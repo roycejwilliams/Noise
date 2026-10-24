@@ -59,12 +59,31 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
   check("2e. the key is the one the scoring pass queues under", A.solicitationKey("Cue Night") === "ask_solicitation:cue night" && /targetKey: solicitationKey\(eventName\),/.test(src("agent/eventAskSolicitation.ts")));
   // Review of #254 (2026-10-19): the ask is noted only after a reply that asks it is delivered, never when it's only planned.
   const sb = src("routes/sendblue.ts");
-  check("2f. the reply path asks at walk-in only when walkinAskDue says so", /const due = await walkinAskDue\(walkinCheckinEventName, user\.id\)/.test(sb) && /if \(due\) \{\n\s+walkinAskEvent = \{ id: walkinCheckinEventId, name: walkinCheckinEventName \};\n\s+walkinAskInstruction = /.test(sb));
+  check("2f. the reply path asks at walk-in only when walkinAskDue says so", /const due = await walkinAskDue\(walkinCheckinEventName, user\.id\)/.test(sb) && /if \(due\) \{\n\s+walkinAskEvent = \{ id: walkinCheckinEventId, name: walkinCheckinEventName \};\n\s+walkinAskReceipt = \{ eventId: walkinCheckinEventId, asked: false \};\n\s+walkinAskInstruction = /.test(sb));
   const replyAt = sb.indexOf("runConversationReplyAgent({");
   const noteAt = sb.indexOf("await noteWalkinAsked(");
-  check("2g. ... and notes it only after the reply, once a delivered text asked it", sb.split("await noteWalkinAsked(").length === 2 && replyAt > 0 && noteAt > replyAt && /if \(walkinAskEvent && walkinAskWentOut\(deliveredThisTurn\)\) \{\n\s+await noteWalkinAsked\(walkinAskEvent\.id, walkinAskEvent\.name, user\.id\)/.test(sb));
+  check("2g. ... and notes it only after the reply, on Cue's askedWalkin receipt and a delivered text", sb.split("await noteWalkinAsked(").length === 2 && replyAt > 0 && noteAt > replyAt && /if \(walkinAskEvent && walkinAskNoted\(walkinAskReceipt, deliveredThisTurn\)\) \{\n\s+await noteWalkinAsked\(walkinAskEvent\.id, walkinAskEvent\.name, user\.id\)/.test(sb) && /walkinAsk: walkinAskReceipt,/.test(sb) && !/walkinAskWentOut/.test(sb));
   check("2h. delivered means the send went out: only a send that returned true is counted", /if \(ok\) deliveredThisTurn\.push\(p\.message\);\n\s+return ok;/.test(sb) && /sendCoReply: threadedSend,/.test(sb));
-  check("2i. a delivered reply that asked counts; nothing delivered, or only an acknowledgment, doesn't", WK.walkinAskWentOut(["Welcome in. What are you hoping to find here tonight?"]) && !WK.walkinAskWentOut([]) && !WK.walkinAskWentOut(["Glad you made it, enjoy the night."]));
+  // Review of #254 (2026-10-23): the ask is Cue's own receipt (the askedWalkin tool, through the registry and toolGuard), never a
+  // guess from a question mark.
+  const asked = { eventId: "evt-1", asked: true }, notAsked = { eventId: "evt-1", asked: false };
+  check("2i. a delivered question about something else (\"How was the drive?\") without the receipt doesn't mark it asked", !WK.walkinAskNoted(notAsked, ["How was the drive?"]) && !WK.walkinAskNoted(null, ["How was the drive?"]));
+  check("2i. ... the receipt and a delivered text do", WK.walkinAskNoted(asked, ["Welcome in. What are you hoping to find here tonight?"]));
+  check("2i. ... the receipt with nothing delivered (held or failed) doesn't", !WK.walkinAskNoted(asked, []) && !WK.walkinAskNoted(asked, ["  "]));
+  const { createConversationTools } = await import("../../src/agent/conversationTools.js");
+  const { abilityForTool } = await import("../../src/services/capabilities.js");
+  const make = (walkinAsk: { eventId: string; asked: boolean } | null) => (createConversationTools({ userId: "u1", phoneNumber: "+15555550100", resolvedContent: "just got here", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true, walkinAsk } as any).tools as any).askedWalkin;
+  const receipt = { eventId: "evt-1", asked: false };
+  const wrong = await make(receipt).execute({ eventId: "evt-other" }, {});
+  check("2k. askedWalkin is a registry tool (toolGuard limits it to once a turn)", abilityForTool("askedWalkin")?.limits?.perTurn === 1);
+  check("2k. ... another event's id records nothing", wrong.ok === false && receipt.asked === false);
+  check("2k. ... nothing due this turn: the tool isn't offered at all", make(null) === undefined);
+  const right = await make(receipt).execute({ eventId: "evt-1" }, {});
+  check("2k. ... the due event's id records the receipt", right.ok === true && receipt.asked === true);
+  const CAP = await import("../../src/services/capabilities.js");
+  const walkinLine = CAP.ABILITIES.find((a) => a.tool === "askedWalkin")!.can;
+  const sit = (walkinDue: boolean) => CAP.situationFor({ kitFields: 0, message: "hi", openTasks: 0, eventToday: true, walkinDue });
+  check("2k. ... listed for Cue, and offered as a tool, only on a turn with the question due", CAP.capabilitySheet({ situation: sit(true) }).includes(walkinLine) && !CAP.capabilitySheet({ situation: sit(false) }).includes(walkinLine) && !CAP.capabilitySheet().includes(walkinLine) && !("askedWalkin" in (createConversationTools({ userId: "u1", phoneNumber: "+15555550100", resolvedContent: "hi", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true } as any).tools as any)));
   check("2j. the unused hasActiveAsk import is gone from the reply path", !/hasActiveAsk/.test(sb));
 
   // The scoring pass after a walk-in ask: the event is marked asked, so it doesn't queue a second one.

@@ -56,7 +56,7 @@ import { recordOfferReaction, reactionFact, type OfferReaction } from "../servic
 import { detectCheckinPhrase, recordCheckin, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
 import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
-import { walkinAskDue, noteWalkinAsked, walkinAskWentOut } from "../services/eventWalkinCheckin.js";
+import { walkinAskDue, noteWalkinAsked, walkinAskNoted } from "../services/eventWalkinCheckin.js";
 import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
@@ -1482,6 +1482,8 @@ export function sendblueRouter(io: Server): Router {
         let walkinAskInstruction = "";
         // The walk-in ask is noted (noteWalkinAsked) only once a reply that asks it has been delivered, after the reply below.
         let walkinAskEvent: { id: string; name: string } | null = null;
+        // Cue's receipt that its reply asks it (the askedWalkin tool, agent/conversationTools.ts).
+        let walkinAskReceipt: { eventId: string; asked: boolean } | null = null;
         if (pendingWalkinCheckin && walkinCheckinEventName && walkinCheckinEventId) {
           // One ask per member per event (services/eventWalkinCheckin.ts walkinAskDue): not when they have an ask, or the scoring pass's
           // ask for this event already went out.
@@ -1491,7 +1493,8 @@ export function sendblueRouter(io: Server): Router {
           });
           if (due) {
             walkinAskEvent = { id: walkinCheckinEventId, name: walkinCheckinEventName };
-            walkinAskInstruction = `They just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
+            walkinAskReceipt = { eventId: walkinCheckinEventId, asked: false };
+            walkinAskInstruction = `They just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else. When your reply asks it, call askedWalkin with eventId "${walkinCheckinEventId}".`;
           }
         }
 
@@ -1682,6 +1685,7 @@ export function sendblueRouter(io: Server): Router {
           turn: turn ?? undefined,
           context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
+          walkinDue: !!walkinAskEvent,
         });
         // A look Co read from their image waits on their yes before anything is built from it (services/designSystem.ts): said to Co
         // so a "yes" builds in this turn instead of getting only an acknowledgment (design audit, 2026-10-12).
@@ -2645,6 +2649,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 contextSummary,
                 personaPrompt,
                 sendCoReply: threadedSend,
+                walkinAsk: walkinAskReceipt,
                 threadNext: () => {
                   threadNextSend = true;
                 },
@@ -2689,10 +2694,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           }
         }
 
-        // The walk-in ask went out (a delivered reply asked it): a pending ask for this event is dropped and the event marked
-        // asked, so the scoring pass doesn't queue another. Not before: a reply that was held, failed or didn't ask leaves the
-        // event unasked, and the scoring pass may still ask (review of #254).
-        if (walkinAskEvent && walkinAskWentOut(deliveredThisTurn)) {
+        // The walk-in ask went out (Cue's askedWalkin receipt, and a text delivered this turn): a pending ask for this event is
+        // dropped and the event marked asked, so the scoring pass doesn't queue another. Not before: a reply that was held, failed or
+        // didn't ask leaves the event unasked, and the scoring pass may still ask (review of #254).
+        if (walkinAskEvent && walkinAskNoted(walkinAskReceipt, deliveredThisTurn)) {
           await noteWalkinAsked(walkinAskEvent.id, walkinAskEvent.name, user.id).catch((err: any) => console.error("sendblue: noteWalkinAsked failed (non-fatal):", err?.message ?? err));
         }
 

@@ -523,6 +523,13 @@ export const ABILITIES: Ability[] = [
     use: "When they tell you whether they met someone you pointed them to or introduced them to at a Noise event, and how it went (\"met Ellis, great talk about fundraising\", \"never found Noor\", \"nice but not a fit\"), record it with that person's first name. Their side only: never tell the other person, never say what the other person thought or answered. Then reply as usual.",
   },
   {
+    id: "walkin_ask",
+    can: "When someone checks in at a Noise event with no ask on file, Cue asks them once what they're hoping to find there, and keeps track that it asked.",
+    tool: "askedWalkin",
+    limits: { perTurn: 1 },
+    use: "Record that the reply you are sending asks them the walk-in question you were given for this event (what they're hoping to find there, who'd be good to meet). Call it with that event's id, only when your reply really asks it. It's noted as asked only once that reply reaches them.",
+  },
+  {
     id: "rapport_topic",
     can: "Cue keeps track of which getting-to-know-you questions it has already asked.",
     tool: "markTopicAsked",
@@ -688,7 +695,8 @@ export const LIMITS: string[] = [
 // they've saved details or the message is about applying, a form, an intro or
 // their LinkedIn. Without a situation (tests, the review), everything is listed.
 // door: a new member's first read is still Co's to give (services/theDoor.ts doorOpen).
-export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean; door?: boolean };
+// walkin: the walk-in question is due this turn (routes/sendblue.ts walkinAskDue); without it the walk-in ask isn't listed.
+export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean; door?: boolean; walkin?: boolean };
 const SITUATIONAL: Record<string, keyof Situation> = {
   kit: "kit",
   task_update: "tasks",
@@ -696,14 +704,17 @@ const SITUATIONAL: Record<string, keyof Situation> = {
   location_share: "eventToday",
   event_going: "eventToday",
   first_read: "door",
+  walkin_ask: "walkin",
 };
-export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean; doorOpen?: boolean }): Situation {
-  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday, ...(o.doorOpen === undefined ? {} : { door: o.doorOpen }) };
+export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean; doorOpen?: boolean; walkinDue?: boolean }): Situation {
+  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday, walkin: !!o.walkinDue, ...(o.doorOpen === undefined ? {} : { door: o.doorOpen }) };
 }
-// An entry is left out only when its situation is known not to apply; one the caller didn't read (door) stays.
-const outOf = (s: Situation, key: keyof Situation) => s[key] === false;
+// An entry is left out only when its situation is known not to apply; one the caller didn't read (door) stays. The walk-in ask is
+// the other way round: listed only on a turn known to have it due (one turn of one night; every other reply's sheet is unchanged).
+const ONLY_WHEN_KNOWN = new Set<keyof Situation>(["walkin"]);
+const outOf = (s: Situation | undefined, key: keyof Situation) => (ONLY_WHEN_KNOWN.has(key) ? s?.[key] !== true : !!s && s[key] === false);
 export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
-  const active = (a: Ability) => (!opts.situation || !SITUATIONAL[a.id] || !outOf(opts.situation, SITUATIONAL[a.id]));
+  const active = (a: Ability) => !SITUATIONAL[a.id] || !outOf(opts.situation, SITUATIONAL[a.id]);
   return [...ABILITIES.filter((a) => (opts.team || !a.teamOnly) && active(a)).map((a) => a.can), ...LIMITS];
 }
 // The tools to leave out for a situation, so Co isn't offered what can't apply.

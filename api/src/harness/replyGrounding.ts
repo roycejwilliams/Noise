@@ -227,10 +227,10 @@ export async function gatherReplyFacts(
   // turn: the one picture of this turn (services/turnContext.ts). When given,
   // the snapshot, the record, open asks and what Co sent come from it instead
   // of separate loads.
-  opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext } = {},
+  opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext; walkinDue?: boolean } = {},
 ): Promise<ReplyFacts> {
   const t = opts.turn;
-  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false }) : undefined);
+  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false, walkinDue: !!opts.walkinDue }) : undefined);
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // What Co knows about them from the one member-knowledge layer, with the member-level rules (addMemberKnowledge): their taste
   // (what's landed with them), what they corrected, restraint, quiet hours, delivery shape. Without the layer (no turn), taste is read

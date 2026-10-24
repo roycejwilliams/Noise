@@ -127,6 +127,9 @@ export type ConversationToolContext = {
   // Thread the next text under theirs too (routes/sendblue.ts): the first find
   // after a "looking" line, the way the first search result always was.
   threadNext?: () => void;
+  // The walk-in question due this turn (routes/sendblue.ts), and Cue's receipt that its reply asks it (askedWalkin). The route notes
+  // the event asked only when this receipt exists and a text was delivered this turn (services/eventWalkinCheckin.ts walkinAskNoted).
+  walkinAsk?: { eventId: string; asked: boolean } | null;
 };
 
 // The exchange a yes answers: the caller's, else Co's last line alone.
@@ -1708,6 +1711,21 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // Cue records that the reply it is sending asks the walk-in question (services/eventWalkinCheckin.ts): a receipt for this turn
+    // only. The route notes the event asked once a text actually reached them, never from what a text looks like.
+    // Only offered on a turn that has the question due, so every other turn's tools are as they were.
+    ...(ctx.walkinAsk ? { askedWalkin: tool({
+      description: toolUse("askedWalkin"),
+      inputSchema: z.object({ eventId: z.string().describe("The id of the event the walk-in question is for, as you were given it.") }),
+      execute: async ({ eventId }) => {
+        if (!ctx.walkinAsk) return { ok: false, error: "No walk-in question is due for them this turn: nothing to record." };
+        if (String(eventId).trim() !== ctx.walkinAsk.eventId) return { ok: false, error: "That isn't the event the walk-in question is for: nothing was recorded." };
+        ctx.walkinAsk.asked = true;
+        ctx.facts?.add("did_this_turn", "Asked them the walk-in question for this event (noted once the reply reaches them).");
+        return { ok: true, note: "Recorded. Ask it in your reply, once." };
+      },
+    }) } : {}),
+
     markTopicAsked: tool({
       description: toolUse("markTopicAsked"),
       inputSchema: z.object({
@@ -1777,7 +1795,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // Tools that can't apply this turn aren't offered (capabilities.ts situations).
   if (ctx.turn) {
     const t = ctx.turn;
-    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false });
+    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, walkinDue: !!ctx.walkinAsk, doorOpen: t.door ? doorOpen(t.door).open : false });
     for (const name of toolsOutOfSituation(s)) delete (tools as Record<string, unknown>)[name];
   }
 
