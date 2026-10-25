@@ -340,6 +340,9 @@ export const PINNED: Pin[] = [
 
   { file: "src/harness/memberThreads.ts", line: "if (!rows[0]) continue;", why: "the inserted thread row (its insert carries the thread's feeling as a column): no row, nothing to follow up; the feeling decides nothing" },
   { file: "src/harness/memberThreads.ts", line: "if (o.kind === \"commitment\" && o.dueDate && o.dueLabel && (await queueCommitmentFollowUp(userId, rows[0].id, o.text, o.dueDate, o.dueLabel, zone))) queued.push(rows[0].id);", why: "queues the commitment follow-up for the inserted row; reaches the census only through the insert that stores the feeling, which decides nothing" },
+  { file: "src/services/memberKnowledge.ts", line: "const keptLedger = ledger.flatMap((s) => { const label = g(s.label); return label === null ? [] : [{ ...s, label }]; });", why: "'label' here is a delivered item's ledger label (kept or dropped by the forget filter g), not a feeling; decides nothing about a mood" },
+  { file: "src/services/memberKnowledge.ts", line: "if (on(\"delivered\")) k.delivered = mergeDelivered({ receipts: keptReceipts, ledger: keptLedger, offers: keptOffers });", why: "the delivered list from the kept ledger; reaches the census only through a ledger label, not a feeling" },
+  { file: "src/services/memberKnowledge.ts", line: "if (on(\"carrying\")) k.carrying = carryingOf({ tasks, briefs, receipts: keptReceipts, ledger: keptLedger, loops: keptLoops, promises: keptPromises, now, zone });", why: "what Cue is carrying from the kept ledger; reaches the census only through a ledger label, not a feeling" },
 ];
 const files: string[] = [];
 const walk = (d: string) => { for (const e of fs.readdirSync(path.join(root, d), { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith(".ts")) files.push(p); } };

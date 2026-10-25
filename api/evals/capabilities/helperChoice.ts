@@ -63,13 +63,12 @@ const known: string[] = [];
   if (ok) known.push("bundle composer: the fit-skip runs in the same prompt as the feeling block (harness/bundleComposer.ts)");
 }
 {
-  // pending Royce's answer: check-ins held while they're struggling, and stop-looking notes withheld when needsCare: their state
-  // decides whether a helper runs. Kept by earlier rulings (Royce 2026-09-18).
+  // Settled by #253 (Royce 2026-10-18/19: feelings change timing and tone, never cancel): check-ins held while they're struggling
+  // wait only on the capped hold (heldForMood: okay again, or the 48h cap, releases them), and stop-looking notes are read whatever
+  // the mood (their ride waits on the same capped hold, noteMayRide). Pinned as the new rule; no longer a pending item.
   const pr = src("harness/proactive.ts");
   const tc = src("services/turnContext.ts");
-  const ok = /if \(state\.needsCare && HOLD_WHILE_STRUGGLING\.has\(c\.type\)\)/.test(pr) && /const stopNotesP = emotional\?\.needsCare \? Promise\.resolve\(\[\]/.test(tc);
-  check("known (pending Royce's answer): feelings-based holds (HOLD_WHILE_STRUGGLING, stop notes on needsCare), as pinned", ok);
-  if (ok) known.push("feelings-based holds: HOLD_WHILE_STRUGGLING (harness/proactive.ts) and stopNotesP on needsCare (services/turnContext.ts)");
+  check("settled (#253): feelings-based holds wait on the capped hold, never cancel (HOLD_WHILE_STRUGGLING through heldForMood; stop notes not withheld on needsCare)", /if \(heldForMood\(state\) && HOLD_WHILE_STRUGGLING\.has\(c\.type\)\)/.test(pr) && !/emotional\?\.needsCare \? Promise\.resolve\(\[\]/.test(tc) && /A\.noteMayRide\(c, heldForMood\(member\.state\)\)/.test(pr));
 }
 {
   // pending Royce's answer: kind restraint: engagement history turns whole kinds of helper off for N days (services/kindRestraint.ts).
