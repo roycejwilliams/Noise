@@ -429,7 +429,7 @@ for (const [label, o] of [["the team", { team: true }], ["a test number", { phon
 {
   const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
   const route = co.slice(co.indexOf('router.post("/el/post-call"'), co.indexOf("// Root-cause guard"));
-  check("3w the route queues unstored calls: missed calls, a processing failure, and processing that stored nothing", /handleMissedVoiceCall\(u\[0\], callSid, kind, conversationId\);\n\s*queueUnstored\(\);/.test(route) && /\} catch \(err\) \{[\s\S]{0,200}queueUnstored\(\);\n\s*throw err;/.test(route) && /else if \(ended\.unstored\) queueUnstored\(\);/.test(route) && /transcriptSha256: null/.test(route));
+  check("3w the route queues unstored calls: missed calls, a processing failure, and processing that stored nothing", /handleMissedVoiceCall\(u\[0\], callSid, kind, conversationId\);\n\s*queueUnstored\(\);/.test(route) && /\} catch \(err\) \{[\s\S]{0,500}queueUnstored\(\);\n\s*throw err;/.test(route) && /else if \(ended\.unstored\) queueUnstored\(\);/.test(route) && /transcriptSha256: null/.test(route));
   const pe = co.slice(co.indexOf("async function processEndedCall("), co.indexOf("async function scheduleFollowUpText("));
   check("3x processEndedCall marks voicemail, empty and no-conversation as unstored (never the duplicate paths)", /skipped: "voicemail" \}, unstored: true/.test(pe) && /empty: true \}, unstored: true/.test(pe) && /noRealConversation: true \}, unstored: true/.test(pe) && !/duplicate: true \}, unstored/.test(pe));
 }

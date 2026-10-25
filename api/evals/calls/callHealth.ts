@@ -12,6 +12,7 @@ import {
   flaggedCalls,
   judgeCallHealth,
   lateReasons,
+  flagNotStored,
   markCallReviewed,
   recordCallHealth,
   refreshLateHealth,
@@ -118,6 +119,15 @@ function healthWorld(o: { decisions?: { decision: string; outcome: string; actio
       if (o.throwOn?.test(sql)) throw new Error("connection refused");
       if (/FROM harness_decisions\s+WHERE user_id = \$1 AND created_at >= \$2/.test(sql)) return { rows: (o.decisions ?? []).filter((d) => d.at >= p[1].getTime() && d.at <= p[2].getTime()) };
       if (/FROM emotion_signals/.test(sql)) return { rows: o.emotionCo ? [{ "?column?": 1 }] : [] };
+      if (/INSERT INTO call_health[\s\S]*ARRAY\['not_stored'\][\s\S]*ON CONFLICT \(conversation_id\) DO UPDATE/.test(sql)) {
+        const r = rows.get(p[0]);
+        if (!r) rows.set(p[0], { conversation_id: p[0], user_id: p[1], started_at: p[2], ended_at: p[3], flagged: true, reasons: ["not_stored"], judged_by: "", reviewed_at: null, late_done_at: null });
+        else {
+          r.flagged = true;
+          if (!r.reasons.includes("not_stored")) r.reasons = ["not_stored", ...r.reasons];
+        }
+        return { rows: [] };
+      }
       if (/INSERT INTO call_health/.test(sql)) {
         if (!rows.has(p[0])) rows.set(p[0], { conversation_id: p[0], user_id: p[1], started_at: p[2], ended_at: p[3], flagged: p[4], reasons: p[5], judged_by: p[6], reviewed_at: null, late_done_at: null });
         return { rows: [] };
@@ -272,6 +282,29 @@ check("5a lateReasons maps counts to codes", JSON.stringify(lateReasons({ unkept
   check("7c the table: flagged, reasons as codes, reviewed_at, no words column", /CREATE TABLE IF NOT EXISTS call_health \(/.test(mig) && /reasons TEXT\[\] NOT NULL/.test(mig) && /reviewed_at TIMESTAMPTZ/.test(mig) && !/call_health \([^)]*\b(content|quote|message|transcript)\b/.test(mig));
   const script = readFileSync(new URL("../../src/scripts/callReviewed.ts", import.meta.url), "utf8");
   check("7d the review script marks one reviewed or lists them", /markCallReviewed\(id\)/.test(script) && /flaggedCalls\(\)/.test(script));
+}
+
+// 8. A call whose processing failed (nothing stored on our side) is flagged not_stored, so its ElevenLabs copy, maybe the only one,
+// is held until someone has looked.
+{
+  const w = healthWorld();
+  const until = new Date(END.getTime() + 3_600_000);
+  check("8a flagNotStored: a new row, flagged, the one code", (await flagNotStored({ userId: U, conversationId: "conv_lost", startedAt: START, endedAt: END }, { db: w.db, log: () => {} })) && w.rows.get("conv_lost")?.flagged === true && w.rows.get("conv_lost")?.reasons.join() === "not_stored");
+  const flags = callHealthFlags(await flaggedCalls({ until }, { db: w.db }));
+  check("8b it is high in the morning review", flags.length === 1 && flags[0].severity === "high" && /not_stored/.test(flags[0].snippet) && HIGH_REASONS.has("not_stored"));
+  await recordCallHealth(input({ conversationId: "conv_lost" }), { db: w.db, log: () => {} });
+  check("8c a health check after it never clears the flag", w.rows.get("conv_lost")?.flagged === true && w.rows.get("conv_lost")!.reasons.includes("not_stored"));
+  await recordCallHealth(input({ conversationId: "conv_clean_first" }), { db: w.db, log: () => {} });
+  await flagNotStored({ userId: U, conversationId: "conv_clean_first", startedAt: START, endedAt: END }, { db: w.db, log: () => {} });
+  await flagNotStored({ userId: U, conversationId: "conv_clean_first", startedAt: START, endedAt: END }, { db: w.db, log: () => {} });
+  check("8d a clean row is flagged after, the code added once", w.rows.get("conv_clean_first")?.flagged === true && w.rows.get("conv_clean_first")?.reasons.filter((r) => r === "not_stored").length === 1);
+  const bad = healthWorld({ throwOn: /INSERT INTO call_health/ });
+  const lines: string[] = [];
+  check("8e never throws, and logs codes only", (await flagNotStored({ userId: U, conversationId: "conv_x", startedAt: null, endedAt: null }, { db: bad.db, log: (l) => lines.push(l) })) === false && lines.every((l) => !l.includes("sister")));
+  const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
+  const route = co.slice(co.indexOf('router.post("/el/post-call"'), co.indexOf("// Root-cause guard"));
+  const fail = route.slice(route.indexOf("await processEndedCall("), route.indexOf("throw err;"));
+  check("8f the route flags it when processing throws, not awaited, caught, before the throw", /\} catch \(err\) \{[\s\S]*if \(u\[0\]\) flagNotStored\(\{ userId, conversationId, startedAt: callStart, endedAt: callEnd \}\)\.catch\(\(\) => \{\}\);/.test(fail) && !/await flagNotStored/.test(route));
 }
 
 console.log(`call health rules: ${total - failed}/${total} passed`);
