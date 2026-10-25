@@ -28,6 +28,23 @@ const HOUR = 3_600_000;
 // 2pm in Los Angeles: inside their hours and the recap's.
 const NOW = new Date("2026-10-19T21:00:00Z");
 const ago = (h: number, from = NOW) => new Date(from.getTime() - h * HOUR);
+// The clock pinned to NOW for the blocks that run code reading it (the post-call text's onSent, holdRecapForMood's default now):
+// the recap's own hours (postCallRecapAllowed) made those checks fail whenever a run fell in Los Angeles' night.
+const RealDate = Date;
+const pinClock = () => {
+  const t = NOW.getTime();
+  (globalThis as any).Date = class extends RealDate {
+    constructor(...a: any[]) {
+      super(...((a.length ? a : [t]) as [number]));
+    }
+    static now() {
+      return t;
+    }
+  };
+};
+const unpinClock = () => {
+  (globalThis as any).Date = RealDate;
+};
 type Sig = import("../../src/harness/emotion.js").EmotionSignal;
 // Their words, so the log checks can look for them.
 const THEIR_WORDS = "my dad is back in the hospital and I can't think";
@@ -134,6 +151,7 @@ const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW 
   const printed: string[] = [];
   const log = console.log, err = console.error;
   try {
+    pinClock();
     reset({ sigs: [hardSig(2, new Date())], inbound: new Date(Date.now() - 2.1 * HOUR) });
     console.log = (...a: any[]) => { printed.push(a.map(String).join(" ")); };
     console.error = () => {};
@@ -156,6 +174,7 @@ const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW 
     reset({ sigs: [hardSig(2, new Date())], inbound: new Date(Date.now() - 2.1 * HOUR), transcript: null });
     check("no call record: nothing queued", (await PC.holdRecapForMood("u-jordan", FID).catch(() => "threw")) === false && !store.writes.length);
   } finally {
+    unpinClock();
     console.log = log; console.error = err;
     real();
   }
@@ -202,12 +221,14 @@ const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW 
     reset();
     await registry.post_call.onSent(heldRecap(), { firstName: "Jordan" }, ["Want me to put what you two decided on Friday's call on a one-page recap?"]);
     check("a held recap sent: the offer is recorded for that call (once per call), the call's record untouched", store.writes.some((w) => /INSERT INTO document_offers/.test(w.sql) && w.params.includes(`[recap] ${PC.recapKey(FID)}`)) && !store.writes.some((w) => /post_call_follow_ups/.test(w.sql)) && !store.writes.some((w) => /INSERT INTO proactive_candidates/.test(w.sql)), store.writes);
+    pinClock();
     reset({ sigs: [hardSig(2, new Date())], inbound: new Date(Date.now() - 2.1 * HOUR) });
     await registry.post_call.onSent(postCallText(), { firstName: "Jordan" }, ["Telling the team Friday is the right call."]);
     check("the post-call text went without the recap while struggling: the call is marked sent and the recap is held for it", store.writes.some((w) => /UPDATE post_call_follow_ups SET sent_at/.test(w.sql)) && store.writes.some((w) => /INSERT INTO proactive_candidates/.test(w.sql) && w.params[2] === PC.recapHoldKey(FID)), store.writes.map((w) => w.sql.slice(0, 70)));
     reset({ sigs: [hardSig(2, new Date())], inbound: new Date(Date.now() - 2.1 * HOUR) });
     await registry.post_call.onSent(postCallText(), { firstName: "Jordan" }, ["Want me to put what you decided on a one-page recap?"]);
     check("the text made the offer itself: recorded, nothing held", store.writes.some((w) => /INSERT INTO document_offers/.test(w.sql)) && !store.writes.some((w) => /INSERT INTO proactive_candidates/.test(w.sql)));
+    unpinClock();
     // Drafting: night defers (never dropped for the hour); a fact that no longer holds ends it; no call record ends it.
     reset();
     const night = await PC.draftHeldRecap("u-jordan", "Jordan", FID, new Date("2026-10-20T06:00:00Z"), true).catch((e: any) => ({ threw: e?.message }));
@@ -221,6 +242,7 @@ const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW 
     reset({ transcript: null });
     check("no call record: ends", "skip" in ((await PC.draftHeldRecap("u-jordan", "Jordan", FID, NOW, true).catch((e: any) => ({ threw: e?.message }))) as any));
   } finally {
+    unpinClock();
     console.error = err;
     real();
   }
