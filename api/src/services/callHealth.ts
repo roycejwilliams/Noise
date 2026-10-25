@@ -7,6 +7,8 @@
 // Log lines carry the conversation id and the codes, nothing else.
 //
 // The reasons, each a fact:
+//   not_stored          the call's processing failed, so nothing of it is stored on our side (flagNotStored, routes/co.ts): its copy
+//                       at ElevenLabs may be the only one, so it is held until someone looks
 //   short_call          the call lasted under CALL_HEALTH.shortCallSecs
 //   cut_mid_sentence    Cue's last line doesn't end a sentence (no closing . ! ? or …)
 //   abnormal_end        ElevenLabs says the call failed or ended on an error/timeout, or Twilio reported it failed or canceled
@@ -34,6 +36,7 @@ import { CALL_FRUSTRATION } from "../harness/emotion.js";
 import { MEMBER_CLOSING } from "./callLlmProxy.js";
 
 export const REASONS = [
+  "not_stored",
   "abnormal_end",
   "brain_error",
   "member_reported",
@@ -51,7 +54,7 @@ export const REASONS = [
 ] as const;
 export type HealthReason = (typeof REASONS)[number];
 // The morning review ranks by these: a call with any of them is high, the rest medium. REASONS is in rank order.
-export const HIGH_REASONS: ReadonlySet<HealthReason> = new Set(["abnormal_end", "brain_error", "member_reported", "frustrated_with_co", "member_confused", "promise_unkept", "tool_failed", "hung_up_after_cue"]);
+export const HIGH_REASONS: ReadonlySet<HealthReason> = new Set(["not_stored", "abnormal_end", "brain_error", "member_reported", "frustrated_with_co", "member_confused", "promise_unkept", "tool_failed", "hung_up_after_cue"]);
 export const isReason = (x: unknown): x is HealthReason => typeof x === "string" && (REASONS as readonly string[]).includes(x);
 export const rankReasons = (rs: Iterable<HealthReason>): HealthReason[] => REASONS.filter((r) => new Set(rs).has(r));
 
@@ -232,6 +235,26 @@ export async function recordCallHealth(
   } catch (err: any) {
     deps.log(`call-health: ${o.conversationId} not recorded (${String(err?.message ?? err).slice(0, 80)})`);
     return null;
+  }
+}
+
+// The call's processing failed before anything was stored (routes/co.ts): the call is flagged not_stored, whatever the health
+// check finds or found, so its ElevenLabs copy is held until reviewed. Codes only. Never throws.
+export async function flagNotStored(o: { userId: string; conversationId: string; startedAt: Date | null; endedAt: Date | null }, deps: HealthDeps = realHealthDeps()): Promise<boolean> {
+  try {
+    if (!o.conversationId) return false;
+    const ended = o.endedAt ?? deps.now?.() ?? new Date();
+    await deps.db.query(
+      `INSERT INTO call_health (conversation_id, user_id, started_at, ended_at, flagged, reasons) VALUES ($1, $2, $3, $4, true, ARRAY['not_stored'])
+       ON CONFLICT (conversation_id) DO UPDATE SET flagged = true, updated_at = NOW(),
+         reasons = CASE WHEN 'not_stored' = ANY(call_health.reasons) THEN call_health.reasons ELSE ARRAY['not_stored'] || call_health.reasons END`,
+      [o.conversationId, o.userId, o.startedAt ?? ended, ended],
+    );
+    deps.log(`call-health: ${o.conversationId} flagged: not_stored`);
+    return true;
+  } catch (err: any) {
+    deps.log(`call-health: ${o.conversationId} not_stored not recorded (${String(err?.message ?? err).slice(0, 80)})`);
+    return false;
   }
 }
 

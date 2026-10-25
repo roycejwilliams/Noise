@@ -50,7 +50,7 @@ import { callerTurnsFrom, momentSignals } from "../services/voiceRead.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { forgetAfterCall, transcriptHash } from "../services/elevenLabsForget.js";
-import { recordCallHealth } from "../services/callHealth.js";
+import { flagNotStored, recordCallHealth } from "../services/callHealth.js";
 import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
 
@@ -532,6 +532,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       queueUnstored();
       return res.status(200).send({ success: true, missed: kind, ...r });
     }
+    const callStart = Number(data.metadata?.start_time_unix_secs) ? new Date(Number(data.metadata.start_time_unix_secs) * 1000) : null;
+    const callEnd = callStart && Number(data.metadata?.call_duration_secs) ? new Date(callStart.getTime() + Number(data.metadata.call_duration_secs) * 1000) : null;
     let ended: Awaited<ReturnType<typeof processEndedCall>>;
     try {
       ended = await processEndedCall({
@@ -559,7 +561,9 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       }),
     });
     } catch (err) {
-      // Processing failed: nothing stored yet. A retried delivery that stores it turns the row into a verified one.
+      // Processing failed: nothing stored yet. A retried delivery that stores it turns the row into a verified one. Flagged
+      // not_stored, so ElevenLabs' copy (maybe the only one) is held until someone has looked.
+      if (u[0]) flagNotStored({ userId, conversationId, startedAt: callStart, endedAt: callEnd }).catch(() => {});
       queueUnstored();
       throw err;
     }
