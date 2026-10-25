@@ -95,7 +95,7 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
 // ================================================================ 1. check-ins held while struggling (checkin_hold)
 {
   const types = [...P.HOLD_WHILE_STRUGGLING];
-  check("the held types are the same nine", types.sort().join() === ["ask_checkin", "ask_solicitation", "calendar_follow", "commitment_nudge", "goal_checkin", "goal_nudge", "goal_recheck", "name_change", "product_update"].sort().join(), types);
+  check("the held types are the same ten", types.sort().join() === ["announcement", "ask_checkin", "ask_solicitation", "calendar_follow", "commitment_nudge", "goal_checkin", "goal_nudge", "goal_recheck", "name_change", "product_update"].sort().join(), types);
   const held = read([hardSig(2)], ago(2.1));
   const okay = read([hardSig(8)], ago(1));
   const capped = read([hardSig(1), hardSig(20), hardSig(40), hardSig(49)], ago(1.5));
@@ -111,7 +111,7 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   for (const [label, mh] of [["held", held], ["okay", okay], ["cap", capped]] as const) {
     check(`safety hold unchanged (${label}): offers and the name notice still held`, failsOn(P.candidateChecks(cand("event_offer"), baseState({ needsCare: true, moodHold: mh, safetyHold: true })), "safety_hold") && failsOn(P.candidateChecks(cand("name_change"), baseState({ needsCare: true, moodHold: mh, safetyHold: true })), "safety_hold"));
   }
-  check("safety: the safety follow-up still skips the conversation hold and the type gap (code unchanged)", /const safetyPassesHold = \(k: GateCheck, c: Pick<Candidate, "payload">\) => k\.name === "mid_conversation" && isSafetyFollowUp\(c\);/.test(src("harness/proactive.ts")) && /if \(state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer" \|\| c\.type === "name_change"\)\) \{/.test(src("harness/proactive.ts")));
+  check("safety: the safety follow-up still skips the conversation hold and the type gap (code unchanged)", /const safetyPassesHold = \(k: GateCheck, c: Pick<Candidate, "payload">\) => k\.name === "mid_conversation" && isSafetyFollowUp\(c\);/.test(src("harness/proactive.ts")) && /if \(state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer" \|\| c\.type === "name_change" \|\| c\.type === "announcement"\)\) \{/.test(src("harness/proactive.ts")));
   // Expiry: its own clock still ends it, held or released; the cap never extends it.
   const gone = { expiresAt: ago(0.5) };
   check("an expired check-in is expired whether held, okay or at the cap", [held, okay, capped].every((mh) => failsOn(at(mh, gone), "not_expired")));
