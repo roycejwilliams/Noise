@@ -95,7 +95,7 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
 // ================================================================ 1. check-ins held while struggling (checkin_hold)
 {
   const types = [...P.HOLD_WHILE_STRUGGLING];
-  check("the held types are the same eight", types.sort().join() === ["ask_checkin", "calendar_follow", "commitment_nudge", "goal_checkin", "goal_nudge", "goal_recheck", "name_change", "product_update"].sort().join(), types);
+  check("the held types are the same nine", types.sort().join() === ["ask_checkin", "ask_solicitation", "calendar_follow", "commitment_nudge", "goal_checkin", "goal_nudge", "goal_recheck", "name_change", "product_update"].sort().join(), types);
   const held = read([hardSig(2)], ago(2.1));
   const okay = read([hardSig(8)], ago(1));
   const capped = read([hardSig(1), hardSig(20), hardSig(40), hardSig(49)], ago(1.5));
@@ -104,7 +104,9 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   check("released early when they're okay", !failsOn(at(okay), "emotional_timing"));
   check("released at the cap even if still struggling", !failsOn(at(capped), "emotional_timing"));
   check("a state without the read's times holds as before", failsOn(P.candidateChecks(cand("ask_checkin"), baseState({ needsCare: true })), "emotional_timing"));
-  check("finds and the room are never held by it", !failsOn(P.candidateChecks(cand("event_offer"), baseState({ needsCare: true, moodHold: held })), "emotional_timing") && !failsOn(P.candidateChecks(cand("ask_solicitation"), baseState({ needsCare: true, moodHold: held })), "emotional_timing"));
+  check("finds are never held by it", !failsOn(P.candidateChecks(cand("event_offer"), baseState({ needsCare: true, moodHold: held })), "emotional_timing"));
+  // The ask to an event guest with no stated ask (#254) follows the rules of any text Cue starts: it waits on the capped hold.
+  check("the event guest's ask waits on a hard day, capped", failsOn(P.candidateChecks(cand("ask_solicitation"), baseState({ needsCare: true, moodHold: held })), "emotional_timing") && !failsOn(P.candidateChecks(cand("ask_solicitation"), baseState({ needsCare: true, moodHold: capped })), "emotional_timing"));
   // Safety is not mood: the cap and okay-again never touch it.
   for (const [label, mh] of [["held", held], ["okay", okay], ["cap", capped]] as const) {
     check(`safety hold unchanged (${label}): offers and the name notice still held`, failsOn(P.candidateChecks(cand("event_offer"), baseState({ needsCare: true, moodHold: mh, safetyHold: true })), "safety_hold") && failsOn(P.candidateChecks(cand("name_change"), baseState({ needsCare: true, moodHold: mh, safetyHold: true })), "safety_hold"));
