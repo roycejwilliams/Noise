@@ -562,7 +562,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     });
     } catch (err) {
       // Processing failed: nothing stored yet. A retried delivery that stores it turns the row into a verified one. Flagged
-      // not_stored, so ElevenLabs' copy (maybe the only one) is held until someone has looked.
+      // not_stored, so ElevenLabs' copy (maybe the only one) is held until someone has looked (on production, at most
+      // FORGET.prodHoldDays after the call).
       if (u[0]) flagNotStored({ userId, conversationId, startedAt: callStart, endedAt: callEnd }).catch(() => {});
       queueUnstored();
       throw err;
