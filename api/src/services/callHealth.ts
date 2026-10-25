@@ -239,7 +239,8 @@ export async function recordCallHealth(
 }
 
 // The call's processing failed before anything was stored (routes/co.ts): the call is flagged not_stored, whatever the health
-// check finds or found, so its ElevenLabs copy is held until reviewed. Codes only. Never throws.
+// check finds or found, so its ElevenLabs copy is held until reviewed (a row already reviewed is opened again: this is new). On
+// production the hold ends FORGET.prodHoldDays after the call, like any flag (services/elevenLabsForget.ts). Codes only. Never throws.
 export async function flagNotStored(o: { userId: string; conversationId: string; startedAt: Date | null; endedAt: Date | null }, deps: HealthDeps = realHealthDeps()): Promise<boolean> {
   try {
     if (!o.conversationId) return false;
@@ -247,6 +248,7 @@ export async function flagNotStored(o: { userId: string; conversationId: string;
     await deps.db.query(
       `INSERT INTO call_health (conversation_id, user_id, started_at, ended_at, flagged, reasons) VALUES ($1, $2, $3, $4, true, ARRAY['not_stored'])
        ON CONFLICT (conversation_id) DO UPDATE SET flagged = true, updated_at = NOW(),
+         reviewed_at = CASE WHEN 'not_stored' = ANY(call_health.reasons) THEN call_health.reviewed_at ELSE NULL END,
          reasons = CASE WHEN 'not_stored' = ANY(call_health.reasons) THEN call_health.reasons ELSE ARRAY['not_stored'] || call_health.reasons END`,
       [o.conversationId, o.userId, o.startedAt ?? ended, ended],
     );

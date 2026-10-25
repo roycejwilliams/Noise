@@ -124,7 +124,10 @@ function healthWorld(o: { decisions?: { decision: string; outcome: string; actio
         if (!r) rows.set(p[0], { conversation_id: p[0], user_id: p[1], started_at: p[2], ended_at: p[3], flagged: true, reasons: ["not_stored"], judged_by: "", reviewed_at: null, late_done_at: null });
         else {
           r.flagged = true;
-          if (!r.reasons.includes("not_stored")) r.reasons = ["not_stored", ...r.reasons];
+          if (!r.reasons.includes("not_stored")) {
+            r.reasons = ["not_stored", ...r.reasons];
+            r.reviewed_at = null;
+          }
         }
         return { rows: [] };
       }
@@ -298,6 +301,12 @@ check("5a lateReasons maps counts to codes", JSON.stringify(lateReasons({ unkept
   await flagNotStored({ userId: U, conversationId: "conv_clean_first", startedAt: START, endedAt: END }, { db: w.db, log: () => {} });
   await flagNotStored({ userId: U, conversationId: "conv_clean_first", startedAt: START, endedAt: END }, { db: w.db, log: () => {} });
   check("8d a clean row is flagged after, the code added once", w.rows.get("conv_clean_first")?.flagged === true && w.rows.get("conv_clean_first")?.reasons.filter((r) => r === "not_stored").length === 1);
+  await recordCallHealth(input({ conversationId: "conv_reviewed", durationSecs: 12 }), { db: w.db, log: () => {} });
+  await markCallReviewed("conv_reviewed", { db: w.db });
+  await flagNotStored({ userId: U, conversationId: "conv_reviewed", startedAt: START, endedAt: END }, { db: w.db, log: () => {} });
+  check("8g a reviewed row is opened again by a new not_stored (held again)", w.rows.get("conv_reviewed")?.reviewed_at === null && w.rows.get("conv_reviewed")!.reasons.includes("not_stored"));
+  const svc = readFileSync(new URL("../../src/services/callHealth.ts", import.meta.url), "utf8");
+  check("8h the upsert reopens only when not_stored is new", /reviewed_at = CASE WHEN 'not_stored' = ANY\(call_health\.reasons\) THEN call_health\.reviewed_at ELSE NULL END/.test(svc));
   const bad = healthWorld({ throwOn: /INSERT INTO call_health/ });
   const lines: string[] = [];
   check("8e never throws, and logs codes only", (await flagNotStored({ userId: U, conversationId: "conv_x", startedAt: null, endedAt: null }, { db: bad.db, log: (l) => lines.push(l) })) === false && lines.every((l) => !l.includes("sister")));
