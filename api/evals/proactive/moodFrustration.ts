@@ -65,7 +65,7 @@ const CLEARED = emo([goodCo(0.5), atCo(1)]);
   check("door and question read the capped hold, never the bare frustration read", (rg.match(/frustrated: frustrationHold\(/g) ?? []).length === 2 && !/frustrated: !!o\.emotional\?\.withCo\?\.frustrated/.test(rg));
   check("no other code passes the bare frustration read into a decision", !/frustrated: !!\w+(?:\.\w+)*\?\.withCo\?\.frustrated/.test(fs.readdirSync(new URL("../../src/harness/", import.meta.url)).filter((f) => f.endsWith(".ts")).map((f) => src(`harness/${f}`)).join("\n")));
   check("the door's and the steer's own rules are unchanged", /if \(o\.frustrated\) return \{ offer: false, why: "frustrated with Cue right now" \};/.test(src("services/theDoor.ts")) && /if \(o\.frustrated\) return \{ steer: false, why: "frustrated with Cue right now" \};/.test(src("services/coldStart.ts")));
-  check("safety unchanged", /if \(state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer" \|\| c\.type === "name_change"\)\) \{/.test(src("harness/proactive.ts")) && /SAFETY_INSTRUCTION/.test(rg));
+  check("safety unchanged", /if \(state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer" \|\| c\.type === "name_change" \|\| c\.type === "announcement"\)\) \{/.test(src("harness/proactive.ts")) && /SAFETY_INSTRUCTION/.test(rg));
   check("moved: ruled, and no longer listed as not changed", "frustration_hold" in MH.MOOD_RULES && !MH.FEELING_PICKS_NOT_CHANGED.some((o) => /frustrated/.test(o.where)));
   check("the feeling block they draft from still names the frustration (tone, not whether)", /look wider and try harder rather than going quiet or getting smaller/.test(src("harness/emotion.ts")));
 }
