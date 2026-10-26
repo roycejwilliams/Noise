@@ -335,7 +335,7 @@ export type NoteDeps = {
 };
 const defaultDeps: NoteDeps = {
   reveal: async (...a) => (await import("./networkIntroNudge.js")).prepareReveal(...a),
-  struggling: async (userId) => !!(await (await import("../harness/emotion.js")).getEmotionalContext(userId).catch(() => null))?.needsCare,
+  struggling: async (userId) => !!(await (await import("../harness/emotion.js")).getEmotionalContext(userId).catch(() => null))?.needsCare, // mood: the read for the note's wording only
   about: aboutTheNight,
   now: () => new Date(),
 };
@@ -349,7 +349,7 @@ export async function draftNoShowNote(c: Candidate, person: Person, deps: NoteDe
   const lumaIn = d?.lumaIn ?? { emails: new Set<string>(), phones: new Set<string>() };
   // They came after all (a late door check-in, an arrival recorded since): no "sorry you couldn't make it".
   if (await cameTonight(p.eventId, { user_id: c.userId, email: await emailOf(c.userId), phone_number: person.phoneNumber }, lumaIn)) return { skip: "they came after all" };
-  const soft = await deps.struggling(c.userId).catch(() => false);
+  const soft = await deps.struggling(c.userId).catch(() => false); // mood: wording only (the gentler intro line); never whether it goes or what it offers
   // The offer: an intro to one person from that night, with its reveal drafted and checked now (the network tease's rule: never ask
   // "want me to tell you who?" without the answer in hand); else the next table. A hard week changes how it's said, never the offer.
   let offer: NoShowOffer = { kind: "none" };
