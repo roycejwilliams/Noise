@@ -85,7 +85,7 @@ const CO_LINES = ["Drinks at Spruce at 7pm, then Rich Table at 8:15pm."];
 // ================================================================ 4. safety unchanged
 {
   check("safety is not mood: the offer gate reads no safety state, before or after", !/safety/i.test(src("services/documentOffer.ts")));
-  check("the safety hold on proactive offers is untouched", /if \(state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer" \|\| c\.type === "name_change"\)\)/.test(src("harness/proactive.ts")));
+  check("the safety hold on proactive offers is untouched", /if \(state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer" \|\| c\.type === "name_change" \|\| c\.type === "announcement"\)\)/.test(src("harness/proactive.ts")));
   check("the mood rule list has no safety entry", !Object.keys(MH.MOOD_RULES).some((k) => /safety/.test(k)));
 }
 
