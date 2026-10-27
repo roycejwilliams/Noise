@@ -189,7 +189,7 @@ export function lumaExaBudget(usedToday: number, source: LumaExaSource, dailyCap
 // keeps who, which share and when: never the query (it's the member's want).
 export async function reserveLumaExaSearch(userId: string | null, source: LumaExaSource, db?: { connect: () => Promise<any> }): Promise<{ ok: boolean; reason: string | null }> {
   // A test account never spends on a paid search (services/testMemberSpend.ts, #271): no slot is taken, no Exa search runs.
-  if (await skipsPaidSearch(userId, "lumaViaExa")) return { ok: false, reason: "a test account: paid search is off for it" };
+  if (await skipsPaidSearch(userId, "lumaViaExa")) return { ok: false, reason: TEST_ACCOUNT };
   let client: any = null;
   try {
     client = await (db ?? (await import("../db/db.js")).default).connect();
@@ -240,6 +240,8 @@ export const clearLumaViaExaCache = () => cache.clear();
 
 // Why an Exa search didn't run for want of a place, with its fix (said in the report, like every other failure).
 export const NO_PLACE = `no city Luma's catalog confirms for this ask, so no search through Exa; ${FEED_ALONE}`;
+export const CATALOG_DOWN = `Luma's city catalog couldn't be read, so no search through Exa; ${FEED_ALONE}`;
+export const TEST_ACCOUNT = `a test account: paid search is off for it; ${FEED_ALONE}`;
 
 // Luma events Exa finds for this want, each checked through Luma's official API (never its page): public, upcoming, inside the window
 // (inRange decides, the same test the feed's events get), with a place or online, and with the start, end, city and details Luma's
@@ -254,11 +256,16 @@ export async function lumaEventsViaExa(
   if (!deps.lumaApi()) return { events: [], report: { cached: false, error: LUMA_API_OFF, pages: 0, read: 0, notPublic: 0, kept: 0 } };
   // Luma's API is refusing: no search, and no checks of a cached one either (each would add to what Luma is refusing).
   if (deps.refusing()) return { events: [], report: { cached: false, error: lumaRefusingReason(deps.pauseMinutes), pages: 0, read: 0, notPublic: 0, refused: 0, kept: 0 } };
+  // A test account never spends on a paid search (services/testMemberSpend.ts, #271): checked before the shared cache, so its refusal
+  // is never another member's answer. reserveLumaExaSearch checks again.
+  if (o.userId && (await skipsPaidSearch(o.userId, "lumaViaExa"))) return { events: [], report: { cached: false, error: TEST_ACCOUNT, pages: 0, read: 0, notPublic: 0, kept: 0 } };
   // Never their words: the query (and so the cache key) is built from fixed parts only.
-  const place = await deps.place(city).catch(() => null);
-  // No place Cue can confirm from Luma's catalog: no Exa search. Without one the query searches everywhere, a paid search for events
-  // they can't get to; the feed alone answers.
-  if (!place) return { events: [], report: { cached: false, error: NO_PLACE, pages: 0, read: 0, notPublic: 0, kept: 0 } };
+  let catalogDown = false;
+  const place = await deps.place(city).catch(() => ((catalogDown = true), null));
+  // No place Cue can confirm from Luma's catalog: no Exa search for in-person events, since the query would search everywhere for
+  // events they can't get to; the feed alone answers. An online ask needs no place: it searches, and keeps online events only.
+  const onlineOnly = !place && lumaExaQuery(what, null, o.dates).query.includes(" online");
+  if (!place && !onlineOnly) return { events: [], report: { cached: false, error: catalogDown ? CATALOG_DOWN : NO_PLACE, pages: 0, read: 0, notPublic: 0, kept: 0 } };
   const { query, kinds } = lumaExaQuery(what, place, o.dates);
   const key = query.toLowerCase();
   const now = deps.now();
@@ -310,6 +317,8 @@ export async function lumaEventsViaExa(
       const online = !!e.locationType && ONLINE_LOCATION_TYPES.has(e.locationType);
       const inPerson = e.locationType === IN_PERSON_LOCATION_TYPE && !!e.city;
       if (!online && !inPerson) return n.noLocation++, null;
+      // With no confirmed place (an online ask), only an online event is kept: an in-person one could be anywhere.
+      if (onlineOnly && !online) return n.noLocation++, null;
       const shown = e.locationVisibility === "public";
       const details: EventDetails = {
         startAt: e.startAt,

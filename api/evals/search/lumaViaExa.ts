@@ -618,7 +618,7 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
     let touched = 0;
     const counting = { connect: async () => { touched++; return { query: async (q: string) => ({ rows: /COUNT/.test(q) ? [{ today: 0 }] : [] }), release: () => {} }; } };
     const testRes = await V.reserveLumaExaSearch(TEST_ID, "request", counting);
-    check("a test account: refused before the budget, the database never touched, saying why", !testRes.ok && touched === 0 && testRes.reason === "a test account: paid search is off for it", { testRes, touched });
+    check("a test account: refused before the budget, the database never touched, saying why", !testRes.ok && touched === 0 && testRes.reason === V.TEST_ACCOUNT && /tier 2 went out from Luma's feed alone$/.test(V.TEST_ACCOUNT), { testRes, touched });
     const realRes = await V.reserveLumaExaSearch(REAL_ID, "request", counting);
     check("...a real member still reserves as before", realRes.ok && touched === 1, { realRes, touched });
     TM.setTestMemberLookupForTests(null);
@@ -628,6 +628,25 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
     let searched = 0;
     const r = await V.lumaEventsViaExa("jazz", "Atlantis", { inRange: () => true, dates: "this weekend", deps: { ...viaDeps(), exa: async (...a: any[]) => (searched++, (exaDep as any)(...a)), reserve: async () => (searched++, { ok: true, reason: null }) } as any });
     check("no confirmed place: no reservation, no Exa search, the report says why and that the feed answered", !!r && r.events.length === 0 && searched === 0 && r.report.error === V.NO_PLACE && /tier 2 went out from Luma's feed alone$/.test(V.NO_PLACE), { r, searched });
+  }
+  // An online ask needs no place: with none confirmed it still searches, and keeps online events only (review of 87d07fc3).
+  {
+    reset({ exa: [{ url: "https://lu.ma/zoomtalk", title: "AI talk" }, { url: "https://lu.ma/inperson9", title: "AI talk IRL" }], pages: { zoomtalk: page({ startAt: at(30), city: null, online: true }), inperson9: page({ startAt: at(31), city: "Boise" }) } });
+    const r = await V.lumaEventsViaExa("online AI talks", "Boise", { inRange: () => true, dates: "this week", deps: viaDeps() });
+    const got = r?.events.map((e) => e.url) ?? [];
+    check("an online ask with no confirmed place: one Exa search with no city, online events kept, in-person dropped", exaCalls.length === 1 && !/ in /.test(exaCalls[0]) && / online/.test(exaCalls[0]) && got.includes("https://lu.ma/zoomtalk") && !got.includes("https://lu.ma/inperson9"), { exaCalls, got, report: r?.report });
+    reset({ exa: [{ url: "https://lu.ma/zoomtalk", title: "AI talk" }], pages: { zoomtalk: page({ startAt: at(30), city: null, online: true }) } });
+    const down = await V.lumaEventsViaExa("jazz", "San Francisco", { inRange: () => true, dates: "this weekend", deps: { ...viaDeps(), place: async () => { throw new Error("catalog unreachable"); } } as any });
+    check("the catalog can't be read: no search, and the report says that, not 'no city'", !!down && exaCalls.length === 0 && down.report.error === V.CATALOG_DOWN, { exaCalls, down });
+    // A test account is refused before the shared cache: a real member asking the same thing still searches.
+    const TM = await import("../../src/services/testMemberSpend.js");
+    const TID = "00000000-0000-4000-8000-0000000000e3";
+    TM.setTestMemberLookupForTests(async (id) => ({ phone_number: null, archived_phone: null, archived_at: id === TID ? new Date() : null, live_test_id: null }));
+    reset({ exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }], pages: { good1: page() } });
+    const t = await V.lumaEventsViaExa("founder dinners", "San Francisco", { userId: TID, inRange: () => true, dates: "this weekend", deps: viaDeps() });
+    const real = await V.lumaEventsViaExa("founder dinners", "San Francisco", { userId: "00000000-0000-4000-8000-0000000000e4", inRange: () => true, dates: "this weekend", deps: viaDeps() });
+    check("a test account: no Exa search, said; the same ask from a real member right after still searches", t?.report.error === V.TEST_ACCOUNT && exaCalls.length === 1 && (real?.events.length ?? 0) === 1, { t: t?.report, exaCalls, real: real?.report });
+    TM.setTestMemberLookupForTests(null);
   }
   const mig = src("db/migrations.ts");
   check("the table: id, user, share, time, and no query column (pinned)", /CREATE TABLE IF NOT EXISTS luma_exa_search_log \(\n\s+id BIGSERIAL PRIMARY KEY,\n\s+user_id UUID REFERENCES users\(id\) ON DELETE CASCADE,\n\s+source TEXT NOT NULL,\n\s+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)\n\s+\)/.test(mig) && /idx_luma_exa_search_log_created ON luma_exa_search_log \(created_at DESC\)/.test(mig));
@@ -693,7 +712,7 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   check("'show me', 'state-of-the-art' and 'world-class' aren't live music, art or a workshop", q("show me something fun, world-class and state-of-the-art") === "events in San Francisco, October 20 to October 26, 2026" && q("live shows and art classes") === "workshop, live music, art events in San Francisco, October 20 to October 26, 2026", [q("show me something fun, world-class and state-of-the-art"), q("live shows and art classes")]);
   check("everyday words that look like a kind aren't one ('talk about', 'book a table', 'no energy', 'it runs late')", q("I want to talk about it, book a table, I have no energy and it runs late") === "events in San Francisco, October 20 to October 26, 2026", q("I want to talk about it, book a table, I have no energy and it runs late"));
   check("at most 3 kinds", V.lumaExaQuery("founder investor climate hardware AI meetups", { name: "San Francisco" }, D1).kinds.length === 3);
-  check("the search itself names the city only through the catalog (pinned)", /const place = await deps\.place\(city\)\.catch\(\(\) => null\);\n[\s\S]{0,300}?if \(!place\) return \{ events: \[\], report: \{ cached: false, error: NO_PLACE,[^\n]*\n  const \{ query, kinds \} = lumaExaQuery\(what, place, o\.dates\);/.test(src("services/lumaViaExa.ts")) && /place: d\.place \?\? \(\(city\) => L\.discoverPlaceFor\(city\)\.then\(\(p\) => \(p \? \{ name: p\.name \} : null\)\)\)/.test(src("services/lumaViaExa.ts")));
+  check("the search itself names the city only through the catalog (pinned)", /const place = await deps\.place\(city\)\.catch\(\(\) => \(\(catalogDown = true\), null\)\);\n[\s\S]{0,500}?if \(!place && !onlineOnly\) return [^\n]*\n  const \{ query, kinds \} = lumaExaQuery\(what, place, o\.dates\);/.test(src("services/lumaViaExa.ts")) && /place: d\.place \?\? \(\(city\) => L\.discoverPlaceFor\(city\)\.then\(\(p\) => \(p \? \{ name: p\.name \} : null\)\)\)/.test(src("services/lumaViaExa.ts")));
   // The receipt's wants (search-compare q4, q5, q10), as Exa now gets them.
   const receipt: [string, string, string, string][] = [
     ["q4", "startup founder events and meetups", "October 19 to October 25, 2026", "startup founder, meetup events in San Francisco, October 19 to October 25, 2026"],
