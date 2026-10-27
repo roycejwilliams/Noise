@@ -38,6 +38,7 @@ import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGap
 import { recordDecision } from "../harness/core.js";
 import { missedCallText } from "../harness/callGate.js";
 import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
+import { withMember } from "../services/llmUsage.js";
 import { perMember, withTraceUser } from "../services/llmTraceText.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
@@ -999,7 +1000,7 @@ export function registerJobs(io: Server) {
       const userIds = await findUsersDueForRecap();
       await runWithConcurrency(userIds, 5, async (userId) => {
         try {
-          await withTraceUser(userId, () => buildRecap(userId));
+          await withTraceUser(userId, () => withMember(userId, () => buildRecap(userId)));
         } catch (err: any) {
           console.error(`Memory compaction failed for ${userId}:`, err?.message ?? err);
         }

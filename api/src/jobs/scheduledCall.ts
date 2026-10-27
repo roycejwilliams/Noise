@@ -6,6 +6,7 @@ import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendExempt } from "../harness/proactive.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { MODELS } from "../models.js";
+import { withMember } from "../services/llmUsage.js";
 import { withTraceUser } from "../services/llmTraceText.js";
 
 // One-line heads-up draft checked by length; narrow work, so Haiku.
@@ -95,8 +96,8 @@ export async function sendDueReminders(): Promise<void> {
     // a slow/failed generation never blocks the reminder from going out.
     let reminderMessage = "Calling you soon, like we said.";
     try {
-      // Under the member's own trace-text mark (services/llmTraceText.ts).
-      const { text: variedReminder } = await withTraceUser(row.user_id, () =>
+      // Under the member's own trace-text mark (services/llmTraceText.ts), its cost theirs (services/llmUsage.ts).
+      const { text: variedReminder } = await withTraceUser(row.user_id, () => withMember(row.user_id, () =>
         generateText({
           model: anthropic(REMINDER_MODEL),
           experimental_telemetry: {
@@ -104,7 +105,7 @@ export async function sendDueReminders(): Promise<void> {
             functionId: "jobs.scheduledCallReminder",
           },
           prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're about to call ${row.first_name} in about 15 minutes, as scheduled. Send a short, natural one-line heads-up text. Vary how you say it, don't just say "Calling you soon." No em dashes. Under 60 characters.`,
-        }),
+        })),
       );
       const trimmed = variedReminder.trim();
       if (trimmed && trimmed.length <= 80 && !/[!—–]|https?:/.test(trimmed)) reminderMessage = trimmed;

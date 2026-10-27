@@ -8,6 +8,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
+import { withMember } from "./llmUsage.js";
 import { withTraceUser } from "./llmTraceText.js";
 
 // "person": someone to meet or talk to ("a founder who's done a pre-seed raise to talk to"), which only an intro can meet, never a
@@ -89,7 +90,7 @@ export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify
   );
   for (const r of rows) {
     // A lookout keeps its kind; it's only marked checked (or given find, if it never had one), so it isn't read again every run.
-    const kind = r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : await withTraceUser(r.user_id, () => classify(r.ask_text)); // under the ask's member
+    const kind = r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : await withTraceUser(r.user_id, () => withMember(r.user_id, () => classify(r.ask_text))); // under the ask's member, its cost theirs
     await setAskKind(db, { id: r.id, read: { kind: r.kind ?? null, intent: r.intent ?? null }, kind, version: ASK_KIND_VERSION }).catch(() => {});
   }
   // Open "find" asks that read as Co's own promise or deliverable are NOT switched off here any more (Royce, 2026-10-13: a member

@@ -176,6 +176,11 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   for (const [f, fn, id] of opened) check(`${f}: ${fn} runs in its scope (${id})`, src(f).includes(`async function ${fn}(...a: Parameters<typeof ${fn}InScope>): ReturnType<typeof ${fn}InScope> {\n  return withMember(${id}, () => ${fn}InScope(...a));`));
   check("services/eventScoring.ts: each person's part of a room pass runs in their own scope", /for \(const person of matched\) await withMember\(person\.user_id, async \(\) => \{/.test(src("services/eventScoring.ts")));
   check("services/taskTurn.ts: each due task runs in its own member's scope", /for \(const t of await claim\(\)\) await withTraceUser\(t\.userId, \(\) => withMember\(t\.userId, \(\) => runOne\(t\)\)\);/.test(src("services/taskTurn.ts")));
+  // Three member calls that had a trace mark and no usage scope (review of the rebase): the call reminder, the nightly memory
+  // compaction, the ask's kind.
+  check("jobs/scheduledCall.ts: the call reminder's draft is the member's", /withTraceUser\(row\.user_id, \(\) => withMember\(row\.user_id, \(\) =>\n\s+generateText\(/.test(src("jobs/scheduledCall.ts")));
+  check("jobs/index.ts: each member's memory compaction is theirs", /withTraceUser\(userId, \(\) => withMember\(userId, \(\) => buildRecap\(userId\)\)\)/.test(src("jobs/index.ts")));
+  check("services/askKind.ts: classifying an ask is its member's", /withTraceUser\(r\.user_id, \(\) => withMember\(r\.user_id, \(\) => classify\(r\.ask_text\)\)\)/.test(src("services/askKind.ts")));
   // Langfuse gets no new member ids: the only telemetry metadata ids are the five that were there before.
   {
     const { execSync } = await import("node:child_process");
