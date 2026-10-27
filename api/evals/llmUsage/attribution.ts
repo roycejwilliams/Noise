@@ -160,14 +160,14 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   ];
   for (const [f, re] of scoped) check(`${f}: its model calls run in the member's scope`, re.test(src(f)));
   const sb = src("routes/sendblue.ts");
-  check("routes/sendblue.ts: the inbound text opens a scope and names the member once looked up", /const run = \(\) => withMember\(null, runTurn\);\n\s+const runTurn = async \(\) => \{/.test(sb) && /let user = await findOrCreateUserByPhone\(number\);\n\s+setScopeMember\(user\.id\);/.test(sb));
+  check("routes/sendblue.ts: the inbound text opens a scope and names the member once looked up", /const run = \(\) => withMember\(null, runTurn\);\n\s+const runTurn = async \(\) => \{/.test(sb) && /let user = await findOrCreateUserByPhone\(number\);\n(\s+\/\/[^\n]*\n\s+noteTraceUser\(user\?\.id\);\n)?\s+setScopeMember\(user\.id\);/.test(sb));
   // Scopes opened where none existed (no member id is added to telemetry metadata for this: review of #270).
   const opened: [string, string, string][] = [
     ["services/askLifecycle.ts", "readIntents", "a[0]"],
     ["services/callOpening.ts", "writeOpening", "a[0].userId ?? scopeMember()"],
     ["services/profileExtraction.ts", "extractPlannedEventMention", "a[0]"],
     ["services/callContext.ts", "summarizeCallForTextContext", "a[0]"],
-    ["services/eventUnmatchedFollowUp.ts", "sendSoloAcknowledgment", "a[2].user_id"],
+    ["services/eventUnmatchedFollowUp.ts", "sendClose", "a[2].user_id"],
     ["services/namedEventLookup.ts", "lookupNamedEvent", "a[3].userId ?? scopeMember()"],
     ["routes/co.ts", "sendMissedCallFollowUp", "a[0].id"],
     ["services/eventScoring.ts", "scoreMatchedGroup", "null"],
@@ -175,7 +175,7 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   ];
   for (const [f, fn, id] of opened) check(`${f}: ${fn} runs in its scope (${id})`, src(f).includes(`async function ${fn}(...a: Parameters<typeof ${fn}InScope>): ReturnType<typeof ${fn}InScope> {\n  return withMember(${id}, () => ${fn}InScope(...a));`));
   check("services/eventScoring.ts: each person's part of a room pass runs in their own scope", /for \(const person of matched\) await withMember\(person\.user_id, async \(\) => \{/.test(src("services/eventScoring.ts")));
-  check("services/taskTurn.ts: each due task runs in its own member's scope", /for \(const t of await claim\(\)\) await withMember\(t\.userId, \(\) => runOne\(t\)\);/.test(src("services/taskTurn.ts")));
+  check("services/taskTurn.ts: each due task runs in its own member's scope", /for \(const t of await claim\(\)\) await withTraceUser\(t\.userId, \(\) => withMember\(t\.userId, \(\) => runOne\(t\)\)\);/.test(src("services/taskTurn.ts")));
   // Langfuse gets no new member ids: the only telemetry metadata ids are the five that were there before.
   {
     const { execSync } = await import("node:child_process");
