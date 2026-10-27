@@ -352,6 +352,11 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   // A call's turn (isVoice) never runs Exa; a text turn does. Exa is "configured" here and answered by a stub that counts its calls.
   const exaCalls: string[] = [];
   globalThis.fetch = (async (u: any, init: any) => {
+    // Luma's city catalog (lumaDiscovery.ts discoverPlaces): one city it confirms. With no confirmed place there's no Exa search.
+    if (String(u?.url ?? u) === "https://lu.ma/discover") {
+      const data = { props: { pageProps: { initialData: { places: [{ api_id: "discplace-sf", name: "San Francisco", slug: "sf", coordinate: { latitude: 37.77, longitude: -122.42 } }] } } } };
+      return new Response(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data)}</script>`, { status: 200, headers: { "content-type": "text/html" } });
+    }
     if (String(u?.url ?? u).startsWith("https://api.exa.ai/")) {
       exaCalls.push(JSON.parse(init?.body ?? "{}").query ?? "");
       return new Response(JSON.stringify({ results: [], costDollars: { total: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -370,7 +375,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   };
   const turn = async (isVoice: boolean, what: string) => {
     const L2 = L.loopTools({ ...ctx, isVoice }, { sent: false, sentMessages: [] }, L.newLoopState(Date.now()), () => {}) as any;
-    return L2.searchEvents.execute({ what, when: "this weekend" }, { toolCallId: what, messages: [] }).catch((e: any) => ({ threw: String(e) }));
+    return L2.searchEvents.execute({ what, when: "this weekend", city: "San Francisco" }, { toolCallId: what, messages: [] }).catch((e: any) => ({ threw: String(e) }));
   };
   const voice = await turn(true, "jazz on a call");
   const onCall = exaCalls.length;
@@ -454,7 +459,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("viaExa: false (a call): no Exa search, the feed's events only, nothing logged", exaCalls.length === 0 && links(r).join() === "https://lu.ma/feed1,https://lu.ma/feed2" && r.viaExa === null && logs.length === 0, { exaCalls, links: links(r) });
   check("calls (voiceFinds) pass viaExa: false; replies, tasks and the sweep leave it on (pinned)",
     /eventCandidates\(what, city, \{ when: brief\?\.when \?\? null, userId, limit: 5, viaExa: false \}\)/.test(src("services/voiceFinds.ts")) &&
-    /eventCandidates\(what, city \?\? ctx\.turn\?\.profile\?\.city \?\? null, \{ when: when \?\? null, userId: ctx\.userId, limit: 8, viaExa: !ctx\.isVoice, source: "request" \}\)/.test(src("agent/loopTools.ts")) &&
+    /eventCandidates\(what, where\.place, \{ when: when \?\? null, userId: ctx\.userId, limit: 8, viaExa: !ctx\.isVoice, source: "request" \}\)/.test(src("agent/loopTools.ts")) &&
     /eventCandidates\(what, person\.city \?\? null, \{ when: when \?\? null, userId, timezone: zone, limit: 6, source: "request" \}\)/.test(src("services/taskTurn.ts")) &&
     /eventCandidates\(what, c\.city, \{ when: when \?\? null, userId: c\.userId, timezone: opts\.timezone \?\? null, limit: 8, source: "sweep" \}\)/.test(src("services/sweepFind.ts")));
 }
@@ -604,6 +609,26 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   check("...the sweep at 40: refused, rolled back, nothing written", !full.ok && sql.some((s) => s.q === "ROLLBACK") && !sql.some((s) => /INSERT/.test(s.q)));
   const broken = await V.reserveLumaExaSearch("u1", "request", { connect: async () => { throw new Error("connect ECONNREFUSED"); } });
   check("the budget can't be checked: no Exa search (fails closed), saying why", !broken.ok && /^the daily budget for Luma searches through Exa couldn't be checked \(connect ECONNREFUSED\), so no Exa search; tier 2 went out from Luma's feed alone$/.test(broken.reason ?? ""), broken);
+  // A test account (services/testMemberSpend.ts, #271): no slot taken, the database never touched, no Exa search.
+  {
+    const TM = await import("../../src/services/testMemberSpend.js");
+    const TEST_ID = "00000000-0000-4000-8000-0000000000e1";
+    const REAL_ID = "00000000-0000-4000-8000-0000000000e2";
+    TM.setTestMemberLookupForTests(async (id) => ({ phone_number: null, archived_phone: null, archived_at: id === TEST_ID ? new Date() : null, live_test_id: null }));
+    let touched = 0;
+    const counting = { connect: async () => { touched++; return { query: async (q: string) => ({ rows: /COUNT/.test(q) ? [{ today: 0 }] : [] }), release: () => {} }; } };
+    const testRes = await V.reserveLumaExaSearch(TEST_ID, "request", counting);
+    check("a test account: refused before the budget, the database never touched, saying why", !testRes.ok && touched === 0 && testRes.reason === "a test account: paid search is off for it", { testRes, touched });
+    const realRes = await V.reserveLumaExaSearch(REAL_ID, "request", counting);
+    check("...a real member still reserves as before", realRes.ok && touched === 1, { realRes, touched });
+    TM.setTestMemberLookupForTests(null);
+  }
+  // No place the catalog confirms: no Exa search at all, and the report says so with its fix.
+  {
+    let searched = 0;
+    const r = await V.lumaEventsViaExa("jazz", "Atlantis", { inRange: () => true, dates: "this weekend", deps: { ...viaDeps(), exa: async (...a: any[]) => (searched++, (exaDep as any)(...a)), reserve: async () => (searched++, { ok: true, reason: null }) } as any });
+    check("no confirmed place: no reservation, no Exa search, the report says why and that the feed answered", !!r && r.events.length === 0 && searched === 0 && r.report.error === V.NO_PLACE && /tier 2 went out from Luma's feed alone$/.test(V.NO_PLACE), { r, searched });
+  }
   const mig = src("db/migrations.ts");
   check("the table: id, user, share, time, and no query column (pinned)", /CREATE TABLE IF NOT EXISTS luma_exa_search_log \(\n\s+id BIGSERIAL PRIMARY KEY,\n\s+user_id UUID REFERENCES users\(id\) ON DELETE CASCADE,\n\s+source TEXT NOT NULL,\n\s+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)\n\s+\)/.test(mig) && /idx_luma_exa_search_log_created ON luma_exa_search_log \(created_at DESC\)/.test(mig));
 
@@ -668,7 +693,7 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   check("'show me', 'state-of-the-art' and 'world-class' aren't live music, art or a workshop", q("show me something fun, world-class and state-of-the-art") === "events in San Francisco, October 20 to October 26, 2026" && q("live shows and art classes") === "workshop, live music, art events in San Francisco, October 20 to October 26, 2026", [q("show me something fun, world-class and state-of-the-art"), q("live shows and art classes")]);
   check("everyday words that look like a kind aren't one ('talk about', 'book a table', 'no energy', 'it runs late')", q("I want to talk about it, book a table, I have no energy and it runs late") === "events in San Francisco, October 20 to October 26, 2026", q("I want to talk about it, book a table, I have no energy and it runs late"));
   check("at most 3 kinds", V.lumaExaQuery("founder investor climate hardware AI meetups", { name: "San Francisco" }, D1).kinds.length === 3);
-  check("the search itself names the city only through the catalog (pinned)", /const place = await deps\.place\(city\)\.catch\(\(\) => null\);\n  const \{ query, kinds \} = lumaExaQuery\(what, place, o\.dates\);/.test(src("services/lumaViaExa.ts")) && /place: d\.place \?\? \(\(city\) => L\.discoverPlaceFor\(city\)\.then\(\(p\) => \(p \? \{ name: p\.name \} : null\)\)\)/.test(src("services/lumaViaExa.ts")));
+  check("the search itself names the city only through the catalog (pinned)", /const place = await deps\.place\(city\)\.catch\(\(\) => null\);\n[\s\S]{0,300}?if \(!place\) return \{ events: \[\], report: \{ cached: false, error: NO_PLACE,[^\n]*\n  const \{ query, kinds \} = lumaExaQuery\(what, place, o\.dates\);/.test(src("services/lumaViaExa.ts")) && /place: d\.place \?\? \(\(city\) => L\.discoverPlaceFor\(city\)\.then\(\(p\) => \(p \? \{ name: p\.name \} : null\)\)\)/.test(src("services/lumaViaExa.ts")));
   // The receipt's wants (search-compare q4, q5, q10), as Exa now gets them.
   const receipt: [string, string, string, string][] = [
     ["q4", "startup founder events and meetups", "October 19 to October 25, 2026", "startup founder, meetup events in San Francisco, October 19 to October 25, 2026"],
