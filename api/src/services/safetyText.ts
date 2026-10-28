@@ -9,10 +9,12 @@ export const CRISIS_RESOURCES =
 const SIGNALS: RegExp[] = [
   /\b(kill|hurt|harm|cut) (myself|my self)\b/i,
   /\bsuicid(e|al)\b/i,
-  /\b(want|wanna|going|plan(ning)?) to (die|end my life|not be here|disappear forever)\b/i,
+  // "wanna" carries its own "to": "I wanna die" (review of #283).
+  /\b(want to|wanna|going to|plan(ning)? to) (die|end my life|not be here|disappear forever)\b/i,
   // "end it" only on its own or as "end it all", never "end it with my cofounder".
-  // A trailing emoji counts as its own ending ("I just want to end it 😔"); \p{Extended_Pictographic} needs the u flag.
-  /\b(want|wanna|going|plan(ning)?) to end it( all\b|\s*($|[.!?,]|\p{Extended_Pictographic}))/iu,
+  // Emoji before the end count as part of the ending ("I just want to end it 😔"), never mid-sentence ("end it 🎉 at 10pm"); the
+  // \p{...} classes need the u flag (review of #283).
+  /\b(want to|wanna|going to|plan(ning)? to) end it( all\b|[\s\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}]*($|[.!?,]))/iu,
   /\b(end(ing)?|take|taking) my (own )?life\b/i,
   /\bdon'?t want to (be alive|live|wake up|exist)( anymore)?\b/i,
   /\b(no|not any) (reason|point) (to|in) (live|living|being alive|going on)\b/i,

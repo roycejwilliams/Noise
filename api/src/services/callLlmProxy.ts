@@ -382,11 +382,13 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const say = (s: string): string | null => {
     const sentence = s.trim();
     const isQuestion = /\?["')\]]*\s*$/.test(sentence);
-    if (clean && asked && ruledOut(decision, "after_question") && !safetyTurn && !SAFETY_LINE.test(sentence)) {
+    // The safety reads see phone punctuation made plain ("don’t", a no-break space); everything else reads the sentence as said.
+    const plainS = plainPunctuation(sentence);
+    if (clean && asked && ruledOut(decision, "after_question") && !safetyTurn && !SAFETY_LINE.test(plainS)) {
       deps.onDropped?.(sentence, "after the question on an inbound call's first reply: they lead");
       return null;
     }
-    if (clean && asked && isQuestion && ruledOut(decision, "second_question") && !safetyTurn && !SAFETY_LINE.test(sentence)) {
+    if (clean && asked && isQuestion && ruledOut(decision, "second_question") && !safetyTurn && !SAFETY_LINE.test(plainS)) {
       deps.onDropped?.(sentence, "a second question in the turn");
       return null;
     }
@@ -419,7 +421,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
     // A sentence that is only a stock phrase ("And I hear you.") isn't said (harness/stockLines.ts stockSentence): the reply goes on
     // without it, the same way a dash is cleaned. Never on a safety call's help line.
-    if (clean && stockSentence(sentence) && !SAFETY_LINE.test(sentence)) {
+    if (clean && stockSentence(sentence) && !SAFETY_LINE.test(plainS)) {
       deps.onDropped?.(sentence, "a stock line");
       heldStock ??= s;
       return null;
@@ -452,7 +454,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
     // Co checking on their safety makes the whole turn a safety turn: no question limit after it.
-    if (SAFETY_LINE.test(plainPunctuation(sentence)) || (isQuestion && SAFETY_TURN.test(plainPunctuation(sentence)))) safetyTurn = true;
+    if (SAFETY_LINE.test(plainS) || (isQuestion && SAFETY_TURN.test(plainS))) safetyTurn = true;
     if (isQuestion && countsAsQuestion(sentence)) asked = true;
     spokeAny = true;
     spokenLines.push(line);
