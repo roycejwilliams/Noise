@@ -355,8 +355,46 @@ const VIEW: Record<QaMedium, { width: number; height: number }> = { deck: { widt
 export const PHONE_VIEW = { width: 390, height: 844 } as const;
 // The link card (Royce, 2026-10-28, option C): what the link's own preview shows is the artifact's real first screen, shot by the QA
 // render of the version that ships, at laptop width (a phone's 390px portrait makes a poor card). A deck: its first slide, the whole
-// 1280x720 frame (16:9, close to the 1.91:1 cards render best at, and never cut). A page: its top, cut to 1280x672 (1.905:1).
+// 1280x720 frame (16:9, close to the 1.91:1 cards render best at, and never cut; approved as is). A page: its content column, not the
+// whole 1280 (Royce, 2026-10-28: ~40% of that was empty margin, so the words read half as large in the card): the column's text in
+// its first screen, padded CARD_PAD each side, at 1.905:1, from its cover when it has a picture (moved down only as far as keeps the
+// title in), else from its first words; shot at 2x so it stays sharp. 1280x672 is the most a page's card can be, in CSS px. No card at all when a Google Places photo shows in it (their
+// terms limit storing their photos; the renderers mark them data-via="google"): the link keeps the drawn card.
 export const CARD_SHOT = { deck: { width: 1280, height: 720 }, page: { width: 1280, height: 672 } } as const;
+export const CARD_PAD = 32;
+export const CARD_PAGE_SCALE = 2;
+// In the page: the card's frame (CSS px) and whether a Google Places photo shows in it.
+function cardInPage(medium: string, card: { width: number; height: number }, pad: number): { clip: { x: number; y: number; width: number; height: number }; google: boolean } {
+  let clip = { x: 0, y: 0, width: card.width, height: card.height };
+  if (medium === "page") {
+    const els = [...document.querySelectorAll("main h1, main h2, main h3, main p, main li, main dt, main dd")].filter((el) => !el.closest(".cover") && (el as HTMLElement).offsetParent !== null);
+    let l = Infinity, r = -Infinity, top = Infinity;
+    for (const el of els) {
+      const b = el.getBoundingClientRect();
+      if (!b.width || b.top >= innerHeight) continue;
+      l = Math.min(l, b.left);
+      r = Math.max(r, b.right);
+      top = Math.min(top, b.top);
+    }
+    if (Number.isFinite(l) && r > l) {
+      const width = Math.min(card.width, Math.round(r - l + 2 * pad));
+      const height = Math.round((width * card.height) / card.width);
+      const x = Math.max(0, Math.min(innerWidth - width, Math.round((l + r) / 2 - width / 2)));
+      // A picture or plate cover is part of the first screen: from the top, moved down only as far as keeps the title in. A page whose
+      // cover is only the slim band starts at its words.
+      const h1 = document.querySelector("main h1")?.getBoundingClientRect();
+      const pictured = !!document.querySelector(".cover.photo, .cover.plate-cover");
+      const want = !pictured ? top - pad : h1 && h1.bottom + pad > height ? h1.bottom + pad - height : 0;
+      const y = Math.max(0, Math.min(innerHeight - height, Math.round(want)));
+      clip = { x, y, width, height };
+    }
+  }
+  const google = [...document.querySelectorAll('img[data-via="google"]')].some((im) => {
+    const b = im.getBoundingClientRect();
+    return b.width > 0 && b.height > 0 && b.right > clip.x && b.left < clip.x + clip.width && b.bottom > clip.y && b.top < clip.y + clip.height && getComputedStyle(im).visibility !== "hidden";
+  });
+  return { clip, google };
+}
 
 // Renders the HTML, screenshots it and measures it. Null measure when Chrome isn't there (the caller sends without QA and says so in
 // its log, never that QA passed).
@@ -370,7 +408,8 @@ export async function qaRender(html: string, medium: QaMedium, o: { width?: numb
   try {
     const browser = await B.sharedBrowser();
     const view = o.phone ? { ...PHONE_VIEW } : { ...VIEW[medium], ...(o.width ? { width: o.width } : {}) };
-    context = await browser.newContext({ javaScriptEnabled: true, viewport: view, deviceScaleFactor: 1 });
+    // A page's card is shot at 2x (its column is narrower than the card it fills); what's measured is in CSS px either way.
+    context = await browser.newContext({ javaScriptEnabled: true, viewport: view, deviceScaleFactor: o.view && medium === "page" && !o.phone ? CARD_PAGE_SCALE : 1 });
     await context.route("**/*", (route: any) => {
       const u = route.request().url();
       let host = "";
@@ -389,9 +428,12 @@ export async function qaRender(html: string, medium: QaMedium, o: { width?: numb
     await Promise.race([pg.evaluate("Promise.all([...document.images].map((i) => i.decode().catch(() => {})))"), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
     const { inPage } = await import("./designRead.js");
     const measure = (await pg.evaluate(inPage(measureInPage, medium))) as Measure;
-    const card = medium === "doc" ? null : CARD_SHOT[medium];
     const shoot = o.screenshot !== false && !(o.view && o.phone);
-    const screenshot = !shoot ? null : Buffer.from(await pg.screenshot(o.view && card ? { type: "png", clip: { x: 0, y: 0, ...card } } : { fullPage: true, type: "png" }));
+    if (shoot && o.view && medium !== "doc") {
+      const c = (await pg.evaluate(inPage(cardInPage, medium, CARD_SHOT[medium], CARD_PAD))) as ReturnType<typeof cardInPage>;
+      return { measure, screenshot: c.google ? null : Buffer.from(await pg.screenshot({ type: "png", clip: c.clip })) };
+    }
+    const screenshot = !shoot ? null : Buffer.from(await pg.screenshot({ fullPage: true, type: "png" }));
     return { measure, screenshot };
   } catch (err: any) {
     console.error("designQa: render failed (non-fatal):", err?.message ?? err);

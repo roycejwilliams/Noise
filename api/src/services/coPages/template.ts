@@ -376,7 +376,8 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
     // A venue photo shows only with its author's credit, fetched for this view (Google's terms).
     const c = p.kind === "venue" ? o.credit?.(p) ?? null : null;
     if (p.kind === "venue" && !c) return "";
-    return u ? `<img src="${e(u)}" alt="${e(p.alt)}" loading="${loading}" decoding="async" data-qa-crop="ok">${creditHtml(p, e, "credit", c)}` : "";
+    // data-via: a Google Places photo is marked, so the link card never stores one (designQa.ts CARD_SHOT, Royce 2026-10-28).
+    return u ? `<img src="${e(u)}" alt="${e(p.alt)}" loading="${loading}" decoding="async" data-qa-crop="ok"${p.via === "google" ? ` data-via="google"` : ""}>${creditHtml(p, e, "credit", c)}` : "";
   };
   const pal = d.style ? paletteFor(d.style) : CO_PALETTE;
   const mapFig = d.map ? mapHtml(d.map, e, tileSrc) : "";
@@ -417,11 +418,11 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
   const mapTop = mapAfter === -1 ? `<div class="inner mapsec">${mapFig}</div>` : "";
   // The cover: their own picture, the venue's own site image, or a picture Co found, as a real image with its credit; with nothing to
   // show at all (no picture, map or logo anywhere), a typographic plate, said as one.
-  const coverSrc = d.coverImage ? { src: assetSrc(d.coverImage), alt: d.title, credit: "" } : d.cover ? { src: urlSrc(d.cover.url), alt: d.cover.alt, credit: `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` } : d.coverArt && shows(d.coverArt) && artUrl(d.coverArt) ? { src: artUrl(d.coverArt)!, alt: d.coverArt.alt, credit: creditHtml(d.coverArt, e, "credit", d.coverArt.kind === "venue" ? o.credit?.(d.coverArt) ?? null : null) } : null;
+  const coverSrc = d.coverImage ? { src: assetSrc(d.coverImage), alt: d.title, credit: "" } : d.cover ? { src: urlSrc(d.cover.url), alt: d.cover.alt, credit: `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` } : d.coverArt && shows(d.coverArt) && artUrl(d.coverArt) ? { src: artUrl(d.coverArt)!, alt: d.coverArt.alt, google: d.coverArt.via === "google", credit: creditHtml(d.coverArt, e, "credit", d.coverArt.kind === "venue" ? o.credit?.(d.coverArt) ?? null : null) } : null;
   // Co's designed cover only on a page made with it (coverDesign), never added to an older one.
   const nothing = !coverSrc && !!d.coverDesign;
   const coverHtml = coverSrc
-    ? `<div class="cover photo"><img class="cover-img" src="${e(coverSrc.src)}" alt="${e(coverSrc.alt)}" decoding="async" data-qa-crop="ok"><div class="cover-mark">Cue.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${coverSrc.credit}</div>`
+    ? `<div class="cover photo"><img class="cover-img" src="${e(coverSrc.src)}" alt="${e(coverSrc.alt)}" decoding="async" data-qa-crop="ok"${"google" in coverSrc && coverSrc.google ? ` data-via="google"` : ""}><div class="cover-mark">Cue.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${coverSrc.credit}</div>`
     : nothing
       ? `<div class="cover plate-cover">${abstractCover(d.title, { ground: pal.coverTop, ink: pal.coverText, accent: pal.maroon === pal.coverTop ? pal.coverText : pal.maroon, accent2: pal.gold }, e)}</div>`
       : `<div class="cover${d.logo ? " logo-only" : " slim"}"><div class="cover-mark">Cue.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}</div>`;

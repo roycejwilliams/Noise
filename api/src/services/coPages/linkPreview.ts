@@ -17,11 +17,13 @@
 // in its address is a hash of the id, version, title and look, so an update gives it a new address: a stale title is never served.
 //
 // The real first screen (Royce, 2026-10-28, option C): when the version that's live has its own picture stored with it (the QA render
-// of what shipped, store.ts previewShotOf; a deck's first slide at 1280x720, a page's top at 1280x672, designQa.ts CARD_SHOT), that
+// of what shipped, store.ts previewShotOf; a deck's first slide at 1280x720, a page's top cut to its content column, designQa.ts CARD_SHOT), that
 // is the card, in place of the drawn one, under the same link: no separate picture goes with the text and nothing is uploaded
 // anywhere. It shows the artifact's content, so it is served like the page itself (no-store), and it goes wherever the content goes.
 // What a crawler already fetched is outside that, as with the drawn card: iMessage builds the card into the message it sends.
-// Share links show the same content (a deck's speaker notes are never on a slide), so they get the same picture.
+// Share links show the same content (a deck's speaker notes are never on a slide), so they get the same picture. A first screen showing
+// a Google Places photo stores no picture at all (their terms limit storing their photos; designQa.ts cardInPage), so it keeps the
+// drawn card; the venue's own image and the member's own photos are fine.
 import { createHash } from "crypto";
 import pool from "../../db/db.js";
 import { EMAIL_COLORS, escapeHtml } from "../emailDesign.js";
@@ -84,10 +86,12 @@ export function previewTag(page: Pick<StoredCoPage, "id" | "version" | "data" | 
 export const PREVIEW_CRAWLER = /facebookexternalhit|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|Discordbot|WhatsApp|LinkedInBot|TelegramBot|Applebot/i;
 export const PREVIEW_TAG = /^[A-Za-z0-9_-]{16}$/;
 
-// Pure: the size of the card a live artifact's link shows: its real first screen when one is stored for this version, else the drawn
-// card.
-export function cardSize(page: Pick<StoredCoPage, "data" | "shot">): { width: number; height: number } {
-  return page.shot ? { ...CARD_SHOT[isDeckData(page.data) ? "deck" : "page"] } : { ...OG_SIZE };
+// Pure: the size of the card a live artifact's link shows: its real first screen when one is stored for this version (its own pixels,
+// else the most its medium's card can be), else the drawn card.
+export function cardSize(page: Pick<StoredCoPage, "data" | "shot" | "shotSize">): { width: number; height: number } {
+  if (!page.shot) return { ...OG_SIZE };
+  const s = page.shotSize;
+  return s && s.width > 0 && s.height > 0 ? { width: s.width, height: s.height } : { ...CARD_SHOT[isDeckData(page.data) ? "deck" : "page"] };
 }
 
 // ---------------------------------------------------------------- the card

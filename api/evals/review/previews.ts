@@ -23,6 +23,14 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
 const pngDims = (b: Buffer | null | undefined) => (b && b.length > 24 ? { w: b.readUInt32BE(16), h: b.readUInt32BE(20) } : null);
 const MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const fakePng = (s: string) => Buffer.concat([MAGIC, Buffer.from(s)]);
+// A page's card (Royce, 2026-10-28): its content column, not the whole 1280, at 1.905:1, shot at 2x.
+const pageCard = (b: Buffer | null | undefined) => {
+  const d = pngDims(b);
+  return !!d && d.w < 1280 * Q.CARD_PAGE_SCALE && d.w > 600 && Math.abs(d.w / d.h - 1280 / 672) < 0.01;
+};
+const DOT = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const googleCover = { kind: "venue", via: "google", src: "gp:ChIJabcdef123:0", placeId: "ChIJabcdef123", i: 0, place: "Alder and Ash", alt: "Alder and Ash dining room" };
+const credit = () => ({ credit: "Photo: A. Diner", creditUrl: null });
 
 // Every outside call made while this file runs (the layer 1 guard refuses them too; this says which, and fails here first).
 const outside: string[] = [];
@@ -52,14 +60,28 @@ check("fixtures: the page and the deck pass the schema", !!pageData && deckOk.ok
 
 // ---------------------------------------------------------------- the shot: the first screen, at the card's size, never the phone's
 {
-  check("card sizes: a deck's first slide whole (1280x720), a page's top cut to 1.91:1 (1280x672)", Q.CARD_SHOT.deck.width === 1280 && Q.CARD_SHOT.deck.height === 720 && Q.CARD_SHOT.page.width === 1280 && Q.CARD_SHOT.page.height === 672);
+  check("card sizes: a deck's first slide whole (1280x720); a page's card at most 1280x672 (1.905:1), at 2x", Q.CARD_SHOT.deck.width === 1280 && Q.CARD_SHOT.deck.height === 720 && Q.CARD_SHOT.page.width === 1280 && Q.CARD_SHOT.page.height === 672 && Q.CARD_PAGE_SCALE === 2);
   const { renderCoPage } = await import("../../src/services/coPages/template.js");
   const pq = await Q.qaPage(pageData, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null }), { screenshot: true, view: true });
   const dq = deckOk.ok ? await Q.qaDeck(deckOk.data, new Map(), { screenshot: true, view: true }) : null;
-  if (pq.final.ran) check("a page's shot is its top at 1280x672, and the phone pass takes none", JSON.stringify(pngDims(pq.final.screenshot)) === JSON.stringify({ w: 1280, h: 672 }) && !pq.final.phone, pngDims(pq.final.screenshot));
+  if (pq.final.ran) check("a page's shot is its content column (narrower than the 1280 page, no wide empty margins) at 1.905:1, and the phone pass takes none", pageCard(pq.final.screenshot) && !pq.final.phone, pngDims(pq.final.screenshot));
   else console.log("note: Chrome didn't run here, so the page shot's size wasn't checked");
   if (dq?.final.ran) check("a deck's shot is its first slide at 1280x720", JSON.stringify(pngDims(dq.final.screenshot)) === JSON.stringify({ w: 1280, h: 720 }), pngDims(dq.final.screenshot));
   if (pq.final.ran) check("a stored shot passes the store's own gate (a PNG under the cap)", S.previewShotOf(pq.final.screenshot) !== null && (pq.final.screenshot?.length ?? 0) < S.PREVIEW_SHOT_MAX_BYTES);
+  // Google Places photos never go into a card (their terms limit storing their photos): a first screen showing one stores no shot.
+  const P2 = (S.parseCoArtifact({ ...pageData, coverArt: googleCover }) as any).data;
+  const P3 = (S.parseCoArtifact({ ...pageData, sources: [{ label: "Alder and Ash", url: "https://alderandash.example/" }], cover: { url: "https://alderandash.example/og.jpg", alt: "Alder and Ash dining room", sourceUrl: "https://alderandash.example/" } }) as any).data;
+  const D2 = S.parseCoArtifact({ ...deckData, coverArt: googleCover });
+  check("fixtures: a page and a deck with a Google cover, and a page with the venue's own image", !!P2 && !!P3 && D2.ok, D2);
+  const withArt = (d: any) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc: () => DOT, artSrc: () => DOT, credit });
+  check("the renderers mark a Google Places photo (and only it)", /<img class="cover-img"[^>]*data-via="google"/.test(withArt(P2)) && !/data-via=/.test(withArt(P3)) && !/data-via=/.test(withArt(pageData)));
+  const gp = await Q.qaPage(P2, withArt, { screenshot: true, view: true });
+  const op = await Q.qaPage(P3, withArt, { screenshot: true, view: true });
+  const gd = D2.ok ? await Q.qaDeck(D2.data, new Map(), { screenshot: true, view: true, art: { src: () => DOT, credit } }) : null;
+  if (gp.final.ran) check("a page whose first screen shows a Google Places photo stores no shot (the link keeps the drawn card)", gp.final.screenshot === null);
+  if (op.final.ran) check("a page whose cover is the venue's own image keeps its shot", pageCard(op.final.screenshot), pngDims(op.final.screenshot));
+  if (gd?.final.ran) check("a deck whose first slide shows a Google Places photo stores no shot", gd.final.screenshot === null);
+  if (D2.ok) check("the deck renderer marks its Google cover too", /<img class="ph"[^>]*data-via="google"/.test((await import("../../src/services/coPages/deck.js")).renderDeck({ id: "q".repeat(24), data: D2.data as any, updatedAt: new Date() }, { url: null, showNotes: false, artSrc: () => DOT, credit, imageSrc: () => null })));
   check("the gate stores nothing that isn't a PNG, is empty or is over the cap", S.previewShotOf(null) === null && S.previewShotOf(Buffer.alloc(0)) === null && S.previewShotOf(Buffer.from("GIF89a....")) === null && S.previewShotOf(Buffer.concat([MAGIC, Buffer.alloc(S.PREVIEW_SHOT_MAX_BYTES)])) === null && S.previewShotOf(fakePng("x")) !== null);
 }
 
@@ -76,13 +98,13 @@ check("fixtures: the page and the deck pass the schema", !!pageData && deckOk.ok
   const ins = calls.find((c) => /INSERT INTO co_pages/.test(c.sql));
   check("made: one text, the line and the link, and say() gets no media (text and its record only)", r.ok && said.length === 1 && said[0].length === 2 && typeof said[0][0] === "string" && /\nhttps:\/\/co\.example\/d\/[A-Za-z0-9_-]{24}$/.test(String(said[0][0])), { r, said });
   const shot = ins?.params[4] as Buffer | null | undefined;
-  check("made: the shot goes into the same INSERT as the page, at version 1 (or nothing when QA couldn't render)", !!ins && /preview, preview_version\) VALUES .*\$5::bytea, CASE WHEN \$5::bytea IS NULL THEN NULL ELSE 1 END/.test(ins.sql) && (shot === null || (Buffer.isBuffer(shot) && JSON.stringify(pngDims(shot)) === JSON.stringify({ w: 1280, h: 672 }))), { sql: ins?.sql, dims: pngDims(shot) });
+  check("made: the shot goes into the same INSERT as the page, at version 1 (or nothing when QA couldn't render)", !!ins && /preview, preview_version\) VALUES .*\$5::bytea, CASE WHEN \$5::bytea IS NULL THEN NULL ELSE 1 END/.test(ins.sql) && (shot === null || (Buffer.isBuffer(shot) && pageCard(shot))), { sql: ins?.sql, dims: pngDims(shot) });
   said.length = 0;
   next = (sql: string) => (/SELECT id, data->>'title'/.test(sql) ? { rows: [{ id: "A".repeat(24), title: "Saturday in the Mission", updated_at: new Date() }] } : /UPDATE co_pages SET data/.test(sql) ? { rows: [{ version: 2 }] } : { rows: [], rowCount: 1 });
   const u = await tools.updatePage.execute({ ...input, page: "the Mission page", changed: "swapped Friday dinner for Saturday at Mesa Verde" }, {});
   const upd = calls.find((c) => /UPDATE co_pages SET data/.test(c.sql));
   const ushot = upd?.params[6] as Buffer | null | undefined;
-  check("changed: one text, no media; the new version's shot replaces the old in the same UPDATE (none when QA couldn't render)", u.ok && said.length === 1 && said[0].length === 2 && !!upd && /preview = \$7::bytea, preview_version = CASE WHEN \$7::bytea IS NULL THEN NULL ELSE version \+ 1 END/.test(upd.sql) && (ushot === null || JSON.stringify(pngDims(ushot)) === JSON.stringify({ w: 1280, h: 672 })), { sql: upd?.sql, said });
+  check("changed: one text, no media; the new version's shot replaces the old in the same UPDATE (none when QA couldn't render)", u.ok && said.length === 1 && said[0].length === 2 && !!upd && /preview = \$7::bytea, preview_version = CASE WHEN \$7::bytea IS NULL THEN NULL ELSE version \+ 1 END/.test(upd.sql) && (ushot === null || pageCard(ushot)), { sql: upd?.sql, said });
   check("nothing is uploaded anywhere: making and changing a page made no outside call", outside.length === before, outside.slice(before));
   // The store: an update with no shot clears the old one (an older version's picture never outlives it).
   calls.length = 0;
@@ -97,7 +119,7 @@ check("fixtures: the page and the deck pass the schema", !!pageData && deckOk.ok
   const shotBytes = { page: fakePng("page-shot"), deck: fakePng("deck-shot") };
   const card = fakePng("drawn-card");
   const live = new Map<string, any>([
-    ["P".repeat(24), { id: "P".repeat(24), data: pageData, version: 2, updatedAt: new Date(), ownerUserId: "owner-a", shot: true }],
+    ["P".repeat(24), { id: "P".repeat(24), data: pageData, version: 2, updatedAt: new Date(), ownerUserId: "owner-a", shot: true, shotSize: { width: 1480, height: 778 } }],
     ["D".repeat(24), { id: "D".repeat(24), data: deckOk.ok ? deckOk.data : deckData, version: 1, updatedAt: new Date(), ownerUserId: "owner-a", shot: true }],
     ["N".repeat(24), { id: "N".repeat(24), data: pageData, version: 1, updatedAt: new Date(), ownerUserId: "owner-a", shot: false }],
     ["G".repeat(24), { id: "G".repeat(24), data: pageData, version: 1, updatedAt: new Date(), ownerUserId: "owner-a", shot: true }],
@@ -124,7 +146,7 @@ check("fixtures: the page and the deck pass the schema", !!pageData && deckOk.ok
   };
   const mp = await meta(`/d/${"P".repeat(24)}`);
   const pImg = await get(mp.path);
-  check("a page with a shot for its live version: its og:image is that shot, as a PNG the page's own size (1280x672)", pImg.status === 200 && pImg.body.equals(shotBytes.page) && pImg.h.get("content-type") === "image/png" && mp.w === "1280" && mp.h === "672" && asked.some(([id, v]) => id === "P".repeat(24) && v === 2), { status: pImg.status, mp });
+  check("a page with a shot for its live version: its og:image is that shot, as a PNG, its og:image size its own pixels (1480x778)", pImg.status === 200 && pImg.body.equals(shotBytes.page) && pImg.h.get("content-type") === "image/png" && mp.w === "1480" && mp.h === "778" && asked.some(([id, v]) => id === "P".repeat(24) && v === 2), { status: pImg.status, mp });
   check("the shot is the content: served like the page (private, no-store), never kept by a shared cache", pImg.h.get("cache-control") === "private, no-store" && pImg.h.get("x-robots-tag") === "noindex, nofollow" && pImg.h.get("referrer-policy") === "no-referrer");
   const md = await meta(`/d/${"D".repeat(24)}`);
   const dImg = await get(md.path);
@@ -178,9 +200,12 @@ check("fixtures: the page and the deck pass the schema", !!pageData && deckOk.ok
   calls.length = 0;
   const none = await S.loadPreviewShot("A".repeat(24), 2);
   check("the shot is read only for the live version of a live artifact", none === null && /WHERE id = \$1 AND version = \$2 AND preview_version = \$2 AND preview IS NOT NULL AND taken_down_at IS NULL AND expires_at > NOW\(\)/.test(calls[0]?.sql ?? "") && (await S.loadPreviewShot("bad", 1)) === null);
-  next = { rows: [{ id: "A".repeat(24), owner_user_id: "owner-a", data: pageData, version: 2, updated_at: new Date(), shot: true }] };
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(1480, 0);
+  head.writeUInt32BE(778, 4);
+  next = { rows: [{ id: "A".repeat(24), owner_user_id: "owner-a", data: pageData, version: 2, updated_at: new Date(), shot: true, shot_head: head }] };
   const loaded = await S.loadCoPage("A".repeat(24));
-  check("loading the page says whether a shot is stored for this version, without reading its bytes", loaded?.shot === true && /\(preview IS NOT NULL AND preview_version = version\) AS shot FROM co_pages/.test(calls.at(-1)!.sql) && !/SELECT[^]*\bpreview\b,/.test(calls.at(-1)!.sql));
+  check("loading the page says whether a shot is stored for this version and its size, reading only the PNG header's 8 bytes", loaded?.shot === true && loaded?.shotSize?.width === 1480 && loaded?.shotSize?.height === 778 && /\(preview IS NOT NULL AND preview_version = version\) AS shot, CASE WHEN preview IS NOT NULL AND preview_version = version THEN substring\(preview from 17 for 8\) END AS shot_head FROM co_pages/.test(calls.at(-1)!.sql) && !/SELECT[^]*\bpreview\b,/.test(calls.at(-1)!.sql));
   S.useCoPageDb(null);
   // Every statement in the store that wipes the content wipes the shot too (a new wipe path can't forget it).
   const store = src("services/coPages/store.ts");
