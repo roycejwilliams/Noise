@@ -180,6 +180,32 @@ export async function readEventPage(url: string, o: { maxAgeMs?: number; deps?: 
   return read;
 }
 
+// Pure: a link that may be a private event page (Luma's or Partiful's: the platforms whose own record says public or not), by its shape.
+export function mayBePrivateEvent(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const path = u.pathname.replace(/\/+$/, "");
+  if (isPartifulHost(url)) return /^\/e\/[^/]+$/.test(path);
+  if (isLumaHost(url)) return /^\/[A-Za-z0-9_-]+$/.test(path);
+  return false;
+}
+
+// The links among these whose page's own record says it's private (a Partiful invite, a private Luma event): never something a member
+// sees, wherever it was found (batched review of #299: an X post's link in a reply). Only Luma and Partiful links are read, at most
+// PRIVATE_CHECK.max at once, inside PRIVATE_CHECK.deadlineMs; one not read by then is left as it is here, and checked again before
+// it's shared (agent/loopTools.ts shareFinds).
+export const PRIVATE_CHECK = { max: 8, deadlineMs: 4_000 } as const;
+export async function privateEventLinks(urls: string[], read: (url: string) => Promise<{ private?: boolean }> = (u) => readEventPage(u)): Promise<Set<string>> {
+  const check = [...new Set(urls.filter(mayBePrivateEvent))].slice(0, PRIVATE_CHECK.max);
+  const deadline = new Promise<null>((r) => setTimeout(() => r(null), PRIVATE_CHECK.deadlineMs).unref?.());
+  const reads = await Promise.all(check.map((u) => Promise.race([read(u).catch(() => null), deadline])));
+  return new Set(check.filter((_, i) => reads[i]?.private === true));
+}
+
 // For the send-time re-read (sendCheck.ts recheckFind): an event page's record now. Luma's through its own reader (same cache as
 // before); any other event page through readEventPage. Null when it can't be read or isn't one event.
 export async function eventPageDetails(url: string, maxAgeMs: number): Promise<EventDetails | null> {

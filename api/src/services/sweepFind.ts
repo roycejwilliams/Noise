@@ -531,6 +531,10 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           console.error(`sweepFind: X search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""}) for user ${c.userId}`);
           return { ok: false, error: xFailedNote(xError) };
         }
+        // A post's link to a private event page is never a find or shown as one (batched review of #299; promoteEventPages drops what
+        // this check didn't reach in time).
+        const privateLinks = await import("./eventPage.js").then((m) => m.privateEventLinks(posts.flatMap((p) => p.links))).catch(() => new Set<string>());
+        for (const p of posts) p.links = p.links.filter((l) => !privateLinks.has(l));
         xPosts += posts.length;
         places.x.ok = true;
         ledger.ran("x", q, posts.length, checked.loosenedFrom);
