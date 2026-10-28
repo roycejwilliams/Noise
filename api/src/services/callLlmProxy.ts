@@ -14,6 +14,7 @@ import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sour
 import { memberStateSignal } from "./memberState.js";
 import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.js";
 import { recordAnthropicUsage } from "./llmUsage.js";
+import { plainPunctuation } from "./safetyText.js";
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
 // database and the tools' imports). One turn's bounds: at most CALL_TOOL_STEPS rounds of Co's tools, inside CALL_TOOL_BUDGET_MS from
@@ -294,7 +295,8 @@ export type ProxyDeps = {
 // question limit for the rest of it, so a crisis phrasing the pattern misses later can't cut Co's follow-up (review of #111).
 export function safetyCall(b: OaiRequest): boolean {
   return b.messages.some((m) => {
-    const t = textOf(m.content ?? "");
+    // Read with phone punctuation made plain: a transcript or Co's own line can carry "don’t" (review of #283).
+    const t = plainPunctuation(textOf(m.content ?? ""));
     return m.role === "user" ? SAFETY_TURN.test(t) : m.role === "assistant" && (SAFETY_LINE.test(t) || SAFETY_TURN.test(t));
   });
 }
@@ -450,7 +452,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
     // Co checking on their safety makes the whole turn a safety turn: no question limit after it.
-    if (SAFETY_LINE.test(sentence) || (isQuestion && SAFETY_TURN.test(sentence))) safetyTurn = true;
+    if (SAFETY_LINE.test(plainPunctuation(sentence)) || (isQuestion && SAFETY_TURN.test(plainPunctuation(sentence)))) safetyTurn = true;
     if (isQuestion && countsAsQuestion(sentence)) asked = true;
     spokeAny = true;
     spokenLines.push(line);

@@ -11,7 +11,8 @@ const SIGNALS: RegExp[] = [
   /\bsuicid(e|al)\b/i,
   /\b(want|wanna|going|plan(ning)?) to (die|end my life|not be here|disappear forever)\b/i,
   // "end it" only on its own or as "end it all", never "end it with my cofounder".
-  /\b(want|wanna|going|plan(ning)?) to end it( all\b|\s*($|[.!?,]))/i,
+  // A trailing emoji counts as its own ending ("I just want to end it 😔"); \p{Extended_Pictographic} needs the u flag.
+  /\b(want|wanna|going|plan(ning)?) to end it( all\b|\s*($|[.!?,]|\p{Extended_Pictographic}))/iu,
   /\b(end(ing)?|take|taking) my (own )?life\b/i,
   /\bdon'?t want to (be alive|live|wake up|exist)( anymore)?\b/i,
   /\b(no|not any) (reason|point) (to|in) (live|living|being alive|going on)\b/i,
@@ -20,12 +21,19 @@ const SIGNALS: RegExp[] = [
   /\b(overdose|od) (on|tonight)\b/i,
 ];
 
-// Pure: curly and modifier apostrophes as a straight one. iPhones type "don’t" by default, and every pattern here is written with "'":
-// "I don’t want to live anymore" read as no crisis at all (2026-10-27, found in the review of #282).
-export const straightApostrophes = (text: string) => String(text ?? "").replace(/[\u2018\u2019\u02BC\u2032\uFF07]/g, "'");
+// Pure: phone punctuation as the plain kind every pattern here is written with. iPhones type "don’t" and "…" by default:
+// "I don’t want to live anymore" read as no crisis at all (2026-10-27, found in the review of #282), and "I just want to end it…"
+// missed the "end it" ending (review of #283). Other apostrophe stand-ins (´ ‛ ʹ ʻ ` ＇) read as "'", a no-break or other wide space
+// as a space, a hyphen or dash as "-". For matching only: what's stored or sent is always the member's own text.
+export const plainPunctuation = (text: string) =>
+  String(text ?? "")
+    .replace(/[\u2018\u2019\u201B\u02B9\u02BB\u02BC\u2032\u00B4\u0060\uFF07]/g, "'")
+    .replace(/\u2026/g, "...")
+    .replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")
+    .replace(/[\u2010-\u2015]/g, "-");
 
 export function soundsLikeCrisis(text: string): boolean {
-  const t = straightApostrophes(text);
+  const t = plainPunctuation(text);
   return SIGNALS.some((p) => p.test(t));
 }
 
@@ -37,5 +45,5 @@ export const SELF_HARM = /\b(?:suicid\w*|kill(?:ing)? (?:my|him|her|them)self|en
 // Pure: a line that carries a safety signal (crisis wording or self-harm wording). Such a line is never filtered, cut or rewritten
 // by anything that tidies what Co reads (services/whatCoKnows.ts guardText): the safety read must always see it whole.
 export function safetySignal(text: string): boolean {
-  return soundsLikeCrisis(text) || SELF_HARM.test(straightApostrophes(text));
+  return soundsLikeCrisis(text) || SELF_HARM.test(plainPunctuation(text));
 }

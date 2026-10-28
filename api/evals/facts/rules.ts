@@ -133,6 +133,11 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   const curly = ["I don\u2019t want to live anymore", "I can\u2019t go on", "I\u2019m going to hurt myself"];
   check("curly apostrophes: crisis and self-harm wording is still caught", S.soundsLikeCrisis(curly[0]) && curly.every((t) => S.safetySignal(t)));
   check("curly apostrophes: they read exactly like straight ones", hits.every((t) => S.soundsLikeCrisis(t.replace(/'/g, "\u2019"))) && misses.every((t) => !S.soundsLikeCrisis(t.replace(/'/g, "\u2019"))));
+  // The rest of phone punctuation (review of #283): "…", a trailing emoji, other apostrophe stand-ins, a no-break space, a dash.
+  const phone = ["I just want to end it\u2026", "I want to end it\u2026 all of it", "I just want to end it \u{1F614}", "I don\u00B4t want to live anymore", "I want\u00A0to die", "I can\u2019t go on", "I don\u2019t want to be here"];
+  check(`phone punctuation: crisis and self-harm wording is still caught (missed: ${phone.filter((t) => !S.safetySignal(t)).join(" | ") || "none"})`, phone.every((t) => S.safetySignal(t)) && phone.slice(0, 5).every((t) => S.soundsLikeCrisis(t)));
+  check("phone punctuation: \"end it\" with someone is still not a crisis, with an emoji too", !S.soundsLikeCrisis("I want to end it with my cofounder \u{1F614}"));
+  check("phone punctuation is for matching only: nothing outside the safety readers uses the plain copy", !/plainPunctuation/.test(src("routes/sendblue.ts") + src("services/whatCoKnows.ts")));
   check("the resource names 988 and 911", /\b988\b/.test(S.CRISIS_RESOURCES) && /\b911\b/.test(S.CRISIS_RESOURCES));
   const { capabilitySheet } = await import("../../src/services/capabilities.js");
   check("Cue knows the resource as a fact, so the fact check never cuts it", capabilitySheet().some((l) => l.includes(S.CRISIS_RESOURCES)));

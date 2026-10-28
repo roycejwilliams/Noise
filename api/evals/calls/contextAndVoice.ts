@@ -146,6 +146,7 @@ const day = () => "Oct 8";
     const call = (msgs: [string, string][]) => safetyCall({ messages: msgs.map(([role, content]) => ({ role, content })) });
     check("a safety call stays one: an earlier \"I don't feel safe\" lifts the limit on a later turn the pattern alone would miss", call([["user", "I don't feel safe"], ["assistant", "Are you safe right now?"], ["user", "I guess, it's just a lot"]]));
     check("Cue's own help line earlier in the call makes it a safety call", call([["user", "it's been heavy"], ["assistant", "You can call or text 988, any time."], ["user", "yeah"]]));
+    check("an iPhone's curly apostrophe reads the same on a call (review of #283)", call([["user", "I don\u2019t want to live anymore"], ["assistant", "I\u2019m here."], ["user", "yeah"]]) && call([["user", "I can\u2019t go on"]]));
     check("an ordinary call is not a safety call", !call([["user", "we played it safe with the menu"], ["assistant", "Smart. What's the headcount?"], ["user", "about forty, drive safe tonight"]]));
   }
   const stock = await run("Don't worry about the time. And I hear you. Feeling invisible in a full room is its own kind of tired. When did it start?");
