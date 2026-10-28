@@ -20,8 +20,13 @@ const SIGNALS: RegExp[] = [
   /\b(overdose|od) (on|tonight)\b/i,
 ];
 
+// Pure: curly and modifier apostrophes as a straight one. iPhones type "don’t" by default, and every pattern here is written with "'":
+// "I don’t want to live anymore" read as no crisis at all (2026-10-27, found in the review of #282).
+export const straightApostrophes = (text: string) => String(text ?? "").replace(/[\u2018\u2019\u02BC\u2032\uFF07]/g, "'");
+
 export function soundsLikeCrisis(text: string): boolean {
-  return SIGNALS.some((p) => p.test(text));
+  const t = straightApostrophes(text);
+  return SIGNALS.some((p) => p.test(t));
 }
 
 export const SAFETY_INSTRUCTION = `What they just said may mean they're thinking about hurting themselves or aren't safe. This comes before anything else in this reply: no events, offers, searches or tapbacks. Stay with them, warmly and plainly, in your own voice. Say you're glad they told you. Ask directly whether they're safe right now. Share the resource in Cue's facts (988, and 911 if they're in immediate danger) once, simply, without sounding like a script. Don't argue with how they feel, don't diagnose, don't promise things will be fine, and don't hand them off and leave: keep the door open to keep talking. Call flagSafetyConcern.`;
@@ -32,5 +37,5 @@ export const SELF_HARM = /\b(?:suicid\w*|kill(?:ing)? (?:my|him|her|them)self|en
 // Pure: a line that carries a safety signal (crisis wording or self-harm wording). Such a line is never filtered, cut or rewritten
 // by anything that tidies what Co reads (services/whatCoKnows.ts guardText): the safety read must always see it whole.
 export function safetySignal(text: string): boolean {
-  return soundsLikeCrisis(text) || SELF_HARM.test(text);
+  return soundsLikeCrisis(text) || SELF_HARM.test(straightApostrophes(text));
 }
