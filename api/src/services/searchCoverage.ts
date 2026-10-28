@@ -15,10 +15,11 @@ export const NO_COVERAGE: SearchCoverage = { asks: [], goals: [], held: [] };
 // How far back a daily run still says what is being searched: a day and a half covers one missed morning's retry window.
 const DAILY_RUN_MAX_AGE_HOURS = 36;
 
-// Pure: the goals a sweep.daily record searched (status "searched"), by their text.
+// Pure: the goals a sweep.daily record searched (status "searched"), by their text. One searched while a place failed or timed out
+// (status "incomplete", 2026-10-28) is still being searched (it's retried), so it counts as running too.
 export function searchedGoals(proposal: any): string[] {
   const items = Array.isArray(proposal?.items) ? proposal.items : [];
-  return [...new Set<string>(items.filter((i: any) => i?.kind === "goal" && i?.status === "searched" && typeof i.text === "string" && i.text.trim()).map((i: any) => String(i.text).trim()))];
+  return [...new Set<string>(items.filter((i: any) => i?.kind === "goal" && (i?.status === "searched" || i?.status === "incomplete") && typeof i.text === "string" && i.text.trim()).map((i: any) => String(i.text).trim()))];
 }
 
 // When their asks can't be read, nothing is known to be idle: one unnamed item counts as running, so a failed read never becomes a

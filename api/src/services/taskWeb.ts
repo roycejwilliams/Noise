@@ -213,8 +213,32 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
   return { kept: { name: name.slice(0, 120), url: raw.url, official: opts.official, facts: kept, excerpts, date: keptDate, deadline: keptDeadline }, dropped: null, droppedDetails };
 }
 
+// One event's own page on the ticketing site its organizers use (lu.ma/abc123, luma.com/abc123, eventbrite.com/e/...,
+// partiful.com/e/..., meetup.com/<group>/events/<id>): the page that holds the event's date, place and RSVP. Read from the url only.
+export function oneEventPage(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  const path = u.pathname.replace(/\/+$/, "");
+  if (host === "lu.ma" || host === "luma.com") return /^\/[A-Za-z0-9_-]+$/.test(path) && !LUMA_NOT_EVENTS.has(path.slice(1).toLowerCase());
+  if (/(^|\.)eventbrite\.[a-z.]+$/.test(host)) return /^\/e\/[^/]+$/.test(path);
+  if (host === "partiful.com") return /^\/e\/[^/]+$/.test(path);
+  if (host === "meetup.com") return /^\/[^/]+\/events\/\d+$/.test(path);
+  return false;
+}
+// Luma paths that are never one event's page (the same list as lumaViaExa.ts lumaEventSlug).
+const LUMA_NOT_EVENTS = new Set(["discover", "home", "signin", "login", "create", "calendar", "explore", "pricing", "user", "u", "settings", "help"]);
+
 // Which page a result is checked against: its own official page when the found
 // page is a blog or directory and the official one reads; else the found page.
+// 2026-10-28 sweep: "MemoryBox Beta Launch party" and "Vast.ai Product Launch Party" came back as their Luma pages
+// (luma.com/2gizvh99, luma.com/atnnffe2), were swapped for the companies' homepages (memorybox.ai, vast.ai), and dropped as
+// "nothing about it was verified on its page": the homepage doesn't hold the party. One event's own page (oneEventPage) is the
+// page that holds its facts, so it's never swapped; it's checked as it is, by the same rules as any found page.
 export async function pickPage(
   raw: RawResult,
   deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null> },
@@ -222,6 +246,8 @@ export async function pickPage(
   // Judged and looked up by the core name: a qualifier's words ("Private Dining") never make a host look like the place's.
   const name = coreName(raw.name);
   if (!looksOfficial(raw.url, name)) {
+    // Not marked official: whether a page is the thing's own still decides how its facts are checked (verifyResult's nearName).
+    if (oneEventPage(raw.url)) return { url: raw.url, text: await deps.read(raw.url), official: false, swapped: false };
     const off = await deps.official(name).catch(() => null);
     if (off && off !== raw.url && looksOfficial(off, name)) {
       const text = await deps.read(off);

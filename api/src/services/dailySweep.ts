@@ -49,7 +49,9 @@ export type ItemResult = {
   kind: "ask" | "goal";
   id: string;
   text: string;
-  status: "searched" | "skipped" | "error" | "followed_as_task";
+  // incomplete: searched, but a place failed or timed out with nothing back (sweepFind.ts SweepSources.outages): retried on a later
+  // hour like an error, never carried as searched (incompleteRetry).
+  status: "searched" | "skipped" | "error" | "followed_as_task" | "incomplete";
   why?: string;
   // Followed as its task (planAsk): the task it follows, when one matches (services/statusCheck.ts).
   taskId?: number;
@@ -57,6 +59,9 @@ export type ItemResult = {
   searchedPart?: string;
   sources?: { events: boolean; web: boolean; x: boolean };
   failures?: string[];
+  // The places that failed or timed out (incomplete), and web results dropped for not proving themselves on their page.
+  outages?: string[];
+  unverified?: number;
   found?: number;
   pooled?: number;
   queued?: number;
@@ -64,9 +69,11 @@ export type ItemResult = {
   earlierRun?: boolean;
 };
 
-// Pure: the day's one summary line, from what each ask and goal did.
-export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; followed: number; errors: number; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
+// Pure: the day's one summary line, from what each ask and goal did. An incomplete item isn't counted as searched (nor its places), but
+// what it did find is real and in the pool, so its finds count (2026-10-28 sweep).
+export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; followed: number; errors: number; incomplete: number; unverified: number; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
   const searched = items.filter((i) => i.status === "searched");
+  const withFinds = items.filter((i) => i.status === "searched" || i.status === "incomplete");
   const sources = { events: 0, web: 0, x: 0 };
   for (const i of searched) for (const s of ["events", "web", "x"] as const) if (i.sources?.[s]) sources[s]++;
   const totals = {
@@ -75,12 +82,14 @@ export function dailySummary(items: ItemResult[]): { action: string; totals: { a
     skipped: items.filter((i) => i.status === "skipped").length,
     followed: items.filter((i) => i.status === "followed_as_task").length,
     errors: items.filter((i) => i.status === "error").length,
+    incomplete: items.filter((i) => i.status === "incomplete").length,
+    unverified: withFinds.reduce((n, i) => n + (i.unverified ?? 0), 0),
     sources,
-    kept: searched.reduce((n, i) => n + (i.found ?? 0), 0),
-    pooled: searched.reduce((n, i) => n + (i.pooled ?? 0), 0),
-    queued: searched.reduce((n, i) => n + (i.queued ?? 0), 0),
+    kept: withFinds.reduce((n, i) => n + (i.found ?? 0), 0),
+    pooled: withFinds.reduce((n, i) => n + (i.pooled ?? 0), 0),
+    queued: withFinds.reduce((n, i) => n + (i.queued ?? 0), 0),
   };
-  const action = `asks searched ${totals.asksSearched}, goals searched ${totals.goalsSearched}, sources events ${sources.events}/web ${sources.web}/x ${sources.x}, finds kept ${totals.kept}, new in the pool ${totals.pooled}, queued ${totals.queued}${totals.skipped ? `, skipped ${totals.skipped}` : ""}${totals.followed ? `, followed as tasks ${totals.followed}` : ""}${totals.errors ? `, errors ${totals.errors}` : ""}`;
+  const action = `asks searched ${totals.asksSearched}, goals searched ${totals.goalsSearched}, sources events ${sources.events}/web ${sources.web}/x ${sources.x}, finds kept ${totals.kept}, new in the pool ${totals.pooled}, queued ${totals.queued}${totals.skipped ? `, skipped ${totals.skipped}` : ""}${totals.followed ? `, followed as tasks ${totals.followed}` : ""}${totals.incomplete ? `, incomplete ${totals.incomplete}` : ""}${totals.unverified ? `, web results dropped unverified ${totals.unverified}` : ""}${totals.errors ? `, errors ${totals.errors}` : ""}`;
   return { action, totals };
 }
 
@@ -107,6 +116,35 @@ export function planAsk(b: { kind: "ask"; id: string; text: string }, askText: s
 // day is retried, never a quiet "searched".
 export function searchFailed(rep: { sources: { events: boolean; web: boolean; x: boolean } } | null): boolean {
   return !rep || (!rep.sources.events && !rep.sources.web && !rep.sources.x);
+}
+
+// Pure: what one search that looked somewhere did: "searched", or "incomplete" when a place failed or timed out with nothing back
+// (Royce, 2026-10-28: "treat a timeout as incomplete with a bounded retry". That morning Exa timed out on all four web queries for
+// "apply to South Park Commons or Blueprint II"; events and X ran, so the goal counted as searched and nothing retried it).
+export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text: string }>(b: B, rep: { sources: { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: string[]; unverified?: number }; found: number; pooled: number; queued: number; outcome: string }): ItemResult {
+  const outages = rep.sources.outages ?? [];
+  return {
+    ...b,
+    status: outages.length ? "incomplete" : "searched",
+    ...(outages.length ? { why: `${outages.join(", ")} failed or timed out: ${rep.sources.failures.join(" | ").slice(0, 240)}`, outages } : {}),
+    sources: { events: rep.sources.events, web: rep.sources.web, x: rep.sources.x },
+    failures: rep.sources.failures,
+    ...(rep.sources.unverified ? { unverified: rep.sources.unverified } : {}),
+    found: rep.found,
+    pooled: rep.pooled,
+    queued: rep.queued,
+    outcome: rep.outcome,
+  };
+}
+
+// Pure: whether this run's incomplete items get the day run again, using the floor's own retry (a run written as "error" is run again
+// on a later hour, at most DAILY_SWEEP_ERRORS_PER_DAY runs a day: the 9am run and two retries). An item searched in full is carried by
+// the retry (searchedEarlierToday), never searched twice; an incomplete one is searched again whole: its finds are already in the pool,
+// and finding them again adds nothing twice (the backlog merge and the queue each take a find once). The day's last run keeps what it
+// has and is written as a normal run, incomplete items said; an on-demand run is never retried.
+export function incompleteRetry(items: ItemResult[], errorsToday: number, manual: boolean): "retry" | "last" | null {
+  if (!items.some((i) => i.status === "incomplete")) return null;
+  return !manual && errorsToday + 1 < DAILY_SWEEP_ERRORS_PER_DAY ? "retry" : "last";
 }
 
 // Pure: what the floor searches for each goal, from the hourly goal sweep's latest plan (goal_sweep.plan): each active goal's
@@ -421,7 +459,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
       items.push({ ...b, status: "error", why: `it looked nowhere: ${(r?.sources.failures ?? ["the search returned without a report"]).join(" | ").slice(0, 300)}`, ...(r ? { failures: r.sources.failures } : {}) });
       return;
     }
-    items.push({ ...b, status: "searched", sources: { events: r!.sources.events, web: r!.sources.web, x: r!.sources.x }, failures: r!.sources.failures, found: r!.found, pooled: r!.pooled, queued: r!.queued, outcome: r!.outcome });
+    items.push(searchedItem(b, r!));
   };
 
   // ---- asks: every open one; find asks in all three places
@@ -493,16 +531,21 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
 
   const { action, totals } = dailySummary(items);
   const proposal = { ...base, items, totals, picker, ...(o.quiet ? { heldQuiet: true, note: "tapered search day: what was found is held for when they write" } : {}), ...(fp ? { goalPlan: { how: fp.how, why: fp.why } } : {}), ...(goalNote ? { goalNote } : {}), ...(asks.length || planned.length || goals.length ? {} : { note: "no open asks and no active goals: nothing to search" }) };
-  const failed = items.filter((i) => i.status === "error").map((i) => `${i.kind} "${i.text.slice(0, 60)}": ${i.why}`);
+  // An incomplete item (a place failed or timed out) gets the day retried while retries remain (incompleteRetry), the same way as an error.
+  const retryIncomplete = incompleteRetry(items, errorsToday, base.trigger === "manual");
+  const incompleteLines = items.filter((i) => i.status === "incomplete").map((i) => `${i.kind} "${i.text.slice(0, 60)}" incomplete: ${i.why}`);
+  const failed = [...items.filter((i) => i.status === "error").map((i) => `${i.kind} "${i.text.slice(0, 60)}": ${i.why}`), ...(retryIncomplete === "retry" ? incompleteLines : [])];
+  // Searched in part counts here: what it found is in the pool.
+  const searchedAny = totals.asksSearched + totals.goalsSearched + totals.incomplete > 0;
   if (failed.length) {
     const last = errorsToday + 1 >= DAILY_SWEEP_ERRORS_PER_DAY;
     await writeDaily(userId, "skip", "error", `${failed.join(" | ").slice(0, 800)}${last ? " (the day's last retry: no more runs today)" : " (run again next hour)"}`, proposal);
     // What did get searched is in the pool: the picker still runs for it.
-    if (totals.asksSearched + totals.goalsSearched > 0 && !o.quiet) await sendMorningFinds(userId, base.day);
+    if (searchedAny && !o.quiet) await sendMorningFinds(userId, base.day);
     return;
   }
-  const searchedAny = totals.asksSearched + totals.goalsSearched > 0;
-  await writeDaily(userId, searchedAny ? "act" : "skip", action, searchedAny ? goalNote : [(proposal as any).note, goalNote].filter(Boolean).join("; ") || "nothing searched; each item says why", proposal);
+  const stillIncomplete = retryIncomplete === "last" ? `still incomplete${base.trigger === "manual" ? "" : " after the day's retries"}: ${incompleteLines.join(" | ")}`.slice(0, 600) : null;
+  await writeDaily(userId, searchedAny ? "act" : "skip", action, searchedAny ? [goalNote, stillIncomplete].filter(Boolean).join("; ") || null : [(proposal as any).note, goalNote].filter(Boolean).join("; ") || "nothing searched; each item says why", proposal);
   // The sweep discovers, the picker decides (sweepShadow.ts runPickerAfterSweep): right after, for what this run put in the pool.
   // While quiet, what was found is held in the backlog: it competes in the first full morning after they write (never dumped at once).
   if (searchedAny && !o.quiet) await sendMorningFinds(userId, base.day);
@@ -603,21 +646,28 @@ export type RollupRow = {
   kept: number;
   queued: number;
   sends: number;
+  // 2026-10-28 (Royce: the sweep failed five days running and this morning's quiet drops never showed): asks and goals left incomplete
+  // (a place failed or timed out) or failed, and web results dropped for not proving themselves on their page, in the day's last run.
+  incomplete: number;
+  failed: number;
+  unverified: number;
 };
 
 // Pure: a member's day, from its sweep.daily records (oldest first), its find sends, and whether 9pm has passed for them.
-export function rollupDay(all: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends"> {
+export function rollupDay(all: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "unverified"> {
   // On-demand runs report themselves too, beside the 9am run, never as it.
   const manual = all.filter((r) => r.proposal?.trigger === "manual");
   const records = all.filter((r) => r.proposal?.trigger !== "manual");
   const out = rollupFloorDay(records, sends, dayOver, started);
   return manual.length ? { ...out, detail: `${out.detail} · on-demand runs: ${manual.length} (last: ${manual[manual.length - 1].action})` } : out;
 }
-function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends"> {
+function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "unverified"> {
   const final = [...records].reverse().find((r) => r.action !== "error");
   const errors = records.filter((r) => r.action === "error");
   const t = (final?.proposal?.totals ?? {}) as Record<string, number>;
-  const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends };
+  // Incomplete, failed and unverified come from the day's last run, a failed one too (a day of failed runs shows what the last one hit).
+  const lastT = (records[records.length - 1]?.proposal?.totals ?? {}) as Record<string, number>;
+  const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends, incomplete: lastT.incomplete ?? 0, failed: lastT.errors ?? 0, unverified: lastT.unverified ?? 0 };
   if (final) {
     const status = final.action === "missed" ? "missed" : final.action === "opted_out" ? "opted out" : final.action === "tapered" ? "tapered" : final.outcome === "act" ? "ran" : "nothing to search";
     return { status, detail: final.reason ?? final.action, ...counts };

@@ -2,11 +2,14 @@ import { renderSidebar } from "./sidebar.js";
 
 renderSidebar("sweeps");
 
-type Row = { day: string; name: string; status: string; detail: string; asksSearched: number; goalsSearched: number; kept: number; queued: number; sends: number };
+// incomplete / failed / unverified (2026-10-28): asks and goals a failed or timed-out place left incomplete, ones that failed, and web
+// results dropped for not proving themselves on their page, in the day's last run (api dailySweep.ts RollupRow). Older rows lack them.
+type Row = { day: string; name: string; status: string; detail: string; asksSearched: number; goalsSearched: number; kept: number; queued: number; sends: number; incomplete?: number; failed?: number; unverified?: number };
 
 const statusEl = document.getElementById("status") as HTMLElement;
 const table = document.getElementById("sweeps") as HTMLTableElement;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+const flag = (n: number) => (n > 0 ? `<span class="pill pill-bad">${n}</span>` : "0");
 const pill = (s: string) => `<span class="pill ${s === "ran" ? "pill-ran" : s === "error" || s === "missed" || s === "silent" ? "pill-bad" : "pill-quiet"}">${esc(s)}</span>`;
 
 async function load() {
@@ -20,16 +23,16 @@ async function load() {
     statusEl.textContent = "No daily sweep has run yet.";
     return;
   }
-  const bad = rows.filter((r) => ["error", "missed", "silent"].includes(r.status)).length;
+  const bad = rows.filter((r) => ["error", "missed", "silent"].includes(r.status) || (r.incomplete ?? 0) > 0 || (r.failed ?? 0) > 0).length;
   statusEl.textContent = bad ? `${bad} day(s) need a look` : "Every day ran";
-  let html = `<thead><tr><th>Member</th><th>Ran</th><th>Asks searched</th><th>Goals searched</th><th>Finds kept</th><th>Queued</th><th>Sends</th><th>Why</th></tr></thead><tbody>`;
+  let html = `<thead><tr><th>Member</th><th>Ran</th><th>Asks searched</th><th>Goals searched</th><th>Finds kept</th><th>Queued</th><th>Sends</th><th>Incomplete</th><th>Failed</th><th>Web dropped unverified</th><th>Why</th></tr></thead><tbody>`;
   let day = "";
   for (const r of rows) {
     if (r.day !== day) {
       day = r.day;
-      html += `<tr class="sweeps-day"><td colspan="8">${esc(day)}</td></tr>`;
+      html += `<tr class="sweeps-day"><td colspan="11">${esc(day)}</td></tr>`;
     }
-    html += `<tr><td>${esc(r.name)}</td><td>${pill(r.status)}</td><td class="num">${r.asksSearched}</td><td class="num">${r.goalsSearched}</td><td class="num">${r.kept}</td><td class="num">${r.queued}</td><td class="num">${r.sends}</td><td class="detail">${esc(r.detail)}</td></tr>`;
+    html += `<tr><td>${esc(r.name)}</td><td>${pill(r.status)}</td><td class="num">${r.asksSearched}</td><td class="num">${r.goalsSearched}</td><td class="num">${r.kept}</td><td class="num">${r.queued}</td><td class="num">${r.sends}</td><td class="num">${flag(r.incomplete ?? 0)}</td><td class="num">${flag(r.failed ?? 0)}</td><td class="num">${r.unverified ?? 0}</td><td class="detail">${esc(r.detail)}</td></tr>`;
   }
   table.innerHTML = html + "</tbody>";
 }
