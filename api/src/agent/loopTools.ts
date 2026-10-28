@@ -24,7 +24,6 @@ import { identityDropped } from "../services/guardDrops.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
-import { DateTime } from "luxon";
 import { resolvePlan, planProblems, type EventRecord } from "../services/planSheet.js";
 import { WRITE_DOCUMENT_INPUT } from "../services/documentSheet.js";
 import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
@@ -665,25 +664,34 @@ export function loopTools(
         // The draft itself goes out as its own text, so they always have it to
         // copy (2026-10-01: Co said "I wrote the note" and never showed it).
         const draftText = `${subject.trim() ? `Subject: ${subject.trim()}\n\n` : ""}${body.trim()}`;
-        // The draft speaks for them, so every number, time and place in it is one they said (their texts from the last two weeks), one
-        // a page or find showed, their brief, or their own contact details: Cue checks it before they see it, rather than leaving a wrong
-        // date or headcount for them to catch (Royce, 2026-10-27; review of #286: this turn's words alone refused yesterday's venue).
+        // The draft speaks for them, so every specific detail in it (a count, time, date, place, price, name, contact) is one the
+        // original evidence establishes: Cue checks it before they see it, rather than leaving a wrong date or headcount for them to
+        // catch (Royce, 2026-10-27). 2026-10-28, Royce: a meaning-based check against the original evidence, not the regex
+        // comparison (services/draftFacts.ts has why). Every source is this member's own, keyed to ctx.userId: their words this turn
+        // and two weeks of their texts and calls (dated), their name and contact on their account, pages read this turn and finds
+        // (stored finds are read by their user_id). Never the brief: Cue's own notes can't back Cue's own draft.
         await seeded();
         const { loadTheirWords } = await import("../services/documentDelivery.js");
-        const me = await pool.query(`SELECT first_name, last_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]).then((r) => r.rows[0] ?? {}).catch(() => ({}));
-        const backing = [
-          theirWords(),
-          await loadTheirWords(ctx.userId).catch(() => ""),
-          ...loop.pages.values(),
-          ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`),
-          notes ? JSON.stringify(notes) : "",
-        ].join("\n");
         const zone = await (await import("../services/memberTime.js")).memberZoneOrFallback(ctx.userId).catch(() => "America/Los_Angeles");
-        // Their own phone and email are theirs to sign with: taken out of the draft before it's checked, never added to what backs it
-        // (re-review of #286: a phone's digits in the backing let any number inside it pass).
-        const gaps = draftFactGaps(withoutOwnContact(draftText, me.phone_number, me.email), backing, new Date(), zone);
-        if (gaps.length) {
-          return { ok: false, error: `Not sent: the draft has ${gaps.map((x) => `"${x}"`).join(", ")}, which they haven't said and nothing read shows. Take those out, or leave a blank for them to fill (like "[date]").` };
+        const me = await pool.query(`SELECT first_name, last_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]).then((r) => r.rows[0] ?? {}).catch(() => ({}) as any);
+        const DF = await import("../services/draftFacts.js");
+        const check = await DF.checkDraftFacts(
+          draftText,
+          {
+            thisTurn: theirWords(),
+            earlier: await loadTheirWords(ctx.userId, { zone }).catch(() => ""),
+            own: { name: [me.first_name, me.last_name].filter(Boolean).join(" ") || null, phone: me.phone_number ?? null, email: me.email ?? null },
+            // A page read this turn goes whole (to its limit); a find whose page was read isn't repeated.
+            read: [...[...loop.pages].map(([url, text]) => `${url}\n${text}`), ...[...loop.found.values()].filter((f) => !loop.pages.has(f.url)).map((f) => `${f.name} (${f.url}) ${usableFacts(f)}`)],
+          },
+          new Date(),
+          zone,
+        );
+        // Recorded either way, and never as checked when it didn't run: the draft then goes unchecked (fail safe, draftFacts.ts).
+        if (!check.ran) console.error(`draftEmail: the fact check didn't run (${check.error}); the draft goes to them unchecked`);
+        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "loop.draftFacts", userId: ctx.userId, outcome: check.ran && check.gaps.length ? "skip" : "act", action: !check.ran ? "unchecked" : check.gaps.length ? "refused" : "checked", proposal: check.ran ? { gaps: check.gaps } : { error: check.error } }).catch(() => {});
+        if (check.ran && check.gaps.length) {
+          return { ok: false, error: `Not sent: the draft has ${check.gaps.map((g) => `"${g.words}"${g.why ? ` (${g.why})` : ""}`).join(", ")}, which they haven't said and nothing read shows. Take those out, or leave a blank for them to fill (like "[date]").` };
         }
         if (!to?.trim()) {
           if (!(await say(draftText, `Co replied: ${draftText}`))) return { ok: false, error: "The draft didn't send. Give them the words in your reply instead, plainly, without mentioning what failed." };
@@ -1220,57 +1228,4 @@ export function describeNotes(b: SearchIntent | null): string | null {
     b.next && `next: ${b.next}`,
   ].filter(Boolean);
   return parts.length ? `Your working notes for what you're finding for them (from earlier texts): ${parts.join(". ")}.` : null;
-}
-
-// Pure: the numbers, clock times and "in/near" places in a draft that nothing backs (draftEmail; review of #286). Times compare as times
-// ("7pm" is "7:00 PM"; one without am or pm matches either); a year is never a claim; a date matches when its own weekday says so
-// ("Saturday, November 1" when Nov 1 is a Saturday in the next two months), so "this Saturday" made exact is checked, not trusted.
-export function draftFactGaps(draft: string, backing: string, now: Date, zone: string): string[] {
-  const TIME = /\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\b|\b(\d{1,2}):(\d{2})\b/gi;
-  const minutes = (text: string) => {
-    const out: { label: string; at: number[] }[] = [];
-    for (const m of text.matchAll(TIME)) {
-      const h = Number(m[1] ?? m[4]), mm = Number(m[2] ?? m[5] ?? 0);
-      if (h > 23 || mm > 59) continue;
-      const ap = m[3]?.toLowerCase();
-      const at = ap ? [((h % 12) + (ap === "p" ? 12 : 0)) * 60 + mm] : [h * 60 + mm, ((h % 12) + 12) * 60 + mm];
-      out.push({ label: m[0].trim(), at });
-    }
-    return out;
-  };
-  const backedTimes = new Set(minutes(backing).flatMap((t) => t.at));
-  const timeGaps = minutes(draft).filter((t) => !t.at.some((x) => backedTimes.has(x))).map((t) => t.label);
-  const MONTHS = "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec";
-  const DAY = new RegExp(`\\b(mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?,?\\s+(${MONTHS})[a-z]*\\.?\\s+(\\d{1,2})\\b`, "gi");
-  const okDays = new Set<string>();
-  for (const m of draft.matchAll(DAY)) {
-    const wd = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].indexOf(m[1].slice(0, 3).toLowerCase()) + 1;
-    const month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(m[2].slice(0, 3).toLowerCase()) + 1;
-    const today = DateTime.fromJSDate(now).setZone(zone).startOf("day");
-    for (const y of [today.year, today.year + 1]) {
-      const d = DateTime.fromObject({ year: y, month, day: Number(m[3]) }, { zone });
-      // The date is right for its own weekday, and that weekday is one they (or a page) said: "this friday" never becomes a Saturday.
-      const dayName = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][wd - 1];
-      if (d.isValid && d.weekday === wd && d >= today && d <= today.plus({ days: 62 }) && new RegExp(`\\b${dayName.slice(0, 3)}`, "i").test(backing)) okDays.add(m[0]);
-    }
-  }
-  // Numbers left once times, years and weekday-checked dates are taken out.
-  let rest = draft.replace(TIME, " ");
-  for (const d of okDays) rest = rest.split(d).join(" ");
-  rest = rest.replace(/\b20[2-3]\d\b/g, " ");
-  // Whole numbers, never a digit inside a longer one ("1" is not backed by a phone number or a "2026-11-12" date).
-  const norm = (n: string) => n.replace(/,/g, "").replace(/^\$/, "").replace(/[.]$/, "");
-  const have = new Set((backing.match(/\d[\d,.]*/g) ?? []).map(norm));
-  const numberGaps = [...new Set((rest.match(/\$?\d[\d,.]*/g) ?? []).map(norm).filter((n) => n && !have.has(n)))];
-  const placeGaps = placesBacked(draft, backing).missing;
-  return [...new Set([...timeGaps, ...numberGaps, ...placeGaps])].slice(0, 6);
-}
-
-// Pure: a draft with the member's own phone number (in any format) and email taken out, so signing with them is never a "claim".
-export function withoutOwnContact(text: string, phone: string | null | undefined, email: string | null | undefined): string {
-  let out = String(text ?? "");
-  if (email && email.trim()) out = out.split(new RegExp(email.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")).join(" ");
-  const last10 = String(phone ?? "").replace(/\D/g, "").slice(-10);
-  if (last10.length === 10) out = out.replace(/\+?[\d][\d\s().-]{8,}\d/g, (run) => (run.replace(/\D/g, "").endsWith(last10) ? " " : run));
-  return out;
 }

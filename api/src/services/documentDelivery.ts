@@ -555,10 +555,12 @@ export async function sendDocumentForTask(
 }
 
 // What a document may rest on: what they said in the last two weeks (their texts and their side of calls). Never Co's own lines.
-export async function loadTheirWords(userId: string): Promise<string> {
+// opts.zone: each text opens with the day they sent it, in their zone ("[Tue Oct 27] "), so a "tomorrow" or "Saturday" said last
+// week is read from the day it was said, not from today (2026-10-28, the draft check: services/draftFacts.ts). Unset: unchanged.
+export async function loadTheirWords(userId: string, opts: { zone?: string } = {}): Promise<string> {
   const { rows } = await pool
     .query(
-      `SELECT memory_type, content FROM co_memories
+      `SELECT memory_type, content, created_at FROM co_memories
        WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days' AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}))
        ORDER BY created_at DESC LIMIT 120`,
       [userId],
@@ -568,10 +570,13 @@ export async function loadTheirWords(userId: string): Promise<string> {
   // the verdict doesn't turn on which messages sit next to which (2026-10-12).
   return rows
     .reverse()
-    .map((r: any) =>
-      r.memory_type === "call_transcript"
-        ? String(r.content).split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, "")).join(" ")
-        : String(r.content).replace(/^User said:\s*/i, ""),
-    )
+    .map((r: any) => {
+      const said =
+        r.memory_type === "call_transcript"
+          ? String(r.content).split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, "")).join(" ")
+          : String(r.content).replace(/^User said:\s*/i, "");
+      const at = opts.zone && r.created_at ? DateTime.fromJSDate(new Date(r.created_at)).setZone(opts.zone) : null;
+      return at?.isValid ? `[${at.toFormat("ccc LLL d")}] ${said}` : said;
+    })
     .join("\n");
 }
