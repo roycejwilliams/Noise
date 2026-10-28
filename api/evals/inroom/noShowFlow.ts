@@ -184,7 +184,30 @@ const said = (m: Member, content: string) => W.memoriesWritten.push({ user_id: m
   W.presence.set(`ev6|${noor.id}`, { sharing_seen_at: null, arrived_at: new Date() }); // came, but nobody was checked in on Luma
   await N.runNoShowAsks(new Date(), { approved: true });
   await N.runNoShowNotes(later(2), { approved: true });
-  check("no answer + door not tracked: nothing", asksTo(jordan).length === 1 && !noteFor(jordan) && W.presence.get(`ev6|${jordan.id}`)?.noshow_outcome === "no_answer");
+  // Review of #274 (2026-10-27): silence at an untracked door stays open through the settle window, so a "no" the next morning
+  // still finds it; a full day of silence settles with nothing owed, as before.
+  check("no answer + door not tracked: no note, and not settled yet (silence can't be told from coming)", asksTo(jordan).length === 1 && !noteFor(jordan) && !W.presence.get(`ev6|${jordan.id}`)?.noshow_settled_at);
+  // A "no" late in the settle window (it runs from the night's end, 40 minutes after the ask) still finds the ask (review of #281:
+  // the ask's own window ran 24h from the ask, so the last of the settle window found nothing open).
+  const realNow = Date.now;
+  Date.now = () => realNow() + 24 * 3_600_000 + 20 * MIN;
+  const lateOpen = await N.openNoShowAsk(jordan.id);
+  Date.now = realNow;
+  check("... a 'no' late in the settle window still finds the open ask", lateOpen?.eventApiId === "ev6", lateOpen);
+  await PA.setGoing("ev6", jordan.id, false); // the next morning: "no, I couldn't make it"
+  await N.runNoShowNotes(later(14), { approved: true });
+  check("... a 'no' the next morning still gets the note", !!noteFor(jordan) && W.presence.get(`ev6|${jordan.id}`)?.noshow_outcome === "said_no:queued", W.presence.get(`ev6|${jordan.id}`));
+}
+{
+  fresh();
+  const jordan = addMember({ first_name: "Jordan" });
+  const noor = addMember({ first_name: "Noor" });
+  night("ev6b", [jordan, noor]);
+  W.presence.set(`ev6b|${noor.id}`, { sharing_seen_at: null, arrived_at: new Date() });
+  await N.runNoShowAsks(new Date(), { approved: true });
+  await N.runNoShowNotes(later(2), { approved: true });
+  await N.runNoShowNotes(later(N.NOSHOW_SETTLE_HOURS + 3), { approved: true });
+  check("no answer + door not tracked, silent past the settle window: settled, nothing", !noteFor(jordan) && W.presence.get(`ev6b|${jordan.id}`)?.noshow_outcome === "no_answer");
 }
 {
   fresh();
