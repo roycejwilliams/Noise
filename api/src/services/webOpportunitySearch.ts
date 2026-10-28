@@ -121,7 +121,8 @@ export async function readPageText(url: string): Promise<string | null> {
 
 // The same read, saying whether the page is gone (Phase B, 2026-10-10): a find re-read before it sends (services/sendCheck.ts) exits
 // on a dead link (404, 410), but only on that: a page that timed out or turned Co away is "couldn't read it now", never "gone".
-export async function readPageChecked(url: string): Promise<{ text: string | null; gone: boolean }> {
+// html: the page as fetched, when a plain fetch read it (taskWeb.ts reads a page's own event record from it, eventPage.ts).
+export async function readPageChecked(url: string): Promise<{ text: string | null; gone: boolean; html?: string | null }> {
   try {
     const u = new URL(url);
     // Public https pages only; never a local or bare-IP address.
@@ -136,7 +137,7 @@ export async function readPageChecked(url: string): Promise<{ text: string | nul
     const text = html ? htmlToText(res!.body) : "";
     // Turned away (403, 429) or a page that loads its content by script: read
     // it in a real browser (services/browserRead.ts, 2026-09-30).
-    if (text.length >= MIN_FETCHED_TEXT) return { text: text.slice(0, PAGE_TEXT_LIMIT), gone: false };
+    if (text.length >= MIN_FETCHED_TEXT) return { text: text.slice(0, PAGE_TEXT_LIMIT), gone: false, html: res!.body };
     if (res && (res.status === 404 || res.status === 410)) return { text: null, gone: true };
     const { browserPageText } = await import("./browserRead.js");
     const seen = await browserPageText(u.toString());

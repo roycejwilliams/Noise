@@ -163,6 +163,7 @@
     "evals/inroom/flow.ts",
     "evals/discovery/placeOnTheWant.ts",
     "evals/discovery/sweepGaps1028.ts",
+    "evals/discovery/eventTier.ts",
     "evals/inroom/noShows.ts",
     "evals/inroom/collisions.ts",
     "evals/inroom/noShowFlow.ts",

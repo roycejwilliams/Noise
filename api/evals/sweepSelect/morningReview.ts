@@ -156,7 +156,7 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
   const second = SH.buildShadowPool(raw, TODAY, new Map(), new Set(), new Set(), judged);
   const promptSecond = selectPrompt(base(second));
   check(`a pool of 45: the 5 the last run never saw lead the next prompt (the first ${SELECT_LIMITS.maxPool} shown)`, second.slice(0, 5).map((p) => p.name).join() === "Find 41,Find 42,Find 43,Find 44,Find 45" && /C1 Find 41/.test(promptSecond) && second.map((p) => p.id).join() === second.map((_, i) => `C${i + 1}`).join());
-  check("pin: the run orders its pool by what the last run judged", /const judgedKeys = new Set<string>\(\(\(last\?\.proposal\?\.judgments \?\? \[\]\) as Judgment\[\]\)\.filter\(\(j\) => j\.verdict !== "no_verdict"\)/.test(src("services/sweepShadow.ts")) && /buildShadowPool\(raw, today, idFor, sentNames, closed, judgedKeys\)/.test(src("services/sweepShadow.ts")));
+  check("pin: the run orders its pool by what the last run judged", /const judgedKeys = new Set<string>\(\(\(last\?\.proposal\?\.judgments \?\? \[\]\) as Judgment\[\]\)\.filter\(\(j\) => j\.verdict !== "no_verdict"\)/.test(src("services/sweepShadow.ts")) && /buildShadowPool\(raw, today, idFor, sentNames, closed, judgedKeys(, sentEvents)?\)/.test(src("services/sweepShadow.ts")));
 }
 
 // ---------------------------------------------------------------- 9. a send's own last day is too late only when the check agrees

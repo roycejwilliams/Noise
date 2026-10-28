@@ -20,6 +20,8 @@ import { memberTerms, QueryLedger, SWEEP_QUERY_RULES } from "./sweepQuery.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
 import { withMember } from "./llmUsage.js";
 import { transientFailure } from "./searchFailure.js";
+import { pageEventMatch } from "./eventPage.js";
+import { emptyTierCounts, tierKey, type TierCounts } from "./tierCounts.js";
 import { EXA_OFF, LUMA_API_OFF, NO_PLACE, TEST_ACCOUNT } from "./lumaViaExa.js";
 
 export const SWEEP_BUDGET = { steps: 7, allSourcesSteps: 9, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
@@ -50,12 +52,19 @@ export const SWEEP_SOURCES = [
 ] as const;
 export type SweepSource = (typeof SWEEP_SOURCES)[number]["source"];
 // Pure: the tool the next step must call, or null when every place has been looked at (or too few steps are left to also keep).
-export function nextRequiredSource(called: ReadonlySet<SweepSource>, stepNumber: number, steps: number = SWEEP_BUDGET.allSourcesSteps): (typeof SWEEP_SOURCES)[number]["tool"] | null {
-  const missing = SWEEP_SOURCES.filter((s) => !called.has(s.source));
+// skip: places this search leaves out by design (a goal its plan read as not tied to a place leaves out events: sweepSkips).
+export function nextRequiredSource(called: ReadonlySet<SweepSource>, stepNumber: number, steps: number = SWEEP_BUDGET.allSourcesSteps, skip: ReadonlySet<SweepSource> = new Set()): (typeof SWEEP_SOURCES)[number]["tool"] | null {
+  const missing = SWEEP_SOURCES.filter((s) => !called.has(s.source) && !skip.has(s.source));
   if (!missing.length || stepNumber >= steps - 2) return null;
   return missing[0].tool;
 }
 export const SWEEP_ALL_SOURCES = `This is the morning sweep, and it looks in all three places: searchEvents, webSearch and searchPosts, each at least once. When the ask is one X rarely covers, still search X once, broadly, for the kind of thing it is.`;
+// A goal its plan read as not tied to a place (goalEdges.ts GoalEdge.placeBound false: funding, programs, jobs, anything done from
+// anywhere) isn't searched in city events (Royce, 2026-10-28, changing his 2026-10-13 "no per-ask source selectivity" for exactly this):
+// the morning sweep looks in the web and X only, and the events tool isn't offered. Unknown or missing keeps all three.
+export const SWEEP_PORTABLE_SOURCES = `This is the morning sweep for something that can be done from anywhere, so it looks in two places: webSearch and searchPosts, each at least once; city events aren't searched for it. When the ask is one X rarely covers, still search X once, broadly, for the kind of thing it is.`;
+// Pure: the places a search leaves out by design.
+export const sweepSkips = (c: { placeBound?: boolean | null }, allSources?: boolean): ReadonlySet<SweepSource> => new Set<SweepSource>(allSources && c.placeBound === false ? ["events"] : []);
 // The morning sweep looks for what's new (Royce, 2026-10-13: "new stuff posts overnight ... Otherwise it re-finds the same pages every
 // morning"): X only returns the last RECENT_HOURS, the web search favors what was posted in them, and Co sees what it already looked
 // at for this ask on earlier mornings.
@@ -127,7 +136,8 @@ export const SWEEP_X_TOOL =
   "Recent X posts (the last 7 days), for what's announced there first: programs and cohorts taking applications, open calls, fellowships, residencies, grants, founder or builder gatherings, investors or people looking for what they want. One search a sweep. Write it the way such posts are written, broad: two or three OR-grouped sets of synonyms in parentheses, e.g. (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply by). No niche words, no city, no year, no venue or vendor names. Each post comes with its own links expanded; when a post points to the program's own page, keep that link rather than the post.";
 
 // city: where this want is (services/wantPlace.ts), or their home city when it has no place of its own; homeCity: where they live.
-export type SweepCandidate = { userId: string; firstName: string; askText: string; fromProfile?: boolean; city: string | null; homeCity?: string | null };
+// placeBound: the goal plan's read of a goal (goalEdges.ts), for a goal's search: false leaves city events out of the morning sweep.
+export type SweepCandidate = { userId: string; firstName: string; askText: string; fromProfile?: boolean; city: string | null; homeCity?: string | null; placeBound?: boolean | null };
 
 // What the sweep reads about them: the member record (services/memberKnowledge.ts), the same one the picker, dispatch, tasks and
 // replies read (Phase A1, 2026-10-10: the sweep ran on a snapshot paragraph, a regex guess at the room they want from their feelings,
@@ -181,6 +191,31 @@ export function sweepRecord(k: MemberKnowledge, askText: string): SweepRecord {
   };
 }
 
+// Pure-with-deps: kept finds whose link is one event's own page (taskWeb.ts eventPageUrl) and still filed as openings, read for the
+// page's own record: a public event becomes an event find (tier 2) with its keep (why it fits, taste, audience, how it was found); one
+// whose record says it's sold out or over is dropped; anything else stays as it was. At most SWEEP_BUDGET.keep reads, at once.
+export async function promoteEventPages(kept: TierMatch[], read: (url: string) => Promise<import("./eventPage.js").PageEvent | null>): Promise<{ kept: TierMatch[]; dropped: number }> {
+  const { eventPageUrl } = await import("./taskWeb.js");
+  let dropped = 0;
+  const out = await Promise.all(
+    kept.map(async (m) => {
+      const url = "url" in m && m.url ? String(m.url) : "";
+      if (m.tier !== 3 || !url || !eventPageUrl(url)) return m;
+      const ev = await read(url).catch(() => null);
+      if (!ev) return m;
+      const over = ev.endAt ?? ev.startAt;
+      if (ev.soldOut === true || (over && Date.parse(over) <= Date.now())) {
+        dropped++;
+        return null;
+      }
+      const a = m as any;
+      return pageEventMatch(ev, url, { source: a.source ?? "web", ...(a.via ? { via: a.via } : {}), whyItFits: a.whyItFits, fits: a.fits, rightKind: a.rightKind, ...(a.taste ? { taste: a.taste } : {}), ...(a.audience ? { audience: a.audience } : {}) });
+    }),
+  );
+  return { kept: out.filter((m): m is TierMatch => m !== null), dropped };
+}
+const eventPageFor = async (url: string) => (await (await import("./eventPage.js")).readEventPage(url)).event;
+
 export function sweepPrompt(c: SweepCandidate, o: { today: string; record: SweepRecord; allSources?: boolean; seen?: { name: string; url: string }[] }): string {
   const r = o.record;
   const section = (title: string, lines: string[]) => (lines.length ? `${title}\n${lines.map((l) => `- ${l}`).join("\n")}\n` : "");
@@ -197,7 +232,7 @@ ${r.statedTaste.length ? `THE KIND OF ROOM THEY'VE TOLD CO THEY WANT (their own 
 Search only for this one ask. Other things they're working on (in who they are) are context for judging fit, not things to look for in this sweep, because each ask gets its own sweep (2026-10-01: a founder-events sweep kept a venue from another ask).
 Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Cue will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
 
-Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}${o.allSources ? ` ${SWEEP_ALL_SOURCES} ${SWEEP_RECENT}${o.seen?.length ? ` ${seenBeforeLine(o.seen)}` : ""}` : ""}
+Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}${o.allSources ? ` ${c.placeBound === false ? SWEEP_PORTABLE_SOURCES : SWEEP_ALL_SOURCES} ${SWEEP_RECENT}${o.seen?.length ? ` ${seenBeforeLine(o.seen)}` : ""}` : ""}
 ${SWEEP_QUERY_RULES}
 Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them, tied to something in their record. Keeping nothing is fine when nothing fits. When you're done, note in skip() the results you looked at and passed on, each with a few words on why, in the same step as your keeps. Then stop.`;
 }
@@ -217,7 +252,11 @@ Judge each result yourself against what they asked and who they are; results are
 // closed, nothing verified there: taskWeb.ts verifyResult and withVerifiedFacts, then factCheck.ts checkVerified), counted for the
 // team's /sweeps page (Royce, 2026-10-28: the morning's quiet drops never showed in the sweep summary). A count only; the rule that
 // drops them is unchanged.
-export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: SweepSource[]; lasting?: SweepSource[]; unverified?: number };
+// tiers: per tier (1 Noise's events, 2 event pages, 3 web and X openings), how many searches could fill it, what came back, what was kept
+// and what was dropped (by a page's own check, the fact gate or their limits), for the team's /sweeps page (Royce, 2026-10-28: to see
+// whether filing finds by kind of page brings better finds).
+export { emptyTierCounts, tierKey, type TierCounts };
+export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: SweepSource[]; lasting?: SweepSource[]; unverified?: number; tiers?: TierCounts };
 
 // What each place's calls came to, for outages and lasting: ok when a call came back with no failure that clears (some of it may have
 // failed for good: Exa out of credit while Luma's feed answered), transient / lasting when a call (or part of one) failed that way.
@@ -316,7 +355,9 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   const sourceFailures: string[] = [];
   // What each place's calls came to (placeReport: SweepSources.outages and lasting).
   const places = newPlaceReads();
+  const skips = sweepSkips(c, opts.allSources);
   let unverified = 0;
+  const tierCounts = emptyTierCounts();
   const exaAdded: { added: number; offered: number; error?: string }[] = [];
   const tools = {
     searchEvents: tool({
@@ -330,6 +371,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           return { ok: false, error: ledger.refusal(what, bad) };
         }
         did.push(`events: ${what}${when ? `, ${when}` : ""}`);
+        tierCounts["1"].searched++;
+        tierCounts["2"].searched++;
         const [r, openings] = await Promise.all([
           eventCandidates(what, c.city, { when: when ?? null, userId: c.userId, timezone: opts.timezone ?? null, limit: 8, source: "sweep" }),
           import("./eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(c.userId)).catch(() => [] as TierMatch[]),
@@ -383,6 +426,9 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         if (!run.length) return { ok: false, error: "No web searches left." };
         webQueries += run.length;
         did.push(...run.map((q) => `web: ${q}${loosenedFrom.has(q) ? ` (loosened from: ${loosenedFrom.get(q)})` : ""}`));
+        // A web page can be one event (tier 2) or an opening (tier 3).
+        tierCounts["2"].searched += run.length;
+        tierCounts["3"].searched += run.length;
         const { taskWebSearch } = await import("./taskWeb.js");
         const all = await Promise.all(run.map((q) => taskWebSearch(c.userId, q, { city: c.city, zone: opts.timezone ?? null, source: "sweep", ...(opts.allSources ? { recentHours: RECENT_HOURS } : {}) }).catch(() => null)));
         // Every search failed outright: an outage, not an empty run (re-review of #133). taskWebSearch catches its own failures and says
@@ -397,13 +443,18 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         const { checkVerified } = await import("./factCheck.js");
         const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? []), { where: "sweep.web_search", userId: c.userId }).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
         unverified += all.reduce((n, r) => n + (r?.dropped?.length ?? 0) + (r?.kept?.length ?? 0), 0) - kept.length;
+        const eventDrops = all.reduce((n, r) => n + (r?.dropped ?? []).filter((d) => d.tier === 2).length, 0);
+        tierCounts["2"].dropped += eventDrops;
+        tierCounts["3"].dropped += all.reduce((n, r) => n + (r?.dropped?.length ?? 0) + (r?.kept?.length ?? 0), 0) - kept.length - eventDrops;
         run.forEach((q, i) => ledger.ran("web", q, all[i]?.kept?.length ?? 0, loosenedFrom.get(q)));
         const queryOf = new Map<string, string>();
         run.forEach((q, i) => { for (const k of all[i]?.kept ?? []) if (!queryOf.has(k.url)) queryOf.set(k.url, q); });
         for (const k of kept) {
           const facts = [...k.facts, ...(k.date ? [`date: ${k.date}`] : [])].join("; ");
           lookedAt.push({ source: "web", name: k.name, url: k.url, query: queryOf.get(k.url) });
-          found.set(k.url, { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}), ...(k.deadline ? { deadline: k.deadline } : {}) } as unknown as TierMatch);
+          // One public event by its page's own record: an event find (tier 2), filed the way the feed's events are (eventPage.ts).
+          if (k.event) found.set(k.url, pageEventMatch(k.event, k.url, { source: "web" }));
+          else found.set(k.url, { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}), ...(k.deadline ? { deadline: k.deadline } : {}) } as unknown as TierMatch);
         }
         // One query that came back is a clean web call (review of #293: the place is an outage only when no web call answered).
         if (all.some((r) => r && !/^Web search failed|^No web search right now/.test(r.note ?? ""))) places.web.ok = true;
@@ -439,6 +490,9 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
         }
         did.push(`x: ${q}${checked.loosenedFrom ? ` (loosened from: ${checked.loosenedFrom})` : ""}`);
+        // A post can point at one event's page (tier 2) or be an opening itself (tier 3).
+        tierCounts["2"].searched++;
+        tierCounts["3"].searched++;
         const { searchRecentPosts, X_SEARCH_RESULTS } = await import("./xSearch.js");
         let posts: Awaited<ReturnType<typeof searchRecentPosts>>;
         try {
@@ -536,8 +590,10 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
       // The daily sweep looks in all three places (SWEEP_SOURCES): a place not yet looked at is the next step's only tool.
       ...(opts.allSources
         ? {
+            // A place left out by design is neither forced nor offered (sweepSkips).
+            ...(skips.has("events") ? { activeTools: ["webSearch", "searchPosts", "readPage", "keep", "skip"] as (keyof typeof tools)[] } : {}),
             prepareStep: ({ stepNumber }: { stepNumber: number }) => {
-              const must = nextRequiredSource(called, stepNumber);
+              const must = nextRequiredSource(called, stepNumber, SWEEP_BUDGET.allSourcesSteps, skips);
               return must ? { toolChoice: { type: "tool" as const, toolName: must } } : undefined;
             },
           }
@@ -549,8 +605,14 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
     sourceFailures.push(`the search loop failed (${String(err?.message ?? err).slice(0, 120)})`);
     // The loop itself failed: every place it hadn't reached yet failed the way the loop did (a model timeout clears; a refused key doesn't).
-    for (const s of SWEEP_SOURCES) if (!called.has(s.source)) placeFailed(places, s.source, String(err?.message ?? err));
+    for (const s of SWEEP_SOURCES) if (!called.has(s.source) && !skips.has(s.source)) placeFailed(places, s.source, String(err?.message ?? err));
   }
+  // A kept link that is one event's own page (a post's link, mostly: a web result's page was already read) is read for its record and
+  // filed as an event, checked as one (Royce, 2026-10-28: a Partiful or Eventbrite event an X post points to is an event, not an opening).
+  const promoted = await promoteEventPages(kept, eventPageFor);
+  kept.splice(0, kept.length, ...promoted.kept);
+  tierCounts["2"].dropped += promoted.dropped;
+  for (const m of found.values()) tierCounts[tierKey((m as any).tier)].found++;
   // Facts only: sold out, past, too far, and a name/date the record actually states.
   const gatedOut: GatedOut[] = [];
   // Started, or starting inside the hour (START_LEAD_MINUTES): never kept, the way the reply's search turns it away (Royce, 2026-10-17).
@@ -572,9 +634,13 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   // Each query beside what became of its results, and each keep with the query that found it (the tuning log, sweepQuery.ts).
   const { queries, keptBy } = ledger.finish(lookedAt, keptUrls, gated.map((m) => ({ name: m.name, url: "url" in m && m.url ? String(m.url) : "" })), postOf);
   // A place the daily sweep never reached (the loop ended first) is a failure with its reason too.
-  if (opts.allSources) for (const s of SWEEP_SOURCES) if (!called.has(s.source)) sourceFailures.push(`${s.source}: not reached (the search ended before it)`);
+  // A place left out by design (sweepSkips) wasn't missed: it isn't said as one.
+  if (opts.allSources) for (const s of SWEEP_SOURCES) if (!called.has(s.source) && !skips.has(s.source)) sourceFailures.push(`${s.source}: not reached (the search ended before it)`);
   const report = placeReport(places);
+  for (const g of gatedOut) tierCounts[tierKey(g.tier)].dropped++;
+  for (const o of limits.out) tierCounts[tierKey((o.match as any).tier)].dropped++;
+  for (const m of gated) tierCounts[tierKey((m as any).tier)].kept++;
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
   await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy, ...(opts.allSources ? { allSources: true } : {}), ...(sourceFailures.length ? { sourceFailures } : {}), ...(exaAdded.length ? { exaAdded } : {}) } }).catch(() => {});
-  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures, ...(report.outages.length ? { outages: report.outages } : {}), ...(report.lasting.length ? { lasting: report.lasting } : {}), ...(unverified ? { unverified } : {}) } }; // mood: carries the read
+  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures, ...(report.outages.length ? { outages: report.outages } : {}), ...(report.lasting.length ? { lasting: report.lasting } : {}), ...(unverified ? { unverified } : {}), tiers: tierCounts } }; // mood: carries the read
 }

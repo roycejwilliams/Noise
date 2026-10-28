@@ -194,8 +194,10 @@ export function checkGrounding(match: TierMatch, facts: MatchFacts): GateCheck {
   const name = "grounding";
   if (!match.name?.trim()) return { name, pass: false, reason: "no name" };
 
-  if (match.tier === 2 && !/^https:\/\/(lu\.ma|luma\.com)\/[\w-]+$/.test(match.url ?? "")) {
-    return { name, pass: false, reason: `not a real Luma link: ${match.url}` };
+  // An event find is a Luma event link, or (Royce, 2026-10-28: tiers by kind of page) any https page whose own event record it was filed
+  // from (services/eventPage.ts pageEventMatch: its start is on the match's details).
+  if (match.tier === 2 && !/^https:\/\/(lu\.ma|luma\.com)\/[\w-]+$/.test(match.url ?? "") && !(/^https:\/\//.test(match.url ?? "") && (match as any).details?.startAt)) {
+    return { name, pass: false, reason: `not a real event page: ${match.url}` };
   }
   if (match.tier === 1 && match.url && !/^https:\/\//.test(match.url)) {
     return { name, pass: false, reason: `bad link: ${match.url}` };
@@ -338,6 +340,30 @@ export function repeatRule(
 // When they were shown it, what they said about it, and whether they texted
 // Co right after. extraShownAt: showings found another way (the sweep's
 // fuzzy name match on openings).
+// When this event was offered under another link: the last 120 days of offers, compared by their records (never by name alone).
+async function shownTwins(userId: string, match: TierMatch): Promise<Date[]> {
+  const { sameEvent } = await import("../services/eventIdentity.js");
+  const id = { name: match.name, url: (match as any).url ?? null, startAt: (match as any).startAt ?? null, city: (match as any).city ?? null, details: (match as any).details ?? null };
+  const rows = await pool
+    .query(
+      `SELECT created_at AS at, content FROM co_memories WHERE user_id = $1 AND memory_type IN ('recommendation_offered', 'event_offer_pending') AND created_at > NOW() - INTERVAL '120 days' ORDER BY created_at DESC LIMIT 300`,
+      [userId],
+    )
+    .then((r) => r.rows as { at: Date; content: string }[])
+    .catch(() => [] as { at: Date; content: string }[]);
+  return rows.flatMap((r) => {
+    let c: any;
+    try {
+      c = typeof r.content === "string" ? JSON.parse(r.content) : r.content;
+    } catch {
+      return [];
+    }
+    const m = c?.match ?? c;
+    const other = { name: m?.name ?? null, url: m?.url ?? null, startAt: m?.startAt ?? null, city: m?.city ?? null, details: m?.details ?? null };
+    return sameEvent(id, other) ? [new Date(r.at)] : [];
+  });
+}
+
 export async function offerHistory(userId: string, match: TierMatch, extraShownAt: Date[] = []): Promise<OfferHistory> {
   const eventId = "event_api_id" in match ? match.event_api_id : null;
   const shown = await pool
@@ -357,7 +383,11 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
     )
     .then((r) => r.rows.map((row: { at: Date }) => new Date(row.at)))
     .catch(() => [] as Date[]);
-  const shownAt = [...shown, ...extraShownAt];
+  // The same event shown under another link (Royce, 2026-10-28: one event on two platforms, services/eventIdentity.ts sameEvent): read
+  // from what was offered by its record, for an event with a start of its own. A time already counted isn't counted twice.
+  const twinShown = match.tier !== 3 || (match as any).details?.startAt ? await shownTwins(userId, match) : [];
+  const seenTimes = new Set(shown.map((d) => d.getTime()));
+  const shownAt = [...shown, ...twinShown.filter((d) => !seenTimes.has(d.getTime())), ...extraShownAt];
   const outcomeRow = await pool
     .query(
       `SELECT result FROM suggestion_outcomes
