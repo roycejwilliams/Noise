@@ -47,11 +47,11 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   const reads: Record<string, string> = { "https://luma.com/2gizvh99": lumaText, "https://www.memorybox.ai/": home };
   let askedPage = "";
   const pageReads: string[] = [];
-  const page = await W.pickPage(raw, { read: async (u) => (pageReads.push(u), reads[u] ?? null), official: async () => { lookedUp = true; return "https://www.memorybox.ai/"; }, eventPage: async (u) => { askedPage = u; return { oneEvent: true, text: lumaText }; } });
+  const page = await W.pickPage(raw, { read: async (u) => (pageReads.push(u), reads[u] ?? null), official: async () => { lookedUp = true; return "https://www.memorybox.ai/"; }, eventPage: async (u) => { askedPage = u; return { oneEvent: true, text: lumaText, shareable: true }; } });
   check("the 10-28 MemoryBox party: its Luma page stays, never swapped for memorybox.ai", page.url === raw.url && !page.swapped && page.text === lumaText, page);
   check("and no homepage is even looked up for it: its own page's data says it's one event", !lookedUp && askedPage === raw.url);
   check("re-review of #293: the Luma page is fetched once, for the check and its text both (no second read)", pageReads.length === 0, pageReads);
-  const shell = await W.pickPage(raw, { read: async (u) => (u === raw.url ? lumaText : null), official: async () => null, eventPage: async () => ({ oneEvent: true, text: "Luma" }) });
+  const shell = await W.pickPage(raw, { read: async (u) => (u === raw.url ? lumaText : null), official: async () => null, eventPage: async () => ({ oneEvent: true, text: "Luma", shareable: true }) });
   check("a fetch that came back as a short shell is read as any page is", shell.text === lumaText && !shell.swapped);
   check("its Luma page isn't marked the company's own page: facts on it are still checked next to its name", page.official === false);
   const v = W.verifyResult({ ...raw, url: page.url }, page.text!, { now: new Date("2026-10-28T16:00:00Z"), zone: "America/Los_Angeles", official: page.official });
@@ -62,13 +62,13 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   check("the verification rule is unchanged: checked against the homepage, it has nothing verified and is dropped", W.withVerifiedFacts(onHome.kept ? [onHome.kept] : []).kept.length === 0);
 
   // A Luma calendar named like an event (lu.ma/genai-sf): its page's data isn't one event, so it's treated as before (swapped).
-  const cal = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async (u) => reads[u] ?? "calendar", official: async () => "https://www.memorybox.ai/", eventPage: async () => ({ oneEvent: false, text: null }) });
+  const cal = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async (u) => reads[u] ?? "calendar", official: async () => "https://www.memorybox.ai/", eventPage: async () => ({ oneEvent: false, text: null, shareable: true }) });
   check("a Luma calendar or city page isn't kept as an event page: its own data decides, and it's swapped as before", cal.swapped && cal.url === "https://www.memorybox.ai/");
   const eb = await W.pickPage({ ...raw, url: "https://www.eventbrite.com/e/memorybox-beta-launch-tickets-1" }, { read: async () => lumaText, official: async () => "https://www.memorybox.ai/", eventPage: async () => ({ oneEvent: false, text: null }) });
   check("an Eventbrite event page is kept by its url alone", !eb.swapped && eb.url.includes("eventbrite.com/e/"));
   // 2026-10-28 (event tier by page): any event-shaped page is read once, through eventPage.ts readEventPage (Luma's record or one schema.org Event).
   check("Luma's own page data decides it, from one fetch (eventPage.ts readEventPage), read for an event-shaped url", /m\.readEventPage\(url\)/.test(src("services/taskWeb.ts")) && /return \(await readLumaPage\(url\)\)\.details;/.test(src("services/eventDetails.ts")));
-  const calText = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async () => { throw new Error("read twice"); }, official: async () => null, eventPage: async () => ({ oneEvent: false, text: lumaText }) });
+  const calText = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async () => { throw new Error("read twice"); }, official: async () => null, eventPage: async () => ({ oneEvent: false, text: lumaText, shareable: true }) });
   check("a Luma page that isn't one event and has no own site found is checked on the text that one fetch read", !calText.swapped && calText.text === lumaText);
   const blog = { name: "The Loft at Mission Bay", url: "https://bestvenues-blog.com/top-10-sf-venues", details: [] };
   const swap = await W.pickPage(blog, { read: async (u) => (u === "https://theloftsf.com/" ? "The Loft at Mission Bay" : "Top 10 venues"), official: async () => "https://theloftsf.com/" });

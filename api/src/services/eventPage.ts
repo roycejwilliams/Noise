@@ -22,7 +22,9 @@ export type PageEvent = EventDetails & { name: string };
 // swapped for a homepage, taskWeb.ts pickPage); event: the record, when it may be an event find.
 // private: the page's own record says it isn't public (a private Luma event, a Partiful invite or a password-locked page): never a find
 // at all, in any tier (batched review of #299). Not the same as a page that couldn't be read, or one that doesn't say.
-export type PageEventRead = { event: PageEvent | null; why: string | null; one: boolean; private?: boolean };
+// public: a Luma or Partiful page's own record says it's public (the only way a link to either may be a find or shared: final review
+// of #299, fail closed, shareableRead).
+export type PageEventRead = { event: PageEvent | null; why: string | null; one: boolean; private?: boolean; public?: boolean };
 
 const hostOf = (url: string) => {
   try {
@@ -73,10 +75,10 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
     if (visibility && visibility !== "public") return { event: null, why: `its Luma page says it's ${visibility}, not public`, one: !!d, private: true };
     // Public only when it says so (batched review of #299), the way a Partiful page must say isPublic: a page that doesn't say isn't an
     // event find (it's checked as a web page, as before).
-    if (visibility !== "public") return { event: null, why: "its Luma page doesn't say it's public", one: !!d };
+    if (visibility !== "public") return { event: null, why: "its Luma page doesn't say it's public", one: !!d || !!data?.event };
     const name = str(data?.event?.name) ?? str(jsonLdEvents(html)[0]?.name);
-    if (!d?.startAt || !name) return { event: null, why: "its Luma page has no event record with a start", one: !!d };
-    return { event: { ...d, name, visibility }, why: null, one: true };
+    if (!d?.startAt || !name) return { event: null, why: "its Luma page has no event record with a start", one: !!d, public: true };
+    return { event: { ...d, name, visibility }, why: null, one: true, public: true };
   }
   const evs = jsonLdEvents(html);
   if (!evs.length) return { event: null, why: null, one: false };
@@ -116,7 +118,7 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
     const pe = pp?.event ?? null;
     if (pp?.passwordRequired === true || pe?.isPublic !== true || (str(pe?.visibility) && pe.visibility !== "public")) return { event: null, why: "not a public Partiful event (a private invite)", one: true, private: true };
     // Only the city: the street is for confirmed guests (the #298 rule).
-    return { event: { ...base, venue: null, address: null, timezone: str(pe?.timezone), soldOut: pe?.atCapacity === true ? true : base.soldOut, visibility: "public" }, why: null, one: true };
+    return { event: { ...base, venue: null, address: null, timezone: str(pe?.timezone), soldOut: pe?.atCapacity === true ? true : base.soldOut, visibility: "public" }, why: null, one: true, public: true };
   }
   return { event: base, why: null, one: true };
 }
@@ -134,7 +136,7 @@ export async function settleZone(ev: PageEvent, zoneOf: (place: string) => Promi
 
 // ---------------------------------------------------------------- reading a page for its event record
 
-export type EventPageRead = { html: string | null; text: string | null; event: PageEvent | null; why: string | null; one: boolean; private?: boolean; error?: string | null };
+export type EventPageRead = { html: string | null; text: string | null; event: PageEvent | null; why: string | null; one: boolean; private?: boolean; public?: boolean; error?: string | null };
 export type EventPageDeps = {
   fetchHtml: (url: string) => Promise<{ html: string | null; error: string | null }>;
   zoneOf: (place: string) => Promise<string | null>;
@@ -160,12 +162,21 @@ export const realEventPageDeps = async (): Promise<EventPageDeps> => {
 // One read per page: kept an hour when it was an event, two minutes otherwise (the event-detail cache's rule, eventDetails.ts).
 export const EVENT_PAGE_CACHE = { okMs: 60 * 60_000, failMs: 2 * 60_000, max: 500 } as const;
 const cache = new Map<string, { at: number; read: EventPageRead }>();
-export const clearEventPageCache = () => cache.clear();
+// A read already under way is shared (final review of #299: a second check of the same link never fetches it again).
+const inFlight = new Map<string, Promise<EventPageRead>>();
+export const clearEventPageCache = () => (cache.clear(), inFlight.clear());
 
 export async function readEventPage(url: string, o: { maxAgeMs?: number; deps?: EventPageDeps } = {}): Promise<EventPageRead> {
   const hit = cache.get(url);
   const ttl = hit?.read.event ? Math.min(o.maxAgeMs ?? EVENT_PAGE_CACHE.okMs, EVENT_PAGE_CACHE.okMs) : EVENT_PAGE_CACHE.failMs;
   if (hit && Date.now() - hit.at < ttl) return hit.read;
+  const running = inFlight.get(url);
+  if (running) return running;
+  const p = readEventPageOnce(url, o).finally(() => inFlight.delete(url));
+  inFlight.set(url, p);
+  return p;
+}
+async function readEventPageOnce(url: string, o: { maxAgeMs?: number; deps?: EventPageDeps }): Promise<EventPageRead> {
   const d = o.deps ?? (await realEventPageDeps());
   const got = await d.fetchHtml(url).catch((err: any) => ({ html: null, error: String(err?.message ?? err) }));
   let read: EventPageRead;
@@ -173,7 +184,7 @@ export async function readEventPage(url: string, o: { maxAgeMs?: number; deps?: 
   else {
     const p = pageEventData(got.html, url, d.parseLuma);
     const settled = p.event ? await settleZone(p.event, d.zoneOf) : null;
-    read = { html: got.html, text: d.toText(got.html), event: settled, why: p.event && !settled ? "no zone its time can be said in" : p.why, one: p.one, ...(p.private ? { private: true } : {}) };
+    read = { html: got.html, text: d.toText(got.html), event: settled, why: p.event && !settled ? "no zone its time can be said in" : p.why, one: p.one, ...(p.private ? { private: true } : {}), ...(p.public ? { public: true } : {}) };
   }
   if (cache.size > EVENT_PAGE_CACHE.max) cache.clear();
   cache.set(url, { at: Date.now(), read });
@@ -194,16 +205,27 @@ export function mayBePrivateEvent(url: string): boolean {
   return false;
 }
 
-// The links among these whose page's own record says it's private (a Partiful invite, a private Luma event): never something a member
-// sees, wherever it was found (batched review of #299: an X post's link in a reply). Only Luma and Partiful links are read, at most
-// PRIVATE_CHECK.max at once, inside PRIVATE_CHECK.deadlineMs; one not read by then is left as it is here, and checked again before
-// it's shared (agent/loopTools.ts shareFinds).
-export const PRIVATE_CHECK = { max: 8, deadlineMs: 4_000 } as const;
-export async function privateEventLinks(urls: string[], read: (url: string) => Promise<{ private?: boolean }> = (u) => readEventPage(u)): Promise<Set<string>> {
-  const check = [...new Set(urls.filter(mayBePrivateEvent))].slice(0, PRIVATE_CHECK.max);
+// Pure: whether a link may be a find or be shared, from its read (final review of #299: fail closed). A Luma or Partiful link only when
+// its page's own record says it's public, or (Luma) the page was read and holds no event at all (a city or calendar page); unread,
+// errored, private or not saying: no. Any other link isn't judged here.
+export function shareableRead(url: string, r: { html?: string | null; public?: boolean; one?: boolean; private?: boolean } | null): boolean {
+  if (!mayBePrivateEvent(url)) return true;
+  if (!r || r.private) return false;
+  if (r.public === true) return true;
+  return isLumaHost(url) && !!r.html && r.one === false;
+}
+
+// The links among these that may not be a find or be shared: every Luma and Partiful link whose page's own record doesn't say public
+// (a Partiful invite, a private Luma event), and every one that couldn't be read, errored or wasn't read inside PRIVATE_CHECK.deadlineMs
+// (final review of #299: fail closed; all of them are read at once, none left unchecked). Wherever it was found (an X post's link in a
+// reply, the sweep), and again before it's shared (agent/loopTools.ts shareFinds).
+export const PRIVATE_CHECK = { deadlineMs: 4_000 } as const;
+export async function unshareableEventLinks(urls: string[], read: (url: string) => Promise<EventPageRead | { html?: string | null; public?: boolean; one?: boolean; private?: boolean }> = (u) => readEventPage(u)): Promise<Set<string>> {
+  const check = [...new Set(urls.filter(mayBePrivateEvent))];
+  if (!check.length) return new Set();
   const deadline = new Promise<null>((r) => setTimeout(() => r(null), PRIVATE_CHECK.deadlineMs).unref?.());
-  const reads = await Promise.all(check.map((u) => Promise.race([read(u).catch(() => null), deadline])));
-  return new Set(check.filter((_, i) => reads[i]?.private === true));
+  const reads = await Promise.all(check.map((u) => Promise.race([Promise.resolve().then(() => read(u)).catch(() => null), deadline])));
+  return new Set(check.filter((u, i) => !shareableRead(u, reads[i])));
 }
 
 // For the send-time re-read (sendCheck.ts recheckFind): an event page's record now. Luma's through its own reader (same cache as

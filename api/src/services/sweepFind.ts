@@ -21,7 +21,7 @@ import { memberTerms, QueryLedger, SWEEP_QUERY_RULES } from "./sweepQuery.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
 import { withMember } from "./llmUsage.js";
 import { transientFailure } from "./searchFailure.js";
-import { pageEventMatch } from "./eventPage.js";
+import { mayBePrivateEvent, pageEventMatch, shareableRead } from "./eventPage.js";
 import { emptyTierCounts, tierKey, type TierCounts } from "./tierCounts.js";
 import { EXA_OFF, LUMA_API_OFF, NO_PLACE, TEST_ACCOUNT } from "./lumaViaExa.js";
 
@@ -216,7 +216,8 @@ export async function promoteEventPages(kept: TierMatch[], read: (url: string) =
     kept.map(async (m) => {
       const url = "url" in m && m.url ? String(m.url) : "";
       if (m.tier !== 3 || !url || !eventPageUrl(url)) return m;
-      const ev = await read(url).catch(() => null);
+      // A Luma or Partiful link whose read failed is dropped too (fail closed, final review of #299); any other stays as it was.
+      const ev = await read(url).catch(() => (mayBePrivateEvent(url) ? ("private" as const) : null));
       if (ev === "private") {
         dropped++;
         return null;
@@ -233,9 +234,10 @@ export async function promoteEventPages(kept: TierMatch[], read: (url: string) =
   );
   return { kept: out.filter((m): m is TierMatch => m !== null), dropped };
 }
+// "private": not shareable (eventPage.ts shareableRead: a Luma or Partiful page not confirmed public, or not read). Fail closed.
 const eventPageFor = async (url: string) => {
   const r = await (await import("./eventPage.js")).readEventPage(url);
-  return r.private ? ("private" as const) : r.event;
+  return !shareableRead(url, r) ? ("private" as const) : r.event;
 };
 
 export function sweepPrompt(c: SweepCandidate, o: { today: string; record: SweepRecord; allSources?: boolean; seen?: { name: string; url: string }[] }): string {
@@ -533,7 +535,10 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         }
         // A post's link to a private event page is never a find or shown as one (batched review of #299; promoteEventPages drops what
         // this check didn't reach in time).
-        const privateLinks = await import("./eventPage.js").then((m) => m.privateEventLinks(posts.flatMap((p) => p.links))).catch(() => new Set<string>());
+        // Fail closed (final review of #299): a Luma or Partiful link not confirmed public, or not read in time, is dropped; a check that
+        // fails as a whole drops every such link.
+        const allLinks = posts.flatMap((p) => p.links);
+        const privateLinks = await import("./eventPage.js").then((m) => m.unshareableEventLinks(allLinks)).catch(() => new Set(allLinks.filter(mayBePrivateEvent)));
         for (const p of posts) p.links = p.links.filter((l) => !privateLinks.has(l));
         xPosts += posts.length;
         places.x.ok = true;
