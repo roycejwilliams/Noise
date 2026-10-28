@@ -230,6 +230,7 @@
     "evals/forget/guardedReaders.ts",
     "evals/checkins/askFrame.ts",
     "evals/relevance/lateJoiner.ts",
-    "evals/events/checkinNoShow.ts"
+    "evals/events/checkinNoShow.ts",
+    "evals/cache/toolOrder.ts"
   ]
 }
