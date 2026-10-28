@@ -45,6 +45,9 @@ export type EventDetails = {
   apiId?: string | null;
   name?: string | null;
   visibility?: string | null;
+  // Its zone came from its city, not its page, and its start doesn't carry that zone's offset (eventPage.ts settleZone): its time is
+  // said as a guess (renderEventDetails).
+  zoneGuessed?: boolean;
 };
 
 // Tier 3: what the source post actually says.
@@ -173,9 +176,9 @@ export function renderEventDetails(name: string, d: EventDetails): string[] {
     const start = DateTime.fromISO(d.startAt).setZone(zone);
     const end = d.endAt ? DateTime.fromISO(d.endAt).setZone(zone) : null;
     const sameDay = end && end.hasSame(start, "day");
-    lines.push(
-      `"${name}" starts ${start.toFormat("cccc, LLLL d 'at' h:mm a")}${end ? ` and ends ${sameDay ? end.toFormat("h:mm a") : end.toFormat("cccc, LLLL d 'at' h:mm a")}` : ""} (${zone}).`,
-    );
+    const ends = end ? ` and ends ${sameDay ? end.toFormat("h:mm a") : end.toFormat("cccc, LLLL d 'at' h:mm a")}` : "";
+    // A zone guessed from its city is said as a guess (#298, rebuilt): COPY "starts around ... PST, judging by the city it's in".
+    lines.push(d.zoneGuessed ? `"${name}" starts around ${start.toFormat("cccc, LLLL d 'at' h:mm a ZZZZ")}${ends}, judging by the city it's in.` : `"${name}" starts ${start.toFormat("cccc, LLLL d 'at' h:mm a")}${ends} (${zone}).`);
   }
   if (d.online) lines.push(`"${name}" is online.`);
   else if (d.venue || d.address) {

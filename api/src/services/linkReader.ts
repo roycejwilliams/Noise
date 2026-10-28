@@ -22,6 +22,8 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { fetchLumaEventDetails, isLumaLink, type EventDetails } from "./eventDetails.js";
 import { parseModelJson } from "./modelJson.js";
+import { pageLocality, withholdsStreet, zoneForPage } from "./eventPage.js";
+import { getTimezoneForCity } from "./geocoding.js";
 
 export const FIELDS = ["what", "name", "host", "date", "start", "end", "timezone", "venue", "address", "online", "audience", "cost", "deadline", "sold_out"] as const;
 export type FieldName = (typeof FIELDS)[number];
@@ -176,12 +178,15 @@ const decode = (s: string) =>
     .replace(/&#39;|&#x27;|&apos;/g, "'")
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
 
-export function pageText(html: string): string {
+// url: the page it came from. A page whose record withholds the street (eventPage.ts withholdsStreet: Partiful) has all its script data
+// left out, its schema.org data too: the street the host keeps for confirmed guests is only there (#298 review).
+export function pageText(html: string, url?: string | null): string {
+  const scripts = url && withholdsStreet(url) ? /<script\b[\s\S]*?<\/script>/gi : /<script\b(?![^>]*application\/ld\+json)[\s\S]*?<\/script>/gi;
   const meta = Array.from(html.matchAll(/<meta[^>]+(?:property|name)=["'](?:og:title|og:description|description|twitter:title|twitter:description)["'][^>]*content=["']([^"']*)["']/gi)).map((m) => decode(m[1]));
   const title = decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").trim();
   const body = decode(
     html
-      .replace(/<script\b(?![^>]*application\/ld\+json)[\s\S]*?<\/script>/gi, " ")
+      .replace(scripts, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
       .replace(/<(br|\/p|\/div|\/li|\/h\d)[^>]*>/gi, "\n")
@@ -227,6 +232,32 @@ export function structuredEvent(html: string): Partial<Record<FieldName, Field>>
     return Object.keys(f).length ? f : null;
   }
   return null;
+}
+
+// An event page's own data, settled before Cue says it (2026-10-28 Partiful read test; #298 rebuilt on eventPage.ts, so there is one
+// zone rule and one Partiful rule):
+//   - a time with no zone of its own is said in the event's zone: the page's own (Luma's, Partiful's record), else its city's (never a
+//     street or a venue, never for an online event: eventPage.ts zoneForPage). A zone from the city is kept unverified when it's a guess
+//     (the start doesn't carry that zone's offset), and the time is said as one (saidTime);
+//   - a page that withholds the street from non-guests (Partiful) keeps only its city: never the street or the venue.
+export async function settleRead(f: Partial<Record<FieldName, Field>>, html: string, url: string, zoneOf: (place: string) => Promise<string | null> = getTimezoneForCity): Promise<void> {
+  if (!f.timezone && (f.start || f.end)) {
+    const z = await zoneForPage(html, url, f.start?.value ?? f.end?.value ?? null, zoneOf).catch(() => ({ zone: null, guessed: false }));
+    if (z.zone) f.timezone = { value: z.zone, quote: z.zone, verified: !z.guessed };
+  }
+  if (withholdsStreet(url)) {
+    const city = pageLocality(html);
+    if (city) f.address = { value: city, quote: city, verified: true };
+    else delete f.address;
+    delete f.venue;
+  }
+}
+
+// A start or end as Cue says it: in its zone, and when that zone is a guess from the city (an unverified timezone field), said as one
+// (COPY: "around Wednesday, October 7 at 5:00 PM PDT, judging by the city").
+export function saidTime(value: string, tz: Field | null | undefined): string {
+  const t = humanTime(value, tz?.value ?? null);
+  return tz && !tz.verified ? `around ${t}, judging by the city` : t;
 }
 
 // ---------------------------------------------------------------- the read
@@ -353,8 +384,9 @@ export async function readPage(url: string): Promise<LinkRead> {
       const d = await fetchLumaEventDetails(got.finalUrl);
       if (d) return { ...base, finalUrl: got.finalUrl, status: "ok", why: null, fields: lumaFields(d), summary: d.description?.slice(0, 200) ?? null, source: "luma", excerpt: d.description?.slice(0, EXCERPT_MAX) ?? null };
     }
-    const text = pageText(got.body);
+    const text = pageText(got.body, got.finalUrl);
     const structured = structuredEvent(got.body);
+    if (structured) await settleRead(structured, got.body, got.finalUrl);
     if (text.length < 200 && !structured) {
       return { ...base, finalUrl: got.finalUrl, status: /log ?in|sign ?in/i.test(text) ? "login_required" : "no_content", why: /log ?in|sign ?in/i.test(text) ? "the page needs a login" : "the page has nothing useful to read" };
     }
@@ -479,7 +511,7 @@ export function describeRead(label: string, r: LinkRead, now = new Date()): { fa
     facts.push(
       `From the page for "${label}" (read ${asOf}): ${verified
         .map((k) => {
-          const v = k === "start" || k === "end" ? humanTime(r.fields[k]!.value, r.fields.timezone?.value ?? null) : r.fields[k]!.value;
+          const v = k === "start" || k === "end" ? saidTime(r.fields[k]!.value, r.fields.timezone) : r.fields[k]!.value;
           return `${k.replace("_", " ")}: ${v}${old && VOLATILE.includes(k) ? ` (as of ${asOf}, may have changed)` : ""}`;
         })
         .join("; ")}.`,
