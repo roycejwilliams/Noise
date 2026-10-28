@@ -76,6 +76,17 @@ export async function judgeJson<S extends z.ZodType>(schema: S, args: GenArgs): 
     output: Output.object({ schema }),
     providerOptions: { ...given, anthropic: { ...(given.anthropic ?? {}), structuredOutputMode: "outputFormat" } },
   } as Parameters<typeof generateText>[0]);
-  const output = (r as unknown as { output: z.infer<S> }).output;
+  // .output throws when the answer was cut off or isn't the shape. The answer's own text and usage ride on the error, so a caller's
+  // failure record (the picker's raw for the morning review, its token count) isn't lost (review of #276).
+  let output: z.infer<S>;
+  try {
+    output = (r as unknown as { output: z.infer<S> }).output;
+  } catch (err: any) {
+    if (err && typeof err === "object") {
+      err.text ??= r.text;
+      err.usage ??= r.usage;
+    }
+    throw err;
+  }
   return { output, text: JSON.stringify(output), usage: r.usage };
 }
