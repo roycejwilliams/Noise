@@ -232,6 +232,7 @@
     "evals/relevance/lateJoiner.ts",
     "evals/events/checkinNoShow.ts",
     "evals/llm/structuredJudge.ts",
-    "evals/cache/toolOrder.ts"
+    "evals/cache/toolOrder.ts",
+    "evals/review/changes.ts"
   ]
 }
