@@ -15,6 +15,10 @@ import { readFileSync } from "fs";
 const W = await import("../../src/services/taskWeb.js");
 const D = await import("../../src/services/dailySweep.js");
 const SC = await import("../../src/services/searchCoverage.js");
+const SF = await import("../../src/services/sweepFind.js");
+const T = await import("../../src/services/tieredRecommendation.js");
+const LV = await import("../../src/services/lumaViaExa.js");
+const { transientFailure } = await import("../../src/services/searchFailure.js");
 const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 
 let total = 0, failed = 0;
@@ -28,19 +32,23 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
 
 // ---------------------------------------------------------------- 1. one event's own page is never swapped for a homepage
 {
-  const events = ["https://luma.com/2gizvh99", "https://lu.ma/atnnffe2", "https://www.eventbrite.com/e/founder-supper-tickets-123456789", "https://partiful.com/e/AbC123", "https://www.meetup.com/sf-builders/events/301234567/"];
-  const notEvents = ["https://luma.com/discover", "https://lu.ma/calendar", "https://luma.com/sf/ai", "https://www.eventbrite.com/d/ca--san-francisco/ai/", "https://www.meetup.com/sf-builders/", "https://memorybox.ai/", "https://allai.events/event/agent-building--founder-networking-salon", "not a url"];
-  check("one event's own page on a ticketing site is known by its url", events.every((u) => W.oneEventPage(u)), events.filter((u) => !W.oneEventPage(u)));
-  check("a ticketing site's discover, calendar or group page, a homepage, or a directory listing isn't one", notEvents.every((u) => !W.oneEventPage(u)), notEvents.filter((u) => W.oneEventPage(u)));
+  const events = ["https://www.eventbrite.com/e/founder-supper-tickets-123456789", "https://partiful.com/e/AbC123", "https://www.meetup.com/sf-builders/events/301234567/"];
+  const lumaMaybe = ["https://luma.com/2gizvh99", "https://lu.ma/atnnffe2", "https://lu.ma/sf", "https://luma.com/nyc", "https://luma.com/ai", "https://lu.ma/genai-sf"];
+  const notEvents = ["https://luma.com/discover", "https://lu.ma/calendar", "https://luma.com/about", "https://luma.com/blog", "https://luma.com/terms", "https://luma.com/signup", "https://luma.com/search", "https://luma.com/sf/ai", "https://www.eventbrite.com/d/ca--san-francisco/ai/", "https://www.meetup.com/sf-builders/", "https://memorybox.ai/", "https://allai.events/event/agent-building--founder-networking-salon", "not a url"];
+  check("an Eventbrite, Partiful or Meetup event url can only be one event", events.every((u) => W.eventPageUrl(u) === "event"), events.map((u) => W.eventPageUrl(u)));
+  check("a one-part Luma path may be an event or a city or calendar page: the page decides", lumaMaybe.every((u) => W.eventPageUrl(u) === "luma"), lumaMaybe.map((u) => W.eventPageUrl(u)));
+  check("Luma's own pages (about, blog, terms, signup, search, discover, calendar), a homepage or a directory listing aren't one", notEvents.every((u) => W.eventPageUrl(u) === null), notEvents.filter((u) => W.eventPageUrl(u) !== null));
+  check("taskWeb reads Luma's not-an-event list from lumaViaExa.ts, not a copy", LV.LUMA_NOT_EVENTS.has("about") && LV.lumaEventSlug("https://luma.com/blog") === null && !/new Set\(\["discover"/.test(src("services/taskWeb.ts")));
 
   const lumaText = `MemoryBox Beta Launch 🏓 AI that remembers. A party you won't forget.\nThursday, November 6, 6:00 PM - 9:00 PM\nSoMa, San Francisco\nHosted by MemoryBox. Join us to celebrate the beta launch with ping pong, drinks and demos. Register to attend.`;
   const home = `MemoryBox. AI that remembers. Your memories, organized. Download the app.`;
   const raw = { name: "MemoryBox Beta Launch 🏓 AI that remembers. A party you won't forget.", url: "https://luma.com/2gizvh99", details: [{ label: "date", value: "Thursday, November 6, 6:00 PM" }, { label: "neighborhood", value: "SoMa, San Francisco" }], date: "2026-11-06", deadline: null };
   let lookedUp = false;
   const reads: Record<string, string> = { "https://luma.com/2gizvh99": lumaText, "https://www.memorybox.ai/": home };
-  const page = await W.pickPage(raw, { read: async (u) => reads[u] ?? null, official: async () => { lookedUp = true; return "https://www.memorybox.ai/"; } });
+  let askedPage = "";
+  const page = await W.pickPage(raw, { read: async (u) => reads[u] ?? null, official: async () => { lookedUp = true; return "https://www.memorybox.ai/"; }, lumaEvent: async (u) => { askedPage = u; return true; } });
   check("the 10-28 MemoryBox party: its Luma page stays, never swapped for memorybox.ai", page.url === raw.url && !page.swapped && page.text === lumaText, page);
-  check("and no homepage is even looked up for it", !lookedUp);
+  check("and no homepage is even looked up for it: its own page's data says it's one event", !lookedUp && askedPage === raw.url);
   check("its Luma page isn't marked the company's own page: facts on it are still checked next to its name", page.official === false);
   const v = W.verifyResult({ ...raw, url: page.url }, page.text!, { now: new Date("2026-10-28T16:00:00Z"), zone: "America/Los_Angeles", official: page.official });
   const kept = W.withVerifiedFacts(v.kept ? [v.kept] : []);
@@ -49,6 +57,12 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   const onHome = W.verifyResult({ ...raw, url: "https://www.memorybox.ai/" }, home, { now: new Date("2026-10-28T16:00:00Z"), zone: "America/Los_Angeles", official: true });
   check("the verification rule is unchanged: checked against the homepage, it has nothing verified and is dropped", W.withVerifiedFacts(onHome.kept ? [onHome.kept] : []).kept.length === 0);
 
+  // A Luma calendar named like an event (lu.ma/genai-sf): its page's data isn't one event, so it's treated as before (swapped).
+  const cal = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async (u) => reads[u] ?? "calendar", official: async () => "https://www.memorybox.ai/", lumaEvent: async () => false });
+  check("a Luma calendar or city page isn't kept as an event page: its own data decides, and it's swapped as before", cal.swapped && cal.url === "https://www.memorybox.ai/");
+  const eb = await W.pickPage({ ...raw, url: "https://www.eventbrite.com/e/memorybox-beta-launch-tickets-1" }, { read: async () => lumaText, official: async () => "https://www.memorybox.ai/", lumaEvent: async () => { throw new Error("only Luma pages are asked"); } });
+  check("an Eventbrite event page is kept by its url alone", !eb.swapped && eb.url.includes("eventbrite.com/e/"));
+  check("Luma's own page data decides it (eventDetails.ts parseLumaEventPage), read only for a Luma url", /fetchLumaEventDetails\(url\)/.test(src("services/taskWeb.ts")));
   const blog = { name: "The Loft at Mission Bay", url: "https://bestvenues-blog.com/top-10-sf-venues", details: [] };
   const swap = await W.pickPage(blog, { read: async (u) => (u === "https://theloftsf.com/" ? "The Loft at Mission Bay" : "Top 10 venues"), official: async () => "https://theloftsf.com/" });
   check("a blog or directory result is still swapped for the thing's own page", swap.swapped && swap.url === "https://theloftsf.com/" && swap.official);
@@ -77,6 +91,17 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   const done = D.searchedEarlierToday(earlier);
   check("a retry carries the fully searched goal and searches the incomplete one again", done.has("goal:g2") && !done.has("goal:g1"));
 
+  // Review of #293: a retried item counts a find once across its runs (the first attempt's finds are in the pool too).
+  const first = D.searchedItem(b, { ...timedOut, foundKeys: ["A|", "B|"], pooledKeys: ["https://a", "https://b"], queued: 1 });
+  const again = D.searchedItem(b, { sources: { events: true, web: true, x: true, failures: [] }, found: 1, pooled: 1, queued: 0, outcome: "x", foundKeys: ["A|"], pooledKeys: ["https://a"] });
+  const merged = D.mergeRetried(again, D.incompleteEarlierToday([{ proposal: { items: [first] } }]).get("goal:g1"));
+  check("a retry that finds fewer doesn't lose the first attempt's finds, and one found twice counts once", merged.status === "searched" && merged.found === 2 && merged.pooled === 2 && merged.queued === 1, merged);
+  const more = D.mergeRetried(D.searchedItem(b, { sources: { events: true, web: true, x: true, failures: [] }, found: 3, pooled: 3, queued: 0, outcome: "x", foundKeys: ["A|", "C|", "D|"], pooledKeys: ["https://a", "https://c", "https://d"] }), first);
+  check("and one that finds more counts each find once (no double count of what both found)", more.found === 4 && more.pooled === 4, more);
+  check("an older record without keys: the larger count stands", D.mergeRetried({ ...b, status: "searched", found: 1, pooled: 1, queued: 0 }, { ...b, status: "incomplete", found: 3, pooled: 2, queued: 0 }).found === 3);
+  check("the floor merges a retried item with its earlier incomplete attempt", /items\.push\(mergeRetried\(searchedItem\(b, r!\), retried\.get\(`\$\{b\.kind\}:\$\{b\.id\}`\)\)\);/.test(src("services/dailySweep.ts")));
+  check("places down are carried on the item and counted", D.searchedItem(b, { sources: { events: true, web: true, x: true, failures: ["web: ..."], lasting: ["web"] }, found: 0, pooled: 0, queued: 0, outcome: "x" }).placesDown?.join() === "web" && D.dailySummary([{ ...b, status: "searched", placesDown: ["web", "x"] }]).totals.placesDown === 2);
+
   const sum = D.dailySummary([item, { kind: "goal", id: "g2", text: "pre-seed funding", status: "searched", sources: { events: true, web: true, x: true }, found: 1, pooled: 1, queued: 0, unverified: 2 }, { ...b, id: "g3", status: "error", why: "x" }]);
   check("the summary: an incomplete goal isn't counted as searched, nor its places", sum.totals.goalsSearched === 1 && sum.totals.incomplete === 1 && sum.totals.sources.web === 1, sum.totals);
   check("but its finds are (they're real and in the pool)", sum.totals.kept === 3 && sum.totals.pooled === 3);
@@ -85,14 +110,35 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   // The reply's "what's running" still counts an incomplete goal (it's retried), never a quiet "nothing's running".
   check("an incomplete goal still counts as being searched for the reply's running-work line", SC.searchedGoals({ items: [item, { kind: "goal", text: "skipped one", status: "skipped" }] }).join() === item.text);
 
-  // Wiring (sweepFind can't run here without a model): the outage branches name their place, a failed loop marks what it didn't reach.
+  // Which failures clear (review of #293): a timeout, a network error, a 5xx. A key, credit, a rate limit or a budget doesn't.
+  const clears = ["Exa timed out", "Web search failed: Exa timed out.", "Web search failed: Exa 503.", "Exa couldn't be reached", "fetch failed", "connect ETIMEDOUT 1.2.3.4:443", "Overloaded", "status 502", LV.exaFailureReason("Exa timed out"), LV.exaFailureReason("Exa 503"), LV.exaFailureReason("threw: ETIMEDOUT"), "Luma's feed failed (lumaDiscovery: fetchPublicEvents failed (504): gateway)"];
+  const stays = ["Web search failed: Exa 401.", "Web search failed: Exa 402 NO_MORE_CREDITS.", "Exa 429", "auth (401)", "rate_limited (429)", "error (402)", "not_configured (no status)", "the day's web search budget is used up", "unavailable (the daily X cap is reached)", LV.exaFailureReason("Exa 402"), LV.exaFailureReason("Exa 401"), LV.exaFailureReason("Exa 429"), LV.lumaRefusedReason(3, 0, 10, 10), LV.LUMA_API_OFF, "Luma's feed failed (luma: listCalendarEvents failed (401): bad key)", "", "something unknown"];
+  check("a timeout, a network error or a 5xx clears", clears.every((t) => transientFailure(t)), clears.filter((t) => !transientFailure(t)));
+  check("a key, credit, a rate limit, a cap or anything unknown doesn't", stays.every((t) => !transientFailure(t)), stays.filter((t) => transientFailure(t)));
+
+  // Each place: an outage only for a failure that clears and no clean call; a failure that doesn't clear is "down", shown, not retried.
+  const reads = (f: (r: ReturnType<typeof SF.newPlaceReads>) => void) => { const r = SF.newPlaceReads(); f(r); return SF.placeReport(r); };
+  check("web timed out on every call: an outage", reads((r) => { SF.placeFailed(r, "web", "Web search failed: Exa timed out."); }).outages.join() === "web");
+  check("review of #293: web timed out once, then a later web call answered: not an outage", reads((r) => { SF.placeFailed(r, "web", "Web search failed: Exa timed out."); r.web.ok = true; }).outages.length === 0);
+  const credit = reads((r) => { SF.placeFailed(r, "web", "Web search failed: Exa 402."); SF.placeFailed(r, "x", "auth (401)"); });
+  check("review of #293: Exa out of credit and X's key refused: down (shown), never an outage (retried)", credit.outages.length === 0 && credit.lasting.join() === "web,x", credit);
+
+  // Review of #293: an events search whose feed, calendar and Exa all time out comes back empty without throwing.
+  const timeout = () => { throw Object.assign(new Error("connect ETIMEDOUT 104.18.0.1:443"), { code: "ETIMEDOUT" }); };
+  const ev = await T.eventCandidates("AI founder events", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { feed: async () => timeout(), calendar: async () => timeout(), viaExa: async () => timeout(), page: async () => null, near: async () => true, rank: (async () => ({ ranked: [], closest: null })) as any, gate: (async (m: any) => m) as any, record: (async () => {}) as any, exaOn: () => true } });
+  const evFailed = SF.eventSearchFailures(ev);
+  check("review of #293: a timed-out feed, calendar and Exa are said, not an empty feed", ev.candidates.length === 0 && evFailed.length === 3 && evFailed.every((f) => transientFailure(f)), evFailed);
+  check("so the events place is an outage", reads((r) => { for (const f of evFailed) SF.placeFailed(r, "events", f); }).outages.join() === "events");
+  check("Exa being off, no Luma key, no catalog city or a test account isn't an events failure", SF.eventSearchFailures({ viaExa: { error: LV.EXA_OFF } }).length === 0 && SF.eventSearchFailures({ viaExa: { error: LV.NO_PLACE } }).length === 0 && SF.eventSearchFailures({ viaExa: { error: LV.LUMA_API_OFF } }).length === 0 && SF.eventSearchFailures({ viaExa: { error: LV.TEST_ACCOUNT } }).length === 0);
+  check("Exa out of credit while the feed answered: an events failure that doesn't clear (down, not an outage)", reads((r) => { const f = SF.eventSearchFailures({ viaExa: { error: LV.exaFailureReason("Exa 402") } }); for (const x of f) SF.placeFailed(r, "events", x); r.events.ok = true; }).lasting.join() === "events");
+
+  // Wiring (sweepFind's loop can't run here without a model).
   const sf = src("services/sweepFind.ts");
-  check("sweepFind: events, web and X failures each mark their place as an outage", /outages\.add\("events"\);\s*sourceFailures\.push\(`events: the search failed/.test(sf) && /outages\.add\("web"\);\s*sourceFailures\.push\("web: the search failed \(an outage/.test(sf) && /outages\.add\("x"\);\s*sourceFailures\.push\(`x: the search failed/.test(sf));
-  check("sweepFind: a failed loop marks every place it hadn't reached as an outage", /the search loop failed[\s\S]{0,300}for \(const s of SWEEP_SOURCES\) if \(!called\.has\(s\.source\)\) outages\.add\(s\.source\);/.test(sf));
-  check("sweepFind: a refusal or a used-up budget isn't an outage", !/outages\.add\([^)]*\);\s*sourceFailures\.push\(`?[a-z]+: (query refused|queries refused|unavailable)/.test(sf) && !/outages\.add\("web"\);\s*sourceFailures\.push\("web: the day's web search budget/.test(sf));
-  check("sweepFind: the report carries outages and the unverified count", /outages: \[\.\.\.outages\]/.test(sf) && /unverified \+= all\.reduce/.test(sf));
+  check("sweepFind: an events throw, an events part that failed, every web query failed, X's failure and a failed loop each go through placeFailed", /placeFailed\(places, "events", String\(err\?\.message \?\? err\)\);/.test(sf) && /for \(const f of partFailed\) placeFailed\(places, "events", f\);/.test(sf) && /for \(const r of all\) placeFailed\(places, "web"/.test(sf) && /placeFailed\(places, "x", xError\.kind === "server"/.test(sf) && /if \(!called\.has\(s\.source\)\) placeFailed\(places, s\.source/.test(sf));
+  check("sweepFind: a clean call marks its place ok (events with nothing that clears failing, any web query answering, X answering)", /if \(!partFailed\.some\(transientFailure\)\) places\.events\.ok = true;/.test(sf) && /\) places\.web\.ok = true;/.test(sf) && /places\.x\.ok = true;/.test(sf));
+  check("sweepFind: the report carries outages, places down and the unverified count", /outages: report\.outages/.test(sf) && /lasting: report\.lasting/.test(sf) && /unverified \+= all\.reduce/.test(sf));
   const ds = src("services/dailySweep.ts");
-  check("the floor reports each search through searchedItem and retries incomplete ones through its error record", /items\.push\(searchedItem\(b, r!\)\);/.test(ds) && /retryIncomplete === "retry" \? incompleteLines : \[\]/.test(ds) && /await writeDaily\(userId, "skip", "error"/.test(ds));
+  check("the floor reports each search through searchedItem and retries incomplete ones through its error record", /searchedItem\(b, r!\)/.test(ds) && /retryIncomplete === "retry" \? incompleteLines : \[\]/.test(ds) && /await writeDaily\(userId, "skip", "error"/.test(ds));
 }
 
 // ---------------------------------------------------------------- 3. the /sweeps page shows it
@@ -102,12 +148,14 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   check("a day whose retry finished it: ran, nothing left incomplete", retried.status === "ran" && retried.incomplete === 0 && retried.goalsSearched === 4 && retried.unverified === 2, retried);
   const stuck = D.rollupDay([run("error", { incomplete: 1 }), run("error", { incomplete: 1 }), run("goals searched 3", { goalsSearched: 3, incomplete: 1, unverified: 5, errors: 0 })], 0, true, true);
   check("a goal still incomplete after the retries shows on the day", stuck.status === "ran" && stuck.incomplete === 1 && stuck.unverified === 5, stuck);
-  const failedDay = D.rollupDay([run("error", { errors: 2, goalsSearched: 1 }), run("error", { errors: 2 }), run("error", { errors: 2, unverified: 1 })], 0, true, true);
-  check("a day of failed runs shows how many items failed in the last one", failedDay.status === "error" && failedDay.failed === 2 && failedDay.unverified === 1, failedDay);
+  const failedDay = D.rollupDay([run("error", { errors: 2, goalsSearched: 1 }), run("error", { errors: 2 }), run("error", { errors: 2, unverified: 1, placesDown: 1 })], 0, true, true);
+  check("a day of failed runs shows how many items failed in the last one, and places down", failedDay.status === "error" && failedDay.failed === 2 && failedDay.unverified === 1 && failedDay.placesDown === 1, failedDay);
   const old = D.rollupDay([{ outcome: "act", action: "x", reason: null, proposal: { totals: { goalsSearched: 1 } } }], 0, true, true);
-  check("an older record without them reads as zero", old.incomplete === 0 && old.failed === 0 && old.unverified === 0);
+  check("an older record without them reads as zero", old.incomplete === 0 && old.failed === 0 && old.placesDown === 0 && old.unverified === 0);
   const client = readFileSync(new URL("../../../co-test/src/client/sweeps.ts", import.meta.url), "utf8");
-  check("the page has the three columns and counts an incomplete or failed day as one to look at", /<th>Incomplete<\/th><th>Failed<\/th><th>Web dropped unverified<\/th>/.test(client) && /\(r\.incomplete \?\? 0\) > 0 \|\| \(r\.failed \?\? 0\) > 0/.test(client));
+  check("the page has the four columns and counts an incomplete, failed or down day as one to look at", /<th>Incomplete<\/th><th>Failed<\/th><th>Places down<\/th><th>Web dropped unverified<\/th>/.test(client) && /\(r\.incomplete \?\? 0\) > 0 \|\| \(r\.failed \?\? 0\) > 0 \|\| \(r\.placesDown \?\? 0\) > 0/.test(client));
+  const html = readFileSync(new URL("../../../co-test/public/sweeps.html", import.meta.url), "utf8");
+  check("the explainer says what turns red (a mark, not a row)", !/A red row/.test(html) && /A red mark/.test(html));
 }
 
 console.log(`sweep gaps (2026-10-28): ${total - failed}/${total} passed`);

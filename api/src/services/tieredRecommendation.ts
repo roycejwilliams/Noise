@@ -242,7 +242,7 @@ export async function eventCandidates(
   what: string,
   city: string | null,
   opts: { when?: string | null; userId?: string | null; timezone?: string | null; limit?: number; viaExa?: boolean; source?: "request" | "sweep"; sources?: Partial<EventSources> } = {},
-): Promise<{ candidates: EventCandidate[]; turnedAway: GatedOut[]; window: string | null; feedSize: number; inWindow: number; outOfRange: string | null; viaExa: ViaExaCounts }> {
+): Promise<{ candidates: EventCandidate[]; turnedAway: GatedOut[]; window: string | null; feedSize: number; inWindow: number; outOfRange: string | null; viaExa: ViaExaCounts; failures?: string[] }> {
   const src: EventSources = { ...realSources, ...opts.sources };
   const { zone } = searchZone(opts.timezone ?? null);
   const now = DateTime.now().setZone(zone);
@@ -258,9 +258,12 @@ export async function eventCandidates(
   const to = window ? window.end : DateTime.fromJSDate(until).setZone(zone);
   const dates = `${from.toFormat("LLLL d")} to ${to.toFormat("LLLL d, yyyy")}`;
   // Exa runs alongside the feed and the calendar, never after them; it failing (or timing out) leaves the feed's events as they were.
+  // A feed or calendar that failed still leaves the search with what the others had, and says so (failures: review of #293,
+  // 2026-10-28: a Luma feed that timed out came back as an empty feed, so the 9am sweep counted the events tier as searched).
+  const failures: string[] = [];
   const [feed, coEvents, exa] = await Promise.all([
-    src.feed(city, until).catch(() => [] as DiscoveredEvent[]),
-    src.calendar().catch(() => [] as CoCalendarEvent[]),
+    src.feed(city, until).catch((err: any) => (failures.push(`Luma's feed failed (${String(err?.message ?? err).slice(0, 120)})`), [] as DiscoveredEvent[])),
+    src.calendar().catch((err: any) => (failures.push(`Noise's calendar failed (${String(err?.message ?? err).slice(0, 120)})`), [] as CoCalendarEvent[])),
     opts.viaExa === false
       ? Promise.resolve(null)
       : src.viaExa(what, city, { userId: opts.userId ?? null, source: opts.source ?? "sweep", inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, notPublic: 0, kept: 0 } })),
@@ -319,5 +322,5 @@ export async function eventCandidates(
     ? { ...exa.report, added: fromExa.size, nearby: theirs.filter((e) => fromExa.has(e.url)).length, offered: candidates.filter(({ match }) => "url" in match && !!match.url && fromExa.has(match.url)).length }
     : null;
   if (viaExa) await src.record({ layer: 7, decision: "luma.via_exa", userId: opts.userId ?? null, outcome: viaExa.added ? "act" : "skip", action: `added ${viaExa.added}`, reason: viaExa.error, proposal: { ...viaExa, feed: feed.length } }).catch(() => {});
-  return { candidates, turnedAway, window: window?.label ?? null, feedSize: feed.length, inWindow: theirs.length + ours.length, outOfRange: null, viaExa };
+  return { candidates, turnedAway, window: window?.label ?? null, feedSize: feed.length, inWindow: theirs.length + ours.length, outOfRange: null, viaExa, ...(failures.length ? { failures } : {}) };
 }

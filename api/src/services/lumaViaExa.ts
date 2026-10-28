@@ -93,13 +93,14 @@ export function lumaExaQuery(what: string, place: { name: string } | null, dates
   const when = DATES.test(dates.trim()) ? `, ${dates.trim()}` : "";
   return { query: `${shown.length ? `${shown.join(", ")} ` : ""}events${how}${where}${when}`, kinds: shown };
 }
-// Luma paths that are never one event's page.
-const NOT_EVENTS = new Set(["discover", "home", "signin", "login", "create", "calendar", "explore", "pricing", "user", "u", "settings", "help"]);
+// Luma paths that are never one event's page (also read by taskWeb.ts eventPageUrl). about, blog, terms, signup and search: review of
+// #293. A city page (lu.ma/sf) or a calendar's own name (lu.ma/genai-sf) has the same shape as an event's: only its page tells.
+export const LUMA_NOT_EVENTS = new Set(["discover", "home", "signin", "signup", "login", "create", "calendar", "explore", "pricing", "user", "u", "settings", "help", "about", "blog", "terms", "search"]);
 
 // Pure: the event's slug when the url is one Luma event page (lu.ma/abc123, luma.com/abc123), else null.
 export function lumaEventSlug(url: string): string | null {
   const m = String(url).replace(/[?#].*$/, "").match(/^https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\/([A-Za-z0-9_-]+)\/?$/i);
-  if (!m || NOT_EVENTS.has(m[1].toLowerCase())) return null;
+  if (!m || LUMA_NOT_EVENTS.has(m[1].toLowerCase())) return null;
   return m[1];
 }
 // Pure: Exa's page title without Luma's own suffix.

@@ -59,9 +59,14 @@ export type ItemResult = {
   searchedPart?: string;
   sources?: { events: boolean; web: boolean; x: boolean };
   failures?: string[];
-  // The places that failed or timed out (incomplete), and web results dropped for not proving themselves on their page.
+  // The places that failed or timed out (incomplete), the places down in a way a retry won't fix (a key, credit, a cap: shown, never
+  // retried), and web results dropped for not proving themselves on their page.
   outages?: string[];
+  placesDown?: string[];
   unverified?: number;
+  // Which finds (SurfacingReport.foundKeys / pooledKeys), so a retry counts a find it finds again once (mergeRetried).
+  foundKeys?: string[];
+  pooledKeys?: string[];
   found?: number;
   pooled?: number;
   queued?: number;
@@ -71,7 +76,7 @@ export type ItemResult = {
 
 // Pure: the day's one summary line, from what each ask and goal did. An incomplete item isn't counted as searched (nor its places), but
 // what it did find is real and in the pool, so its finds count (2026-10-28 sweep).
-export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; followed: number; errors: number; incomplete: number; unverified: number; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
+export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; followed: number; errors: number; incomplete: number; placesDown: number; unverified: number; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
   const searched = items.filter((i) => i.status === "searched");
   const withFinds = items.filter((i) => i.status === "searched" || i.status === "incomplete");
   const sources = { events: 0, web: 0, x: 0 };
@@ -83,13 +88,15 @@ export function dailySummary(items: ItemResult[]): { action: string; totals: { a
     followed: items.filter((i) => i.status === "followed_as_task").length,
     errors: items.filter((i) => i.status === "error").length,
     incomplete: items.filter((i) => i.status === "incomplete").length,
+    // Each place down for one ask or goal counts once (web down for three goals is 3).
+    placesDown: withFinds.reduce((n, i) => n + (i.placesDown?.length ?? 0), 0),
     unverified: withFinds.reduce((n, i) => n + (i.unverified ?? 0), 0),
     sources,
     kept: withFinds.reduce((n, i) => n + (i.found ?? 0), 0),
     pooled: withFinds.reduce((n, i) => n + (i.pooled ?? 0), 0),
     queued: withFinds.reduce((n, i) => n + (i.queued ?? 0), 0),
   };
-  const action = `asks searched ${totals.asksSearched}, goals searched ${totals.goalsSearched}, sources events ${sources.events}/web ${sources.web}/x ${sources.x}, finds kept ${totals.kept}, new in the pool ${totals.pooled}, queued ${totals.queued}${totals.skipped ? `, skipped ${totals.skipped}` : ""}${totals.followed ? `, followed as tasks ${totals.followed}` : ""}${totals.incomplete ? `, incomplete ${totals.incomplete}` : ""}${totals.unverified ? `, web results dropped unverified ${totals.unverified}` : ""}${totals.errors ? `, errors ${totals.errors}` : ""}`;
+  const action = `asks searched ${totals.asksSearched}, goals searched ${totals.goalsSearched}, sources events ${sources.events}/web ${sources.web}/x ${sources.x}, finds kept ${totals.kept}, new in the pool ${totals.pooled}, queued ${totals.queued}${totals.skipped ? `, skipped ${totals.skipped}` : ""}${totals.followed ? `, followed as tasks ${totals.followed}` : ""}${totals.incomplete ? `, incomplete ${totals.incomplete}` : ""}${totals.placesDown ? `, places down (not retried) ${totals.placesDown}` : ""}${totals.unverified ? `, web results dropped unverified ${totals.unverified}` : ""}${totals.errors ? `, errors ${totals.errors}` : ""}`;
   return { action, totals };
 }
 
@@ -121,7 +128,7 @@ export function searchFailed(rep: { sources: { events: boolean; web: boolean; x:
 // Pure: what one search that looked somewhere did: "searched", or "incomplete" when a place failed or timed out with nothing back
 // (Royce, 2026-10-28: "treat a timeout as incomplete with a bounded retry". That morning Exa timed out on all four web queries for
 // "apply to South Park Commons or Blueprint II"; events and X ran, so the goal counted as searched and nothing retried it).
-export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text: string }>(b: B, rep: { sources: { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: string[]; unverified?: number }; found: number; pooled: number; queued: number; outcome: string }): ItemResult {
+export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text: string }>(b: B, rep: { sources: { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: string[]; lasting?: string[]; unverified?: number }; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[] }): ItemResult {
   const outages = rep.sources.outages ?? [];
   return {
     ...b,
@@ -129,11 +136,39 @@ export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text:
     ...(outages.length ? { why: `${outages.join(", ")} failed or timed out: ${rep.sources.failures.join(" | ").slice(0, 240)}`, outages } : {}),
     sources: { events: rep.sources.events, web: rep.sources.web, x: rep.sources.x },
     failures: rep.sources.failures,
+    ...(rep.sources.lasting?.length ? { placesDown: rep.sources.lasting } : {}),
     ...(rep.sources.unverified ? { unverified: rep.sources.unverified } : {}),
+    ...(rep.foundKeys ? { foundKeys: rep.foundKeys } : {}),
+    ...(rep.pooledKeys ? { pooledKeys: rep.pooledKeys } : {}),
     found: rep.found,
     pooled: rep.pooled,
     queued: rep.queued,
     outcome: rep.outcome,
+  };
+}
+
+// Pure: the items an earlier run today left incomplete, by item (the latest one), for mergeRetried.
+export function incompleteEarlierToday(earlier: { proposal: any }[]): Map<string, ItemResult> {
+  const out = new Map<string, ItemResult>();
+  for (const e of earlier) for (const i of (e.proposal?.items ?? []) as ItemResult[]) if (i.status === "incomplete") out.set(`${i.kind}:${i.id}`, i);
+  return out;
+}
+
+// Pure: a retried item with what its earlier, incomplete search today found (review of #293: the day's counts came from the last run
+// alone, so finds the first attempt pooled went uncounted when the retry found fewer). Finds counted once across both by their keys;
+// queued is what each run queued (the queue takes a find once), so it adds. Without keys (an older record) the larger count stands.
+export function mergeRetried(now: ItemResult, before: ItemResult | undefined): ItemResult {
+  if (!before) return now;
+  const union = (a?: string[], b?: string[]) => (a && b ? [...new Set([...a, ...b])] : null);
+  const fk = union(before.foundKeys, now.foundKeys);
+  const pk = union(before.pooledKeys, now.pooledKeys);
+  return {
+    ...now,
+    ...(fk ? { foundKeys: fk } : {}),
+    ...(pk ? { pooledKeys: pk } : {}),
+    found: fk ? fk.length : Math.max(before.found ?? 0, now.found ?? 0),
+    pooled: pk ? pk.length : Math.max(before.pooled ?? 0, now.pooled ?? 0),
+    queued: (before.queued ?? 0) + (now.queued ?? 0),
   };
 }
 
@@ -443,6 +478,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
   const { goalHash, edgeSearchText, goalStates } = await import("./goalEdges.js");
   const picker = await E.pickerDecides(userId).catch(() => false);
   const done = searchedEarlierToday(earlier);
+  const retried = incompleteEarlierToday(earlier);
   const items: ItemResult[] = [];
   const goals = goalTexts(row.intent, row.goals);
   const AS = await import("./askSplit.js");
@@ -459,7 +495,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
       items.push({ ...b, status: "error", why: `it looked nowhere: ${(r?.sources.failures ?? ["the search returned without a report"]).join(" | ").slice(0, 300)}`, ...(r ? { failures: r.sources.failures } : {}) });
       return;
     }
-    items.push(searchedItem(b, r!));
+    items.push(mergeRetried(searchedItem(b, r!), retried.get(`${b.kind}:${b.id}`)));
   };
 
   // ---- asks: every open one; find asks in all three places
@@ -650,24 +686,26 @@ export type RollupRow = {
   // (a place failed or timed out) or failed, and web results dropped for not proving themselves on their page, in the day's last run.
   incomplete: number;
   failed: number;
+  // Places down in a way a retry won't fix (review of #293): shown, never retried.
+  placesDown: number;
   unverified: number;
 };
 
 // Pure: a member's day, from its sweep.daily records (oldest first), its find sends, and whether 9pm has passed for them.
-export function rollupDay(all: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "unverified"> {
+export function rollupDay(all: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "placesDown" | "unverified"> {
   // On-demand runs report themselves too, beside the 9am run, never as it.
   const manual = all.filter((r) => r.proposal?.trigger === "manual");
   const records = all.filter((r) => r.proposal?.trigger !== "manual");
   const out = rollupFloorDay(records, sends, dayOver, started);
   return manual.length ? { ...out, detail: `${out.detail} · on-demand runs: ${manual.length} (last: ${manual[manual.length - 1].action})` } : out;
 }
-function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "unverified"> {
+function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "placesDown" | "unverified"> {
   const final = [...records].reverse().find((r) => r.action !== "error");
   const errors = records.filter((r) => r.action === "error");
   const t = (final?.proposal?.totals ?? {}) as Record<string, number>;
   // Incomplete, failed and unverified come from the day's last run, a failed one too (a day of failed runs shows what the last one hit).
   const lastT = (records[records.length - 1]?.proposal?.totals ?? {}) as Record<string, number>;
-  const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends, incomplete: lastT.incomplete ?? 0, failed: lastT.errors ?? 0, unverified: lastT.unverified ?? 0 };
+  const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends, incomplete: lastT.incomplete ?? 0, failed: lastT.errors ?? 0, placesDown: lastT.placesDown ?? 0, unverified: lastT.unverified ?? 0 };
   if (final) {
     const status = final.action === "missed" ? "missed" : final.action === "opted_out" ? "opted out" : final.action === "tapered" ? "tapered" : final.outcome === "act" ? "ran" : "nothing to search";
     return { status, detail: final.reason ?? final.action, ...counts };
