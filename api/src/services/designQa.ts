@@ -359,7 +359,8 @@ export const PHONE_VIEW = { width: 390, height: 844 } as const;
 // whole 1280 (Royce, 2026-10-28: ~40% of that was empty margin, so the words read half as large in the card): the column's text in
 // its first screen, padded CARD_PAD each side, at 1.905:1, from its cover when it has a picture (moved down only as far as keeps the
 // title in), else from its first words; shot at 2x so it stays sharp. 1280x672 is the most a page's card can be, in CSS px. No card at all when a Google Places photo shows in it (their
-// terms limit storing their photos; the renderers mark them data-via="google"): the link keeps the drawn card.
+// terms limit storing their photos, and Unsplash's guidelines ask that theirs be hotlinked; the renderers mark both data-via): the
+// link keeps the drawn card.
 export const CARD_SHOT = { deck: { width: 1280, height: 720 }, page: { width: 1280, height: 672 } } as const;
 export const CARD_PAD = 32;
 export const CARD_PAGE_SCALE = 2;
@@ -389,7 +390,7 @@ function cardInPage(medium: string, card: { width: number; height: number }, pad
       clip = { x, y, width, height };
     }
   }
-  const google = [...document.querySelectorAll('img[data-via="google"]')].some((im) => {
+  const google = [...document.querySelectorAll('img[data-via]')].some((im) => {
     const b = im.getBoundingClientRect();
     return b.width > 0 && b.height > 0 && b.right > clip.x && b.left < clip.x + clip.width && b.bottom > clip.y && b.top < clip.y + clip.height && getComputedStyle(im).visibility !== "hidden";
   });
