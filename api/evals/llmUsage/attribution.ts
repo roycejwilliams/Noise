@@ -188,7 +188,9 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
     check(`no member ids added to telemetry metadata (${hits.length} sites, the 5 pre-existing)`, hits.length === 5 && hits.every((h) => /sweepFind|sweepSelect|taskWeb|profileExtraction/.test(h)));
   }
   // Member-less calls say so in a comment beside NO_MEMBER.
-  for (const f of ["harness/devReview.ts", "services/partnerReadout.ts", "services/roomMatching.ts", "services/entryKind.ts", "scripts/notifyTesters.ts"]) {
+  // The morning review's model read is one member's day, inside their member scope (review of #274, 2026-10-27).
+  check("harness/devReview.ts: the model read runs in the reviewed member's scope, not NO_MEMBER", /withTraceUser\(userId, \(\) => withMember\(userId, async \(\) => \[\.\.\.\(await modelFlags\(data\)\)/.test(src("harness/devReview.ts")) && !/NO_MEMBER/.test(src("harness/devReview.ts")));
+  for (const f of ["services/partnerReadout.ts", "services/roomMatching.ts", "services/entryKind.ts", "scripts/notifyTesters.ts"]) {
     check(`${f}: its member-less call is marked NO_MEMBER with a reason`, /\/\/ Not about one member: [^\n]+\n[^\n]*metadata: NO_MEMBER/.test(src(f)));
   }
   const m = src("db/migrations.ts");

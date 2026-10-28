@@ -170,6 +170,17 @@ const BLOCKER = "my divorce is dragging on";
   check("draft: a clean nudge passes", (await C.hiddenEchoCheck("Noor is here tonight and backs climate hardware founders at seed.", ctx))?.pass === true);
   check("draft: a nudge echoing her blocker is refused", (await C.hiddenEchoCheck("Noor is here tonight. Her divorce is dragging on, so be kind.", ctx))?.pass === false);
   check("draft: a nudge paraphrasing her private ask is refused", (await C.hiddenEchoCheck("Noor is here tonight, before she moves to Lisbon.", ctx))?.pass === false);
+  // Review of #274 (2026-10-27): the event's own name is set aside, as in the value lines; a private ask that shares its words
+  // never refuses a nudge that names the event. The rest of the draft is still read.
+  const priya = addMember({ first_name: "Priya", intent: [ask("backing climate hardware founders at seed", "offering"), ask("founders in climate tech who are hiring", "seeking", false)] });
+  const evCtx = { otherUserIds: [priya.id], said: ["backing climate hardware founders at seed"], facts: { otherFirstName: "Priya", recipientFirstName: "Jordan" } as any, event: { name: "Founders in Climate Tech Night", venue: "The Battery" } };
+  check("draft: naming the event never trips a private ask that shares its words", (await C.hiddenEchoCheck("Priya is at Founders in Climate Tech Night and backs climate hardware founders at seed.", evCtx))?.pass === true);
+  check("draft: ... but echoing the private ask outside the event's name is still refused", (await C.hiddenEchoCheck("Priya is at Founders in Climate Tech Night, and she wants founders in climate tech who are hiring.", evCtx))?.pass === false);
+  // ... but a name that is itself a sensitive word never clears it (review of #274: a venue called "Rehab").
+  const samR = addMember({ first_name: "Sam", blockers: ["staying sober after rehab"], intent: [ask("backing climate hardware founders at seed", "offering")] });
+  const rehabCtx = { otherUserIds: [samR.id], said: ["backing climate hardware founders at seed"], facts: { otherFirstName: "Sam", recipientFirstName: "Jordan" } as any, event: { name: "Founders Night", venue: "Rehab" } };
+  check("draft: a venue named like a sensitive word never lets that word through", (await C.hiddenEchoCheck("Sam is at Founders Night, fresh out of rehab, and backs climate hardware founders at seed.", rehabCtx))?.pass === false);
+  check("draft: ... the same on the value lines' path (hiddenEcho with that allow)", E.hiddenEcho("Sam is fresh out of rehab and backs founders.", ["staying sober after rehab"], [], ["Rehab", "Sam"], G.SENSITIVE) !== null);
   const sentBefore = W.sent.length;
   const drafted = await C.draftWithConsent(
     { decision: "eval.hiddenSignals", recipientId: jordan.id, facts: { otherFirstName: "Noor", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: "Jordan", otherStatedAsks: ["backing climate hardware founders at seed"] } as any, otherUserIds: [noor.id], said: ["backing climate hardware founders at seed"] },

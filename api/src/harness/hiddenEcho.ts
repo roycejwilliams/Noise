@@ -85,9 +85,13 @@ export function hiddenEcho(text: string, hidden: string[], allowedTexts: string[
   const allowedShingles = shingles(words(allowedAll.join(" . ")), 3);
   const textStems = stemsOf(t);
   const textShingles = shingles(words(t), 3);
+  // A phrase set aside (an event, a venue, a name) that itself carries a sensitive word never clears that word: setting it aside takes
+  // out every place the text has it, not only where it names the place (review of #274, 2026-10-27: a venue called "Rehab" let
+  // "fresh out of rehab" through).
+  const sensitiveAllow = allow.filter((a) => !sensitive.some((re) => matchesOf(re, sensitiveForm(re, ` ${fold(a)} `, ` ${fold(joinHyphens(a))} `)).length));
   for (const h of hidden.map(String).filter((x) => x.trim())) {
     // Quoted as the text has it (folded): the redraft feedback names only words the draft itself already carried.
-    const said = unconsentedSensitive(text, [h], ownShareable, sensitive, true, allow);
+    const said = unconsentedSensitive(text, [h], ownShareable, sensitive, true, sensitiveAllow);
     if (said) return `touches something they keep private ("${said}")`;
     for (const sh of shingles(words(h), 3)) if (!sh.includes("zzsep") && textShingles.has(sh) && !allowedShingles.has(sh)) return `quotes something they keep private ("${sh}")`;
     const distinct = [...stemsOf(h)].filter((w) => !allowedStems.has(w));

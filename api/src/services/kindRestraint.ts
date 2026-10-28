@@ -242,6 +242,7 @@ export async function loadKindHistory(db: Queryable, userId: string): Promise<{ 
     `SELECT ps.id, ps.type, ps.kind, ps.message, ps.sent_at, pc.payload
      FROM proactive_sends ps LEFT JOIN proactive_candidates pc ON pc.id = ps.candidate_id
      WHERE ps.user_id = $1 AND ps.sent_at > NOW() - ($2 || ' days')::interval
+       AND ps.topic_key IS DISTINCT FROM 'mood_fallback'
        AND ps.sent_at >= COALESCE((SELECT MIN(sent_at) FROM proactive_sends WHERE kind IS NOT NULL), 'infinity'::timestamptz)
      ORDER BY ps.sent_at`,
     [userId, RESTRAINT.historyDays],

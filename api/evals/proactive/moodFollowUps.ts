@@ -32,6 +32,8 @@ const CALM = read([], null);
   check("the cap is the one shared constant", MH.MOOD_HOLD_CAP_HOURS === 48);
   check("struggling, a skip: its one wait", F.followUpMoodWait({ waitedAt: null, because: "no_longer_matters", read: HELD }) && F.followUpMoodWait({ waitedAt: null, because: null, read: HELD }));
   check("a skip because they asked for space is their own ask: closed, never a wait", !F.followUpMoodWait({ waitedAt: null, because: "asked_for_space", read: HELD }));
+  // Review of #274 (2026-10-27): they already answered is a fact, not a mood: looking again risks asking what they told Cue.
+  check("a skip because they already answered: closed, never a wait", !F.followUpMoodWait({ waitedAt: null, because: "answered", read: HELD }));
   check("one wait: a second skip closes", !F.followUpMoodWait({ waitedAt: ago(30).toISOString(), because: null, read: HELD }));
   check("okay again, at the stretch's cap, or not struggling: a skip closes as before", [OKAY, CAP, CALM].every((r) => !F.followUpMoodWait({ waitedAt: null, because: null, read: r })));
 }
