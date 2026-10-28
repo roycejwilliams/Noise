@@ -395,8 +395,9 @@ async function openPromiseThread(userId: string, p: PlannedPromise, transcript: 
   const { startTask } = await import("../services/coTasks.js");
   // Never a look-out that names another member (the same guard as a text reply's promise, services/promises.ts trackPromise).
   const { linkedMemberNames } = await import("../services/memberSafeMemories.js");
-  const names = await linkedMemberNames(userId).catch(() => [] as string[]);
-  if (namesAMember(p.what, names)) return "blocked";
+  // A failed lookup blocks it: no names meant no check.
+  const names = await linkedMemberNames(userId).catch(() => null);
+  if (!names || namesAMember(p.what, names)) return "blocked";
   const t = promiseThreadTask(p, theirLineBefore(transcript, p.quotes[0] ?? ""));
   const r = await startTask({ userId, ...t });
   const result = r.ok

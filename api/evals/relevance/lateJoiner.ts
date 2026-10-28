@@ -76,6 +76,29 @@ function deps(o: { newcomer?: any; failOn?: string } = {}) {
   check("one ask's scorer failing doesn't stop the next", JSON.stringify(seen.logged.map((l) => l.askId)) === JSON.stringify(["a-noor"]), seen.logged);
 }
 
+// ---------------------------------------------------------------- 1b. each standing ask is scored as its asker's (review of #274, 2026-10-27)
+// The prompt holds the asker's ask and context: it was filed under the newcomer whose turn started the sweep (their trace text,
+// their cost), so the asker's removal never reached it, and the asker's own name wasn't left out of the newcomer's items.
+{
+  const T = await import("../../src/services/llmTraceText.js");
+  const U = await import("../../src/services/llmUsage.js");
+  const NEW = "11111111-1111-4111-8111-111111111111", ASKER = "22222222-2222-4222-8222-222222222222", OFFER = "33333333-3333-4333-8333-333333333333";
+  const under: any[] = [];
+  const d: import("../../src/services/relevance.js").NewcomerSweepDeps = {
+    newcomer: async () => ({ ...NEWCOMER, user_id: NEW }),
+    standingAsksNear: async () => [
+      { personId: ASKER, ask: STANDING[0].ask, askerContext: "goals: a new hobby", askerFirstName: "Jordan" },
+      { personId: OFFER, ask: STANDING[1].ask, askerFirstName: "Noor" },
+    ],
+    scoreSeeking: async (_a, c, _ctx, name) => { under.push({ trace: T.currentTraceUser(), member: U.scopeMember(), name }); return []; },
+    scoreOffering: async (_a, c, name) => { under.push({ trace: T.currentTraceUser(), member: U.scopeMember(), name }); return []; },
+    logEdges: async () => {},
+  };
+  await T.withTraceUser(NEW, () => U.withMember(NEW, () => R.sweepStandingAsksForNewcomer(NEW, d)));
+  check("each standing ask is scored under its asker's trace mark and cost scope, never the newcomer's", JSON.stringify(under.map((u) => [u.trace, u.member])) === JSON.stringify([[ASKER, ASKER], [OFFER, OFFER]]), under);
+  check("the asker's first name goes to the scorer, so it is left out of the newcomer's items (as the 3am pass does)", JSON.stringify(under.map((u) => u.name)) === JSON.stringify(["Jordan", "Noor"]), under);
+}
+
 // ---------------------------------------------------------------- 2. wired at capture, and the read matches the 3am pass
 {
   const pe = src("services/profileExtraction.ts");
