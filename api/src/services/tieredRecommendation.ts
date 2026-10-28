@@ -260,14 +260,16 @@ export async function eventCandidates(
   // Exa runs alongside the feed and the calendar, never after them; it failing (or timing out) leaves the feed's events as they were.
   // A feed or calendar that failed still leaves the search with what the others had, and says so (failures: review of #293,
   // 2026-10-28: a Luma feed that timed out came back as an empty feed, so the 9am sweep counted the events tier as searched).
-  // answered: how many of the feed, the calendar and the Luma search through Exa came back with no failure (re-review of #293: events is
+  // answered: how many of the live searches (the feed and the Luma search through Exa) came back with no failure (re-review of #293: events is
   // an outage only when none did). No LUMA_API_KEY is a setting, the way the Exa path says it (LUMA_API_OFF): neither a failure nor an
   // answer.
   const failures: string[] = [];
   let answered = 0;
-  const part = <T,>(name: string, p: Promise<T>, empty: T): Promise<T> =>
+  // live: whether this source searches now. Noise's own calendar is read from a cache, so it answering says nothing about whether the
+  // search ran: it never counts as events having answered (batched review of #293: both live sources timing out was not an outage).
+  const part = <T,>(name: string, p: Promise<T>, empty: T, live = true): Promise<T> =>
     p.then(
-      (v) => (answered++, v),
+      (v) => (live && answered++, v),
       (err: any) => {
         const msg = String(err?.message ?? err);
         if (msg !== LUMA_KEY_MISSING) failures.push(`${name} failed (${msg.slice(0, 120)})`);
@@ -276,7 +278,7 @@ export async function eventCandidates(
     );
   const [feed, coEvents, exa] = await Promise.all([
     part("Luma's feed", Promise.resolve().then(() => src.feed(city, until)), [] as DiscoveredEvent[]),
-    part("Noise's calendar", Promise.resolve().then(() => src.calendar()), [] as CoCalendarEvent[]),
+    part("Noise's calendar", Promise.resolve().then(() => src.calendar()), [] as CoCalendarEvent[], false),
     opts.viaExa === false
       ? Promise.resolve(null)
       : src.viaExa(what, city, { userId: opts.userId ?? null, source: opts.source ?? "sweep", inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, notPublic: 0, kept: 0 } })),
