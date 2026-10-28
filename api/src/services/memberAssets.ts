@@ -110,10 +110,17 @@ export async function wipeUnusedAssets(): Promise<number> {
 }
 
 // "Delete the photos I sent you": their own images, the bytes gone now (the number stays retired). numbers null = all of them. A
-// page or deck that placed one shows it no more.
+// page or deck that placed one shows it no more, and neither does its link card: a stored picture of a page or deck placing one goes
+// too (services/coPages/store.ts, Royce 2026-10-28, option C), and its link falls back to the drawn card.
 export async function deleteAssets(userId: string, numbers: number[] | null): Promise<number> {
+  // One statement, so the photo and every card showing it go together or not at all.
   const { rowCount } = await db.query(
-    `UPDATE member_assets SET bytes = NULL, description = NULL, wiped_at = NOW() WHERE owner_user_id = $1 AND wiped_at IS NULL AND ($2::int[] IS NULL OR n = ANY($2::int[]) OR -n = ANY($2::int[]))`,
+    `WITH gone AS (
+       UPDATE member_assets SET bytes = NULL, description = NULL, wiped_at = NOW() WHERE owner_user_id = $1 AND wiped_at IS NULL AND ($2::int[] IS NULL OR n = ANY($2::int[]) OR -n = ANY($2::int[])) RETURNING id
+     ), cards AS (
+       UPDATE co_pages p SET preview = NULL, preview_version = NULL WHERE p.owner_user_id = $1 AND p.preview IS NOT NULL AND EXISTS (SELECT 1 FROM gone WHERE p.data::text LIKE '%' || gone.id || '%') RETURNING p.id
+     )
+     SELECT id FROM gone`,
     [userId, numbers && numbers.length ? numbers : null],
   );
   // A removal: all of their model prompt/answer text goes with it, the photo descriptions included (services/llmTraceText.ts).

@@ -207,12 +207,14 @@ export function pageTools(
         const Q = await import("../services/designQa.js");
         const { renderCoPage } = await import("../services/coPages/template.js");
         const imageSrc = await qaImageSrc(ctx.userId, imaged0).catch(() => undefined);
-        const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc: art2?.src, credit: art2?.credit }), { screenshot: false }).catch(() => null);
+        const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc: art2?.src, credit: art2?.credit }), { screenshot: true, view: true }).catch(() => null);
         const fixedOk = qa?.fixed.length ? store.checkPage(qa.data, source) : null;
         const imaged = fixedOk?.ok ? fixedOk.data : imaged0;
         // What ships is what's said: the unfixed page goes with what QA first found (review).
         const shipped = qa ? (!qa.fixed.length || fixedOk?.ok ? qa.final : qa.first) : null;
-        const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
+        // Its link card is the top of the page as it shipped (Royce, 2026-10-28, option C), stored with it; QA that couldn't render
+        // stores none and the link keeps the drawn card.
+        const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source, preview: shipped?.ran ? shipped.screenshot : null }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
@@ -275,13 +277,14 @@ export function pageTools(
         const { renderCoPage } = await import("../services/coPages/template.js");
         const art2 = ctx.dryRun ? undefined : await AI.artDataUris(unchecked).catch(() => undefined);
         const imageSrc = ctx.dryRun ? undefined : await qaImageSrc(ctx.userId, unchecked).catch(() => undefined);
-        const qa = ctx.dryRun ? null : await Q.qaPage(unchecked, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc: art2?.src, credit: art2?.credit }), { screenshot: false }).catch(() => null);
+        const qa = ctx.dryRun ? null : await Q.qaPage(unchecked, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc: art2?.src, credit: art2?.credit }), { screenshot: true, view: true }).catch(() => null);
         const fixedOk = qa?.fixed.length ? store.checkPage(qa.data, source) : null;
         const next = fixedOk?.ok ? fixedOk.data : unchecked;
         // What ships is what's said: the unfixed page goes with what QA first found.
         const shipped = qa ? (!qa.fixed.length || fixedOk?.ok ? qa.final : qa.first) : null;
         const short = shipped ? Q.qaShortfall(shipped.findings, "the page") : null;
-        const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null });
+        // The new version's link card, as it shipped (option C), replaces the old one; none when QA couldn't render it.
+        const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null, preview: shipped?.ran ? shipped.screenshot : null });
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         // Another change landed after this one read the page (concurrency audit, 2026-10-12): never written over.
         if (!r.ok && r.conflict) {

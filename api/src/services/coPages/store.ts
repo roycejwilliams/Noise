@@ -5,6 +5,8 @@
 //   another's thread can't be used to change or remove it from there (H1).
 //   What's stored has passed the schema (parseCoPageData) and the grounding (grounding.ts: only the owner's words and Co's reads, H2).
 //   A page expires 90 days after its last change. Taken down or expired, the link answers 404 and the content is wiped (M2).
+//   Its link card's picture (preview, Royce 2026-10-28, option C) is the content too: wiped everywhere data is (take-down, expiry, a
+//   reset's old row, a photo of theirs it placed being deleted, the account deleted by cascade) and replaced on every new version.
 import { randomBytes } from "crypto";
 import pool from "../../db/db.js";
 import { parseCoPageData, type CoPageData } from "./schema.js";
@@ -26,7 +28,8 @@ export function newCoPageId(): string {
 
 // A row holds one artifact: a page (CoPageData) or a deck (DeckData, kind "deck"). Same link, rules and lifetime for both.
 export type CoArtifactData = CoPageData | DeckData;
-export type StoredCoPage = { id: string; data: CoArtifactData; version: number; updatedAt: Date; ownerUserId: string };
+// shot: a link card picture is stored for this very version (loadCoPage; services/coPages/linkPreview.ts serves it).
+export type StoredCoPage = { id: string; data: CoArtifactData; version: number; updatedAt: Date; ownerUserId: string; shot?: boolean };
 export const artifactKind = (d: unknown): "page" | "deck" => (isDeckData(d) ? "deck" : "page");
 // The gate for either type: a deck's own schema, else the page's.
 export function parseCoArtifact(input: unknown): { ok: true; data: CoArtifactData } | { ok: false; problems: string[] } {
@@ -72,7 +75,19 @@ export function checkPage(data: unknown, source: PageSource): { ok: true; data: 
   return problems.length ? { ok: false, problems } : p;
 }
 
-export async function createCoPage(data: unknown, o: { ownerUserId: string; source: PageSource }): Promise<{ ok: true; id: string; url: string } | { ok: false; problems: string[] }> {
+// The link card's picture (Royce, 2026-10-28, option C: no separate picture with the text; the link's own card shows the artifact's
+// real first screen, kept with it on this server, never uploaded anywhere). It is the QA render of the version that ships
+// (services/designQa.ts CARD_SHOT), stored with that version in the same write, so a card never shows another version. Only a PNG,
+// and only up to the cap (a 1280x720 slide of photos runs ~1MB); anything else, or QA that couldn't render, stores nothing and the
+// link keeps the drawn card (linkPreview.ts).
+export const PREVIEW_SHOT_MAX_BYTES = 2 * 1024 * 1024;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+export function previewShotOf(png: Buffer | null | undefined): Buffer | null {
+  if (!png || !Buffer.isBuffer(png) || png.length <= PNG_MAGIC.length || png.length > PREVIEW_SHOT_MAX_BYTES) return null;
+  return png.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC) ? png : null;
+}
+
+export async function createCoPage(data: unknown, o: { ownerUserId: string; source: PageSource; preview?: Buffer | null }): Promise<{ ok: true; id: string; url: string } | { ok: false; problems: string[] }> {
   if (!o.ownerUserId) return { ok: false, problems: ["a page needs its owner"] };
   const c = checkPage(data, o.source);
   if (!c.ok) return c;
@@ -82,8 +97,8 @@ export async function createCoPage(data: unknown, o: { ownerUserId: string; sour
   // The link is made before the row, so a missing base URL never leaves a page nobody can reach.
   const url = coPageUrl(id);
   await db.query(
-    `INSERT INTO co_pages (id, owner_user_id, data, expires_at) VALUES ($1, $2, $3, NOW() + make_interval(days => $4))`,
-    [id, o.ownerUserId, JSON.stringify(c.data), PAGE_LIFETIME_DAYS],
+    `INSERT INTO co_pages (id, owner_user_id, data, expires_at, preview, preview_version) VALUES ($1, $2, $3, NOW() + make_interval(days => $4), $5::bytea, CASE WHEN $5::bytea IS NULL THEN NULL ELSE 1 END)`,
+    [id, o.ownerUserId, JSON.stringify(c.data), PAGE_LIFETIME_DAYS, previewShotOf(o.preview)],
   );
   return { ok: true, id, url };
 }
@@ -92,13 +107,15 @@ export async function createCoPage(data: unknown, o: { ownerUserId: string; sour
 // expectVersion (concurrency audit, 2026-10-12): the version the change was written from. Another change that landed in between is
 // never overwritten: the result says so (conflict) with the newest version, and the caller recomposes or reads again. A reset that
 // moved the page to a fresh link meanwhile is followed there (moved: the new id and link), so the change isn't lost.
+// preview: the new version's link card picture (createCoPage above). Every new version replaces the last one's, with none when QA
+// couldn't render it: an older version's picture never outlives it.
 export type UpdateConflict = { ok: false; problems: string[]; conflict: { id: string; version: number } };
 export async function updateCoPage(
   id: string,
   ownerUserId: string,
   data: unknown,
   source: PageSource,
-  opts: { expectVersion?: number | null } = {},
+  opts: { expectVersion?: number | null; preview?: Buffer | null } = {},
 ): Promise<{ ok: true; version: number; moved?: { id: string; url: string } } | { ok: false; problems: string[]; conflict?: UpdateConflict["conflict"] } | null> {
   if (!CO_PAGE_ID.test(id) || !ownerUserId) return null;
   const c = checkPage(data, source);
@@ -109,9 +126,10 @@ export async function updateCoPage(
   let at = id;
   for (let hop = 0; hop < 3; hop++) {
     const { rows } = await db.query(
-      `UPDATE co_pages SET data = $3, version = version + 1, updated_at = NOW(), expires_at = CASE WHEN kept THEN expires_at ELSE NOW() + make_interval(days => $4) END, expiry_warned_at = NULL
+      `UPDATE co_pages SET data = $3, version = version + 1, updated_at = NOW(), expires_at = CASE WHEN kept THEN expires_at ELSE NOW() + make_interval(days => $4) END, expiry_warned_at = NULL,
+         preview = $7::bytea, preview_version = CASE WHEN $7::bytea IS NULL THEN NULL ELSE version + 1 END
        WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND expires_at > NOW() AND COALESCE(data->>'kind', 'page') = $5 AND ($6::int IS NULL OR version = $6::int) RETURNING version`,
-      [at, ownerUserId, JSON.stringify(c.data), PAGE_LIFETIME_DAYS, artifactKind(c.data), expect],
+      [at, ownerUserId, JSON.stringify(c.data), PAGE_LIFETIME_DAYS, artifactKind(c.data), expect, previewShotOf(opts.preview)],
     );
     if (rows[0]) return { ok: true, version: Number(rows[0].version), ...(at !== id ? { moved: { id: at, url: coPageUrl(at) } } : {}) };
     const miss = await whyNotUpdated(at, ownerUserId);
@@ -142,7 +160,7 @@ async function whyNotUpdated(id: string, ownerUserId: string): Promise<{ movedTo
 export async function takeDownCoPage(id: string, ownerUserId: string): Promise<boolean> {
   if (!CO_PAGE_ID.test(id) || !ownerUserId) return false;
   const { rowCount } = await db.query(
-    `UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW() WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL`,
+    `UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW(), preview = NULL, preview_version = NULL WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL`,
     [id, ownerUserId],
   );
   return (rowCount ?? 0) > 0;
@@ -159,7 +177,7 @@ export async function livePagesFor(ownerUserId: string): Promise<{ id: string; t
 
 // Expired pages lose their content (run daily from jobs). The row stays so the link keeps answering 404, never someone else's page.
 export async function wipeExpiredCoPages(): Promise<number> {
-  const { rowCount } = await db.query(`UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb WHERE taken_down_at IS NULL AND expires_at <= NOW()`);
+  const { rowCount } = await db.query(`UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb, preview = NULL, preview_version = NULL WHERE taken_down_at IS NULL AND expires_at <= NOW()`);
   return rowCount ?? 0;
 }
 
@@ -167,7 +185,7 @@ export async function wipeExpiredCoPages(): Promise<number> {
 export async function loadCoPage(id: string): Promise<StoredCoPage | null> {
   if (!CO_PAGE_ID.test(id)) return null;
   const { rows } = await db.query(
-    `SELECT id, owner_user_id, data, version, updated_at FROM co_pages WHERE id = $1 AND taken_down_at IS NULL AND expires_at > NOW()`,
+    `SELECT id, owner_user_id, data, version, updated_at, (preview IS NOT NULL AND preview_version = version) AS shot FROM co_pages WHERE id = $1 AND taken_down_at IS NULL AND expires_at > NOW()`,
     [id],
   );
   const r = rows[0];
@@ -178,7 +196,18 @@ export async function loadCoPage(id: string): Promise<StoredCoPage | null> {
     console.error(`co page ${id.slice(0, 4)}…: stored data no longer passes the schema: ${p.problems.slice(0, 3).join("; ")}`);
     return null;
   }
-  return { id: String(r.id), data: p.data, version: Number(r.version), updatedAt: new Date(r.updated_at), ownerUserId: String(r.owner_user_id) };
+  return { id: String(r.id), data: p.data, version: Number(r.version), updatedAt: new Date(r.updated_at), ownerUserId: String(r.owner_user_id), shot: r.shot === true };
+}
+
+// For the card route only: the link card picture of this live artifact's current version, or null (none stored, an older version's,
+// taken down or expired). The bytes are read only here, never with the page.
+export async function loadPreviewShot(id: string, version: number): Promise<Buffer | null> {
+  if (!CO_PAGE_ID.test(id) || !Number.isInteger(version)) return null;
+  const { rows } = await db.query(
+    `SELECT preview FROM co_pages WHERE id = $1 AND version = $2 AND preview_version = $2 AND preview IS NOT NULL AND taken_down_at IS NULL AND expires_at > NOW()`,
+    [id, version],
+  );
+  return rows[0]?.preview ? Buffer.from(rows[0].preview) : null;
 }
 
 // ---------------------------------------------------------------- keep and renewal (2026-10-11)
@@ -271,7 +300,8 @@ export async function loadShared(shareId: string): Promise<StoredCoPage | null> 
 
 // "Reset my link": a member's own link is a link anyone they forward it to can open (members don't sign in on the web), so the way
 // to revoke it is a new one. The same artifact (content, version, keep and expiry) moves to a fresh id; the old link answers 404 and
-// its content is wiped, and every share link to it ends. Owner's own live artifact only. Null when there's none.
+// its content is wiped, and every share link to it ends. Owner's own live artifact only. Null when there's none. Its link card picture
+// moves with the content (the same version) and is wiped from the old row.
 export async function resetCoPageLink(id: string, ownerUserId: string): Promise<{ id: string; url: string } | null> {
   if (!CO_PAGE_ID.test(id) || !ownerUserId) return null;
   const fresh = newCoPageId();
@@ -281,16 +311,16 @@ export async function resetCoPageLink(id: string, ownerUserId: string): Promise<
   // resets must never leave two working own-links").
   const { rows } = await db.query(
     `WITH old AS (
-       SELECT id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM co_pages
+       SELECT id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at, preview, preview_version FROM co_pages
        WHERE id = $2 AND owner_user_id = $3 AND taken_down_at IS NULL AND expires_at > NOW()
        FOR UPDATE
      ), down AS (
-       UPDATE co_pages p SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW(), moved_to = $1 FROM old
+       UPDATE co_pages p SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW(), moved_to = $1, preview = NULL, preview_version = NULL FROM old
        WHERE p.id = old.id AND p.taken_down_at IS NULL
-       RETURNING old.owner_user_id, old.data, old.version, old.created_at, old.updated_at, old.expires_at, old.kept, old.last_viewed_at
+       RETURNING old.owner_user_id, old.data, old.version, old.created_at, old.updated_at, old.expires_at, old.kept, old.last_viewed_at, old.preview, old.preview_version
      ), ins AS (
-       INSERT INTO co_pages (id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at)
-       SELECT $1, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM down
+       INSERT INTO co_pages (id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at, preview, preview_version)
+       SELECT $1, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at, preview, preview_version FROM down
        RETURNING id
      ), rev AS (
        UPDATE co_page_shares SET revoked_at = NOW() WHERE page_id = $2 AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM ins) RETURNING id

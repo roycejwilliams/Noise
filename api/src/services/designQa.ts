@@ -353,11 +353,16 @@ export function contentFindings(medium: QaMedium, data: any): QaFinding[] {
 export const DOC_CONTENT = { width: 624, pageHeight: 888 } as const;
 const VIEW: Record<QaMedium, { width: number; height: number }> = { deck: { width: 1280, height: 720 }, page: { width: 1280, height: 900 }, doc: { width: DOC_CONTENT.width, height: 1056 } };
 export const PHONE_VIEW = { width: 390, height: 844 } as const;
+// The link card (Royce, 2026-10-28, option C): what the link's own preview shows is the artifact's real first screen, shot by the QA
+// render of the version that ships, at laptop width (a phone's 390px portrait makes a poor card). A deck: its first slide, the whole
+// 1280x720 frame (16:9, close to the 1.91:1 cards render best at, and never cut). A page: its top, cut to 1280x672 (1.905:1).
+export const CARD_SHOT = { deck: { width: 1280, height: 720 }, page: { width: 1280, height: 672 } } as const;
 
 // Renders the HTML, screenshots it and measures it. Null measure when Chrome isn't there (the caller sends without QA and says so in
 // its log, never that QA passed).
 // phone: rendered at 390px as a phone shows it (a deck's slides as the phone layout, not the 1280x720 frame).
-export async function qaRender(html: string, medium: QaMedium, o: { width?: number; screenshot?: boolean; phone?: boolean } = {}): Promise<{ measure: Measure; screenshot: Buffer | null } | null> {
+// view: the shot is the link card (CARD_SHOT), one screen at laptop width, not the whole page; the phone pass takes none.
+export async function qaRender(html: string, medium: QaMedium, o: { width?: number; screenshot?: boolean; phone?: boolean; view?: boolean } = {}): Promise<{ measure: Measure; screenshot: Buffer | null } | null> {
   const B = await import("./browserRead.js");
   if (!B.browserReadEnabled()) return null;
   const release = await B.browserSlot();
@@ -384,7 +389,9 @@ export async function qaRender(html: string, medium: QaMedium, o: { width?: numb
     await Promise.race([pg.evaluate("Promise.all([...document.images].map((i) => i.decode().catch(() => {})))"), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
     const { inPage } = await import("./designRead.js");
     const measure = (await pg.evaluate(inPage(measureInPage, medium))) as Measure;
-    const screenshot = o.screenshot === false ? null : Buffer.from(await pg.screenshot({ fullPage: true, type: "png" }));
+    const card = medium === "doc" ? null : CARD_SHOT[medium];
+    const shoot = o.screenshot !== false && !(o.view && o.phone);
+    const screenshot = !shoot ? null : Buffer.from(await pg.screenshot(o.view && card ? { type: "png", clip: { x: 0, y: 0, ...card } } : { fullPage: true, type: "png" }));
     return { measure, screenshot };
   } catch (err: any) {
     console.error("designQa: render failed (non-fatal):", err?.message ?? err);
@@ -397,7 +404,7 @@ export async function qaRender(html: string, medium: QaMedium, o: { width?: numb
 
 // The whole check for one medium: content rules, then the render's measures. Letter at 96 dpi less the doc's margins is one page.
 // phone: also measure at 390px (decks and pages); its findings join the rest, each saying "on a phone".
-export async function runQa(html: string, medium: QaMedium, data: unknown, o: { screenshot?: boolean; phone?: boolean } = {}): Promise<QaResult> {
+export async function runQa(html: string, medium: QaMedium, data: unknown, o: { screenshot?: boolean; phone?: boolean; view?: boolean } = {}): Promise<QaResult> {
   const content = contentFindings(medium, data);
   const r = await qaRender(html, medium, o.phone ? { ...o, phone: false } : o);
   if (!r) return { ran: false, findings: content, screenshot: null, measured: 0 };
@@ -611,7 +618,7 @@ export function applyDeckFixes(data: any, findings: QaFinding[]): { data: any; f
 
 // A deck's QA: render with its own images inlined, check, fix what code can, and measure again until nothing more can be fixed (six
 // rounds at most: three steps down and a split, twice over); then the phone pass. The findings left are what's logged, and said in one line with the link (qaShortfall).
-export async function qaDeck(data: any, images: Map<string, { data: Buffer; mediaType: string }>, o: { screenshot?: boolean; phone?: boolean; art?: { src: (ref: string) => string | null; credit: (p: any) => any } } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
+export async function qaDeck(data: any, images: Map<string, { data: Buffer; mediaType: string }>, o: { screenshot?: boolean; phone?: boolean; view?: boolean; art?: { src: (ref: string) => string | null; credit: (p: any) => any } } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
   const { renderDeck } = await import("./coPages/deck.js");
   const html = (d: any) => renderDeck({ id: "q".repeat(24), data: d, updatedAt: new Date() }, { url: null, showNotes: false, artSrc: o.art?.src ?? (() => null), credit: o.art?.credit ?? (() => null), imageSrc: (id) => {
     const im = images.get(id);
@@ -637,7 +644,7 @@ export async function qaDeck(data: any, images: Map<string, { data: Buffer; medi
 
 // A page's QA, at laptop and phone width, with its images inlined (imageSrc) so they're really measured. What code can fix on a page
 // is fixed: text that doesn't read is re-inked (its style), and measured again. Headlines never end on one word (template.ts).
-export async function qaPage(data: any, render: (d: any) => string, o: { screenshot?: boolean } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
+export async function qaPage(data: any, render: (d: any) => string, o: { screenshot?: boolean; view?: boolean } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
   const first = await runQa(render(data), "page", data, { ...o, phone: true });
   if (!first.ran) return { data, first, final: first, fixed: [] };
   const fixed: string[] = [];
