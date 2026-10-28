@@ -9,6 +9,7 @@ import { createServer } from "http";
 import path from "path";
 import { Server } from "socket.io";
 import pool from "../../api/src/db/db.js";
+import { Client as PgClient } from "pg";
 import { runMigrations } from "../../api/src/db/migrations.js";
 import { buildCoVCard } from "../../api/src/utils/vcard.js";
 import { getAudioEntry } from "../../api/src/services/voiceNote.js";
@@ -94,6 +95,16 @@ async function main() {
 
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));
+  // The database too (2026-10-28): after the password rotation the live copy answered /health while every text failed with "password
+  // authentication failed", and the merge script's health watch passed. Kept off /health itself, so Railway's deploy check (which
+  // promotes a new copy) isn't held up by a slow database moment; the merge script watches this one. A new connection each time
+  // (a pooled one can outlive a changed password), with the pool's own settings, capped at 5s; says nothing about the database beyond ok or not.
+  app.get("/health/db", async (_req, res) => {
+    const client = new PgClient({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000, query_timeout: 5000 });
+    const ok = await client.connect().then(() => client.query("SELECT 1")).then(() => true, () => false);
+    client.end().catch(() => {});
+    res.status(ok ? 200 : 503).set("Cache-Control", "no-store").send(ok ? "ok" : "db unavailable");
+  });
 
   // Rate limits (security review, 2026-10-11): co-test had none. The public pages anyone can open without signing in are limited
   // (100 per 15 minutes per address), and starting a sign-in to 10. The signed-in dashboard polls every few seconds and is behind
