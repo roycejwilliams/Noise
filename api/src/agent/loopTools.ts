@@ -691,7 +691,7 @@ export function loopTools(
         if (!check.ran) console.error(`draftEmail: the fact check didn't run (${check.error}); the draft goes to them unchecked`);
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "loop.draftFacts", userId: ctx.userId, outcome: check.ran && check.gaps.length ? "skip" : "act", action: !check.ran ? "unchecked" : check.gaps.length ? "refused" : "checked", proposal: check.ran ? { gaps: check.gaps } : { error: check.error } }).catch(() => {});
         if (check.ran && check.gaps.length) {
-          return { ok: false, error: `Not sent: the draft has ${check.gaps.map((g) => `"${g.words}"${g.why ? ` (${g.why})` : ""}`).join(", ")}, which they haven't said and nothing read shows. Take those out, or leave a blank for them to fill (like "[date]").` };
+          return { ok: false, error: `Not sent: the draft has ${check.gaps.map((g) => `"${g.words}"${g.why ? ` (${g.why})` : ""}`).join(", ")}, which they haven't said and nothing read shows. Never fill it in yourself: take it out if the email works without it; if it's needed, ask them for it in your reply (one short question) and draft again with their answer.` };
         }
         if (!to?.trim()) {
           if (!(await say(draftText, `Co replied: ${draftText}`))) return { ok: false, error: "The draft didn't send. Give them the words in your reply instead, plainly, without mentioning what failed." };
