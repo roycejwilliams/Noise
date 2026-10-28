@@ -43,6 +43,10 @@ check("an answer that isn't the shape throws", bad !== "no throw", bad);
 reply = JSON.stringify({ claims: [{ text: "I sent it", type: "past_action", supported: "yes" }] });
 const wrong = await S.judgeJson(S.CLAIMS_SCHEMA, { model: anthropic(MODELS.sonnet), prompt: "claims" }).then(() => "no throw", (e: any) => e?.name ?? "threw");
 check("a wrong-typed field (supported: \"yes\") throws, never coerced", wrong !== "no throw", wrong);
+// A cut-off answer (max_tokens) throws with its own text and usage on the error, for the caller's failure record.
+reply = '{"verdicts":[{"id":"C1","verdict":"se';
+const cut = await S.judgeJson(S.SELECT_SCHEMA, { model: anthropic(MODELS.sonnet), prompt: "pick" }).then(() => null, (e: any) => e);
+check("a failed answer keeps its text and usage on the error", !!cut && typeof cut.text === "string" && cut.text.startsWith('{"verdicts"') && cut.usage != null, { text: cut?.text, usage: cut?.usage });
 globalThis.fetch = realFetch;
 
 // Wiring: the four judges go through it, each with its own schema.
