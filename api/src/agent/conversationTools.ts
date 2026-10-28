@@ -1752,12 +1752,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           proposal: { personName, eventId: resolved.eventId, targetId: resolved.target.user_id },
           ...(failure ? { checks: [{ name: "request_sent", pass: false, reason: failure.slice(0, 200) }] } : {}),
         }).catch(() => {});
-        // Not sent: not ok, so the guard never records an intro as started (or refuses a later try at it), with the same neutral answer as
-        // when nobody resolves, so saying it never tells them the person was found.
+        // Not sent: exactly the answer the not-found path gives (no fact, the same note), so nothing the reply reads tells them the person
+        // was found; notStarted keeps the guard from recording it as started or refusing a later try (re-review of #284).
         if (failure) {
           return {
-            ok: false,
-            error: "Not requested right now. Tell them the same neutral thing: if it's someone you know from that event, you'll check whether they're open to it too. Never say it failed, never confirm or deny that you know the person, and don't try again this turn.",
+            ok: true,
+            notStarted: true,
+            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list, and don't say whether you found them.",
           };
         }
         // The same answer as when nobody resolves, so the reply never tells

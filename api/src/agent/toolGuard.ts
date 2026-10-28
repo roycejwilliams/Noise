@@ -153,6 +153,10 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       usedThisTurn.set(name, used + 1);
       const result = await run(input, options);
       const failed = !!result && typeof result === "object" && result.ok === false;
+      // notStarted: the tool answers as it would have anyway (its reply must read the same either way: a privacy rule), but nothing
+      // was started. Logged as not done, so it's never counted as started (oncePerPerson, the day's limit) or recorded as an action,
+      // and no "didn't go through" fact the reply would read (review of #284).
+      const notStarted = !failed && !!result && typeof result === "object" && (result as { notStarted?: boolean }).notStarted === true;
       const made = failed && typeof result.made === "string" && result.made.trim() ? String(result.made) : null;
       // A refused attempt doesn't use up the turn's allowance, once: the tool's own refusal says "fix these and try again once"
       // (2026-10-08 call test: a document refused for one unbacked line was then refused again as "already done this turn").
@@ -163,9 +167,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       if (failed && !made && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
       if (made) ctx.notDone(`${name} made ${made}, but the text with it didn't send.`);
       else if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
-      await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : {});
+      await log(failed || notStarted ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : notStarted ? { notStarted: true } : {});
       // Co's record of what it did for them (services/coFacts.ts).
-      if ((!failed || made) && !ctx.dryRun) await recordToolAction(ctx.userId, name, input);
+      if ((!failed || made) && !notStarted && !ctx.dryRun) await recordToolAction(ctx.userId, name, input);
       return result;
     };
   }
