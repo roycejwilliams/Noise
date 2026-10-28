@@ -1,8 +1,10 @@
 const LUMA_BASE_URL = "https://public-api.luma.com";
 
+// What a Luma call throws with no key: a setting, not a failure (tieredRecommendation.ts eventCandidates; review of #293).
+export const LUMA_KEY_MISSING = "luma: LUMA_API_KEY is not configured";
 function lumaHeaders(): Record<string, string> {
   const key = process.env.LUMA_API_KEY;
-  if (!key) throw new Error("luma: LUMA_API_KEY is not configured");
+  if (!key) throw new Error(LUMA_KEY_MISSING);
   return { "x-luma-api-key": key };
 }
 

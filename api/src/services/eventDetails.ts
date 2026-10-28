@@ -138,22 +138,31 @@ export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: numb
   const cached = detailCache.get(key);
   const ttl = cached?.details ? Math.min(opts.maxAgeMs ?? DETAIL_TTL_MS, DETAIL_TTL_MS) : FAILED_DETAIL_TTL_MS;
   if (cached && Date.now() - cached.at < ttl) return cached.details;
-  let details: EventDetails | null = null;
+  return (await readLumaPage(url)).details;
+}
+
+// One fetch of a Luma page: its html and its event record (null for a calendar's or a city's page), the record cached as above. The web
+// search's page check reads both from this one response (taskWeb.ts pickPage; re-review of #293: it fetched the page to check it, then
+// read it again).
+export async function readLumaPage(url: string): Promise<{ html: string | null; details: EventDetails | null }> {
+  const key = lumaUrl(url);
+  let html: string | null = null;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PAGE_TIMEOUT_MS);
     try {
       const res = await fetchCheckedHops(key, controller.signal);
-      if (res?.ok) details = parseLumaEventPage(await res.text());
+      if (res?.ok) html = await res.text();
     } finally {
       clearTimeout(timer);
     }
   } catch (err: any) {
     console.error(`eventDetails: fetch failed for ${key} (non-fatal):`, err?.message ?? err);
   }
+  const details = html ? parseLumaEventPage(html) : null;
   if (detailCache.size > 500) detailCache.clear();
   detailCache.set(key, { at: Date.now(), details });
-  return details;
+  return { html, details };
 }
 
 // Plain facts for any prompt, one per line. Only what's actually on record.

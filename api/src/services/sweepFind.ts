@@ -239,6 +239,16 @@ const VIA_EXA_SETTINGS = new Set([EXA_OFF, LUMA_API_OFF, NO_PLACE, TEST_ACCOUNT]
 export function eventSearchFailures(r: { failures?: string[]; viaExa: { error: string | null } | null }): string[] {
   return [...(r.failures ?? []), ...(r.viaExa?.error && !VIA_EXA_SETTINGS.has(r.viaExa.error) ? [r.viaExa.error] : [])];
 }
+// Pure: one events search into the place's read, returning what failed in it. Events is an outage only when none of its sources
+// answered, the web's rule (re-review of #293: Exa timing out while Luma's feed answered isn't worth searching the whole item again); a
+// search that ended before its sources (a date too far out) answered nothing failed. A part that fails for good (Exa out of credit) is
+// a place down whatever answered; a part that timed out while another answered is only said on the item.
+export function noteEventSearch(reads: Record<SweepSource, PlaceRead>, r: { failures?: string[]; viaExa: { error: string | null } | null; answered?: number }): string[] {
+  const failed = eventSearchFailures(r);
+  if ((r.answered ?? 1) > 0) reads.events.ok = true;
+  for (const f of failed) if (!reads.events.ok || !transientFailure(f)) placeFailed(reads, "events", f);
+  return failed;
+}
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 // Pure: a find's date as Co read it, kept only when its own text shows that day: the month (its name, its first three letters, or as a
 // number) next to the day, and not before today. Anything else is no date.
@@ -329,12 +339,9 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           sourceFailures.push(`events: the search failed (${String(err?.message ?? err).slice(0, 120)})`);
           throw err;
         });
-        // Part of it failed (the feed, the calendar, Exa) while the rest answered: said, and a failure that clears makes it an outage
-        // unless another events call came back clean (review of #293: a timed-out feed came back as an empty one).
-        const partFailed = eventSearchFailures(r);
-        for (const f of partFailed) placeFailed(places, "events", f);
+        // Part of it failed (the feed, the calendar, Exa): said on the item (review of #293: a timed-out feed came back as an empty one).
+        const partFailed = noteEventSearch(places, r);
         if (partFailed.length) sourceFailures.push(`events: part of the search failed (${partFailed.join("; ").slice(0, 200)})`);
-        if (!partFailed.some(transientFailure)) places.events.ok = true;
         for (const { match } of r.candidates) if ("url" in match && match.url) {
           found.set(match.url, match);
           lookedAt.push({ source: "events", name: match.name, url: match.url, query: what });

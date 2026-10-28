@@ -16,7 +16,7 @@ import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { checkGrounding, checkTiming, placesClaimed } from "../harness/matchGate.js";
 import type { TierMatch } from "./tieredRecommendation.js";
-import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
+import { findOfficialPage, htmlToText, looksOfficial, MIN_FETCHED_TEXT, PAGE_TEXT_LIMIT, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
 import { exaConfigured, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
@@ -233,9 +233,14 @@ export function eventPageUrl(url: string): "event" | "luma" | null {
   if (host === "meetup.com") return /^\/[^/]+\/events\/\d+$/.test(path) ? "event" : null;
   return null;
 }
-// Whether a Luma page is one event, from the page's own data (eventDetails.ts parseLumaEventPage: its embedded record names one event;
-// a calendar's or a city's doesn't). A read that fails says no, and the page is treated as before (review of #293).
-const lumaPageIsEvent = async (url: string): Promise<boolean> => !!(await import("./eventDetails.js").then((m) => m.fetchLumaEventDetails(url)).catch(() => null));
+// A Luma page, fetched once (eventDetails.ts readLumaPage): whether it's one event, from the page's own data (its embedded record names
+// one event; a calendar's or a city's doesn't), and its text, from the same response (re-review of #293: the check and the read were two
+// fetches). A read that fails says no, with no text, and the page is treated as before.
+export type LumaPageRead = { oneEvent: boolean; text: string | null };
+const readLuma = async (url: string): Promise<LumaPageRead> => {
+  const { html, details } = await import("./eventDetails.js").then((m) => m.readLumaPage(url));
+  return { oneEvent: !!details, text: html ? htmlToText(html) : null };
+};
 
 // Which page a result is checked against: its own official page when the found
 // page is a blog or directory and the official one reads; else the found page.
@@ -246,21 +251,23 @@ const lumaPageIsEvent = async (url: string): Promise<boolean> => !!(await import
 // same rules as any found page.
 export async function pickPage(
   raw: RawResult,
-  deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null>; lumaEvent?: (url: string) => Promise<boolean> },
+  deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null>; lumaPage?: (url: string) => Promise<LumaPageRead> },
 ): Promise<{ url: string; text: string | null; official: boolean; swapped: boolean }> {
   // Judged and looked up by the core name: a qualifier's words ("Private Dining") never make a host look like the place's.
   const name = coreName(raw.name);
   if (!looksOfficial(raw.url, name)) {
     // Not marked official: whether a page is the thing's own still decides how its facts are checked (verifyResult's nearName).
     const shape = eventPageUrl(raw.url);
-    const oneEvent = shape === "event" || (shape === "luma" && (await (deps.lumaEvent ?? lumaPageIsEvent)(raw.url).catch(() => false)));
-    if (oneEvent) return { url: raw.url, text: await deps.read(raw.url), official: false, swapped: false };
+    const luma = shape === "luma" ? await (deps.lumaPage ?? readLuma)(raw.url).catch(() => null) : null;
+    // The found page's text: from the one Luma fetch when it read whole (a short one is a shell: read as any page is), else read now.
+    const found = async () => (luma?.text && luma.text.length >= MIN_FETCHED_TEXT ? luma.text.slice(0, PAGE_TEXT_LIMIT) : await deps.read(raw.url));
+    if (shape === "event" || luma?.oneEvent) return { url: raw.url, text: await found(), official: false, swapped: false };
     const off = await deps.official(name).catch(() => null);
     if (off && off !== raw.url && looksOfficial(off, name)) {
       const text = await deps.read(off);
       if (text) return { url: off, text, official: true, swapped: true };
     }
-    return { url: raw.url, text: await deps.read(raw.url), official: false, swapped: false };
+    return { url: raw.url, text: await found(), official: false, swapped: false };
   }
   return { url: raw.url, text: await deps.read(raw.url), official: true, swapped: false };
 }
