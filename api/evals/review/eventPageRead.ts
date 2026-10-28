@@ -90,6 +90,10 @@ check("COPY: an event with no zone and no offset of its own: no time, the listin
 const exact = await P.settleZone({ ...guessed!, zoneGuessed: undefined, timezone: null, startAt: "2026-10-07T17:00:00-07:00" }, zoneOf);
 check("a start carrying the zone's offset isn't a guess", !exact?.zoneGuessed && /^"Rooftop" starts Wednesday, October 7 at 5:00 PM \(America\/Los_Angeles\)\.$/.test(ED.renderEventDetails("Rooftop", exact!)[0]));
 
+// Final review of #298: no zone of its own but an offset in its start: its own offset, as listed, never the next day in UTC.
+const listed = ED.renderEventDetails("Launch Night", { ...guessed!, zoneGuessed: undefined, timezone: null, startAt: "2026-10-07T17:00:00-07:00", endAt: "2026-10-07T20:00:00-07:00" });
+check("COPY: an offset start with no zone keeps its own offset (Wednesday 5:00 PM, never Thursday 12:00 AM UTC)", listed[0] === `"Launch Night" starts Wednesday, October 7 at 5:00 PM UTC-7 and ends 8:00 PM, as listed.` && !/Thursday|12:00 AM/.test(listed[0]), listed[0]);
+
 // The live check ("still spots?"): a time with no zone isn't said; the listing's zone is said to be unclear in its place.
 const A = await import("../../src/services/asOf.js");
 const live = await A.liveDetailFacts("is it still on? any spots left?", [{ name: "Launch Night", url: "https://www.eventbrite.com/e/9", sentAt: new Date() } as any], { luma: async () => null, isLuma: () => false, page: async () => ({ timeNote: "The listing for \"Launch Night\" doesn't say what time zone its start time is in. Check the page before you plan around it", cost: "free" }) }).catch((e) => [String(e)]);
