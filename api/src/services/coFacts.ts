@@ -111,8 +111,10 @@ export function toolAction(tool: string, input: any): { relation: string; label:
       return [{ relation: "did", label: `noted how "${s(input?.item)}" landed: ${s(input?.reaction)}${s(input?.quote) ? ` (their words: "${s(input.quote).slice(0, 120)}")` : ""}` }];
     case "markArrived":
       return [{ relation: "did", label: "recorded that they arrived at a Noise event" }];
+    // What the member asked, never what came of it: found, not found and not sent yet all record this same line, so a later turn
+    // can't tell them apart either (review of #284).
     case "requestEventIntro":
-      return [{ relation: "did", label: `started a double opt-in intro${s(input?.personName) ? ` with ${s(input.personName)}` : ""}` }];
+      return [{ relation: "did", label: `took their ask for an intro${s(input?.personName) ? ` to ${s(input.personName)}` : ""} (checked only if it's someone Cue knows from that event)` }];
     case "reactInsteadOfReplying":
       return [{ relation: "did", label: "reacted with a tapback" }];
     default:

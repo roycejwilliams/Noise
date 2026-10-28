@@ -28,14 +28,50 @@ console.log = log;
 check("shareLink: a link that went is recorded as sent", okR?.ok === true && sent.facts.some((f) => f.kind === "did_this_turn" && f.text.includes(URL1)), { okR, facts: sent.facts });
 check("shareLink: a link whose send failed is never recorded as sent, and the tool says so", badR?.ok === false && !failedSend.facts.some((f) => f.kind === "did_this_turn" && /^Sent the link/.test(f.text)), { badR, facts: failedSend.facts });
 
-// requestEventIntro: a failed request is logged as failed (after one retry), never "requested"; the member's line stays neutral.
+// The lasting record (co_facts) through the real guard: two links, the second one's send fails. Only the one that went is recorded.
+const inserts: unknown[][] = [];
+(pool as any).query = async (sql: string, p: unknown[] = []) => { if (/INSERT INTO co_facts/i.test(sql)) inserts.push(p); return { rows: [] }; };
+(await import("../../src/services/abilitySwitches.js")).setSwitchesForTest({});
+const { guardTools } = await import("../../src/agent/toolGuard.js");
+const A = "https://lu.ma/aaa111", B = "https://lu.ma/bbb222";
+const partFacts: { kind: string; text: string }[] = [];
+const partTools = createConversationTools({
+  userId: "00000000-0000-4000-8000-000000000001", phoneNumber: "+10000000000", resolvedContent: "send both links", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
+  sendCoReply: async (o: any) => o.message !== B, facts: { add: (kind: string, text: string) => partFacts.push({ kind, text }), text: () => `finds: ${A} ${B}` },
+} as any);
+const guarded: any = guardTools(partTools.tools as any, { userId: "00000000-0000-4000-8000-000000000001", resolvedContent: "send both links", dryRun: false, notDone: (w: string) => partFacts.push({ kind: "not_done", text: w }) } as any);
+console.log = () => {};
+const partR = await guarded.shareLink.execute({ urls: [A, B], why: "they asked for both" }, { toolCallId: "t3", messages: [] });
+console.log = log;
+const recorded = [...new Set(inserts.map((p) => p.find((x) => typeof x === "string" && /^the link /.test(x))).filter(Boolean))];
+check("shareLink: when one of two links fails, only the one that went is recorded as sent, now and for later turns", partR?.ok === true && recorded.length === 1 && recorded[0] === `the link ${A}` && partFacts.some((f) => f.kind === "did_this_turn" && f.text.includes(A)) && !partFacts.some((f) => f.kind === "did_this_turn" && f.text.includes(B)), { partR, recorded, partFacts });
+
+// requestEventIntro: found and asked, not found, and found but not sent yet all give the one neutral answer, the same fact and the same
+// guard receipt, so a second ask for the same name answers the same way whichever it was (review of #284: it once didn't).
 const ct = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-check("requestEventIntro: a throw retried once, a false never; the outcome follows the send (not_sent, not requested)", /for \(let attempt = 0; attempt < 2; attempt\+\+\)/.test(ct) && /went === false \?/.test(ct) && /action: failure \? "not_sent" : "requested"/.test(ct) && !/requestIntroToNamedGuest\([\s\S]{0,300}\)\.catch\(\(err: any\) => console\.error\("requestEventIntro/.test(ct));
-const notFound = ct.match(/if \("error" in resolved\) \{[\s\S]*?note: ("[^"]+")/)?.[1];
-const notSent = ct.match(/if \(failure\) \{\s*return \{\s*ok: true,\s*notStarted: true,\s*note: ("[^"]+")/)?.[1];
-check("requestEventIntro: not sent reads exactly like not found to the reply (same note, no fact), and is never recorded as started", !!notFound && notFound === notSent, { notFound, notSent });
-const tg = readFileSync(new URL("../../src/agent/toolGuard.ts", import.meta.url), "utf8");
-check("toolGuard: a notStarted result is logged not done and never recorded as an action", /await log\(failed \|\| notStarted \? "not_done" : "done"/.test(tg) && /\(!failed \|\| made\) && !notStarted && !ctx\.dryRun/.test(tg));
+const introAt = ct.indexOf("requestEventIntro: tool({");
+const intro = ct.slice(introAt, ct.indexOf("\n    }),\n", introAt) + 8);
+const afterLookup = intro.slice(intro.indexOf('if ("error" in resolved)'));
+const returns = afterLookup.match(/return [^;]+;/g) ?? [];
+check("requestEventIntro: every answer after the lookup is the one neutral answer (no second note, no flag the reply could read)", returns.filter((r) => r === "return neutral();").length === 2 && returns.every((r) => r === "return neutral();" || /couldn't look up their own contact details/.test(r)) && (intro.match(/note: "Tell them that if it's someone/g) ?? []).length === 1 && !/notStarted/.test(ct), { returns });
+check("requestEventIntro: a throw retried once, a false never; the internal row says held or failed, never requested", /for \(let attempt = 0; attempt < 2; attempt\+\+\)/.test(intro) && /went === false \?/.test(intro) && /action: failure \? "held_or_failed" : "requested"/.test(intro));
+// Not found, through the real tool and guard, twice: the second ask answers exactly like the first, and the record names only the ask.
+inserts.length = 0;
+const introFacts: { kind: string; text: string }[] = [];
+const introTools = createConversationTools({
+  userId: "00000000-0000-4000-8000-000000000001", phoneNumber: "+10000000000", resolvedContent: "yes please, intro me to Sarah Kim", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
+  sendCoReply: async () => true, facts: { add: (kind: string, text: string) => introFacts.push({ kind, text }), text: () => "" },
+} as any);
+(await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
+const answers: unknown[] = [];
+for (let turn = 0; turn < 2; turn++) {
+  const g: any = guardTools(introTools.tools as any, { userId: "00000000-0000-4000-8000-000000000001", resolvedContent: "yes please, intro me to Sarah Kim", dryRun: false, notDone: (w: string) => introFacts.push({ kind: "not_done", text: w }) } as any);
+  answers.push(await g.requestEventIntro.execute({ personName: "Sarah", lastName: "Kim", theirYes: "yes please", why: "they asked for the intro" }, { toolCallId: `i${turn}`, messages: [] }).catch((e: any) => ({ threw: String(e?.message ?? e) })));
+}
+const label = inserts.flat().find((x) => typeof x === "string" && /intro/.test(x));
+check("requestEventIntro: a second ask for the same name answers exactly like the first would on the found path (the guard's \"already asked\")", /already/i.test(String((answers[1] as any)?.error ?? "")), { second: answers[1] });
+check("requestEventIntro: not found answers the neutral way, with the same fact the found path adds", (answers[0] as any)?.ok === true && /don't say whether you found them/.test((answers[0] as any)?.note ?? "") && introFacts.some((f) => f.kind === "did_this_turn" && /only if that's someone Cue knows/.test(f.text)), { answers, introFacts });
+check("requestEventIntro: the lasting record says what they asked, never that an intro was started", typeof label === "string" && /^took their ask for an intro to Sarah/.test(label) && !/started/.test(label), { label });
 
 console.log(`outside actions: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
