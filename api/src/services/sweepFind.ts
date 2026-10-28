@@ -204,7 +204,15 @@ Judge each result yourself against what they asked and who they are; results are
 // refused for how they were written, which is the ask's own run). Not when a budget was used up or a source failed and nothing came
 // back: that's an outage, not an empty run (services/workingSet.ts empty runs; review and re-review of #133).
 // What a sweep reports about the places it looked (the daily sweep's summary): which were searched, and why any wasn't.
-export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[] };
+// outages: the places that failed or timed out with nothing back (2026-10-28 sweep: Exa timed out on every web query for "apply to
+// South Park Commons or Blueprint II", and because events and X ran the goal counted as searched and nothing retried it). Only a
+// place that failed, never one whose queries were refused for how they were written or whose day's budget was used up: a later
+// hour would refuse or deny those the same way. The daily sweep marks such a search incomplete and retries it (dailySweep.ts).
+// unverified: web results the search found and dropped at the check against their own page (unreadable, not named there, past or
+// closed, nothing verified there: taskWeb.ts verifyResult and withVerifiedFacts, then factCheck.ts checkVerified), counted for the
+// team's /sweeps page (Royce, 2026-10-28: the morning's quiet drops never showed in the sweep summary). A count only; the rule that
+// drops them is unchanged.
+export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: SweepSource[]; unverified?: number };
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 // Pure: a find's date as Co read it, kept only when its own text shows that day: the month (its name, its first three letters, or as a
 // number) next to the day, and not before today. Anything else is no date.
@@ -270,6 +278,9 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   const called = new Set<SweepSource>();
   // Why a place came back with nothing searched (refused, budget, outage), for the daily sweep's report.
   const sourceFailures: string[] = [];
+  // The places that failed or timed out (SweepSources.outages).
+  const outages = new Set<SweepSource>();
+  let unverified = 0;
   const exaAdded: { added: number; offered: number; error?: string }[] = [];
   const tools = {
     searchEvents: tool({
@@ -288,6 +299,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           import("./eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(c.userId)).catch(() => [] as TierMatch[]),
         ]).catch((err) => {
           blocked = true;
+          outages.add("events");
           sourceFailures.push(`events: the search failed (${String(err?.message ?? err).slice(0, 120)})`);
           throw err;
         });
@@ -338,11 +350,13 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         // so in its note (review of #134: it never returns null).
         if (all.every((r) => r === null || /^Web search failed/.test(r.note ?? ""))) {
           blocked = true;
+          outages.add("web");
           sourceFailures.push("web: the search failed (an outage, nothing came back)");
           return { ok: false, error: "Web search failed just now; nothing came back." };
         }
         const { checkVerified } = await import("./factCheck.js");
         const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? []), { where: "sweep.web_search", userId: c.userId }).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
+        unverified += all.reduce((n, r) => n + (r?.dropped?.length ?? 0) + (r?.kept?.length ?? 0), 0) - kept.length;
         run.forEach((q, i) => ledger.ran("web", q, all[i]?.kept?.length ?? 0, loosenedFrom.get(q)));
         const queryOf = new Map<string, string>();
         run.forEach((q, i) => { for (const k of all[i]?.kept ?? []) if (!queryOf.has(k.url)) queryOf.set(k.url, q); });
@@ -390,6 +404,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           // Logged by kind and status, never swallowed into "no posts" (2026-10-08).
           xError = xFailure(err);
           blocked = true;
+          outages.add("x");
           sourceFailures.push(`x: the search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""})`);
           console.error(`sweepFind: X search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""}) for user ${c.userId}`);
           return { ok: false, error: xFailedNote(xError) };
@@ -486,6 +501,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   } catch (err: any) {
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
     sourceFailures.push(`the search loop failed (${String(err?.message ?? err).slice(0, 120)})`);
+    // The loop itself failed (a model timeout): every place it hadn't reached yet is an outage, not a place it chose to skip.
+    for (const s of SWEEP_SOURCES) if (!called.has(s.source)) outages.add(s.source);
   }
   // Facts only: sold out, past, too far, and a name/date the record actually states.
   const gatedOut: GatedOut[] = [];
@@ -511,5 +528,5 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   if (opts.allSources) for (const s of SWEEP_SOURCES) if (!called.has(s.source)) sourceFailures.push(`${s.source}: not reached (the search ended before it)`);
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
   await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy, ...(opts.allSources ? { allSources: true } : {}), ...(sourceFailures.length ? { sourceFailures } : {}), ...(exaAdded.length ? { exaAdded } : {}) } }).catch(() => {});
-  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures } }; // mood: carries the read
+  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures, ...(outages.size ? { outages: [...outages] } : {}), ...(unverified ? { unverified } : {}) } }; // mood: carries the read
 }
