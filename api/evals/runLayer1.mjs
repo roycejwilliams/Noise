@@ -18,7 +18,7 @@ const env = {
   ...process.env,
   // Placeholders: clients read these at import; the guard answers anything that tries to use them.
   SENDBLUE_API_API_KEY: "ci", SENDBLUE_API_API_SECRET: "ci", SENDBLUE_API_KEY: "ci", SENDBLUE_SECRET_KEY: "ci",
-  ANTHROPIC_API_KEY: "ci", OPENAI_API_KEY: "ci", GOOGLE_PLACES_API_KEY: "ci", RESEND_API_KEY: "re_ci", ELEVENLABS_API_KEY: "ci",
+  ANTHROPIC_API_KEY: "ci", OPENAI_API_KEY: "ci", GOOGLE_API_KEY: "ci", GOOGLE_PLACES_API_KEY: "ci", RESEND_API_KEY: "re_ci", ELEVENLABS_API_KEY: "ci",
   DATABASE_URL: "postgres://ci:ci@127.0.0.1:1/ci", MODEL_GUARD_LOG: log,
   // dotenv must not fill anything from the real api/.env (Twilio, Stripe, Langfuse... use node http, which the guard cannot see).
   DOTENV_CONFIG_PATH: "/dev/null",

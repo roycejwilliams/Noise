@@ -4,6 +4,12 @@ import pool from "../db/db.js";
 
 const client = new Client({});
 
+// The Google key (Geocoding + Places, one key): GOOGLE_API_KEY, the name co-test's Railway sets (Royce, 2026-10-28: "We're going to
+// stick with that"). The code read GOOGLE_PLACES_API_KEY, which co-test never set, so every lookup was refused (the morning's ~65
+// "Google failed ... 403" lines) and fell back to the open geocoder, and Places photos never ran. The old name still works where it's
+// set (production's service has it), so nothing changes there.
+export const googleKey = (env: NodeJS.ProcessEnv = process.env): string => env.GOOGLE_API_KEY || env.GOOGLE_PLACES_API_KEY || "";
+
 export type GeoPoint = { lat: number; lng: number };
 
 const EARTH_RADIUS_MILES = 3958.8;
@@ -74,7 +80,7 @@ export async function geocodeCity(city: string, bias?: GeoBias | null): Promise<
     // immediately after enabling.
     const ask = (address: string) => client.geocode({
       // region: a US bias for a name with nothing else to go on (the club is in the US).
-      params: { address, region: "us", key: process.env.GOOGLE_PLACES_API_KEY! },
+      params: { address, region: "us", key: googleKey() },
     });
     let response = await ask(trimmed);
     // No such place in that state ("Newark, MA" came back as a nearby town): the name as given, never a guess near the bias.
@@ -115,7 +121,7 @@ export async function geocodeVenue(address: string): Promise<GeoPoint | null> {
   const cached = await pool.query(`SELECT lat, lng FROM geocode_cache WHERE query = $1`, [key]).catch(() => ({ rows: [] as any[] }));
   if (cached.rows.length) return { lat: Number(cached.rows[0].lat), lng: Number(cached.rows[0].lng) };
   try {
-    const response = await client.geocode({ params: { address: trimmed, key: process.env.GOOGLE_PLACES_API_KEY! } });
+    const response = await client.geocode({ params: { address: trimmed, key: googleKey() } });
     const hit = response.data.results?.[0];
     const precise = hit && (VENUE_PRECISE.has(String(hit.geometry?.location_type)) || (hit.types ?? []).some((t: string) => VENUE_TYPES.includes(t)));
     if (!hit || !precise) return null;
