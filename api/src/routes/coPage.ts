@@ -4,11 +4,11 @@
 // Nothing here writes. Mounted by api/src/server.ts and co-test/src/server.ts behind the public-page rate limit.
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { assetIdsIn, coPageBase, loadCoPage, loadShared, noteViewed, type StoredCoPage } from "../services/coPages/store.js";
+import { assetIdsIn, coPageBase, loadCoPage, loadPreviewShot, loadShared, noteViewed, type StoredCoPage } from "../services/coPages/store.js";
 import { notFoundPage, renderCoPage } from "../services/coPages/template.js";
 import { isDeckData, renderDeck, type DeckData } from "../services/coPages/deck.js";
 import type { CoPageData } from "../services/coPages/schema.js";
-import { CO_MARK_SVG, coMarkPng, genericHead, ownerPreviewName, PREVIEW_CRAWLER, PREVIEW_TAG, previewDescription, previewHead, previewPng, previewState, previewTag, withPreviewHead } from "../services/coPages/linkPreview.js";
+import { CO_MARK_SVG, cardSize, coMarkPng, genericHead, ownerPreviewName, PREVIEW_CRAWLER, PREVIEW_TAG, previewDescription, previewHead, previewPng, previewState, previewTag, withPreviewHead } from "../services/coPages/linkPreview.js";
 
 export const CO_PAGE_HEADERS = {
   "Cache-Control": "private, no-store",
@@ -47,6 +47,7 @@ function render(page: StoredCoPage, v: { shareId?: string }, name: string | null
     url,
     imageUrl: url ? `${url}/og/${previewTag(page, name)}.png` : null,
     iconBase: base,
+    imageSize: cardSize(page),
   });
   return withPreviewHead(renderArtifact(page, v, url, zone, credit), head);
 }
@@ -64,13 +65,14 @@ async function artCredits(page: StoredCoPage): Promise<(p: any) => any> {
 }
 
 export function createCoPageRouter(
-  o: { load?: (id: string) => Promise<StoredCoPage | null>; loadShare?: (id: string) => Promise<StoredCoPage | null>; viewed?: (id: string) => Promise<void>; zone?: string; loadAsset?: (ownerUserId: string, id: string) => Promise<{ data: Buffer; mediaType: string } | null>; ownerName?: (ownerUserId: string) => Promise<string | null>; renderPng?: (html: string, size: { width: number; height: number }) => Promise<Buffer | null> } = {},
+  o: { load?: (id: string) => Promise<StoredCoPage | null>; loadShare?: (id: string) => Promise<StoredCoPage | null>; viewed?: (id: string) => Promise<void>; zone?: string; loadAsset?: (ownerUserId: string, id: string) => Promise<{ data: Buffer; mediaType: string } | null>; ownerName?: (ownerUserId: string) => Promise<string | null>; renderPng?: (html: string, size: { width: number; height: number }) => Promise<Buffer | null>; loadShot?: (id: string, version: number) => Promise<Buffer | null> } = {},
 ): Router {
   const load = o.load ?? loadCoPage;
   const loadShare = o.loadShare ?? loadShared;
   const viewed = o.viewed ?? noteViewed;
   const loadAsset = o.loadAsset ?? (async (owner: string, id: string) => (await import("../services/memberAssets.js")).loadAssetFor(owner, id));
   const ownerName = o.ownerName ?? ownerPreviewName;
+  const loadShot = o.loadShot ?? loadPreviewShot;
   const router = Router();
   // The name on the card (it's in the card's address too), held a minute so the page and its image agree, and never waited on long.
   const names = new Map<string, { name: string | null; at: number }>();
@@ -86,6 +88,8 @@ export function createCoPageRouter(
   // is served, so it's ready when asked. Only for crawlers, and only a card that isn't ready, rendering or failing already.
   const warm = (page: StoredCoPage, name: string | null, req: any) => {
     if (!PREVIEW_CRAWLER.test(String(req.get?.("user-agent") ?? ""))) return;
+    // Its real first screen is already stored (option C): nothing to render.
+    if (page.shot) return;
     if (previewState(page, name) !== "none") return;
     void previewPng(page, name, o.renderPng).catch(() => {});
   };
@@ -97,6 +101,13 @@ export function createCoPageRouter(
     const tag = file.replace(/\.png$/, "");
     const name = page ? await nameFor(page.ownerUserId) : null;
     if (!page || !file.endsWith(".png") || !PREVIEW_TAG.test(tag) || tag !== previewTag(page, name)) return res.status(404).set("Cache-Control", "no-store").type("text/plain").send("Not found");
+    // The artifact's real first screen, stored with this version (Royce, 2026-10-28, option C; store.ts previewShotOf). It is the
+    // content, so it's served as the page is: never kept by a shared cache, and gone the moment the page is. Read only for the live
+    // version of a live artifact; a picture that went meanwhile (a placed photo deleted) falls back to the drawn card below.
+    if (page.shot) {
+      const shot = await loadShot(page.id, page.version).catch(() => null);
+      if (shot) return res.status(200).set("Cache-Control", "private, no-store").type("image/png").send(shot);
+    }
     // A card whose render is failing is a fast 503 until its back-off ends, never a new render.
     if (previewState(page, name) === "failed") return res.status(503).set({ "Cache-Control": "no-store", "Retry-After": "300" }).type("text/plain").send("Not ready");
     const png = await previewPng(page, name, o.renderPng).catch(() => null);

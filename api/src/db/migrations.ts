@@ -2669,6 +2669,13 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_page_shares_page ON co_page_shares (page_id) WHERE revoked_at IS NULL`))
     .catch((err: Error) => console.error("co_pages table init failed:", err));
+  // The link card's picture (Royce, 2026-10-28, option C): the artifact's real first screen, the QA render of the version that ships
+  // (services/coPages/store.ts), kept on its own row so it goes with the content: replaced on every version, wiped wherever data is
+  // (take-down, expiry, a reset's old row, a placed photo deleted) and deleted with the row (the owner's account, by cascade).
+  // preview_version: the version it shows; the card route serves it only for the current one.
+  await pool
+    .query(`ALTER TABLE co_pages ADD COLUMN IF NOT EXISTS preview BYTEA NULL, ADD COLUMN IF NOT EXISTS preview_version INT NULL`)
+    .catch((err: Error) => console.error("co_pages.preview init failed:", err));
   // Member assets (services/memberAssets.ts, 2026-10-11): the pictures, logos and inspiration images a member texts Co, kept for
   // their own artifacts (a deck now). One member's only; viewable only through a live artifact of theirs that places it
   // (routes/coPage.ts /d/<page>/a/<asset>). Unused for 90 days, the bytes are wiped.

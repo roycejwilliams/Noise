@@ -351,7 +351,8 @@ async function cleanedLogo(userId: string, assetId: string, fromN: number): Prom
 }
 
 // Design QA for a deck with its own images (services/designQa.ts qaDeck): fixes what code can and measures again, at 1280 and on a phone.
-async function deckQa(userId: string, data: any) {
+// card: also shoot its first slide, the link card it's stored with (Royce, 2026-10-28, option C).
+async function deckQa(userId: string, data: any, card = false) {
   const Q = await import("../services/designQa.js");
   const A = await import("../services/memberAssets.js");
   const imgs = new Map<string, { data: Buffer; mediaType: string }>();
@@ -361,7 +362,7 @@ async function deckQa(userId: string, data: any) {
   }
   // The pictures Co found and the map tiles, inlined so QA measures the real ones.
   const art = await (await import("../services/artImagery.js")).artDataUris(data).catch(() => undefined);
-  return Q.qaDeck(data, imgs, { screenshot: false, art });
+  return Q.qaDeck(data, imgs, { screenshot: card, view: card, art });
 }
 
 export function deckTools(
@@ -689,7 +690,7 @@ export function deckTools(
           const art = await AI.fillDeckArt(checked.data, { mood: deckIn.coverMood ?? null });
           const artOk = store.checkPage(art.data, backed);
           const withArt: any = artOk.ok ? artOk.data : checked.data;
-          const qa = await deckQa(ctx.userId, withArt);
+          const qa = await deckQa(ctx.userId, withArt, true);
           const ideas = qa.final.findings.filter((f) => f.fix === "co");
           if (ideas.length && !qaBounced) {
             qaBounced = true;
@@ -701,7 +702,8 @@ export function deckTools(
           const toStore = final.ok ? final.data : withArt;
           // What ships is what's said: when the fixed version didn't pass, the unfixed one goes, with what QA first found (review).
           const shipped = final.ok ? qa.final : qa.first;
-          const made = await store.createCoPage(toStore, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
+          // Its link card is its first slide as it shipped (option C), stored with it; QA that couldn't render stores none.
+          const made = await store.createCoPage(toStore, { ownerUserId: ctx.userId, source: backed, preview: shipped.ran ? shipped.screenshot : null }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
           if (!made.ok) {
             o.notDone("The deck wasn't made.");
             return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
@@ -873,18 +875,21 @@ export function deckTools(
             if (art && store.checkPage(art.data, self ? { ...source, read: `${source.read}\n${self}` } : source).ok) Object.assign(next, art.data);
           }
           // Design QA on a change too (design audit: a corrected look went out with type that didn't read on its field).
+          // card: this write's link card, its first slide as it ships (option C); this pass's own, never an earlier pass's.
+          let card: Buffer | null = null;
           if (!ctx.dryRun) {
-            const q = await deckQa(ctx.userId, next).catch(() => null);
+            const q = await deckQa(ctx.userId, next, true).catch(() => null);
             // The fixed version only when it still passes the gate; otherwise the change goes as written, with what QA first found.
             const ok = q ? store.checkPage(q.data, self ? { ...source, read: `${source.read}\n${self}` } : source).ok : false;
             if (q && ok) {
               Object.assign(next, q.data);
               updateQa = q;
             } else if (q) updateQa = { ...q, final: q.first };
+            card = q && updateQa?.final.ran ? updateQa.final.screenshot : null;
           }
           basis = was;
           written = next;
-          r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source, { expectVersion: was ? before?.version : null });
+          r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source, { expectVersion: was ? before?.version : null, preview: card });
           if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
           // Another change landed while this one was written (concurrency audit, 2026-10-12): never written over. A change written
           // from the deck is written once more from the newest version; one with the slides in hand is read again first.

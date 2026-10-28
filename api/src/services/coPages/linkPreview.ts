@@ -15,6 +15,13 @@
 //
 // The image is rendered once per artifact version and look (headless Chrome, browserRead.ts renderPng) and held in memory. The tag
 // in its address is a hash of the id, version, title and look, so an update gives it a new address: a stale title is never served.
+//
+// The real first screen (Royce, 2026-10-28, option C): when the version that's live has its own picture stored with it (the QA render
+// of what shipped, store.ts previewShotOf; a deck's first slide at 1280x720, a page's top at 1280x672, designQa.ts CARD_SHOT), that
+// is the card, in place of the drawn one, under the same link: no separate picture goes with the text and nothing is uploaded
+// anywhere. It shows the artifact's content, so it is served like the page itself (no-store), and it goes wherever the content goes.
+// What a crawler already fetched is outside that, as with the drawn card: iMessage builds the card into the message it sends.
+// Share links show the same content (a deck's speaker notes are never on a slide), so they get the same picture.
 import { createHash } from "crypto";
 import pool from "../../db/db.js";
 import { EMAIL_COLORS, escapeHtml } from "../emailDesign.js";
@@ -23,6 +30,7 @@ import { contrast, inkOn, type DeckStyle } from "./style.js";
 import { isDeckData, type DeckData } from "./deck.js";
 import type { CoPageData } from "./schema.js";
 import type { StoredCoPage } from "./store.js";
+import { CARD_SHOT } from "../designQa.js";
 
 export const OG_SIZE = { width: 1200, height: 630 } as const;
 const e = escapeHtml;
@@ -62,17 +70,25 @@ export function previewDescription(data: StoredCoPage["data"]): string {
 const styleOf = (data: StoredCoPage["data"]): DeckStyle | null => (isDeckData(data) ? (data as DeckData).style : ((data as CoPageData).style ?? null));
 const titleOf = (data: StoredCoPage["data"]): string => String((data as { title?: string }).title ?? "");
 
-// Pure: the image's tag: the artifact, its version, its title, its look and the name on it. Any change gives a new address.
-export function previewTag(page: Pick<StoredCoPage, "id" | "version" | "data">, name: string | null): string {
+// Pure: the image's tag: the artifact, its version, its title, its look and the name on it, and whether it's the real first screen
+// (shot) or the drawn card. Any change gives a new address: a picture taken away (a placed photo deleted) is never the one a crawler
+// kept under the old address. A drawn card's tag is what it always was.
+export function previewTag(page: Pick<StoredCoPage, "id" | "version" | "data" | "shot">, name: string | null): string {
   const st = styleOf(page.data);
   return createHash("sha256")
-    .update(JSON.stringify([page.id, page.version, titleOf(page.data), isDeckData(page.data) ? "deck" : "page", st ?? null, name ?? null]))
+    .update(JSON.stringify([page.id, page.version, titleOf(page.data), isDeckData(page.data) ? "deck" : "page", st ?? null, name ?? null, ...(page.shot ? ["shot"] : [])]))
     .digest("base64url")
     .slice(0, 16);
 }
 // The link-preview fetchers: iMessage (it sends "facebookexternalhit ... Facebot Twitterbot"), Slack, Discord, WhatsApp, LinkedIn.
 export const PREVIEW_CRAWLER = /facebookexternalhit|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|Discordbot|WhatsApp|LinkedInBot|TelegramBot|Applebot/i;
 export const PREVIEW_TAG = /^[A-Za-z0-9_-]{16}$/;
+
+// Pure: the size of the card a live artifact's link shows: its real first screen when one is stored for this version, else the drawn
+// card.
+export function cardSize(page: Pick<StoredCoPage, "data" | "shot">): { width: number; height: number } {
+  return page.shot ? { ...CARD_SHOT[isDeckData(page.data) ? "deck" : "page"] } : { ...OG_SIZE };
+}
 
 // ---------------------------------------------------------------- the card
 
@@ -127,8 +143,9 @@ export function coMarkHtml(): string {
 // ---------------------------------------------------------------- the head
 
 // Pure: the preview tags for a live artifact. url: the link it was opened with; imageUrl: its card, or null when there's no public
-// base to name it from.
-export function previewHead(o: { title: string; description: string; url: string | null; imageUrl: string | null; iconBase: string | null }): string {
+// base to name it from. imageSize: the card's own size (cardSize), the drawn card's when not given.
+export function previewHead(o: { title: string; description: string; url: string | null; imageUrl: string | null; iconBase: string | null; imageSize?: { width: number; height: number } }): string {
+  const size = o.imageSize ?? OG_SIZE;
   return [
     `<meta name="description" content="${e(o.description)}">`,
     `<meta property="og:site_name" content="Cue">`,
@@ -141,8 +158,8 @@ export function previewHead(o: { title: string; description: string; url: string
           `<meta property="og:image" content="${e(o.imageUrl)}">`,
           o.imageUrl.startsWith("https://") ? `<meta property="og:image:secure_url" content="${e(o.imageUrl)}">` : "",
           `<meta property="og:image:type" content="image/png">`,
-          `<meta property="og:image:width" content="${OG_SIZE.width}">`,
-          `<meta property="og:image:height" content="${OG_SIZE.height}">`,
+          `<meta property="og:image:width" content="${size.width}">`,
+          `<meta property="og:image:height" content="${size.height}">`,
           `<meta property="og:image:alt" content="${e(o.title)}">`,
           `<meta name="twitter:card" content="summary_large_image">`,
           `<meta name="twitter:image" content="${e(o.imageUrl)}">`,

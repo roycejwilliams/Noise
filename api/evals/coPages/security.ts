@@ -65,7 +65,7 @@ S.useCoPageDb({ query: async (sql: string, params: unknown[] = []) => { calls.pu
   next = { rows: [], rowCount: 1 };
   const made = await S.createCoPage(page(), { ownerUserId: "owner-a", source });
   const ins = calls.at(-1)!;
-  check("a page is made with its owner and a 90-day expiry, and its link is /d/<id>", made.ok && /^https:\/\/co\.example\/d\/[A-Za-z0-9_-]{24}$/.test((made as any).url) && /INSERT INTO co_pages \(id, owner_user_id, data, expires_at\)/.test(ins.sql) && ins.params[1] === "owner-a" && ins.params[3] === 90);
+  check("a page is made with its owner and a 90-day expiry, and its link is /d/<id>", made.ok && /^https:\/\/co\.example\/d\/[A-Za-z0-9_-]{24}$/.test((made as any).url) && /INSERT INTO co_pages \(id, owner_user_id, data, expires_at, preview, preview_version\)/.test(ins.sql) && ins.params[1] === "owner-a" && ins.params[3] === 90);
   calls.length = 0;
   const refused = await S.createCoPage(page("Ellis Park is coming too, newly divorced and looking to meet people."), { ownerUserId: "owner-a", source });
   check("a page that fails the grounding is never written", !refused.ok && calls.length === 0);
@@ -88,7 +88,7 @@ S.useCoPageDb({ query: async (sql: string, params: unknown[] = []) => { calls.pu
   check("a member's own page list is theirs only (to find 'that page' to take down)", /WHERE owner_user_id = \$1 AND taken_down_at IS NULL AND expires_at > NOW\(\)/.test(calls[0].sql) && calls[0].params[0] === "owner-a");
   calls.length = 0;
   await S.wipeExpiredCoPages();
-  check("M2: expired pages lose their content (daily job)", /SET taken_down_at = NOW\(\), data = '\{\}'::jsonb WHERE taken_down_at IS NULL AND expires_at <= NOW\(\)/.test(calls[0].sql));
+  check("M2: expired pages lose their content (daily job), the link card picture with it", /SET taken_down_at = NOW\(\), data = '\{\}'::jsonb, preview = NULL, preview_version = NULL WHERE taken_down_at IS NULL AND expires_at <= NOW\(\)/.test(calls[0].sql));
   calls.length = 0;
   next = { rows: [] };
   check("the public read only finds a live, unexpired page", (await S.loadCoPage(id)) === null && /WHERE id = \$1 AND taken_down_at IS NULL AND expires_at > NOW\(\)/.test(calls[0].sql));
