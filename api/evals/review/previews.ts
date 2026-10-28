@@ -31,6 +31,7 @@ const pageCard = (b: Buffer | null | undefined) => {
 const DOT = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 const googleCover = { kind: "venue", via: "google", src: "gp:ChIJabcdef123:0", placeId: "ChIJabcdef123", i: 0, place: "Alder and Ash", alt: "Alder and Ash dining room" };
 const credit = () => ({ credit: "Photo: A. Diner", creditUrl: null });
+const unsplashCover = { kind: "mood", via: "unsplash", src: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=1600", alt: "A quiet dining room at dusk", credit: "Photo: B. Lens", creditUrl: "https://unsplash.com/@blens" };
 
 // Every outside call made while this file runs (the layer 1 guard refuses them too; this says which, and fails here first).
 const outside: string[] = [];
@@ -81,6 +82,13 @@ check("fixtures: the page and the deck pass the schema", !!pageData && deckOk.ok
   if (gp.final.ran) check("a page whose first screen shows a Google Places photo stores no shot (the link keeps the drawn card)", gp.final.screenshot === null);
   if (op.final.ran) check("a page whose cover is the venue's own image keeps its shot", pageCard(op.final.screenshot), pngDims(op.final.screenshot));
   if (gd?.final.ran) check("a deck whose first slide shows a Google Places photo stores no shot", gd.final.screenshot === null);
+  // Unsplash, the same (Royce 2026-10-28: their guidelines ask that their images be hotlinked).
+  const P4 = (S.parseCoArtifact({ ...pageData, coverArt: unsplashCover }) as any).data;
+  if (P4) {
+    check("the renderer marks an Unsplash photo too", /<img class="cover-img"[^>]*data-via="unsplash"/.test(withArt(P4)));
+    const up = await Q.qaPage(P4, withArt, { screenshot: true, view: true });
+    if (up.final.ran) check("a page whose first screen shows an Unsplash photo stores no shot", up.final.screenshot === null);
+  } else check("fixture: a page with an Unsplash cover", false);
   if (D2.ok) check("the deck renderer marks its Google cover too", /<img class="ph"[^>]*data-via="google"/.test((await import("../../src/services/coPages/deck.js")).renderDeck({ id: "q".repeat(24), data: D2.data as any, updatedAt: new Date() }, { url: null, showNotes: false, artSrc: () => DOT, credit, imageSrc: () => null })));
   check("the gate stores nothing that isn't a PNG, is empty or is over the cap", S.previewShotOf(null) === null && S.previewShotOf(Buffer.alloc(0)) === null && S.previewShotOf(Buffer.from("GIF89a....")) === null && S.previewShotOf(Buffer.concat([MAGIC, Buffer.alloc(S.PREVIEW_SHOT_MAX_BYTES)])) === null && S.previewShotOf(fakePng("x")) !== null);
 }

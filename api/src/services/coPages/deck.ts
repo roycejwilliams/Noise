@@ -524,8 +524,8 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
       const u = artUrl(p.art);
       const c = p.art.kind === "venue" ? o.credit?.(p.art) ?? null : null;
       if (p.art.kind === "venue" && !c) return "";
-      // data-via: a Google Places photo is marked, so the link card never stores one (designQa.ts CARD_SHOT, Royce 2026-10-28).
-      return u ? `<figure class="fig ${cls}"${extra}><img class="ph" src="${e(u)}" alt="${e(p.art.alt)}" decoding="async" data-qa-img data-qa-crop="ok"${p.art.via === "google" ? ` data-via="google"` : ""}>${creditHtml(p.art, e, "credit lab", c)}</figure>` : "";
+      // data-via: a Google Places or Unsplash photo is marked, so the link card never stores one (designQa.ts CARD_SHOT, Royce 2026-10-28).
+      return u ? `<figure class="fig ${cls}"${extra}><img class="ph" src="${e(u)}" alt="${e(p.art.alt)}" decoding="async" data-qa-img data-qa-crop="ok"${p.art.via === "google" || p.art.via === "unsplash" ? ` data-via="${p.art.via}"` : ""}>${creditHtml(p.art, e, "credit lab", c)}</figure>` : "";
     }
     return "";
   };
