@@ -12,7 +12,7 @@ import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { gateNetworkCandidate } from "../harness/matchGate.js";
 import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from "../harness/introConsent.js";
-import { getActiveAsks } from "./matching.js";
+import { shareableAsks } from "./matching.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
@@ -25,9 +25,12 @@ import { recordDecision } from "../harness/core.js";
 const CLASSIFY_MODEL = MODELS.haiku;
 const NAMING_DRAFT_MODEL = MODELS.sonnet;
 
+// Only what they marked shareable counts as "what they told Cue" for the consent checks, as on the room path
+// (eventScoring.ts): a private ask handed in here was allowed text for the consent read and the hidden-echo check, so a reveal
+// echoing it passed both (context-sources review, 2026-10-27).
 async function statedAsksFor(userId: string): Promise<string[]> {
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-  return getActiveAsks(rows[0]?.intent);
+  return shareableAsks(rows[0]?.intent).map((a) => String(a.text));
 }
 
 // This person's timezone, for the hours check on a reply-triggered direct

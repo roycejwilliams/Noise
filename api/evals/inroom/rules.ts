@@ -160,6 +160,22 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   }
 }
 
+// ------------------------------------------------------------ a failed name lookup fails closed (context-sources review, 2026-10-27)
+{
+  // It returned no names, so nothing was stripped and Cue's own lines about another member went to the reply as written.
+  const { reset, addMember } = await import("./world.js");
+  const { default: pool } = await import("../../src/db/db.js");
+  reset();
+  const jordan = addMember({ first_name: "Jordan" });
+  const real = (pool as any).query;
+  (pool as any).query = async () => Promise.reject(new Error("db down"));
+  const lookup = await MS.linkedMemberNames(jordan.id).then(() => "returned", () => "threw");
+  const strip = await MS.memberSafe(jordan.id, [{ content: "Co replied: Ellis left Tesla.", memory_type: "text_exchange" }]).then(() => "returned", () => "threw");
+  (pool as any).query = real;
+  check("memory: a failed name lookup throws instead of returning no names", lookup === "threw", lookup);
+  check("memory: memberSafe throws on it too, so the reply leaves its memories out instead of reading them unstripped", strip === "threw", strip);
+}
+
 // ------------------------------------------------------------ brief naming with stale rankings
 {
   const members = [{ user_id: "a", first_name: "Jordan" }, { user_id: "b", first_name: "Ellis" }];

@@ -172,26 +172,12 @@ export function introFacts(rows: { content: string; memory_type?: string | null 
   return out;
 }
 
-// The members this one has been matched, nudged or introduced with: the only
-// names stripped from Co's own lines, so their own people (a mentor who
-// shares a member's first name) aren't touched in what they said.
+// The members this one has been matched, nudged or introduced with: the only names stripped from Cue's own lines, so their own
+// people (a mentor who shares a member's first name) aren't touched in what they said. The same set as memberNamesStrict, network
+// intros included, and it fails the same way: a failed lookup throws, so a caller leaves the text out instead of reading it
+// unstripped (it returned no names, so nothing was stripped; context-sources review, 2026-10-27).
 export async function linkedMemberNames(userId: string): Promise<string[]> {
-  const { rows } = await pool
-    .query(
-      `SELECT DISTINCT u.first_name FROM users u
-       WHERE u.id <> $1 AND u.first_name IS NOT NULL AND u.id IN (
-         SELECT candidate_id FROM event_guest_match_nudges WHERE person_id = $1
-         UNION SELECT person_id FROM event_guest_match_nudges WHERE candidate_id = $1
-         UNION SELECT candidate_id FROM event_guest_match_opt_ins WHERE person_id = $1
-         UNION SELECT person_id FROM event_guest_match_opt_ins WHERE candidate_id = $1
-         UNION SELECT candidate_id FROM event_match_offers WHERE person_id = $1 AND candidate_id IS NOT NULL
-         UNION SELECT unnest(candidate_ids) FROM event_match_offers WHERE person_id = $1
-         UNION SELECT person_id FROM event_match_offers WHERE candidate_id = $1 OR $1 = ANY(candidate_ids)
-       )`,
-      [userId],
-    )
-    .catch(() => ({ rows: [] as any[] }));
-  return rows.map((r: any) => String(r.first_name));
+  return memberNamesStrict(userId);
 }
 
 // Names Co's own records give for this member: the JSON intro offers and Tier 0 picks.

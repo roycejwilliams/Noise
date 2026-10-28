@@ -69,7 +69,8 @@ type ContextParts = {
   recommendation: string | null;
   recentTexts: string[];
   emotionalLine: string | null;
-  names: string[];
+  // null: the name lookup failed, so every part that needed the strip is left out.
+  names: string[] | null;
 };
 
 // The sections each build reads. A text reply's summary needs only the profile-side facts; a call reads what Co carries and
@@ -169,14 +170,18 @@ async function loadContextParts(userId: string, include: readonly KnowledgeSecti
   // Another member's details never reach this summary; intro history stays
   // (services/memberSafeMemories.ts). The layer's parts are stripped inside it; these are the parts read here.
   const { memberSafe, linkedMemberNames, namesInRecords } = memberSafeModule;
-  const linked = await linkedMemberNames(userId);
+  // A failed lookup leaves out every part read here that the strip would have read (null names): the summary goes without them.
+  const linked = await linkedMemberNames(userId).catch((err: any) => {
+    console.error("callContext: member name lookup failed, leaving out the parts it strips:", err?.message ?? err);
+    return null;
+  });
   // A Tier 0 pick names someone their recap or texts may describe too.
-  const names = [...linked, ...namesInRecords(recentRecommendationResult.rows)];
-  const [safeRecap, safeRecommendation] = await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names)]);
+  const names = linked ? [...linked, ...namesInRecords(recentRecommendationResult.rows)] : null;
+  const [safeRecap, safeRecommendation] = names ? await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names)]) : [[], []];
   // The person model is model-written (snapshot, threads, loops): it gets the
   // same strip, so another member's details never reach a call or reply.
   const rawPicture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
-  const picture = rawPicture ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : rawPicture;
+  const picture = rawPicture && names ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : names ? rawPicture : "";
   // The recap through the live guards (services/whatCoKnows.ts): a line on something they removed is out, a corrected one says so.
   if (safeRecap[0]) safeRecap[0] = await import("./whatCoKnows.js").then(async (W) => W.guardBlock(String(safeRecap[0]), await W.forgottenRows(userId))).catch(() => String(safeRecap[0]));
   const recapAt = recapResult.rows[0]?.created_at ? new Date(recapResult.rows[0].created_at) : null;
@@ -673,7 +678,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // (memberSafeMemories.ts; 2026-10-01 call review: these bypassed it). The layer's parts are stripped inside it already; they go
   // through this strip again with the call's own name set (linked members and the names in their last suggestion).
   const { memberSafe } = memberSafeModule;
-  const strip = async (xs: string[]) => (xs.length ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" })), p.names) : []);
+  const strip = async (xs: string[]) => (xs.length && p.names ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" })), p.names) : []);
   const stripOne = async (x: string) => (await strip([x]))[0] ?? "";
   const corrections = p.corrections;
   const keep = (text: string, at?: Date | string | null) => !retiredBy(text, corrections, at);

@@ -176,6 +176,14 @@ const BLOCKER = "my divorce is dragging on";
     async () => "Noor backs climate hardware founders at seed. Heads up, she's moving to Lisbon when her lease ends.",
   );
   check("draft: draftWithConsent sends nothing when every draft echoes the hidden part", drafted === null && W.sent.length === sentBefore, drafted);
+  // The network reveal hands the consent checks only Noor's shareable asks, as the room path does (2026-10-27): her private ask
+  // was handed in as "what she told Cue", so the consent read was told describing it is fine and the echo check let it through.
+  W.llmCalls.length = 0;
+  const reveal = await N.prepareReveal(jordan.id, "Jordan", { edge_id: "e-noor", candidate_id: noor.id, match_score: 0.9, match_reason: `what they've said they can offer: "backing climate hardware founders at seed"`, share_safe: true, first_name: "Noor", phone_number: noor.phone_number, email: null } as any);
+  const consentPrompts = W.llmCalls.filter((c) => c.kind === "consent").map((c) => c.prompt);
+  check("reveal: the draft reached the consent read", "message" in reveal && consentPrompts.length > 0, { reveal, kinds: W.llmCalls.map((c) => c.kind) });
+  check("reveal: the consent read is told her shared ask", consentPrompts.every((p) => p.includes("backing climate hardware founders at seed")), consentPrompts);
+  check("reveal: the consent read is never told her private ask", consentPrompts.every((p) => !p.includes(PRIVATE_ASK)), consentPrompts);
   // A failed read withholds the draft and the email (fails closed).
   const real = (pool as any).query;
   (pool as any).query = async (sql: string, p?: any[]) => (/FROM co_profiles WHERE user_id = \$1/.test(sql) ? Promise.reject(new Error("db down")) : real(sql, p));

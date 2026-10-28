@@ -226,14 +226,15 @@ async function sweepOneOffering(userId: string, offering: StatedIntent): Promise
 // the same edge log as the 3am pass, one model call per ask, capped.
 const STANDING_ASKS_PER_NEWCOMER = 5;
 
-export type StandingAsk = { personId: string; ask: StatedIntent; askerContext?: string };
+// askerFirstName: the standing asker, left out of the newcomer's items as the 3am pass does (matching.ts candidateLines).
+export type StandingAsk = { personId: string; ask: StatedIntent; askerContext?: string; askerFirstName?: string };
 type EdgeScore = { user_id: string; score: number; reason: string; shareReason: string; mutual: boolean };
 
 export type NewcomerSweepDeps = {
   newcomer: (userId: string) => Promise<RelevanceCandidate | null>;
   standingAsksNear: (userId: string, limit: number) => Promise<StandingAsk[]>;
-  scoreSeeking: (ask: StatedIntent, candidates: RelevanceCandidate[], askerContext?: string) => Promise<EdgeScore[]>;
-  scoreOffering: (offering: StatedIntent, candidates: RelevanceCandidate[]) => Promise<EdgeScore[]>;
+  scoreSeeking: (ask: StatedIntent, candidates: RelevanceCandidate[], askerContext?: string, askerFirstName?: string) => Promise<EdgeScore[]>;
+  scoreOffering: (offering: StatedIntent, candidates: RelevanceCandidate[], askerFirstName?: string) => Promise<EdgeScore[]>;
   logEdges: (personId: string, askId: string, askText: string, scored: EdgeScore[]) => Promise<void>;
 };
 
@@ -272,8 +273,8 @@ const realNewcomerDeps: NewcomerSweepDeps = {
               FROM me, jsonb_array_elements(CASE WHEN jsonb_typeof(me.intent) = 'array' THEN me.intent ELSE '[]'::jsonb END) AS e
               WHERE e->>'status' = 'active' AND COALESCE(e->>'kind', 'ask') = 'ask' AND COALESCE(btrim(e->>'text'), '') <> '' AND jsonb_typeof(e->'embedding') = 'array'
             )
-       SELECT person_id, goals, blockers, long_term_direction, entry FROM (
-         SELECT cp.user_id AS person_id, cp.goals, cp.blockers, cp.long_term_direction, a.entry,
+       SELECT person_id, first_name, goals, blockers, long_term_direction, entry FROM (
+         SELECT cp.user_id AS person_id, u.first_name, cp.goals, cp.blockers, cp.long_term_direction, a.entry,
                 LEAST(
                   COALESCE((SELECT me.goal_embeddings FROM me) <=> (a.entry->'embedding')::text::vector, 2),
                   COALESCE((SELECT MIN(mine.emb <=> (a.entry->'embedding')::text::vector) FROM mine), 2)
@@ -289,10 +290,10 @@ const realNewcomerDeps: NewcomerSweepDeps = {
        LIMIT $2`,
       [userId, limit],
     );
-    return rows.map((r: any) => ({ personId: r.person_id, ask: r.entry as StatedIntent, askerContext: askerContextOf(r) }));
+    return rows.map((r: any) => ({ personId: r.person_id, ask: r.entry as StatedIntent, askerContext: askerContextOf(r), askerFirstName: r.first_name ?? undefined }));
   },
-  scoreSeeking: async (ask, candidates, askerContext) => toEdgeScores(await scoreAgainstStatedAsk(ask, candidates, askerContext)),
-  scoreOffering: async (offering, candidates) => toEdgeScores(await scoreOfferingAgainstCandidates(offering, candidates)),
+  scoreSeeking: async (ask, candidates, askerContext, askerFirstName) => toEdgeScores(await scoreAgainstStatedAsk(ask, candidates, askerContext, undefined, { askerFirstName })),
+  scoreOffering: async (offering, candidates, askerFirstName) => toEdgeScores(await scoreOfferingAgainstCandidates(offering, candidates, { askerFirstName })),
   logEdges: (personId, askId, askText, scored) => logRelevanceEdges(personId, askId, askText, scored),
 };
 
@@ -301,14 +302,20 @@ export async function sweepStandingAsksForNewcomer(userId: string, deps: Newcome
     const newcomer = await deps.newcomer(userId);
     if (!newcomer) return;
     const standing = await deps.standingAsksNear(userId, STANDING_ASKS_PER_NEWCOMER);
-    for (const { personId, ask, askerContext } of standing) {
+    for (const { personId, ask, askerContext, askerFirstName } of standing) {
       if (personId === userId || !isOpenAsk(ask) || !ask.id || !ask.text || !ask.embedding?.length) continue;
       try {
-        const scored = ask.type === "offering"
-          ? await deps.scoreOffering(ask, [newcomer])
-          : ask.type === "seeking"
-            ? await deps.scoreSeeking(ask, [newcomer], askerContext)
-            : [];
+        // The prompt holds the standing asker's ask and context: it is theirs (trace text and cost under their id, so a removal of
+        // theirs reaches it), never the newcomer's whose turn started this (review of #274, 2026-10-27).
+        const scored = await withTraceUser(personId, () =>
+          withMember(personId, () =>
+            ask.type === "offering"
+              ? deps.scoreOffering(ask, [newcomer], askerFirstName)
+              : ask.type === "seeking"
+                ? deps.scoreSeeking(ask, [newcomer], askerContext, askerFirstName)
+                : Promise.resolve([] as EdgeScore[]),
+          ),
+        );
         if (scored.length) await deps.logEdges(personId, ask.id, ask.text, scored);
       } catch (err) {
         console.error(`sweepStandingAsksForNewcomer: ask ${ask.id} failed (non-fatal):`, err);
