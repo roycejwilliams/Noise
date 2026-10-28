@@ -11,7 +11,8 @@ import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { gateMatches, START_LEAD_MINUTES, type GatedOut } from "../harness/matchGate.js";
+import { gateMatches, START_LEAD_MINUTES, TIER_LOOKAHEAD_DAYS, type GatedOut } from "../harness/matchGate.js";
+import { DateTime } from "luxon";
 import { localDay } from "./memberTime.js";
 import { avoidFor, limitsGate } from "./memberLimits.js";
 import type { KnowledgeSection, MemberKnowledge } from "./memberKnowledge.js";
@@ -191,10 +192,24 @@ export function sweepRecord(k: MemberKnowledge, askText: string): SweepRecord {
   };
 }
 
+// How far out an event page the web or X found may be and still be kept (held until it's inside the event tier's window): the longest
+// window a want carries (wantWhen.ts WHEN_LIMITS.windowMaxDays).
+export const HOLD_EVENT_DAYS = 60;
+// Pure: an event find past the event tier's window (matchGate.ts TIER_LOOKAHEAD_DAYS[2]) marked with the day it comes inside it
+// (heldUntil); one inside it is unchanged.
+export function holdForWindow(m: TierMatch, today: string): TierMatch {
+  const day = (m as any).event_date ? String((m as any).event_date).slice(0, 10) : null;
+  if (!day) return m;
+  const opens = DateTime.fromISO(day).minus({ days: TIER_LOOKAHEAD_DAYS[2] }).toISODate()!;
+  return opens > today ? ({ ...m, heldUntil: opens } as unknown as TierMatch) : m;
+}
+
 // Pure-with-deps: kept finds whose link is one event's own page (taskWeb.ts eventPageUrl) and still filed as openings, read for the
 // page's own record: a public event becomes an event find (tier 2) with its keep (why it fits, taste, audience, how it was found); one
 // whose record says it's sold out or over is dropped; anything else stays as it was. At most SWEEP_BUDGET.keep reads, at once.
-export async function promoteEventPages(kept: TierMatch[], read: (url: string) => Promise<import("./eventPage.js").PageEvent | null>): Promise<{ kept: TierMatch[]; dropped: number }> {
+// A link whose page's own record says it's private (a Partiful invite, a private Luma event) is dropped, never kept as an opening
+// (batched review of #299); one that couldn't be read stays as it was.
+export async function promoteEventPages(kept: TierMatch[], read: (url: string) => Promise<import("./eventPage.js").PageEvent | "private" | null>): Promise<{ kept: TierMatch[]; dropped: number }> {
   const { eventPageUrl } = await import("./taskWeb.js");
   let dropped = 0;
   const out = await Promise.all(
@@ -202,6 +217,10 @@ export async function promoteEventPages(kept: TierMatch[], read: (url: string) =
       const url = "url" in m && m.url ? String(m.url) : "";
       if (m.tier !== 3 || !url || !eventPageUrl(url)) return m;
       const ev = await read(url).catch(() => null);
+      if (ev === "private") {
+        dropped++;
+        return null;
+      }
       if (!ev) return m;
       const over = ev.endAt ?? ev.startAt;
       if (ev.soldOut === true || (over && Date.parse(over) <= Date.now())) {
@@ -214,7 +233,10 @@ export async function promoteEventPages(kept: TierMatch[], read: (url: string) =
   );
   return { kept: out.filter((m): m is TierMatch => m !== null), dropped };
 }
-const eventPageFor = async (url: string) => (await (await import("./eventPage.js")).readEventPage(url)).event;
+const eventPageFor = async (url: string) => {
+  const r = await (await import("./eventPage.js")).readEventPage(url);
+  return r.private ? ("private" as const) : r.event;
+};
 
 export function sweepPrompt(c: SweepCandidate, o: { today: string; record: SweepRecord; allSources?: boolean; seen?: { name: string; url: string }[] }): string {
   const r = o.record;
@@ -616,7 +638,17 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   // Facts only: sold out, past, too far, and a name/date the record actually states.
   const gatedOut: GatedOut[] = [];
   // Started, or starting inside the hour (START_LEAD_MINUTES): never kept, the way the reply's search turns it away (Royce, 2026-10-17).
-  const factGated = await gateMatches(kept, { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null, gatedOut, leadMinutes: START_LEAD_MINUTES }).catch(() => kept);
+  // An event page the web or X found (filed as an event, pageEventMatch) is held, not dropped, when it's past the event tier's window
+  // (Royce, 2026-10-28 ruling): it's gated with HOLD_EVENT_DAYS and waits in the backlog, marked heldUntil, until it's inside the window
+  // (holdForWindow; the picker and the queue skip it until then). Everything else is gated as before.
+  const isPageFind = (m: TierMatch) => m.tier === 2 && ["web", "x"].includes(String((m as any).source ?? ""));
+  const gateOpts = { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null, gatedOut, leadMinutes: START_LEAD_MINUTES };
+  const today = opts.today ?? localDay(new Date(), opts.timezone ?? null);
+  const [gatedRest, gatedPages] = await Promise.all([
+    gateMatches(kept.filter((m) => !isPageFind(m)), gateOpts).catch(() => kept.filter((m) => !isPageFind(m))),
+    gateMatches(kept.filter(isPageFind), { ...gateOpts, lookaheadDays: HOLD_EVENT_DAYS }).catch(() => kept.filter(isPageFind)),
+  ]);
+  const factGated = [...gatedRest, ...gatedPages.map((m) => holdForWindow(m, today))];
   // Kept but stopped by the fact gate: the gate's reason, unless Co gave one.
   for (const g of gatedOut) if (g.url && !passReasons.has(g.url)) passReasons.set(g.url, `kept, then the fact gate: ${g.reasons.join("; ")}`);
   // Their limits, for every member (Phase A2): a kind they ruled out, judged by its main activity, and an event outside when they're free.

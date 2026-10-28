@@ -8,6 +8,8 @@
 // (tieredRecommendation.ts eventCandidates), the picker's pool (sweepShadow.ts buildShadowPool) and what was already shown
 // (harness/matchGate.ts offerHistory), so a member never gets the same event twice under two links.
 
+import { DateTime } from "luxon";
+
 export const EVENT_SAME = { startMinutes: 30 } as const;
 
 // What identity reads off a find: the shapes the finds come in (a TierMatch, a backlog item's match, a feed event).
@@ -19,7 +21,7 @@ export type EventLike = {
   event_date?: string | null;
   city?: string | null;
   venue?: string | null;
-  details?: { startAt?: string | null; city?: string | null; venue?: string | null; [k: string]: unknown } | null;
+  details?: { startAt?: string | null; city?: string | null; venue?: string | null; timezone?: string | null; [k: string]: unknown } | null;
 };
 
 // Pure: a name with case, emoji, punctuation and hashtags set aside ("SF Tech Week: AI Mixer 🚀 #SFTechWeek" -> "sf tech week ai mixer").
@@ -34,22 +36,36 @@ export function eventNameKey(name: string | null | undefined): string {
     .trim();
 }
 
+// The start as an instant. A start with no offset of its own ("2026-11-06T18:00:00") is read in the event's own zone (its record's, or
+// the zone its city gave it, eventPage.ts settleZone), never the server's; with no zone it's no start (batched review of #299).
 const startOf = (e: EventLike): number | null => {
-  const s = e.details?.startAt ?? e.startAt ?? e.start_at ?? null;
-  const t = s ? Date.parse(String(s)) : NaN;
-  return Number.isFinite(t) ? t : null;
+  const s = String(e.details?.startAt ?? e.startAt ?? e.start_at ?? "").trim();
+  if (!s) return null;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : null;
+  }
+  const zone = typeof e.details?.timezone === "string" ? e.details.timezone : null;
+  if (!zone) return null;
+  const d = DateTime.fromISO(s, { zone });
+  return d.isValid ? d.toMillis() : null;
 };
 const placeKey = (s: string | null | undefined) => {
   const c = String(s ?? "").split(",")[0].trim().toLowerCase().replace(/\./g, "");
   const alias: Record<string, string> = { sf: "san francisco", "san fran": "san francisco", nyc: "new york", "new york city": "new york", la: "los angeles" };
   return alias[c] ?? c;
 };
+// Pure: a name as its set of words (order set aside: "SF Tech Week: AI Mixer" and "AI Mixer | SF Tech Week" are one name).
+export const nameTokens = (name: string | null | undefined): string => [...new Set(eventNameKey(name).split(" ").filter(Boolean))].sort().join(" ");
 
 // Pure: whether two finds are one event. A find with no start of its own is never merged by name alone (two "Founder Dinner"s on
-// different nights are two events).
+// different nights are two events). Where they are (batched review of #299):
+//   - both name a venue: the same venue, or two events (one city, two rooms, one name is two events);
+//   - a venue missing on either side: the same city;
+//   - one side says neither where: only the same name and the very same start.
 export function sameEvent(a: EventLike, b: EventLike): boolean {
-  const na = eventNameKey(a.name);
-  if (!na || na !== eventNameKey(b.name)) return false;
+  const na = nameTokens(a.name);
+  if (!na || na !== nameTokens(b.name)) return false;
   const sa = startOf(a);
   const sb = startOf(b);
   if (sa === null || sb === null || Math.abs(sa - sb) > EVENT_SAME.startMinutes * 60_000) return false;
@@ -57,7 +73,9 @@ export function sameEvent(a: EventLike, b: EventLike): boolean {
   const cb = placeKey(b.details?.city ?? b.city);
   const va = placeKey(a.details?.venue ?? a.venue);
   const vb = placeKey(b.details?.venue ?? b.venue);
-  return (!!ca && ca === cb) || (!!va && va === vb);
+  if (va && vb) return va === vb;
+  if ((!ca && !va) || (!cb && !vb)) return eventNameKey(a.name) === eventNameKey(b.name) && sa === sb;
+  return !!ca && ca === cb;
 }
 
 const isLuma = (url: string | null | undefined) => /^https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\//i.test(String(url ?? ""));

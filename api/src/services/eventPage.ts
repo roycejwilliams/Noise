@@ -20,7 +20,9 @@ import type { TierMatch } from "./tieredRecommendation.js";
 export type PageEvent = EventDetails & { name: string };
 // one: the page is ONE event's own page by its own record, public or not, with a zone or not (what decides that a found page is never
 // swapped for a homepage, taskWeb.ts pickPage); event: the record, when it may be an event find.
-export type PageEventRead = { event: PageEvent | null; why: string | null; one: boolean };
+// private: the page's own record says it isn't public (a private Luma event, a Partiful invite or a password-locked page): never a find
+// at all, in any tier (batched review of #299). Not the same as a page that couldn't be read, or one that doesn't say.
+export type PageEventRead = { event: PageEvent | null; why: string | null; one: boolean; private?: boolean };
 
 const hostOf = (url: string) => {
   try {
@@ -68,10 +70,13 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
     const data = nextData(html)?.props?.pageProps?.initialData?.data ?? null;
     const visibility = str(data?.event?.visibility);
     const d = parseLuma(html);
-    if (visibility && visibility !== "public") return { event: null, why: `its Luma page says it's ${visibility}, not public`, one: !!d };
+    if (visibility && visibility !== "public") return { event: null, why: `its Luma page says it's ${visibility}, not public`, one: !!d, private: true };
+    // Public only when it says so (batched review of #299), the way a Partiful page must say isPublic: a page that doesn't say isn't an
+    // event find (it's checked as a web page, as before).
+    if (visibility !== "public") return { event: null, why: "its Luma page doesn't say it's public", one: !!d };
     const name = str(data?.event?.name) ?? str(jsonLdEvents(html)[0]?.name);
     if (!d?.startAt || !name) return { event: null, why: "its Luma page has no event record with a start", one: !!d };
-    return { event: { ...d, name, visibility: visibility ?? null }, why: null, one: true };
+    return { event: { ...d, name, visibility }, why: null, one: true };
   }
   const evs = jsonLdEvents(html);
   if (!evs.length) return { event: null, why: null, one: false };
@@ -109,7 +114,7 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
   if (isPartifulHost(url)) {
     const pp = nextData(html)?.props?.pageProps ?? null;
     const pe = pp?.event ?? null;
-    if (pp?.passwordRequired === true || pe?.isPublic !== true || (str(pe?.visibility) && pe.visibility !== "public")) return { event: null, why: "not a public Partiful event (a private invite)", one: true };
+    if (pp?.passwordRequired === true || pe?.isPublic !== true || (str(pe?.visibility) && pe.visibility !== "public")) return { event: null, why: "not a public Partiful event (a private invite)", one: true, private: true };
     // Only the city: the street is for confirmed guests (the #298 rule).
     return { event: { ...base, venue: null, address: null, timezone: str(pe?.timezone), soldOut: pe?.atCapacity === true ? true : base.soldOut, visibility: "public" }, why: null, one: true };
   }
@@ -117,9 +122,11 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
 }
 
 // The zone its time is said in: its own, else its city's (geocoding.ts getTimezoneForCity, a cached lookup). None: not an event find.
+// Looked up from its city (the record's locality) only: never a street or a venue, which would send an address out and into the lookup
+// cache (batched review of #299), and never for an online event (no place to take a zone from).
 export async function settleZone(ev: PageEvent, zoneOf: (place: string) => Promise<string | null>): Promise<PageEvent | null> {
   if (ev.timezone) return ev;
-  const place = ev.city ?? ev.address ?? null;
+  const place = ev.online ? null : ev.city;
   if (!place) return null;
   const zone = await zoneOf(place).catch(() => null);
   return zone ? { ...ev, timezone: zone } : null;
@@ -127,7 +134,7 @@ export async function settleZone(ev: PageEvent, zoneOf: (place: string) => Promi
 
 // ---------------------------------------------------------------- reading a page for its event record
 
-export type EventPageRead = { html: string | null; text: string | null; event: PageEvent | null; why: string | null; one: boolean; error?: string | null };
+export type EventPageRead = { html: string | null; text: string | null; event: PageEvent | null; why: string | null; one: boolean; private?: boolean; error?: string | null };
 export type EventPageDeps = {
   fetchHtml: (url: string) => Promise<{ html: string | null; error: string | null }>;
   zoneOf: (place: string) => Promise<string | null>;
@@ -166,7 +173,7 @@ export async function readEventPage(url: string, o: { maxAgeMs?: number; deps?: 
   else {
     const p = pageEventData(got.html, url, d.parseLuma);
     const settled = p.event ? await settleZone(p.event, d.zoneOf) : null;
-    read = { html: got.html, text: d.toText(got.html), event: settled, why: p.event && !settled ? "no zone its time can be said in" : p.why, one: p.one };
+    read = { html: got.html, text: d.toText(got.html), event: settled, why: p.event && !settled ? "no zone its time can be said in" : p.why, one: p.one, ...(p.private ? { private: true } : {}) };
   }
   if (cache.size > EVENT_PAGE_CACHE.max) cache.clear();
   cache.set(url, { at: Date.now(), read });

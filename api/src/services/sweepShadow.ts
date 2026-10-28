@@ -44,7 +44,8 @@ export async function shadowUserIds(env: NodeJS.ProcessEnv = process.env): Promi
 }
 
 // ident: what the find's own record says it is (its link, start, city, venue), for one event on two platforms (eventIdentity.ts).
-type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; details: string | null; ident?: EventLike };
+// heldUntil: an event page past the event tier's window, held in the backlog until that day (sweepFind.ts holdForWindow).
+type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; details: string | null; ident?: EventLike; heldUntil?: string | null };
 // Pure: a waiting find's identity, from its match.
 export const identOf = (m: any): EventLike => ({ name: m?.name ?? null, url: m?.url ?? null, startAt: m?.startAt ?? null, event_date: m?.event_date ?? null, city: m?.city ?? null, details: m?.details && typeof m.details === "object" ? m.details : null });
 
@@ -63,6 +64,8 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
   for (const r of raw) {
     if (!r.name || (r.date && r.date < today)) continue;
     if (servesClosedAsk(r, closedAsks)) continue;
+    // Held until it's inside the event tier's window: it waits, never judged early (Royce, 2026-10-28).
+    if (r.heldUntil && r.heldUntil > today) continue;
     if (sentNames.has(norm(r.name)) && !r.reminder && !r.again) continue;
     if (r.ident && !r.reminder && !r.again && sentEvents.some((s) => sameEvent(s, r.ident!))) continue;
     let key = shadowKey(r.name, r.date);
@@ -252,6 +255,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
         details: describeMatch(it?.match),
         again: !!it?.again,
         ident: identOf(it?.match),
+        heldUntil: typeof it?.match?.heldUntil === "string" ? it.match.heldUntil : null,
       })),
     ),
     ...queued.map((c: any) => {

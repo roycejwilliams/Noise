@@ -71,7 +71,7 @@ check("the reply gets the guide when they want something found, and the working 
   check("the sweep queues Cue's own judgment, with no second fit read", /if \(!item\.match\.whyItFits\) \{/.test(sw) && /const match = await enrichMatch\(item\.match\);/.test(sw));
   check("the sweep's tools: events, web (checked by the second reader), X posts, pages, keep", ["searchEvents: tool(", "webSearch: tool(", "searchPosts: tool(", "readPage: tool(", "keep: tool("].every((t) => sf.includes(t)) && /checkVerified\(/.test(sf));
   check("the sweep uses the sweep's share of the web and X budgets", /source: "sweep"/.test(sf) && /reserveXSearch\(c\.userId, "sweep", q\)/.test(sf));
-  check("what the sweep keeps still goes through the fact gate", /gateMatches\(kept, \{ userId: c\.userId/.test(sf));
+  check("what the sweep keeps still goes through the fact gate", (/gateMatches\(kept, \{ userId: c\.userId/.test(sf) || (/const gateOpts = \{ userId: c\.userId/.test(sf) && /gateMatches\(kept\.filter\(\(m\) => !isPageFind\(m\)\), gateOpts\)/.test(sf) && /gateMatches\(kept\.filter\(isPageFind\), \{ \.\.\.gateOpts/.test(sf))));
   const SF = await import("../../src/services/sweepFind.js");
   const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "AI founder dinners", city: "San Francisco" }, { today: "2026-10-01", record: { ...SF.emptySweepRecord(), feeling: "stressed", shown: ["Rooftop evening"] } });
   check("the sweep's brief: their ask, what was already sent, feelings never decide", p.includes("AI founder dinners") && p.includes("Rooftop evening") && p.includes("never whether they hear about something") && p.includes("Search only for this one ask"));

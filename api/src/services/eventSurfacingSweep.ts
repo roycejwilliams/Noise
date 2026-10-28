@@ -841,6 +841,12 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
 
   for (const item of pending) {
     if (item.unread) continue; // held: its date isn't known yet (services/workingSet.ts)
+    // Held until it's inside the event tier's window (sweepFind.ts holdForWindow, Royce 2026-10-28): it waits in the backlog.
+    const heldUntil = (item.match as any).heldUntil as string | undefined;
+    if (heldUntil && heldUntil > localDay(new Date(), zone)) {
+      skipped.push({ name: item.match.name, why: `held until ${heldUntil} (inside the event window then)` });
+      continue;
+    }
     const targetKey = offerTargetKey(item);
     if (alreadyWaiting.has(targetKey)) {
       skipped.push({ name: item.match.name, why: "already queued" });
