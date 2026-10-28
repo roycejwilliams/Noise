@@ -664,6 +664,35 @@ export function loopTools(
         // The draft itself goes out as its own text, so they always have it to
         // copy (2026-10-01: Co said "I wrote the note" and never showed it).
         const draftText = `${subject.trim() ? `Subject: ${subject.trim()}\n\n` : ""}${body.trim()}`;
+        // The draft speaks for them, so every specific detail in it (a count, time, date, place, price, name, contact) is one the
+        // original evidence establishes: Cue checks it before they see it, rather than leaving a wrong date or headcount for them to
+        // catch (Royce, 2026-10-27). 2026-10-28, Royce: a meaning-based check against the original evidence, not the regex
+        // comparison (services/draftFacts.ts has why). Every source is this member's own, keyed to ctx.userId: their words this turn
+        // and two weeks of their texts and calls (dated), their name and contact on their account, pages read this turn and finds
+        // (stored finds are read by their user_id). Never the brief: Cue's own notes can't back Cue's own draft.
+        await seeded();
+        const { loadTheirWords } = await import("../services/documentDelivery.js");
+        const zone = await (await import("../services/memberTime.js")).memberZoneOrFallback(ctx.userId).catch(() => "America/Los_Angeles");
+        const me = await pool.query(`SELECT first_name, last_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]).then((r) => r.rows[0] ?? {}).catch(() => ({}) as any);
+        const DF = await import("../services/draftFacts.js");
+        const check = await DF.checkDraftFacts(
+          draftText,
+          {
+            thisTurn: theirWords(),
+            earlier: await loadTheirWords(ctx.userId, { zone }).catch(() => ""),
+            own: { name: [me.first_name, me.last_name].filter(Boolean).join(" ") || null, phone: me.phone_number ?? null, email: me.email ?? null },
+            // A page read this turn goes whole (to its limit); a find whose page was read isn't repeated.
+            read: [...[...loop.pages].map(([url, text]) => `${url}\n${text}`), ...[...loop.found.values()].filter((f) => !loop.pages.has(f.url)).map((f) => `${f.name} (${f.url}) ${usableFacts(f)}`)],
+          },
+          new Date(),
+          zone,
+        );
+        // Recorded either way, and never as checked when it didn't run: the draft then goes unchecked (fail safe, draftFacts.ts).
+        if (!check.ran) console.error(`draftEmail: the fact check didn't run (${check.error}); the draft goes to them unchecked`);
+        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "loop.draftFacts", userId: ctx.userId, outcome: check.ran && check.gaps.length ? "skip" : "act", action: !check.ran ? "unchecked" : check.gaps.length ? "refused" : "checked", proposal: check.ran ? { gaps: check.gaps } : { error: check.error } }).catch(() => {});
+        if (check.ran && check.gaps.length) {
+          return { ok: false, error: `Not sent: the draft has ${check.gaps.map((g) => `"${g.words}"${g.why ? ` (${g.why})` : ""}`).join(", ")}, which they haven't said and nothing read shows. Take those out, or leave a blank for them to fill (like "[date]").` };
+        }
         if (!to?.trim()) {
           if (!(await say(draftText, `Co replied: ${draftText}`))) return { ok: false, error: "The draft didn't send. Give them the words in your reply instead, plainly, without mentioning what failed." };
           ctx.facts?.add("did_this_turn", `Sent them a draft message to paste into the listing's own contact form: "${draftText.slice(0, 400)}"`);
