@@ -4,6 +4,8 @@ import { MAX_ASK_DAYS_AHEAD, resolveAskWindow, whenForWindow, withinWindow } fro
 import { listCalendarEvents, LUMA_KEY_MISSING, resolveCoEventPlace } from "./luma.js";
 import { DEFAULT_FEED_DAYS, fetchPublicEvents, type DiscoveredEvent } from "./lumaDiscovery.js";
 import { EXA_OFF, exaFailureReason, lumaEventsViaExa, withExaEvents, type ViaExaReport } from "./lumaViaExa.js";
+import { partifulEvents, type PartifulEvent } from "./partiful.js";
+import { collapseEvents, sameEvent } from "./eventIdentity.js";
 import { exaConfigured } from "./exaSearch.js";
 import { recordDecision } from "../harness/core.js";
 import { rankEventsByDescription } from "./eventRanking.js";
@@ -221,6 +223,8 @@ export type EventSources = {
   feed: (city: string | null, until: Date) => Promise<DiscoveredEvent[]>;
   calendar: () => Promise<CoCalendarEvent[]>;
   viaExa: typeof lumaEventsViaExa;
+  // Partiful's public listings for the city (services/partiful.ts): null when Partiful has none there (not a failure).
+  partiful: (city: string | null, until: Date) => Promise<PartifulEvent[] | null>;
   page: (url: string) => Promise<EventDetails | null>;
   near: (a: string, b: string) => Promise<boolean>;
   rank: typeof rankEventsByDescription;
@@ -228,7 +232,7 @@ export type EventSources = {
   record: typeof recordDecision;
   exaOn: () => boolean;
 };
-const realSources: EventSources = { feed: cachedPublicEvents, calendar: cachedCalendarEvents, viaExa: lumaEventsViaExa, page: (url) => fetchLumaEventDetails(url), near: withinRadius, rank: rankEventsByDescription, gate: gateMatches, record: recordDecision, exaOn: () => exaConfigured() };
+const realSources: EventSources = { feed: cachedPublicEvents, calendar: cachedCalendarEvents, viaExa: lumaEventsViaExa, partiful: (city, until) => partifulEvents(city, until), page: (url) => fetchLumaEventDetails(url), near: withinRadius, rank: rankEventsByDescription, gate: gateMatches, record: recordDecision, exaOn: () => exaConfigured() };
 // Exa being off (no key) is logged once per start, not on every search: it's a setting, not a failure.
 let toldExaOff = false;
 // What Exa added to one search, for the log and the caller: null when Exa didn't run (no key, or a call: viaExa false).
@@ -243,7 +247,8 @@ export async function eventCandidates(
   city: string | null,
   opts: { when?: string | null; userId?: string | null; timezone?: string | null; limit?: number; viaExa?: boolean; source?: "request" | "sweep"; sources?: Partial<EventSources> } = {},
 ): Promise<{ candidates: EventCandidate[]; turnedAway: GatedOut[]; window: string | null; feedSize: number; inWindow: number; outOfRange: string | null; viaExa: ViaExaCounts; failures?: string[]; answered?: number }> {
-  const src: EventSources = { ...realSources, ...opts.sources };
+  // Sources handed in (a test) without Partiful's: none (it reads the live site).
+  const src: EventSources = { ...realSources, ...opts.sources, ...(opts.sources && !opts.sources.partiful ? { partiful: async () => null } : {}) };
   const { zone } = searchZone(opts.timezone ?? null);
   const now = DateTime.now().setZone(zone);
   const when = whenForWindow(opts.when);
@@ -276,12 +281,20 @@ export async function eventCandidates(
         return empty;
       },
     );
-  const [feed, coEvents, exa] = await Promise.all([
+  const [feed, coEvents, exa, partifulRaw] = await Promise.all([
     part("Luma's feed", Promise.resolve().then(() => src.feed(city, until)), [] as DiscoveredEvent[]),
     part("Noise's calendar", Promise.resolve().then(() => src.calendar()), [] as CoCalendarEvent[], false),
     opts.viaExa === false
       ? Promise.resolve(null)
       : src.viaExa(what, city, { userId: opts.userId ?? null, source: opts.source ?? "sweep", inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, notPublic: 0, kept: 0 } })),
+    // Partiful's public listings (Royce, 2026-10-28): a live source where Partiful lists the city; none there is neither a failure nor an
+    // answer.
+    Promise.resolve()
+      .then(() => src.partiful(city, until))
+      .then(
+        (v) => (v !== null && answered++, v),
+        (err: any) => (failures.push(`Partiful's listings failed (${String(err?.message ?? err).slice(0, 120)})`), null),
+      ),
   ]);
   if (!exa && opts.viaExa !== false && !toldExaOff && !src.exaOn()) {
     toldExaOff = true;
@@ -291,8 +304,12 @@ export async function eventCandidates(
   const ours = await filterByRadius(coEvents.filter((e) => inRange(e.start_at)), city, src.near);
   // Exa's events join the feed's before anything else (deduped by Luma slug and event id, the feed's copy kept), so they get the same
   // window, nearby filter, ranking, gate and start check as a feed event (with Luma API details in place of a page read).
-  const merged = withExaEvents<DiscoveredEvent & { online?: boolean }>(feed, exa?.events ?? []);
-  const fromExa = new Set(merged.slice(feed.length).map((e) => e.url));
+  const lumaMerged = withExaEvents<DiscoveredEvent & { online?: boolean }>(feed, exa?.events ?? []);
+  const fromExa = new Set(lumaMerged.slice(feed.length).map((e) => e.url));
+  // Partiful's join after Luma's, each event once (services/eventIdentity.ts): one Luma also has stays Luma's (its RSVP path is ours, and
+  // its page record is read before it's offered), and the same event cross-posted twice on Partiful is kept once.
+  const partiful = collapseEvents((partifulRaw ?? []).filter((p) => !lumaMerged.some((e) => sameEvent({ name: e.name, start_at: e.start_at, city: e.city }, p))), (p) => p);
+  const merged = [...lumaMerged, ...partiful];
   const theirs = await filterByRadius(merged.filter((e) => !coIds.has(e.api_id) && inRange(e.start_at)), city, src.near);
   // The ranking reads at most 40 (spread across the days), and a city's feed can hold more than that in a window (41 SF events for
   // q5 on 10-17), so Exa's go in first: they were found for this want, and the ranking still orders everything by how well it fits.
@@ -318,7 +335,8 @@ export async function eventCandidates(
   // and a start the page moved goes by the page (review of #229). The gate then judges the start with everything known, so a late event
   // is turned away and logged as a skip, never as offered (second review of #229: the morning review read those as offers).
   // An event Exa found already carries its details from Luma's API (services/lumaViaExa.ts): its page is never read.
-  const fromApi = new Map((exa?.events ?? []).map((e) => [e.url, e.details]));
+  // A Partiful event carries its own page's record too (services/partiful.ts).
+  const fromApi = new Map<string, EventDetails>([...(exa?.events ?? []).map((e) => [e.url, e.details] as [string, EventDetails]), ...partiful.map((e) => [e.url, e.details] as [string, EventDetails])]);
   const read = await Promise.all(
     raw.map(async (m) => {
       const details = "url" in m && m.url ? (fromApi.get(m.url) ?? (await src.page(m.url).catch(() => null)) ?? undefined) : undefined;

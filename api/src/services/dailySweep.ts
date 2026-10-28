@@ -20,6 +20,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { hoursZone, REASONABLE_HOUR_END } from "./localHours.js";
 import { memberZone } from "./memberTime.js";
+import { emptyTierCounts, type TierCounts } from "./tierCounts.js";
 
 export const DAILY_SWEEP_HOUR = 9;
 // A failed day is run again on a later hour, at most this many failed runs a day (the picker's rule, sweepShadow.ts PICK_ERRORS_PER_DAY).
@@ -64,6 +65,8 @@ export type ItemResult = {
   outages?: string[];
   placesDown?: string[];
   unverified?: number;
+  // Per tier (1 Noise's events, 2 event pages, 3 web and X openings): searched, found, kept, dropped (sweepFind.ts TierCounts).
+  tiers?: TierCounts;
   // Which finds (SurfacingReport.foundKeys / pooledKeys), so a retry counts a find it finds again once (mergeRetried).
   foundKeys?: string[];
   pooledKeys?: string[];
@@ -74,9 +77,16 @@ export type ItemResult = {
   earlierRun?: boolean;
 };
 
+// Pure: per-tier counts added up (an item without them, an older record, adds nothing).
+export function sumTiers(list: (TierCounts | undefined)[]): TierCounts {
+  const out = emptyTierCounts();
+  for (const t of list) if (t) for (const k of ["1", "2", "3"] as const) for (const f of ["searched", "found", "kept", "dropped"] as const) out[k][f] += Number(t[k]?.[f] ?? 0);
+  return out;
+}
+
 // Pure: the day's one summary line, from what each ask and goal did. An incomplete item isn't counted as searched (nor its places), but
 // what it did find is real and in the pool, so its finds count (2026-10-28 sweep).
-export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; followed: number; errors: number; incomplete: number; placesDown: number; unverified: number; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
+export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; followed: number; errors: number; incomplete: number; placesDown: number; unverified: number; tiers: TierCounts; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
   const searched = items.filter((i) => i.status === "searched");
   const withFinds = items.filter((i) => i.status === "searched" || i.status === "incomplete");
   const sources = { events: 0, web: 0, x: 0 };
@@ -91,6 +101,7 @@ export function dailySummary(items: ItemResult[]): { action: string; totals: { a
     // Each place down for one ask or goal counts once (web down for three goals is 3).
     placesDown: withFinds.reduce((n, i) => n + (i.placesDown?.length ?? 0), 0),
     unverified: withFinds.reduce((n, i) => n + (i.unverified ?? 0), 0),
+    tiers: sumTiers(withFinds.map((i) => i.tiers)),
     sources,
     kept: withFinds.reduce((n, i) => n + (i.found ?? 0), 0),
     pooled: withFinds.reduce((n, i) => n + (i.pooled ?? 0), 0),
@@ -128,7 +139,7 @@ export function searchFailed(rep: { sources: { events: boolean; web: boolean; x:
 // Pure: what one search that looked somewhere did: "searched", or "incomplete" when a place failed or timed out with nothing back
 // (Royce, 2026-10-28: "treat a timeout as incomplete with a bounded retry". That morning Exa timed out on all four web queries for
 // "apply to South Park Commons or Blueprint II"; events and X ran, so the goal counted as searched and nothing retried it).
-export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text: string }>(b: B, rep: { sources: { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: string[]; lasting?: string[]; unverified?: number }; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[] }): ItemResult {
+export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text: string }>(b: B, rep: { sources: { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: string[]; lasting?: string[]; unverified?: number; tiers?: TierCounts }; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[] }): ItemResult {
   const outages = rep.sources.outages ?? [];
   return {
     ...b,
@@ -138,6 +149,7 @@ export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text:
     failures: rep.sources.failures,
     ...(rep.sources.lasting?.length ? { placesDown: rep.sources.lasting } : {}),
     ...(rep.sources.unverified ? { unverified: rep.sources.unverified } : {}),
+    ...(rep.sources.tiers ? { tiers: rep.sources.tiers } : {}),
     ...(rep.foundKeys ? { foundKeys: rep.foundKeys } : {}),
     ...(rep.pooledKeys ? { pooledKeys: rep.pooledKeys } : {}),
     found: rep.found,
@@ -184,12 +196,14 @@ export function incompleteRetry(items: ItemResult[], errorsToday: number, manual
 
 // Pure: what the floor searches for each goal, from the hourly goal sweep's latest plan (goal_sweep.plan): each active goal's
 // findable edges, on their own (not mixed with another goal's or what they enjoy), and each goal the plan passed or set aside, with why.
-// placeBound: the plan's read of the goal (goalEdges.ts GoalEdge.placeBound); only an explicit true is place-bound (unknown is portable).
+// placeBound: the plan's read of the goal (goalEdges.ts GoalEdge.placeBound), carried as the plan has it (true, false, or left out when
+// the read didn't say). Away holds only an explicit true (unknown is portable); the 9am search leaves city events out only for an
+// explicit false (unknown keeps them: sweepFind.ts sweepSkips, Royce 2026-10-28).
 export function goalItemsFromPlan(plan: any, searchText: (edge: any) => string | null): { goal: string; search: string | null; why: string | null; placeBound?: boolean }[] {
   const out: { goal: string; search: string | null; why: string | null; placeBound?: boolean }[] = [];
   for (const e of Array.isArray(plan?.edges) ? plan.edges : []) {
     const s = searchText(e);
-    out.push({ goal: String(e.goal ?? ""), search: s, why: s ? null : "its plan has nothing findable to search", ...(e.placeBound === true ? { placeBound: true } : {}) });
+    out.push({ goal: String(e.goal ?? ""), search: s, why: s ? null : "its plan has nothing findable to search", ...(typeof e.placeBound === "boolean" ? { placeBound: e.placeBound } : {}) });
   }
   for (const p of Array.isArray(plan?.passed) ? plan.passed : []) out.push({ goal: String(p.goal ?? ""), search: null, why: `nothing findable to search: ${String(p.why ?? "").slice(0, 160)}` });
   for (const a of Array.isArray(plan?.setAside) ? plan.setAside : []) out.push({ goal: String(a.goal ?? ""), search: null, why: `set aside (${a.state ?? "not active"}): ${String(a.reason ?? "").slice(0, 160)}` });
@@ -562,7 +576,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     const decide = floorGoalDecision(g, { states, statesError, gateError, hold: goalHold, goalId: b.id });
     if (decide) { items.push({ ...b, ...decide }); continue; }
     // cooldownCleared is only logged by the search; the floor never reads the goal cooldown, so it's always clear here.
-    await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search ?? "", fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `goal:${b.id}`, text: g.goal, createdAt: goalRecordedAt(row.intent, g.goal) } });
+    await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search ?? "", fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `goal:${b.id}`, text: g.goal, createdAt: goalRecordedAt(row.intent, g.goal) }, ...(typeof g.placeBound === "boolean" ? { placeBound: g.placeBound } : {}) });
   }
 
   const { action, totals } = dailySummary(items);
@@ -689,23 +703,25 @@ export type RollupRow = {
   // Places down in a way a retry won't fix (review of #293): shown, never retried.
   placesDown: number;
   unverified: number;
+  // Per tier, from the day's last run (Royce, 2026-10-28: to see whether filing finds by kind of page brings better finds).
+  tiers: TierCounts;
 };
 
 // Pure: a member's day, from its sweep.daily records (oldest first), its find sends, and whether 9pm has passed for them.
-export function rollupDay(all: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "placesDown" | "unverified"> {
+export function rollupDay(all: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "placesDown" | "unverified" | "tiers"> {
   // On-demand runs report themselves too, beside the 9am run, never as it.
   const manual = all.filter((r) => r.proposal?.trigger === "manual");
   const records = all.filter((r) => r.proposal?.trigger !== "manual");
   const out = rollupFloorDay(records, sends, dayOver, started);
   return manual.length ? { ...out, detail: `${out.detail} · on-demand runs: ${manual.length} (last: ${manual[manual.length - 1].action})` } : out;
 }
-function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "placesDown" | "unverified"> {
+function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "placesDown" | "unverified" | "tiers"> {
   const final = [...records].reverse().find((r) => r.action !== "error");
   const errors = records.filter((r) => r.action === "error");
   const t = (final?.proposal?.totals ?? {}) as Record<string, number>;
   // Incomplete, failed and unverified come from the day's last run, a failed one too (a day of failed runs shows what the last one hit).
   const lastT = (records[records.length - 1]?.proposal?.totals ?? {}) as Record<string, number>;
-  const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends, incomplete: lastT.incomplete ?? 0, failed: lastT.errors ?? 0, placesDown: lastT.placesDown ?? 0, unverified: lastT.unverified ?? 0 };
+  const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends, incomplete: lastT.incomplete ?? 0, failed: lastT.errors ?? 0, placesDown: lastT.placesDown ?? 0, unverified: lastT.unverified ?? 0, tiers: sumTiers([(records[records.length - 1]?.proposal?.totals ?? {}).tiers]) };
   if (final) {
     const status = final.action === "missed" ? "missed" : final.action === "opted_out" ? "opted out" : final.action === "tapered" ? "tapered" : final.outcome === "act" ? "ran" : "nothing to search";
     return { status, detail: final.reason ?? final.action, ...counts };

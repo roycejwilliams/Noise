@@ -8,6 +8,7 @@ import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js
 import { enrichMatch } from "./eventDetails.js";
 import { UNDATED_QUEUE_DAYS } from "./sendCheck.js";
 import { sweepFind, type SweepSources } from "./sweepFind.js";
+import { collapseEvents, preferEvent, sameEvent } from "./eventIdentity.js";
 import { recordDecision } from "../harness/core.js";
 import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
@@ -45,6 +46,8 @@ export type SurfacingCandidate = {
   // The want this search is for, when it isn't the ask row itself (a goal off their plan): its place is the want's (wantPlace.ts).
   // createdAt: when the want was recorded (null: unknown, so it reads its own words only), which decides whether what they told Co counts.
   want?: { key: string; text: string; createdAt: Date | null };
+  // A goal's plan read (goalEdges.ts placeBound): false leaves city events out of the 9am sweep's search (sweepFind.ts sweepSkips).
+  placeBound?: boolean | null;
 };
 
 // Where this search looks (services/wantPlace.ts, Royce 2026-10-15): the want's own place, else their home city. The want is the one
@@ -431,7 +434,7 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
   // Where this want is (Royce, 2026-10-15): the search looks there, the home city only when the want has no place of its own.
   const where = await searchPlace(candidate).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } }));
   const result = await sweepFind(
-    { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: where.city, homeCity: candidate.city },
+    { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: where.city, homeCity: candidate.city, ...(candidate.placeBound !== undefined ? { placeBound: candidate.placeBound } : {}) },
     { timezone, allSources: candidate.allSources },
   ).catch((err: any) => {
     console.error("attemptEventSurfacing: sweepFind failed (non-fatal):", err?.message ?? err);
@@ -481,9 +484,29 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
   };
 }
 
-function sameMatch(a: TierMatch, b: TierMatch): boolean {
+// One thing: the same event id, or (Royce, 2026-10-28) one event on two platforms (services/eventIdentity.ts sameEvent: its name with
+// case, emoji, punctuation and tags set aside, a start within 30 minutes, the same city or venue), else the same name.
+export function sameMatch(a: TierMatch, b: TierMatch): boolean {
+  if (sameEvent(a as any, b as any)) return true;
   if ("event_api_id" in a && "event_api_id" in b) return a.event_api_id === b.event_api_id;
   return a.name.toLowerCase() === b.name.toLowerCase();
+}
+
+// Pure: what's waiting merged with what was just found, each thing once (Royce, 2026-10-28: a member never gets the same event twice
+// under two links). A reminder replaces an older queued pitch for the same event; one event found again on another platform keeps the
+// version with the richest verified record (eventIdentity.ts preferEvent: Luma's when tied) in the waiting one's place; finds that are
+// one event among themselves are kept once.
+export function mergeFinds<I extends { match: TierMatch; reminder?: boolean }>(queued: I[], found: I[]): I[] {
+  const fresh = collapseEvents(found, (f) => f.match as any);
+  return [
+    ...queued
+      .filter((q) => !fresh.some((f) => f.reminder && sameMatch(f.match, q.match)))
+      .map((q) => {
+        const twin = fresh.find((f) => !f.reminder && sameEvent(f.match as any, q.match as any));
+        return twin && preferEvent(q.match as any, twin.match as any) === (twin.match as any) ? { ...q, match: twin.match } : q;
+      }),
+    ...fresh.filter((f) => f.reminder || !queued.some((q) => sameMatch(q.match, f.match))),
+  ];
 }
 
 // Openings the sweep already found for them and hasn't sent yet: waiting in a
@@ -740,11 +763,8 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       await pool.query(`UPDATE ask_checkins SET empty_runs = $2, quiet_held_at = CASE WHEN $3 THEN COALESCE(quiet_held_at, NOW()) ELSE NULL END WHERE id::text = $1`, [candidate.askId, n.emptyRuns, n.held]).catch(() => {});
     }
   }
-  // A reminder replaces an older queued pitch for the same event.
-  const merged = [
-    ...queued.filter((q) => !found.some((f) => f.reminder && sameMatch(f.match, q.match))),
-    ...found.filter((f) => f.reminder || !queued.some((q) => sameMatch(q.match, f.match))),
-  ];
+  // A reminder replaces an older queued pitch for the same event; one event is kept once, however many pages carry it (mergeFinds).
+  const merged = mergeFinds(queued, found);
   const pending = await dropStaleFront(candidate.userId, [
     ...byTaste(merged.filter((i) => i.source === "urgent" || isShortNotice(i.match, zone))),
     ...interleaveByTier(

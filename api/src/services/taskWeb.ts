@@ -12,11 +12,12 @@
 //   5. every search is logged as task.webSearch with what was kept and dropped.
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
+import { DateTime } from "luxon";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { checkGrounding, checkTiming, placesClaimed } from "../harness/matchGate.js";
 import type { TierMatch } from "./tieredRecommendation.js";
-import { findOfficialPage, htmlToText, looksOfficial, MIN_FETCHED_TEXT, PAGE_TEXT_LIMIT, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
+import { findOfficialPage, looksOfficial, MIN_FETCHED_TEXT, PAGE_TEXT_LIMIT, readPageChecked, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
 import { exaConfigured, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
@@ -32,8 +33,11 @@ export const cantCheck = (site: string) => CANT_CHECK_SITES.some((d) => site ===
 
 // excerpts: for each fact, the passage of the page it was found in (for the
 // second reader, services/factCheck.ts).
-export type VerifiedResult = { name: string; url: string; official: boolean; facts: string[]; excerpts?: string[]; date: string | null; deadline: string | null };
-export type Dropped = { name: string; url: string; why: string };
+// event: the page's own event record (eventPage.ts), when the page is one public event: it's an event find (tier 2), its facts are that
+// record's, and the caller files it as an event (sweepFind.ts). Royce, 2026-10-28: tiers by kind of page, not by source.
+export type VerifiedResult = { name: string; url: string; official: boolean; facts: string[]; excerpts?: string[]; date: string | null; deadline: string | null; event?: import("./eventPage.js").PageEvent };
+// tier: 2 when it was dropped as an event (by its own record), for the per-tier counts (sweepFind.ts).
+export type Dropped = { name: string; url: string; why: string; tier?: 2 };
 export type DroppedDetail = { name: string; detail: string; why: string };
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -214,6 +218,17 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
   return { kept: { name: name.slice(0, 120), url: raw.url, official: opts.official, facts: kept, excerpts, date: keptDate, deadline: keptDeadline }, dropped: null, droppedDetails };
 }
 
+// Pure: an event page checked against its own record (eventPage.ts), the way a Luma feed event is checked against Luma's: sold out by its
+// record, or already over or under way, is dropped; otherwise its facts are the record's own lines (eventDetails.ts renderEventDetails),
+// each read by code from the page's data. Its text isn't read for facts: the record is what it says.
+export function verifyEventResult(ev: import("./eventPage.js").PageEvent, url: string, o: { now: Date; official: boolean; render: (name: string, d: any) => string[] }): { kept: VerifiedResult | null; dropped: Dropped | null } {
+  if (ev.soldOut === true) return { kept: null, dropped: { name: ev.name, url, why: "sold out by its page's own event record", tier: 2 } };
+  const over = ev.endAt ?? ev.startAt;
+  if (over && Date.parse(over) <= o.now.getTime()) return { kept: null, dropped: { name: ev.name, url, why: `already ${ev.endAt ? "over" : "under way"} by its page's own event record (${over})`, tier: 2 } };
+  const day = ev.startAt && ev.timezone ? DateTime.fromISO(ev.startAt, { zone: "utc" }).setZone(ev.timezone).toISODate() : null;
+  return { kept: { name: ev.name.slice(0, 120), url, official: o.official, facts: o.render(ev.name, ev), date: day, deadline: null, event: ev }, dropped: null };
+}
+
 // One event's own page on the ticketing site its organizers use, from its url: "event" when the url's shape can only be one event
 // (eventbrite.*/e/..., partiful.com/e/..., meetup.com/<group>/events/<id>); "luma" when it's a Luma page that may be one event
 // (lu.ma/abc123, luma.com/abc123, never one of LUMA_NOT_EVENTS): a city page or a calendar has the same shape, so the page itself
@@ -233,13 +248,14 @@ export function eventPageUrl(url: string): "event" | "luma" | null {
   if (host === "meetup.com") return /^\/[^/]+\/events\/\d+$/.test(path) ? "event" : null;
   return null;
 }
-// A Luma page, fetched once (eventDetails.ts readLumaPage): whether it's one event, from the page's own data (its embedded record names
-// one event; a calendar's or a city's doesn't), and its text, from the same response (re-review of #293: the check and the read were two
-// fetches). A read that fails says no, with no text, and the page is treated as before.
-export type LumaPageRead = { oneEvent: boolean; text: string | null };
-const readLuma = async (url: string): Promise<LumaPageRead> => {
-  const { html, details } = await import("./eventDetails.js").then((m) => m.readLumaPage(url));
-  return { oneEvent: !!details, text: html ? htmlToText(html) : null };
+// An event page, fetched once (eventPage.ts readEventPage): whether it's one event, from the page's own record (Luma's embedded record or
+// one schema.org Event; a calendar's, a city's or a list's isn't), its text from the same response (re-review of #293: the check and the
+// read were two fetches), and the record itself when it may be an event find (public, with a zone: the event tier, Royce 2026-10-28).
+// A read that fails says no, with no text, and the page is treated as before.
+export type EventPageCheck = { oneEvent: boolean; text: string | null; event?: import("./eventPage.js").PageEvent | null };
+const readEventPageCheck = async (url: string): Promise<EventPageCheck> => {
+  const r = await import("./eventPage.js").then((m) => m.readEventPage(url));
+  return { oneEvent: r.one, text: r.text, event: r.event };
 };
 
 // Which page a result is checked against: its own official page when the found
@@ -251,17 +267,17 @@ const readLuma = async (url: string): Promise<LumaPageRead> => {
 // same rules as any found page.
 export async function pickPage(
   raw: RawResult,
-  deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null>; lumaPage?: (url: string) => Promise<LumaPageRead> },
-): Promise<{ url: string; text: string | null; official: boolean; swapped: boolean }> {
+  deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null>; eventPage?: (url: string) => Promise<EventPageCheck> },
+): Promise<{ url: string; text: string | null; official: boolean; swapped: boolean; event?: import("./eventPage.js").PageEvent | null }> {
   // Judged and looked up by the core name: a qualifier's words ("Private Dining") never make a host look like the place's.
   const name = coreName(raw.name);
   if (!looksOfficial(raw.url, name)) {
     // Not marked official: whether a page is the thing's own still decides how its facts are checked (verifyResult's nearName).
     const shape = eventPageUrl(raw.url);
-    const luma = shape === "luma" ? await (deps.lumaPage ?? readLuma)(raw.url).catch(() => null) : null;
-    // The found page's text: from the one Luma fetch when it read whole (a short one is a shell: read as any page is), else read now.
-    const found = async () => (luma?.text && luma.text.length >= MIN_FETCHED_TEXT ? luma.text.slice(0, PAGE_TEXT_LIMIT) : await deps.read(raw.url));
-    if (shape === "event" || luma?.oneEvent) return { url: raw.url, text: await found(), official: false, swapped: false };
+    const ep = shape ? await (deps.eventPage ?? readEventPageCheck)(raw.url).catch(() => null) : null;
+    // The found page's text: from the one event-page fetch when it read whole (a short one is a shell: read as any page is), else read now.
+    const found = async () => (ep?.text && ep.text.length >= MIN_FETCHED_TEXT ? ep.text.slice(0, PAGE_TEXT_LIMIT) : await deps.read(raw.url));
+    if (shape === "event" || ep?.oneEvent) return { url: raw.url, text: await found(), official: false, swapped: false, event: ep?.event ?? null };
     const off = await deps.official(name).catch(() => null);
     if (off && off !== raw.url && looksOfficial(off, name)) {
       const text = await deps.read(off);
@@ -368,8 +384,12 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
         if (r?.pageText) return r.pageText;
       }
     }
-    return readPageText(u);
+    const r = await readPageChecked(u);
+    if (r.html) htmlOf.set(u, r.html);
+    return r.text;
   };
+  // The html each plain read fetched, so a page's own event record is read from the same response (eventPage.ts pageEventData).
+  const htmlOf = new Map<string, string>();
   const lookup = (n: string) => findOfficialPage(n, opts.background ? 40_000 : 20_000, opts.ownPage ? { near: opts.city ?? null, page: opts.ownPage } : undefined, userId);
   const pages = await Promise.all(raws.map((raw) => pickPage(raw, { read, official: lookup }).catch(() => ({ url: raw.url, text: null, official: false, swapped: false }))));
   const swappedFrom = new Map(pages.map((p, i) => [p.url, p.swapped ? raws[i].url : null]));
@@ -377,6 +397,16 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
     const page = pages[i];
     if (!page.text) {
       dropped.push({ name: raw.name, url: raw.url, why: "its page couldn't be read" });
+      continue;
+    }
+    // One public event by its page's own record (an event page, or any page with one schema.org Event): checked as an event against that
+    // record, never dropped by the web's "nothing verified on its page" (Royce, 2026-10-28: tiers by kind of page).
+    const ev = page.event ?? (htmlOf.has(page.url) ? await pageEventFrom(htmlOf.get(page.url)!, page.url) : null);
+    if (ev) {
+      const { renderEventDetails } = await import("./eventDetails.js");
+      const e = verifyEventResult(ev, page.url, { now: new Date(), official: page.official, render: renderEventDetails });
+      if (e.kept) kept.push(e.kept);
+      else if (e.dropped) dropped.push(e.dropped);
       continue;
     }
     const v = verifyResult({ ...raw, url: page.url }, page.text, { now: new Date(), zone: opts.zone ?? null, official: page.official });
@@ -405,6 +435,14 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
   const withFacts = withVerifiedFacts(kept, { ownPageReadAfter: !!opts.readsPageItself });
   dropped.push(...withFacts.dropped);
   return { kept: withFacts.kept, dropped, droppedDetails, note: withFacts.kept.length ? "Each kept result was checked against its own page; only the listed facts are verified." : "Nothing came back that proved itself on its page." };
+}
+
+// A page's own event record, from html a plain read already fetched (eventPage.ts): public, one event, with a zone; else null.
+async function pageEventFrom(html: string, url: string): Promise<import("./eventPage.js").PageEvent | null> {
+  const P = await import("./eventPage.js");
+  const d = await P.realEventPageDeps();
+  const p = P.pageEventData(html, url, d.parseLuma);
+  return p.event ? P.settleZone(p.event, d.zoneOf) : null;
 }
 
 export function withVerifiedFacts(kept: VerifiedResult[], opts: { ownPageReadAfter?: boolean } = {}): { kept: VerifiedResult[]; dropped: Dropped[] } {

@@ -246,7 +246,8 @@ export type SendCheckDeps = RecheckDeps &
     saveDefers: (candidateId: string, defers: number) => Promise<void>;
   };
 export const realSendCheckDeps: SendCheckDeps = {
-  luma: async (url) => (await import("./eventDetails.js")).fetchLumaEventDetails(url, { maxAgeMs: RECHECK_FRESH_MS }),
+  // An event's own page record now: Luma's, or (Royce, 2026-10-28: tiers by kind of page) any event page it was filed from (eventPage.ts).
+  luma: async (url) => (await import("./eventPage.js")).eventPageDetails(url, RECHECK_FRESH_MS),
   page: async (url) => (await import("./webOpportunitySearch.js")).readPageChecked(url),
   openRead: (i) => readOpenNow(i),
   now: () => new Date(),

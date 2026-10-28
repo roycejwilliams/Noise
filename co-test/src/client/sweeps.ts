@@ -5,7 +5,11 @@ renderSidebar("sweeps");
 // incomplete / failed / placesDown / unverified (2026-10-28): asks and goals a timed-out place left incomplete, ones that failed, places
 // down in a way a retry won't fix (a key, credit, a cap: shown, never retried), and web results dropped at the check against their own
 // page, in the day's last run (api dailySweep.ts RollupRow). Older rows lack them.
-type Row = { day: string; name: string; status: string; detail: string; asksSearched: number; goalsSearched: number; kept: number; queued: number; sends: number; incomplete?: number; failed?: number; placesDown?: number; unverified?: number };
+// tiers (2026-10-28): per tier (1 Noise's events, 2 event pages, 3 web and X openings), searched / found / kept / dropped in the day's
+// last run. Older rows lack it and read 0.
+type TierCount = { searched: number; found: number; kept: number; dropped: number };
+type Row = { day: string; name: string; status: string; detail: string; asksSearched: number; goalsSearched: number; kept: number; queued: number; sends: number; incomplete?: number; failed?: number; placesDown?: number; unverified?: number; tiers?: Partial<Record<"1" | "2" | "3", TierCount>> };
+const tierCell = (t: TierCount | undefined) => `${t?.searched ?? 0} · ${t?.found ?? 0} · ${t?.kept ?? 0} · ${t?.dropped ?? 0}`;
 
 const statusEl = document.getElementById("status") as HTMLElement;
 const table = document.getElementById("sweeps") as HTMLTableElement;
@@ -26,14 +30,14 @@ async function load() {
   }
   const bad = rows.filter((r) => ["error", "missed", "silent"].includes(r.status) || (r.incomplete ?? 0) > 0 || (r.failed ?? 0) > 0 || (r.placesDown ?? 0) > 0).length;
   statusEl.textContent = bad ? `${bad} day(s) need a look` : "Every day ran";
-  let html = `<thead><tr><th>Member</th><th>Ran</th><th>Asks searched</th><th>Goals searched</th><th>Finds kept</th><th>Queued</th><th>Sends</th><th>Incomplete</th><th>Failed</th><th>Places down</th><th>Web dropped unverified</th><th>Why</th></tr></thead><tbody>`;
+  let html = `<thead><tr><th>Member</th><th>Ran</th><th>Asks searched</th><th>Goals searched</th><th>Finds kept</th><th>Queued</th><th>Sends</th><th>Incomplete</th><th>Failed</th><th>Places down</th><th>Web dropped unverified</th><th title="searched · found · kept · dropped">Noise events</th><th title="searched · found · kept · dropped">Event pages</th><th title="searched · found · kept · dropped">Web and X</th><th>Why</th></tr></thead><tbody>`;
   let day = "";
   for (const r of rows) {
     if (r.day !== day) {
       day = r.day;
-      html += `<tr class="sweeps-day"><td colspan="12">${esc(day)}</td></tr>`;
+      html += `<tr class="sweeps-day"><td colspan="15">${esc(day)}</td></tr>`;
     }
-    html += `<tr><td>${esc(r.name)}</td><td>${pill(r.status)}</td><td class="num">${r.asksSearched}</td><td class="num">${r.goalsSearched}</td><td class="num">${r.kept}</td><td class="num">${r.queued}</td><td class="num">${r.sends}</td><td class="num">${flag(r.incomplete ?? 0)}</td><td class="num">${flag(r.failed ?? 0)}</td><td class="num">${flag(r.placesDown ?? 0)}</td><td class="num">${r.unverified ?? 0}</td><td class="detail">${esc(r.detail)}</td></tr>`;
+    html += `<tr><td>${esc(r.name)}</td><td>${pill(r.status)}</td><td class="num">${r.asksSearched}</td><td class="num">${r.goalsSearched}</td><td class="num">${r.kept}</td><td class="num">${r.queued}</td><td class="num">${r.sends}</td><td class="num">${flag(r.incomplete ?? 0)}</td><td class="num">${flag(r.failed ?? 0)}</td><td class="num">${flag(r.placesDown ?? 0)}</td><td class="num">${r.unverified ?? 0}</td><td class="num">${tierCell(r.tiers?.["1"])}</td><td class="num">${tierCell(r.tiers?.["2"])}</td><td class="num">${tierCell(r.tiers?.["3"])}</td><td class="detail">${esc(r.detail)}</td></tr>`;
   }
   table.innerHTML = html + "</tbody>";
 }

@@ -21,6 +21,7 @@ import { memberZone } from "./memberTime.js";
 import { exitKey } from "./findForm.js";
 import { closedAskRefs, servesClosedAsk } from "./askLifecycle.js";
 import { withMember } from "./llmUsage.js";
+import { preferEvent, sameEvent, type EventLike } from "./eventIdentity.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -42,7 +43,10 @@ export async function shadowUserIds(env: NodeJS.ProcessEnv = process.env): Promi
   return me ? [me] : [];
 }
 
-type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; details: string | null };
+// ident: what the find's own record says it is (its link, start, city, venue), for one event on two platforms (eventIdentity.ts).
+type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; details: string | null; ident?: EventLike };
+// Pure: a waiting find's identity, from its match.
+export const identOf = (m: any): EventLike => ({ name: m?.name ?? null, url: m?.url ?? null, startAt: m?.startAt ?? null, event_date: m?.event_date ?? null, city: m?.city ?? null, details: m?.details && typeof m.details === "object" ? m.details : null });
 
 // Pure: the pool from what's waiting (the event backlogs and the queued
 // offers): deduped by name + date, past ones and things already sent dropped
@@ -50,13 +54,30 @@ type RawCandidate = { name: string; date: string | null; tier: number; askId: st
 // live sweep), each tagged with the asks it serves. A find for an ask that has closed is dead and left out (a reminder stays).
 // judgedKeys: what the last run judged. A find it never judged comes first, so the prompt's first SELECT_LIMITS.maxPool always reach the
 // newest finds and nothing sits past the cut forever (review of the tier PR; fit-only holds also age out, sweepSelect.ts FIT_ONLY_MORNINGS).
-export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>, closedAsks: ReadonlySet<string> = new Set(), judgedKeys: ReadonlySet<string> = new Set()): PoolItem[] {
+// One event on two platforms (Royce, 2026-10-28; eventIdentity.ts sameEvent) is one pool item: the version with the richest record
+// (Luma's when tied) under its own key, serving every ask either served; and one already sent under another link isn't picked again
+// (sentEvents: what was sent, by its record).
+export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>, closedAsks: ReadonlySet<string> = new Set(), judgedKeys: ReadonlySet<string> = new Set(), sentEvents: EventLike[] = []): PoolItem[] {
   const items = new Map<string, PoolItem>();
+  const idents = new Map<string, EventLike>();
   for (const r of raw) {
     if (!r.name || (r.date && r.date < today)) continue;
     if (servesClosedAsk(r, closedAsks)) continue;
     if (sentNames.has(norm(r.name)) && !r.reminder && !r.again) continue;
-    const key = shadowKey(r.name, r.date);
+    if (r.ident && !r.reminder && !r.again && sentEvents.some((s) => sameEvent(s, r.ident!))) continue;
+    let key = shadowKey(r.name, r.date);
+    // The same event already in the pool under another name or link: one item, the richer version's.
+    const twinKey = r.ident && !items.has(key) ? [...idents.entries()].find(([k, id]) => k !== key && sameEvent(id, r.ident!))?.[0] : undefined;
+    if (twinKey) {
+      const twin = items.get(twinKey)!;
+      if (preferEvent(idents.get(twinKey)!, r.ident!) === r.ident) {
+        items.delete(twinKey);
+        idents.delete(twinKey);
+        items.set(key, { ...twin, key, name: r.name, date: r.date, tier: r.tier, details: r.details ?? twin.details });
+        idents.set(key, r.ident!);
+      } else key = twinKey;
+    }
+    if (r.ident && !idents.has(key)) idents.set(key, r.ident);
     const it = items.get(key) ?? { id: "", key, name: r.name, date: r.date, tier: r.tier, kind: "discovery" as const, asks: [] as string[], shortNotice: !!r.date && DateTime.fromISO(r.date).diff(DateTime.fromISO(today), "days").days <= 2, details: r.details };
     const a = !r.fromProfile && r.askId ? askNumber.get(r.askId) : undefined;
     if (a && !it.asks.includes(a)) it.asks.push(a);
@@ -230,12 +251,13 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
         reminder: !!it?.reminder,
         details: describeMatch(it?.match),
         again: !!it?.again,
+        ident: identOf(it?.match),
       })),
     ),
     ...queued.map((c: any) => {
       const p = c.payload ?? {};
       const m = p.match ?? {};
-      return { name: String(m.name ?? ""), date: dateOf(m), tier: Number(m.tier ?? 0), askId: p.askId && p.askId !== "profile" ? String(p.askId) : null, fromProfile: p.fromProfile === true, reminder: !!p.reminder, again: !!p.again, details: describeMatch(m) };
+      return { name: String(m.name ?? ""), date: dateOf(m), tier: Number(m.tier ?? 0), askId: p.askId && p.askId !== "profile" ? String(p.askId) : null, fromProfile: p.fromProfile === true, reminder: !!p.reminder, again: !!p.again, details: describeMatch(m), ident: identOf(m) };
     }),
   ];
   const askIds = [...new Set(raw.map((r) => r.askId).filter((x): x is string => !!x))];
@@ -250,16 +272,19 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   }
   // Never re-pick what they already have: the offers Co sent, plus everything the layer has as delivered (receipts, Co's ledger,
   // sent offers). A reminder or a month-later resurface still stays (buildShadowPool).
+  const sentRows = await q(`SELECT payload->'match' AS match FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent'`, [userId]);
+  // What was sent, by its record: the same event found again under another link isn't picked again (Royce, 2026-10-28).
+  const sentEvents = sentRows.map((r: any) => identOf(r.match)).filter((e: EventLike) => !!e.name);
   const sentNames = new Set(
     [
-      ...(await q(`SELECT payload->'match'->>'name' AS name FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent'`, [userId])).map((r: any) => String(r.name ?? "")),
+      ...sentRows.map((r: any) => String(r.match?.name ?? "")),
       ...(knowledge?.delivered ?? []).map((d) => d.what),
     ].map(norm).filter(Boolean),
   );
   // The last run: what it judged orders the pool (never-judged first), and its signature and holds decide the unchanged skip.
   const [last] = await q(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]);
   const judgedKeys = new Set<string>(((last?.proposal?.judgments ?? []) as Judgment[]).filter((j) => j.verdict !== "no_verdict").map((j) => j.key));
-  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames, closed, judgedKeys), ...(opts.morning ? { morning: true } : {}) };
+  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames, closed, judgedKeys, sentEvents), ...(opts.morning ? { morning: true } : {}) };
 
   // Skip unchanged days: same signature as the last run (holds that came due count as a change).
   const holds = holdDueDates((last?.proposal?.judgments ?? []) as Judgment[], String(last?.proposal?.day ?? today));
