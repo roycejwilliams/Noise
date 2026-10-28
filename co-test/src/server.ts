@@ -99,10 +99,22 @@ async function main() {
   // authentication failed", and the merge script's health watch passed. Kept off /health itself, so Railway's deploy check (which
   // promotes a new copy) isn't held up by a slow database moment; the merge script watches this one. A new connection each time
   // (a pooled one can outlive a changed password), with the pool's own settings, capped at 5s; says nothing about the database beyond ok or not.
-  app.get("/health/db", async (_req, res) => {
+  // One check at a time, its answer reused for 5s, and the whole check capped at 5s (review of #297: an open route that opened a
+  // fresh connection per request could use up Postgres's connections in a burst, and the connect and query timeouts added up to 10s).
+  let dbCheck: { at: number; ok: Promise<boolean> } | null = null;
+  const checkDb = (): Promise<boolean> => {
+    if (dbCheck && Date.now() - dbCheck.at < 5000) return dbCheck.ok;
     const client = new PgClient({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000, query_timeout: 5000 });
-    const ok = await client.connect().then(() => client.query("SELECT 1")).then(() => true, () => false);
-    client.end().catch(() => {});
+    client.on("error", () => {});
+    const run = client.connect().then(() => client.query("SELECT 1")).then(() => true, () => false);
+    const ok = Promise.race([run, new Promise<boolean>((r) => setTimeout(() => r(false), 5000).unref())]).finally(() => {
+      client.end().catch(() => {});
+    });
+    dbCheck = { at: Date.now(), ok };
+    return ok;
+  };
+  app.get("/health/db", async (_req, res) => {
+    const ok = await checkDb();
     res.status(ok ? 200 : 503).set("Cache-Control", "no-store").send(ok ? "ok" : "db unavailable");
   });
 
