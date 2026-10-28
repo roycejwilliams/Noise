@@ -10,7 +10,7 @@ import { recordDecision } from "../harness/core.js";
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { regionFor } from "./areaCodes.js";
-import { humanTime, readLink, REREAD_AFTER_MS, VOLATILE_AFTER_MS, savedRead, type LinkRead } from "./linkReader.js";
+import { humanTime, saidTime, readLink, REREAD_AFTER_MS, VOLATILE_AFTER_MS, savedRead, type LinkRead } from "./linkReader.js";
 import { lineInVoice } from "./voiceLine.js";
 
 export type Change = { kind: "sold_out" | "moved" | "gone"; detail: string };
@@ -32,7 +32,7 @@ export function staleChange(prev: LinkRead | null, next: LinkRead): Change | nul
   const a = prev.fields.start;
   const b = next.fields.start;
   if (a?.verified && b?.verified && minutesApart(a.value, b.value) >= 15) {
-    return { kind: "moved", detail: `it now starts ${humanTime(b.value, next.fields.timezone?.value ?? null)}` };
+    return { kind: "moved", detail: `it now starts ${saidTime(b.value, next.fields.timezone)}` };
   }
   return null;
 }

@@ -16,8 +16,13 @@ import { DateTime } from "luxon";
 import type { EventDetails } from "./eventDetails.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 
-// The page's event record, with its own name.
-export type PageEvent = EventDetails & { name: string };
+// The page's event record, with its own name. zoneGuessed: its zone came from its city, not the page, and its start doesn't carry
+// that zone's own offset: its time is said as a guess ("around ..., judging by the city", eventDetails.ts renderEventDetails).
+export type PageEvent = EventDetails & { name: string; zoneGuessed?: boolean };
+
+// A page whose own record withholds the street from anyone who isn't a confirmed guest (Partiful: "Sign in for full location") while its
+// script data carries it: its script data is never read as text, kept in an excerpt, or sent anywhere (#298, rebuilt on these helpers).
+export const withholdsStreet = (url: string) => isPartifulHost(url);
 // one: the page is ONE event's own page by its own record, public or not, with a zone or not (what decides that a found page is never
 // swapped for a homepage, taskWeb.ts pickPage); event: the record, when it may be an event find.
 // private: the page's own record says it isn't public (a private Luma event, a Partiful invite or a password-locked page): never a find
@@ -131,7 +136,42 @@ export async function settleZone(ev: PageEvent, zoneOf: (place: string) => Promi
   const place = ev.online ? null : ev.city;
   if (!place) return null;
   const zone = await zoneOf(place).catch(() => null);
-  return zone ? { ...ev, timezone: zone } : null;
+  return zone ? { ...ev, timezone: zone, ...(zoneIsGuess(ev.startAt, zone) ? { zoneGuessed: true } : {}) } : null;
+}
+
+// Pure: whether a zone from the city is a guess for this start: yes unless the start carries its own offset and it's that zone's offset
+// at that moment (then the time of day is the page's own, and the zone only names it). A start in UTC ("Z") is a guess.
+export function zoneIsGuess(startAt: string | null | undefined, zone: string): boolean {
+  const s = String(startAt ?? "");
+  const m = s.match(/([+-]\d{2}):?(\d{2})$/);
+  if (!m) return true;
+  const own = (m[1].startsWith("-") ? -1 : 1) * (Math.abs(Number(m[1])) * 60 + Number(m[2]));
+  if (own === 0) return true;
+  const d = DateTime.fromISO(s, { setZone: true });
+  return !d.isValid || d.setZone(zone).offset !== own;
+}
+
+// Pure: the city a page's own event data names (its schema.org address locality, with its region), or null. Never the street.
+export function pageLocality(html: string): string | null {
+  const ev = jsonLdEvents(html)[0];
+  const addr = placeOf(ev)?.address;
+  if (!addr || typeof addr !== "object") return null;
+  const city = str(addr.addressLocality);
+  return city ? [city, str(addr.addressRegion)].filter(Boolean).join(", ") : null;
+}
+
+// The zone an event page's time is said in, whatever its visibility (a link they texted is read for them): the page's own (Luma's or
+// Partiful's record), else its city's (never a street or a venue; never for an online event), marked a guess when it is (zoneIsGuess).
+export async function zoneForPage(html: string, url: string, startAt: string | null, zoneOf: (place: string) => Promise<string | null>): Promise<{ zone: string | null; guessed: boolean }> {
+  const nd = nextData(html);
+  const own = isLumaHost(url) ? str(nd?.props?.pageProps?.initialData?.data?.event?.timezone) : isPartifulHost(url) ? str(nd?.props?.pageProps?.event?.timezone) : null;
+  if (own) return { zone: own, guessed: false };
+  const ev = jsonLdEvents(html)[0];
+  if (/OnlineEventAttendanceMode/.test(String(ev?.eventAttendanceMode ?? ""))) return { zone: null, guessed: false };
+  const city = str(placeOf(ev)?.address?.addressLocality);
+  if (!city) return { zone: null, guessed: false };
+  const zone = await zoneOf(city).catch(() => null);
+  return zone ? { zone, guessed: zoneIsGuess(startAt, zone) } : { zone: null, guessed: false };
 }
 
 // ---------------------------------------------------------------- reading a page for its event record
@@ -141,7 +181,7 @@ export type EventPageDeps = {
   fetchHtml: (url: string) => Promise<{ html: string | null; error: string | null }>;
   zoneOf: (place: string) => Promise<string | null>;
   parseLuma: (html: string) => EventDetails | null;
-  toText: (html: string) => string;
+  toText: (html: string, url: string) => string;
 };
 export const realEventPageDeps = async (): Promise<EventPageDeps> => {
   const [L, G, E, W] = await Promise.all([import("./linkReader.js"), import("./geocoding.js"), import("./eventDetails.js"), import("./webOpportunitySearch.js")]);
@@ -184,7 +224,7 @@ async function readEventPageOnce(url: string, o: { maxAgeMs?: number; deps?: Eve
   else {
     const p = pageEventData(got.html, url, d.parseLuma);
     const settled = p.event ? await settleZone(p.event, d.zoneOf) : null;
-    read = { html: got.html, text: d.toText(got.html), event: settled, why: p.event && !settled ? "no zone its time can be said in" : p.why, one: p.one, ...(p.private ? { private: true } : {}), ...(p.public ? { public: true } : {}) };
+    read = { html: got.html, text: d.toText(got.html, url), event: settled, why: p.event && !settled ? "no zone its time can be said in" : p.why, one: p.one, ...(p.private ? { private: true } : {}), ...(p.public ? { public: true } : {}) };
   }
   if (cache.size > EVENT_PAGE_CACHE.max) cache.clear();
   cache.set(url, { at: Date.now(), read });

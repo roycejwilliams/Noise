@@ -28,6 +28,7 @@ import { MODELS } from "../models.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { checkGrounding } from "../harness/matchGate.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
+import { withholdsStreet } from "./eventPage.js";
 
 // Judgment call (does this real, current thing actually fit, or is it just
 // a real thing that exists), not narrow extraction — same policy reasoning
@@ -97,8 +98,10 @@ function scriptText(html: string): string {
   return [...new Set(out)].join(". ");
 }
 
-export function htmlToText(html: string): string {
-  const fromScripts = scriptText(html);
+// url: the page it came from. A page whose record withholds the street (eventPage.ts withholdsStreet: Partiful) never has its script
+// data read as text: its street is only there (#298 review: "1301 Sansome St" reached the reply through the page's data).
+export function htmlToText(html: string, url?: string | null): string {
+  const fromScripts = url && withholdsStreet(url) ? "" : scriptText(html);
   return (html
     .replace(/<(script|style|noscript|svg)[^>]*>[\s\S]*?<\/\1>/gi, " ")
     .replace(/<[^>]+>/g, " ")
@@ -134,7 +137,7 @@ export async function readPageChecked(url: string): Promise<{ text: string | nul
     const res = got && !("error" in got) ? got : null;
     if (got && "blocked" in got && got.blocked) return { text: null, gone: false };
     const html = res && res.status >= 200 && res.status < 300 && /text\/(html|plain)/.test(res.contentType);
-    const text = html ? htmlToText(res!.body) : "";
+    const text = html ? htmlToText(res!.body, res!.finalUrl ?? u.toString()) : "";
     // Turned away (403, 429) or a page that loads its content by script: read
     // it in a real browser (services/browserRead.ts, 2026-09-30).
     if (text.length >= MIN_FETCHED_TEXT) return { text: text.slice(0, PAGE_TEXT_LIMIT), gone: false, html: res!.body };
