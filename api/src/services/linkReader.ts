@@ -23,6 +23,7 @@ import { MODELS } from "../models.js";
 import { fetchLumaEventDetails, isLumaLink, type EventDetails } from "./eventDetails.js";
 import { parseModelJson } from "./modelJson.js";
 import { pageLocality, withholdsStreet, zoneForPage } from "./eventPage.js";
+import { assumedZoneTime, listedWithOffset, ZONE_ASSUMED, ZONE_ASSUMED_MARK, ZONE_UNCLEAR } from "./zoneWords.js";
 import { getTimezoneForCity } from "./geocoding.js";
 
 export const FIELDS = ["what", "name", "host", "date", "start", "end", "timezone", "venue", "address", "online", "audience", "cost", "deadline", "sold_out"] as const;
@@ -243,7 +244,8 @@ export function structuredEvent(html: string): Partial<Record<FieldName, Field>>
 export async function settleRead(f: Partial<Record<FieldName, Field>>, html: string, url: string, zoneOf: (place: string) => Promise<string | null> = getTimezoneForCity): Promise<void> {
   if (!f.timezone && (f.start || f.end)) {
     const z = await zoneForPage(html, url, f.start?.value ?? f.end?.value ?? null, zoneOf).catch(() => ({ zone: null, guessed: false }));
-    if (z.zone) f.timezone = { value: z.zone, quote: z.zone, verified: !z.guessed };
+    // A guess keeps the city it's assumed from as its quote (the disclosure names it: zoneWords.ts ZONE_ASSUMED); never a street.
+    if (z.zone) f.timezone = { value: z.zone, quote: z.guessed && z.city ? z.city : z.zone, verified: !z.guessed };
   }
   if (withholdsStreet(url)) {
     const city = pageLocality(html);
@@ -253,11 +255,24 @@ export async function settleRead(f: Partial<Record<FieldName, Field>>, html: str
   }
 }
 
-// A start or end as Cue says it: in its zone, and when that zone is a guess from the city (an unverified timezone field), said as one
-// (COPY: "around Wednesday, October 7 at 5:00 PM PDT, judging by the city").
-export function saidTime(value: string, tz: Field | null | undefined): string {
-  const t = humanTime(value, tz?.value ?? null);
-  return tz && !tz.verified ? `around ${t}, judging by the city` : t;
+// A start or end as Cue may say it (Royce, 2026-10-28 ruling; zoneWords.ts):
+//   - its zone the page's own (a verified timezone field): said as before;
+//   - its zone assumed from its city (an unverified field, its quote the city): said in that zone ("Wednesday, October 7 at 5 PM PT"),
+//     with the assumption (note: ZONE_ASSUMED, naming the city), never "around";
+//   - no zone Cue can establish: said only when the listing carries its own offset (as listed); otherwise no time at all (said null) and
+//     the note says the listing's time zone isn't clear.
+export function timeFact(value: string, tz: Field | null | undefined, name: string): { said: string | null; note: string | null; assumed: boolean } {
+  if (tz?.verified) return { said: humanTime(value, tz.value), note: null, assumed: false };
+  if (tz && !tz.verified) {
+    const said = assumedZoneTime(value, tz.value);
+    return said ? { said, note: ZONE_ASSUMED(tz.quote ?? "the city it's in"), assumed: true } : { said: null, note: ZONE_UNCLEAR(name), assumed: false };
+  }
+  return listedWithOffset(value) ? { said: humanTime(value, null), note: null, assumed: false } : { said: null, note: ZONE_UNCLEAR(name), assumed: false };
+}
+// The time and its note as one line (a stale-watch heads-up, a live check): "Wednesday, October 7 at 5 PM PT. The listing doesn't ...".
+export function saidTime(value: string, tz: Field | null | undefined, name = "it"): string {
+  const t = timeFact(value, tz, name);
+  return [t.said, t.note].filter(Boolean).join(". ").replace(/\.\./g, ".");
 }
 
 // ---------------------------------------------------------------- the read
@@ -506,17 +521,26 @@ export function describeRead(label: string, r: LinkRead, now = new Date()): { fa
   const hints: string[] = [];
   const old = now.getTime() - r.fetchedAt.getTime() > VOLATILE_AFTER_MS;
   const asOf = r.fetchedAt.toISOString().slice(0, 16).replace("T", " ") + " UTC";
-  const verified = FIELDS.filter((k) => r.fields[k]?.verified);
+  // A start or end whose zone Cue can't establish isn't stated (timeFact): the listing's time zone is said to be unclear instead.
+  const times = new Map((["start", "end"] as FieldName[]).filter((k) => r.fields[k]?.verified).map((k) => [k, timeFact(r.fields[k]!.value, r.fields.timezone, label)] as const));
+  const verified = FIELDS.filter((k) => r.fields[k]?.verified && !(times.has(k) && !times.get(k)!.said));
+  let assumedNote: string | null = null;
   if (verified.length) {
     facts.push(
       `From the page for "${label}" (read ${asOf}): ${verified
         .map((k) => {
-          const v = k === "start" || k === "end" ? saidTime(r.fields[k]!.value, r.fields.timezone) : r.fields[k]!.value;
+          const t = times.get(k);
+          if (t?.assumed) assumedNote = t.note;
+          const v = t ? t.said! : r.fields[k]!.value;
           return `${k.replace("_", " ")}: ${v}${old && VOLATILE.includes(k) ? ` (as of ${asOf}, may have changed)` : ""}`;
         })
         .join("; ")}.`,
     );
   }
+  // The assumed zone, said once with the time (Royce, 2026-10-28): marked so the model keeps it.
+  if (assumedNote) facts.push(`About that time: ${assumedNote} ${ZONE_ASSUMED_MARK}`);
+  const unclear = [...times.values()].find((t) => !t.said);
+  if (unclear?.note) facts.push(unclear.note);
   const missing = (["start", "venue"] as FieldName[]).filter((k) => !r.fields[k]?.verified);
   // Only a page that was actually read for fields can be said not to state one (source null: the model read failed and
   // only the page's own text is known).

@@ -73,14 +73,16 @@ import { PROMISE_RE, STARTED_WORK, dropPromise, promiseFact, promiseSentence, pr
 // Any other event page, read live for "still spots?" (Royce, 2026-10-11): through safeFetch (every hop checked), its schema.org Event
 // data only, no model, so the reply waits seconds at most. Null when it can't be read.
 async function livePageFacts(url: string): Promise<import("../services/asOf.js").LivePage> {
-  const { safeFetch, structuredEvent, settleRead, saidTime } = await import("../services/linkReader.js");
+  const { safeFetch, structuredEvent, settleRead, timeFact } = await import("../services/linkReader.js");
   const r = await safeFetch(url);
   if ("error" in r || r.status >= 400 || !/html/i.test(r.contentType)) return null;
   const f = structuredEvent(r.body);
   if (!f) return null;
-  // Its time in the event's own zone, said as a guess when the zone came from its city (linkReader.ts settleRead: one zone rule, #298).
+  // Its time in the event's own zone (linkReader.ts settleRead: one zone rule, #298); a zone assumed from its city is said with the city
+  // it's assumed from, and a time whose zone can't be established isn't said at all (timeFact, Royce 2026-10-28).
   await settleRead(f, r.body, r.finalUrl);
-  return { start: f.start ? saidTime(f.start.value, f.timezone) : undefined, cost: f.cost?.value, soldOut: f.sold_out?.value === "yes" };
+  const t = f.start ? timeFact(f.start.value, f.timezone, f.name?.value ?? "it") : null;
+  return { start: t?.said ? `${t.said}${t.note ? ` (${t.note.replace(/\.$/, "")})` : ""}` : undefined, ...(t && !t.said && t.note ? { timeNote: t.note.replace(/\.$/, "") } : {}), cost: f.cost?.value, soldOut: f.sold_out?.value === "yes" };
 }
 
 export const LAYER3_MODELS = {
