@@ -199,7 +199,7 @@ section:not(.band) .b.led li{border-color:${t.line}}
 .lead{font-family:${t.serif};font-style:italic;font-size:17px;color:${t.gold};line-height:1.45}
 section:not(.band) .lead{color:${t.maroon}}
 .bt{color:inherit}
-.cmp{display:flex;gap:28px;overflow-x:auto;scroll-snap-type:x mandatory;margin:8px -22px 18px 0;padding:2px 22px 10px 0;scrollbar-width:none}
+.cmp{display:flex;gap:28px;overflow-x:auto;scroll-snap-type:x mandatory;margin:8px -22px 18px 0;padding:2px 40px 10px 0;scrollbar-width:none;-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 40px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 40px),transparent)}
 .cmp::-webkit-scrollbar{display:none}
 .opt{flex:0 0 78%;scroll-snap-align:start;border-top:1px solid ${t.ink};padding:16px 0 0}
 .opt h4{font-family:${t.serif};font-weight:300;font-size:26px;line-height:1.15;color:${t.ink};margin:0 0 14px}
@@ -231,7 +231,7 @@ footer .asof{display:block;margin-top:10px;font-size:11px;letter-spacing:0.16em;
   .open{grid-template-columns:1fr 1fr;gap:40px;padding-top:64px;align-items:start}
   .ctx{text-align:right}
   h1{font-size:40px}
-  .cmp{display:grid;overflow:visible;margin:8px 0 18px;padding:0;gap:32px}
+  .cmp{display:grid;overflow:visible;margin:8px 0 18px;padding:0;gap:32px;-webkit-mask-image:none;mask-image:none}
   .cmp.n2{grid-template-columns:repeat(2,1fr)}
   .cmp.n3{grid-template-columns:repeat(3,1fr)}
   .cmp.n4{grid-template-columns:repeat(2,1fr)}
