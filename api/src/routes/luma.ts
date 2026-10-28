@@ -272,7 +272,7 @@ router.post("/webhook", (req: Request, res: Response) => {
       break;
     }
     default:
-      console.log(`luma/webhook: received unrecognized type "${type}" — payload:`, JSON.stringify(payload));
+      console.log(`luma/webhook: received unrecognized type "${type}"; its keys (never its values, which can carry guests' details):`, Object.keys(payload ?? {}).join(", "));
   }
 });
 

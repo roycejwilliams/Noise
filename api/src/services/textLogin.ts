@@ -50,7 +50,7 @@ export async function claimTextLogin(phoneNumber: string, content: string): Prom
   if (!m) return content;
   try {
     if (isRateLimited(phoneNumber)) {
-      console.error(`claimTextLogin: rate limited ${phoneNumber} after too many code attempts.`);
+      console.error("claimTextLogin: a number was rate limited after too many code attempts.");
       return content.replace(CODE_RE, " ").replace(/\s+/g, " ").trim() || "Hi Cue!";
     }
     // Single-use, expiry-bound and bound to the number the browser typed, in
