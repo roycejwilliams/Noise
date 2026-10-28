@@ -238,7 +238,7 @@ export async function markRead(number: string): Promise<void> {
       },
       body: JSON.stringify({ number, from_number: from }),
     });
-    if (!res.ok) console.error(`markRead: ${res.status} for ${number} (non-fatal)`);
+    if (!res.ok) console.error(`markRead: ${res.status} (non-fatal)`);
   } catch (err: any) {
     console.error("markRead failed (non-fatal):", err?.message ?? err);
   }

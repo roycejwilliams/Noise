@@ -223,7 +223,7 @@ router.post(
 
       // Validate Twilio sent the required fields
       if (!CallStatus || !To) {
-        console.error("call-status webhook missing CallStatus or To:", req.body);
+        console.error("call-status webhook missing CallStatus or To; its keys (never the numbers):", Object.keys(req.body ?? {}).join(", "));
         return res.sendStatus(204);
       }
 
@@ -275,7 +275,7 @@ router.post(
 
       // Unknown number — nothing to do, ack so Twilio doesn't retry
       if (!user) {
-        console.warn(`call-status: no user found for number ${To} (${CallStatus})`);
+        console.warn(`call-status: no user found for the called number (${CallStatus})`);
         return res.sendStatus(204);
       }
 
