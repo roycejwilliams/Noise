@@ -92,7 +92,7 @@ check("too late to queue: the run (started) and the talk (30 minutes out); the 2
   const sweep = src("services/eventSurfacingSweep.ts");
   check("the 9am pick refuses it before and after its page is read (pinned)", /if \(isPastEvent\(o\.match, zone\) \|\| tooLateToOffer\(o\.match, zone\)\) return "past";/.test(sweep) && /\/\/ Its page's start, read just now, decides too[^\n]*\n  if \(tooLateToOffer\(match, zone\)\) return "past";/.test(sweep));
   check("the sweep never queues it, and drops it from the front of a backlog (pinned)", /if \(tooLateToOffer\(match, zone\)\) \{\n\s+skipped\.push/.test(sweep) && /isPastEvent\(rest\[0\]\.match, zone\) \|\| tooLateToOffer\(rest\[0\]\.match, zone\)/.test(sweep));
-  check("the sweep's fact gate asks for the lead (pinned)", /gatedOut, leadMinutes: START_LEAD_MINUTES \}\)/.test(src("services/sweepFind.ts")));
+  check("the sweep's fact gate asks for the lead (pinned)", /gatedOut, leadMinutes: START_LEAD_MINUTES \}(\)|;)/.test(src("services/sweepFind.ts")));
 }
 
 // ---------------------------------------------------------------- at send: every proactive offer (bundle, reveal, reminder, bounce)

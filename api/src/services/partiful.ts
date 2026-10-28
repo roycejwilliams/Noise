@@ -8,7 +8,9 @@
 // explore pages are allowed to it. Every fetch goes through linkReader.ts safeFetch (every redirect hop checked).
 //
 // Capped: one explore page and PARTIFUL_LIMITS.events event pages a read, the whole read inside PARTIFUL_LIMITS.deadlineMs (what's read
-// by then is used), cached per city and day reached for PARTIFUL_LIMITS.cacheMs (the Luma feed's cache, tieredRecommendation.ts).
+// by then is used), cached per city for PARTIFUL_LIMITS.cacheMs (the Luma feed's cache length, tieredRecommendation.ts), with every
+// upcoming event kept and each search's own dates applied after (batched review of #299: a key by the last day asked missed across
+// windows).
 // A failed explore read throws (the event search says it, and a timeout is an outage by searchFailure.ts transientFailure).
 import { readEventPage, type EventPageDeps, type PageEvent } from "./eventPage.js";
 import type { EventDetails } from "./eventDetails.js";
@@ -58,9 +60,10 @@ export async function partifulEvents(city: string | null, until: Date, o: { deps
   const explore = partifulExploreUrl(city);
   if (!explore) return null;
   const now = o.now ?? Date.now;
-  const key = `${explore}|${until.toISOString().slice(0, 10)}`;
+  const key = explore;
+  const inWindow = (events: PartifulEvent[]) => events.filter((e) => Date.parse(e.start_at) > now() && Date.parse(e.start_at) <= until.getTime());
   const hit = cache.get(key);
-  if (hit && now() - hit.at < PARTIFUL_LIMITS.cacheMs) return hit.events;
+  if (hit && now() - hit.at < PARTIFUL_LIMITS.cacheMs) return inWindow(hit.events);
   const deps = o.deps ?? (await (await import("./eventPage.js")).realEventPageDeps());
   const page = await deps.fetchHtml(explore).catch((err: any) => ({ html: null, error: String(err?.message ?? err) }));
   // Said so its kind reads right (searchFailure.ts): a network failure as "couldn't be reached", a timeout as itself, a status as itself.
@@ -70,12 +73,12 @@ export async function partifulEvents(city: string | null, until: Date, o: { deps
   const reads = await Promise.all(links.map((u) => Promise.race([readEventPage(u, { deps }).then((r) => r.event).catch(() => null), deadline])));
   const events = reads
     .map((ev, i) => ({ ev, url: links[i] }))
-    .filter((x): x is { ev: PageEvent; url: string } => !!x.ev?.startAt && Date.parse(x.ev.startAt) > now() && Date.parse(x.ev.startAt) <= until.getTime())
+    .filter((x): x is { ev: PageEvent; url: string } => !!x.ev?.startAt && Date.parse(x.ev.startAt) > now())
     .map(({ ev, url }) => {
       const { name, ...details } = ev;
       return { api_id: url, name, start_at: ev.startAt!, city: ev.city, url, ...(ev.online ? { online: true } : {}), details };
     });
   if (cache.size > 20) cache.clear();
   cache.set(key, { at: now(), events });
-  return events;
+  return inWindow(events);
 }

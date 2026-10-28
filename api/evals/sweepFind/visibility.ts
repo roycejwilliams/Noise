@@ -52,7 +52,7 @@ const sf = fs.readFileSync(new URL("../../src/services/sweepFind.ts", import.met
   const small = SF.passedOver(looked.slice(0, 3), new Set(), reasons);
   check("web and events are listed after X, with their reason", small.map((x) => x.source).join() === "x,web,events" && small[1].why === "applications closed", JSON.stringify(small));
   check("a page kept in place of its X post keeps the post off the list", /postOf\.set\(l, p\.url\)/.test(sf) && /postOf\.get\(String\(m\.url\)\)/.test(sf));
-  check("the gate's reason is used for what Cue kept and the gate stopped", /gatedOut(?:, leadMinutes: START_LEAD_MINUTES)? \}\)/.test(sf) && /kept, then the fact gate: /.test(sf));
+  check("the gate's reason is used for what Cue kept and the gate stopped", /gatedOut(?:, leadMinutes: START_LEAD_MINUTES)? \}(\)|;)/.test(sf) && /kept, then the fact gate: /.test(sf));
   check("the sweep.find record carries passedOver, counts of what was looked at, and the tiers tried", /passedOver: passed/.test(sf) && /lookedAt: \{ x: /.test(sf) && /tried, kept:/.test(sf));
   check("Cue states its reasons in the same loop (a skip tool), not a second model call", sf.includes("skip: tool(") && /description: SWEEP_PASS_TOOL/.test(sf) && (sf.match(/generateText\(/g) ?? []).length === 1);
 }

@@ -289,8 +289,10 @@ export async function eventCandidates(
       : src.viaExa(what, city, { userId: opts.userId ?? null, source: opts.source ?? "sweep", inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, notPublic: 0, kept: 0 } })),
     // Partiful's public listings (Royce, 2026-10-28): a live source where Partiful lists the city; none there is neither a failure nor an
     // answer.
+    // Not on a call or a voice reply (viaExa false: they can't wait for it), the way the Luma search through Exa isn't (batched review
+    // of #299).
     Promise.resolve()
-      .then(() => src.partiful(city, until))
+      .then(() => (opts.viaExa === false ? null : src.partiful(city, until)))
       .then(
         (v) => (v !== null && answered++, v),
         (err: any) => (failures.push(`Partiful's listings failed (${String(err?.message ?? err).slice(0, 120)})`), null),

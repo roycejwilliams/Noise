@@ -106,7 +106,7 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   const over = W.verifyEventResult({ ...pick.event!, startAt: iso(-3), endAt: null }, pick.url, { now: new Date(), official: false, render: ED.renderEventDetails });
   check("already under way by its record: dropped", !over.kept && /under way/.test(over.dropped?.why ?? ""));
   const tw = src("services/taskWeb.ts");
-  check("taskWebSearch checks a page with an event record as an event, before (and instead of) the web's text check", /const ev = page\.event \?\? \(htmlOf\.has\(page\.url\)/.test(tw) && /if \(ev\) \{[\s\S]{0,400}continue;\s*\}\s*const v = verifyResult/.test(tw));
+  check("taskWebSearch checks a page with an event record as an event, before (and instead of) the web's text check", /const fromHtml = !page\.event && htmlOf\.has\(page\.url\)/.test(tw) && /const ev = page\.event \?\? fromHtml\?\.event \?\? null;/.test(tw) && /if \(ev\) \{[\s\S]{0,400}continue;\s*\}\s*const v = verifyResult/.test(tw));
   check("and reads the record from the same response a plain page read fetched (no second fetch)", /if \(r\.html\) htmlOf\.set\(u, r\.html\);/.test(tw) && /html: res!\.body/.test(src("services/webOpportunitySearch.ts")));
   const sf = src("services/sweepFind.ts");
   check("the sweep files a web result with an event record as an event (tier 2)", /if \(k\.event\) found\.set\(k\.url, pageEventMatch\(k\.event, k\.url, \{ source: "web" \}\)\);/.test(sf));
@@ -155,7 +155,7 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   const evs = await PF.partifulEvents("San Francisco", until, { deps });
   check("read like the feed: public, upcoming, inside the window, each from its own page; a failed page is skipped", evs?.length === 1 && evs[0].name === "Dolores Run Club" && evs[0].details.timezone === "America/Los_Angeles" && evs[0].url === "https://partiful.com/e/e1", evs);
   const again = await PF.partifulEvents("San Francisco", until, { deps });
-  check("cached like the feed: a second read in the window fetches nothing", again === evs && fetched.filter((u) => u.endsWith("/explore/sf")).length === 1);
+  check("cached like the feed: a second read in the window fetches nothing", JSON.stringify(again) === JSON.stringify(evs) && fetched.filter((u) => u.endsWith("/explore/sf")).length === 1);
   check("capped: at most PARTIFUL_LIMITS.events event pages a read", PF.PARTIFUL_LIMITS.events === 12 && /\.slice\(0, PARTIFUL_LIMITS\.events\)/.test(src("services/partiful.ts")));
   check("no explore page for the city: nothing read, not a failure", (await PF.partifulEvents("Sacramento", until, { deps })) === null);
   PF.clearPartifulCache();
@@ -218,7 +218,7 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   check("picker pool: one item for the pair, Luma's, serving both asks", pool.length === 1 && pool[0].name === luma.name && pool[0].asks.sort().join() === "A1,A2", pool);
   const after = SS.buildShadowPool([raw(asMatch(partiful), "a1")], "2026-10-28", new Map([["a1", "A1"]]), new Set(), new Set(), new Set(), [SS.identOf(asMatch(luma))]);
   check("sent on Luma: the Partiful copy isn't picked again", after.length === 0);
-  check("what was shown is matched by record too (offerHistory reads the event's twins)", /const twinShown = [\s\S]{0,120}await shownTwins\(userId, match\)/.test(src("harness/matchGate.ts")));
+  check("what was shown is matched by record too (offerHistory reads the event's twins)", /const twins = [\s\S]{0,120}await shownTwins\(userId, match\)/.test(src("harness/matchGate.ts")));
 }
 
 // ---------------------------------------------------------------- 5. goals with no place leave city events out of the 9am sweep
@@ -259,6 +259,69 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   check("the search counts each tier: searched per call, found by what it filed, kept after the gate, dropped by a page's check, the gate or their limits", /tierCounts\["2"\]\.dropped \+= eventDrops;/.test(sf) && /for \(const m of found\.values\(\)\) tierCounts\[tierKey\(\(m as any\)\.tier\)\]\.found\+\+;/.test(sf) && /for \(const g of gatedOut\) tierCounts\[tierKey\(g\.tier\)\]\.dropped\+\+;/.test(sf) && /for \(const m of gated\) tierCounts\[tierKey\(\(m as any\)\.tier\)\]\.kept\+\+;/.test(sf) && /tiers: tierCounts \} \};/.test(sf));
   const client = readFileSync(new URL("../../../co-test/src/client/sweeps.ts", import.meta.url), "utf8");
   check("/sweeps shows a column per tier (searched · found · kept · dropped)", /<th title="searched · found · kept · dropped">Noise events<\/th><th title="searched · found · kept · dropped">Event pages<\/th><th title="searched · found · kept · dropped">Web and X<\/th>/.test(client) && /tierCell\(r\.tiers\?\.\["2"\]\)/.test(client));
+}
+
+// ---------------------------------------------------------------- 7. batched review of #299
+{
+  // 1. A page known to be private is dropped everywhere, never kept as an opening; one that couldn't be read keeps today's behavior.
+  P.clearEventPageCache();
+  const priv = await P.readEventPage("https://partiful.com/e/inv", { deps: pagesDeps({ "https://partiful.com/e/inv": partifulPage({ id: "inv", name: "Maya's 30th", start: iso(48), isPublic: false }) }) });
+  check("#299 review 1: readEventPage says private apart from couldn't-read", priv.private === true && !priv.event && !(await P.readEventPage("https://partiful.com/e/gone", { deps: pagesDeps({}) })).private);
+  const kept = [{ tier: 3, kind: "opportunity", source: "web", via: "x", name: "Maya's 30th", url: "https://partiful.com/e/inv", reason: "" }, { tier: 3, kind: "opportunity", source: "web", name: "Unreadable", url: "https://partiful.com/e/gone", reason: "" }] as any[];
+  const pr = await SF.promoteEventPages(kept, async (u) => (u.endsWith("inv") ? "private" : null));
+  check("#299 review 1: a private invite an X post points to is dropped, never kept as an opening; an unreadable one stays as it was", pr.kept.length === 1 && (pr.kept[0] as any).url.endsWith("gone") && pr.dropped === 1);
+  const pick = await W.pickPage({ name: "Maya's 30th", url: "https://partiful.com/e/inv", details: [] }, { read: async () => "a page of text ".repeat(50), official: async () => "https://maya.example.com/", eventPage: async () => ({ oneEvent: true, text: "x", event: null, private: true }) });
+  check("#299 review 1: pickPage marks it private, with no text to fall through to the web check", pick.private === true && pick.text === null && !pick.swapped);
+  const tw = src("services/taskWeb.ts");
+  check("#299 review 1: taskWebSearch drops a private page before any check, from pickPage's read or the plain read's html", /if \("private" in page && page\.private\) \{\s*dropped\.push\(\{ name: raw\.name, url: raw\.url, why: "its page's own record says it's private", tier: 2 \}\);\s*continue;/.test(tw) && /if \(fromHtml\?\.private\) \{/.test(tw));
+  // 2. Luma: public only when it says so.
+  const noVis = P.pageEventData(lumaPage({ name: "Quiet thing", start: iso(48), visibility: "" }), "https://luma.com/q1", ED.parseLumaEventPage);
+  check("#299 review 2: a Luma page that doesn't say public isn't an event find (and isn't called private either)", !noVis.event && !noVis.private && /doesn't say it's public/.test(noVis.why ?? ""), noVis);
+  // 3. Declines by record, and no reminder after an answer that wasn't recorded.
+  const shortNotice = { isEvent: true, date: "2026-10-29", shortNotice: true };
+  check("#299 review 3: shown, answered (no outcome recorded), within a day: no reminder", G.repeatRule({ shownAt: [new Date(NOW - 86_400_000)], outcome: null, answered: true }, shortNotice, "2026-10-28", new Date(NOW)).action === "blocked");
+  check("#299 review 3: never answered, within a day: still a reminder; interested: a reminder", G.repeatRule({ shownAt: [new Date(NOW - 86_400_000)], outcome: null, answered: false }, shortNotice, "2026-10-28", new Date(NOW)).action === "remind" && G.repeatRule({ shownAt: [new Date(NOW - 86_400_000)], outcome: "interested", answered: true }, shortNotice, "2026-10-28", new Date(NOW)).action === "remind");
+  check("#299 review 3: declined is blocked first, as before", G.repeatRule({ shownAt: [new Date(NOW - 86_400_000)], outcome: "declined", answered: true }, shortNotice, "2026-10-28", new Date(NOW)).action === "blocked");
+  const mg = src("harness/matchGate.ts");
+  check("#299 review 3: outcomes are read under this link and every twin's (by record)", /const keys = \[\.\.\.new Set\(\[eventId \? `event:\$\{eventId\}` : "", `name:\$\{match\.name\.toLowerCase\(\)\}`, \.\.\.twins\.flatMap/.test(mg) && /item_key = ANY\(\$2::text\[\]\) OR lower\(item_name\) = ANY\(\$3::text\[\]\)/.test(mg));
+  // 4. Two venues: two events.
+  const start = "2026-11-06T02:00:00.000Z";
+  const a = { name: "Founder Dinner", details: { startAt: start, city: "San Francisco", venue: "Zuni Cafe" } };
+  check("#299 review 4: one name, one city, one night, two venues: two events", !ID.sameEvent(a, { ...a, details: { ...a.details, venue: "Nopa" } }));
+  check("#299 review 4: a venue missing on one side: the city decides", ID.sameEvent(a, { ...a, details: { ...a.details, venue: null } }));
+  // 5. Missed twins.
+  check("#299 review 5: word order set aside", ID.sameEvent({ name: "SF Tech Week: AI Mixer", details: { startAt: start, city: "San Francisco" } }, { name: "AI Mixer | SF Tech Week", details: { startAt: start, city: "SF" } }));
+  check("#299 review 5: an offset-less start is read in the event's own zone, never the server's", ID.sameEvent({ name: "Run Club", details: { startAt: "2026-11-05T18:00:00", timezone: "America/Los_Angeles", city: "San Francisco" } }, { name: "Run Club", details: { startAt: "2026-11-06T02:00:00.000Z", city: "San Francisco" } }) && !ID.sameEvent({ name: "Run Club", details: { startAt: "2026-11-05T18:00:00", city: "San Francisco" } }, { name: "Run Club", details: { startAt: "2026-11-06T02:00:00.000Z", city: "San Francisco" } }));
+  check("#299 review 5: one side with no place: only the same name and the very same start", ID.sameEvent({ name: "Run Club", details: { startAt: start } }, { name: "Run Club", details: { startAt: start, city: "San Francisco" } }) && !ID.sameEvent({ name: "Run Club", details: { startAt: start } }, { name: "Run Club", details: { startAt: "2026-11-06T02:10:00.000Z", city: "San Francisco" } }) && !ID.sameEvent({ name: "Club Run", details: { startAt: start } }, { name: "Run Club", details: { startAt: start, city: "San Francisco" } }));
+  // Zone from a locality only; never a street or a venue, never for an online event.
+  const asked: string[] = [];
+  const z = async (p: string) => (asked.push(p), "America/Los_Angeles");
+  const base = P.pageEventData(eventbritePage({ name: "Gala", start: "2026-11-20T18:00:00-08:00", city: null }), "https://www.eventbrite.com/e/gala-1", ED.parseLumaEventPage).event!;
+  check("#299 review: no locality, no zone lookup (never the street or the venue)", (await P.settleZone(base, z)) === null && asked.length === 0);
+  check("#299 review: an online event gets no zone lookup", (await P.settleZone({ ...base, city: "San Francisco", online: true }, z)) === null && asked.length === 0);
+  check("#299 review: a locality is looked up", (await P.settleZone({ ...base, city: "San Francisco" }, z))?.timezone === "America/Los_Angeles" && asked.join() === "San Francisco");
+  // 6. Held, not dropped.
+  const far = P.pageEventMatch({ ...base, city: "San Francisco", timezone: "America/Los_Angeles", startAt: "2026-12-10T18:00:00-08:00" }, "https://www.eventbrite.com/e/gala-1", { source: "web" });
+  const held = SF.holdForWindow(far, "2026-10-28") as any;
+  check("#299 review 6: an event page past the event window is held until it's inside it", held.heldUntil === "2026-11-26", held.heldUntil);
+  check("#299 review 6: one inside the window isn't held", !("heldUntil" in (SF.holdForWindow(P.pageEventMatch({ ...base, city: "San Francisco", timezone: "America/Los_Angeles", startAt: "2026-11-05T18:00:00-08:00" }, "https://x.example/e", { source: "web" }), "2026-10-28") as any)));
+  const sf = src("services/sweepFind.ts");
+  check("#299 review 6: the web's and X's event pages are gated with the hold window and marked; the rest as before", /gateMatches\(kept\.filter\(isPageFind\), \{ \.\.\.gateOpts, lookaheadDays: HOLD_EVENT_DAYS \}\)/.test(sf) && /gatedPages\.map\(\(m\) => holdForWindow\(m, today\)\)/.test(sf) && SF.HOLD_EVENT_DAYS === 60);
+  const rawHeld = { name: "Gala", date: "2026-12-10", tier: 2, askId: null, fromProfile: true, reminder: false, details: "x", heldUntil: "2026-11-26" };
+  check("#299 review 6: the picker doesn't judge it until its day, then does", SS.buildShadowPool([rawHeld], "2026-10-28", new Map(), new Set()).length === 0 && SS.buildShadowPool([rawHeld], "2026-11-26", new Map(), new Set()).length === 1);
+  check("#299 review 6: the queue leaves it in the backlog until its day", /if \(heldUntil && heldUntil > localDay\(new Date\(\), zone\)\) \{/.test(src("services/eventSurfacingSweep.ts")));
+  // 7. Partiful: not on calls; cached by city, each search's dates applied after.
+  let calls = 0;
+  const viaFalse = await T.eventCandidates("x", "San Francisco", { userId: null, timezone: "America/Los_Angeles", viaExa: false, sources: { feed: async () => [], calendar: async () => [], viaExa: async () => { throw new Error("no"); }, partiful: async () => (calls++, []), page: async () => null, near: async () => true, rank: (async (e: any[]) => ({ ranked: e, closest: null })) as any, gate: (async (m: any) => m) as any, record: (async () => {}) as any, exaOn: () => true } as any });
+  check("#299 review 7: no Partiful read on a call or a voice reply (viaExa false)", calls === 0 && !(viaFalse.failures ?? []).length);
+  PF.clearPartifulCache();
+  P.clearEventPageCache();
+  const fetched: string[] = [];
+  const explore = body("explore").replace("</head>", ld({ "@type": "ItemList", itemListElement: [{ url: "https://partiful.com/e/w1" }, { url: "https://partiful.com/e/w2" }] }) + "</head>");
+  const deps = pagesDeps({ "https://partiful.com/explore/sf": explore, "https://partiful.com/e/w1": partifulPage({ id: "w1", name: "Soon", start: iso(30) }), "https://partiful.com/e/w2": partifulPage({ id: "w2", name: "Later", start: iso(24 * 20) }) }, fetched);
+  const week = await PF.partifulEvents("San Francisco", new Date(NOW + 7 * 86_400_000), { deps });
+  const month = await PF.partifulEvents("San Francisco", new Date(NOW + 30 * 86_400_000), { deps });
+  check("#299 review 7: one read per city serves every window (this week, this month)", week?.map((e) => e.name).join() === "Soon" && month?.map((e) => e.name).join() === "Soon,Later" && fetched.filter((u) => u.endsWith("/explore/sf")).length === 1, { week: week?.map((e) => e.name), month: month?.map((e) => e.name), fetched });
 }
 
 console.log(`event tier by page: ${total - failed}/${total} passed`);

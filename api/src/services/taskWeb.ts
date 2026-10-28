@@ -252,10 +252,11 @@ export function eventPageUrl(url: string): "event" | "luma" | null {
 // one schema.org Event; a calendar's, a city's or a list's isn't), its text from the same response (re-review of #293: the check and the
 // read were two fetches), and the record itself when it may be an event find (public, with a zone: the event tier, Royce 2026-10-28).
 // A read that fails says no, with no text, and the page is treated as before.
-export type EventPageCheck = { oneEvent: boolean; text: string | null; event?: import("./eventPage.js").PageEvent | null };
+// private: its own record says it isn't public: never a find (batched review of #299).
+export type EventPageCheck = { oneEvent: boolean; text: string | null; event?: import("./eventPage.js").PageEvent | null; private?: boolean };
 const readEventPageCheck = async (url: string): Promise<EventPageCheck> => {
   const r = await import("./eventPage.js").then((m) => m.readEventPage(url));
-  return { oneEvent: r.one, text: r.text, event: r.event };
+  return { oneEvent: r.one, text: r.text, event: r.event, ...(r.private ? { private: true } : {}) };
 };
 
 // Which page a result is checked against: its own official page when the found
@@ -268,7 +269,7 @@ const readEventPageCheck = async (url: string): Promise<EventPageCheck> => {
 export async function pickPage(
   raw: RawResult,
   deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null>; eventPage?: (url: string) => Promise<EventPageCheck> },
-): Promise<{ url: string; text: string | null; official: boolean; swapped: boolean; event?: import("./eventPage.js").PageEvent | null }> {
+): Promise<{ url: string; text: string | null; official: boolean; swapped: boolean; event?: import("./eventPage.js").PageEvent | null; private?: boolean }> {
   // Judged and looked up by the core name: a qualifier's words ("Private Dining") never make a host look like the place's.
   const name = coreName(raw.name);
   if (!looksOfficial(raw.url, name)) {
@@ -277,6 +278,7 @@ export async function pickPage(
     const ep = shape ? await (deps.eventPage ?? readEventPageCheck)(raw.url).catch(() => null) : null;
     // The found page's text: from the one event-page fetch when it read whole (a short one is a shell: read as any page is), else read now.
     const found = async () => (ep?.text && ep.text.length >= MIN_FETCHED_TEXT ? ep.text.slice(0, PAGE_TEXT_LIMIT) : await deps.read(raw.url));
+    if (ep?.private) return { url: raw.url, text: null, official: false, swapped: false, event: null, private: true };
     if (shape === "event" || ep?.oneEvent) return { url: raw.url, text: await found(), official: false, swapped: false, event: ep?.event ?? null };
     const off = await deps.official(name).catch(() => null);
     if (off && off !== raw.url && looksOfficial(off, name)) {
@@ -395,13 +397,24 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
   const swappedFrom = new Map(pages.map((p, i) => [p.url, p.swapped ? raws[i].url : null]));
   for (const [i, raw] of raws.entries()) {
     const page = pages[i];
+    // A page whose own record says it's private (a Partiful invite, a private Luma event) is never a find, in any tier (batched review
+    // of #299): dropped, not checked as a web page.
+    if ("private" in page && page.private) {
+      dropped.push({ name: raw.name, url: raw.url, why: "its page's own record says it's private", tier: 2 });
+      continue;
+    }
     if (!page.text) {
       dropped.push({ name: raw.name, url: raw.url, why: "its page couldn't be read" });
       continue;
     }
     // One public event by its page's own record (an event page, or any page with one schema.org Event): checked as an event against that
     // record, never dropped by the web's "nothing verified on its page" (Royce, 2026-10-28: tiers by kind of page).
-    const ev = page.event ?? (htmlOf.has(page.url) ? await pageEventFrom(htmlOf.get(page.url)!, page.url) : null);
+    const fromHtml = !page.event && htmlOf.has(page.url) ? await pageEventFrom(htmlOf.get(page.url)!, page.url) : null;
+    if (fromHtml?.private) {
+      dropped.push({ name: raw.name, url: page.url, why: "its page's own record says it's private", tier: 2 });
+      continue;
+    }
+    const ev = page.event ?? fromHtml?.event ?? null;
     if (ev) {
       const { renderEventDetails } = await import("./eventDetails.js");
       const e = verifyEventResult(ev, page.url, { now: new Date(), official: page.official, render: renderEventDetails });
@@ -438,11 +451,11 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
 }
 
 // A page's own event record, from html a plain read already fetched (eventPage.ts): public, one event, with a zone; else null.
-async function pageEventFrom(html: string, url: string): Promise<import("./eventPage.js").PageEvent | null> {
+async function pageEventFrom(html: string, url: string): Promise<{ event: import("./eventPage.js").PageEvent | null; private: boolean }> {
   const P = await import("./eventPage.js");
   const d = await P.realEventPageDeps();
   const p = P.pageEventData(html, url, d.parseLuma);
-  return p.event ? P.settleZone(p.event, d.zoneOf) : null;
+  return { event: p.event ? await P.settleZone(p.event, d.zoneOf) : null, private: !!p.private };
 }
 
 export function withVerifiedFacts(kept: VerifiedResult[], opts: { ownPageReadAfter?: boolean } = {}): { kept: VerifiedResult[]; dropped: Dropped[] } {

@@ -324,7 +324,9 @@ export function repeatRule(
   if (h.outcome === "acted") return { action: "blocked", reason: "they already went or applied" };
   const daysLeft = m.date ? daysBetween(today, m.date) : null;
   if (daysLeft !== null && daysLeft < 0) return { action: "blocked", reason: "no longer open" };
-  if (m.isEvent && m.shortNotice) return { action: "remind", reason: "shown before and it's within a day" };
+  // A reminder only for one they never answered, or said they were interested in: an answer that wasn't recorded may have been a no
+  // (batched review of #299: never remind about a declined event).
+  if (m.isEvent && m.shortNotice && (h.outcome === "interested" || !h.answered)) return { action: "remind", reason: "shown before and it's within a day" };
   if (h.outcome === "interested") {
     return !m.isEvent && daysLeft !== null && daysLeft >= 1 && daysLeft <= OPPORTUNITY_REMINDER_DAYS
       ? { action: "remind", reason: `they were interested and the deadline is ${daysLeft} day(s) out` }
@@ -340,8 +342,10 @@ export function repeatRule(
 // When they were shown it, what they said about it, and whether they texted
 // Co right after. extraShownAt: showings found another way (the sweep's
 // fuzzy name match on openings).
-// When this event was offered under another link: the last 120 days of offers, compared by their records (never by name alone).
-async function shownTwins(userId: string, match: TierMatch): Promise<Date[]> {
+// When this event was offered under another link: the last 120 days of offers, compared by their records (never by name alone), with
+// each twin's id and name, so what they said about a twin counts for this one too (batched review of #299: a decline came back under
+// another link).
+async function shownTwins(userId: string, match: TierMatch): Promise<{ at: Date; id: string | null; name: string }[]> {
   const { sameEvent } = await import("../services/eventIdentity.js");
   const id = { name: match.name, url: (match as any).url ?? null, startAt: (match as any).startAt ?? null, city: (match as any).city ?? null, details: (match as any).details ?? null };
   const rows = await pool
@@ -360,7 +364,7 @@ async function shownTwins(userId: string, match: TierMatch): Promise<Date[]> {
     }
     const m = c?.match ?? c;
     const other = { name: m?.name ?? null, url: m?.url ?? null, startAt: m?.startAt ?? null, city: m?.city ?? null, details: m?.details ?? null };
-    return sameEvent(id, other) ? [new Date(r.at)] : [];
+    return sameEvent(id, other) ? [{ at: new Date(r.at), id: typeof (c?.event_api_id ?? m?.event_api_id) === "string" ? String(c?.event_api_id ?? m?.event_api_id) : null, name: String(m?.name ?? "") }] : [];
   });
 }
 
@@ -385,16 +389,19 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
     .catch(() => [] as Date[]);
   // The same event shown under another link (Royce, 2026-10-28: one event on two platforms, services/eventIdentity.ts sameEvent): read
   // from what was offered by its record, for an event with a start of its own. A time already counted isn't counted twice.
-  const twinShown = match.tier !== 3 || (match as any).details?.startAt ? await shownTwins(userId, match) : [];
+  const twins = match.tier !== 3 || (match as any).details?.startAt ? await shownTwins(userId, match) : [];
   const seenTimes = new Set(shown.map((d) => d.getTime()));
-  const shownAt = [...shown, ...twinShown.filter((d) => !seenTimes.has(d.getTime())), ...extraShownAt];
+  const shownAt = [...shown, ...twins.map((t) => t.at).filter((d) => !seenTimes.has(d.getTime())), ...extraShownAt];
+  // What they said about it, under this link or a twin's (by its record, not its name alone).
+  const keys = [...new Set([eventId ? `event:${eventId}` : "", `name:${match.name.toLowerCase()}`, ...twins.flatMap((t) => [t.id ? `event:${t.id}` : "", `name:${t.name.toLowerCase()}`])].filter(Boolean))];
+  const names = [...new Set([match.name, ...twins.map((t) => t.name)].map((n) => n.toLowerCase()).filter(Boolean))];
   const outcomeRow = await pool
     .query(
       `SELECT result FROM suggestion_outcomes
        WHERE user_id = $1 AND result IN ('declined', 'interested', 'acted', 'helped', 'didnt_help')
-         AND (item_key = $2 OR item_key = $3 OR lower(item_name) = lower($4))
+         AND (item_key = ANY($2::text[]) OR lower(item_name) = ANY($3::text[]))
        ORDER BY (result = 'declined') DESC, created_at DESC LIMIT 1`,
-      [userId, eventId ? `event:${eventId}` : "", `name:${match.name.toLowerCase()}`, match.name],
+      [userId, keys, names],
     )
     .then((r) => r.rows[0]?.result as string | undefined)
     .catch(() => undefined);
