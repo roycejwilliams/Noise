@@ -722,6 +722,12 @@ export function toolsOutOfSituation(s: Situation): string[] {
   return ABILITIES.filter((a) => a.tool && SITUATIONAL[a.id] && outOf(s, SITUATIONAL[a.id])).map((a) => a.tool!);
 }
 
+// Every tool that some turns offer and others don't (any situation). The reply prompt puts these after the always-present tools, so
+// the part every member gets on every turn stays the same and stays cached (agent/conversationTools.ts orderForCache).
+export function situationalTools(): string[] {
+  return ABILITIES.filter((a) => a.tool && SITUATIONAL[a.id]).map((a) => a.tool!);
+}
+
 // Tools only the team gets (teamOnly abilities).
 export function teamOnlyTools(): string[] {
   return ABILITIES.filter((a) => a.teamOnly && a.tool).map((a) => a.tool!);

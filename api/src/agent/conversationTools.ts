@@ -2,7 +2,7 @@ import { notToTeammate } from "../services/teamLines.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
-import { situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
+import { situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
 import { guardTools } from "./toolGuard.js";
 import { doorOpen } from "../services/theDoor.js";
 import { proactivePaused } from "../services/proactivePause.js";
@@ -202,6 +202,29 @@ function wordsDue(ctx: Pick<ConversationToolContext, "decision" | "safetyConcern
 // callOfferCheck verification existed to prevent. That verification is
 // restored in conversationReply.ts (verifyAndRecordCallOffer) — it reads the
 // actual sent text after the fact, rather than trusting a self-report.
+// Tools that some turns offer and others don't: team-only, situational, and the ones that exist only after something happened this
+// turn (leaving it at a reaction, the walk-in receipt).
+export function comeAndGoTools(): Set<string> {
+  return new Set([...teamOnlyTools(), ...situationalTools(), "leaveItAtReaction", "askedWalkin"]);
+}
+
+// Pure: the tool set in prompt order for caching (Phase B, 2026-10-27). Tools render first in the request, so a tool missing or
+// worded differently early in the list made everything after it, Cue's shared core included, a fresh cache write on every turn
+// (82% of the reply's cost). The tools every member gets on every turn come first, in their defined order, and the last of them
+// carries a cache point, so that part is the same for everyone and is read at about a tenth of the price; the ones that come and go
+// follow it. Nothing is added, removed or reworded: only the order and one cache point.
+export function orderForCache<T extends Record<string, any>>(tools: T): T {
+  const moving = comeAndGoTools();
+  const always = Object.keys(tools).filter((n) => !moving.has(n));
+  const rest = Object.keys(tools).filter((n) => moving.has(n)).sort();
+  const out: Record<string, any> = {};
+  for (const n of always) out[n] = tools[n];
+  const last = always[always.length - 1];
+  if (last) out[last] = { ...tools[last], providerOptions: { ...(tools[last].providerOptions ?? {}), anthropic: { ...(tools[last].providerOptions?.anthropic ?? {}), cacheControl: { type: "ephemeral" } } } };
+  for (const n of rest) out[n] = tools[n];
+  return out as T;
+}
+
 export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
@@ -1105,7 +1128,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
     reactInsteadOfReplying: tool({
       // Any single emoji chosen for this exact message (Royce, 2026-10-01
       // decisions), same rules as the ack (readTurn.ts parseAck).
-      description: `${toolUse("reactInsteadOfReplying")}${ctx.lastReaction ? ` Your last reaction to them was ${ctx.lastReaction}; use a different one.` : ""}`,
+      // The same for every member and turn, so it caches with the other tools; their last reaction is in the reply prompt's
+      // member part (agent/conversationReply.ts), and execute still refuses a repeat.
+      description: toolUse("reactInsteadOfReplying"),
       inputSchema: z.object({
         reaction: z.string().describe('Exactly one emoji that says something about this message: "🥂" a plan locked in or a win, "🫡" a correction or instruction taken, "🔥" real news, "😂" when they\'re genuinely funny, "❤️" something personal and good, "👍" a plain okay (never on bad news, and never a heart on a complaint or burnout). Any other single emoji that fits the moment beats a generic one.'),
       }),
@@ -1819,5 +1844,5 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
   guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });
-  return { tools, state, flushLinks, loop: () => turnLoop };
+  return { tools: orderForCache(tools), state, flushLinks, loop: () => turnLoop };
 }

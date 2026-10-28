@@ -231,6 +231,7 @@
     "evals/checkins/askFrame.ts",
     "evals/relevance/lateJoiner.ts",
     "evals/events/checkinNoShow.ts",
-    "evals/llm/structuredJudge.ts"
+    "evals/llm/structuredJudge.ts",
+    "evals/cache/toolOrder.ts"
   ]
 }

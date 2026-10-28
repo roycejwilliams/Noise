@@ -456,7 +456,7 @@ ${input.recentConversation || "(this is the start of the conversation)"}
 What Cue knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread. It's theirs: when they ask about their own people, plans or history, answer from it.
 ${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
 
-${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
+${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.lastReaction ? `Your last reaction to them was ${input.lastReaction}; if you react this time, use a different one.\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
 
 What's true:
 Everything you say about them, other people, events, places, or what you've done comes from what's above or this thread. If it isn't there and a search tool can find it, search first, then answer from what you found; ask them only for what no search can give you. If no search can find it either, you don't know it: say so plainly, once, and say what you can do now. Your own past actions come from what you actually sent. Only promise something later when the context says it will happen. If you can't tell what they mean, ask.
@@ -508,7 +508,7 @@ ${input.recentConversation || "(this is the start of the conversation)"}
 What Cue knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread. It's theirs: when they ask about their own people, plans or history, answer from it.
 ${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
 
-${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
+${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.lastReaction ? `Your last reaction to them was ${input.lastReaction}; if you react this time, use a different one.\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
 
 Only what's real:
 - Ground everything in "What's true right now", the rest of what's above, and what was said in this thread. Never state or imply a personal detail, preference or fact about them that isn't there.
