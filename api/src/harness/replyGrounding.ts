@@ -1354,7 +1354,9 @@ async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSource
   const started = Date.now();
   const facts = rf.facts.filter((f) => f.kind !== "hint").map((f) => `[${f.id}] ${f.text}`).join("\n");
   const receipts = receiptsForCheck(rf);
-  const { text } = await generateText({
+  // Held to the claims shape at the API (services/structuredJudge.ts); every citation is still checked in code (claimChecks).
+  const { judgeJson, CLAIMS_SCHEMA } = await import("../services/structuredJudge.js");
+  const { text } = await judgeJson(CLAIMS_SCHEMA, {
     model: anthropic(model),
     maxOutputTokens: 2000,
     // Haiku takes no effort setting (it errors, 2026-09-27).

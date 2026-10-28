@@ -229,6 +229,7 @@
     "evals/forget/stores.ts",
     "evals/forget/guardedReaders.ts",
     "evals/checkins/askFrame.ts",
-    "evals/relevance/lateJoiner.ts"
+    "evals/relevance/lateJoiner.ts",
+    "evals/llm/structuredJudge.ts"
   ]
 }
