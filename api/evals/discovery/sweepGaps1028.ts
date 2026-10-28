@@ -40,15 +40,19 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   check("Luma's own pages (about, blog, terms, signup, search, discover, calendar), a homepage or a directory listing aren't one", notEvents.every((u) => W.eventPageUrl(u) === null), notEvents.filter((u) => W.eventPageUrl(u) !== null));
   check("taskWeb reads Luma's not-an-event list from lumaViaExa.ts, not a copy", LV.LUMA_NOT_EVENTS.has("about") && LV.lumaEventSlug("https://luma.com/blog") === null && !/new Set\(\["discover"/.test(src("services/taskWeb.ts")));
 
-  const lumaText = `MemoryBox Beta Launch 🏓 AI that remembers. A party you won't forget.\nThursday, November 6, 6:00 PM - 9:00 PM\nSoMa, San Francisco\nHosted by MemoryBox. Join us to celebrate the beta launch with ping pong, drinks and demos. Register to attend.`;
+  const lumaText = `MemoryBox Beta Launch 🏓 AI that remembers. A party you won't forget.\nThursday, November 6, 6:00 PM - 9:00 PM\nSoMa, San Francisco\nHosted by MemoryBox. Join us to celebrate the beta launch with ping pong, drinks and demos. Register to attend.\nAbout the event: MemoryBox is an AI that remembers the people, places and moments in your life, so you never lose the thread. Come meet the team behind the beta, try it on your own phone, play a round of ping pong with the founders, and hear what we're building next. Doors open at six; demos start at seven. Space is limited, so please register ahead and bring a friend who forgets birthdays.`;
   const home = `MemoryBox. AI that remembers. Your memories, organized. Download the app.`;
   const raw = { name: "MemoryBox Beta Launch 🏓 AI that remembers. A party you won't forget.", url: "https://luma.com/2gizvh99", details: [{ label: "date", value: "Thursday, November 6, 6:00 PM" }, { label: "neighborhood", value: "SoMa, San Francisco" }], date: "2026-11-06", deadline: null };
   let lookedUp = false;
   const reads: Record<string, string> = { "https://luma.com/2gizvh99": lumaText, "https://www.memorybox.ai/": home };
   let askedPage = "";
-  const page = await W.pickPage(raw, { read: async (u) => reads[u] ?? null, official: async () => { lookedUp = true; return "https://www.memorybox.ai/"; }, lumaEvent: async (u) => { askedPage = u; return true; } });
+  const pageReads: string[] = [];
+  const page = await W.pickPage(raw, { read: async (u) => (pageReads.push(u), reads[u] ?? null), official: async () => { lookedUp = true; return "https://www.memorybox.ai/"; }, lumaPage: async (u) => { askedPage = u; return { oneEvent: true, text: lumaText }; } });
   check("the 10-28 MemoryBox party: its Luma page stays, never swapped for memorybox.ai", page.url === raw.url && !page.swapped && page.text === lumaText, page);
   check("and no homepage is even looked up for it: its own page's data says it's one event", !lookedUp && askedPage === raw.url);
+  check("re-review of #293: the Luma page is fetched once, for the check and its text both (no second read)", pageReads.length === 0, pageReads);
+  const shell = await W.pickPage(raw, { read: async (u) => (u === raw.url ? lumaText : null), official: async () => null, lumaPage: async () => ({ oneEvent: true, text: "Luma" }) });
+  check("a fetch that came back as a short shell is read as any page is", shell.text === lumaText && !shell.swapped);
   check("its Luma page isn't marked the company's own page: facts on it are still checked next to its name", page.official === false);
   const v = W.verifyResult({ ...raw, url: page.url }, page.text!, { now: new Date("2026-10-28T16:00:00Z"), zone: "America/Los_Angeles", official: page.official });
   const kept = W.withVerifiedFacts(v.kept ? [v.kept] : []);
@@ -58,11 +62,13 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   check("the verification rule is unchanged: checked against the homepage, it has nothing verified and is dropped", W.withVerifiedFacts(onHome.kept ? [onHome.kept] : []).kept.length === 0);
 
   // A Luma calendar named like an event (lu.ma/genai-sf): its page's data isn't one event, so it's treated as before (swapped).
-  const cal = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async (u) => reads[u] ?? "calendar", official: async () => "https://www.memorybox.ai/", lumaEvent: async () => false });
+  const cal = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async (u) => reads[u] ?? "calendar", official: async () => "https://www.memorybox.ai/", lumaPage: async () => ({ oneEvent: false, text: null }) });
   check("a Luma calendar or city page isn't kept as an event page: its own data decides, and it's swapped as before", cal.swapped && cal.url === "https://www.memorybox.ai/");
-  const eb = await W.pickPage({ ...raw, url: "https://www.eventbrite.com/e/memorybox-beta-launch-tickets-1" }, { read: async () => lumaText, official: async () => "https://www.memorybox.ai/", lumaEvent: async () => { throw new Error("only Luma pages are asked"); } });
+  const eb = await W.pickPage({ ...raw, url: "https://www.eventbrite.com/e/memorybox-beta-launch-tickets-1" }, { read: async () => lumaText, official: async () => "https://www.memorybox.ai/", lumaPage: async () => { throw new Error("only Luma pages are asked"); } });
   check("an Eventbrite event page is kept by its url alone", !eb.swapped && eb.url.includes("eventbrite.com/e/"));
-  check("Luma's own page data decides it (eventDetails.ts parseLumaEventPage), read only for a Luma url", /fetchLumaEventDetails\(url\)/.test(src("services/taskWeb.ts")));
+  check("Luma's own page data decides it, from one fetch (eventDetails.ts readLumaPage), read only for a Luma url", /m\.readLumaPage\(url\)/.test(src("services/taskWeb.ts")) && /return \(await readLumaPage\(url\)\)\.details;/.test(src("services/eventDetails.ts")));
+  const calText = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async () => { throw new Error("read twice"); }, official: async () => null, lumaPage: async () => ({ oneEvent: false, text: lumaText }) });
+  check("a Luma page that isn't one event and has no own site found is checked on the text that one fetch read", !calText.swapped && calText.text === lumaText);
   const blog = { name: "The Loft at Mission Bay", url: "https://bestvenues-blog.com/top-10-sf-venues", details: [] };
   const swap = await W.pickPage(blog, { read: async (u) => (u === "https://theloftsf.com/" ? "The Loft at Mission Bay" : "Top 10 venues"), official: async () => "https://theloftsf.com/" });
   check("a blog or directory result is still swapped for the thing's own page", swap.swapped && swap.url === "https://theloftsf.com/" && swap.official);
@@ -111,7 +117,7 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   check("an incomplete goal still counts as being searched for the reply's running-work line", SC.searchedGoals({ items: [item, { kind: "goal", text: "skipped one", status: "skipped" }] }).join() === item.text);
 
   // Which failures clear (review of #293): a timeout, a network error, a 5xx. A key, credit, a rate limit or a budget doesn't.
-  const clears = ["Exa timed out", "Web search failed: Exa timed out.", "Web search failed: Exa 503.", "Exa couldn't be reached", "fetch failed", "connect ETIMEDOUT 1.2.3.4:443", "Overloaded", "status 502", LV.exaFailureReason("Exa timed out"), LV.exaFailureReason("Exa 503"), LV.exaFailureReason("threw: ETIMEDOUT"), "Luma's feed failed (lumaDiscovery: fetchPublicEvents failed (504): gateway)"];
+  const clears = ["Exa timed out", "Web search failed: Exa timed out.", "Web search failed: Exa 503.", "Exa couldn't be reached", "fetch failed", "connect ETIMEDOUT 1.2.3.4:443", "Overloaded", "Cannot connect to API: other side closed", "read ECONNRESET", "socket hang up", "status 502", LV.exaFailureReason("Exa timed out"), LV.exaFailureReason("Exa 503"), LV.exaFailureReason("threw: ETIMEDOUT"), "Luma's feed failed (lumaDiscovery: fetchPublicEvents failed (504): gateway)"];
   const stays = ["Web search failed: Exa 401.", "Web search failed: Exa 402 NO_MORE_CREDITS.", "Exa 429", "auth (401)", "rate_limited (429)", "error (402)", "not_configured (no status)", "the day's web search budget is used up", "unavailable (the daily X cap is reached)", LV.exaFailureReason("Exa 402"), LV.exaFailureReason("Exa 401"), LV.exaFailureReason("Exa 429"), LV.lumaRefusedReason(3, 0, 10, 10), LV.LUMA_API_OFF, "Luma's feed failed (luma: listCalendarEvents failed (401): bad key)", "", "something unknown"];
   check("a timeout, a network error or a 5xx clears", clears.every((t) => transientFailure(t)), clears.filter((t) => !transientFailure(t)));
   check("a key, credit, a rate limit, a cap or anything unknown doesn't", stays.every((t) => !transientFailure(t)), stays.filter((t) => transientFailure(t)));
@@ -127,18 +133,37 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   const timeout = () => { throw Object.assign(new Error("connect ETIMEDOUT 104.18.0.1:443"), { code: "ETIMEDOUT" }); };
   const ev = await T.eventCandidates("AI founder events", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { feed: async () => timeout(), calendar: async () => timeout(), viaExa: async () => timeout(), page: async () => null, near: async () => true, rank: (async () => ({ ranked: [], closest: null })) as any, gate: (async (m: any) => m) as any, record: (async () => {}) as any, exaOn: () => true } });
   const evFailed = SF.eventSearchFailures(ev);
-  check("review of #293: a timed-out feed, calendar and Exa are said, not an empty feed", ev.candidates.length === 0 && evFailed.length === 3 && evFailed.every((f) => transientFailure(f)), evFailed);
-  check("so the events place is an outage", reads((r) => { for (const f of evFailed) SF.placeFailed(r, "events", f); }).outages.join() === "events");
+  check("review of #293: a timed-out feed, calendar and Exa are said, not an empty feed", ev.candidates.length === 0 && evFailed.length === 3 && evFailed.every((f) => transientFailure(f)) && ev.answered === 0, { evFailed, answered: ev.answered });
+  check("so the events place is an outage (none of its sources answered)", reads((r) => { SF.noteEventSearch(r, ev); }).outages.join() === "events");
+  const stub = { page: async () => null, near: async () => true, rank: (async () => ({ ranked: [], closest: null })) as any, gate: (async (m: any) => m) as any, record: (async () => {}) as any, exaOn: () => true };
+  // Re-review of #293: Luma's feed answered and only the Luma search through Exa timed out: said, not an outage (no retry).
+  const partial = await T.eventCandidates("AI founder events", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { ...stub, feed: async () => [], calendar: async () => [], viaExa: async () => timeout() } });
+  const partialRead = reads((r) => { check("the partial timeout is still said on the item", SF.noteEventSearch(r, partial).length === 1); });
+  check("re-review of #293: the feed answered and only Exa timed out: no outage, nothing down", (partial.answered ?? 0) >= 1 && partialRead.outages.length === 0 && partialRead.lasting.length === 0, { answered: partial.answered, partialRead });
+  // Re-review of #293: no LUMA_API_KEY is a setting, as on the Exa path: no failure, nothing red.
+  const { LUMA_KEY_MISSING } = await import("../../src/services/luma.js");
+  const noKey = await T.eventCandidates("AI founder events", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, viaExa: false, sources: { ...stub, feed: async () => [], calendar: async () => { throw new Error(LUMA_KEY_MISSING); } } });
+  check("re-review of #293: a missing LUMA_API_KEY on the calendar is no failure, and events isn't down", !noKey.failures && reads((r) => { SF.noteEventSearch(r, noKey); }).lasting.length === 0, noKey.failures);
   check("Exa being off, no Luma key, no catalog city or a test account isn't an events failure", SF.eventSearchFailures({ viaExa: { error: LV.EXA_OFF } }).length === 0 && SF.eventSearchFailures({ viaExa: { error: LV.NO_PLACE } }).length === 0 && SF.eventSearchFailures({ viaExa: { error: LV.LUMA_API_OFF } }).length === 0 && SF.eventSearchFailures({ viaExa: { error: LV.TEST_ACCOUNT } }).length === 0);
-  check("Exa out of credit while the feed answered: an events failure that doesn't clear (down, not an outage)", reads((r) => { const f = SF.eventSearchFailures({ viaExa: { error: LV.exaFailureReason("Exa 402") } }); for (const x of f) SF.placeFailed(r, "events", x); r.events.ok = true; }).lasting.join() === "events");
+  check("Exa out of credit while the feed answered: an events failure that doesn't clear (down, not an outage)", (() => { const x = reads((r) => { SF.noteEventSearch(r, { viaExa: { error: LV.exaFailureReason("Exa 402") }, answered: 1 }); }); return x.lasting.join() === "events" && !x.outages.length; })());
 
   // Wiring (sweepFind's loop can't run here without a model).
   const sf = src("services/sweepFind.ts");
-  check("sweepFind: an events throw, an events part that failed, every web query failed, X's failure and a failed loop each go through placeFailed", /placeFailed\(places, "events", String\(err\?\.message \?\? err\)\);/.test(sf) && /for \(const f of partFailed\) placeFailed\(places, "events", f\);/.test(sf) && /for \(const r of all\) placeFailed\(places, "web"/.test(sf) && /placeFailed\(places, "x", xError\.kind === "server"/.test(sf) && /if \(!called\.has\(s\.source\)\) placeFailed\(places, s\.source/.test(sf));
-  check("sweepFind: a clean call marks its place ok (events with nothing that clears failing, any web query answering, X answering)", /if \(!partFailed\.some\(transientFailure\)\) places\.events\.ok = true;/.test(sf) && /\) places\.web\.ok = true;/.test(sf) && /places\.x\.ok = true;/.test(sf));
+  check("sweepFind: an events throw, an events part that failed, every web query failed, X's failure and a failed loop each go through placeFailed", /placeFailed\(places, "events", String\(err\?\.message \?\? err\)\);/.test(sf) && /const partFailed = noteEventSearch\(places, r\);/.test(sf) && /for \(const r of all\) placeFailed\(places, "web"/.test(sf) && /placeFailed\(places, "x", xError\.kind === "server"/.test(sf) && /if \(!called\.has\(s\.source\)\) placeFailed\(places, s\.source/.test(sf));
+  check("sweepFind: a clean call marks its place ok (events with nothing that clears failing, any web query answering, X answering)", /if \(\(r\.answered \?\? 1\) > 0\) reads\.events\.ok = true;/.test(sf) && /\) places\.web\.ok = true;/.test(sf) && /places\.x\.ok = true;/.test(sf));
   check("sweepFind: the report carries outages, places down and the unverified count", /outages: report\.outages/.test(sf) && /lasting: report\.lasting/.test(sf) && /unverified \+= all\.reduce/.test(sf));
   const ds = src("services/dailySweep.ts");
   check("the floor reports each search through searchedItem and retries incomplete ones through its error record", /searchedItem\(b, r!\)/.test(ds) && /retryIncomplete === "retry" \? incompleteLines : \[\]/.test(ds) && /await writeDaily\(userId, "skip", "error"/.test(ds));
+}
+
+// ---------------------------------------------------------------- 2b. the hourly ask sweep: a timed-out place isn't an empty run
+{
+  const ES = await import("../../src/services/eventSurfacingSweep.js");
+  check("Royce 10-28 'close those gaps': the web timed out while events answered and nothing was found: not an empty run", !ES.movesEmptyRuns({ searched: true, found: [], sources: { outages: ["web"] } }));
+  check("a run that found something still resets the count, outage or not", ES.movesEmptyRuns({ searched: true, found: [{}], sources: { outages: ["web"] } }));
+  check("a clean run that found nothing is an empty run, as before (a place down for good doesn't stop it)", ES.movesEmptyRuns({ searched: true, found: [], sources: {} }) && ES.movesEmptyRuns({ searched: true, found: [] }));
+  check("a run that never really looked moves nothing, as before", !ES.movesEmptyRuns({ searched: false, found: [] }));
+  check("the hourly sweep's empty-run count reads it", /&& movesEmptyRuns\(trace\)\) \{/.test(src("services/eventSurfacingSweep.ts")));
 }
 
 // ---------------------------------------------------------------- 3. the /sweeps page shows it

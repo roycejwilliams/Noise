@@ -14,7 +14,8 @@ export function transientFailure(text: string | null | undefined): boolean {
   const code = status ? Number(status[1] ?? status[2]) : null;
   if (code !== null && code >= 400) return code >= 500;
   if (/timed?\s?out|timeout|ETIMEDOUT|ESOCKETTIMEDOUT|AbortError|aborted/i.test(t)) return true;
-  if (/couldn't be reached|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|fetch failed|network error/i.test(t)) return true;
+  // A dropped connection too (re-review of #293): "Cannot connect to API: other side closed", ECONNRESET, socket hang up.
+  if (/couldn't be reached|cannot connect to API|other side closed|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|fetch failed|network error|terminated|UND_ERR_SOCKET/i.test(t)) return true;
   if (/overloaded|internal server error|bad gateway|service unavailable|gateway timeout/i.test(t)) return true;
   return false;
 }

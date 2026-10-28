@@ -221,7 +221,8 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   // 5. A failed search isn't an empty run.
   const ess = src("services/eventSurfacingSweep.ts");
   const sf = src("services/sweepFind.ts");
-  check("#5 empty runs count only when a search really ran", /&& trace\.searched\) \{\s*const quiet = [\s\S]{0,600}UPDATE ask_checkins SET empty_runs/.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3);
+  // 2026-10-28 (#293): and a run whose place timed out with nothing found isn't one either (movesEmptyRuns reads trace.searched first).
+  check("#5 empty runs count only when a search really ran", /&& movesEmptyRuns\(trace\)\) \{\s*const quiet = [\s\S]{0,600}UPDATE ask_checkins SET empty_runs/.test(ess) && /return !!t\.searched && /.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3);
   // 6. Person asks are in the people graph.
   check("#6 person asks count in peopleGraph", /kind IN \('find', 'person'\)/.test(src("services/peopleGraph.ts")));
   // 7. A goal change that didn't happen is never reported.

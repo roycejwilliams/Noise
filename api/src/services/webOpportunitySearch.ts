@@ -77,9 +77,9 @@ export type WebOpportunityResult = (TierMatch & { tier: 3 }) | null;
 // (2026-09-18: the Awesome Foundation's "$1000" sat past an 8,000-character
 // cut, below a list of past grantees, and the result was rejected); Co's
 // drafting prompts get a short excerpt around what the result claims.
-const PAGE_TEXT_LIMIT = 60_000;
+export const PAGE_TEXT_LIMIT = 60_000;
 // Less than this from a plain fetch is a script-rendered shell or a block page.
-const MIN_FETCHED_TEXT = 400;
+export const MIN_FETCHED_TEXT = 400;
 const EXCERPT_LIMIT = 2500;
 
 // Readable sentences a page keeps in its script data rather than its HTML

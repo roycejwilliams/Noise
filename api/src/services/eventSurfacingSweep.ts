@@ -416,6 +416,11 @@ type SweepSearchTrace = {
 // What one ask's (or one goal's) search did, for the daily sweep's summary (services/dailySweep.ts).
 // foundKeys / pooledKeys: which finds those were (a find's name and date; a pooled one's link), so a retry later that day counts a find
 // it finds again once (dailySweep.ts mergeRetried; review of #293).
+// Pure: whether this run moves the ask's empty-run count (services/workingSet.ts nextEmptyRuns): it really looked, and it found
+// something (which resets the count) or no place it looked in had an outage (an incomplete run that found nothing isn't an empty one).
+export function movesEmptyRuns(t: { searched?: boolean; found: unknown[]; sources?: { outages?: string[] } }): boolean {
+  return !!t.searched && (t.found.length > 0 || !t.sources?.outages?.length);
+}
 export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[] };
 
 async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
@@ -723,7 +728,10 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // The 9am daily sweep doesn't count (services/dailySweep.ts): it leaves the ask lifecycle as the hourly sweep runs it (Royce, 2026-10-13).
   // While they're quiet the count is frozen and the ask marked held; the first empty run once they're engaged again counts fresh
   // (services/workingSet.ts nextEmptyRuns).
-  if (!candidate.allSources && /^[0-9a-f-]{36}$/i.test(candidate.askId) && trace.searched) {
+  // A place that failed in a way that clears (sweepFind.ts SweepSources.outages: a timeout, a network error, a 5xx, with no call to it
+  // answering) makes the run incomplete, not empty, here as in the 9am sweep (Royce, 2026-10-28: "close those gaps"): a web timeout while
+  // events answered used to count as an empty run and move the ask toward backoff. A place down for good (a key, credit) still counts.
+  if (!candidate.allSources && /^[0-9a-f-]{36}$/i.test(candidate.askId) && movesEmptyRuns(trace)) {
     const quiet = await import("./dailySweep.js").then((D) => D.memberTapered(candidate.userId)).catch(() => true);
     const [cur] = (await pool.query(`SELECT empty_runs, quiet_held_at FROM ask_checkins WHERE id::text = $1`, [candidate.askId]).catch(() => ({ rows: [] as any[] }))).rows;
     if (cur) {
