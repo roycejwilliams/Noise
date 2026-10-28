@@ -44,13 +44,37 @@ check("read: said no, but a walk-in check-in: sent (came)", (await run({ row: { 
 check("read: 'not going' days before, then arrived: sent", (await run({ row: { ...base, not_going_at: T, noshow_asked_at: null }, arrived: true })) === "send");
 check("read: asked, not settled: waits", (await run({ row: { ...base, noshow_asked_at: T, noshow_settled_at: null } })) === "wait");
 check("read: the store can't be read: waits, never sends blind", (await run({ throws: true })) === "wait");
+
+// 2b. The Luma door (a real event id, the guest list injected)
+const real = "evt-dinner-1027";
+let reads = 0;
+const door = (o: { email?: string; fail?: boolean }) => async () => { reads++; if (o.fail) throw new Error("luma: getEventGuestList failed (503)"); return o.email ? [{ email: o.email, phone: null, checked_in_at: "2026-10-28T02:10:00Z" } as any] : []; };
+const runL = async (row: any, g: ReturnType<typeof door>) => { Object.assign(world, { row, arrived: false, walkin: false, throws: false }); return E.debriefForEvent(u, real, { guestList: g }); };
+check("door: 'not going' Wednesday, scanned at Luma's door Friday: sent (came)", (await runL({ ...base, not_going_at: T, noshow_asked_at: null }, door({ email: base.email }))) === "send");
+check("door: said no, not on the door list: skipped", (await runL({ ...base, noshow_asked_at: T, noshow_settled_at: T, noshow_outcome: "said_no:queued" }, door({}))) === "skip");
+check("door: Luma can't be read and the answer turns on it: waits, never skips on a failed read", (await runL({ ...base, not_going_at: T, noshow_asked_at: null }, door({ fail: true }))) === "wait");
+reads = 0;
+check("door: never asked, never said anything: sent without reading Luma at all", (await runL({ ...base, not_going_at: null, noshow_asked_at: null }, door({ fail: true }))) === "send" && reads === 0, { reads });
+
+// 2c. The bound, through the real draft: a wait defers the debrief, but never past 3 days from when it was first queued
+const { proactiveRegistry: registry, DEBRIEF_WAIT_MAX_HOURS } = await import("../../src/harness/proactiveRegistry.js");
+const cand = (ageHours: number) => ({ id: "c1", userId: u, type: "debrief", targetKey: `debrief:${ev}`, topicKey: null, summary: "", priority: 50, attempts: 0, dueAt: new Date(), expiresAt: new Date(Date.now() + 72 * 3_600_000), createdAt: new Date(Date.now() - ageHours * 3_600_000), payload: { eventApiId: ev, eventName: "The Dinner", outcomeFollowupIds: [], checkinFollowupIds: ["f1"], walkinCheckinIds: [], askText: null } }) as any;
+const person = { userId: u, firstName: "Jordan", phoneNumber: base.phone_number } as any;
+Object.assign(world, { row: { ...base, noshow_asked_at: T, noshow_settled_at: null }, arrived: false, walkin: false, throws: false });
+const young = await registry.debrief.draft(cand(1), person);
+const old = await registry.debrief.draft(cand(DEBRIEF_WAIT_MAX_HOURS + 1), person);
+check("draft: unsettled an hour in: deferred (about 2h), nothing drafted", "defer" in young && Math.abs((young as any).defer.getTime() - Date.now() - 2 * 3_600_000) < 60_000, young);
+check("draft: still unsettled past the cap: skipped, nothing sent on a guess", "skip" in old && /never settled/.test((old as any).skip), old);
+Object.assign(world, { row: { ...base, noshow_asked_at: T, noshow_settled_at: T, noshow_outcome: "no_answer:queued" } });
+const no = await registry.debrief.draft(cand(1), person);
+check("draft: a settled no-show: the whole debrief is skipped before any model call", "skip" in no && /no-show flow covers/.test((no as any).skip), no);
 (pool as any).query = realQuery;
 
 // 3. Wiring: decided at draft time, before anything is written; the check-in queue itself is unchanged
 const reg = fs.readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
 const dd = reg.slice(reg.indexOf("async function draftDebrief("), reg.indexOf("async function debriefItemKeys("));
 check("draftDebrief asks debriefForEvent for a Noise event before drafting", dd.indexOf("debriefForEvent(c.userId, p.eventApiId)") > 0 && dd.indexOf("debriefForEvent(") < dd.indexOf("draftDebriefText("));
-check("a skip ends the whole debrief; a wait defers it (the candidate's own expiry bounds the wait)", /if \(said === "skip"\) return skip\(/.test(dd) && /if \(said === "wait"\) return \{ defer:/.test(dd));
+check("a skip ends the whole debrief; a wait defers it, bounded by the candidate's age (2c runs it)", /if \(said === "skip"\) return skip\(/.test(dd) && /c\.createdAt\.getTime\(\) > DEBRIEF_WAIT_MAX_HOURS/.test(dd));
 check("draftDebrief still waits until the day is over first", dd.indexOf("hasn't happened yet") > 0 && dd.indexOf("hasn't happened yet") < dd.indexOf("debriefForEvent("));
 const ecf = fs.readFileSync(new URL("../../src/services/eventCheckinFollowUp.ts", import.meta.url), "utf8");
 check("the queue step doesn't decide it (it runs up to a day before the event ends)", !ecf.slice(ecf.indexOf("export async function enqueueDueEventCheckinFollowUps")).includes("debriefFor"));

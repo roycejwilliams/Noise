@@ -83,6 +83,8 @@ async function whatCoSent(userId: string, followupIds: string[]): Promise<SentRe
   return null;
 }
 
+// The longest a debrief waits on whether they made it, from when it was first queued.
+export const DEBRIEF_WAIT_MAX_HOURS = 72;
 async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResult> {
   const p = c.payload as DebriefPayload;
   const tz = await memberZone(c.userId);
@@ -101,7 +103,12 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   if (p.eventApiId) {
     const said = await (await import("../services/eventCheckinFollowUp.js")).debriefForEvent(c.userId, p.eventApiId);
     if (said === "skip") return skip("they didn't make it: the no-show flow covers that night");
-    if (said === "wait") return { defer: new Date(Date.now() + 2 * 3_600_000), reason: "whether they made it isn't settled yet" };
+    // A wait never outlives the debrief's first 3 days: each defer moves the candidate's expiry on, so the bound is its age (review
+    // of #275). Still unknown then (the night never settled, the door never read): nothing is sent on a guess.
+    if (said === "wait") {
+      if (Date.now() - c.createdAt.getTime() > DEBRIEF_WAIT_MAX_HOURS * 3_600_000) return skip("whether they made it never settled");
+      return { defer: new Date(Date.now() + 2 * 3_600_000), reason: "whether they made it isn't settled yet" };
+    }
   }
   // A follow-up on something Co sent needs a record that Co sent it.
   const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds) : null;
