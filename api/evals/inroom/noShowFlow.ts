@@ -210,6 +210,17 @@ const said = (m: Member, content: string) => W.memoriesWritten.push({ user_id: m
   check("no answer + door not tracked, silent past the settle window: settled, nothing", !noteFor(jordan) && W.presence.get(`ev6b|${jordan.id}`)?.noshow_outcome === "no_answer");
 }
 {
+  // Review of #281: a late "no" answers the last night Cue asked about. An older ask still open behind a settled newer one is never
+  // bound (it would send "sorry you couldn't make it" for a night they came to).
+  fresh();
+  const jordan = addMember({ first_name: "Jordan" });
+  W.presence.set(`evA|${jordan.id}`, { sharing_seen_at: null, arrived_at: null, noshow_asked_at: new Date(Date.now() - 20 * 3_600_000) } as any);
+  W.presence.set(`evB|${jordan.id}`, { sharing_seen_at: null, arrived_at: null, noshow_asked_at: new Date(Date.now() - 2 * 3_600_000), noshow_settled_at: new Date(), noshow_outcome: "no_answer:queued" } as any);
+  check("a late 'no' never binds to an older open ask behind a settled newer one", (await N.openNoShowAsk(jordan.id)) === null);
+  W.presence.get(`evB|${jordan.id}`)!.noshow_settled_at = null;
+  check("... and binds to the newest while it is open", (await N.openNoShowAsk(jordan.id))?.eventApiId === "evB");
+}
+{
   fresh();
   const jordan = addMember({ first_name: "Jordan" });
   const noor = addMember({ first_name: "Noor" });
