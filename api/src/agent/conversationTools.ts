@@ -1687,8 +1687,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         lastName: z.string().optional().describe("Their last name, once the member has told you. Never guess it."),
       }),
       execute: async ({ personName, lastName }) => {
-        // Found and asked, not found, or found but the request didn't go: one answer, the same fact, the same receipt, so nothing the
-        // reply reads (now or on a later turn) tells them whether the person was found, is a member, or already said yes (2026-09-22;
+        // Found and asked, not found, or found but the request didn't go: one answer, the same fact, the same receipt and co_fact, so
+        // nothing this tool returns or records tells them whether the person was found, is a member, or already said yes (2026-09-22;
         // review of #284: a second ask for the same name used to answer differently when the first didn't go). The honest status is
         // only in the internal reply.requestEventIntro row.
         const neutral = () => {

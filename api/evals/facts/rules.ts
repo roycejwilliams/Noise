@@ -27,7 +27,7 @@ check("a search is recorded as what was looked for", F.toolAction("searchEvents"
 check("what the loop shares is recorded as sent, with its link", F.toolAction("shareFinds", { items: [{ link: "https://x.example/a", caption: "A loft in SoMa" }] })?.[0].url === "https://x.example/a" && F.toolAction("shareFinds", { items: [{ link: "https://x.example/a", caption: "A loft in SoMa" }] })?.[0].relation === "sent");
 check("a drafted email is recorded as drafted, never as sent", /drafted an email to events@wave\.sf/.test(F.toolAction("draftEmail", { to: "events@wave.sf", subject: "Oct 10?" })?.[0].label ?? "") && F.toolAction("draftEmail", { to: "a@b.co", subject: "x" })?.[0].relation === "did");
 check("saving an ask is recorded in their words", F.toolAction("saveAsk", { what: "a hardware cofounder" })?.[0].label === "saved an ask to keep looking for: a hardware cofounder");
-check("an intro names who it was with", /with Sam$/.test(F.toolAction("requestEventIntro", { personName: "Sam" })?.[0].label ?? ""));
+check("an intro ask names who it was for, never that an intro started (review of #284)", /intro to Sam\b/.test(F.toolAction("requestEventIntro", { personName: "Sam" })?.[0].label ?? "") && !/started/.test(F.toolAction("requestEventIntro", { personName: "Sam" })?.[0].label ?? ""));
 check("tools that only read aren't actions", F.toolAction("listOpenAsks", {}) === null && F.toolAction("checkInvitesLeft", {}) === null && F.toolAction("sendReply", { message: "hi" }) === null);
 
 const rows = [
@@ -199,7 +199,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
 }
 
 // ------------------------------------------------ wiring
-check("every tool Cue uses goes on the record", /await recordToolAction\(ctx\.userId, name, input\)/.test(src("agent/toolGuard.ts")));
+check("every tool Cue uses goes on the record (the part it did, when it did only part), and the backfill reads the same", /await recordToolAction\(ctx\.userId, name, recordAs\)/.test(src("agent/toolGuard.ts")) && /const recordAs = partial \?\? input;/.test(src("agent/toolGuard.ts")) && /partial \? \{ recordAs: partial \}/.test(src("agent/toolGuard.ts")) && /COALESCE\(proposal->'recordAs', proposal->'input'\)/.test(src("services/coFacts.ts")));
 check("every find Cue sends goes on the record", /await recordSentItems\(/.test(src("services/recommendation.ts")));
 check("every unprompted text goes on the record", (src("harness/proactive.ts").match(/recordProactiveText\(/g) ?? []).length >= 3);
 check("Cue's replies read the record, including older things they name", /const ledger = opts\.turn\?\.ledger \?\? \(await ledgerFacts\(userId, opts\.context \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /ledgerFacts\(userId, `\$\{message\}\\n\$\{opts\.ledgerContext \?\? ""\}`, zone\)/.test(src("services/turnContext.ts")) && /turnP = assembleContext\(user\.id, resolvedContent, \{\s*inlineTarget,\s*ledgerContext:/.test(src("routes/sendblue.ts")) && /turn: turn \?\? undefined,/.test(src("routes/sendblue.ts")));
