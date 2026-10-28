@@ -792,7 +792,9 @@ export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
     const eventId = String(r.event_id);
     // Who was in the room at its end, for the follow-up (read before the room is marked closed).
     const roster = await (await import("./eventScoring.js")).inRoomPool(eventId).catch(() => [] as ScorableGuest[]);
-    const offers = await pool.query(`UPDATE event_match_offers SET status = 'expired', answered_at = NULL WHERE event_id = $1 AND status IN ('open', 'queued', 'sending') RETURNING person_id`, [eventId]);
+    // An ask that never went out (queued, or stuck mid-send) loses its opened_at as it expires: the member-names read counts an expired
+    // ask with an opened_at as one that reached them, so a stuck send must not put the candidate's name on their list (review of #295).
+    const offers = await pool.query(`UPDATE event_match_offers SET status = 'expired', answered_at = NULL, opened_at = CASE WHEN status IN ('queued', 'sending') THEN NULL ELSE opened_at END WHERE event_id = $1 AND status IN ('open', 'queued', 'sending') RETURNING person_id`, [eventId]);
     // Asks held for someone's morning: brought due now, so the deferred runner drops them as "event over" and tells the
     // asker only that it didn't go out.
     const held = await pool.query(
