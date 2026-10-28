@@ -51,13 +51,15 @@ type Stored = { type: string; targetKey: string; topicKey?: string; summary: str
 // decider sees "they've been having a hard time lately", and a skip used to close the follow-up for good. Now a skip while the hard
 // day's hold is on (services/moodHold.ts, capped) is one wait instead (followup.moodWaitAt): the task sleeps, wakes again once they're
 // okay or the hard stretch reaches the cap, never more than MOOD_HOLD_CAP_HOURS after the skip, and the decider looks again with the
-// feeling as tone only (FOLLOWUP_GENTLE). A skip because they asked for space is their own ask and is never a mood: closed as before.
-// So is a second skip, and a skip when they're not struggling. The waiting wakes don't use up the task's looks (unspendWake); its own
+// feeling as tone only (FOLLOWUP_GENTLE). A skip because they asked for space is their own ask, and one because they already answered
+// is a fact: neither is a mood, both close as before (review of #274, 2026-10-27: an answered follow-up slept and looked again, which
+// risks asking what they already told Cue). "No longer matters" is a judgment a hard day can color: it waits once. So does a skip with
+// no reason. A second skip closes, and so does a skip when they're not struggling. The waiting wakes don't use up the task's looks (unspendWake); its own
 // clock (FOLLOWUP_LIMITS.maxDays) still ends it.
 export const FOLLOWUP_SKIP_BECAUSE = ["answered", "asked_for_space", "no_longer_matters"] as const;
 // Pure: whether this skip is the follow-up's one mood wait.
 export function followUpMoodWait(o: { waitedAt: string | null | undefined; because?: string | null; read: MoodHold }): boolean {
-  return !o.waitedAt && o.because !== "asked_for_space" && o.read.hold;
+  return !o.waitedAt && o.because !== "asked_for_space" && o.because !== "answered" && o.read.hold;
 }
 // Pure: a follow-up waiting out a hard day (null: not waiting). Held while the hold is on and under the cap since the skip.
 export function followUpStillWaiting(o: { waitedAt: string | null | undefined; read: MoodHold; now: Date }): MoodHold | null {

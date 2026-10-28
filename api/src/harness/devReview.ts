@@ -39,9 +39,9 @@ import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "./core.js";
 import { signalTarget } from "./emotion.js";
 import { withTraceUser } from "../services/llmTraceText.js";
+import { withMember } from "../services/llmUsage.js";
 import { HIGH_REASONS, flaggedCalls, type FlaggedCall } from "../services/callHealth.js";
 import { stuckDeletes, type StuckDelete } from "../services/elevenLabsForget.js";
-import { NO_MEMBER } from "../services/llmUsage.js";
 
 export function reviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test") return false;
@@ -459,8 +459,9 @@ export async function modelFlags(data: ReviewData): Promise<ReviewFlag[]> {
       // tests) with no effort set, so it's medium now, like the learning reads.
       maxOutputTokens: 16_000,
       providerOptions: { anthropic: { effort: "medium" } },
-      // Not about one member: the morning review reads across everyone.
-      experimental_telemetry: { isEnabled: true, functionId: "devReview.modelFlags", metadata: NO_MEMBER },
+      // One member's day: its cost is theirs, through the member scope reviewWindow opens (review of #274, 2026-10-27: it was
+      // marked as nobody's, so cost per member undercounted).
+      experimental_telemetry: { isEnabled: true, functionId: "devReview.modelFlags" },
       prompt: modelReviewPrompt(data),
     });
     if (finishReason === "length") console.error(`devReview: model review ran out of room for ${data.userId}; its flags are missing today`);
@@ -771,7 +772,7 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     flags.push(...callHealthFlags(await flaggedCalls({ userId, until }).catch(() => [] as FlaggedCall[])));
     flags.push(...stuckDeleteFlags(await stuckDeletes({ userId }).catch(() => [] as StuckDelete[])));
     // The model reads of one member's day, under that member's trace-text mark (services/llmTraceText.ts).
-    if (opts.model !== false) flags.push(...(await withTraceUser(userId, async () => [...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => []))])));
+    if (opts.model !== false) flags.push(...(await withTraceUser(userId, () => withMember(userId, async () => [...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => []))]))));
   }
   return { flags: flags.sort((a, b) => ms(a.at) - ms(b.at)), names };
 }

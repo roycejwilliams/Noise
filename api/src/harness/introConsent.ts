@@ -361,11 +361,14 @@ export function checkInventedSpecifics(draft: string, ctx: Pick<ConsentContext, 
 // The other member's hidden part (private asks and blockers, harness/hiddenEcho.ts): never echoed in a draft, word for word or
 // near it (Royce, 2026-10-18). What the draft may rest on (ctx.said, their shareable asks) is allowed. A failed read withholds
 // the draft: this check fails closed.
-export async function hiddenEchoCheck(draft: string, ctx: Pick<ConsentContext, "otherUserIds" | "said" | "facts">): Promise<GateCheck | null> {
+export async function hiddenEchoCheck(draft: string, ctx: Pick<ConsentContext, "otherUserIds" | "said" | "facts" | "event">): Promise<GateCheck | null> {
   if (!ctx.otherUserIds?.length) return null;
   const { hiddenSideOf, SENSITIVE } = await import("./matchGate.js");
   const { hiddenEcho } = await import("./hiddenEcho.js");
-  const names = [ctx.facts?.otherFirstName, ctx.facts?.recipientFirstName].filter((n): n is string => !!n && n.trim().length > 1);
+  // The event's own name and venue are set aside too, as the value lines do (roomMatching.ts checkValueLines): a private ask
+  // "founders in climate tech" never refuses a nudge for "Founders in Climate Tech Night" (review of #274, 2026-10-27). Only the
+  // whole name, as written, is set aside; a sensitive word anywhere else in the draft still counts.
+  const names = [ctx.facts?.otherFirstName, ctx.facts?.recipientFirstName, ctx.event?.name, ctx.event?.venue].filter((n): n is string => !!n && n.trim().length > 1);
   for (const id of ctx.otherUserIds) {
     let side: { hidden: string[]; shared: string[] };
     try {

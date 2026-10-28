@@ -49,7 +49,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext, STRETCH_LOOKBACK_HOURS } from "./emotion.js";
-import { HELD_RECAP_APPROVED, MOOD_FALLBACK_KEY, MOOD_FALLBACK_LINE, MOOD_HOLD_CAP_HOURS, moodFallbackLogLine, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
+import { HELD_RECAP_APPROVED, MOOD_FALLBACK_KEY, MOOD_FALLBACK_LINE, MOOD_FALLBACK_TOPIC, MOOD_HOLD_CAP_HOURS, moodFallbackLogLine, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
@@ -408,7 +408,8 @@ export function okaySinceFallback(fallbackAt: Date, hardSince: Date, now: Date):
 // (MOOD_FALLBACK_LINE, Royce 2026-10-19) instead of nothing. Only for a skip the hard day caused: a bare model SKIP, never a fit skip the
 // draft gave its reason for, never the held recap. Once a stretch a member, on the ledger: no second fallback while they haven't been
 // okay since their last one (okaySinceFallback); never twice in a row, never under a safety hold; the send itself keeps the usual hours,
-// caps, spacing and opt-out (sendWithLedger). Anything else is a normal skip: a skip code decided, a fit skip, a first SKIP (that's the
+// caps, spacing and opt-out (sendWithLedger). Past the stretch's cap the wait is spent (never past the cap), so a bare SKIP then gets
+// the line too (review of #274, 2026-10-27: kept on purpose). Anything else is a normal skip: a skip code decided, a fit skip, a first SKIP (that's the
 // wait), not struggling, or the fallback already used this stretch (a second item in the same stretch drops as before).
 export function moodFallbackDecision(o: { candidate: Pick<Candidate, "type" | "payload">; skip: string; state: Pick<PickState, "now" | "needsCare" | "moodHold" | "safetyHold" | "sends">; hardSince: Date | null }): { send: true; key: string } | { send: false; why: string } {
   if (!MODEL_SKIP.test(o.skip)) return { send: false, why: "a skip code decided, not the draft's" };
@@ -1834,7 +1835,7 @@ async function sendWithLedger(
       ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
     ];
     // The day's discovery cap, read again inside the lock, so two sends at once can't both pass it (review of the tier PR).
-    const discovery = [c, ...extras.map((e) => e.candidate)].filter(isDiscoveryFind).length;
+    const discovery = [c, ...extras.map((e) => e.candidate)].filter((x) => x.topicKey !== MOOD_FALLBACK_TOPIC && isDiscoveryFind(x)).length;
     if (discovery) {
       const sentToday = await findsSentToday(person.userId, person.timezone, now, client).catch(() => DAILY_FIND_CAP);
       checks.push({ name: "daily_find_cap", pass: sentToday + discovery <= DAILY_FIND_CAP, reason: `${sentToday} discovery find(s) went today; this send has ${discovery}; the day's cap is ${DAILY_FIND_CAP}` });
@@ -1859,7 +1860,7 @@ async function sendWithLedger(
       `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt, kind)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true) || morning, kindOf(c.type, c.payload)],
+      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true) || morning, c.topicKey === MOOD_FALLBACK_TOPIC ? null : kindOf(c.type, c.payload)],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
@@ -2191,7 +2192,7 @@ export async function markDraftMoodSkip(userId: string, c: Candidate, now: Date)
 export async function sendMoodFallback(registry: ProactiveRegistry, c: Candidate, person: Person, key: string, skip: string, opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[] } = {}): Promise<boolean> {
   const { safetyHoldActive } = await import("../services/safety.js");
   if (await safetyHoldActive(person.userId).catch(() => true)) return false;
-  const went = await sendWithLedger({ ...c, targetKey: key, topicKey: "mood_fallback", payload: {} }, person, [MOOD_FALLBACK_LINE], opts).catch(() => ({ sent: false as const, failed: [] }));
+  const went = await sendWithLedger({ ...c, targetKey: key, topicKey: MOOD_FALLBACK_TOPIC, payload: {} }, person, [MOOD_FALLBACK_LINE], opts).catch(() => ({ sent: false as const, failed: [] }));
   if (!went.sent) return false;
   for (const m of went.delivered) await writeMemory(person.userId, "text_exchange", `Co replied: ${m}`).catch(() => {});
   if (went.delivered.length) await recordProactiveText(person.userId, c.type, went.delivered.join(" "), c.id).catch(() => {});

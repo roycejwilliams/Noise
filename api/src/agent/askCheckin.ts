@@ -47,7 +47,7 @@ export function askCheckinTask(p: Pick<AskCheckinPayload, "checkinCount">, recen
 // closed: the task then reads as it always did, never with unguarded lines).
 export async function recentAskCheckins(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<string[]> {
   const rows = await q
-    .query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND type = 'ask_checkin' AND message IS NOT NULL AND message <> '' ORDER BY sent_at DESC LIMIT 3`, [userId])
+    .query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND type = 'ask_checkin' AND topic_key IS DISTINCT FROM 'mood_fallback' AND message IS NOT NULL AND message <> '' ORDER BY sent_at DESC LIMIT 3`, [userId])
     .then((r) => r.rows.map((x: any) => String(x.message)))
     .catch(() => [] as string[]);
   if (!rows.length) return rows;

@@ -214,7 +214,7 @@ export async function recordCallHealth(
            AND decision IN ('call.turn_health', 'call.tool', 'call.background_tool', 'call.offer_unsourced', 'call.gate')`,
         [o.userId, from, to],
       ),
-      deps.db.query(`SELECT 1 FROM emotion_signals WHERE user_id = $1 AND source = 'call' AND target = 'co' AND intensity <> 'low' AND created_at >= $2 LIMIT 1`, [o.userId, from]),
+      deps.db.query(`SELECT 1 FROM emotion_signals WHERE user_id = $1 AND source = 'call' AND target = 'co' AND valence <> 'positive' AND intensity <> 'low' AND created_at >= $2 LIMIT 1`, [o.userId, from]),
     ]);
     const facts: CallHealthFacts = {
       durationSecs: o.durationSecs,

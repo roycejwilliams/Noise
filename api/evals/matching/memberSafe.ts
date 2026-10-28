@@ -172,14 +172,37 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   void offering;
 }
 
-// ---------------------------------------------------------------- 1b. the name finder (whole word, any case, accents folded)
+// ---------------------------------------------------------------- 1b. the name finder (memberSafeMemories.ts nameFinder: whole word, any case, accents folded)
 {
-  const find = M.nameFinder(["Noor", "Zoë", "Sarah Hao", "Al"]);
-  check("finds a lowercase name ('meet noor about her gallery')", find("meet noor about her gallery").includes("noor"));
-  check("finds an uppercase name ('NOOR said yes')", find("NOOR said yes").includes("noor"));
-  check("finds a name without its accent ('zoe') and with it ('ZOË')", find("lunch with zoe").includes("zoe") && find("ZOË called").includes("zoe"));
-  check("whole words only ('Noorani', 'also', 'salt' are not names here)", !find("Noorani studio, also salt").length);
-  check("a two-word first name is found whole", find("coffee with sarah hao").includes("sarah hao"));
+  // What reaches the line: Ellis's items that name Noor, Zoë or Sarah Hao, in any case, are left out.
+  const line = (items: string[]) => M.candidateLines([
+    { user_id: "x", first_name: "Ellis", goals: [...items, "a gallery of my own"], intent: [] },
+    { user_id: "n", first_name: "Noor", intent: [] }, { user_id: "z", first_name: "Zoë", intent: [] }, { user_id: "s", first_name: "Sarah Hao", intent: [] }, { user_id: "a", first_name: "Al", intent: [] },
+  ])[0];
+  check("finds a lowercase name ('meet noor about her gallery')", !/noor/i.test(line(["meet noor about her gallery"])));
+  check("finds an uppercase name ('NOOR said yes')", !/noor/i.test(line(["NOOR said yes"])));
+  check("finds a name without its accent ('zoe') and with it ('ZOË')", !/zo[eë]/i.test(line(["lunch with zoe", "ZOË called"])));
+  check("whole words only ('Noorani', 'also', 'salt' are not names here)", line(["Noorani studio, also salt"]).includes("Noorani studio, also salt"));
+  check("a two-word first name is found whole", !/sarah hao/i.test(line(["coffee with sarah hao"])));
+  // Review of #274 (2026-10-27): a name that is also a word counts only where it stands for a person.
+  const [, priya] = M.candidateLinesWithLabels([
+    { user_id: "w", first_name: "Will", intent: [] },
+    { user_id: "p", first_name: "Priya", intent: [{ id: "p1", text: "an engineer who will join early", type: "seeking", status: "active", kind: "ask", shareable: true }] as any },
+  ]);
+  check("a word-name ('Will') never drops another candidate's ask that only uses the word ('who will join early')", priya.line.includes("an engineer who will join early") && priya.labels.has("S1"), priya);
+  const [, priya2] = M.candidateLinesWithLabels([
+    { user_id: "w", first_name: "Will", intent: [] },
+    { user_id: "p", first_name: "Priya", goals: ["coffee with Will about his studio"], intent: [] },
+  ]);
+  check("... and still drops one that names Will the person", !/Will about his studio/.test(priya2.line), priya2.line);
+  // Review of #274's second read: a shorter name inside their own ("Sarah" in "Sarah Hao") is never someone else; an underscore splits.
+  const [sh] = M.candidateLinesWithLabels([
+    { user_id: "sh", first_name: "Sarah Hao", goals: ["sarah hao studio launch", "coffee with Sarah about her kiln"], intent: [] },
+    { user_id: "s", first_name: "Sarah", intent: [] },
+  ]);
+  check("their own two-word name never reads as the shorter one beside it; naming the other Sarah still drops", sh.line.includes("sarah hao studio launch") && !/kiln/.test(sh.line), sh.line);
+  const [el] = M.candidateLinesWithLabels([{ user_id: "e", first_name: "Ellis", goals: ["collab with @noor_designs", "a gallery of my own"], intent: [] }, { user_id: "n", first_name: "Noor", intent: [] }]);
+  check("an underscore splits a handle ('@noor_designs' names Noor)", !/noor_designs/.test(el.line) && el.line.includes("a gallery of my own"), el.line);
   const lines = M.candidateLines([
     { user_id: "x", first_name: "Ellis", goals: ["meet noor about her gallery", "a gallery of my own"], blockers: ["NOOR said yes"], intent: [] },
     { user_id: "y", first_name: "Noor", goals: ["noor's own goal stays on her line"], intent: [] },

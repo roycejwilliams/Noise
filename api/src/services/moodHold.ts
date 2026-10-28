@@ -70,6 +70,9 @@ export const MOOD_FALLBACK_LINE = "No rush on anything. I'm around whenever you 
 // The ledger key prefix (the stretch's start is the rest of the key). Once a stretch is read from the ledger, not the key: no second
 // fallback while they haven't been okay since the last one (harness/proactive.ts okaySinceFallback).
 export const MOOD_FALLBACK_KEY = "mood_fallback:";
+// The care line's ledger topic. It goes in the replaced item's place and keeps that item's type for the send's own gates, but it is
+// never that item: never a discovery find, never a kind restraint learns from, never a past check-in (review of #274, 2026-10-27).
+export const MOOD_FALLBACK_TOPIC = "mood_fallback";
 // Pure: the log line for a fallback sent in an item's place. The rule, the kind, ids; never member text.
 export function moodFallbackLogLine(o: { kind: string; ref: string }): string {
   return `mood hold: rule=draft_skip_wait kind=${o.kind} ref=${o.ref} the approved fallback line went in its place`;

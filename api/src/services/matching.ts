@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { goalEntries, isOpenAsk } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
+import { nameFinder } from "./memberSafeMemories.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
 // whom, so it runs on Sonnet 5.
@@ -121,18 +122,9 @@ export function clipItem(s: unknown, max = DIGEST_ITEM_CHARS): string {
 }
 
 const firstNameOf = (c: ScorableCandidate) => String((c as { first_name?: unknown }).first_name ?? "").trim();
-const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // Accents folded and lowercased, so "Zoë", "ZOE" and "zoe" are one name.
 const fold = (s: string) => s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase();
 
-// Pure: which of these names a text carries, as whole words in any case, accents folded. A local stand-in: PR #248's
-// nameFinder (services/memberSafeMemories.ts, unmerged) can replace it once it lands.
-export function nameFinder(names: string[]): (text: string) => string[] {
-  const ns = [...new Set(names.map((n) => fold(String(n ?? "").trim())).filter((n) => n.length >= 2))].sort((x, y) => y.length - x.length);
-  if (!ns.length) return () => [];
-  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${ns.map(escapeRe).join("|")})(?![\\p{L}\\p{N}])`, "gu");
-  return (text: string) => [...new Set([...fold(String(text ?? "")).matchAll(re)].map((m) => m[0]))];
-}
 
 // Pure: a member's open asks they did not mark shareable (private by default).
 export function privateAskTexts(intent: unknown): string[] {
@@ -193,11 +185,24 @@ export function candidateLinesWithLabels<T extends ScorableCandidate>(candidates
   const budget = Math.max(DIGEST_MIN_CANDIDATE_CHARS, Math.min(DIGEST_CANDIDATE_CHARS, Math.floor(DIGEST_PROMPT_CHARS / Math.max(1, candidates.length))));
   // Everyone in this call with a first name (the room, partner and network paths carry one). One pattern screens every item;
   // an item naming anyone but the candidate themself is left out.
-  const asker = fold(String(opts.askerFirstName ?? "").trim());
-  const find = nameFinder([...candidates.map(firstNameOf), ...(asker.length >= 2 ? [String(opts.askerFirstName)] : [])]);
+  // The finder is memberSafeMemories.ts nameFinder: a name that is also an everyday word ("Will", "May", "Mark") counts only
+  // where it stands for a person, so "an engineer who will join early" stays on Priya's line beside a candidate named Will (review
+  // of #274, 2026-10-27: the local any-case finder dropped it and her S labels with it).
+  const askerName = String(opts.askerFirstName ?? "").trim();
+  const asker = fold(askerName);
+  const everyone = [...candidates.map(firstNameOf), ...(asker.length >= 2 ? [askerName] : [])];
   return candidates.map((c) => {
     const own = fold(firstNameOf(c));
-    const named = (item: string) => find(item).some((n) => n !== own || n === asker);
+    // Everyone else's name; the asker's even when it is theirs too.
+    const find = nameFinder(everyone.filter((n) => fold(n) !== own || (asker.length >= 2 && fold(n) === asker)));
+    // Their own name is taken out first, so a shorter name inside it ("Sarah" in "Sarah Hao") never reads as someone else; an
+    // underscore splits words ("@noor_designs" names Noor). Review of #274's second read, 2026-10-27.
+    const ownRe = own.length >= 2 && own !== asker ? new RegExp(`(?<![\\p{L}\\p{N}])${own.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}(?![\\p{L}\\p{N}])`, "giu") : null;
+    const named = (item: string) => {
+      const plain = String(item).replace(/_/g, " ");
+      // Accents off, case kept: a capitalized word-name ("Grant") reads as a person more readily than a lowercase one.
+      return find(ownRe ? plain.normalize("NFD").replace(/\p{M}+/gu, "").replace(ownRe, " ") : plain) !== null;
+    };
     return candidateLine(c, budget, named, hints?.get(c.user_id), hidden?.get(c.user_id) ?? [], opts.withHidden !== false);
   });
 }

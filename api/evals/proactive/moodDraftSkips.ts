@@ -163,8 +163,9 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
     constructor(...a: any[]) { if (a.length) super(...(a as [any])); else super(FIXED); }
     static now() { return FIXED; }
   } as DateConstructor;
-  const send = async (zone: string, safety = false) => {
+  const send = async (zone: string, safety = false, type = "companion", findsToday = 0) => {
     const f = installFakeLedger(pool, sendblue);
+    f.ledger.findsToday = findsToday;
     const q = pool.query;
     const sqls: string[] = [];
     (pool as any).query = async (sql: string, args: any[] = []) => { sqls.push(String(sql).replace(/\s+/g, " ").trim()); if (/safety_hold_until > NOW\(\)/.test(sql)) return { rows: safety ? [{ "?column?": 1 }] : [] }; return q(sql, args); };
@@ -172,7 +173,7 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
     const log = console.log;
     console.log = (...a: any[]) => { printed.push(a.map(String).join(" ")); };
     const person = { userId: "u-jordan", firstName: "Jordan", phoneNumber: "+14155550199", timezone: zone, city: "San Francisco" } as any;
-    const c = { ...cand("companion", { moodDraftSkipAt: ago(49).toISOString(), recap: THEIR_WORDS }), id: "61", userId: "u-jordan", summary: `About ${THEIR_WORDS}` };
+    const c = { ...cand(type, { moodDraftSkipAt: ago(49).toISOString(), recap: THEIR_WORDS }), id: "61", userId: "u-jordan", summary: `About ${THEIR_WORDS}` };
     const ok = await P.sendMoodFallback(proactiveRegistry, c, person, key, "model chose SKIP").catch(() => false);
     console.log = log;
     f.restore();
@@ -180,6 +181,14 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   };
   const day = await send("America/Los_Angeles");
   check("in their hours: the line goes, exactly, once, keyed to the stretch", day.ok && day.ledger.outbox.length === 1 && day.ledger.outbox[0].content === MH.MOOD_FALLBACK_LINE && day.ledger.sends.some((r: any) => r.target_key === key), day.ledger);
+  // Review of #274 (2026-10-27): replacing an event offer, the line counted as a discovery find (refused at the day's cap) and was
+  // ledgered with the "find" kind restraint learns from.
+  const forOffer = await send("America/Los_Angeles", false, "event_offer", 3);
+  check("replacing a find at the day's find cap, the line still goes (it is never a find)", forOffer.ok && forOffer.ledger.outbox.length === 1, forOffer.ledger);
+  check("... ledgered under its own topic with no kind", forOffer.ledger.sends.some((r: any) => r.target_key === key && r.topic_key === "mood_fallback" && r.kind === null), forOffer.ledger.sends);
+  const kr = (await import("node:fs")).readFileSync(new URL("../../src/services/kindRestraint.ts", import.meta.url), "utf8");
+  const ac = (await import("node:fs")).readFileSync(new URL("../../src/agent/askCheckin.ts", import.meta.url), "utf8");
+  check("... and restraint and the past check-ins never read it", /ps\.topic_key IS DISTINCT FROM 'mood_fallback'/.test(kr) && /type = 'ask_checkin' AND topic_key IS DISTINCT FROM 'mood_fallback'/.test(ac));
   check("the item it replaces is closed as skipped (with the draft's reason), never marked sent", day.sqls.some((x) => /^UPDATE proactive_candidates SET status = 'skipped'/.test(x)) && !day.ledger.sentCandidates.includes("61") || day.ledger.sentCandidates.includes("61") && day.sqls.findIndex((x) => /SET status = 'skipped'/.test(x)) > day.sqls.findIndex((x) => /SET status = 'sent'/.test(x)), day.sqls.filter((x) => /proactive_candidates/.test(x)));
   check("no recap: the line carries nothing from the item", !day.ledger.outbox.some((m: any) => m.content.includes("hospital")));
   check("logged with the rule and the kind, no member text", day.printed.some((l) => /^mood hold: rule=draft_skip_wait kind=companion ref=u-jordan:61 the approved fallback line went in its place$/.test(l)) && day.printed.every((l) => !l.includes("hospital") && !l.includes("Jordan")), day.printed);

@@ -507,7 +507,7 @@ T.traceTextStore.db = async () => fakeDb;
   check("weekly reflections: each member under their mark", /await withTraceUser\(r\.id, \(\) => reflectOnMember\(r\.id\)\)/.test(src("harness/memberReflection.ts")));
   check("askKind: the open-ask classifier reads each ask's member", /SELECT id, user_id, ask_text, kind, intent FROM ask_checkins/.test(src("services/askKind.ts")) && /await withTraceUser\(r\.user_id, \(\) => withMember\(r\.user_id, \(\) => classify\(r\.ask_text\)\)\)/.test(src("services/askKind.ts")));
   check("the end-of-night close: each person under their mark", /await withTraceUser\(person\.user_id, \(\) => sendClose\(eventId, eventName, person, \{\}\)\)\.catch/.test(src("services/eventUnmatchedFollowUp.ts")));
-  check("dev review: each member's model reads under their mark", /await withTraceUser\(userId, async \(\) => \[\.\.\.\(await modelFlags\(data\)\)/.test(src("harness/devReview.ts")));
+  check("dev review: each member's model reads under their mark (and their cost scope)", /await withTraceUser\(userId, \(\) => withMember\(userId, async \(\) => \[\.\.\.\(await modelFlags\(data\)\)/.test(src("harness/devReview.ts")));
   check("scheduled call reminders: under the member's mark", /await withTraceUser\(row\.user_id, \(\) => withMember\(row\.user_id, \(\) =>\n\s*generateText\(\{/.test(src("jobs/scheduledCall.ts")));
   check("network reveals run inside proactive dispatch (covered there)", /prepareReveal\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
   check("no job uses enterWith: the only enterWith calls are the entry-point marks", (src("services/llmTraceText.ts").match(/enterWith\(/g) ?? []).length === 1);

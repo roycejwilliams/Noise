@@ -104,6 +104,8 @@ check("2o unknown decision rows and junk turns are ignored", callHealthReasons(f
   check("3d a judge answering something that isn't a list falls back too", n.judgedBy === "rule (fallback from jev-fake)");
   const svc = readFileSync(new URL("../../src/services/callHealth.ts", import.meta.url), "utf8");
   const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
+  // Review of #274 (2026-10-27): a warm "thanks Cue" is a call read aimed at Cue too; never frustration (a mixed one can be).
+  check("2l frustrated_with_co never reads a positive feeling about Cue", /FROM emotion_signals WHERE[^`]*target = 'co' AND valence <> 'positive'/.test(svc));
   check("3e not wired: nothing imports a model or the gateway, and the route passes no judge", !/jevGateway|generateText|anthropic/.test(svc) && /recordCallHealth\(\{[^}]*?\n\s*\}\)\.catch\(\(\) => \{\}\);/.test(co));
 }
 
