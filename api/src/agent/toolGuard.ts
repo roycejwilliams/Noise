@@ -18,6 +18,7 @@ import { abilityForTool } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
 import { recordToolAction } from "../services/coFacts.js";
 import { logKind } from "../services/whatCoKnows.js";
+import { guestName } from "../services/guestName.js";
 
 // Replies and bookkeeping aren't choices worth logging one by one.
 const UNGUARDED = new Set(["sendReply", "markTopicAsked"]);
@@ -45,16 +46,15 @@ type GuardCtx = {
 // continue the existing intro"; the first-name call used to count as the request and the answer was refused as "already requested").
 export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes" | "asked_back";
 
-// Pure: who oncePerPerson means, the way the guest-list lookup reads a name (eventGuestMatchHandoff.ts resolveNamedEventGuest):
-// the first word of personName, then lastName when given or else the rest of personName. So "Sarah" + "Kim" and "Sarah Kim" are
-// one person and two Sarahs are two (2026-10-28: the key was personName alone, so the last-name answer read as a repeat of
-// "Sarah", and any Sarah blocked every other). Accents folded, case and punctuation dropped. "" when no name was given.
+// Pure: who oncePerPerson means, read exactly as the guest-list lookup reads a name (services/guestName.ts, shared with
+// resolveNamedEventGuest): the first word of personName, then lastName when given or else the rest of personName. So "Sarah" + "Kim"
+// and "Sarah Kim" are one person and two Sarahs are two (2026-10-28: the key was personName alone, so the last-name answer read as
+// a repeat of "Sarah", and any Sarah blocked every other). Its own folding once split "Mary-Kate" from "Mary-Kate Olsen" and joined
+// Mary-Kate to Mary-Ann (review of #294). "" when no name was given.
 export function personKey(input: any): string {
-  const fold = (s: unknown) => norm(String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
-  const parts = fold(input?.personName).split(" ").filter(Boolean);
-  if (!parts.length) return "";
-  const last = fold(input?.lastName) || parts.slice(1).join(" ");
-  return last ? `${parts[0]} ${last}` : parts[0];
+  const { first, last } = guestName(input?.personName, input?.lastName);
+  if (!first) return "";
+  return last ? `${first} ${last}` : first;
 }
 
 // Pure: the receipt for a correctWhatCoKnows call that removes anything: how many changes of each action and the kinds of the refs

@@ -63,8 +63,8 @@ const intro = ct.slice(introAt, ct.indexOf("\n    }),\n", introAt) + 8);
 const afterLookup = intro.slice(intro.indexOf('if ("error" in resolved)'));
 const returns = afterLookup.match(/return [^;]+;/g) ?? [];
 // The found path's own work runs after the answer (2026-10-28), so its returns (the failure, the internal row) go to the background
-// closure, never to the model; behavior in evals/review/introTrace.ts.
-check("requestEventIntro: every answer after the lookup is the one neutral answer (no second note, no flag the reply could read)", returns.filter((r) => r === "return neutral();").length === 2 && returns.every((r) => r === "return neutral();" || r === "return failure;" || /^return recordDecision\(/.test(r)) && (intro.match(/note: "Tell them that if it's someone/g) ?? []).length === 1 && !/notStarted/.test(ct) && /void request\(\)\.then\(logged, /.test(afterLookup), { returns });
+// closure, never to the model, and it is tracked so a deploy waits for it (review of #294); behavior in evals/review/introTrace.ts.
+check("requestEventIntro: every answer after the lookup is the one neutral answer (no second note, no flag the reply could read)", returns.filter((r) => r === "return neutral();").length === 2 && returns.every((r) => r === "return neutral();" || r === "return failure;" || /^return recordDecision\(/.test(r)) && (intro.match(/note: "Tell them that if it's someone/g) ?? []).length === 1 && !/notStarted/.test(ct) && /void track\(request\(\)\.then\(logged, /.test(afterLookup), { returns });
 check("requestEventIntro: a throw retried once, a false never; the internal row says held or failed, never requested", /for \(let attempt = 0; requester && attempt < 2; attempt\+\+\)/.test(intro) && /went === false \?/.test(intro) && /action: failure \? "held_or_failed" : "requested"/.test(intro));
 // Not found, through the real tool and its guard, on two turns: the second ask answers exactly like the first, and the record names only the ask.
 (await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
