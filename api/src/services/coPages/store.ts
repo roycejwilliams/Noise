@@ -28,8 +28,9 @@ export function newCoPageId(): string {
 
 // A row holds one artifact: a page (CoPageData) or a deck (DeckData, kind "deck"). Same link, rules and lifetime for both.
 export type CoArtifactData = CoPageData | DeckData;
-// shot: a link card picture is stored for this very version (loadCoPage; services/coPages/linkPreview.ts serves it).
-export type StoredCoPage = { id: string; data: CoArtifactData; version: number; updatedAt: Date; ownerUserId: string; shot?: boolean };
+// shot: a link card picture is stored for this very version (loadCoPage; services/coPages/linkPreview.ts serves it); shotSize: its
+// pixels, read from the PNG's own header (a page's card is as wide as its column, so sizes differ).
+export type StoredCoPage = { id: string; data: CoArtifactData; version: number; updatedAt: Date; ownerUserId: string; shot?: boolean; shotSize?: { width: number; height: number } | null };
 export const artifactKind = (d: unknown): "page" | "deck" => (isDeckData(d) ? "deck" : "page");
 // The gate for either type: a deck's own schema, else the page's.
 export function parseCoArtifact(input: unknown): { ok: true; data: CoArtifactData } | { ok: false; problems: string[] } {
@@ -185,7 +186,9 @@ export async function wipeExpiredCoPages(): Promise<number> {
 export async function loadCoPage(id: string): Promise<StoredCoPage | null> {
   if (!CO_PAGE_ID.test(id)) return null;
   const { rows } = await db.query(
-    `SELECT id, owner_user_id, data, version, updated_at, (preview IS NOT NULL AND preview_version = version) AS shot FROM co_pages WHERE id = $1 AND taken_down_at IS NULL AND expires_at > NOW()`,
+    `SELECT id, owner_user_id, data, version, updated_at, (preview IS NOT NULL AND preview_version = version) AS shot,
+       CASE WHEN preview IS NOT NULL AND preview_version = version THEN substring(preview from 17 for 8) END AS shot_head
+     FROM co_pages WHERE id = $1 AND taken_down_at IS NULL AND expires_at > NOW()`,
     [id],
   );
   const r = rows[0];
@@ -196,7 +199,9 @@ export async function loadCoPage(id: string): Promise<StoredCoPage | null> {
     console.error(`co page ${id.slice(0, 4)}…: stored data no longer passes the schema: ${p.problems.slice(0, 3).join("; ")}`);
     return null;
   }
-  return { id: String(r.id), data: p.data, version: Number(r.version), updatedAt: new Date(r.updated_at), ownerUserId: String(r.owner_user_id), shot: r.shot === true };
+  const head = r.shot_head ? Buffer.from(r.shot_head) : null;
+  const shotSize = head && head.length === 8 ? { width: head.readUInt32BE(0), height: head.readUInt32BE(4) } : null;
+  return { id: String(r.id), data: p.data, version: Number(r.version), updatedAt: new Date(r.updated_at), ownerUserId: String(r.owner_user_id), shot: r.shot === true, shotSize };
 }
 
 // For the card route only: the link card picture of this live artifact's current version, or null (none stored, an older version's,
