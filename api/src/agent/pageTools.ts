@@ -220,7 +220,7 @@ export function pageTools(
         const DSm = await import("../services/designSystem.js");
         const turns = await DSm.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
         await DSm.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: `${(imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial"}/${(imaged as any).style ? "theirs" : "co"}`, tokens: (imaged as any).style ?? null, qa: qa && shipped ? { ran: shipped.ran, findings: shipped.findings, fixed: fixedOk?.ok ? qa.fixed : [], first: qa.first.findings.length } : { ran: false }, turnsToBuild: turns }).catch(() => {});
-        const short = shipped ? Q.qaShortfall(shipped.findings) : null;
+        const short = shipped ? Q.qaShortfall(shipped.findings, "the page") : null;
         // Co's art direction, said in one line with the link (what it chose and what the pictures are).
         const { GRAMMAR_SAID } = await import("../services/coPages/art.js");
         const g = (imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial";
@@ -280,7 +280,7 @@ export function pageTools(
         const next = fixedOk?.ok ? fixedOk.data : unchecked;
         // What ships is what's said: the unfixed page goes with what QA first found.
         const shipped = qa ? (!qa.fixed.length || fixedOk?.ok ? qa.final : qa.first) : null;
-        const short = shipped ? Q.qaShortfall(shipped.findings) : null;
+        const short = shipped ? Q.qaShortfall(shipped.findings, "the page") : null;
         const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null });
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         // Another change landed after this one read the page (concurrency audit, 2026-10-12): never written over.
