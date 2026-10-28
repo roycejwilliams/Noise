@@ -140,6 +140,10 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   const partial = await T.eventCandidates("AI founder events", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { ...stub, feed: async () => [], calendar: async () => [], viaExa: async () => timeout() } });
   const partialRead = reads((r) => { check("the partial timeout is still said on the item", SF.noteEventSearch(r, partial).length === 1); });
   check("re-review of #293: the feed answered and only Exa timed out: no outage, nothing down", (partial.answered ?? 0) >= 1 && partialRead.outages.length === 0 && partialRead.lasting.length === 0, { answered: partial.answered, partialRead });
+  // Batched review of #293: Noise's own calendar is a cache, so it answering alone isn't events having searched.
+  const cacheOnly = await T.eventCandidates("AI founder events", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { ...stub, feed: async () => timeout(), calendar: async () => [], viaExa: async () => timeout() } });
+  check("batched review of #293: feed and Exa timed out, only the cached calendar answered: an outage (retried)", cacheOnly.answered === 0 && reads((r) => { SF.noteEventSearch(r, cacheOnly); }).outages.join() === "events", { answered: cacheOnly.answered });
+  check("batched review of #293: only undici's bare \"terminated\" clears, not any message with the word", transientFailure("TypeError: terminated") && transientFailure("terminated") && !transientFailure("Session terminated by the provider: account closed"));
   // Re-review of #293: no LUMA_API_KEY is a setting, as on the Exa path: no failure, nothing red.
   const { LUMA_KEY_MISSING } = await import("../../src/services/luma.js");
   const noKey = await T.eventCandidates("AI founder events", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, viaExa: false, sources: { ...stub, feed: async () => [], calendar: async () => { throw new Error(LUMA_KEY_MISSING); } } });
