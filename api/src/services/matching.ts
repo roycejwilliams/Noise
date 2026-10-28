@@ -277,13 +277,13 @@ async function runAskScoring<T extends ScorableCandidate>(
   try {
     const { hiddenEcho } = await import("../harness/hiddenEcho.js");
     const { SENSITIVE } = await import("../harness/matchGate.js");
-    const { text: raw } = await generateText({
+    // The answer is held to the scoring shape at the API (services/structuredJudge.ts); the values are still checked below.
+    const { judgeJson, SCORE_SCHEMA } = await import("./structuredJudge.js");
+    const { output: parsed } = await judgeJson(SCORE_SCHEMA, {
       model: anthropic(SCORING_MODEL),
       experimental_telemetry: { isEnabled: true, functionId, ...(opts.noTraceText ? { recordInputs: false, recordOutputs: false } : {}) },
       prompt,
     });
-
-    const parsed = parseModelJson(raw);
     // No results list at all is a malformed answer, not "nobody fits" (an honest empty list is `"results": []`).
     if (opts.failLoudly && !Array.isArray(parsed?.results)) throw new Error("no results list in the scorer's answer");
     const results = Array.isArray(parsed.results) ? parsed.results : [];

@@ -87,7 +87,10 @@ export async function readPeopleAsks(texts: string[]): Promise<(PeopleRead | nul
         ? await reader(prompt)
         : (
             await Promise.race([
-              generateText({ model: anthropic(MODELS.haiku), experimental_telemetry: { isEnabled: true, functionId: "peopleAsks.read" }, prompt }),
+              // Held to the read's shape at the API (services/structuredJudge.ts); parsePeopleReads still checks each value.
+              import("./structuredJudge.js").then(({ judgeJson, PEOPLE_ASKS_SCHEMA }) =>
+                judgeJson(PEOPLE_ASKS_SCHEMA, { model: anthropic(MODELS.haiku), experimental_telemetry: { isEnabled: true, functionId: "peopleAsks.read" }, prompt }),
+              ),
               new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15_000)),
             ])
           ).text;

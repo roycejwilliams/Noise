@@ -701,7 +701,9 @@ export type SelectResult = { judgments: Judgment[]; set?: string | null; raw: st
 export async function selectForMember(c: SelectContext, opts: { model?: string; userId?: string; effort?: "low" | "medium" | "high"; judge?: ClaimJudge } = {}): Promise<SelectResult> {
   const model = opts.model ?? SELECT_MODEL;
   try {
-    const r = await generateText({
+    // Held to the verdict shape at the API (services/structuredJudge.ts); parseVerdicts and the guards still check every value.
+    const { judgeJson, SELECT_SCHEMA } = await import("./structuredJudge.js");
+    const r = await judgeJson(SELECT_SCHEMA, {
       model: anthropic(model),
       // Room to think, then answer: at 6000 the whole budget went to thinking
       // and no verdicts came back (2026-10-02 replay). Medium effort, like the
