@@ -17,7 +17,7 @@ import type { EventDetails } from "./eventDetails.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 
 // The page's event record, with its own name. zoneGuessed: its zone came from its city, not the page, and its start doesn't carry
-// that zone's own offset: its time is said as a guess ("around ..., judging by the city", eventDetails.ts renderEventDetails).
+// that zone's own offset: its time is said in that zone with the assumption naming the city (zoneWords.ts ZONE_ASSUMED).
 export type PageEvent = EventDetails & { name: string; zoneGuessed?: boolean };
 
 // A page whose own record withholds the street from anyone who isn't a confirmed guest (Partiful: "Sign in for full location") while its
@@ -162,7 +162,7 @@ export function pageLocality(html: string): string | null {
 
 // The zone an event page's time is said in, whatever its visibility (a link they texted is read for them): the page's own (Luma's or
 // Partiful's record), else its city's (never a street or a venue; never for an online event), marked a guess when it is (zoneIsGuess).
-export async function zoneForPage(html: string, url: string, startAt: string | null, zoneOf: (place: string) => Promise<string | null>): Promise<{ zone: string | null; guessed: boolean }> {
+export async function zoneForPage(html: string, url: string, startAt: string | null, zoneOf: (place: string) => Promise<string | null>): Promise<{ zone: string | null; guessed: boolean; city?: string | null }> {
   const nd = nextData(html);
   const own = isLumaHost(url) ? str(nd?.props?.pageProps?.initialData?.data?.event?.timezone) : isPartifulHost(url) ? str(nd?.props?.pageProps?.event?.timezone) : null;
   if (own) return { zone: own, guessed: false };
@@ -171,7 +171,7 @@ export async function zoneForPage(html: string, url: string, startAt: string | n
   const city = str(placeOf(ev)?.address?.addressLocality);
   if (!city) return { zone: null, guessed: false };
   const zone = await zoneOf(city).catch(() => null);
-  return zone ? { zone, guessed: zoneIsGuess(startAt, zone) } : { zone: null, guessed: false };
+  return zone ? { zone, guessed: zoneIsGuess(startAt, zone), city } : { zone: null, guessed: false };
 }
 
 // ---------------------------------------------------------------- reading a page for its event record

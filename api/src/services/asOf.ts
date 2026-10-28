@@ -131,7 +131,8 @@ export function citesStaleAsCurrent(claim: string, citedFact: string | null | un
 export type LiveItem = { name: string; url: string | null };
 // page: any other event page, read without a model (its schema.org Event data: start, price, sold out), Royce 2026-10-11: "live
 // re-read". Optional, so a caller without it keeps Luma-only.
-export type LivePage = { start?: string; cost?: string; soldOut?: boolean } | null;
+// timeNote: what's said in place of a start whose time zone the listing doesn't give (zoneWords.ts ZONE_UNCLEAR).
+export type LivePage = { start?: string; cost?: string; soldOut?: boolean; timeNote?: string } | null;
 export type LiveDeps = { luma: (url: string) => Promise<EventDetails | null>; isLuma: (url: string) => boolean; page?: (url: string) => Promise<LivePage> };
 export const LIVE_READS_MAX = 2;
 // They asked a live question: the Luma pages of the few things Co sent them most recently are read now (a short cache: a read within
@@ -155,7 +156,7 @@ export async function liveDetailFacts(message: string, items: LiveItem[], deps: 
     picks.map(async (i) => {
       if (!deps.isLuma(i.url!) && deps.page) {
         const p = await deps.page(i.url!).catch(() => null);
-        const parts = p ? [p.start ? `starts ${p.start}` : "", p.cost ? `price ${p.cost}` : "", p.soldOut ? "sold out" : ""].filter(Boolean) : [];
+        const parts = p ? [p.start ? `starts ${p.start}` : "", p.timeNote ?? "", p.cost ? `price ${p.cost}` : "", p.soldOut ? "sold out" : ""].filter(Boolean) : [];
         lines.push(
           parts.length
             ? `Checked live just now (${now.toISOString().slice(0, 16).replace("T", " ")} UTC), "${i.name}", from its own page: ${parts.join("; ")}${p?.soldOut ? "" : " (the page doesn't say it's sold out)"}.`

@@ -10,7 +10,7 @@ import { recordDecision } from "../harness/core.js";
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { regionFor } from "./areaCodes.js";
-import { humanTime, saidTime, readLink, REREAD_AFTER_MS, VOLATILE_AFTER_MS, savedRead, type LinkRead } from "./linkReader.js";
+import { humanTime, timeFact, readLink, REREAD_AFTER_MS, VOLATILE_AFTER_MS, savedRead, type LinkRead } from "./linkReader.js";
 import { lineInVoice } from "./voiceLine.js";
 
 export type Change = { kind: "sold_out" | "moved" | "gone"; detail: string };
@@ -32,7 +32,9 @@ export function staleChange(prev: LinkRead | null, next: LinkRead): Change | nul
   const a = prev.fields.start;
   const b = next.fields.start;
   if (a?.verified && b?.verified && minutesApart(a.value, b.value) >= 15) {
-    return { kind: "moved", detail: `it now starts ${saidTime(b.value, next.fields.timezone)}` };
+    // Its new time as Cue may say it (linkReader.ts timeFact): with the zone it assumes, or no time when the listing's zone is unclear.
+    const t = timeFact(b.value, next.fields.timezone, "it");
+    return { kind: "moved", detail: t.said ? `it now starts ${t.said}${t.note ? ` (${t.note.replace(/\.$/, "").replace(/^The/, "the")})` : ""}` : "its start time changed, and the listing doesn't say what time zone it's in. Check the page before you plan around it" };
   }
   return null;
 }
