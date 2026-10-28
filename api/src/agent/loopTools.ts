@@ -32,7 +32,8 @@ import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
 // that came with it, and every page it read.
 // stored: carried in from an earlier turn (seedFound), checked at checkedAt and good until freshUntil; past that its facts back
 // nothing until its page is read again.
-export type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null; stored?: boolean; checkedAt?: string | null; freshUntil?: number | null };
+// viaPost: a link an X post pointed to (checked for a private event page again before it's shared, batched review of #299).
+export type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null; stored?: boolean; checkedAt?: string | null; freshUntil?: number | null; viaPost?: boolean };
 // The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, so it sounds like Cue
 // reacting to what they asked, never a status message.
 export const WHILE_LOOKING = "Only on your first search, if it'll take a moment: a few words to them in your own voice that react to what they actually asked (its subject, their timing, their mood), the way a friend who's into it would. Never a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
@@ -513,11 +514,16 @@ export function loopTools(
         const posts = await searchRecentPosts(q, X_SEARCH_RESULTS).catch(() => null);
         await remember({ tried: [`x: ${q}`] });
         if (!posts) return { ok: false, error: "X search failed this time; use webSearch instead." };
+        // A post's link to a private event page (a Partiful invite, a private Luma event, by its own record) is never a find, never shown
+        // to the model as one (batched review of #299; the sweep drops it the same way, sweepFind.ts promoteEventPages).
+        const { privateEventLinks } = await import("../services/eventPage.js");
+        const privateLinks = await privateEventLinks(posts.flatMap((p) => p.links)).catch(() => new Set<string>());
+        for (const p of posts) p.links = p.links.filter((l) => !privateLinks.has(l));
         for (const p of posts) {
           const match = { tier: 3, kind: "opportunity", source: "x", name: p.text.slice(0, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
           loop.found.set(p.url, { name: p.text.slice(0, 80), url: p.url, facts: p.text, match, blocked: null });
           // What the post links to (expanded from t.co), with the post as what's known about it, as readPage does for a page.
-          for (const l of p.links) if (!loop.found.has(l)) loop.found.set(l, { name: p.text.slice(0, 80), url: l, facts: p.text, match: null, blocked: null });
+          for (const l of p.links) if (!loop.found.has(l)) loop.found.set(l, { name: p.text.slice(0, 80), url: l, facts: p.text, match: null, blocked: null, viaPost: true });
         }
         return { ok: true, posts: posts.map((p) => ({ link: p.url, by: p.author ? `@${p.author}` : undefined, text: p.text.slice(0, 600), links: p.links.length ? p.links : undefined })), note: posts.length ? "Posts from the last week, as written. Judge them yourself; share only one whose own text backs what you'd say." : "No recent posts for that. Try other keywords or webSearch." };
       },
@@ -584,6 +590,12 @@ export function loopTools(
           }
           if (f.blocked) {
             refused.push(`${f.name}: ${f.blocked}`);
+            continue;
+          }
+          // A post's link to a private event page (by its own record) never goes, the check made again here for one the search's check
+          // didn't reach in time (batched review of #299). A web find was already checked by the web search (taskWeb.ts).
+          if (f.viaPost && (await (await import("../services/eventPage.js")).privateEventLinks([it.link]).catch(() => new Set<string>())).has(it.link)) {
+            refused.push(`${f.name}: its page says it's a private event; never share it`);
             continue;
           }
           // Its start, read again as it goes: an event found earlier that has started, or starts too soon to get to, never goes

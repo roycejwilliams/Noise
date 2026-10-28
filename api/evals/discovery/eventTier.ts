@@ -324,5 +324,21 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   check("#299 review 7: one read per city serves every window (this week, this month)", week?.map((e) => e.name).join() === "Soon" && month?.map((e) => e.name).join() === "Soon,Later" && fetched.filter((u) => u.endsWith("/explore/sf")).length === 1, { week: week?.map((e) => e.name), month: month?.map((e) => e.name), fetched });
 }
 
+// ---------------------------------------------------------------- 8. a private event page an X post links to, everywhere it surfaces
+{
+  check("only Luma and Partiful event-shaped links can be private by their record", P.mayBePrivateEvent("https://partiful.com/e/abc") && P.mayBePrivateEvent("https://lu.ma/abc123") && !P.mayBePrivateEvent("https://partiful.com/explore/sf") && !P.mayBePrivateEvent("https://www.eventbrite.com/e/x-1") && !P.mayBePrivateEvent("https://x.com/a/status/1"));
+  const reads: string[] = [];
+  const priv = await P.privateEventLinks(["https://partiful.com/e/inv", "https://lu.ma/open1", "https://example.com/post", "https://partiful.com/e/inv"], async (u) => (reads.push(u), { private: u.endsWith("inv") }));
+  check("privateEventLinks: the private ones, reading only Luma and Partiful links, each once", priv.size === 1 && priv.has("https://partiful.com/e/inv") && reads.sort().join() === "https://lu.ma/open1,https://partiful.com/e/inv", { priv: [...priv], reads });
+  const slow = await P.privateEventLinks(["https://partiful.com/e/slow"], () => new Promise((r) => setTimeout(() => r({ private: true }), P.PRIVATE_CHECK.deadlineMs + 2000)));
+  check("one not read in time is left (and checked again before it's shared)", slow.size === 0);
+  const lt = src("agent/loopTools.ts");
+  check("reply loop: an X post's private event links are dropped before they're finds or shown", /const privateLinks = await privateEventLinks\(posts\.flatMap\(\(p\) => p\.links\)\)/.test(lt) && /for \(const p of posts\) p\.links = p\.links\.filter\(\(l\) => !privateLinks\.has\(l\)\);\s*for \(const p of posts\) \{/.test(lt));
+  check("reply loop: a post's link is marked, so shareFinds checks it again", /loop\.found\.set\(l, \{ name: p\.text\.slice\(0, 80\), url: l, facts: p\.text, match: null, blocked: null, viaPost: true \}\)/.test(lt));
+  check("reply loop: a post's private event page is refused at shareFinds", /if \(f\.viaPost && [\s\S]{0,80}privateEventLinks\(\[it\.link\]\)[\s\S]{0,120}\.has\(it\.link\)\) \{\s*refused\.push\(`\$\{f\.name\}: its page says it's a private event; never share it`\);/.test(lt));
+  const sf = src("services/sweepFind.ts");
+  check("the sweep (9am and hourly: one search) drops them from X results too, and promoteEventPages drops any it missed", /m\.privateEventLinks\(posts\.flatMap\(\(p\) => p\.links\)\)/.test(sf) && /const promoted = await promoteEventPages\(kept, eventPageFor\);/.test(sf) && !/if \(opts\.allSources\)[^\n]*promoteEventPages/.test(sf));
+}
+
 console.log(`event tier by page: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
