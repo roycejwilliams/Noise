@@ -1704,8 +1704,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const resolved = await resolveNamedEventGuest(ctx.userId, personName, lastName);
         // Always the same first question, whoever they name: the guest list isn't read until Co has a full name.
+        // askedBack: this step is not the request (agent/toolGuard.ts reads it and takes it off before the model sees the result), so
+        // their last-name answer continues this intro instead of reading as a repeat (2026-10-28, Royce). It comes before any lookup,
+        // the same for everyone, so it says nothing about whether the person is found.
         if ("needsDetail" in resolved) {
-          return { ok: true, note: "Before anything else, ask for the person's last name, so you reach the right person. Ask it plainly, the same way you would for anyone; don't say whether you know anyone by that first name, how many, or whether they were there." };
+          return { ok: true, note: "Before anything else, ask for the person's last name, so you reach the right person. Ask it plainly, the same way you would for anyone; don't say whether you know anyone by that first name, how many, or whether they were there.", askedBack: true };
         }
         if ("error" in resolved) {
           await recordDecision({
@@ -1725,40 +1728,47 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // same answer too (no one is contacted).
           return neutral();
         }
-        const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
-        const requester = rows[0];
-        if (!requester) {
-          notDone(`The intro request for ${personName} was not made.`);
-          return { ok: false, error: "couldn't look up their own contact details" };
-        }
-        const ask = () =>
-          requestIntroToNamedGuest(
-            resolved.eventId,
-            resolved.eventName,
-            { user_id: ctx.userId, first_name: requester.first_name, phone_number: requester.phone_number, email: requester.email },
-            resolved.target,
-          );
-        // One retry, then the truth in the internal log: a failure used to be logged as "requested". A throw is retried once. A false is
-        // never retried: the intro email didn't go yet (failed, no address, or held by the matching pause, which sends it later), and a
-        // retry would only hold it again (review of #284).
-        let failure: string | null = null;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          failure = await ask().then(
-            (went) => (went === false ? "the intro email didn't go yet (failed, no address, or held by the pause to send later)" : null),
-            (err: any) => String(err?.message ?? err),
-          );
-          if (!failure || /didn't go yet/.test(failure)) break;
-        }
-        if (failure) console.error("requestEventIntro: the intro request didn't go:", failure);
-        await recordDecision({
-          layer: 3,
-          decision: "reply.requestEventIntro",
-          userId: ctx.userId,
-          outcome: failure ? "skip" : "act",
-          action: failure ? "held_or_failed" : "requested",
-          proposal: { personName, eventId: resolved.eventId, targetId: resolved.target.user_id },
-          ...(failure ? { checks: [{ name: "request_sent", pass: false, reason: failure.slice(0, 200) }] } : {}),
-        }).catch(() => {});
+        // Found: answered now, the same moment and the same way as not found, and asked in the background (2026-10-28, Royce:
+        // "found/not-found results shouldn't leak"). Run inside the call, the found path waited on a draft and a send while not found
+        // answered at once, and a missing requester row answered with its own error. Every outcome, failures included, is still
+        // logged only in the internal reply.requestEventIntro row.
+        const target = resolved;
+        const request = async () => {
+          const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
+          const requester = rows[0];
+          const ask = () =>
+            requestIntroToNamedGuest(
+              target.eventId,
+              target.eventName,
+              { user_id: ctx.userId, first_name: requester.first_name, phone_number: requester.phone_number, email: requester.email },
+              target.target,
+            );
+          // One retry, then the truth in the internal log: a failure used to be logged as "requested". A throw is retried once. A false
+          // is never retried: the intro email didn't go yet (failed, no address, or held by the matching pause, which sends it later),
+          // and a retry would only hold it again (review of #284).
+          let failure: string | null = requester ? null : "couldn't look up their own contact details";
+          for (let attempt = 0; requester && attempt < 2; attempt++) {
+            failure = await ask().then(
+              (went) => (went === false ? "the intro email didn't go yet (failed, no address, or held by the pause to send later)" : null),
+              (err: any) => String(err?.message ?? err),
+            );
+            if (!failure || /didn't go yet/.test(failure)) break;
+          }
+          return failure;
+        };
+        const logged = (failure: string | null) => {
+          if (failure) console.error("requestEventIntro: the intro request didn't go:", failure);
+          return recordDecision({
+            layer: 3,
+            decision: "reply.requestEventIntro",
+            userId: ctx.userId,
+            outcome: failure ? "skip" : "act",
+            action: failure ? "held_or_failed" : "requested",
+            proposal: { personName, eventId: target.eventId, targetId: target.target.user_id },
+            ...(failure ? { checks: [{ name: "request_sent", pass: false, reason: failure.slice(0, 200) }] } : {}),
+          }).catch(() => {});
+        };
+        void request().then(logged, (err: any) => logged(String(err?.message ?? err)));
         return neutral();
       },
     }),

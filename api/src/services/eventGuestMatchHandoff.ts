@@ -156,6 +156,12 @@ export async function recordOptIn(
   candidateId: string,
   candidateFirstName: string,
   status: "interested" | "declined",
+  // false for a member who asked for this intro by name (requestIntroToNamedGuest): the line below exists only when the person they
+  // named was found, so a later reply that read it ("Cue's record: Jo said yes to being introduced to Sarah", introFacts) told them
+  // Sarah is someone Cue knows. Their ask is already in co_facts, the same line found or not (coFacts.ts toolAction). The opt-in row,
+  // the offer and the pair record still drive the double opt-in; the asker hears of it only from the intro email's own record
+  // (sendIntroEmail) once both have said yes (2026-10-28, Royce: "found/not-found results shouldn't leak through later memory").
+  memory = true,
 ): Promise<void> {
   await pool
     .query(
@@ -168,7 +174,7 @@ export async function recordOptIn(
   await (await import("./inRoomOffers.js")).answerOffer(eventId, personId, candidateId, status === "interested" ? "yes" : "no").catch(() => {});
   // The pair record (services/roomMatching.ts): one answer per side; a no declines the pair for good.
   await (await import("./roomMatching.js")).notePairAnswer(eventId, personId, candidateId, status === "interested" ? "yes" : "no").catch(() => {});
-  await writeMemory(
+  if (memory) await writeMemory(
     personId,
     "event_guest_match_optin",
     `${personFirstName} ${status === "interested" ? "said yes to" : "passed on"} being introduced to ${candidateFirstName}.`,
@@ -521,7 +527,7 @@ export async function requestIntroToNamedGuest(
   const RM = await import("./roomMatching.js");
   await RM.notePairMemberRequested(eventId, requester.user_id, target.user_id);
   await recordDecision({ layer: 6, decision: "match.valueLines", userId: requester.user_id, outcome: "act", action: "member_requested", proposal: { eventId, targetId: target.user_id }, reason: "a member asked for this intro by name; the value gate applies to Cue's own suggestions" }).catch(() => {});
-  await recordOptIn(eventId, requester.user_id, requester.first_name, target.user_id, target.first_name, "interested");
+  await recordOptIn(eventId, requester.user_id, requester.first_name, target.user_id, target.first_name, "interested", false);
 
   if (await hasReciprocalOptIn(eventId, requester.user_id, target.user_id)) {
     return sendIntroEmail(eventId, eventName, requester, target);

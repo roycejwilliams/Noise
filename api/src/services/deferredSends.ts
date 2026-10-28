@@ -101,9 +101,16 @@ export const afterHandlers: AfterHandlers = {
     if (outcome === "sent") await (await import("./networkIntroNudge.js")).afterDirectAskSent(p as any);
     else if (!(await (await import("../harness/introConsent.js")).networkOptedIn(String(p?.candidateId ?? ""), String(p?.askerId ?? "")))) await noteIntroAskNotSent(p);
   },
+  // Only for a pair Cue suggested (origin 'co'): that asker was told about the person by Cue. One a member asked for by name was told
+  // only "if it's someone Cue knows from that event, I'll check", the same whether anyone was found, so "the ask to Sarah didn't go
+  // out" would tell them Sarah was found (and that she can't be reached). They hear nothing, as when no one was found; an unreadable
+  // pair gets no note either (2026-10-28, Royce: "found/not-found results shouldn't leak through later memory or replies").
   event_direct_ask: async (p, outcome) => {
     if (outcome === "sent") await (await import("./eventGuestMatchHandoff.js")).afterDirectAskSent(p as any);
-    else if (!(await (await import("../harness/introConsent.js")).eventOptedIn(String(p?.eventId ?? ""), String(p?.candidateId ?? ""), String(p?.askerId ?? "")))) await noteIntroAskNotSent(p);
+    else if (!(await (await import("../harness/introConsent.js")).eventOptedIn(String(p?.eventId ?? ""), String(p?.candidateId ?? ""), String(p?.askerId ?? "")))) {
+      const pair = await (await import("./roomMatching.js")).pairRow(String(p?.eventId ?? ""), String(p?.candidateId ?? ""), String(p?.askerId ?? "")).catch(() => null);
+      if (pair?.origin === "co") await noteIntroAskNotSent(p);
+    }
   },
   call_confirm: async (p, outcome) => {
     await (await import("./callFollowThrough.js")).afterConfirmSent(p as any, outcome);

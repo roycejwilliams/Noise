@@ -46,17 +46,20 @@ async function removeNetworkBacklogItem(userId: string, askId: string, candidate
   );
 }
 
-// People Co pointed them to at this event, only from recorded nudges.
-async function peopleCoPointedTo(userId: string, eventApiId: string | null): Promise<string[]> {
-  if (!eventApiId) return [];
-  const { rows } = await pool.query(
-    `SELECT DISTINCT u.first_name FROM event_guest_match_nudges n JOIN users u ON u.id = n.candidate_id
+// People Co pointed them to at this event, only from recorded nudges. A yes they gave by naming someone themselves
+// (requestEventIntro, co_pairs origin 'member') isn't Cue pointing them anywhere, and it exists only when that person was found:
+// named in the debrief, it told them so. Left out until the intro email went (2026-10-28, Royce: "found/not-found results
+// shouldn't leak through later memory or replies").
+export const PEOPLE_POINTED_TO_SQL = `SELECT DISTINCT u.first_name FROM event_guest_match_nudges n JOIN users u ON u.id = n.candidate_id
      WHERE n.event_id = $1 AND n.person_id = $2 AND u.first_name <> ''
      UNION
      SELECT DISTINCT u.first_name FROM event_guest_match_opt_ins o JOIN users u ON u.id = o.candidate_id
-     WHERE o.event_id = $1 AND o.person_id = $2 AND o.status = 'interested' AND u.first_name <> ''`,
-    [eventApiId, userId],
-  );
+     WHERE o.event_id = $1 AND o.person_id = $2 AND o.status = 'interested' AND u.first_name <> ''
+       AND NOT EXISTS (SELECT 1 FROM co_pairs p WHERE p.event_id = o.event_id AND p.a_id = LEAST(o.person_id, o.candidate_id)
+         AND p.b_id = GREATEST(o.person_id, o.candidate_id) AND p.origin = 'member' AND p.intro_sent_at IS NULL)`;
+async function peopleCoPointedTo(userId: string, eventApiId: string | null): Promise<string[]> {
+  if (!eventApiId) return [];
+  const { rows } = await pool.query(PEOPLE_POINTED_TO_SQL, [eventApiId, userId]);
   return rows.map((r: any) => r.first_name);
 }
 
