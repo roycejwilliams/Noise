@@ -31,12 +31,21 @@ export type BriefInput = { title: string; asked: string; finds: ResearchFind[]; 
 // used, only those it had. Null when there's neither.
 export function briefAskedLines(b: Pick<BriefInput, "theirWords" | "searched" | "zone">): string[] {
   const out: string[] = [];
-  const words = (b.theirWords ?? "").replace(/\s+/g, " ").trim();
+  // The stored words are their message joined with the turn's copy of it (loopTools theirWords), the same text twice on a text turn:
+  // said once (review of #287).
+  const joined = (b.theirWords ?? "").replace(/\s+/g, " ").trim();
+  const words = joined.match(/^(.+?) \1$/)?.[1] ?? joined;
   if (words) out.push(`What you asked: "${words.length > 200 ? `${words.slice(0, 197).replace(/\s+\S*$/, "")}..." ` : `${words}"`}`.trim());
   const s = b.searched ?? {};
   const zone = b.zone && DateTime.now().setZone(b.zone).isValid ? b.zone : "America/Los_Angeles";
   const day = s.date ? DateTime.fromISO(s.date, { zone }) : null;
-  const at = s.start && /^\d{1,2}:\d{2}$/.test(s.start) ? DateTime.fromFormat(s.start.padStart(5, "0"), "HH:mm", { zone }) : null;
+  // The start as the brief stores it ("6:00 pm"), or a 24-hour "18:00".
+  const start = String(s.start ?? "").trim().toLowerCase();
+  const at = /^\d{1,2}:\d{2}\s*[ap]m$/.test(start)
+    ? DateTime.fromFormat(start.replace(/\s*([ap]m)$/, " $1").toUpperCase(), "h:mm a", { zone })
+    : /^\d{1,2}:\d{2}$/.test(start)
+      ? DateTime.fromFormat(start.padStart(5, "0"), "HH:mm", { zone })
+      : null;
   const parts = [
     day?.isValid ? `${day.toFormat("cccc, LLL d")}${at?.isValid ? ` at ${at.toFormat("h:mm a")}` : ""}` : null,
     s.headcount ? `${s.headcount} ${s.headcount === 1 ? "person" : "people"}` : null,
