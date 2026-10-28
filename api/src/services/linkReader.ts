@@ -23,7 +23,7 @@ import { MODELS } from "../models.js";
 import { fetchLumaEventDetails, isLumaLink, type EventDetails } from "./eventDetails.js";
 import { parseModelJson } from "./modelJson.js";
 import { pageLocality, withholdsStreet, zoneForPage } from "./eventPage.js";
-import { assumedZoneTime, listedWithOffset, ZONE_ASSUMED, ZONE_ASSUMED_MARK, ZONE_UNCLEAR } from "./zoneWords.js";
+import { assumedZoneTime, listedTime, listedWithOffset, ZONE_ASSUMED, ZONE_ASSUMED_MARK, ZONE_UNCLEAR } from "./zoneWords.js";
 import { getTimezoneForCity } from "./geocoding.js";
 
 export const FIELDS = ["what", "name", "host", "date", "start", "end", "timezone", "venue", "address", "online", "audience", "cost", "deadline", "sold_out"] as const;
@@ -267,7 +267,8 @@ export function timeFact(value: string, tz: Field | null | undefined, name: stri
     const said = assumedZoneTime(value, tz.value);
     return said ? { said, note: ZONE_ASSUMED(tz.quote ?? "the city it's in"), assumed: true } : { said: null, note: ZONE_UNCLEAR(name), assumed: false };
   }
-  return listedWithOffset(value) ? { said: humanTime(value, null), note: null, assumed: false } : { said: null, note: ZONE_UNCLEAR(name), assumed: false };
+  // As listed, in its own offset (approved by Royce 2026-10-28): "Wednesday, October 7 at 5 PM (UTC−7, as listed)".
+  return listedWithOffset(value) ? { said: listedTime(value), note: null, assumed: false } : { said: null, note: ZONE_UNCLEAR(name), assumed: false };
 }
 // The time and its note as one line (a stale-watch heads-up, a live check): "Wednesday, October 7 at 5 PM PT. The listing doesn't ...".
 export function saidTime(value: string, tz: Field | null | undefined, name = "it"): string {

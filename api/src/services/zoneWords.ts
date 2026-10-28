@@ -31,6 +31,27 @@ export const listedWithOffset = (value: string): boolean => {
   return !!m && !(m[2] === "00" && m[3] === "00");
 };
 
+// A start that carries its own offset, said as listed (approved by Royce 2026-10-28):
+// "Wednesday, October 7 at 5 PM (UTC−7, as listed)": the true minus sign, "UTC+5:30" for a half-hour offset.
+export function offsetLabel(dt: DateTime): string {
+  const m = dt.offset;
+  const h = Math.floor(Math.abs(m) / 60);
+  const min = Math.abs(m) % 60;
+  return `UTC${m < 0 ? "\u2212" : "+"}${h}${min ? `:${String(min).padStart(2, "0")}` : ""}`;
+}
+export function listedTime(value: string): string | null {
+  const dt = DateTime.fromISO(value, { setZone: true });
+  return dt.isValid ? `${dt.toFormat("cccc, LLLL d")} at ${clockTime(dt)} (${offsetLabel(dt)}, as listed)` : null;
+}
+// Its end, after a listed start: "and ends at 8 PM", or on another day "and ends Thursday at 1 AM". None when the listing gives none.
+export function listedEnd(startValue: string, endValue: string | null | undefined): string {
+  if (!endValue) return "";
+  const s = DateTime.fromISO(startValue, { setZone: true });
+  const e = DateTime.fromISO(endValue, { setZone: true }).setZone(s.zone);
+  if (!s.isValid || !e.isValid) return "";
+  return e.hasSame(s, "day") ? ` and ends at ${clockTime(e)}` : ` and ends ${e.toFormat("cccc")} at ${clockTime(e)}`;
+}
+
 export const ZONE_ASSUMED = (city: string) => `The listing doesn't specify a timezone, so I'm assuming local time in ${city}.`;
 export const ZONE_UNCLEAR = (name: string) => `The listing for "${name}" doesn't say what time zone its start time is in. Check the page before you plan around it.`;
 // What the model is told alongside an assumed-zone time in a fact (said once, never dropped).

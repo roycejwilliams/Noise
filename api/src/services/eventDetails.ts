@@ -24,7 +24,7 @@ import { IDENTITY_RULE, stripUngroundedIdentity } from "./identityGuard.js";
 import { identityDropped } from "./guardDrops.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { availabilityConflict } from "./availability.js";
-import { assumedZoneTime, clockTime, listedWithOffset, ZONE_ASSUMED, ZONE_UNCLEAR } from "./zoneWords.js";
+import { assumedZoneTime, clockTime, listedEnd, listedTime, listedWithOffset, ZONE_ASSUMED, ZONE_UNCLEAR } from "./zoneWords.js";
 
 export type EventDetails = {
   startAt: string | null;
@@ -188,7 +188,8 @@ export function renderEventDetails(name: string, d: EventDetails): string[] {
     const assumed = d.zoneGuessed && d.timezone && d.city ? assumedZoneTime(d.startAt, d.timezone) : null;
     if (assumed) lines.push(`"${name}" starts ${assumed}${end ? ` and ends ${clockTime(end)}` : ""}. ${ZONE_ASSUMED(d.city!)}`);
     else if (!d.timezone && !listedWithOffset(d.startAt)) lines.push(ZONE_UNCLEAR(name));
-    else if (ownOffset) lines.push(`"${name}" starts ${start.toFormat("cccc, LLLL d 'at' h:mm a ZZZZ")}${ends}, as listed.`);
+    // COPY, approved by Royce 2026-10-28: "\"Launch Night\" starts Wednesday, October 7 at 5 PM (UTC−7, as listed) and ends at 8 PM."
+    else if (ownOffset) lines.push(`"${name}" starts ${listedTime(d.startAt)}${listedEnd(d.startAt, d.endAt)}.`);
     else lines.push(`"${name}" starts ${start.toFormat("cccc, LLLL d 'at' h:mm a")}${ends} (${zone}).`);
   }
   if (d.online) lines.push(`"${name}" is online.`);
