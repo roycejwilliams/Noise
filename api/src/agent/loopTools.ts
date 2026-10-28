@@ -3,6 +3,7 @@
 // address was really seen, the turn's budget, and nothing is sent to anyone
 // but the member (an email is a tap-to-send link they send themselves).
 import { z } from "zod";
+import { asHoldSend } from "../services/turnReplies.js";
 import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import { writeMemory } from "../services/memory.js";
@@ -229,7 +230,8 @@ export function loopTools(
   const hold = async (line?: string) => {
     if (!line?.trim() || loop.holdSent || state.sent || stockLine(line, theirWords())) return;
     loop.holdSent = true;
-    if (await say(line.trim(), `${HOLD_PREFIX} ${line.trim()}`)) {
+    // Sent as a hold, so a turn that dies after it is still owed an answer (services/turnReplies.ts asHoldSend, review of #301).
+    if (await asHoldSend(() => say(line.trim(), `${HOLD_PREFIX} ${line.trim()}`))) {
       ctx.facts?.add("did_this_turn", `Told them "${line.trim()}" while looking.`);
       // A holding line answers nothing (agent/conversationTools.ts sendReply never counts it as the reply).
       state.holdLines?.push(line.trim());

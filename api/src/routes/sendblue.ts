@@ -88,7 +88,8 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 import { isShuttingDown, track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
-import { refusedBySendLayer, sendsTo } from "../services/sendblue.js";
+import { refusedBySendLayer } from "../services/sendblue.js";
+import { asHoldSend, trackTurnReplies, type TurnReplies } from "../services/turnReplies.js";
 import { setScopeMember, withMember } from "../services/llmUsage.js";
 import { createInboundHold, dbDownFor, holdFilePath } from "../services/inboundHold.js";
 import { isTestNumber } from "../services/testNumbers.js";
@@ -148,6 +149,13 @@ const ONBOARDING_CALL_OFFER_PREFIX = "[onboarding]";
 // The late line (services/inboundRecovery.ts) is one of these too: it comes before the real answer and answers nothing itself.
 const HOLD_LINES = ["On it, give me a sec.", "Let me look, one sec.", "Looking now, give me a minute.", LATE_REPLY_LINE];
 export const HOLD_PREFIX = "Co is looking:";
+// Pure: whether a text Cue sent answers something (review of #301): not a hold line, not the late line, not a line that leaves their
+// message owed (a failure note), not a logged "looking" line. Cue's own "looking" lines are sent inside asHoldSend.
+export function isRealReply(content: string): boolean {
+  const t = cleanCoMessage(String(content ?? "")).trim();
+  if (!t || t.startsWith(HOLD_PREFIX)) return false;
+  return ![...HOLD_LINES, ...OWED_AFTER].some((l) => cleanCoMessage(l).trim() === t);
+}
 // After a reaction, the looking text waits this long: a quick search needs none.
 const HOLD_AFTER_ACK_MS = 8_000;
 const HOLD_NO_ACK_MS = 5_000;
@@ -611,13 +619,14 @@ export function sendblueRouter(io: Server): Router {
       let held = false;
       // The turn's error, if it failed (decides, at the end, whether the text waits in the hold).
       let turnError: unknown = undefined;
-      // Whether this turn had already texted them when it failed (review of #301: a reply that went out and then failed to log
-      // must never be replayed, or they're answered twice). Counted from Sendblue sends to this number (services/sendblue.ts
-      // sendsTo), from the start of the turn's own work (after any late line), up to the failure (before any failure note).
-      let sendsBase = req.body?.number ? sendsTo(req.body.number) : 0;
+      // Whether this turn had really answered them when it failed (reviews of #301: a reply that went out and then failed to log
+      // must never be replayed, or they're answered twice). The turn's own flag (services/sendblue.ts trackTurnReplies), set by a
+      // send of this turn that answers something: never a "looking" line, the late line or a failure note (isRealReply), never another
+      // flow's text to the same number. Read at the failure, before any failure note goes.
+      const turnReplies: TurnReplies = { replied: false, isReply: isRealReply };
       let repliedBeforeFailure: boolean | null = null;
       const notePossibleReply = () => {
-        repliedBeforeFailure ??= !!req.body?.number && sendsTo(req.body.number) > sendsBase;
+        repliedBeforeFailure ??= turnReplies.replied;
       };
       // This text joined the hold behind a held STOP or START of theirs; the drain answers them all, in order.
       let deferred = false;
@@ -743,7 +752,6 @@ export function sendblueRouter(io: Server): Router {
           else if (held && lateLineFits(bodyForStamp, arrivedAt, Date.now())) lateFrom = arrivedAt;
         }
         if (lateFrom) await sayLate(lockKey);
-        sendsBase = sendsTo(lockKey);
         return true;
       };
       // Every model call this text causes (the reply, its readers, learning, the snapshot, fire-and-forget work) is this member's
@@ -753,6 +761,8 @@ export function sendblueRouter(io: Server): Router {
       try {
         // Under the phone's lock (this whole turn is), first: held texts taken in, the late line if it's late. Never throws.
         if (!(await beforeTurn())) return;
+        // From here, this turn's sends are counted as its answer (only the ones that answer something).
+        trackTurnReplies(turnReplies);
         const {
           number,
           content,
@@ -1892,7 +1902,8 @@ export function sendblueRouter(io: Server): Router {
         // so it never counts as a real answer (the checks below exclude it by
         // prefix now that Co writes its own, not by a fixed list).
         const threadedSendAndLog = async (message: string, asVoice = false, hold = false): Promise<boolean> => {
-          const sent = await threadedSend({ phone: user.phone_number, message, asVoice });
+          const send = () => threadedSend({ phone: user.phone_number, message, asVoice });
+          const sent = await (hold ? asHoldSend(send) : send());
           if (sent) await logTextExchange(user.id, `${hold ? HOLD_PREFIX : "Co replied:"} ${cleanCoMessage(message)}`);
           return sent;
         };
@@ -2958,27 +2969,27 @@ function scheduleTurnReplay(handle: string, afterMs: number, o: { neverRan?: boo
 // again, no call went out, and it's under an hour old (turnReplayBlocked).
 // Returns whether it ran.
 export async function replayOwedTurn(handle: string, o: { neverRan?: boolean } = {}): Promise<boolean> {
+  // Held for the database (services/inboundHold.ts): the drain answers it, under the phone's lock, with its own claim. Taking the
+  // claim here could leave the drain nothing to answer if the checks below then failed (review of #301). It will be answered.
+  if (inboundHold.has(handle)) return true;
   const claim = await claimRetry(handle);
   if (!claim?.payload || !replayHandler) return false;
   const { payload, receivedAt } = claim;
   const phone = payload.number;
   const isGroup = payload.message_type === "group" || !!payload.group_id;
   if (typeof phone !== "string" || !phone || isGroup || payload.is_outbound) return false;
-  const { rows } = await pool
-    .query(
-      `SELECT u.id, u.sms_opted_out, u.archived_at,
-         EXISTS (
-           SELECT 1 FROM co_memories r
-           WHERE r.user_id = u.id AND r.memory_type = 'text_exchange' AND (r.content LIKE 'Co replied:%' OR r.content LIKE 'Mo replied:%')
-             AND r.created_at > $2 AND r.content <> ALL($3::text[])
-         ) AS replied,
-         (SELECT d.last_inbound_at FROM phone_debounce d WHERE d.phone = $1) AS last_inbound_at,
-         u.call_status_updated_at
-       FROM users u WHERE u.phone_number = $1 LIMIT 1`,
-      [phone, receivedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
-    )
-    .catch(() => ({ rows: [] as any[] }));
-  const row = rows[0];
+  let row: any;
+  try {
+    row = await replayCheckRow(phone, receivedAt, { strict: true });
+  } catch (err) {
+    // The checks couldn't be read (a database blip, review of #301): never "no member" and gone. The claim goes back and the text
+    // goes to the drain, which answers it once the database answers (and gives the claim back itself if this release didn't land).
+    await pool.query(`UPDATE inbound_webhook_handles SET retry_claimed_at = NULL WHERE handle = $1`, [handle]).catch(() => {});
+    inboundHold.hold({ handle, payload, receivedAt, active: false, reclaim: true });
+    if (await dbDownFor(err, dbAnswers)) noteDbTrouble();
+    else holdDrain.kick();
+    return true;
+  }
   const blocked = turnReplayBlocked({
     member: row ? { optedOut: !!row.sms_opted_out, archived: !!row.archived_at } : null,
     coRepliedSince: !!row?.replied,
