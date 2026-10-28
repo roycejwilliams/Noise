@@ -129,6 +129,10 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   const misses = ["this week is literally killing me lol", "I'd die for a good ramen spot", "killing it at work today", "my grandma passed last week", "I'm dying to see that show", "that set killed", "I want to end it with my cofounder"];
   check("unmistakable crisis wording is caught", hits.every((t) => S.soundsLikeCrisis(t)));
   check("figures of speech and ordinary sadness aren't", misses.every((t) => !S.soundsLikeCrisis(t)));
+  // iPhones type curly apostrophes by default: the same words must read the same (2026-10-27, review of #282).
+  const curly = ["I don\u2019t want to live anymore", "I can\u2019t go on", "I\u2019m going to hurt myself"];
+  check("curly apostrophes: crisis and self-harm wording is still caught", S.soundsLikeCrisis(curly[0]) && curly.every((t) => S.safetySignal(t)));
+  check("curly apostrophes: they read exactly like straight ones", hits.every((t) => S.soundsLikeCrisis(t.replace(/'/g, "\u2019"))) && misses.every((t) => !S.soundsLikeCrisis(t.replace(/'/g, "\u2019"))));
   check("the resource names 988 and 911", /\b988\b/.test(S.CRISIS_RESOURCES) && /\b911\b/.test(S.CRISIS_RESOURCES));
   const { capabilitySheet } = await import("../../src/services/capabilities.js");
   check("Cue knows the resource as a fact, so the fact check never cuts it", capabilitySheet().some((l) => l.includes(S.CRISIS_RESOURCES)));
