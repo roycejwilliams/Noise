@@ -13,6 +13,7 @@
 // re-reads anything past its freshness window, and the options are ordered by what this member (or everyone) said yes and no to.
 // Sources: the scripted Peerspace reader, and since round 2 passed (evals/browserPilot/round2.ts: 39 right, 11 unknown, 0
 // wrong on 12 sites with no script) the general reader (services/sdkGeneralReader.ts) for a venue's own pages.
+import { DateTime } from "luxon";
 import type { Doc, DocSection, ResearchSource } from "./documentSheet.js";
 import { regionFor } from "./areaCodes.js";
 import { schemaFields, type FieldValue, type FindField, type FindType, type StoredFind } from "./researchQuality.js";
@@ -22,7 +23,29 @@ export const BRIEF_LIMITS = { maxOptions: 6, maxContext: 6, maxReads: 8 };
 
 export type { FindField };
 export type ResearchFind = { name: string; url: string; checkedAt: string; reader: "scripted" | "sdk"; fields: FindField[] };
-export type BriefInput = { title: string; asked: string; finds: ResearchFind[]; memberContext: string[]; zone?: string | null };
+// theirWords: their own words asking for it (the task's quote, checked at startTask). searched: what the search actually used.
+export type BriefSearched = { date?: string | null; start?: string | null; headcount?: number | null; budget?: string | null; neighborhood?: string | null; city?: string | null };
+export type BriefInput = { title: string; asked: string; finds: ResearchFind[]; memberContext: string[]; zone?: string | null; theirWords?: string | null; searched?: BriefSearched | null };
+
+// Pure: the brief's two opening lines (Royce, 2026-10-27: the result says what shaped it): their own words, and the criteria the search
+// used, only those it had. Null when there's neither.
+export function briefAskedLines(b: Pick<BriefInput, "theirWords" | "searched" | "zone">): string[] {
+  const out: string[] = [];
+  const words = (b.theirWords ?? "").replace(/\s+/g, " ").trim();
+  if (words) out.push(`What you asked: "${words.length > 200 ? `${words.slice(0, 197).replace(/\s+\S*$/, "")}..." ` : `${words}"`}`.trim());
+  const s = b.searched ?? {};
+  const zone = b.zone && DateTime.now().setZone(b.zone).isValid ? b.zone : "America/Los_Angeles";
+  const day = s.date ? DateTime.fromISO(s.date, { zone }) : null;
+  const at = s.start && /^\d{1,2}:\d{2}$/.test(s.start) ? DateTime.fromFormat(s.start.padStart(5, "0"), "HH:mm", { zone }) : null;
+  const parts = [
+    day?.isValid ? `${day.toFormat("cccc, LLL d")}${at?.isValid ? ` at ${at.toFormat("h:mm a")}` : ""}` : null,
+    s.headcount ? `${s.headcount} ${s.headcount === 1 ? "person" : "people"}` : null,
+    s.budget?.trim() || null,
+    [s.neighborhood?.trim(), s.city?.trim()].filter(Boolean).join(", ") || null,
+  ].filter((x): x is string => !!x);
+  if (parts.length) out.push(`Searched for: ${parts.join(" · ")}`);
+  return out;
+}
 
 export const UNKNOWN = "unknown";
 const fmtChecked = (iso: string, zone?: string | null) => {
@@ -43,13 +66,15 @@ export function findSection(f: ResearchFind, zone?: string | null, n?: number): 
 // Pure: the brief. Researched options first (numbered, so they can say "the second one"), then what the member told Co.
 export function buildBrief(b: BriefInput): Doc {
   const finds = b.finds.slice(0, BRIEF_LIMITS.maxOptions);
-  const sections: DocSection[] = finds.map((f, i) => findSection(f, b.zone, i + 1));
+  const asked = briefAskedLines(b);
+  const sections: DocSection[] = [...(asked.length ? [{ heading: null, paragraphs: asked, bullets: [] } as unknown as DocSection] : []), ...finds.map((f, i) => findSection(f, b.zone, i + 1))];
   const context = b.memberContext.map((x) => x.trim()).filter(Boolean).slice(0, BRIEF_LIMITS.maxContext);
   if (context.length) sections.push({ heading: "From what you told me", paragraphs: [], bullets: context });
   const sources = finds.length ? `${finds.length} option${finds.length === 1 ? "" : "s"} researched, each with its source and when it was checked` : "nothing could be verified";
   return {
     title: b.title,
-    note: `For: ${b.asked}. Researched sections: ${sources}. "unknown" means the page didn't say.`,
+    // Their own words lead when there are any (the opening lines above); Cue's paraphrase only stands in when there aren't.
+    note: `${asked.length ? "" : `For: ${b.asked}. `}Researched sections: ${sources}. "unknown" means the page didn't say.`,
     sections,
     suggestions: [],
     kind: "venue_brief",
@@ -402,7 +427,15 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const signal = await Q.rankingSignal(task.userId);
   finds = Q.rankFinds(finds.map((f) => ({ ...f, type: "venue" as FindType })), signal.member, signal.global).map(({ score: _s, type: _t, ...f }) => f);
 
-  const doc = buildBrief({ title: p.title || `Venue options: ${p.what}`.slice(0, 70), asked: p.what, finds, memberContext: p.memberContext ?? [], zone });
+  const doc = buildBrief({
+    title: p.title || `Venue options: ${p.what}`.slice(0, 70),
+    asked: p.what,
+    finds,
+    memberContext: p.memberContext ?? [],
+    zone,
+    theirWords: task.theirWords,
+    searched: { date: p.date ?? null, start: p.start ?? null, headcount: p.headcount ?? null, budget: p.budget ?? null, neighborhood: p.neighborhood ?? null, city },
+  });
   const { loadTheirWords } = await import("./documentDelivery.js");
   const theirs = [await loadTheirWords(task.userId).catch(() => ""), task.theirWords].join("\n");
   const problems = [...researchProblems(doc), ...(await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs }))];

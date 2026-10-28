@@ -82,5 +82,18 @@ check("not asked in their words: the PDF", T({ askedForGoogle: false }) === "pdf
 check("not on the narrowing list when it's set: the PDF", T({ env: { GOOGLE_DOCS_TEST_USERS: "22222222-2222-4222-8222-222222222222" } }) === "pdf_text");
 check("default delivery (no ask): the PDF", T({ saveTo: "pdf", askedForGoogle: false }) === "pdf_text");
 
+// The brief says what shaped it (Royce, 2026-10-27, wording approved): their own words, and the criteria the search used, on top.
+{
+  const b = RB.buildBrief({ title: "Venue options", asked: "quiet dinner, Mission, 6", finds: [find()], memberContext: [], zone: "America/Los_Angeles", theirWords: "a quiet dinner spot in the Mission for 6 on Saturday", searched: { date: "2026-10-24", start: "19:30", headcount: 6, budget: "under $60 a head", neighborhood: "Mission", city: "SF" } });
+  const top = b.sections[0];
+  check("brief: opens with their words, then what was searched", top.heading === null && top.paragraphs[0] === 'What you asked: "a quiet dinner spot in the Mission for 6 on Saturday"' && top.paragraphs[1] === "Searched for: Saturday, Oct 24 at 7:30 PM · 6 people · under $60 a head · Mission, SF", top);
+  check("brief: Cue's paraphrase doesn't repeat it in the note", !/^For: /.test(b.note), b.note);
+  check("brief: the opening lines never count as an unsourced researched section", RB.researchProblems(b).length === 0, RB.researchProblems(b));
+  const only = RB.briefAskedLines({ theirWords: "", searched: { headcount: 1, city: "Oakland" } });
+  check("brief: only the criteria it had (no empty slots)", JSON.stringify(only) === JSON.stringify(["Searched for: 1 person · Oakland"]), only);
+  const none = RB.buildBrief({ title: "t", asked: "a launch party for 40", finds: [find()], memberContext: [] });
+  check("brief: no words and no criteria, the note keeps Cue's paraphrase as before", /^For: a launch party for 40\./.test(none.note) && none.sections[0].heading !== null, none.note);
+}
+
 console.log(`research briefs: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

@@ -236,7 +236,7 @@ h1 { font-family: ${SERIF}; font-weight: 300; font-size: var(--title); line-heig
 .for { margin-top: 14px; font-size: 8.5px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; color: ${C.muted}; }
 .lede { margin: calc(var(--pad) * 0.9) 0 0 0; max-width: 4.9in; font-size: var(--lead); line-height: 1.5; color: ${C.soft}; }
 .sec { display: grid; grid-template-columns: 1.75in 1fr; column-gap: 0.4in; padding: var(--pad) 0; border-top: 1px solid ${C.line}; break-inside: avoid; counter-increment: sec; }
-.sec.bare { grid-template-columns: 1fr; }
+.sec.bare { grid-template-columns: 1fr; counter-increment: none; }
 h2 { font-family: ${SERIF}; font-weight: 400; font-size: var(--h2); line-height: 1.22; color: ${C.ink}; margin: 0; }
 h2::before { content: counter(sec, decimal-leading-zero); display: block; font-family: ${SANS}; font-size: 8.5px; font-weight: 600; letter-spacing: 0.2em; color: ${C.gold}; margin-bottom: 7px; }
 .body p { margin: 0 0 0.6em 0; font-size: var(--text); line-height: 1.5; color: ${C.body}; }
