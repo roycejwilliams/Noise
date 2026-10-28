@@ -149,14 +149,20 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   const recap = `Co replied: Ellis is building grid storage and left Tesla, worth a chat.`;
   check("memory: Cue's own line about a linked member is cut to a history line", !/Tesla/.test(MS.safeMemory("text_exchange", recap, ["Ellis"]) ?? ""));
   {
-    // Linked names come from linkedMemberNames: someone who was only in an additive offer must be linked too.
+    // Linked names come from linkedMemberNames, this member's own side only (2026-10-28). An additive offer names no one: the people
+    // it counted were never named to Jordan, so they aren't on his list, and a line of his that says "Noor" (his own Noor, or a
+    // guess) isn't turned into "Noor, another member". Cue's lines about her can only come from Cue naming her to him: the reveal
+    // after his yes opens a question about her (handleAdditiveReply), and from then on she is on the list and those lines are cut.
     const { W, reset, addMember } = await import("./world.js");
     reset();
     const jordan = addMember({ first_name: "Jordan" });
     const noor = addMember({ first_name: "Noor" });
     W.offers.push({ event_id: "evt-x", person_id: jordan.id, candidate_key: "additive", kind: "additive", candidate_id: null, candidate_ids: [noor.id], status: "open", opened_at: new Date(), created_at: new Date() });
-    const linked = await MS.linkedMemberNames(jordan.id);
-    finding("memory: but a member who was only in an ADDITIVE offer is not 'linked' (no nudge row), so Cue's own lines about them are not cut", /Tesla/.test(MS.safeMemory("text_exchange", `Co replied: Noor left Tesla.`, linked) ?? ""), linked);
+    const before = await MS.linkedMemberNames(jordan.id);
+    check("memory: someone only counted in an additive offer is not on his list, so his lines don't call them 'another member'", !before.includes("Noor") && !/another member/.test(MS.safeMemory("text_exchange", `Co replied: say hi to Noor for me.`, before) ?? ""), before);
+    W.offers.push({ event_id: "evt-x", person_id: jordan.id, candidate_key: noor.id, kind: "nudge", candidate_id: noor.id, candidate_ids: [], status: "open", opened_at: new Date(), created_at: new Date() });
+    const after = await MS.linkedMemberNames(jordan.id);
+    check("memory: once Cue names her to him (the reveal's question), she is linked and Cue's own lines about her are cut", after.includes("Noor") && !/Tesla/.test(MS.safeMemory("text_exchange", `Co replied: Noor left Tesla.`, after) ?? ""), after);
   }
 }
 

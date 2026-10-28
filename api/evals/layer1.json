@@ -239,6 +239,7 @@
     "evals/review/outsideActions.ts",
     "evals/review/introTrace.ts",
     "evals/review/googleKey.ts",
-    "evals/review/previews.ts"
+    "evals/review/previews.ts",
+    "evals/review/memberNamesOwnSide.ts"
   ]
 }
