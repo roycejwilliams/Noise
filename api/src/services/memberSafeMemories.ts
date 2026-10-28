@@ -205,19 +205,31 @@ export async function memberSafeLine(userId: string, linked?: string[]): Promise
   return (s: string) => safeMemory("context", String(s ?? ""), names);
 }
 
-export async function memberNamesStrict(userId: string): Promise<string[]> {
-  const [linked, records, intros] = await Promise.all([
-    pool.query(
-      `SELECT DISTINCT u.first_name FROM users u
+// An intro a member asked for by name (requestEventIntro, co_pairs origin 'member') adds no one here until the intro email went
+// (2026-10-28, Royce: "found/not-found results shouldn't leak"). Its opt-in rows and the direct ask to the other side exist only when
+// the person they named was found, and a name on this list turns Cue's own lines about her into "Sarah, another member, ..."
+// (historyLine): their next reply would read that she was found. So those three reads (the opt-ins both ways, and an ask to someone
+// else about this member) leave out a pair asked for by name and not introduced yet. A nudge or an offer Cue sent THIS member about
+// the person still counts: Cue told them about her itself.
+export const MEMBER_NAMES_SQL = `WITH asked_by_name AS (
+         SELECT CASE WHEN a_id = $1 THEN b_id ELSE a_id END AS other FROM co_pairs WHERE a_id = $1 OR b_id = $1
+         GROUP BY 1 HAVING bool_or(origin = 'member') AND NOT bool_or(intro_sent_at IS NOT NULL)
+       )
+       SELECT DISTINCT u.first_name FROM users u
        WHERE u.id <> $1 AND u.first_name IS NOT NULL AND u.id IN (
          SELECT candidate_id FROM event_guest_match_nudges WHERE person_id = $1
          UNION SELECT person_id FROM event_guest_match_nudges WHERE candidate_id = $1
-         UNION SELECT candidate_id FROM event_guest_match_opt_ins WHERE person_id = $1
-         UNION SELECT person_id FROM event_guest_match_opt_ins WHERE candidate_id = $1
+         UNION SELECT candidate_id FROM event_guest_match_opt_ins WHERE person_id = $1 AND candidate_id NOT IN (SELECT other FROM asked_by_name)
+         UNION SELECT person_id FROM event_guest_match_opt_ins WHERE candidate_id = $1 AND person_id NOT IN (SELECT other FROM asked_by_name)
          UNION SELECT candidate_id FROM event_match_offers WHERE person_id = $1 AND candidate_id IS NOT NULL
          UNION SELECT unnest(candidate_ids) FROM event_match_offers WHERE person_id = $1
-         UNION SELECT person_id FROM event_match_offers WHERE candidate_id = $1 OR $1 = ANY(candidate_ids)
-       )`,
+         UNION SELECT person_id FROM event_match_offers WHERE (candidate_id = $1 OR $1 = ANY(candidate_ids)) AND person_id NOT IN (SELECT other FROM asked_by_name)
+       )`;
+
+export async function memberNamesStrict(userId: string): Promise<string[]> {
+  const [linked, records, intros] = await Promise.all([
+    pool.query(
+      MEMBER_NAMES_SQL,
       [userId],
     ),
     pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('network_offer_pending', 'network_intro_offer_pending', 'recommendation') ORDER BY created_at DESC LIMIT 200`, [userId]),

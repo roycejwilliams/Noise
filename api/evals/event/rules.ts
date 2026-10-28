@@ -53,7 +53,8 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
 {
   const handoff = readFileSync(new URL("../../src/services/eventGuestMatchHandoff.ts", import.meta.url), "utf8");
   c(/export async function requestIntroToNamedGuest/.test(handoff), "requestIntroToNamedGuest is exported");
-  c(/await recordOptIn\(eventId, requester\.user_id, requester\.first_name, target\.user_id, target\.first_name, "interested"\);/.test(handoff), "the requester's ask itself is recorded as their real opt-in");
+  // Without the opt-in memory (false, 2026-10-28): that line existed only when the named person was found (behavior in evals/review/introTrace.ts).
+  c(/await recordOptIn\(eventId, requester\.user_id, requester\.first_name, target\.user_id, target\.first_name, "interested", false\);/.test(handoff), "the requester's ask itself is recorded as their real opt-in");
   c(/hasReciprocalOptIn\(eventId, requester\.user_id, target\.user_id\)/.test(handoff), "it checks for the other side's opt-in before ever sending an intro email");
   c(/await maybeAskCandidateDirectly\(eventId, eventName, requester\.first_name, target, requester\)/.test(handoff), "without a reciprocal yes yet, it asks the other side, it never emails unilaterally");
 

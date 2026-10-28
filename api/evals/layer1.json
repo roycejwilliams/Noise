@@ -235,6 +235,7 @@
     "evals/cache/toolOrder.ts",
     "evals/review/changes.ts",
     "evals/review/audience.ts",
-    "evals/review/outsideActions.ts"
+    "evals/review/outsideActions.ts",
+    "evals/review/introTrace.ts"
   ]
 }

@@ -40,7 +40,22 @@ type GuardCtx = {
   recentExchange?: string | null;
 };
 
-export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes";
+// asked_back: the tool did nothing yet and asked a question back (requestEventIntro's "what's their last name?"). Logged, never
+// counted as done: not toward perDay or oncePerPerson, not in the lasting record (2026-10-28, Royce: "a last-name answer should
+// continue the existing intro"; the first-name call used to count as the request and the answer was refused as "already requested").
+export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes" | "asked_back";
+
+// Pure: who oncePerPerson means, the way the guest-list lookup reads a name (eventGuestMatchHandoff.ts resolveNamedEventGuest):
+// the first word of personName, then lastName when given or else the rest of personName. So "Sarah" + "Kim" and "Sarah Kim" are
+// one person and two Sarahs are two (2026-10-28: the key was personName alone, so the last-name answer read as a repeat of
+// "Sarah", and any Sarah blocked every other). Accents folded, case and punctuation dropped. "" when no name was given.
+export function personKey(input: any): string {
+  const fold = (s: unknown) => norm(String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+  const parts = fold(input?.personName).split(" ").filter(Boolean);
+  if (!parts.length) return "";
+  const last = fold(input?.lastName) || parts.slice(1).join(" ");
+  return last ? `${parts[0]} ${last}` : parts[0];
+}
 
 // Pure: the receipt for a correctWhatCoKnows call that removes anything: how many changes of each action and the kinds of the refs
 // (whatCoKnows.ts logKind), nothing else. Null for any other tool or a call with no removal (logged as before).
@@ -130,13 +145,21 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
           return refuse("limited", `${name} wasn't run: it's already been done ${rows[0].n} time(s) for them today.`, "Already done for them today. Don't do it again; say so if it comes up.");
         }
       }
-      if (!ctx.dryRun && limits.oncePerPerson) {
-        const person = norm(input?.personName);
-        const { rows } = person
-          ? await pool
-              .query(`SELECT 1 FROM harness_decisions WHERE decision = $1 AND user_id = $2 AND outcome = 'act' AND lower(proposal->'input'->>'personName') = $3 LIMIT 1`, [`tool.${name}`, ctx.userId, person])
-              .catch(() => ({ rows: [] as any[] }))
-          : { rows: [] as any[] };
+      // The full name, once there is one (personKey). A first name alone is never checked: nothing is done for a first name alone
+      // (the tool asks for the last name before any lookup, the same for everyone), and rows logged before 2026-10-28 counted that
+      // first-name step as done, so checking it would refuse the same first step forever. Rows from then on carry the key as
+      // proposal.person; older ones are read the way personKey reads their input.
+      const person = limits.oncePerPerson ? personKey(input) : "";
+      if (!ctx.dryRun && limits.oncePerPerson && person.includes(" ")) {
+        const { rows } = await pool
+          .query(
+            `SELECT 1 FROM harness_decisions WHERE decision = $1 AND user_id = $2 AND outcome = 'act'
+               AND COALESCE(proposal->>'person', CASE WHEN COALESCE(proposal->'input'->>'lastName', '') <> ''
+                 THEN split_part(lower(proposal->'input'->>'personName'), ' ', 1) || ' ' || lower(proposal->'input'->>'lastName')
+                 ELSE lower(proposal->'input'->>'personName') END) = $3 LIMIT 1`,
+            [`tool.${name}`, ctx.userId, person],
+          )
+          .catch(() => ({ rows: [] as any[] }));
         if (rows.length) return refuse("limited", `${name} wasn't run: it was already done for ${input.personName}.`, "Already requested for this person. Don't ask again.");
       }
       if (ability.confirm) {
@@ -151,7 +174,15 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       }
 
       usedThisTurn.set(name, used + 1);
-      const result = await run(input, options);
+      const raw = await run(input, options);
+      // askedBack (2026-10-28): the tool asked a question back and did nothing, so this call isn't a request (receipt asked_back).
+      // Read here and taken off before the model sees the result, so what the model reads is exactly what it read before.
+      const askedBack = !!raw && typeof raw === "object" && raw.askedBack === true;
+      const result = askedBack ? (({ askedBack: _a, ...rest }) => rest)(raw) : raw;
+      if (askedBack) {
+        await log("asked_back");
+        return result;
+      }
       const failed = !!result && typeof result === "object" && result.ok === false;
       const made = failed && typeof result.made === "string" && result.made.trim() ? String(result.made) : null;
       // A refused attempt doesn't use up the turn's allowance, once: the tool's own refusal says "fix these and try again once"
@@ -168,7 +199,8 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       // never from the full ask (review of #284).
       const partial = !!result && typeof result === "object" && result.recordAs && typeof result.recordAs === "object" ? result.recordAs : null;
       const recordAs = partial ?? input;
-      await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : partial ? { recordAs: partial } : {});
+      // person: the oncePerPerson key, so a later "Sarah" + "Kim" and "Sarah Kim" both find this row (2026-10-28).
+      await log(failed ? "not_done" : "done", { ...(failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : partial ? { recordAs: partial } : {}), ...(person ? { person } : {}) });
       // Co's record of what it did for them (services/coFacts.ts).
       if ((!failed || made) && !ctx.dryRun) await recordToolAction(ctx.userId, name, recordAs);
       return result;
