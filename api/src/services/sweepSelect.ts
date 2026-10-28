@@ -698,6 +698,17 @@ export function selectSignature(c: SelectContext, holdsUntil: (string | null)[] 
 // claimCheck: the claim check's read for this run (checkClaims): calls, tokens and whether it read.
 export type SelectResult = { judgments: Judgment[]; set?: string | null; raw: string; usage: { input: number; cacheRead: number; cacheWrite: number; output: number }; model: string; error?: string; claimCheck?: ClaimCheck };
 
+// Pure: a call's token usage in the picker's terms (the AI SDK's shape, either version of it).
+export function selectUsage(u: any): SelectResult["usage"] {
+  const x = u ?? {};
+  return {
+    input: Number(x.inputTokenDetails?.noCacheTokens ?? x.inputTokens ?? 0),
+    cacheRead: Number(x.inputTokenDetails?.cacheReadTokens ?? x.cachedInputTokens ?? 0),
+    cacheWrite: Number(x.inputTokenDetails?.cacheWriteTokens ?? 0),
+    output: Number(x.outputTokens ?? 0),
+  };
+}
+
 export async function selectForMember(c: SelectContext, opts: { model?: string; userId?: string; effort?: "low" | "medium" | "high"; judge?: ClaimJudge } = {}): Promise<SelectResult> {
   const model = opts.model ?? SELECT_MODEL;
   try {
@@ -716,19 +727,14 @@ export async function selectForMember(c: SelectContext, opts: { model?: string; 
       prompt: selectPrompt(c),
     });
     const verdicts = parseVerdicts(r.text);
-    const u: any = r.usage ?? {};
-    const usage = {
-      input: Number(u.inputTokenDetails?.noCacheTokens ?? u.inputTokens ?? 0),
-      cacheRead: Number(u.inputTokenDetails?.cacheReadTokens ?? u.cachedInputTokens ?? 0),
-      cacheWrite: Number(u.inputTokenDetails?.cacheWriteTokens ?? 0),
-      output: Number(u.outputTokens ?? 0),
-    };
+    const usage = selectUsage(r.usage);
     if (!verdicts) return { judgments: guardVerdicts(c, []), raw: r.text, usage, model, error: "unreadable verdicts" };
     const checked = await checkClaims(c, guardVerdicts(c, verdicts), opts.judge);
     // The 9am floor's run: one find per tier (tierPicks), after the guard and the claim check have said what's really held back.
     if (c.morning) checked.judgments = tierPicks(c, checked.judgments);
     return { judgments: checked.judgments, set: parseSet(r.text), raw: r.text, usage, model, claimCheck: checked.check };
   } catch (err: any) {
-    return { judgments: guardVerdicts(c, []), raw: "", usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, model, error: String(err?.message ?? err) };
+    // A cut-off or off-shape answer still has its text and usage on the error (services/structuredJudge.ts): kept for the review.
+    return { judgments: guardVerdicts(c, []), raw: typeof err?.text === "string" ? err.text : "", usage: selectUsage(err?.usage), model, error: String(err?.message ?? err) };
   }
 }
