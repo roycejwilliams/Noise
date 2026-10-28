@@ -414,7 +414,9 @@ type SweepSearchTrace = {
   sources?: SweepSources;
 };
 // What one ask's (or one goal's) search did, for the daily sweep's summary (services/dailySweep.ts).
-export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string };
+// foundKeys / pooledKeys: which finds those were (a find's name and date; a pooled one's link), so a retry later that day counts a find
+// it finds again once (dailySweep.ts mergeRetried; review of #293).
+export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[] };
 
 async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
   // Their time zone (memberTime.ts), so event dates are their local calendar dates.
@@ -746,7 +748,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   await saveBacklogMerged(candidate.userId, candidate.askId, readAtStart, pending);
   // For the daily sweep's summary: what was searched, kept by the search, and is now in the pool (this ask's backlog).
   const report = (outcome: string, queued = 0): void =>
-    candidate.onReport?.({ sources: trace.sources ?? { events: false, web: false, x: false, failures: ["nothing searched: their record, or the limits in it, couldn't be read"] }, found: trace.found.length, pooled: found.filter((i) => !i.unread).length, queued, outcome });
+    candidate.onReport?.({ sources: trace.sources ?? { events: false, web: false, x: false, failures: ["nothing searched: their record, or the limits in it, couldn't be read"] }, found: trace.found.length, pooled: found.filter((i) => !i.unread).length, queued, outcome, foundKeys: trace.found.map((f) => `${f.name}|${f.date ?? ""}`), pooledKeys: found.filter((i) => !i.unread).map((i) => ("url" in i.match && i.match.url ? String(i.match.url) : i.match.name)) });
 
   // Every run is recorded, so a quiet week can be traced to where things
   // were dropped instead of guessed at (2026-09-18).

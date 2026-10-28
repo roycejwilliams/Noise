@@ -19,6 +19,8 @@ import { eventCandidates, reserveXSearch, type TierMatch } from "./tieredRecomme
 import { memberTerms, QueryLedger, SWEEP_QUERY_RULES } from "./sweepQuery.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
 import { withMember } from "./llmUsage.js";
+import { transientFailure } from "./searchFailure.js";
+import { EXA_OFF, LUMA_API_OFF, NO_PLACE, TEST_ACCOUNT } from "./lumaViaExa.js";
 
 export const SWEEP_BUDGET = { steps: 7, allSourcesSteps: 9, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
 
@@ -206,13 +208,37 @@ Judge each result yourself against what they asked and who they are; results are
 // What a sweep reports about the places it looked (the daily sweep's summary): which were searched, and why any wasn't.
 // outages: the places that failed or timed out with nothing back (2026-10-28 sweep: Exa timed out on every web query for "apply to
 // South Park Commons or Blueprint II", and because events and X ran the goal counted as searched and nothing retried it). Only a
-// place that failed, never one whose queries were refused for how they were written or whose day's budget was used up: a later
-// hour would refuse or deny those the same way. The daily sweep marks such a search incomplete and retries it (dailySweep.ts).
+// failure that clears on its own (searchFailure.ts transientFailure: a timeout, a network error, a 5xx), and only when no call to that
+// place came back clean (review of #293: one failed web call while a later one worked isn't an outage). Never a query refused for
+// how it was written. The daily sweep marks such a search incomplete and retries it (dailySweep.ts).
+// lasting: the places that failed in a way an hour won't fix (a key refused or missing, no credit, a rate limit, a budget used up):
+// not retried, shown on the team's /sweeps page as failed places (review of #293).
 // unverified: web results the search found and dropped at the check against their own page (unreadable, not named there, past or
 // closed, nothing verified there: taskWeb.ts verifyResult and withVerifiedFacts, then factCheck.ts checkVerified), counted for the
 // team's /sweeps page (Royce, 2026-10-28: the morning's quiet drops never showed in the sweep summary). A count only; the rule that
 // drops them is unchanged.
-export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: SweepSource[]; unverified?: number };
+export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: SweepSource[]; lasting?: SweepSource[]; unverified?: number };
+
+// What each place's calls came to, for outages and lasting: ok when a call came back with no failure that clears (some of it may have
+// failed for good: Exa out of credit while Luma's feed answered), transient / lasting when a call (or part of one) failed that way.
+export type PlaceRead = { ok: boolean; transient: boolean; lasting: boolean };
+export const newPlaceReads = (): Record<SweepSource, PlaceRead> => ({ events: { ok: false, transient: false, lasting: false }, web: { ok: false, transient: false, lasting: false }, x: { ok: false, transient: false, lasting: false } });
+// Pure: a failure at a place, by whether it clears.
+export function placeFailed(reads: Record<SweepSource, PlaceRead>, place: SweepSource, why: string): void {
+  if (transientFailure(why)) reads[place].transient = true;
+  else reads[place].lasting = true;
+}
+// Pure: the outages (a failure that clears, and no clean call) and the places down for good (a lasting failure, not an outage).
+export function placeReport(reads: Record<SweepSource, PlaceRead>): { outages: SweepSource[]; lasting: SweepSource[] } {
+  const outages = SWEEP_SOURCES.map((s) => s.source).filter((s) => reads[s].transient && !reads[s].ok);
+  return { outages, lasting: SWEEP_SOURCES.map((s) => s.source).filter((s) => reads[s].lasting && !outages.includes(s)) };
+}
+// Pure: what failed inside one event search that still answered (tieredRecommendation.ts eventCandidates): Luma's feed or Noise's
+// calendar, and the Luma search through Exa. Exa being off, no Luma key, no catalog city or a test account is a setting, not a failure.
+const VIA_EXA_SETTINGS = new Set([EXA_OFF, LUMA_API_OFF, NO_PLACE, TEST_ACCOUNT]);
+export function eventSearchFailures(r: { failures?: string[]; viaExa: { error: string | null } | null }): string[] {
+  return [...(r.failures ?? []), ...(r.viaExa?.error && !VIA_EXA_SETTINGS.has(r.viaExa.error) ? [r.viaExa.error] : [])];
+}
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 // Pure: a find's date as Co read it, kept only when its own text shows that day: the month (its name, its first three letters, or as a
 // number) next to the day, and not before today. Anything else is no date.
@@ -278,8 +304,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   const called = new Set<SweepSource>();
   // Why a place came back with nothing searched (refused, budget, outage), for the daily sweep's report.
   const sourceFailures: string[] = [];
-  // The places that failed or timed out (SweepSources.outages).
-  const outages = new Set<SweepSource>();
+  // What each place's calls came to (placeReport: SweepSources.outages and lasting).
+  const places = newPlaceReads();
   let unverified = 0;
   const exaAdded: { added: number; offered: number; error?: string }[] = [];
   const tools = {
@@ -299,10 +325,16 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           import("./eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(c.userId)).catch(() => [] as TierMatch[]),
         ]).catch((err) => {
           blocked = true;
-          outages.add("events");
+          placeFailed(places, "events", String(err?.message ?? err));
           sourceFailures.push(`events: the search failed (${String(err?.message ?? err).slice(0, 120)})`);
           throw err;
         });
+        // Part of it failed (the feed, the calendar, Exa) while the rest answered: said, and a failure that clears makes it an outage
+        // unless another events call came back clean (review of #293: a timed-out feed came back as an empty one).
+        const partFailed = eventSearchFailures(r);
+        for (const f of partFailed) placeFailed(places, "events", f);
+        if (partFailed.length) sourceFailures.push(`events: part of the search failed (${partFailed.join("; ").slice(0, 200)})`);
+        if (!partFailed.some(transientFailure)) places.events.ok = true;
         for (const { match } of r.candidates) if ("url" in match && match.url) {
           found.set(match.url, match);
           lookedAt.push({ source: "events", name: match.name, url: match.url, query: what });
@@ -350,8 +382,9 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         // so in its note (review of #134: it never returns null).
         if (all.every((r) => r === null || /^Web search failed/.test(r.note ?? ""))) {
           blocked = true;
-          outages.add("web");
-          sourceFailures.push("web: the search failed (an outage, nothing came back)");
+          // A null is a throw taskWebSearch didn't catch: unknown, so it isn't retried (only a failure that says it clears is).
+          for (const r of all) placeFailed(places, "web", r?.note ?? "the web search threw");
+          sourceFailures.push(`web: the search failed (${[...new Set(all.map((r) => r?.note ?? "it threw"))].join(" ").slice(0, 160)})`);
           return { ok: false, error: "Web search failed just now; nothing came back." };
         }
         const { checkVerified } = await import("./factCheck.js");
@@ -365,8 +398,11 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           lookedAt.push({ source: "web", name: k.name, url: k.url, query: queryOf.get(k.url) });
           found.set(k.url, { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}), ...(k.deadline ? { deadline: k.deadline } : {}) } as unknown as TierMatch);
         }
+        // One query that came back is a clean web call (review of #293: the place is an outage only when no web call answered).
+        if (all.some((r) => r && !/^Web search failed|^No web search right now/.test(r.note ?? ""))) places.web.ok = true;
         if (all.every((r) => r && /^No web search right now/.test(r.note))) {
           blocked = true;
+          placeFailed(places, "web", "the day's web search budget is used up");
           sourceFailures.push("web: the day's web search budget is used up");
           return { ok: false, error: "Web search budget is used up for today." };
         }
@@ -391,6 +427,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         const budget = await reserveXSearch(c.userId, "sweep", q);
         if (!budget.ok) {
           blocked = true;
+          placeFailed(places, "x", `unavailable (${budget.reason ?? "budget"})`);
           sourceFailures.push(`x: unavailable (${budget.reason ?? "budget"})`);
           return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
         }
@@ -404,12 +441,15 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           // Logged by kind and status, never swallowed into "no posts" (2026-10-08).
           xError = xFailure(err);
           blocked = true;
-          outages.add("x");
+          // A 5xx clears, and so may a failure with no status (a timeout, a network error, by its own words); a key that's missing or
+          // refused, a rate limit or any other 4xx doesn't (review of #293).
+          placeFailed(places, "x", xError.kind === "server" ? `status ${xError.status}` : xError.status === null && xError.kind === "error" ? String((err as any)?.message ?? err) : `${xError.kind} (${xError.status ?? "no status"})`);
           sourceFailures.push(`x: the search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""})`);
           console.error(`sweepFind: X search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""}) for user ${c.userId}`);
           return { ok: false, error: xFailedNote(xError) };
         }
         xPosts += posts.length;
+        places.x.ok = true;
         ledger.ran("x", q, posts.length, checked.loosenedFrom);
         searched = true;
         for (const p of posts) {
@@ -501,8 +541,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   } catch (err: any) {
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
     sourceFailures.push(`the search loop failed (${String(err?.message ?? err).slice(0, 120)})`);
-    // The loop itself failed (a model timeout): every place it hadn't reached yet is an outage, not a place it chose to skip.
-    for (const s of SWEEP_SOURCES) if (!called.has(s.source)) outages.add(s.source);
+    // The loop itself failed: every place it hadn't reached yet failed the way the loop did (a model timeout clears; a refused key doesn't).
+    for (const s of SWEEP_SOURCES) if (!called.has(s.source)) placeFailed(places, s.source, String(err?.message ?? err));
   }
   // Facts only: sold out, past, too far, and a name/date the record actually states.
   const gatedOut: GatedOut[] = [];
@@ -526,7 +566,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   const { queries, keptBy } = ledger.finish(lookedAt, keptUrls, gated.map((m) => ({ name: m.name, url: "url" in m && m.url ? String(m.url) : "" })), postOf);
   // A place the daily sweep never reached (the loop ended first) is a failure with its reason too.
   if (opts.allSources) for (const s of SWEEP_SOURCES) if (!called.has(s.source)) sourceFailures.push(`${s.source}: not reached (the search ended before it)`);
+  const report = placeReport(places);
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
   await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy, ...(opts.allSources ? { allSources: true } : {}), ...(sourceFailures.length ? { sourceFailures } : {}), ...(exaAdded.length ? { exaAdded } : {}) } }).catch(() => {});
-  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures, ...(outages.size ? { outages: [...outages] } : {}), ...(unverified ? { unverified } : {}) } }; // mood: carries the read
+  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures, ...(report.outages.length ? { outages: report.outages } : {}), ...(report.lasting.length ? { lasting: report.lasting } : {}), ...(unverified ? { unverified } : {}) } }; // mood: carries the read
 }

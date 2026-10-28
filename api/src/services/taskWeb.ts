@@ -20,6 +20,7 @@ import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from 
 import { parseModelJson } from "./modelJson.js";
 import { exaConfigured, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
+import { lumaEventSlug } from "./lumaViaExa.js";
 
 export type RawDetail = { label: string; value: string };
 export type RawResult = { name: string; url: string; details: RawDetail[]; date?: string | null; deadline?: string | null };
@@ -213,41 +214,47 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
   return { kept: { name: name.slice(0, 120), url: raw.url, official: opts.official, facts: kept, excerpts, date: keptDate, deadline: keptDeadline }, dropped: null, droppedDetails };
 }
 
-// One event's own page on the ticketing site its organizers use (lu.ma/abc123, luma.com/abc123, eventbrite.com/e/...,
-// partiful.com/e/..., meetup.com/<group>/events/<id>): the page that holds the event's date, place and RSVP. Read from the url only.
-export function oneEventPage(url: string): boolean {
+// One event's own page on the ticketing site its organizers use, from its url: "event" when the url's shape can only be one event
+// (eventbrite.*/e/..., partiful.com/e/..., meetup.com/<group>/events/<id>); "luma" when it's a Luma page that may be one event
+// (lu.ma/abc123, luma.com/abc123, never one of LUMA_NOT_EVENTS): a city page or a calendar has the same shape, so the page itself
+// decides (pickPage's lumaEvent); null otherwise.
+export function eventPageUrl(url: string): "event" | "luma" | null {
   let u: URL;
   try {
     u = new URL(url);
   } catch {
-    return false;
+    return null;
   }
   const host = u.hostname.toLowerCase().replace(/^www\./, "");
   const path = u.pathname.replace(/\/+$/, "");
-  if (host === "lu.ma" || host === "luma.com") return /^\/[A-Za-z0-9_-]+$/.test(path) && !LUMA_NOT_EVENTS.has(path.slice(1).toLowerCase());
-  if (/(^|\.)eventbrite\.[a-z.]+$/.test(host)) return /^\/e\/[^/]+$/.test(path);
-  if (host === "partiful.com") return /^\/e\/[^/]+$/.test(path);
-  if (host === "meetup.com") return /^\/[^/]+\/events\/\d+$/.test(path);
-  return false;
+  if (host === "lu.ma" || host === "luma.com") return lumaEventSlug(`https://${host}${path}`) ? "luma" : null;
+  if (/(^|\.)eventbrite\.[a-z.]+$/.test(host)) return /^\/e\/[^/]+$/.test(path) ? "event" : null;
+  if (host === "partiful.com") return /^\/e\/[^/]+$/.test(path) ? "event" : null;
+  if (host === "meetup.com") return /^\/[^/]+\/events\/\d+$/.test(path) ? "event" : null;
+  return null;
 }
-// Luma paths that are never one event's page (the same list as lumaViaExa.ts lumaEventSlug).
-const LUMA_NOT_EVENTS = new Set(["discover", "home", "signin", "login", "create", "calendar", "explore", "pricing", "user", "u", "settings", "help"]);
+// Whether a Luma page is one event, from the page's own data (eventDetails.ts parseLumaEventPage: its embedded record names one event;
+// a calendar's or a city's doesn't). A read that fails says no, and the page is treated as before (review of #293).
+const lumaPageIsEvent = async (url: string): Promise<boolean> => !!(await import("./eventDetails.js").then((m) => m.fetchLumaEventDetails(url)).catch(() => null));
 
 // Which page a result is checked against: its own official page when the found
 // page is a blog or directory and the official one reads; else the found page.
 // 2026-10-28 sweep: "MemoryBox Beta Launch party" and "Vast.ai Product Launch Party" came back as their Luma pages
 // (luma.com/2gizvh99, luma.com/atnnffe2), were swapped for the companies' homepages (memorybox.ai, vast.ai), and dropped as
-// "nothing about it was verified on its page": the homepage doesn't hold the party. One event's own page (oneEventPage) is the
-// page that holds its facts, so it's never swapped; it's checked as it is, by the same rules as any found page.
+// "nothing about it was verified on its page": the homepage doesn't hold the party. One event's own page (eventPageUrl, and for a
+// Luma page its own data saying it's one event) is the page that holds its facts, so it's never swapped; it's checked as it is, by the
+// same rules as any found page.
 export async function pickPage(
   raw: RawResult,
-  deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null> },
+  deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null>; lumaEvent?: (url: string) => Promise<boolean> },
 ): Promise<{ url: string; text: string | null; official: boolean; swapped: boolean }> {
   // Judged and looked up by the core name: a qualifier's words ("Private Dining") never make a host look like the place's.
   const name = coreName(raw.name);
   if (!looksOfficial(raw.url, name)) {
     // Not marked official: whether a page is the thing's own still decides how its facts are checked (verifyResult's nearName).
-    if (oneEventPage(raw.url)) return { url: raw.url, text: await deps.read(raw.url), official: false, swapped: false };
+    const shape = eventPageUrl(raw.url);
+    const oneEvent = shape === "event" || (shape === "luma" && (await (deps.lumaEvent ?? lumaPageIsEvent)(raw.url).catch(() => false)));
+    if (oneEvent) return { url: raw.url, text: await deps.read(raw.url), official: false, swapped: false };
     const off = await deps.official(name).catch(() => null);
     if (off && off !== raw.url && looksOfficial(off, name)) {
       const text = await deps.read(off);
