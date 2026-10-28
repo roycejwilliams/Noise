@@ -80,13 +80,16 @@ export type TurnReplayCheck = {
   // The text's turn never ran (its phone's lock never came free, concurrency review 2026-10-12): nothing answered it, and a newer
   // text's turn never saw it, so neither a Co reply since nor a newer text of theirs stops it from being answered now.
   neverRan?: boolean;
+  // A text an outage held back or that Sendblue's list recovered (services/inboundRecovery.ts RECOVERED_MAX_AGE_MS): it may be up
+  // to a day old, and Cue says first that it's late. Every other check is the same.
+  maxAgeMs?: number;
 };
 export function turnReplayBlocked(c: TurnReplayCheck): string | null {
   if (!c.member) return "no_member";
   if (c.member.optedOut) return "opted_out";
   if (c.member.archived) return "archived";
   if (c.coRepliedSince && !c.neverRan) return "already_answered";
-  if (c.now.getTime() - c.receivedAt.getTime() > TURN_REPLAY_MAX_AGE_MS) return "too_old";
+  if (c.now.getTime() - c.receivedAt.getTime() > (c.maxAgeMs ?? TURN_REPLAY_MAX_AGE_MS)) return "too_old";
   // Their own stamp lands a moment after the text arrives; past that, it's a newer text.
   if (!c.neverRan && c.lastInboundAt && c.lastInboundAt.getTime() > c.receivedAt.getTime() + 5_000) return "newer_text";
   if (c.callAt && c.callAt.getTime() > c.receivedAt.getTime()) return "call_placed";
