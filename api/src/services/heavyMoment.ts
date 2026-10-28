@@ -132,10 +132,15 @@ export async function queueHeavyCheckins(now = new Date()): Promise<number> {
       [u.user_id, new Date(now.getTime() - HEAVY.lookbackHours * 3_600_000)],
     );
     const tz = await memberZone(u.user_id);
-    // Their words through the forget guard (harness/emotion.ts forgetGuardedSignals): the episode's labels stay, removed words don't.
+    // Every "don't check in" reads their raw words first, the self-harm bail above all: a removal can only ever take a check-in away,
+    // never let one through (review of #282: a removal cut a curly-apostrophe "I can’t go on" line and the episode queued).
+    const raw = pickEpisode(sig.map((s: any) => ({ ...s, at: new Date(s.at) })), now, tz);
+    if (!raw || raw.expiresAt <= now) continue;
+    // Then the words it carries go through the forget guard (harness/emotion.ts forgetGuardedSignals). If the episode's lead lost its
+    // words to a removal, there's no specific thing left to ask about: nothing is queued.
     const guarded = await (await import("../harness/emotion.js")).forgetGuardedSignals(u.user_id, sig);
     const ep = pickEpisode(guarded.map((s: any) => ({ ...s, at: new Date(s.at) })), now, tz);
-    if (!ep || ep.expiresAt <= now) continue;
+    if (!ep || ep.key !== raw.key || !(String(ep.about ?? "").trim() || String(ep.quote ?? "").trim())) continue;
     const { queued: ok } = await enqueueCandidate({
       userId: u.user_id,
       type: "companion",

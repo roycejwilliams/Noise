@@ -109,6 +109,30 @@ const texts = [
   const blindRows = await E.forgetGuardedSignals(U, sigs);
   check("emotion: a failed guard read leaves out every word, keeps the feeling", !GONE.test(JSON.stringify(blind)) && blind.current?.emotion === "scared" && blindRows.every((r) => r.about === null && r.quote === null && r.emotion === "scared"));
   (pool as any).query = prev;
+  // Heavy moments (review of #282): every "don't check in" reads the raw words first, so a removal can only take a check-in away.
+  const H = await import("../../src/services/heavyMoment.js");
+  const hs = (emotion: string, intensity: string, about: string | null, quote: string | null, h: number) => ({ source: "text", emotion, intensity, valence: "negative", about, quote, target: "life", basis: null, at: ago(h) });
+  const runHeavy = async (sigsH: any[]) => {
+    const inserts: any[] = [];
+    (pool as any).query = async (sql: string, p: any[] = []) => {
+      if (/FROM users u\s+JOIN co_profiles cp/.test(sql)) return { rows: [{ user_id: U, city: null }] };
+      if (/FROM emotion_signals WHERE user_id = \$1 AND created_at > \$2 ORDER BY created_at/.test(sql)) return { rows: sigsH };
+      if (/INSERT INTO proactive_candidates/.test(sql)) { inserts.push(p); return { rows: [{ id: 1 }] }; }
+      return handle(sql, p);
+    };
+    const prevConnect = (pool as any).connect;
+    (pool as any).connect = async () => ({ query: (pool as any).query, release: () => {} });
+    await H.queueHeavyCheckins(NOW).catch(() => 0);
+    (pool as any).query = prev;
+    (pool as any).connect = prevConnect;
+    return inserts;
+  };
+  const curly = await runHeavy([hs("stressed", "medium", "work deadlines", "deadlines are piling up", 6), hs("desperate", "high", "the custody hearing in May", "I can\u2019t go on like this, the custody hearing in May", 5)]);
+  check("heavy: a removal never lets a self-harm episode through (curly apostrophe, removed fact in the same line)", curly.length === 0);
+  const leadGone = await runHeavy([hs("stressed", "medium", "work deadlines", "deadlines are piling up", 6), hs("scared", "high", "the custody hearing in May", "the custody hearing is in May", 5)]);
+  check("heavy: an episode whose lead lost its words to a removal queues nothing (nothing specific left to ask about)", leadGone.length === 0);
+  const control = await runHeavy([hs("stressed", "medium", "work deadlines", "deadlines are piling up", 6), hs("overwhelmed", "high", "the product launch", "the launch is crushing me", 5)]);
+  check("heavy: an episode a removal doesn't touch still queues, with its words", control.length === 1 && /the product launch/.test(JSON.stringify(control[0])), control);
   // Every reader that puts their words in a prompt or a report reads through it.
   check("emotion: heavy moments, the picker's replay and the team review read through the guard", /forgetGuardedSignals\(u\.user_id, sig\)/.test(src("services/heavyMoment.ts")) && /forgetGuardedSignals\(userId, feelRaw/.test(src("services/sweepSelectContext.ts")) && /forgetGuardedSignals\(userId, r\.rows\)/.test(src("harness/devReview.ts")));
 }
