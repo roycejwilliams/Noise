@@ -9,6 +9,11 @@ check("said: their own word (any form) means no line", D.assumedAudienceLine("se
 check("'my' reads as 'your' back to them", D.assumedAudienceLine("my partners", "make me a deck", "professional") === "I pitched it at your partners; say if it's for someone else.");
 check("personal decks: no line (that wording isn't approved)", D.assumedAudienceLine("my friends", "a deck for game night", "personal") === null);
 check("no audience: no line", D.assumedAudienceLine(null, "make a deck", "professional") === null && D.assumedAudienceLine("the team", "make a deck", "professional") === null);
+// Review of #290: what they did say is never read back as assumed; a long description isn't an audience.
+check("'co-founder' said is 'co-founder' (hyphens)", D.assumedAudienceLine("my co-founder", "a deck for my co-founder", "professional") === null);
+check("singular and plural are one word", D.assumedAudienceLine("event attendees", "something for the attendee", "professional") === null && D.assumedAudienceLine("partner companies", "for each company we partner with", "professional") === null);
+check("a short acronym counts ('VCs' assumed, 'VC' said)", D.assumedAudienceLine("VCs", "make a deck about Noise", "professional") === "I pitched it at VCs; say if it's for someone else." && D.assumedAudienceLine("VCs", "for the vc meeting", "professional") === null);
+check("a long description gets no line", D.assumedAudienceLine("the companies we're pitching next month", "make a deck", "professional") === null);
 const src = readFileSync(new URL("../../src/agent/deckTools.ts", import.meta.url), "utf8");
 check("makeDeck puts it in the link's one line", /const assumed = assumedAudienceLine\(input\.audience, `\$\{source\.theirs\}\\n\$\{ctx\.resolvedContent \?\? ""\}`, context\);/.test(src) && /\$\{assumed \? ` \$\{assumed\}` : ""\}\\n\$\{made\.url\}/.test(src));
 console.log(`audience: ${total - failed}/${total} passed`);
