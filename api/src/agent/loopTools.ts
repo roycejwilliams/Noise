@@ -677,10 +677,11 @@ export function loopTools(
           ...loop.pages.values(),
           ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`),
           notes ? JSON.stringify(notes) : "",
-          [me.first_name, me.last_name, me.phone_number, me.email].filter(Boolean).join(" "),
         ].join("\n");
         const zone = await (await import("../services/memberTime.js")).memberZoneOrFallback(ctx.userId).catch(() => "America/Los_Angeles");
-        const gaps = draftFactGaps(draftText, backing, new Date(), zone);
+        // Their own phone and email are theirs to sign with: taken out of the draft before it's checked, never added to what backs it
+        // (re-review of #286: a phone's digits in the backing let any number inside it pass).
+        const gaps = draftFactGaps(withoutOwnContact(draftText, me.phone_number, me.email), backing, new Date(), zone);
         if (gaps.length) {
           return { ok: false, error: `Not sent: the draft has ${gaps.map((x) => `"${x}"`).join(", ")}, which they haven't said and nothing read shows. Take those out, or leave a blank for them to fill (like "[date]").` };
         }
@@ -1248,14 +1249,28 @@ export function draftFactGaps(draft: string, backing: string, now: Date, zone: s
     const today = DateTime.fromJSDate(now).setZone(zone).startOf("day");
     for (const y of [today.year, today.year + 1]) {
       const d = DateTime.fromObject({ year: y, month, day: Number(m[3]) }, { zone });
-      if (d.isValid && d.weekday === wd && d >= today && d <= today.plus({ days: 62 })) okDays.add(m[0]);
+      // The date is right for its own weekday, and that weekday is one they (or a page) said: "this friday" never becomes a Saturday.
+      const dayName = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][wd - 1];
+      if (d.isValid && d.weekday === wd && d >= today && d <= today.plus({ days: 62 }) && new RegExp(`\\b${dayName.slice(0, 3)}`, "i").test(backing)) okDays.add(m[0]);
     }
   }
   // Numbers left once times, years and weekday-checked dates are taken out.
   let rest = draft.replace(TIME, " ");
   for (const d of okDays) rest = rest.split(d).join(" ");
   rest = rest.replace(/\b20[2-3]\d\b/g, " ");
-  const numberGaps = numbersBacked(rest, backing).missing;
+  // Whole numbers, never a digit inside a longer one ("1" is not backed by a phone number or a "2026-11-12" date).
+  const norm = (n: string) => n.replace(/,/g, "").replace(/^\$/, "").replace(/[.]$/, "");
+  const have = new Set((backing.match(/\d[\d,.]*/g) ?? []).map(norm));
+  const numberGaps = [...new Set((rest.match(/\$?\d[\d,.]*/g) ?? []).map(norm).filter((n) => n && !have.has(n)))];
   const placeGaps = placesBacked(draft, backing).missing;
   return [...new Set([...timeGaps, ...numberGaps, ...placeGaps])].slice(0, 6);
+}
+
+// Pure: a draft with the member's own phone number (in any format) and email taken out, so signing with them is never a "claim".
+export function withoutOwnContact(text: string, phone: string | null | undefined, email: string | null | undefined): string {
+  let out = String(text ?? "");
+  if (email && email.trim()) out = out.split(new RegExp(email.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")).join(" ");
+  const last10 = String(phone ?? "").replace(/\D/g, "").slice(-10);
+  if (last10.length === 10) out = out.replace(/\+?[\d][\d\s().-]{8,}\d/g, (run) => (run.replace(/\D/g, "").endsWith(last10) ? " " : run));
+  return out;
 }

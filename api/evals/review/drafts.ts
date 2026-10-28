@@ -30,8 +30,10 @@ check("draft: one that places them somewhere they never said is held", place?.ok
   const now = new Date("2026-10-27T18:00:00Z"); // a Tuesday; Saturday is Oct 31, Nov 1 is a Sunday
   const Z = "America/Los_Angeles";
   const gaps = (draft: string, backing: string) => LT.draftFactGaps(draft, backing, now, Z);
-  const me = "Jordan Lee +14155550123 jordan92@example.com";
-  check("their own phone and email in the sign-off are theirs", gaps("Thanks, Jordan Lee, 415-555-0123, jordan92@example.com", `table for 8 ${me}`).length === 0, gaps("Thanks, Jordan Lee, 415-555-0123, jordan92@example.com", `table for 8 ${me}`));
+  const sign = (d: string) => LT.withoutOwnContact(d, "+14155550123", "jordan92@example.com");
+  check("their own phone and email in the sign-off are theirs", gaps(sign("Thanks, Jordan Lee, (415) 555-0123, jordan92@example.com"), "table for 8").length === 0, gaps(sign("Thanks, Jordan Lee, (415) 555-0123, jordan92@example.com"), "table for 8"));
+  check("re-review of #286: a number is never backed by a digit inside another (an invented 12 beside a phone or a date)", JSON.stringify(gaps(sign("book for 12, call 415-555-0123"), "table for 8 on 2026-11-02 +14155550123")) === JSON.stringify(["12"]), gaps(sign("book for 12, call 415-555-0123"), "table for 8 on 2026-11-02 +14155550123"));
+  check("re-review of #286: a right date for the wrong day they said is held ('this friday' never becomes Saturday)", gaps("on Saturday, October 31", "this friday").join() === "31", gaps("on Saturday, October 31", "this friday"));
   check("'7pm' they said, drafted as '7:00 PM', is the same time", gaps("Could we come at 7:00 PM?", "dinner at 7pm").length === 0);
   check("a year is never a claim", gaps("for October 2026", "dinner in october").length === 0);
   check("'this Saturday' made exact is checked: the right date passes", gaps("on Saturday, October 31", "this saturday").length === 0, gaps("on Saturday, October 31", "this saturday"));
