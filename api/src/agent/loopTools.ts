@@ -664,6 +664,19 @@ export function loopTools(
         // The draft itself goes out as its own text, so they always have it to
         // copy (2026-10-01: Co said "I wrote the note" and never showed it).
         const draftText = `${subject.trim() ? `Subject: ${subject.trim()}\n\n` : ""}${body.trim()}`;
+        // The draft speaks for them, so every number and place in it is one they said or one read this turn (the plan's own facts):
+        // Cue checks it before they see it, rather than leaving a wrong date or headcount for them to catch (Royce, 2026-10-27).
+        const backing = [theirWords(), ...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`), notes ? JSON.stringify(notes) : ""].join("\n");
+        const nums = numbersBacked(draftText, backing);
+        const places = placesBacked(draftText, backing);
+        // A clock time is one fact: "8:30" isn't backed by an 8 and a 30 from elsewhere.
+        const clock = (t: string) => t.replace(/^0/, "");
+        const backedTimes = new Set((backing.match(/\b\d{1,2}:\d{2}\b/g) ?? []).map(clock));
+        const times = [...new Set((draftText.match(/\b\d{1,2}:\d{2}\b/g) ?? []).map(clock))].filter((t) => !backedTimes.has(t));
+        if (!nums.ok || !places.ok || times.length) {
+          const gaps = [...new Set([...times, ...nums.missing, ...places.missing])].map((x) => `"${x}"`).slice(0, 6).join(", ");
+          return { ok: false, error: `Not sent: the draft has ${gaps}, which they haven't said and no page read this turn shows. Take those out or leave a blank for them to fill (like "[date]"), or ask them first if it matters.` };
+        }
         if (!to?.trim()) {
           if (!(await say(draftText, `Co replied: ${draftText}`))) return { ok: false, error: "The draft didn't send. Give them the words in your reply instead, plainly, without mentioning what failed." };
           ctx.facts?.add("did_this_turn", `Sent them a draft message to paste into the listing's own contact form: "${draftText.slice(0, 400)}"`);
