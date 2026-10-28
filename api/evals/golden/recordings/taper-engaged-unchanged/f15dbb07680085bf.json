@@ -1,0 +1,279 @@
+{
+  "hash": "f15dbb07680085bf",
+  "case": "taper-engaged-unchanged",
+  "recorded_at": "2026-10-28T01:30:55.623Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-sonnet-5",
+    "grader": false,
+    "max_tokens": 16000,
+    "system": "You're Cue. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today. The bar is: they'd reply \"wow\". Not \"seems relevant\", not \"fits a keyword in their ask\". It has to be clearly for ...",
+    "messages": 1,
+    "last": "user: Member: Ellis, San Francisco. Today: Tuesday 2026-10-13 (their time, America/Los_Angeles). Discovery texts left this week: 4 (things they asked for don't use these). What they've asked Cue for (open): (none) Where they say they are headed (the LENS: judge every candidate against this as well as the ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 16000,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Member: Ellis, San Francisco. Today: Tuesday 2026-10-13 (their time, America/Los_Angeles).\nDiscovery texts left this week: 4 (things they asked for don't use these).\n\nWhat they've asked Cue for (open):\n(none)\n\nWhere they say they are headed (the LENS: judge every candidate against this as well as the asks; never cite it as the reason, the reason is an ask, a text, or what they did):\n- meet other climate founders who actually see each other\n\nTheir recent texts with Cue (oldest first):\nT1 Oct 7 14:00 They: Run product at a small climate startup. Dinners and hikes with other founders would be great.\nT2 Oct 7 14:00 Cue: Noted: small rooms with climate builders.\nT3 Oct 11 14:00 They: Anything this week?\n\nWhat Cue sent them first, last 30 days, and what happened:\n(nothing)\n\nMember rules (for judging what goes; the send step still holds timing and caps):\nWhat's true:\n- Everything you say about them, other people, events, places, times, or what you've done comes from what you know about them or what was said in this conversation. If it isn't there, you don't have it: say so plainly, once, and say what you can do.\n- Your own read on something is an impression, so say it like one. Two events only clash if you have both start times and they overlap. Nobody knows who'll be at an event Cue isn't running.\n- When they've corrected something, only the corrected version exists. Never bring back the old one.\n- Something in what you know that's marked OLD is a question, not a fact: ask whether it's still true before you build on it.\n- What you did for them comes from what you actually sent or said. Never claim more.\n- Never say something is broken, down, sold out, failed or didn't work unless something in front of you says so. If you left a thing out, just leave it out.\n- You have no body. You can't be in a room, hold a drink, shake a hand or turn up anywhere in person. Be playful about it if the moment is light: wink at what you actually are, the voice in their phone, with them that way. Personality yes, small lies no.\nOther members: one member's details, plans, matches or answers never reach another member's conversation, and neither does whether someone is a member at all. People in their own life you talk about freely.\n\nTHIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Noise event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate \"rank\": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and \"forThem\": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or \"not a wow\" only moves it down its kind; it never empties a kind.\n\nThe pool (3):\nC1 Co Supper: Climate Builders (2026-10-16); a Noise event; from what they've shared; a Co dinner for 12 climate founders, Thursday 7pm\nC2 Bay Area Climate Hike (2026-10-18); an event; from what they've shared; a 15-person Saturday hike for people working in climate\nC3 On Deck Climate Fellowship (2026-11-15); an opening (program, place or opportunity); from what they've shared; a part-time fellowship for climate operators; applications close Nov 15",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "medium",
+        "format": {
+          "schema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "set": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "verdicts": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cites": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "forThem": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "lastDay": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rank": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "taste": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "until": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "verdict": {
+                      "enum": [
+                        "send",
+                        "hold",
+                        "reject"
+                      ],
+                      "type": "string"
+                    },
+                    "why": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "whyMember": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "whyNow": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "wow": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "verdict",
+                    "rank",
+                    "forThem",
+                    "whyMember",
+                    "cites",
+                    "whyNow",
+                    "wow",
+                    "lastDay",
+                    "taste",
+                    "why",
+                    "until",
+                    "reason"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "set",
+              "verdicts"
+            ],
+            "type": "object"
+          },
+          "type": "json_schema"
+        }
+      },
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "You're Cue. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today.\n\nThe bar is: they'd reply \"wow\". Not \"seems relevant\", not \"fits a keyword in their ask\". It has to be clearly for them (something they said, a goal they're working on, a person or place they care about) and clearly for now (a date that's coming, a deadline, something that just changed, or exactly what they asked for this week). If you can't say both, it doesn't go today.\n\nFor every candidate, give one verdict:\n- \"send\": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Cue sent before, O# how they reacted), why now, and \"wow\": true only if you'd genuinely expect that reaction. If it's time-bound (an event's day, a deadline, a weekend), give \"lastDay\": the last day (YYYY-MM-DD) it's still worth sending; null if it will still be there next week.\n- \"hold\": good for them, but the thing itself isn't ready yet (it opens later, or it's too far out to act on), or it would crowd a stronger send today. Say when it would be right, as a date (YYYY-MM-DD) if you can. You judge whether it fits them and its timing, never their attention: don't hold something because they seem busy, focused elsewhere or in a mood. They decide what they're too busy for. Something open now with a deadline, or applications open, is never held for that.\n- \"reject\": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate in today's pool does the same job better; cite its C# in \"cites\"), closed (it rests on something finished: an ask that's closed, or a past goal that's done or set aside), already_known (they mentioned it, are going, already have it, or said no), ruled_out (their own words rule out this thing or this kind of thing; cite the ask or text, A# or T#, where they said it), other. Add one line why.\n\nA ruled_out reject cites their own words (A# or T#) that rule it out. A closed or already_known reject is a claim about a record, so it cites that record by id in \"cites\": a closed ask (A#), a past goal that's done or set aside (G#), something Cue sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.\n\nPast goals each say why they're past. done and set aside are their word. lapsed is Cue's own bookkeeping (a window that passed, a recheck they didn't answer), not theirs, and is never the reason something is closed. A closed one-off question (find me a couple of these) doesn't close an aim one of their active goals still carries either.\n\nAn ask isn't finished after one send: someone looking for events this week usually wants a few across the week, and a search for a community can take several tries. What Cue already sent for an ask only counts against a candidate when it's the same kind of thing for the same moment. \"covered\" means another candidate in today's pool does the same job better, not that the ask got something before.\n\nSome candidates come with only a name and a date. Judge what the name tells you; thin isn't the same as weak.\n\nThings they asked for and things you'd bring up yourself clear the same bar. When both clear it and compete for today's sends, what they asked for goes first; what you noticed for them fills what's left. Send at most 3, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.\n\nWhen you send more than one, add \"set\": one line on why these go together today (what they share for this member, or how they differ), in plain words; it's what Cue's message opens with. Leave it out for one send or none.\n\nReturn ONLY JSON:\n{\"set\":\"...\",\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"whyMember\":\"...\",\"cites\":[\"A2\",\"T5\"],\"whyNow\":\"...\",\"wow\":true,\"lastDay\":\"2026-10-08\",\"taste\":\"matches\"},{\"id\":\"C2\",\"verdict\":\"hold\",\"why\":\"...\",\"until\":\"2026-10-08\"},{\"id\":\"C3\",\"verdict\":\"reject\",\"reason\":\"weak_fit\",\"why\":\"...\"},{\"id\":\"C4\",\"verdict\":\"reject\",\"reason\":\"already_known\",\"cites\":[\"S3\"],\"why\":\"...\"}]}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"set\":\"Three ways to find that climate-founder room you're after this week: a dinner, a hike, and a longer-term fellowship.\",\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A 12-person Co dinner this Thursday with other climate founders — exactly the small-room dinner you said you wanted.\",\"whyMember\":\"You told Cue dinners with other founders would be great, and asked if there's anything this week.\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Thursday dinner, this week — matches both the ask and the timing.\",\"wow\":true,\"lastDay\":\"2026-10-16\",\"taste\":null,\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C2\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A Saturday hike with 15 people working in climate — the other half of what you asked for.\",\"whyMember\":\"You specifically mentioned hikes with other founders, and this week's hike lands Saturday.\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Happening Saturday, same week you asked about.\",\"wow\":true,\"lastDay\":\"2026-10-18\",\"taste\":null,\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C3\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A part-time fellowship for climate operators — a longer-term way to keep finding that founder community, not just a one-off dinner.\",\"whyMember\":\"You're aiming to meet other climate founders who actually see each other regularly; this is a standing structure for that.\",\"cites\":[\"T1\"],\"whyNow\":\"Applications close Nov 15, so there's real time to decide but not forever.\",\"wow\":false,\"lastDay\":\"2026-11-15\",\"taste\":null,\"why\":null,\"until\":null,\"reason\":null}]}",
+      "usage": {
+        "input_tokens": 1185,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 2684,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 1109,
+        "output_tokens_details": {
+          "thinking_tokens": 524
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgTmeA7nCEne8Wv3bDCGN",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"set\":\"Three ways to find that climate-founder room you're after this week: a dinner, a hike, and a longer-term fellowship.\",\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A 12-person Co dinner this Thursday with other climate founders — exactly the small-room dinner you said you wanted.\",\"whyMember\":\"You told Cue dinners with other founders would be great, and asked if there's anything this week.\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Thursday dinner, this week — matches both the ask and the timing.\",\"wow\":true,\"lastDay\":\"2026-10-16\",\"taste\":null,\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C2\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A Saturday hike with 15 people working in climate — the other half of what you asked for.\",\"whyMember\":\"You specifically mentioned hikes with other founders, and this week's hike lands Saturday.\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Happening Saturday, same week you asked about.\",\"wow\":true,\"lastDay\":\"2026-10-18\",\"taste\":null,\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C3\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A part-time fellowship for climate operators — a longer-term way to keep finding that founder community, not just a one-off dinner.\",\"whyMember\":\"You're aiming to meet other climate founders who actually see each other regularly; this is a standing structure for that.\",\"cites\":[\"T1\"],\"whyNow\":\"Applications close Nov 15, so there's real time to decide but not forever.\",\"wow\":false,\"lastDay\":\"2026-11-15\",\"taste\":null,\"why\":null,\"until\":null,\"reason\":null}]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1185,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2684,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 1109,
+          "output_tokens_details": {
+            "thinking_tokens": 524
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "hash": "898a7233aa15255e",
   "case": "double-offer",
-  "recorded_at": "2026-10-17T18:51:27.133Z",
+  "recorded_at": "2026-10-28T01:26:55.456Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-haiku-5-5",
-      "text": "Yes",
+      "text": "Yes.",
       "usage": {
         "input_tokens": 104,
         "cache_creation_input_tokens": 0,
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 63,
+        "output_tokens": 6,
         "output_tokens_details": {
-          "thinking_tokens": 58
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,18 +54,13 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011Cg8K6zJxwKXpPTupVsdiL",
+        "id": "msg_011CgTmMG9Cu5Js2ZfecF4QT",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "CAQSzQUKEAgSGAI4AUIIdGhpbmtpbmcSDA6WyXpcU7KXTxBF1hoMzaUPhcOhz0FmnrDrIjBEASy6lIYF1IetOtmcgPuO88U4QXgQ4wqun1LK4d51YdemCyso7ykCPuvN0estJi0q6gS/nVd7JCysuCtj6RxD4fuj85q3uLjcCarQhqaz/Scz7Wi1UlnDyRY1gYRK4mvs3d3p10cfwBlqT8rZdfcKuLdCxdbhTHXw+UMaxt5X/4qML/sP/5uuDsu8bWeY06hYRwXLZLm5xGVSxj33Rub0rKSWSN0e6hKmFTodEy0CK693FFsjAXKHjZey8voqaW0h2vKsYKIpQ5J13YGU5N1ImsVro5IR4V9Rr7TyR+WORjw/0RAgTAYkLdwjfVjnFIz0ci+qQNM0V03nOY5EIgPX++DnVod1r3piTYP27rYYscC4UCxY7Czo5LP7oypmm0ocPPvMdpkHJ/fM4+dluo2wGyGSvl03Q2Yp10H/7PxFWX5tjihbpIDOJxEgDgDpWkztjY0/Klhw/NzY+FvfYzbAy8iJq/U7fVsGUgCswkbTwF1Z7po8OM5nz62Awd4yV7r7Z44KzqJRERTq5vXNGow7jxl881x3AtkGGri10mDlYkm3yCf+RlPpB30En83EsYKxdGlro+MxWdv9h+eexo+mUoUQkdOHamI/6Ug/2ZvRBWtSML/mvPzxO6Sup4bU2NR4pFMlWZbTBXlvR9evEZfe5IDZAikni+a9IdNcMX07pgNT60s8w1uK3WpSYJGw8eqZLP3KHwqFhapkirBgpYL9T+St83bOosdOuWVrKIGhPu/m+dy3yBlFvRONNwlYVGE8oJTbj3hszLrOZLiH6sTFcx39wqpU7lnhSFVBugyEb4h13U8DmO1tgvHkIDjjlC6lg+dY9G960KUz9rWrAJjuIlEqlnwHVWCdOcRO+yqKzE2SSyDrUgdFjzQ//YgYAQ=="
-          },
-          {
             "type": "text",
-            "text": "Yes"
+            "text": "Yes."
           }
         ],
         "container": null,
@@ -80,9 +75,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 63,
+          "output_tokens": 6,
           "output_tokens_details": {
-            "thinking_tokens": 58
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",
