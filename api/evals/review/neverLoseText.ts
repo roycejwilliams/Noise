@@ -6,7 +6,7 @@
 // own number; and logs that carry counts only.
 // Zero tokens, no database (a fake pool), nothing sent (test numbers, logged and never sent).
 //   npx tsx --import ./evals/lib/modelGuard.mjs evals/review/neverLoseText.ts
-import { mkdtempSync, readFileSync, statSync, existsSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -73,16 +73,39 @@ const T = await import("../../src/services/turnFailure.js");
   fresh.hold({ handle: "b", payload: { number: "+14155550142" }, receivedAt: 2, active: false });
   fresh.hold({ handle: "c", payload: { number: PHONE }, receivedAt: 3, active: true });
   check("a live turn takes only its own phone's settled texts", fresh.readyFor(PHONE).map((t) => t.handle).join() === "a" && fresh.readyFor(PHONE, "a").length === 0);
+  // Review of #301 (7): a crashed write's leftover .tmp (here world-readable) never becomes the hold file with its own mode.
+  const f7 = join(dir, "perm-hold.json");
+  writeFileSync(`${f7}.tmp`, "junk from a crashed write", { mode: 0o644 });
+  chmodSync(`${f7}.tmp`, 0o644);
+  const h7 = H.createInboundHold({ file: f7 });
+  h7.hold({ handle: "p1", payload: { number: PHONE, content: SECRET }, receivedAt: Date.now(), active: false });
+  check("a leftover .tmp from a crashed write is replaced: the hold file is still the owner's only (0600), no .tmp left", (statSync(f7).mode & 0o777) === 0o600 && !existsSync(`${f7}.tmp`), (statSync(f7).mode & 0o777).toString(8));
+  // A rename that fails (the target is a non-empty directory) leaves no copy of anyone's text behind.
+  const f7b = join(dir, "blocked-hold.json");
+  mkdirSync(join(f7b, "x"), { recursive: true });
+  const h7b = H.createInboundHold({ file: f7b });
+  h7b.hold({ handle: "p2", payload: { number: PHONE, content: SECRET }, receivedAt: Date.now(), active: false });
+  check("a failed rename cleans up its .tmp (no stray copy of a member's text) and keeps the text in memory", !existsSync(`${f7b}.tmp`) && h7b.has("p2"));
 }
 
 // ---------------------------------------------------------------- what counts as the database being unreachable
-check("the 10-28 password rotation, a refused connection, a dropped one, a pool timeout: unreachable", [
+check("the 10-28 password rotation, a dropped pg connection, a pool timeout, a shutdown: unreachable on their own word", [
   Object.assign(new Error('password authentication failed for user "postgres"'), { code: "28P01" }),
-  Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:5432"), { code: "ECONNREFUSED" }),
   new Error("Connection terminated unexpectedly"),
   new Error("timeout exceeded when trying to connect"),
   Object.assign(new Error("wrapped"), { cause: Object.assign(new Error("x"), { code: "57P01" }) }),
 ].every((e) => H.isDbUnreachable(e)));
+{
+  // Review of #301 (4): a generic network error is what Anthropic, a fetch or Sendblue throw too. On its own it's not the database;
+  // only a probe that gets no answer makes it one.
+  const generic = ["ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "EPIPE", "ECONNREFUSED"].map((code) => Object.assign(new Error(`fetch failed: ${code}`), { code }));
+  check("a generic network error (an Anthropic, fetch or Sendblue blip) is not the database on its own", generic.every((e) => !H.isDbUnreachable(e)));
+  const up = await Promise.all(generic.map((e) => H.dbDownFor(e, async () => true)));
+  const down = await Promise.all(generic.map((e) => H.dbDownFor(e, async () => false)));
+  check("... only when the database also doesn't answer a probe", up.every((x) => !x) && down.every((x) => x));
+  let probed = 0;
+  check("... and pg's own word needs no probe", await H.dbDownFor(Object.assign(new Error("x"), { code: "28P01" }), async () => (probed++, true)) && probed === 0);
+}
 check("a bad query or a model error is not", !H.isDbUnreachable(Object.assign(new Error('syntax error at or near "SELEC"'), { code: "42601" })) && !H.isDbUnreachable(new Error("overloaded_error")) && !H.isDbUnreachable(undefined));
 
 // ---------------------------------------------------------------- the drain: waits for the database with backoff, then replays once
@@ -102,7 +125,9 @@ check("a bad query or a model error is not", !H.isDbUnreachable(Object.assign(ne
     dbAnswers: async () => up,
     answer: (items, done) =>
       R.answerTexts(items, {
+        withLock: (_p, fn) => fn(),
         foldIn: async (t) => (claimed.has(t.handle) ? false : (claimed.add(t.handle), true)),
+        drop: async (t) => (claimed.has(t.handle) ? false : (claimed.add(t.handle), true)),
         replay: async (t, o) => {
           if (claimed.has(t.handle)) return false;
           claimed.add(t.handle);
@@ -110,7 +135,7 @@ check("a bad query or a model error is not", !H.isDbUnreachable(Object.assign(ne
           return true;
         },
         done,
-        isDbDown: H.isDbUnreachable,
+        isDbDown: async (e) => H.dbDownFor(e, async () => up),
         now: () => new Date(now),
       }),
     recover: async (o) => void recovered.push(o.before),
@@ -151,16 +176,19 @@ check("a bad query or a model error is not", !H.isDbUnreachable(Object.assign(ne
   const t = (handle: string, minAgo: number, number = PHONE, content = SECRET, extra: Record<string, unknown> = {}) => ({ handle, payload: { number, content, message_handle: handle, ...extra }, receivedAt: at - minAgo * 60_000 });
   const run = async (items: any[], claimed = new Set<string>()) => {
     const folded: string[] = [];
+    const dropped: string[] = [];
     const replays: { handle: string; late: boolean }[] = [];
     const done: string[] = [];
     const r = await R.answerTexts(items, {
+      withLock: (_p, fn) => fn(),
       foldIn: async (x) => (claimed.has(x.handle) ? false : (claimed.add(x.handle), folded.push(x.handle), true)),
+      drop: async (x) => (claimed.has(x.handle) ? false : (claimed.add(x.handle), dropped.push(x.handle), true)),
       replay: async (x, o) => (claimed.has(x.handle) ? false : (claimed.add(x.handle), replays.push({ handle: x.handle, late: o.late }), true)),
       done: (x) => done.push(x.handle),
-      isDbDown: H.isDbUnreachable,
+      isDbDown: async (e) => H.dbDownFor(e, async () => true),
       now: () => new Date(at),
     });
-    return { r, folded, replays, done };
+    return { r, folded, dropped, replays, done };
   };
   const a = await run([t("x3", 2), t("x1", 25), t("x2", 12), t("y1", 3, "+14155550142")]);
   check("three texts from one member during an outage: the two earlier go on file, the newest is replayed (one answer that sees all three)", a.folded.join() === "x1,x2" && a.replays.filter((r) => r.handle.startsWith("x")).map((r) => r.handle).join() === "x3", a);
@@ -184,26 +212,111 @@ check("a bad query or a model error is not", !H.isDbUnreachable(Object.assign(ne
   guard.release(PHONE);
   check("... and a line that didn't go may be said by the next answer", guard.claim(PHONE));
   const stop = await R.answerTexts([t("s1", 20), t("s2", 15)], {
+    withLock: (_p, fn) => fn(),
     foldIn: async () => {
       throw Object.assign(new Error("Connection terminated unexpectedly"), {});
     },
+    drop: async () => true,
     replay: async () => true,
     done: () => {},
-    isDbDown: H.isDbUnreachable,
+    isDbDown: async (e) => H.dbDownFor(e, async () => true),
     now: () => new Date(at),
   });
   check("the database going away mid-batch stops the batch (what's left stays held)", stop.stoppedOnDb && stop.replayed === 0);
   const doneOdd: string[] = [];
   const odd = await R.answerTexts([t("o1", 20), t("o2", 15)], {
+    withLock: (_p, fn) => fn(),
     foldIn: async () => {
-      throw new TypeError("something else");
+      throw Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
     },
+    drop: async () => true,
     replay: async () => true,
     done: (x) => doneOdd.push(x.handle),
-    isDbDown: H.isDbUnreachable,
+    isDbDown: async (e) => H.dbDownFor(e, async () => true),
     now: () => new Date(at),
   });
-  check("any other failure on an earlier text never costs the newest its answer", odd.failed === 1 && odd.replayed === 1 && doneOdd.join() === "o1,o2", odd);
+  check("any other failure on an earlier text (a generic network blip while the database answers) never costs the newest its answer", odd.failed === 1 && odd.replayed === 1 && doneOdd.join() === "o1,o2" && !odd.stoppedOnDb, odd);
+
+  // ------------------------------------------------ review of #301 (1): a held STOP is honored through the normal path, first
+  const s1 = await run([t("a1", 30, PHONE, "where should we eat Friday?"), t("a2", 25, PHONE, "STOP"), t("a3", 20, PHONE, "also what about Sunday")]);
+  check("a held STOP between texts: the earlier text goes on file, STOP goes through the normal turn (opt-out + its confirmation), on time", s1.folded.join() === "a1" && s1.replays.map((r) => `${r.handle}:${r.late}`).join() === "a2:false", s1);
+  check("... and after it, nothing: the later text is claimed and dropped, no answer, no late line", s1.dropped.join() === "a3" && !s1.replays.some((r) => r.handle === "a3" || r.late), s1);
+  const s2 = await run([t("b1", 40, PHONE, "stop"), t("b2", 35, PHONE, "hey are you there"), t("b3", 30, PHONE, "Start"), t("b4", 25, PHONE, "ok so about Friday")]);
+  check("STOP then START: both through the normal turn in order, then the newest answered with the late line", s2.replays.map((r) => `${r.handle}:${r.late}`).join() === "b1:false,b3:false,b4:true" && s2.dropped.join() === "" && s2.folded.join() === "b2", s2);
+  const s3 = await run([t("c1", 40), t("c2", 30, PHONE, "UNSUBSCRIBE")]);
+  check("STOP as the newest held text: replayed with no late line, nothing after it", s3.replays.map((r) => `${r.handle}:${r.late}`).join() === "c2:false" && s3.folded.join() === "c1", s3);
+  check("the plan uses the existing STOP/START words (services/optOut.ts), nothing new", R.keywordOf(t("k", 1, PHONE, " quit ")) === "out" && R.keywordOf(t("k", 1, PHONE, "unstop")) === "in" && R.keywordOf(t("k", 1, PHONE, "please stop texting so much")) === null);
+  {
+    const folded: string[] = [];
+    const live = await R.takeHeldIntoLiveTurn([t("h1", 20), t("h2", 15, PHONE, "STOP")], { foldIn: async (x) => (folded.push(x.handle), true), release: () => {} });
+    check("a live text behind a held STOP doesn't run its own turn first: it joins the hold (the drain answers all of them in order)", live === "defer" && folded.length === 0);
+  }
+
+  // ------------------------------------------------ review of #301 (3): the drain and a live text from the same phone never overlap
+  {
+    // One fake phone lock, one claim store, one hold, shared by the drain's batch and a live text's turn that arrives mid-batch.
+    let locked = Promise.resolve();
+    const withLock = <X,>(_p: string, fn: () => Promise<X>): Promise<X> => {
+      const run = locked.then(fn);
+      locked = run.then(() => undefined, () => undefined);
+      return run;
+    };
+    const hold = H.createInboundHold();
+    for (const [h, m] of [["q1", 20], ["q2", 15]] as const) hold.hold({ handle: h, payload: { number: PHONE, content: SECRET, message_handle: h }, receivedAt: at - m * 60_000, active: false });
+    const claimed = new Set<string>();
+    const answered: string[] = [];
+    const filed: string[] = [];
+    let liveRanAt = 0;
+    // Two turns for one phone at once is what the phone's lock exists to prevent (two replies, the wrong branch on a double yes).
+    let inTurn = 0;
+    let most = 0;
+    const turn = async () => {
+      most = Math.max(most, ++inTurn);
+      await new Promise((r) => setTimeout(r, 10));
+      inTurn--;
+    };
+    // The replay the real one makes: the checks (a newer text of theirs answered since is "newer_text", stopped), the claim, the turn.
+    const replay = async (x: any) => {
+      if (liveRanAt > x.receivedAt) return false;
+      if (claimed.has(x.handle)) return false;
+      claimed.add(x.handle);
+      await turn();
+      answered.push(x.handle);
+      return true;
+    };
+    const foldIn = async (x: any) => {
+      await new Promise((r) => setTimeout(r, 5));
+      if (claimed.has(x.handle)) return false;
+      claimed.add(x.handle);
+      filed.push(x.handle);
+      return true;
+    };
+    const batch = R.answerTexts(hold.ready(), {
+      withLock,
+      foldIn,
+      drop: foldIn,
+      replay,
+      done: (x) => hold.release(x.handle),
+      isDbDown: async () => false,
+      now: () => new Date(at),
+    });
+    // The live text arrives while the batch is mid-way: its turn waits for the same phone's lock.
+    const live = withLock(PHONE, async () => {
+      const r = await R.takeHeldIntoLiveTurn(hold.readyFor(PHONE), { foldIn, release: (h) => hold.release(h) });
+      liveRanAt = at;
+      await turn();
+      answered.push("live");
+      return r;
+    });
+    await Promise.all([batch, live]);
+    const handled = (h: string) => answered.includes(h) || filed.includes(h);
+    check("a live text arriving mid-batch waits for the phone's lock: every held text is answered or on file, none lost to 'newer_text'", handled("q1") && handled("q2") && answered.includes("live") && hold.size() === 0, { answered, filed, held: hold.size() });
+    check("... and the newest held text was answered before the live one ran, never alongside it (one turn per phone at a time)", answered.indexOf("q2") > -1 && answered.indexOf("q2") < answered.indexOf("live") && most === 1, { answered, most });
+    const kept = H.createInboundHold();
+    kept.hold({ handle: "w1", payload: { number: PHONE, content: SECRET }, receivedAt: at - 60_000, active: false });
+    await R.takeHeldIntoLiveTurn(kept.readyFor(PHONE), { foldIn: async () => false, release: (h) => kept.release(h) });
+    check("a held text the live turn couldn't claim is never let go there (whoever has it, or the drain, settles it)", kept.has("w1"));
+  }
 }
 check("the late line is one fixed line, short and plain, no outage explanation", R.LATE_REPLY_LINE === "Sorry for the slow reply." && !/database|outage|server|down|system/i.test(R.LATE_REPLY_LINE));
 check("a recovered text may be up to a day old; a crashed turn's replay stays at an hour", (() => {
@@ -240,15 +353,25 @@ check("a recovered text may be up to a day old; a crashed turn's replay stays at
   });
   const f = await R.findMissedTexts(deps(), { before: now });
   check("only texts never handled here: not known, not held, not another number's, no groups, no outbound, no empty ones, each once", f.texts.map((t) => t.handle).join() === "missed1,missed2" && f.skipped === null, f.texts.map((t) => t.handle));
-  check("... asked from the newest handled text, two minutes back", queries[0].created_at_gte === new Date(anchorAt.getTime() - R.RECOVERY_MARGIN_MS).toISOString() && queries[0].offset === 0 && queries[0].limit === 100);
+  const main = queries.filter((q) => !q.created_at_lte);
+  check("... the anchor checked on its own (a few minutes either side), then read newest first from two minutes before it", !!queries[0].created_at_lte && main[0]?.created_at_gte === new Date(anchorAt.getTime() - R.RECOVERY_MARGIN_MS).toISOString() && main[0]?.order_direction === "desc" && main[0]?.offset === 0 && main[0]?.limit === 100, queries);
   check("... shaped like the webhook body (number is the member's, inbound), with when it arrived", f.texts[0].payload.number === PHONE && f.texts[0].payload.is_outbound === false && f.texts[0].payload.message_handle === "missed1" && new Date(f.texts[0].receivedAt).getTime() === now.getTime() - 30 * 60_000);
   check("no anchor in Sendblue's list (the webhook for this number may point at another environment): nothing recovered", (await R.findMissedTexts(deps({ anchor: async () => ({ handle: "not-there", receivedAt: anchorAt }) }), { before: now })).skipped === "anchor_not_listed");
   check("no handled text to anchor on, or no number set: nothing recovered", (await R.findMissedTexts(deps({ anchor: async () => null }), { before: now })).skipped === "no_anchor" && (await R.findMissedTexts(deps({ ourNumber: undefined }), { before: now })).skipped === "no_sendblue_number");
   const old = await R.findMissedTexts(deps({ now: () => new Date(now.getTime() + 24 * 60 * 60_000) }), { before: now });
   check("at most a day back", old.texts.length === 0, old.texts.map((t) => t.handle));
   let pages = 0;
-  await R.findMissedTexts(deps({ list: async (q: any) => (pages++, { data: q.offset === 0 ? [msg("anchor", 40), ...Array.from({ length: 99 }, (_, i) => msg(`p${i}`, 20))] : [], hasMore: q.offset === 0 }) }), { before: now });
-  check("pages through 100 at a time and stops when there's no more", pages === 2);
+  await R.findMissedTexts(deps({ list: async (q: any) => (q.created_at_lte ? { data: [msg("anchor", 40)], hasMore: false } : (pages++, { data: q.offset === 0 ? Array.from({ length: 100 }, (_, i) => msg(`p${i}`, 20)) : [], hasMore: q.offset === 0 })) }), { before: now });
+  check("pages through 100 at a time and stops when there's no more", pages === 2, pages);
+  // Review of #301 (8): a long outage. 2,500 texts since the anchor, newest first: the newest are read, the page cap leaves out the oldest.
+  const many = Array.from({ length: 2500 }, (_, i) => msg(`n${i}`, 39 - i * (38 / 2500)));
+  const byNewest = [...many].reverse();
+  const big = await R.findMissedTexts(
+    deps({ list: async (q: any) => (q.created_at_lte ? { data: [msg("anchor", 40)], hasMore: false } : { data: (q.order_direction === "desc" ? byNewest : many).slice(q.offset, q.offset + q.limit), hasMore: q.offset + q.limit < many.length }), known: async () => new Set() }),
+    { before: now },
+  );
+  const got = new Set(big.texts.map((t) => t.handle));
+  check("a long outage: the newest texts are always read (newest first), the page cap leaves out only the oldest, and says so", got.has("n2499") && got.has("n500") && !got.has("n0") && big.capped && got.size === R.RECOVERY_MAX_PAGES * R.RECOVERY_PAGE, { size: got.size, capped: big.capped });
 }
 
 // ---------------------------------------------------------------- the team alert: once an hour while failing, once on recovery, no member data
@@ -363,17 +486,70 @@ check("a recovered text may be up to a day old; a crashed turn's replay stays at
   const nonAlert = queries.filter((q) => /INSERT INTO outbound_messages/.test(q.sql) && !/'ops'/.test(q.sql));
   check("nothing went to the member while the database was down", nonAlert.every((q) => q.params[1] !== PHONE), nonAlert.map((q) => q.params[1]));
   check("the logs this change writes carry counts only: no member words, no number", ours().length > 0 && leaks(ours()).length === 0, { ours: ours(), leaks: leaks(ours()) });
+
+  // ------------------------------------------------ review of #301 (2): a turn that already texted them is never replayed
+  const base = { handle: "h", holdable: true, held: false, failed: true, dbDown: true, replied: false, replay: false };
+  check("a turn that died on the database before texting them: held for the drain", S.settleAction(base) === "hold");
+  check("a turn that texted them and then died on the database (logging the reply): never held, never replayed", S.settleAction({ ...base, replied: true }) === "count" && S.settleAction({ ...base, held: true, replied: true }) === "count");
+  check("... the same for a replay: one that dies before texting gives its claim back for another try, one that texted is done", S.settleAction({ ...base, replay: true }) === "reclaim" && S.settleAction({ ...base, replay: true, replied: true }) === "count");
+  check("a failure that isn't the database, or a turn that ended fine: never held", S.settleAction({ ...base, dbDown: false }) === "count" && S.settleAction({ ...base, failed: false }) === "release");
+  const SB = await import("../../src/services/sendblue.js");
+  const before = SB.sendsTo("+14155550163");
+  await SB.default.messages.send({ number: "+14155550163", content: "Here's what I found.", from_number: "+14155550100" } as any);
+  check("every text that reaches Sendblue is counted for its number (what the turn compares), by number however it's written", SB.sendsTo("(415) 555-0163") === before + 1);
+
+  // ------------------------------------------------ review of #301 (5): a database blip after the claim never loses a recovered text
+  const calls: { sql: string; params: any[] }[] = [];
+  let checkRow: () => any = () => {
+    throw Object.assign(new Error("Connection terminated unexpectedly"), {});
+  };
+  pool.query = async (sql: string, params: any[] = []) => {
+    const q = flat(String(sql));
+    calls.push({ sql: q, params });
+    if (/^INSERT INTO inbound_webhook_handles .* RETURNING payload, received_at, retry_claimed_at/.test(q)) return { rows: [{ payload: { number: "+14155550164", content: SECRET, message_handle: params[0] }, received_at: new Date(Date.now() - 20 * 60_000), retry_claimed_at: null }] };
+    if (/FROM users u WHERE u\.phone_number = \$1 LIMIT 1/.test(q) && /AS replied/.test(q)) return { rows: [checkRow()] };
+    if (/^UPDATE inbound_webhook_handles SET retry_claimed_at = NOW\(\)/.test(q)) return { rows: [{ payload: { number: "+14155550164" }, received_at: new Date() }] };
+    return { rows: [], rowCount: 0 };
+  };
+  const rec = { handle: "rec-1", payload: { number: "+14155550164", content: SECRET, message_handle: "rec-1" }, receivedAt: Date.now() - 20 * 60_000 };
+  const threw = await S.replayRecovered(rec, { late: true }).then(() => "returned", (e: any) => (H.isDbUnreachable(e) ? "threw db" : `threw ${e?.message}`));
+  check("the replay checks hitting a database error: it throws (stays held for the next pass), never reads as 'no member'", threw === "threw db", threw);
+  check("... and the claim was never taken, so the next pass can claim it", !calls.some((c) => /^UPDATE inbound_webhook_handles SET retry_claimed_at = NOW\(\)/.test(c.sql)));
+  calls.length = 0;
+  checkRow = () => ({ id: "u1", sms_opted_out: true, archived_at: null, replied: false, last_inbound_at: null, call_status_updated_at: null });
+  const blocked = await S.replayRecovered({ ...rec, handle: "rec-2", reclaim: true } as any, { late: true });
+  const upsert = calls.find((c) => /^INSERT INTO inbound_webhook_handles/.test(c.sql));
+  check("a held text whose earlier replay died on the database gives its claim back first (reclaim)", upsert?.params[3] === true && /retry_claimed_at = CASE WHEN \$4::boolean THEN NULL/.test(upsert?.sql ?? ""));
+  check("an opted-out member's recovered text: checked, claimed (done), never replayed", blocked === false && calls.some((c) => /^UPDATE inbound_webhook_handles SET retry_claimed_at/.test(c.sql)) && !calls.some((c) => /INSERT INTO phone_debounce|turn.replay.*replayed/.test(c.sql)) && !calls.some((c) => /INSERT INTO harness_decisions/.test(c.sql) && c.params.includes("replayed")), { blocked, calls: calls.map((c) => c.sql.slice(0, 90)) });
+
+  // ------------------------------------------------ review of #301 (6): the late line isn't said twice across a restart
+  const sent: string[] = [];
+  pool.query = async (sql: string, params: any[] = []) => {
+    const q = flat(String(sql));
+    if (/AS said_lately/.test(q)) return { rows: [{ id: "u-" + params[0], sms_opted_out: false, archived_at: null, said_lately: params[0] === "+14155550165" }] };
+    if (/INSERT INTO outbound_messages/.test(q)) return sent.push(`${params[1]}|${params[2]}`), { rows: [] };
+    if (/INSERT INTO co_memories/.test(q)) return { rows: [{ id: 1 }] };
+    return { rows: [], rowCount: 0 };
+  };
+  const afterRestart = await S.sayLate("+14155550165");
+  const fresh = await S.sayLate("+14155550166");
+  await new Promise((r) => setTimeout(r, 50));
+  check("the late line said in the last 30 minutes (on file, from before a restart): not said again", afterRestart === false && !sent.some((x) => x.startsWith("+14155550165")), sent);
+  check("... otherwise it goes, the one fixed line", fresh === true && sent.includes(`+14155550166|${R.LATE_REPLY_LINE}`), sent);
 }
 
 // ---------------------------------------------------------------- the wiring (read from the source)
 {
   const src = flat(read("routes/sendblue.ts"));
   check("a failed handle or payload save is noticed (no more .catch(() => true) / .catch(() => {}) that hid it)", /\.catch\(\(\) => \{ saveFailed = true; return true; \}\)/.test(src) && /\.catch\(\(\) => \{ saveFailed = true; \}\)/.test(src) && /if \(saveFailed && holdable\) held = holdInbound\(handle, req\.body, arrivedAt, true\)/.test(src));
-  check("the turn's outcome decides: answered leaves the hold, a database failure goes to the drain", /await settleInbound\(\{ handle: holdable \? \(handle as string\) : null, body: req\.body, arrivedAt, held, turnError, replay: !!replay/.test(src) && /const dbDown = t\.held \|\| isDbUnreachable\(t\.turnError\) \|\| !\(await dbAnswers\(\)\)/.test(src));
-  check("held and recovered texts replay through the one-shot claim (replayOwedTurn, claimRetry strict) and the phone's lock", /return replayOwedTurn\(t\.handle, \{ recovered: true, late: o\.late \}\)/.test(src) && /const claim = await claimRetry\(handle, \{ strict: o\.recovered \}\)/.test(src) && /withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\)/.test(src));
+  check("the turn's outcome decides (settleAction): answered leaves the hold, a database failure before any text goes to the drain", /await settleInbound\(\{ handle: typeof handle === "string" && handle \? handle : null, holdable, body: req\.body, arrivedAt: replay\?\.receivedAt \?\? arrivedAt, held, turnError, replied: repliedBeforeFailure \?\? false,/.test(src) && /const dbDown = failed && \(t\.held \|\| \(await dbDownFor\(t\.turnError, dbAnswers\)\)\)/.test(src));
+  check("(2) whether it texted them is read at the failure, before any failure note, from after the late line", /turnError = error; notePossibleReply\(\);.*tellMemberTurnFailed\(lockKey/.test(src) && /turnError = err; notePossibleReply\(\);/.test(src) && /if \(lateFrom\) await sayLate\(lockKey\); sendsBase = sendsTo\(lockKey\);/.test(src));
+  check("(3) the drain answers each member's held texts under their phone's lock; their replays don't take it again", /withLock: \(phone, fn\) => withPhoneLock\(phone, fn\)/.test(src) && /await replayHandler\(payload, receivedAt, \{ late: o\.late && !keyword, lockHeld: true \}\)/.test(src) && /await track\(lockKey && !replay\?\.lockHeld \? withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)\);/.test(src));
+  check("(5) recovered texts: checks strict and before the claim, STOP/START never blocked, one-shot claim, up to a day", /const member = await replayCheckRow\(phone, receivedAt, \{ strict: true \}\); const blocked = keyword \? null : turnReplayBlocked\(/.test(src) && /if \(!\(await claimRetry\(t\.handle, \{ strict: true \}\)\)\) return false;/.test(src) && /maxAgeMs: RECOVERED_MAX_AGE_MS/.test(src));
+  check("(1) a live text behind a held STOP/START joins the hold instead of running first", /if \(taken === "defer" && holdable\) \{ inboundHold\.hold\(.*deferred = true; holdDrain\.kick\(\); return false; \}/.test(src) && /if \(!\(await beforeTurn\(\)\)\) return;/.test(src));
   check("a text taken into another's answer is claimed once (retry_claimed_at IS NULL) before its line goes on file", /DO UPDATE SET retry_claimed_at = NOW\(\).*WHERE inbound_webhook_handles\.retry_claimed_at IS NULL RETURNING handle/.test(src));
   check("a recovered text is owned by inserting its handle first: a webhook that got there first wins, one that comes later is a duplicate", /VALUES \(\$1, \$2::jsonb, \$3, NOW\(\)\) ON CONFLICT \(handle\) DO NOTHING RETURNING handle`, \[t\.handle, JSON\.stringify\(t\.payload\), new Date\(t\.receivedAt\)\],? \); if \(!rows\.length\) continue; inboundHold\.hold/.test(src));
-  check("the late line is sent under the phone's lock, before the turn, and never counts as an answer (it's with the hold lines)", /const run = \(\) => withMember\(null, runTurn\); const runTurn = async \(\) => \{ try \{ \/\/[^\n]*?Never throws\. await beforeTurn\(\);/.test(src) && /const HOLD_LINES = \[[^\]]*LATE_REPLY_LINE\]/.test(src));
+  check("the late line is sent under the phone's lock, before the turn, and never counts as an answer (it's with the hold lines)", /const run = \(\) => withMember\(null, runTurn\); const runTurn = async \(\) => \{ try \{ \/\/[^\n]*?Never throws\. if \(!\(await beforeTurn\(\)\)\) return;/.test(src) && /const HOLD_LINES = \[[^\]]*LATE_REPLY_LINE\]/.test(src));
   check("Sendblue's list is read through the existing client and keys, for our number only", /client\.messages\.list\(\{ is_outbound: "false", sendblue_number: q\.sendblue_number/.test(flat(read("services/sendblue.ts"))) && /list: \(q\) => listInboundMessages\(\{ \.\.\.q, sendblue_number: ours! \}\)/.test(src));
   check("startup runs the recovery after migrations", /startInboundRecovery\(new Date\(\)\);/.test(read("server.ts")));
   check("no key is ever logged", !/SENDBLUE_(API|SECRET)_KEY/.test(read("services/inboundRecovery.ts") + read("services/inboundHold.ts") + read("services/inboundOutageAlert.ts")));

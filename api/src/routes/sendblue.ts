@@ -88,12 +88,12 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 import { isShuttingDown, track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
-import { refusedBySendLayer } from "../services/sendblue.js";
+import { refusedBySendLayer, sendsTo } from "../services/sendblue.js";
 import { setScopeMember, withMember } from "../services/llmUsage.js";
-import { createInboundHold, holdFilePath, isDbUnreachable } from "../services/inboundHold.js";
+import { createInboundHold, dbDownFor, holdFilePath } from "../services/inboundHold.js";
 import { isTestNumber } from "../services/testNumbers.js";
 import { createOutageAlert } from "../services/inboundOutageAlert.js";
-import { answerTexts, createHoldDrain, createLateGuard, findMissedTexts, LATE_REPLY_LINE, lateLineFits, RECOVERED_MAX_AGE_MS, type RecoveredText } from "../services/inboundRecovery.js";
+import { answerTexts, createHoldDrain, createLateGuard, findMissedTexts, keywordOf, LATE_LINE_EVERY_MS, LATE_REPLY_LINE, lateLineFits, RECOVERED_MAX_AGE_MS, takeHeldIntoLiveTurn, type RecoveredText } from "../services/inboundRecovery.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -563,7 +563,7 @@ export function sendblueRouter(io: Server): Router {
   // restart (replayOwedTurn, below). The text was already checked, acked,
   // de-duplicated, saved and marked read, and its "User said" line may
   // already be logged, so none of that happens twice.
-  const handleWebhook = async (req: Request, webhookRes: Response, next: NextFunction, replay: { receivedAt: Date; late?: boolean } | null = null) => {
+  const handleWebhook = async (req: Request, webhookRes: Response, next: NextFunction, replay: { receivedAt: Date; late?: boolean; lockHeld?: boolean } | null = null) => {
       // The member's message is logged once, however many times its turn runs.
       const logTextExchange = replay ? (userId: string, content: string) => logTextExchangeOnce(userId, content, replay.receivedAt) : logTextExchangeRow;
       // Only Sendblue can post here (2026-09-17 code review: with no check,
@@ -611,6 +611,16 @@ export function sendblueRouter(io: Server): Router {
       let held = false;
       // The turn's error, if it failed (decides, at the end, whether the text waits in the hold).
       let turnError: unknown = undefined;
+      // Whether this turn had already texted them when it failed (review of #301: a reply that went out and then failed to log
+      // must never be replayed, or they're answered twice). Counted from Sendblue sends to this number (services/sendblue.ts
+      // sendsTo), from the start of the turn's own work (after any late line), up to the failure (before any failure note).
+      let sendsBase = req.body?.number ? sendsTo(req.body.number) : 0;
+      let repliedBeforeFailure: boolean | null = null;
+      const notePossibleReply = () => {
+        repliedBeforeFailure ??= !!req.body?.number && sendsTo(req.body.number) > sendsBase;
+      };
+      // This text joined the hold behind a held STOP or START of theirs; the drain answers them all, in order.
+      let deferred = false;
       if (!replay && typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
         // Already waiting in the hold (its first delivery couldn't be saved): this is the same text again, and its first handler or
         // the drain answers it. Checked first, since the database may be the thing that can't tell.
@@ -709,19 +719,32 @@ export function sendblueRouter(io: Server): Router {
       }
 
       // Under the phone's lock, before the turn: texts of theirs an outage held back are taken into this answer (put on file, so
-      // this turn sees them), and an answer more than ten minutes late starts with the late line (services/inboundRecovery.ts).
-      const beforeTurn = async () => {
-        if (!lockKey || !isGenuineInbound || isGroupMessage) return;
+      // this turn sees them), and an answer more than ten minutes late starts with the late line (services/inboundRecovery.ts). When
+      // one of the held texts is STOP or START, this text joins the hold instead and the drain answers them all in order, so the
+      // keyword goes through the normal opt-out path first (review of #301). Returns false when this turn should not run. Never throws.
+      const beforeTurn = async (): Promise<boolean> => {
+        if (!lockKey || !isGenuineInbound || isGroupMessage) return true;
         let lateFrom: Date | null = replay?.late ? replay.receivedAt : null;
         if (!replay) {
-          const folded = await foldHeldFor(lockKey, typeof handle === "string" ? handle : undefined).catch((err: any) => {
-            if (isDbUnreachable(err)) noteDbTrouble();
+          const taken = await takeHeldIntoLiveTurn(inboundHold.readyFor(lockKey, typeof handle === "string" ? handle : undefined), {
+            foldIn: foldHeld,
+            release: (h) => inboundHold.release(h),
+          }).catch(async (err: any) => {
+            if (await dbDownFor(err, dbAnswers)) noteDbTrouble();
             return null;
           });
-          if (folded && lateLineFits(bodyForStamp, folded, Date.now())) lateFrom = folded;
+          if (taken === "defer" && holdable) {
+            inboundHold.hold({ handle: handle as string, payload: req.body, receivedAt: arrivedAt, active: false });
+            deferred = true;
+            holdDrain.kick();
+            return false;
+          }
+          if (taken instanceof Date && lateLineFits(bodyForStamp, taken, Date.now())) lateFrom = taken;
           else if (held && lateLineFits(bodyForStamp, arrivedAt, Date.now())) lateFrom = arrivedAt;
         }
         if (lateFrom) await sayLate(lockKey);
+        sendsBase = sendsTo(lockKey);
+        return true;
       };
       // Every model call this text causes (the reply, its readers, learning, the snapshot, fire-and-forget work) is this member's
       // in llm_usage: the scope opens with the turn and the member is named once the number is looked up (services/llmUsage.ts).
@@ -729,7 +752,7 @@ export function sendblueRouter(io: Server): Router {
       const runTurn = async () => {
       try {
         // Under the phone's lock (this whole turn is), first: held texts taken in, the late line if it's late. Never throws.
-        await beforeTurn();
+        if (!(await beforeTurn())) return;
         const {
           number,
           content,
@@ -2794,6 +2817,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         return;
       } catch (error) {
         turnError = error;
+        notePossibleReply();
         // If the early ack above already went out, the response is done —
         // next(error) would try to send a second response and throw
         // ERR_HTTP_HEADERS_SENT. Only fall through to the normal error
@@ -2817,9 +2841,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
       try {
         // Tracked so a restart waits for a reply mid-draft (services/shutdown.ts).
         // One trace-text turn (services/llmTraceText.ts traceTurn): a removal or correction in it deletes again when it ends.
-        await track(lockKey ? withPhoneLock(lockKey, () => traceTurn(run)) : traceTurn(run));
+        // A held or recovered text's replay already holds the phone's lock (the drain takes it for all of that member's texts).
+        await track(lockKey && !replay?.lockHeld ? withPhoneLock(lockKey, () => traceTurn(run)) : traceTurn(run));
       } catch (err) {
         turnError = err;
+        notePossibleReply();
         // The phone's lock never came free (concurrency audit, 2026-10-12): the turn never ran, and it never runs unlocked. It's
         // re-queued from what was saved: the replay re-checks that no newer text took it over and that Co hasn't answered since. A
         // replay that also can't get the lock tells them plainly, so they're never left with nothing.
@@ -2838,21 +2864,32 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1`, [handle]).catch(() => {});
         }
         // Answered, or waiting in the hold for the database (2026-10-28). Never throws.
-        if (lockKey && isGenuineInbound && !isGroupMessage) await settleInbound({ handle: holdable ? (handle as string) : null, body: req.body, arrivedAt, held, turnError, replay: !!replay, testMember: isTestNumber(lockKey) });
+        if (lockKey && isGenuineInbound && !isGroupMessage && !deferred)
+          await settleInbound({
+            handle: typeof handle === "string" && handle ? handle : null,
+            holdable,
+            body: req.body,
+            arrivedAt: replay?.receivedAt ?? arrivedAt,
+            held,
+            turnError,
+            replied: repliedBeforeFailure ?? false,
+            replay: !!replay,
+            testMember: isTestNumber(lockKey),
+          });
       }
   };
 
   router.post("/webhook", (req: Request, res: Response, next: NextFunction) => handleWebhook(req, res, next));
-  replayHandler = async (payload: any, receivedAt: Date, o: { late?: boolean } = {}) => {
+  replayHandler = async (payload: any, receivedAt: Date, o: { late?: boolean; lockHeld?: boolean } = {}) => {
     const noop: any = { headersSent: true, status: () => noop, send: () => noop, json: () => noop, sendStatus: () => noop };
-    await handleWebhook({ body: payload, get: () => undefined, ip: "replay" } as any, noop, (err?: any) => err && console.error("sendblue: replayed turn failed:", err?.message ?? err), { receivedAt, late: o.late });
+    await handleWebhook({ body: payload, get: () => undefined, ip: "replay" } as any, noop, (err?: any) => err && console.error("sendblue: replayed turn failed:", err?.message ?? err), { receivedAt, late: o.late, lockHeld: o.lockHeld });
   };
 
   return router;
 }
 
 // Set once the router exists; runs a saved text's turn again (replayOwedTurn).
-let replayHandler: ((payload: any, receivedAt: Date, o?: { late?: boolean }) => Promise<void>) | null = null;
+let replayHandler: ((payload: any, receivedAt: Date, o?: { late?: boolean; lockHeld?: boolean }) => Promise<void>) | null = null;
 
 // A reply that came out empty gets one more try a minute later, from the
 // message Co already has (agent/conversationReply.ts resumeLater). Under the
@@ -2920,10 +2957,8 @@ function scheduleTurnReplay(handle: string, afterMs: number, o: { neverRan?: boo
 // once, and only when it's safe: Co hasn't answered since, they haven't texted
 // again, no call went out, and it's under an hour old (turnReplayBlocked).
 // Returns whether it ran.
-// recovered: a text an outage held back or Sendblue's list recovered (services/inboundRecovery.ts): up to a day old, a database
-// error throws (so it stays held), and late puts the late line before the answer.
-export async function replayOwedTurn(handle: string, o: { neverRan?: boolean; recovered?: boolean; late?: boolean } = {}): Promise<boolean> {
-  const claim = await claimRetry(handle, { strict: o.recovered });
+export async function replayOwedTurn(handle: string, o: { neverRan?: boolean } = {}): Promise<boolean> {
+  const claim = await claimRetry(handle);
   if (!claim?.payload || !replayHandler) return false;
   const { payload, receivedAt } = claim;
   const phone = payload.number;
@@ -2952,11 +2987,10 @@ export async function replayOwedTurn(handle: string, o: { neverRan?: boolean; re
     receivedAt,
     now: new Date(),
     neverRan: o.neverRan,
-    maxAgeMs: o.recovered ? RECOVERED_MAX_AGE_MS : undefined,
   });
-  await recordDecision({ layer: 2, decision: "turn.replay", userId: row?.id ?? null, outcome: blocked ? "skip" : "act", action: blocked ?? "replayed", proposal: { handle, message: String(payload.content ?? "").slice(0, 200), ...(o.recovered ? { recovered: true, late: !!o.late } : {}) } }).catch(() => {});
+  await recordDecision({ layer: 2, decision: "turn.replay", userId: row?.id ?? null, outcome: blocked ? "skip" : "act", action: blocked ?? "replayed", proposal: { handle, message: String(payload.content ?? "").slice(0, 200) } }).catch(() => {});
   if (blocked) return false;
-  await replayHandler(payload, receivedAt, { late: o.late });
+  await replayHandler(payload, receivedAt);
   return true;
 }
 
@@ -3110,7 +3144,17 @@ async function dbAnswers(): Promise<boolean> {
 const holdDrain = createHoldDrain({
   hold: inboundHold,
   dbAnswers,
-  answer: (items, done) => answerTexts(items, { foldIn: foldHeld, replay: replayHeld, done, isDbDown: isDbUnreachable, now: () => new Date() }),
+  answer: (items, done) =>
+    answerTexts(items, {
+      // All of one member's held texts under their phone's lock: a live text of theirs waits, and the replays inside don't take it again.
+      withLock: (phone, fn) => withPhoneLock(phone, fn),
+      foldIn: foldHeld,
+      drop: dropHeld,
+      replay: replayRecovered,
+      done,
+      isDbDown: (err) => dbDownFor(err, dbAnswers),
+      now: () => new Date(),
+    }),
   recover: (o) => recoverFromSendblue(o),
   alert: outageAlert,
   schedule: (fn, ms) => {
@@ -3127,20 +3171,36 @@ function noteDbTrouble(): void {
 }
 
 // Holds a text whose save failed or whose turn died on the database. Returns whether it's held.
-function holdInbound(handle: string, body: unknown, arrivedAt: Date, active: boolean): boolean {
-  const ok = inboundHold.hold({ handle, payload: body, receivedAt: arrivedAt, active });
+function holdInbound(handle: string, body: unknown, arrivedAt: Date, active: boolean, reclaim = false): boolean {
+  const ok = inboundHold.hold({ handle, payload: body, receivedAt: arrivedAt, active, reclaim });
   noteDbTrouble();
   return ok;
 }
 
-// How an inbound text's handler ended. Answered: out of the hold, and its handle on file so a restart's look-back knows it was
-// handled. Failed on the database (or never saved): into the hold for the drain. Failed otherwise: counted toward the team alert
-// (the crash replay above still covers it). Never throws.
-async function settleInbound(t: { handle: string | null; body: unknown; arrivedAt: Date; held: boolean; turnError: unknown; replay: boolean; testMember: boolean }): Promise<void> {
+// Pure: where an inbound text goes when its handler ends (review of #301).
+//   release: answered (or its turn returned on its own): out of the hold.
+//   hold:    its turn died on the database before texting them, or it was never saved: the drain answers it. A replay that dies
+//            the same way is held again with its claim to be given back ("reclaim").
+//   count:   it failed for another reason, or it had already texted them (replaying would answer twice): counted toward the alert,
+//            never replayed by the hold.
+export type SettleCase = { handle: string | null; holdable: boolean; held: boolean; failed: boolean; dbDown: boolean; replied: boolean; replay: boolean };
+export function settleAction(c: SettleCase): "release" | "hold" | "reclaim" | "count" {
+  if (!c.failed) return "release";
+  if (!c.dbDown || c.replied) return "count";
+  if (c.replay) return c.handle ? "reclaim" : "count";
+  return c.handle && c.holdable ? "hold" : "count";
+}
+
+// How an inbound text's handler ended (settleAction). Never throws.
+async function settleInbound(t: { handle: string | null; holdable: boolean; body: unknown; arrivedAt: Date; held: boolean; turnError: unknown; replied: boolean; replay: boolean; testMember: boolean }): Promise<void> {
   try {
-    if (t.turnError === undefined) {
+    const failed = t.turnError !== undefined;
+    const dbDown = failed && (t.held || (await dbDownFor(t.turnError, dbAnswers)));
+    const action = settleAction({ handle: t.handle, holdable: t.holdable, held: t.held, failed, dbDown, replied: t.replied, replay: t.replay });
+    if (action === "release") {
       if (t.handle && t.held) {
         inboundHold.release(t.handle);
+        // Its row, so a restart's Sendblue look-back knows it was handled.
         await pool
           .query(
             `INSERT INTO inbound_webhook_handles (handle, received_at, finished_at) VALUES ($1, $2, NOW())
@@ -3152,17 +3212,19 @@ async function settleInbound(t: { handle: string | null; body: unknown; arrivedA
       outageAlert.noteHealthy("turn", { held: inboundHold.size() });
       return;
     }
-    const dbDown = t.held || isDbUnreachable(t.turnError) || !(await dbAnswers());
-    if (!dbDown) {
+    if (action === "count") {
+      // It already texted them: out of the hold for good (at most its log row is missing).
+      if (t.handle && t.held) inboundHold.release(t.handle);
+      if (dbDown) noteDbTrouble();
       // A test member's broken turn is a test result, never a reason to text the team (Royce, 2026-10-17: test counts stay off texts).
-      if (!t.testMember) outageAlert.noteTurnFailure();
+      else if (!t.testMember) outageAlert.noteTurnFailure();
       return;
     }
-    if (t.handle && !t.replay) {
-      if (t.held) inboundHold.settle(t.handle);
-      else holdInbound(t.handle, t.body, t.arrivedAt, false);
-    }
-    noteDbTrouble();
+    if (action === "reclaim") holdInbound(t.handle!, t.body, t.arrivedAt, false, true);
+    else if (t.held) {
+      inboundHold.settle(t.handle!);
+      noteDbTrouble();
+    } else holdInbound(t.handle!, t.body, t.arrivedAt, false);
   } catch (err: any) {
     console.error(`sendblue: settling an inbound text failed (${err?.constructor?.name ?? "Error"})`);
   }
@@ -3188,46 +3250,107 @@ async function foldHeld(t: RecoveredText): Promise<boolean> {
   return true;
 }
 
-// The newest held or recovered text of theirs: its row (so the one-shot claim covers it), then the replay path above, up to a day
-// old, the late line first when it's late. A database error throws (it stays held).
-async function replayHeld(t: RecoveredText, o: { late: boolean }): Promise<boolean> {
-  await pool.query(
-    `INSERT INTO inbound_webhook_handles (handle, payload, received_at, finished_at) VALUES ($1, $2::jsonb, $3, NOW())
-     ON CONFLICT (handle) DO UPDATE SET payload = COALESCE(inbound_webhook_handles.payload, EXCLUDED.payload),
-       finished_at = COALESCE(inbound_webhook_handles.finished_at, NOW())`,
+// A held text from after their STOP: claimed so nothing replays it, and nothing else (no answer, no line on file, no late line).
+async function dropHeld(t: RecoveredText): Promise<boolean> {
+  const { rows } = await pool.query(
+    `INSERT INTO inbound_webhook_handles (handle, payload, received_at, finished_at, retry_claimed_at) VALUES ($1, $2::jsonb, $3, NOW(), NOW())
+     ON CONFLICT (handle) DO UPDATE SET retry_claimed_at = NOW(), finished_at = COALESCE(inbound_webhook_handles.finished_at, NOW())
+     WHERE inbound_webhook_handles.retry_claimed_at IS NULL
+     RETURNING handle`,
     [t.handle, JSON.stringify(t.payload ?? {}), new Date(t.receivedAt)],
   );
-  return replayOwedTurn(t.handle, { recovered: true, late: o.late });
+  if (!rows.length) return false;
+  await recordDecision({ layer: 2, decision: "turn.recovered", userId: null, outcome: "skip", action: "after_opt_out", proposal: { handle: t.handle } }).catch(() => {});
+  return true;
 }
 
-// A live text's turn takes in the held texts from the same phone that are waiting for the drain (so it answers them too, instead of
-// the drain answering them after it). The oldest one's arrival, or null when there were none.
-async function foldHeldFor(phone: string, exceptHandle?: string): Promise<Date | null> {
-  let oldest: number | null = null;
-  for (const t of inboundHold.readyFor(phone, exceptHandle)) {
-    if (await foldHeld(t)) oldest = Math.min(oldest ?? t.receivedAt, t.receivedAt);
-    inboundHold.release(t.handle);
-  }
-  return oldest === null ? null : new Date(oldest);
+// Who they are now, for the replay checks (turnReplayBlocked). strict: a database error throws instead of reading as "no member".
+async function replayCheckRow(phone: string, receivedAt: Date, o: { strict?: boolean } = {}): Promise<any | undefined> {
+  const { rows } = await pool
+    .query(
+      `SELECT u.id, u.sms_opted_out, u.archived_at,
+         EXISTS (
+           SELECT 1 FROM co_memories r
+           WHERE r.user_id = u.id AND r.memory_type = 'text_exchange' AND (r.content LIKE 'Co replied:%' OR r.content LIKE 'Mo replied:%')
+             AND r.created_at > $2 AND r.content <> ALL($3::text[])
+         ) AS replied,
+         (SELECT d.last_inbound_at FROM phone_debounce d WHERE d.phone = $1) AS last_inbound_at,
+         u.call_status_updated_at
+       FROM users u WHERE u.phone_number = $1 LIMIT 1`,
+      [phone, receivedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
+    )
+    .catch((err: any) => {
+      if (o.strict) throw err;
+      return { rows: [] as any[] };
+    });
+  return rows[0];
 }
 
-// The late line, under the phone's lock, before the answer: once per member in LATE_LINE_EVERY_MS, never to someone opted out,
-// archived or unknown. Never throws.
-async function sayLate(phone: string): Promise<void> {
-  if (!lateGuard.claim(phone)) return;
+// A held or recovered text's turn, the phone's lock already held (answerTexts): its row (so the one-shot claim covers it), the replay
+// checks (up to a day old), then the claim, then the normal turn with the late line first when it's late. STOP and START skip the
+// checks: an opt-out is always honored, an opt-in always heard. Any database error throws before the claim is taken, so the text
+// stays held and can be claimed again (review of #301); a held text whose earlier replay died on the database gives its claim back.
+// Exported for evals/review/neverLoseText.ts.
+export async function replayRecovered(t: RecoveredText & { reclaim?: boolean }, o: { late: boolean }): Promise<boolean> {
+  const { rows } = await pool.query(
+    `INSERT INTO inbound_webhook_handles (handle, payload, received_at, finished_at) VALUES ($1, $2::jsonb, $3, NOW())
+     ON CONFLICT (handle) DO UPDATE SET payload = COALESCE(inbound_webhook_handles.payload, EXCLUDED.payload),
+       finished_at = COALESCE(inbound_webhook_handles.finished_at, NOW()),
+       retry_claimed_at = CASE WHEN $4::boolean THEN NULL ELSE inbound_webhook_handles.retry_claimed_at END
+     RETURNING payload, received_at, retry_claimed_at`,
+    [t.handle, JSON.stringify(t.payload ?? {}), new Date(t.receivedAt), !!t.reclaim],
+  );
+  const row = rows[0];
+  if (!row || row.retry_claimed_at || !replayHandler) return false;
+  const payload = row.payload ?? t.payload;
+  const receivedAt = new Date(row.received_at);
+  const phone = payload?.number;
+  if (typeof phone !== "string" || !phone || payload.message_type === "group" || payload.group_id || payload.is_outbound) return false;
+  const keyword = keywordOf({ handle: t.handle, payload, receivedAt });
+  const member = await replayCheckRow(phone, receivedAt, { strict: true });
+  const blocked = keyword
+    ? null
+    : turnReplayBlocked({
+        member: member ? { optedOut: !!member.sms_opted_out, archived: !!member.archived_at } : null,
+        coRepliedSince: !!member?.replied,
+        lastInboundAt: member?.last_inbound_at ? new Date(member.last_inbound_at) : null,
+        callAt: member?.call_status_updated_at ? new Date(member.call_status_updated_at) : null,
+        receivedAt,
+        now: new Date(),
+        maxAgeMs: RECOVERED_MAX_AGE_MS,
+      });
+  if (!(await claimRetry(t.handle, { strict: true }))) return false;
+  await recordDecision({ layer: 2, decision: "turn.replay", userId: member?.id ?? null, outcome: blocked ? "skip" : "act", action: blocked ?? "replayed", proposal: { handle: t.handle, recovered: true, late: o.late && !keyword, keyword: keyword ?? undefined } }).catch(() => {});
+  if (blocked) return false;
+  await replayHandler(payload, receivedAt, { late: o.late && !keyword, lockHeld: true });
+  return true;
+}
+
+// The late line, under the phone's lock, before the answer: once per member in LATE_LINE_EVERY_MS (in memory, and checked on file so
+// a restart doesn't say it twice), never to someone opted out, archived or unknown. Never throws. Exported for the tests.
+export async function sayLate(phone: string): Promise<boolean> {
+  if (!lateGuard.claim(phone)) return false;
   try {
-    const { rows } = await pool.query(`SELECT id, sms_opted_out, archived_at FROM users WHERE phone_number = $1 LIMIT 1`, [phone]);
+    const { rows } = await pool.query(
+      `SELECT u.id, u.sms_opted_out, u.archived_at,
+         EXISTS (SELECT 1 FROM co_memories m WHERE m.user_id = u.id AND m.memory_type = 'text_exchange' AND m.content = $2
+                   AND m.created_at > NOW() - make_interval(secs => $3)) AS said_lately
+       FROM users u WHERE u.phone_number = $1 LIMIT 1`,
+      [phone, `Co replied: ${LATE_REPLY_LINE}`, LATE_LINE_EVERY_MS / 1000],
+    );
     const u = rows[0];
-    if (!u || u.sms_opted_out || u.archived_at) {
-      lateGuard.release(phone);
-      return;
+    if (!u || u.sms_opted_out || u.archived_at || u.said_lately) {
+      if (!u?.said_lately) lateGuard.release(phone);
+      return false;
     }
     const sent = await sendAndLog(u.id, phone, LATE_REPLY_LINE);
     if (!sent) lateGuard.release(phone);
     await recordDecision({ layer: 2, decision: "turn.late", userId: u.id, outcome: sent ? "act" : "skip", action: sent ? "said_late" : "send_failed" }).catch(() => {});
+    return sent;
   } catch (err: any) {
     lateGuard.release(phone);
     console.error(`sendblue: the late line failed (${err?.constructor?.name ?? "Error"})`);
+    return false;
   }
 }
 
@@ -3271,7 +3394,7 @@ export async function recoverFromSendblue(o: { before: Date }): Promise<number> 
     inboundHold.hold({ handle: t.handle, payload: t.payload, receivedAt: t.receivedAt, active: false });
     claimed++;
   }
-  console.error(`inbound recovery: Sendblue listed ${found.listed} inbound, ${claimed} never handled here${found.skipped ? ` (look-back skipped: ${found.skipped})` : ""}`);
+  console.error(`inbound recovery: Sendblue listed ${found.listed} inbound, ${claimed} never handled here${found.skipped ? ` (look-back skipped: ${found.skipped})` : ""}${found.capped ? " (page cap reached: the oldest of the window were not read)" : ""}`);
   await recordDecision({ layer: 2, decision: "turn.recovered", userId: null, outcome: claimed ? "act" : "skip", action: found.skipped ?? (claimed ? "found" : "none_missed"), proposal: { listed: found.listed, found: claimed } }).catch(() => {});
   if (claimed) holdDrain.kick();
   return claimed;
@@ -3288,7 +3411,7 @@ export function startInboundRecovery(bootAt = new Date()): void {
   recoverFromSendblue({ before: bootAt }).catch((err: any) => {
     console.error(`inbound recovery: the startup look-back failed (${err?.status ?? err?.code ?? "error"})`);
     // The database wasn't there yet: the drain waits for it and looks back from now.
-    if (isDbUnreachable(err)) holdDrain.kick({ dbDown: true });
+    dbDownFor(err, dbAnswers).then((down) => down && holdDrain.kick({ dbDown: true }));
   });
   const watch = setInterval(async () => {
     outageAlert.tick();

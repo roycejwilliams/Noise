@@ -83,7 +83,7 @@ check("every scheduled job goes through the tracked scheduler", /^import cron fr
 check("the sweep is scheduled", /releaseStrandedClaims\(\)/.test(jobs));
 check("the scheduler wrapper tracks and stops each task", /trackedJob\(/.test(src("src/jobs/cron.ts")) && /task\.stop\(\)/.test(src("src/jobs/cron.ts")));
 // The turn runs inside its trace-text scope (services/llmTraceText.ts traceTurn); it's still the same tracked turn.
-check("a text mid-reply is waited for", /await track\(lockKey \? withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)\);/.test(src("src/routes/sendblue.ts")));
+check("a text mid-reply is waited for", /await track\(lockKey(?: && !replay\?\.lockHeld)? \? withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)\);/.test(src("src/routes/sendblue.ts")));
 for (const [name, file] of [["api", "src/server.ts"], ["co-test", "../co-test/src/server.ts"]] as const) {
   const s = src(file);
   check(`${name} server installs the shutdown handler`, /installGracefulShutdown\(httpServer\)/.test(s));

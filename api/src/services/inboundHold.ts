@@ -13,7 +13,7 @@
 // service is a Docker image with no volume in railway.toml, so the temp file lives on the container's own disk: it survives this
 // process crashing and restarting inside the same container, and is gone when Railway replaces the container (every deploy). Texts
 // lost that way are found again from Sendblue's message list (routes/sendblue.ts recoverFromSendblue).
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 
@@ -28,6 +28,9 @@ export type HeldText = {
   // Its first handler is still running (waiting on the phone's lock, or mid-turn). Only that handler, never the drain, may answer
   // it until it settles: otherwise the drain's replay and the original turn could both answer the same text.
   active: boolean;
+  // Its replay already took the one-shot claim and then died on the database before anything reached them: the drain gives the claim
+  // back before trying again (routes/sendblue.ts replayRecovered).
+  reclaim?: boolean;
 };
 
 export function holdFilePath(env: NodeJS.ProcessEnv = process.env): string {
@@ -52,9 +55,18 @@ export function createInboundHold(o: { file?: string | null; now?: () => number;
         return;
       }
       mkdirSync(dirname(file), { recursive: true });
+      // A .tmp a crashed write left behind keeps its own mode (writeFileSync's mode applies only to a new file), so it goes first,
+      // and the new one is set to the owner only before it takes the file's place. A failed rename leaves no copy behind.
       const tmp = `${file}.tmp`;
-      writeFileSync(tmp, JSON.stringify([...items.values()]), { mode: 0o600 });
-      renameSync(tmp, file);
+      rmSync(tmp, { force: true });
+      try {
+        writeFileSync(tmp, JSON.stringify([...items.values()]), { mode: 0o600 });
+        chmodSync(tmp, 0o600);
+        renameSync(tmp, file);
+      } catch (err) {
+        rmSync(tmp, { force: true, recursive: true });
+        throw err;
+      }
     } catch (err: any) {
       console.error(`inbound hold: writing the hold file failed (${err?.code ?? "error"}); ${items.size} held in memory only`);
     }
@@ -81,11 +93,12 @@ export function createInboundHold(o: { file?: string | null; now?: () => number;
 
   return {
     // Holds a text (or updates its state). Returns whether it's held after the cap.
-    hold(t: { handle: string; payload: unknown; receivedAt: Date | number; active: boolean }): boolean {
+    hold(t: { handle: string; payload: unknown; receivedAt: Date | number; active: boolean; reclaim?: boolean }): boolean {
       const prev = items.get(t.handle);
       const payload = prev?.payload ?? (JSON.parse(JSON.stringify(t.payload ?? {})) as Record<string, unknown>);
       const receivedAt = prev?.receivedAt ?? (t.receivedAt instanceof Date ? t.receivedAt.getTime() : t.receivedAt);
-      items.set(t.handle, { handle: t.handle, payload, receivedAt, active: t.active });
+      const reclaim = !!(t.reclaim || prev?.reclaim);
+      items.set(t.handle, { handle: t.handle, payload, receivedAt, active: t.active, ...(reclaim ? { reclaim } : {}) });
       trim();
       persist();
       if (!prev) console.error(`inbound hold: holding a text until the database answers (${items.size} held)`);
@@ -125,7 +138,7 @@ export function createInboundHold(o: { file?: string | null; now?: () => number;
         if (Array.isArray(raw))
           for (const t of raw)
             if (t && typeof t.handle === "string" && t.payload && typeof t.receivedAt === "number")
-              items.set(t.handle, { handle: t.handle, payload: t.payload, receivedAt: t.receivedAt, active: false });
+              items.set(t.handle, { handle: t.handle, payload: t.payload, receivedAt: t.receivedAt, active: false, ...(t.reclaim ? { reclaim: true } : {}) });
       } catch (err: any) {
         if (err?.code !== "ENOENT") console.error(`inbound hold: the hold file couldn't be read (${err?.code ?? "bad json"}); starting empty`);
       }
@@ -138,19 +151,23 @@ export function createInboundHold(o: { file?: string | null; now?: () => number;
 }
 export type InboundHold = ReturnType<typeof createInboundHold>;
 
-// Whether an error means the database can't be reached (down, refusing, wrong password, out of connections), as opposed to a bad
-// query or a failure somewhere else. 28P01 is the 2026-10-28 password rotation.
-const DB_DOWN_CODES = new Set([
-  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "EPIPE",
-  "08000", "08001", "08003", "08004", "08006", "28000", "28P01", "3D000", "53300", "57P01", "57P02", "57P03",
-]);
-const DB_DOWN_MESSAGE =
-  /Connection terminated|timeout exceeded when trying to connect|password authentication failed|Client has encountered a connection error|connect ECONNREFUSED|the database system is (starting up|shutting down|in recovery mode)|too many clients|Connection refused/i;
+// Whether an error is the database itself being unreachable (down, refusing this login, out of connections, shutting down): a
+// Postgres SQLSTATE in those classes, or one of pg's own connection messages. 28P01 is the 2026-10-28 password rotation. A generic
+// network code (ECONNRESET, ETIMEDOUT, ENOTFOUND, EAI_AGAIN, EPIPE, ECONNREFUSED) is NOT enough on its own: Anthropic, a fetch or
+// Sendblue throw those too (review of #301). For those, ask the database (routes/sendblue.ts dbAnswers) before calling it down.
+const PG_DOWN_CODES = new Set(["08000", "08001", "08003", "08004", "08006", "28000", "28P01", "3D000", "53300", "57P01", "57P02", "57P03"]);
+const PG_DOWN_MESSAGE =
+  /Connection terminated|timeout exceeded when trying to connect|password authentication failed|Client has encountered a connection error|the database system is (starting up|shutting down|in recovery mode)|sorry, too many clients/i;
 export function isDbUnreachable(err: unknown, depth = 0): boolean {
   if (!err || depth > 4) return false;
-  const e = err as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown; name?: unknown };
-  if (typeof e.code === "string" && DB_DOWN_CODES.has(e.code)) return true;
-  if (typeof e.message === "string" && DB_DOWN_MESSAGE.test(e.message)) return true;
+  const e = err as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown };
+  if (typeof e.code === "string" && PG_DOWN_CODES.has(e.code)) return true;
+  if (typeof e.message === "string" && PG_DOWN_MESSAGE.test(e.message)) return true;
   if (Array.isArray(e.errors) && e.errors.some((x) => isDbUnreachable(x, depth + 1))) return true;
   return isDbUnreachable(e.cause, depth + 1);
+}
+
+// The database is down when the error says so itself, or when it doesn't and the database doesn't answer a probe either.
+export async function dbDownFor(err: unknown, dbAnswers: () => Promise<boolean>): Promise<boolean> {
+  return isDbUnreachable(err) || !(await dbAnswers());
 }
