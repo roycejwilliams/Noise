@@ -200,12 +200,14 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   const hiddenOnly = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", hidden_only: true, mutual: true }));
   check("a fit resting on the hidden part alone gets no share reason, so nothing is proposed", hiddenOnly.length === 2 && hiddenOnly.every((s) => s.shareReason === ""), hiddenOnly.map((s) => s.shareReason));
   const unsaid = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", mutual: true }));
-  check("hidden_only missing: fails closed, no share reason", unsaid.every((s) => s.shareReason === ""));
-  const noReason = await run((index) => ({ index, score: 95, reason: "  ", share_ask: "S1", hidden_only: false }));
+  // With structured outputs (services/structuredJudge.ts) an answer missing a field never reaches the code: the whole answer is refused,
+  // which fails closed harder than before (no match at all, so no share reason).
+  check("hidden_only missing: the answer is refused (no match, no share reason)", unsaid.length === 0, unsaid);
+  const noReason = await run((index) => ({ index, score: 95, reason: "  ", share_ask: "S1", hidden_only: false, mutual: false }));
   check("no reason: no share reason, no intro", noReason.every((s) => s.shareReason === ""));
-  const noAsk = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "", hidden_only: false }));
+  const noAsk = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "", hidden_only: false, mutual: false }));
   check("no shared ask named: no share reason", noAsk.every((s) => s.shareReason === ""));
-  const ok = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", hidden_only: false }));
+  const ok = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", hidden_only: false, mutual: false }));
   check("a shared ask, a reason, not hidden alone: the share reason is that shared ask word for word", ok[0]?.shareReason === `what they've said they can offer: "intros to climate hardware investors"` && ok[1]?.shareReason === `what they've said they're looking for: "a seed investor for a ceramics studio"`, ok.map((s) => s.shareReason));
   check("a share reason never carries a private ask or blocker, whatever the scorer names", [...hiddenOnly, ...ok].every((s) => !/PRIVATE-ASK|cofounder yet/.test(s.shareReason)));
   check("shareReasonFor: the rules in one place", M.shareReasonFor(B.intent, { reason: "x", share_ask: "S1", hidden_only: false }) !== "" && M.shareReasonFor(B.intent, { reason: "x", share_ask: "S2", hidden_only: false }) === "" && M.shareReasonFor(B.intent, { reason: "", share_ask: "S1", hidden_only: false }) === "" && M.shareReasonFor(B.intent, { reason: "x", share_ask: "S1", hidden_only: "false" }) === "");
