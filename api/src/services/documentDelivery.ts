@@ -14,6 +14,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { renderPdf } from "./browserRead.js";
 import { cachePlanFile } from "./planFile.js";
+import type { QaFinding } from "./designQa.js";
 import { DateTime } from "luxon";
 import { docFilename, documentHtml, type Doc, type DocKind } from "./documentSheet.js";
 import { notToTeammate } from "./teamLines.js";
@@ -93,6 +94,12 @@ const lastDocQa = new Map<string, { at: number; qa: unknown }>();
 export function noteDocQa(userId: string, r: { ran: boolean; findings: unknown[] }): void {
   lastDocQa.set(userId, { at: Date.now(), qa: { ran: r.ran, findings: r.findings, first: r.findings.length, fixed: [] } });
 }
+// What's left after the fixes, for the delivery's own line (the record keeps the findings until deliverAndRecord takes them).
+function docQaLeft(userId: string): QaFinding[] {
+  const hit = lastDocQa.get(userId);
+  const qa = hit && Date.now() - hit.at < 120_000 ? (hit.qa as { findings?: QaFinding[] }) : null;
+  return Array.isArray(qa?.findings) ? qa!.findings : [];
+}
 export function takeDocQa(userId: string): unknown | null {
   const hit = lastDocQa.get(userId);
   lastDocQa.delete(userId);
@@ -171,12 +178,19 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   const look = deps.look ? await deps.look(to.userId, doc).catch(() => null) : null;
   const html0 = documentHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy"), look });
   // Measured before it goes, and fixed where it can be; a QA that can't run (or runs long) never holds the PDF.
-  const html = (deps.qa ? await deps.qa(html0, doc, to.userId).catch((err: any) => (console.error("doc design QA failed (non-fatal):", err?.message ?? err), null)) : null) ?? html0;
+  const measured = deps.qa ? await deps.qa(html0, doc, to.userId).catch((err: any) => (console.error("doc design QA failed (non-fatal):", err?.message ?? err), null)) : null;
+  const html = measured ?? html0;
   const pdf = await deps.render(html).catch(() => null);
   if (!pdf) return fallback("the PDF couldn't be made");
+  // What the design QA couldn't fix is said with it, as decks and pages already do (Royce, 2026-10-27: assumptions and anything not
+  // right are beside the result, not buried). Findings were only logged.
+  const { qaShortfall } = await import("./designQa.js");
+  // Only this document's own QA, finished in time: one that timed out never borrows an earlier document's findings.
+  const left = measured ? qaShortfall(docQaLeft(to.userId), "the document") : null;
+  const content = `${to.line ?? doc.title}${left ? ` ${left}` : ""}`;
   try {
     // The attachment and its one line, as one send (2026-10-08: a title text, then a "here it is" text, said it three times).
-    await deps.send({ number: to.phone, content: to.line ?? doc.title, media_url: deps.cache(pdf, filename), from_number: deps.from });
+    await deps.send({ number: to.phone, content, media_url: deps.cache(pdf, filename), from_number: deps.from });
   } catch (err: any) {
     return fallback(`the PDF didn't send by text (${String(err?.message ?? err).slice(0, 80)})`);
   }

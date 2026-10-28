@@ -83,6 +83,23 @@ check("held sends go through it at send time (deferred_sends)", /dropStaleAck\(m
   check("morning: one sentence", (line.match(/[.!?](?:\s|$)/g) ?? []).length === 1);
 }
 
+// ---- 3b. what the design QA couldn't fix is said with the PDF (Royce, 2026-10-27, wording approved: the existing phrases)
+{
+  const doc = { title: "The Launch Brief", note: "n", sections: [{ heading: "Timeline", paragraphs: ["p"], bullets: [] }], suggestions: [], kind: "other" };
+  const sendWith = async (qa: any) => {
+    const wire: any[] = [];
+    const deps: any = { render: async () => Buffer.from("%PDF"), cache: () => "https://files.test/b.pdf", send: async (m: any) => { wire.push(m); }, from: "+10000000000", qa };
+    await DD.deliverDocument(doc as any, { userId: "u-qa", firstName: "Jordan", phone: "+14155550123", zone: SF, line: "Here's the launch brief." } as any, "pdf_text", deps);
+    return wire[0]?.content ?? "";
+  };
+  const left = await sendWith(async (html: string) => { DD.noteDocQa("u-qa", { ran: true, findings: [{ rule: "page_break", where: '"Timeline"', detail: "", fix: "auto" }] }); return html; });
+  check(`doc QA: what's left is said with the PDF ("${left}")`, left === "Here's the launch brief. One thing I couldn't fix yet: a heading lands at the foot of a page.", left);
+  const timedOut = await sendWith(async () => null);
+  check("doc QA: a QA that didn't finish never borrows an earlier document's findings", timedOut === "Here's the launch brief.", timedOut);
+  const clean = await sendWith(async (html: string) => { DD.noteDocQa("u-qa", { ran: true, findings: [] }); return html; });
+  check("doc QA: nothing left, nothing added", clean === "Here's the launch brief.", clean);
+}
+
 // ---- 4. nothing says it again: a task that sent the document can't text about it
 check("the task's text tool refuses once the document went (one delivery, one line)", /if \(docsSent\.length\) return \{ ok: false, error: "The document already went out with its one line/.test(src("services/taskTurn.ts")));
 check("the task passes when they asked, so the line can say it", /askedAt: task\.createdAt \? new Date\(task\.createdAt\) : null/.test(src("services/taskTurn.ts")));

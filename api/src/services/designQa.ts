@@ -419,11 +419,12 @@ export const unresolved = (fs: QaFinding[]) => fs.filter((f) => f.rule !== "rend
 
 // Pure: one plain line for the delivery text when something still isn't right after the fixes (design audit: QA found contrast and blur
 // and the deck went out silently). Null when nothing is left.
-export function qaShortfall(fs: QaFinding[]): string | null {
+// thing: what the whole of it is called ("the deck", "the page", "the document"); a page or a document said "the deck" before.
+export function qaShortfall(fs: QaFinding[], thing = "the deck"): string | null {
   const left = unresolved(fs);
   if (!left.length) return null;
   const say = (f: QaFinding): string => {
-    const at = f.where.replace(/^the whole thing$/, "the deck");
+    const at = f.where.replace(/^the whole thing$/, thing);
     if (f.rule === "contrast") return f.role === "label" ? `the small labels on ${at} are harder to read than they should be` : `the text on ${at} is harder to read than it should be`;
     if (f.rule === "overflow" || f.rule === "spacing") return `${at} is crowded`;
     if (f.rule === "image") return f.role === "crop" ? `the picture on ${at} is cropped tight` : `${f.role === "logo" ? "the logo" : "a picture"} on ${at} is softer than it should be`;
