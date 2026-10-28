@@ -3,6 +3,7 @@ import { stripCues } from "./voiceCues.js";
 import { sendLimiter } from "./sendLimiter.js";
 import { claimReaction, confirmReaction, releaseReaction } from "./tapbacks.js";
 import { createHash, timingSafeEqual } from "crypto";
+import { noteSent } from "./turnReplies.js";
 import { SendblueAPI } from "sendblue";
 import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "./textStyle.js";
 import { sentinelRule, SENTINEL_REFUSAL } from "./sentinelBody.js";
@@ -137,17 +138,6 @@ function reportSendBreaker(number: string, count: number, resumesAt: number, rea
     .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));
 }
 
-// How many texts reached Sendblue for each number since this process started. A turn compares it before and after,
-// so a turn that already answered someone and then died on the database (logging the reply, say) is never replayed: replaying it
-// would answer them twice (review of #301, routes/sendblue.ts settleInbound). Memory only; counts, never content.
-const sentTo = new Map<string, number>();
-const sentKey = (n: unknown) => String(n ?? "").replace(/\D/g, "").slice(-10);
-export const sendsTo = (number: unknown): number => sentTo.get(sentKey(number)) ?? 0;
-const noteSent = (number: unknown) => {
-  const k = sentKey(number);
-  if (k) sentTo.set(k, (sentTo.get(k) ?? 0) + 1);
-};
-
 // Every send is Co's (outbound_messages.sender keeps its default, "co").
 function recordOutbound(handle: string, number: string, content: string): void {
   import("../db/db.js")
@@ -215,7 +205,7 @@ const sendblue = {
         ? Promise.resolve({ message_handle: testHandle(), status: "SENT", test: true })
         : client.messages.send({ ...body, content }, options);
       return sent.then((res: any) => {
-        noteSent(to);
+        noteSent(content);
         // Every message Co sends, kept by its handle so a later reply can
         // thread under it (services/inlineReply.ts sentMessageHandle).
         if (res?.message_handle) recordOutbound(String(res.message_handle), to ?? "", content ?? "");

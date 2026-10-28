@@ -493,10 +493,54 @@ check("a recovered text may be up to a day old; a crashed turn's replay stays at
   check("a turn that texted them and then died on the database (logging the reply): never held, never replayed", S.settleAction({ ...base, replied: true }) === "count" && S.settleAction({ ...base, held: true, replied: true }) === "count");
   check("... the same for a replay: one that dies before texting gives its claim back for another try, one that texted is done", S.settleAction({ ...base, replay: true }) === "reclaim" && S.settleAction({ ...base, replay: true, replied: true }) === "count");
   check("a failure that isn't the database, or a turn that ended fine: never held", S.settleAction({ ...base, dbDown: false }) === "count" && S.settleAction({ ...base, failed: false }) === "release");
+  // Follow-up review of #301: only a send that answers something marks the turn as having replied. A "looking" line, Cue's own
+  // hold line, the late line or a failure note leaves the text owed (held and replayed if the turn then dies), and another flow's
+  // text to the same number is never this turn's answer.
   const SB = await import("../../src/services/sendblue.js");
-  const before = SB.sendsTo("+14155550163");
-  await SB.default.messages.send({ number: "+14155550163", content: "Here's what I found.", from_number: "+14155550100" } as any);
-  check("every text that reaches Sendblue is counted for its number (what the turn compares), by number however it's written", SB.sendsTo("(415) 555-0163") === before + 1);
+  const TR = await import("../../src/services/turnReplies.js");
+  const TF = await import("../../src/services/turnFailure.js");
+  const NUM = "+14155550163";
+  const sendIt = (text: string) => SB.default.messages.send({ number: NUM, content: text, from_number: "+14155550100" } as any);
+  const aTurn = async (lines: { text: string; hold?: boolean }[], during?: () => Promise<unknown>) => {
+    await Promise.resolve();
+    const st = { replied: false, isReply: S.isRealReply };
+    TR.trackTurnReplies(st);
+    for (const l of lines) await (l.hold ? TR.asHoldSend(() => sendIt(l.text)) : sendIt(l.text));
+    if (during) await during();
+    return st.replied;
+  };
+  check("a search turn that said 'Looking now…' and then lost the database has not replied: it's still held and replayed", (await aTurn([{ text: "Looking now, give me a minute." }])) === false && S.settleAction({ ...base, replied: false }) === "hold");
+  check("... nor one that sent Cue's own hold line, the late line, 'On it, give me a sec.' or a failure note", (await aTurn([{ text: "Checking a few spots near the Mission for Friday.", hold: true }])) === false && (await aTurn([{ text: R.LATE_REPLY_LINE }, { text: "On it, give me a sec." }, { text: TF.TURN_FAILED_NOTE }])) === false);
+  check("a turn that sent a real answer has replied (never replayed)", (await aTurn([{ text: "Looking now, give me a minute." }, { text: "Bar Agricole has a table at 8, want it?" }])) === true);
+  const other = async () => {
+    // Another flow (a proactive text) to the same number, outside this turn.
+    await new Promise((r) => setTimeout(r, 1));
+    await sendIt("Thinking of you before Thursday's demo.");
+  };
+  const [quiet, proactive] = await Promise.all([aTurn([{ text: "Looking now, give me a minute." }], () => new Promise((r) => setTimeout(r, 5))), (async () => (await new Promise((r) => setTimeout(r, 0)), other()))()]);
+  void proactive;
+  check("a proactive text to the same number during the turn is not this turn's reply (no per-number counting)", quiet === false);
+  const [t1, t2] = await Promise.all([aTurn([{ text: "Looking now, give me a minute." }]), aTurn([{ text: "Here's the plan for Saturday." }])]);
+  check("two turns at once each keep their own flag", t1 === false && t2 === true);
+  check("isRealReply: the logged 'Co is looking:' form and the fixed hold lines are not answers; words are", !S.isRealReply("Co is looking: checking now") && !S.isRealReply("Let me look, one sec.") && !S.isRealReply("") && S.isRealReply("Sorry for the wait, here it is: the Fillmore at 9."));
+
+  // Follow-up review of #301 (low): a crash replay never takes the claim of a text the drain owns, and never loses one on a blip.
+  {
+    const qs: { sql: string; params: any[] }[] = [];
+    pool.query = async (sql: string, params: any[] = []) => {
+      const q = flat(String(sql));
+      qs.push({ sql: q, params });
+      if (/^UPDATE inbound_webhook_handles SET retry_claimed_at = NOW\(\)/.test(q)) return { rows: [{ payload: { number: "+14155550167", content: SECRET, message_handle: params[0] }, received_at: new Date(Date.now() - 60_000) }] };
+      if (/AS replied/.test(q)) throw Object.assign(new Error("Connection terminated unexpectedly"), {});
+      return { rows: [], rowCount: 0 };
+    };
+    const heldOne = S.heldInbound.has("live-1");
+    const r1 = await S.replayOwedTurn("live-1");
+    check("a text in the hold: the crash replay leaves it to the drain (no claim taken), and reports it as being answered", heldOne && r1 === true && !qs.some((q) => /SET retry_claimed_at = NOW\(\)/.test(q.sql)), qs.map((q) => q.sql.slice(0, 80)));
+    qs.length = 0;
+    const r2 = await S.replayOwedTurn("crash-1");
+    check("a database error in the crash replay's checks: the claim goes back and the text goes to the drain (never 'no member', never lost)", r2 === true && qs.some((q) => /^UPDATE inbound_webhook_handles SET retry_claimed_at = NULL WHERE handle = \$1/.test(q.sql) && q.params[0] === "crash-1") && S.heldInbound.has("crash-1"), qs.map((q) => q.sql.slice(0, 80)));
+  }
 
   // ------------------------------------------------ review of #301 (5): a database blip after the claim never loses a recovered text
   const calls: { sql: string; params: any[] }[] = [];
@@ -543,7 +587,8 @@ check("a recovered text may be up to a day old; a crashed turn's replay stays at
   const src = flat(read("routes/sendblue.ts"));
   check("a failed handle or payload save is noticed (no more .catch(() => true) / .catch(() => {}) that hid it)", /\.catch\(\(\) => \{ saveFailed = true; return true; \}\)/.test(src) && /\.catch\(\(\) => \{ saveFailed = true; \}\)/.test(src) && /if \(saveFailed && holdable\) held = holdInbound\(handle, req\.body, arrivedAt, true\)/.test(src));
   check("the turn's outcome decides (settleAction): answered leaves the hold, a database failure before any text goes to the drain", /await settleInbound\(\{ handle: typeof handle === "string" && handle \? handle : null, holdable, body: req\.body, arrivedAt: replay\?\.receivedAt \?\? arrivedAt, held, turnError, replied: repliedBeforeFailure \?\? false,/.test(src) && /const dbDown = failed && \(t\.held \|\| \(await dbDownFor\(t\.turnError, dbAnswers\)\)\)/.test(src));
-  check("(2) whether it texted them is read at the failure, before any failure note, from after the late line", /turnError = error; notePossibleReply\(\);.*tellMemberTurnFailed\(lockKey/.test(src) && /turnError = err; notePossibleReply\(\);/.test(src) && /if \(lateFrom\) await sayLate\(lockKey\); sendsBase = sendsTo\(lockKey\);/.test(src));
+  check("(2) whether it really answered them is the turn's own flag, opened after the late line, read at the failure before any failure note", /turnError = error; notePossibleReply\(\);.*tellMemberTurnFailed\(lockKey/.test(src) && /turnError = err; notePossibleReply\(\);/.test(src) && /repliedBeforeFailure \?\?= turnReplies\.replied;/.test(src) && /if \(!\(await beforeTurn\(\)\)\) return; \/\/[^\n]*? trackTurnReplies\(turnReplies\);/.test(src) && !/sendsTo/.test(src));
+  check("(2) Cue's own 'looking' lines are sent as holds, in the turn and in the loop's search tool; every send reports through noteSent", /const sent = await \(hold \? asHoldSend\(send\) : send\(\)\);/.test(src) && /if \(await asHoldSend\(\(\) => say\(line\.trim\(\), `\$\{HOLD_PREFIX\} \$\{line\.trim\(\)\}`\)\)\)/.test(flat(read("agent/loopTools.ts"))) && /return sent\.then\(\(res: any\) => \{ noteSent\(content\);/.test(flat(read("services/sendblue.ts"))));
   check("(3) the drain answers each member's held texts under their phone's lock; their replays don't take it again", /withLock: \(phone, fn\) => withPhoneLock\(phone, fn\)/.test(src) && /await replayHandler\(payload, receivedAt, \{ late: o\.late && !keyword, lockHeld: true \}\)/.test(src) && /await track\(lockKey && !replay\?\.lockHeld \? withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)\);/.test(src));
   check("(5) recovered texts: checks strict and before the claim, STOP/START never blocked, one-shot claim, up to a day", /const member = await replayCheckRow\(phone, receivedAt, \{ strict: true \}\); const blocked = keyword \? null : turnReplayBlocked\(/.test(src) && /if \(!\(await claimRetry\(t\.handle, \{ strict: true \}\)\)\) return false;/.test(src) && /maxAgeMs: RECOVERED_MAX_AGE_MS/.test(src));
   check("(1) a live text behind a held STOP/START joins the hold instead of running first", /if \(taken === "defer" && holdable\) \{ inboundHold\.hold\(.*deferred = true; holdDrain\.kick\(\); return false; \}/.test(src) && /if \(!\(await beforeTurn\(\)\)\) return;/.test(src));
