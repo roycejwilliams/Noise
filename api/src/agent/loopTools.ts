@@ -516,8 +516,10 @@ export function loopTools(
         if (!posts) return { ok: false, error: "X search failed this time; use webSearch instead." };
         // A post's link to a private event page (a Partiful invite, a private Luma event, by its own record) is never a find, never shown
         // to the model as one (batched review of #299; the sweep drops it the same way, sweepFind.ts promoteEventPages).
-        const { privateEventLinks } = await import("../services/eventPage.js");
-        const privateLinks = await privateEventLinks(posts.flatMap((p) => p.links)).catch(() => new Set<string>());
+        // Fail closed (final review of #299): a Luma or Partiful link not confirmed public, or not read in time, is dropped too.
+        const { unshareableEventLinks, mayBePrivateEvent } = await import("../services/eventPage.js");
+        const allLinks = posts.flatMap((p) => p.links);
+        const privateLinks = await unshareableEventLinks(allLinks).catch(() => new Set(allLinks.filter(mayBePrivateEvent)));
         for (const p of posts) p.links = p.links.filter((l) => !privateLinks.has(l));
         for (const p of posts) {
           const match = { tier: 3, kind: "opportunity", source: "x", name: p.text.slice(0, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
@@ -578,6 +580,9 @@ export function loopTools(
           const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: askWords() }).catch(() => null);
           for (const o of g?.out ?? []) outByLink.set(String((o.match as any).link), o.why);
         }
+        const postLinks = items.map((it) => it.link).filter((l) => foundFor(l)?.viaPost);
+        const { unshareableEventLinks, mayBePrivateEvent } = await import("../services/eventPage.js");
+        const unshareable = postLinks.length ? await unshareableEventLinks(postLinks).catch(() => new Set(postLinks.filter(mayBePrivateEvent))) : new Set<string>();
         for (const it of items) {
           if (outByLink.has(it.link)) {
             refused.push(`${foundFor(it.link)?.name ?? it.link}: ${outByLink.get(it.link)}`);
@@ -592,10 +597,10 @@ export function loopTools(
             refused.push(`${f.name}: ${f.blocked}`);
             continue;
           }
-          // A post's link to a private event page (by its own record) never goes, the check made again here for one the search's check
-          // didn't reach in time (batched review of #299). A web find was already checked by the web search (taskWeb.ts).
-          if (f.viaPost && (await (await import("../services/eventPage.js")).privateEventLinks([it.link]).catch(() => new Set<string>())).has(it.link)) {
-            refused.push(`${f.name}: its page says it's a private event; never share it`);
+          // A post's link to a Luma or Partiful page not confirmed public never goes (fail closed): checked again here, all of them at once
+          // before this loop (unshareable). A web find was already checked by the web search (taskWeb.ts).
+          if (unshareable.has(it.link)) {
+            refused.push(`${f.name}: its page doesn't confirm it's a public event; never share it`);
             continue;
           }
           // Its start, read again as it goes: an event found earlier that has started, or starts too soon to get to, never goes

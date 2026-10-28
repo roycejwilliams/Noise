@@ -22,6 +22,7 @@ import { parseModelJson } from "./modelJson.js";
 import { exaConfigured, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
 import { lumaEventSlug } from "./lumaViaExa.js";
+import { mayBePrivateEvent } from "./eventPage.js";
 
 export type RawDetail = { label: string; value: string };
 export type RawResult = { name: string; url: string; details: RawDetail[]; date?: string | null; deadline?: string | null };
@@ -253,10 +254,13 @@ export function eventPageUrl(url: string): "event" | "luma" | null {
 // read were two fetches), and the record itself when it may be an event find (public, with a zone: the event tier, Royce 2026-10-28).
 // A read that fails says no, with no text, and the page is treated as before.
 // private: its own record says it isn't public: never a find (batched review of #299).
-export type EventPageCheck = { oneEvent: boolean; text: string | null; event?: import("./eventPage.js").PageEvent | null; private?: boolean };
+// shareable: a Luma or Partiful page's own record says it's public (or it holds no event at all): eventPage.ts shareableRead. Fail closed
+// (final review of #299): a Luma or Partiful link without it, read or not, is never a find.
+export type EventPageCheck = { oneEvent: boolean; text: string | null; event?: import("./eventPage.js").PageEvent | null; private?: boolean; shareable?: boolean };
 const readEventPageCheck = async (url: string): Promise<EventPageCheck> => {
-  const r = await import("./eventPage.js").then((m) => m.readEventPage(url));
-  return { oneEvent: r.one, text: r.text, event: r.event, ...(r.private ? { private: true } : {}) };
+  const m = await import("./eventPage.js");
+  const r = await m.readEventPage(url);
+  return { oneEvent: r.one, text: r.text, event: r.event, ...(r.private ? { private: true } : {}), shareable: m.shareableRead(url, r) };
 };
 
 // Which page a result is checked against: its own official page when the found
@@ -278,7 +282,7 @@ export async function pickPage(
     const ep = shape ? await (deps.eventPage ?? readEventPageCheck)(raw.url).catch(() => null) : null;
     // The found page's text: from the one event-page fetch when it read whole (a short one is a shell: read as any page is), else read now.
     const found = async () => (ep?.text && ep.text.length >= MIN_FETCHED_TEXT ? ep.text.slice(0, PAGE_TEXT_LIMIT) : await deps.read(raw.url));
-    if (ep?.private) return { url: raw.url, text: null, official: false, swapped: false, event: null, private: true };
+    if (ep?.private || (mayBePrivateEvent(raw.url) && !ep?.shareable)) return { url: raw.url, text: null, official: false, swapped: false, event: null, private: true };
     if (shape === "event" || ep?.oneEvent) return { url: raw.url, text: await found(), official: false, swapped: false, event: ep?.event ?? null };
     const off = await deps.official(name).catch(() => null);
     if (off && off !== raw.url && looksOfficial(off, name)) {
@@ -400,7 +404,7 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
     // A page whose own record says it's private (a Partiful invite, a private Luma event) is never a find, in any tier (batched review
     // of #299): dropped, not checked as a web page.
     if ("private" in page && page.private) {
-      dropped.push({ name: raw.name, url: raw.url, why: "its page's own record says it's private", tier: 2 });
+      dropped.push({ name: raw.name, url: raw.url, why: "its page's own record doesn't say it's public (or it couldn't be read)", tier: 2 });
       continue;
     }
     if (!page.text) {

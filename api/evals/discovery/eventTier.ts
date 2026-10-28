@@ -96,7 +96,7 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   const r1 = await P.readEventPage("https://partiful.com/e/pf1", { deps });
   const r2 = await P.readEventPage("https://partiful.com/e/pf1", { deps });
   check("an event page is read once and kept (the hour's cache)", !!r1.event && r2 === r1 && fetched.length === 1);
-  const pick = await W.pickPage({ name: "AI Builders Rooftop", url: "https://partiful.com/e/pf1", details: [] }, { read: async () => { throw new Error("read twice"); }, official: async () => { throw new Error("no lookup for an event page"); }, eventPage: async (u) => { const r = await P.readEventPage(u, { deps }); return { oneEvent: r.one, text: r.text, event: r.event }; } });
+  const pick = await W.pickPage({ name: "AI Builders Rooftop", url: "https://partiful.com/e/pf1", details: [] }, { read: async () => { throw new Error("read twice"); }, official: async () => { throw new Error("no lookup for an event page"); }, eventPage: async (u) => { const r = await P.readEventPage(u, { deps }); return { oneEvent: r.one, text: r.text, event: r.event, shareable: P.shareableRead(u, r) }; } });
   check("pickPage hands back the page's record from its one read", !pick.swapped && pick.event?.name === "AI Builders Rooftop" && !!pick.text);
   const v = W.verifyEventResult(pick.event!, pick.url, { now: new Date(), official: false, render: ED.renderEventDetails });
   check("checked as an event: kept with its record's own lines as facts (never 'nothing verified on its page')", !!v.kept && v.kept.facts.length > 0 && v.kept.event?.name === "AI Builders Rooftop" && !!v.kept.date && W.withVerifiedFacts([v.kept]).kept.length === 1, v);
@@ -273,7 +273,7 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   const pick = await W.pickPage({ name: "Maya's 30th", url: "https://partiful.com/e/inv", details: [] }, { read: async () => "a page of text ".repeat(50), official: async () => "https://maya.example.com/", eventPage: async () => ({ oneEvent: true, text: "x", event: null, private: true }) });
   check("#299 review 1: pickPage marks it private, with no text to fall through to the web check", pick.private === true && pick.text === null && !pick.swapped);
   const tw = src("services/taskWeb.ts");
-  check("#299 review 1: taskWebSearch drops a private page before any check, from pickPage's read or the plain read's html", /if \("private" in page && page\.private\) \{\s*dropped\.push\(\{ name: raw\.name, url: raw\.url, why: "its page's own record says it's private", tier: 2 \}\);\s*continue;/.test(tw) && /if \(fromHtml\?\.private\) \{/.test(tw));
+  check("#299 review 1: taskWebSearch drops a private page before any check, from pickPage's read or the plain read's html", /if \("private" in page && page\.private\) \{\s*dropped\.push\(\{ name: raw\.name, url: raw\.url, why: "its page's own record doesn't say it's public \(or it couldn't be read\)", tier: 2 \}\);\s*continue;/.test(tw) && /if \(fromHtml\?\.private\) \{/.test(tw));
   // 2. Luma: public only when it says so.
   const noVis = P.pageEventData(lumaPage({ name: "Quiet thing", start: iso(48), visibility: "" }), "https://luma.com/q1", ED.parseLumaEventPage);
   check("#299 review 2: a Luma page that doesn't say public isn't an event find (and isn't called private either)", !noVis.event && !noVis.private && /doesn't say it's public/.test(noVis.why ?? ""), noVis);
@@ -324,20 +324,40 @@ const pagesDeps = (pages: Record<string, string | Error>, fetched: string[] = []
   check("#299 review 7: one read per city serves every window (this week, this month)", week?.map((e) => e.name).join() === "Soon" && month?.map((e) => e.name).join() === "Soon,Later" && fetched.filter((u) => u.endsWith("/explore/sf")).length === 1, { week: week?.map((e) => e.name), month: month?.map((e) => e.name), fetched });
 }
 
-// ---------------------------------------------------------------- 8. a private event page an X post links to, everywhere it surfaces
+// ---------------------------------------------------------------- 8. a Luma or Partiful link an X post points to: fail closed, everywhere
 {
-  check("only Luma and Partiful event-shaped links can be private by their record", P.mayBePrivateEvent("https://partiful.com/e/abc") && P.mayBePrivateEvent("https://lu.ma/abc123") && !P.mayBePrivateEvent("https://partiful.com/explore/sf") && !P.mayBePrivateEvent("https://www.eventbrite.com/e/x-1") && !P.mayBePrivateEvent("https://x.com/a/status/1"));
+  check("only Luma and Partiful event-shaped links are judged", P.mayBePrivateEvent("https://partiful.com/e/abc") && P.mayBePrivateEvent("https://lu.ma/abc123") && !P.mayBePrivateEvent("https://partiful.com/explore/sf") && !P.mayBePrivateEvent("https://www.eventbrite.com/e/x-1") && !P.mayBePrivateEvent("https://x.com/a/status/1"));
+  check("shareable only when its own record says public (or a Luma page read with no event in it)", P.shareableRead("https://partiful.com/e/a", { html: "x", one: true, public: true }) && !P.shareableRead("https://partiful.com/e/a", { html: "x", one: true }) && !P.shareableRead("https://partiful.com/e/a", { html: "x", one: false }) && !P.shareableRead("https://partiful.com/e/a", null) && !P.shareableRead("https://lu.ma/x1", { html: "x", one: true, private: true }) && P.shareableRead("https://lu.ma/genai-sf", { html: "x", one: false }) && !P.shareableRead("https://lu.ma/genai-sf", { html: null, one: false }) && P.shareableRead("https://www.eventbrite.com/e/x-1", null));
   const reads: string[] = [];
-  const priv = await P.privateEventLinks(["https://partiful.com/e/inv", "https://lu.ma/open1", "https://example.com/post", "https://partiful.com/e/inv"], async (u) => (reads.push(u), { private: u.endsWith("inv") }));
-  check("privateEventLinks: the private ones, reading only Luma and Partiful links, each once", priv.size === 1 && priv.has("https://partiful.com/e/inv") && reads.sort().join() === "https://lu.ma/open1,https://partiful.com/e/inv", { priv: [...priv], reads });
-  const slow = await P.privateEventLinks(["https://partiful.com/e/slow"], () => new Promise((r) => setTimeout(() => r({ private: true }), P.PRIVATE_CHECK.deadlineMs + 2000)));
-  check("one not read in time is left (and checked again before it's shared)", slow.size === 0);
-  const lt = src("agent/loopTools.ts");
-  check("reply loop: an X post's private event links are dropped before they're finds or shown", /const privateLinks = await privateEventLinks\(posts\.flatMap\(\(p\) => p\.links\)\)/.test(lt) && /for \(const p of posts\) p\.links = p\.links\.filter\(\(l\) => !privateLinks\.has\(l\)\);\s*for \(const p of posts\) \{/.test(lt));
-  check("reply loop: a post's link is marked, so shareFinds checks it again", /loop\.found\.set\(l, \{ name: p\.text\.slice\(0, 80\), url: l, facts: p\.text, match: null, blocked: null, viaPost: true \}\)/.test(lt));
-  check("reply loop: a post's private event page is refused at shareFinds", /if \(f\.viaPost && [\s\S]{0,80}privateEventLinks\(\[it\.link\]\)[\s\S]{0,120}\.has\(it\.link\)\) \{\s*refused\.push\(`\$\{f\.name\}: its page says it's a private event; never share it`\);/.test(lt));
+  const pub = { html: "x", one: true, public: true };
+  const out = await P.unshareableEventLinks(["https://partiful.com/e/inv", "https://lu.ma/open1", "https://example.com/post", "https://partiful.com/e/inv"], async (u) => (reads.push(u), u.endsWith("inv") ? { html: "x", one: true, private: true } : pub));
+  check("the private one is unshareable, the public one isn't; only Luma and Partiful links are read, each once", out.size === 1 && out.has("https://partiful.com/e/inv") && reads.sort().join() === "https://lu.ma/open1,https://partiful.com/e/inv", { out: [...out], reads });
+  const slow = await P.unshareableEventLinks(["https://partiful.com/e/slow"], () => new Promise((r) => setTimeout(() => r(pub), P.PRIVATE_CHECK.deadlineMs + 2000)));
+  check("final review: a slow page (past the deadline) is dropped", slow.has("https://partiful.com/e/slow"));
+  const err = await P.unshareableEventLinks(["https://lu.ma/err1"], async () => { throw new Error("HTTP 429"); });
+  check("final review: a read error (429) is dropped", err.has("https://lu.ma/err1"));
+  const nine = Array.from({ length: 9 }, (_, i) => `https://partiful.com/e/p${i}`);
+  const seen: string[] = [];
+  const ninth = await P.unshareableEventLinks(nine, async (u) => (seen.push(u), u.endsWith("p8") ? { html: "x", one: true } : pub));
+  check("final review: every link is checked (a 9th too), and one not confirmed public is dropped", seen.length === 9 && ninth.size === 1 && ninth.has("https://partiful.com/e/p8"), { seen: seen.length, ninth: [...ninth] });
+  // A read already under way is shared.
+  P.clearEventPageCache();
+  let fetches = 0;
+  const slowDeps = { ...pagesDeps({ "https://partiful.com/e/once": partifulPage({ id: "once", name: "Once", start: iso(30) }) }), fetchHtml: async (u: string) => (fetches++, await new Promise((r) => setTimeout(r, 50)), { html: partifulPage({ id: "once", name: "Once", start: iso(30) }), error: null }) };
+  const [a1, a2] = await Promise.all([P.readEventPage("https://partiful.com/e/once", { deps: slowDeps }), P.readEventPage("https://partiful.com/e/once", { deps: slowDeps })]);
+  check("final review: two checks of one link at once share one read", fetches === 1 && a1 === a2 && a1.public === true);
+  // promoteEventPages: a Luma or Partiful link whose read failed is dropped, any other stays.
+  const kept = [{ tier: 3, kind: "opportunity", source: "web", via: "x", name: "p", url: "https://partiful.com/e/err", reason: "" }, { tier: 3, kind: "opportunity", source: "web", via: "x", name: "e", url: "https://www.eventbrite.com/e/err-2", reason: "" }] as any[];
+  const pr = await SF.promoteEventPages(kept, async () => { throw new Error("timed out"); });
+  check("final review: a post's Partiful link whose read failed is dropped; an Eventbrite one stays as it was", pr.kept.length === 1 && (pr.kept[0] as any).url.includes("eventbrite") && pr.dropped === 1);
   const sf = src("services/sweepFind.ts");
-  check("the sweep (9am and hourly: one search) drops them from X results too, and promoteEventPages drops any it missed", /m\.privateEventLinks\(posts\.flatMap\(\(p\) => p\.links\)\)/.test(sf) && /const promoted = await promoteEventPages\(kept, eventPageFor\);/.test(sf) && !/if \(opts\.allSources\)[^\n]*promoteEventPages/.test(sf));
+  check("the sweep's eventPageFor fails closed (not shareable is 'private')", /return !shareableRead\(url, r\) \? \("private" as const\) : r\.event;/.test(sf) && /m\.unshareableEventLinks\(allLinks\)\)\.catch\(\(\) => new Set\(allLinks\.filter\(mayBePrivateEvent\)\)\)/.test(sf));
+  const lt = src("agent/loopTools.ts");
+  check("reply loop: an X post's unshareable links are dropped before they're finds or shown (a failed check drops them all)", /const privateLinks = await unshareableEventLinks\(allLinks\)\.catch\(\(\) => new Set\(allLinks\.filter\(mayBePrivateEvent\)\)\);/.test(lt) && /for \(const p of posts\) p\.links = p\.links\.filter\(\(l\) => !privateLinks\.has\(l\)\);\s*for \(const p of posts\) \{/.test(lt));
+  check("reply loop: shareFinds checks every post link at once, before its loop, and refuses an unshareable one", /const unshareable = postLinks\.length \? await unshareableEventLinks\(postLinks\)/.test(lt) && /if \(unshareable\.has\(it\.link\)\) \{/.test(lt) && !/for \(const it of items\) \{[\s\S]{0,1500}unshareableEventLinks\(/.test(lt));
+  check("a post's link is marked, so shareFinds checks it", /loop\.found\.set\(l, \{ name: p\.text\.slice\(0, 80\), url: l, facts: p\.text, match: null, blocked: null, viaPost: true \}\)/.test(lt));
+  const pick = await W.pickPage({ name: "Unread", url: "https://partiful.com/e/unread", details: [] }, { read: async () => "a page of text ".repeat(50), official: async () => "https://x.example.com/", eventPage: async () => { throw new Error("timed out"); } });
+  check("final review: the web search drops a Partiful result whose page couldn't be confirmed public (read failed)", pick.private === true && pick.text === null);
 }
 
 console.log(`event tier by page: ${total - failed}/${total} passed`);
