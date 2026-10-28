@@ -89,6 +89,10 @@ export type DeliverTo = { userId: string; firstName: string; phone: string; zone
 // record (deliverAndRecord logs them with the document's key).
 export const DOC_QA_MS = 10_000;
 const lastDocQa = new Map<string, { at: number; qa: unknown }>();
+// A sheet measured on its own (the plan, services/planEmail.ts buildPlanFiles): its real QA is what the design metrics record.
+export function noteDocQa(userId: string, r: { ran: boolean; findings: unknown[] }): void {
+  lastDocQa.set(userId, { at: Date.now(), qa: { ran: r.ran, findings: r.findings, first: r.findings.length, fixed: [] } });
+}
 export function takeDocQa(userId: string): unknown | null {
   const hit = lastDocQa.get(userId);
   lastDocQa.delete(userId);
