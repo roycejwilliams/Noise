@@ -23,9 +23,10 @@ async function reachOutToSubscriber(email: string, name?: string): Promise<void>
   const { rows } = await pool.query(`SELECT id, first_name, phone_number FROM users WHERE email = $1`, [email]);
   const user = rows[0];
   if (!user) {
-    console.log(`luma/webhook: calendar.person_subscribed (${email}) — not a Cue user, reaching out by email instead`);
+    // Never their address in the log (2026-10-28 board review: a non-member's email was written in plain text): only that it happened.
+    console.log("luma/webhook: calendar.person_subscribed — not a Cue member, reaching out by email instead");
     await sendEmail({ email, calendarFollow: true, firstName: name }).catch((err: any) =>
-      console.error(`luma/webhook: calendar.person_subscribed (${email}) — sendEmail failed:`, err?.message ?? err),
+      console.error("luma/webhook: calendar.person_subscribed — the follow email failed:", err?.message ?? err),
     );
     return;
   }
@@ -178,7 +179,7 @@ router.post("/webhook", (req: Request, res: Response) => {
     case "event.created": {
       const eventId = data?.api_id;
       if (!eventId) {
-        console.error("luma/webhook: event.created payload missing api_id:", JSON.stringify(data));
+        console.error("luma/webhook: event.created payload missing api_id; its keys:", Object.keys(data ?? {}).join(", "));
         break;
       }
       // Idempotent per event id (code review, 2026-09-17) — see
@@ -207,8 +208,8 @@ router.post("/webhook", (req: Request, res: Response) => {
       const eventId = data?.event_api_id ?? data?.event?.api_id ?? data?.event_id;
       if (!eventId) {
         console.error(
-          `luma/webhook: ${type} payload has no recognizable event id field — logging raw payload so the real shape can be confirmed:`,
-          JSON.stringify(data),
+          `luma/webhook: ${type} payload has no recognizable event id field; its keys (never its values, which can carry guests\' details):`,
+          Object.keys(data ?? {}).join(", "),
         );
         break;
       }
@@ -222,7 +223,7 @@ router.post("/webhook", (req: Request, res: Response) => {
     case "event.updated": {
       const eventId = data?.api_id;
       if (!eventId) {
-        console.error("luma/webhook: event.updated payload missing api_id:", JSON.stringify(data));
+        console.error("luma/webhook: event.updated payload missing api_id; its keys:", Object.keys(data ?? {}).join(", "));
         break;
       }
       handleEventUpdated(eventId).catch((err: any) =>
@@ -233,7 +234,7 @@ router.post("/webhook", (req: Request, res: Response) => {
     case "event.canceled": {
       const eventId = data?.api_id;
       if (!eventId) {
-        console.error("luma/webhook: event.canceled payload missing api_id:", JSON.stringify(data));
+        console.error("luma/webhook: event.canceled payload missing api_id; its keys:", Object.keys(data ?? {}).join(", "));
         break;
       }
       handleEventCanceled(eventId).catch((err: any) =>
@@ -249,7 +250,7 @@ router.post("/webhook", (req: Request, res: Response) => {
       const email = data?.email;
       const name = data?.name;
       if (!email) {
-        console.error("luma/webhook: calendar.person_subscribed payload has no email field:", JSON.stringify(data));
+        console.error("luma/webhook: calendar.person_subscribed payload has no email field; its keys:", Object.keys(data ?? {}).join(", "));
         break;
       }
       reachOutToSubscriber(email, name).catch((err: any) =>
