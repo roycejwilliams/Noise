@@ -67,6 +67,7 @@
     "evals/review/rules.ts",
     "evals/review/northStar.ts",
     "evals/review/failureCount.ts",
+    "evals/review/neverLoseText.ts",
     "evals/review/email.ts",
     "evals/onboarding/rules.ts",
     "evals/invites/rules.ts",

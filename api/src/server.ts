@@ -28,7 +28,7 @@ import { serveInvitePage } from "./routes/invitePage.js";
 import { createLumaRouter } from "./routes/luma.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { createReferralsRouter } from "./routes/referrals.js";
-import { reportUnfinishedTurns, sendblueRouter } from "./routes/sendblue.js";
+import { reportUnfinishedTurns, sendblueRouter, startInboundRecovery } from "./routes/sendblue.js";
 import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
 import { getAudioEntry } from "./services/voiceNote.js";
@@ -166,6 +166,9 @@ migrationsReady
     reportUnfinishedTurns().catch((err: any) =>
       console.error("reportUnfinishedTurns failed on startup (non-fatal):", err?.message ?? err),
     );
+    // Texts the last process held when the database couldn't take them, and texts Sendblue received that never reached this
+    // server (a restart, a container swap), answered once through the replay path (routes/sendblue.ts, 2026-10-28). Never throws.
+    startInboundRecovery(new Date());
 
     registerJobs(io);
 

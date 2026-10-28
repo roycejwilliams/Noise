@@ -221,6 +221,25 @@ const sendblue = {
 
 export default sendblue;
 
+// Inbound texts to one of our numbers since a moment, oldest first (docs.sendblue.com/api-v2/messages: GET /api/v2/messages; the
+// SDK's messages.list, rate limited to 100 requests per 10 seconds). Read only, through the same client and keys as every send.
+// Used to find texts that reached Sendblue but never this server (routes/sendblue.ts recoverFromSendblue).
+export async function listInboundMessages(q: { sendblue_number: string; created_at_gte: string; offset: number; limit: number }): Promise<{ data: Record<string, unknown>[]; hasMore: boolean }> {
+  const res = await client.messages.list({
+    is_outbound: "false",
+    sendblue_number: q.sendblue_number,
+    created_at_gte: q.created_at_gte,
+    order_by: "createdAt",
+    order_direction: "asc",
+    limit: q.limit,
+    offset: q.offset,
+  });
+  const data = (res?.data ?? []) as Record<string, unknown>[];
+  const p = res?.pagination;
+  const hasMore = typeof p?.hasMore === "boolean" ? p.hasMore : typeof p?.total === "number" ? q.offset + data.length < p.total : data.length >= q.limit;
+  return { data, hasMore };
+}
+
 // Read receipts (Royce, 2026-09-15): the moment a 1:1 text reaches Co, the
 // sender sees it was read, even while the reply is still being worked on.
 // Sendblue sends these only for iMessage/RCS, best effort; never blocks.
