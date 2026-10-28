@@ -91,6 +91,8 @@ check("default delivery (no ask): the PDF", T({ saveTo: "pdf", askedForGoogle: f
   check("brief: the opening lines never count as an unsourced researched section", RB.researchProblems(b).length === 0, RB.researchProblems(b));
   const only = RB.briefAskedLines({ theirWords: "", searched: { headcount: 1, city: "Oakland" } });
   check("brief: only the criteria it had (no empty slots)", JSON.stringify(only) === JSON.stringify(["Searched for: 1 person · Oakland"]), only);
+  const asStored = RB.briefAskedLines({ theirWords: "find a quiet spot for 6 find a quiet spot for 6", searched: { date: "2026-10-24", start: "6:00 pm", headcount: 6 }, zone: "America/Los_Angeles" });
+  check("brief (review of #287): their message once, and the start as the brief stores it", JSON.stringify(asStored) === JSON.stringify(['What you asked: "find a quiet spot for 6"', "Searched for: Saturday, Oct 24 at 6:00 PM · 6 people"]), asStored);
   const none = RB.buildBrief({ title: "t", asked: "a launch party for 40", finds: [find()], memberContext: [] });
   check("brief: no words and no criteria, the note keeps Cue's paraphrase as before", /^For: a launch party for 40\./.test(none.note) && none.sections[0].heading !== null, none.note);
 }
