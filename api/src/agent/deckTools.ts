@@ -720,7 +720,9 @@ export function deckTools(
           ctx.facts?.add("known", `The deck's look, as Cue chose it: ${choices}`);
           // What QA found and code couldn't fix is said, in one line (never shipped silently).
           const short = Q.qaShortfall(shipped.findings);
-          const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
+          // Who it's for, when Cue assumed it rather than they said it: beside the result, one gesture to correct (Royce, 2026-10-27).
+          const assumed = assumedAudienceLine(input.audience, `${source.theirs}\n${ctx.resolvedContent ?? ""}`, context);
+          const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}${short ? ` ${short}` : ""}${assumed ? ` ${assumed}` : ""}\n${made.url}`, input.alsoAnswer);
           if (!(await o.say(text, `Co replied: ${text}`))) {
             o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
             // made: it exists (toolGuard.ts treats it as done, never as "nothing was made"); only the text didn't go.
@@ -958,4 +960,20 @@ export function slidesChangedLine(nums: number[]): string | null {
   if (!nums.length) return null;
   if (nums.length === 1) return `slide ${nums[0]} changed`;
   return `slides ${nums.slice(0, -1).join(", ")} and ${nums[nums.length - 1]} changed`;
+}
+
+// Pure: the audience Cue assumed, as one line, or null when they said it (Royce, 2026-10-27, wording approved: "I pitched it at
+// investors; say if it's for someone else."). Said when none of the audience's own words are in theirs. Professional decks only: the
+// line's "pitched" is wrong for a party or a family deck, and that wording isn't approved yet.
+const AUDIENCE_SKIP = new Set(["the", "my", "our", "your", "their", "and", "for", "with", "from", "team", "people", "folks", "group"]);
+export function assumedAudienceLine(audience: string | null | undefined, theirs: string, context: "professional" | "personal"): string | null {
+  const a = String(audience ?? "").replace(/\s+/g, " ").trim();
+  if (!a || context !== "professional") return null;
+  const stem = (w: string) => w.toLowerCase().replace(/[^a-z]/g, "").replace(/(?:ies|es|s)$/, "");
+  const words = a.split(" ").map(stem).filter((w) => w.length >= 3 && !AUDIENCE_SKIP.has(w));
+  if (!words.length) return null;
+  const said = new Set(String(theirs).split(/[^A-Za-z]+/).map(stem).filter(Boolean));
+  if (words.some((w) => said.has(w))) return null;
+  const who = a.replace(/^(?:my|our)\s+/i, "your ").replace(/[.\s]+$/, "");
+  return `I pitched it at ${who}; say if it's for someone else.`;
 }
