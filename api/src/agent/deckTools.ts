@@ -968,11 +968,14 @@ export function slidesChangedLine(nums: number[]): string | null {
 const AUDIENCE_SKIP = new Set(["the", "my", "our", "your", "their", "and", "for", "with", "from", "team", "people", "folks", "group"]);
 export function assumedAudienceLine(audience: string | null | undefined, theirs: string, context: "professional" | "personal"): string | null {
   const a = String(audience ?? "").replace(/\s+/g, " ").trim();
-  if (!a || context !== "professional") return null;
-  const stem = (w: string) => w.toLowerCase().replace(/[^a-z]/g, "").replace(/(?:ies|es|s)$/, "");
-  const words = a.split(" ").map(stem).filter((w) => w.length >= 3 && !AUDIENCE_SKIP.has(w));
+  // A long description isn't an audience to read back ("the companies we're pitching next month"): no line.
+  if (!a || context !== "professional" || a.split(" ").length > 4) return null;
+  // Hyphens join on both sides ("co-founder" is "cofounder"); a plural is its singular ("attendees", "companies", "VCs").
+  const stem = (w: string) => w.toLowerCase().replace(/[^a-z]/g, "").replace(/ies$/, "y").replace(/(?<!s)s$/, "");
+  const wordsOf = (t: string) => t.replace(/(\p{L})[-\u2010\u2011](?=\p{L})/gu, "$1").split(/[^A-Za-z]+/).map(stem).filter(Boolean);
+  const words = wordsOf(a).filter((w) => w.length >= 2 && !AUDIENCE_SKIP.has(w));
   if (!words.length) return null;
-  const said = new Set(String(theirs).split(/[^A-Za-z]+/).map(stem).filter(Boolean));
+  const said = new Set(wordsOf(String(theirs)));
   if (words.some((w) => said.has(w))) return null;
   const who = a.replace(/^(?:my|our)\s+/i, "your ").replace(/[.\s]+$/, "");
   return `I pitched it at ${who}; say if it's for someone else.`;
