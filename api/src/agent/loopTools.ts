@@ -24,6 +24,7 @@ import { identityDropped } from "../services/guardDrops.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
+import { DateTime } from "luxon";
 import { resolvePlan, planProblems, type EventRecord } from "../services/planSheet.js";
 import { WRITE_DOCUMENT_INPUT } from "../services/documentSheet.js";
 import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
@@ -664,18 +665,24 @@ export function loopTools(
         // The draft itself goes out as its own text, so they always have it to
         // copy (2026-10-01: Co said "I wrote the note" and never showed it).
         const draftText = `${subject.trim() ? `Subject: ${subject.trim()}\n\n` : ""}${body.trim()}`;
-        // The draft speaks for them, so every number and place in it is one they said or one read this turn (the plan's own facts):
-        // Cue checks it before they see it, rather than leaving a wrong date or headcount for them to catch (Royce, 2026-10-27).
-        const backing = [theirWords(), ...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`), notes ? JSON.stringify(notes) : ""].join("\n");
-        const nums = numbersBacked(draftText, backing);
-        const places = placesBacked(draftText, backing);
-        // A clock time is one fact: "8:30" isn't backed by an 8 and a 30 from elsewhere.
-        const clock = (t: string) => t.replace(/^0/, "");
-        const backedTimes = new Set((backing.match(/\b\d{1,2}:\d{2}\b/g) ?? []).map(clock));
-        const times = [...new Set((draftText.match(/\b\d{1,2}:\d{2}\b/g) ?? []).map(clock))].filter((t) => !backedTimes.has(t));
-        if (!nums.ok || !places.ok || times.length) {
-          const gaps = [...new Set([...times, ...nums.missing, ...places.missing])].map((x) => `"${x}"`).slice(0, 6).join(", ");
-          return { ok: false, error: `Not sent: the draft has ${gaps}, which they haven't said and no page read this turn shows. Take those out or leave a blank for them to fill (like "[date]"), or ask them first if it matters.` };
+        // The draft speaks for them, so every number, time and place in it is one they said (their texts from the last two weeks), one
+        // a page or find showed, their brief, or their own contact details: Cue checks it before they see it, rather than leaving a wrong
+        // date or headcount for them to catch (Royce, 2026-10-27; review of #286: this turn's words alone refused yesterday's venue).
+        await seeded();
+        const { loadTheirWords } = await import("../services/documentDelivery.js");
+        const me = await pool.query(`SELECT first_name, last_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]).then((r) => r.rows[0] ?? {}).catch(() => ({}));
+        const backing = [
+          theirWords(),
+          await loadTheirWords(ctx.userId).catch(() => ""),
+          ...loop.pages.values(),
+          ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`),
+          notes ? JSON.stringify(notes) : "",
+          [me.first_name, me.last_name, me.phone_number, me.email].filter(Boolean).join(" "),
+        ].join("\n");
+        const zone = await (await import("../services/memberTime.js")).memberZoneOrFallback(ctx.userId).catch(() => "America/Los_Angeles");
+        const gaps = draftFactGaps(draftText, backing, new Date(), zone);
+        if (gaps.length) {
+          return { ok: false, error: `Not sent: the draft has ${gaps.map((x) => `"${x}"`).join(", ")}, which they haven't said and nothing read shows. Take those out, or leave a blank for them to fill (like "[date]").` };
         }
         if (!to?.trim()) {
           if (!(await say(draftText, `Co replied: ${draftText}`))) return { ok: false, error: "The draft didn't send. Give them the words in your reply instead, plainly, without mentioning what failed." };
@@ -1212,4 +1219,43 @@ export function describeNotes(b: SearchIntent | null): string | null {
     b.next && `next: ${b.next}`,
   ].filter(Boolean);
   return parts.length ? `Your working notes for what you're finding for them (from earlier texts): ${parts.join(". ")}.` : null;
+}
+
+// Pure: the numbers, clock times and "in/near" places in a draft that nothing backs (draftEmail; review of #286). Times compare as times
+// ("7pm" is "7:00 PM"; one without am or pm matches either); a year is never a claim; a date matches when its own weekday says so
+// ("Saturday, November 1" when Nov 1 is a Saturday in the next two months), so "this Saturday" made exact is checked, not trusted.
+export function draftFactGaps(draft: string, backing: string, now: Date, zone: string): string[] {
+  const TIME = /\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\b|\b(\d{1,2}):(\d{2})\b/gi;
+  const minutes = (text: string) => {
+    const out: { label: string; at: number[] }[] = [];
+    for (const m of text.matchAll(TIME)) {
+      const h = Number(m[1] ?? m[4]), mm = Number(m[2] ?? m[5] ?? 0);
+      if (h > 23 || mm > 59) continue;
+      const ap = m[3]?.toLowerCase();
+      const at = ap ? [((h % 12) + (ap === "p" ? 12 : 0)) * 60 + mm] : [h * 60 + mm, ((h % 12) + 12) * 60 + mm];
+      out.push({ label: m[0].trim(), at });
+    }
+    return out;
+  };
+  const backedTimes = new Set(minutes(backing).flatMap((t) => t.at));
+  const timeGaps = minutes(draft).filter((t) => !t.at.some((x) => backedTimes.has(x))).map((t) => t.label);
+  const MONTHS = "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec";
+  const DAY = new RegExp(`\\b(mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?,?\\s+(${MONTHS})[a-z]*\\.?\\s+(\\d{1,2})\\b`, "gi");
+  const okDays = new Set<string>();
+  for (const m of draft.matchAll(DAY)) {
+    const wd = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].indexOf(m[1].slice(0, 3).toLowerCase()) + 1;
+    const month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(m[2].slice(0, 3).toLowerCase()) + 1;
+    const today = DateTime.fromJSDate(now).setZone(zone).startOf("day");
+    for (const y of [today.year, today.year + 1]) {
+      const d = DateTime.fromObject({ year: y, month, day: Number(m[3]) }, { zone });
+      if (d.isValid && d.weekday === wd && d >= today && d <= today.plus({ days: 62 })) okDays.add(m[0]);
+    }
+  }
+  // Numbers left once times, years and weekday-checked dates are taken out.
+  let rest = draft.replace(TIME, " ");
+  for (const d of okDays) rest = rest.split(d).join(" ");
+  rest = rest.replace(/\b20[2-3]\d\b/g, " ");
+  const numberGaps = numbersBacked(rest, backing).missing;
+  const placeGaps = placesBacked(draft, backing).missing;
+  return [...new Set([...timeGaps, ...numberGaps, ...placeGaps])].slice(0, 6);
 }

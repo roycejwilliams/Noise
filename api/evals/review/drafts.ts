@@ -25,6 +25,20 @@ check("draft: one that keeps to their headcount and time goes", good?.ok === tru
 check("draft: one with a headcount and time they never gave is held, naming them", wrong?.ok === false && /"12"/.test(wrong.error) && /"8:30"/.test(wrong.error), wrong);
 check("draft: one that places them somewhere they never said is held", place?.ok === false && /Dolores Park/.test(place.error), place);
 
+// Review of #286: what it must not refuse, and what it still must.
+{
+  const now = new Date("2026-10-27T18:00:00Z"); // a Tuesday; Saturday is Oct 31, Nov 1 is a Sunday
+  const Z = "America/Los_Angeles";
+  const gaps = (draft: string, backing: string) => LT.draftFactGaps(draft, backing, now, Z);
+  const me = "Jordan Lee +14155550123 jordan92@example.com";
+  check("their own phone and email in the sign-off are theirs", gaps("Thanks, Jordan Lee, 415-555-0123, jordan92@example.com", `table for 8 ${me}`).length === 0, gaps("Thanks, Jordan Lee, 415-555-0123, jordan92@example.com", `table for 8 ${me}`));
+  check("'7pm' they said, drafted as '7:00 PM', is the same time", gaps("Could we come at 7:00 PM?", "dinner at 7pm").length === 0);
+  check("a year is never a claim", gaps("for October 2026", "dinner in october").length === 0);
+  check("'this Saturday' made exact is checked: the right date passes", gaps("on Saturday, October 31", "this saturday").length === 0, gaps("on Saturday, October 31", "this saturday"));
+  check("... and a date whose weekday is wrong is held", gaps("on Saturday, November 1", "this saturday").join() === "1", gaps("on Saturday, November 1", "this saturday"));
+  check("a time they never gave is held, said as written, no '00' noise", JSON.stringify(gaps("at 8:30 PM for 8", "8 of us at 7:30")) === JSON.stringify(["8:30 PM"]), gaps("at 8:30 PM for 8", "8 of us at 7:30"));
+}
+
 console.log(`drafts: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();
