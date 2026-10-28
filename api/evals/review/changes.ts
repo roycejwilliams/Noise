@@ -8,9 +8,9 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 const slide = (h: string, b: string[] = ["a"], image: string | null = null) => ({ headline: h, bullets: b, image });
 const was = { slides: [slide("Why now"), slide("The room"), slide("Timeline", ["Jan", "Feb"]), slide("Team"), slide("Ask", ["$500K"])] };
 const next = { slides: [slide("Why now"), slide("The room"), slide("Timeline", ["Jan", "Feb", "March"]), slide("Team"), slide("Ask", ["$750K"])] };
-check("the slides whose content changed, by number", JSON.stringify(D.changedSlides(was, next)) === "[3,5]", D.changedSlides(was, next));
-check("a new slide counts as changed", JSON.stringify(D.changedSlides(was, { slides: [...was.slides, slide("Close")] })) === "[6]");
-check("a new picture counts as changed", JSON.stringify(D.changedSlides(was, { slides: was.slides.map((s, i) => (i === 1 ? { ...s, image: "img:2" } : s)) })) === "[2]");
+check("the slides whose content changed, by the number the deck shows (title slide is 01)", JSON.stringify(D.changedSlides(was, next)) === "[4,6]", D.changedSlides(was, next));
+check("a slide added or taken out lists nothing (the line falls back to Cue's words), never a shifted run", D.changedSlides(was, { slides: [...was.slides, slide("Close")] }).length === 0 && D.changedSlides(was, { slides: was.slides.slice(1) }).length === 0);
+check("a new picture counts as changed", JSON.stringify(D.changedSlides(was, { slides: was.slides.map((s, i) => (i === 1 ? { ...s, image: "img:2" } : s)) })) === "[3]");
 check("nothing changed, nothing listed", D.changedSlides(was, was).length === 0 && D.slidesChangedLine([]) === null);
 check("the line reads as approved", D.slidesChangedLine([3, 5]) === "slides 3 and 5 changed" && D.slidesChangedLine([3]) === "slide 3 changed" && D.slidesChangedLine([2, 3, 6]) === "slides 2, 3 and 6 changed");
 const src = readFileSync(new URL("../../src/agent/deckTools.ts", import.meta.url), "utf8");

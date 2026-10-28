@@ -942,13 +942,16 @@ export function deckTools(
   };
 }
 
-// Pure: which slides changed, by number (1-based), compared in code: a slide whose headline, points, picture or notes differ from the
-// one at its place before, or that is new. What the line says changed is checked, not taken from Cue's own words (Royce, 2026-10-27).
+// Pure: which slides changed, by the number the deck shows (the title slide is 01, so content slide i shows as i + 2, as the deck and
+// its QA number them), compared in code: a slide whose headline, points, picture or notes differ from the one at its place before.
+// What the line says changed is checked, not taken from Cue's own words (Royce, 2026-10-27). A slide added or taken out shifts every
+// slide after it, so a changed count lists nothing (the line falls back to Cue's words) rather than a false "slides 3 to 9 changed".
 export function changedSlides(was: any, next: any): number[] {
   const key = (x: any) => JSON.stringify({ h: x?.headline ?? "", b: x?.bullets ?? [], i: x?.image ?? null, n: x?.notes ?? null });
   const before: any[] = Array.isArray(was?.slides) ? was.slides : [];
   const after: any[] = Array.isArray(next?.slides) ? next.slides : [];
-  return after.map((x, i) => (i >= before.length || key(x) !== key(before[i]) ? i + 1 : 0)).filter(Boolean);
+  if (before.length !== after.length) return [];
+  return after.map((x, i) => (key(x) !== key(before[i]) ? i + 2 : 0)).filter(Boolean);
 }
 // Pure: "slide 3 changed", "slides 3 and 5 changed", "slides 2, 3 and 6 changed"; null when no slide's content changed.
 export function slidesChangedLine(nums: number[]): string | null {
