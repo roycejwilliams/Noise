@@ -217,17 +217,26 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
 
   // rankings
-  // linkedMemberNames (memberSafeMemories.ts): everyone this member was nudged, asked or offered about, both directions. A pair
-  // asked for by name and not introduced yet adds no one through the opt-ins or an ask to the other side (2026-10-28).
+  // linkedMemberNames (memberSafeMemories.ts MEMBER_NAMES_SQL): only this member's own side (2026-10-28). A nudge that reached them
+  // and named the person, a question about the person that reached them (not queued, not still sending, never an additive offer's
+  // count), their own answer (not to an anonymous heads-up, not a by-name ask that wasn't introduced), and an intro email that went
+  // (before co_pairs: both said yes at that event). Nothing from the other side's state.
   if (has("SELECT DISTINCT u.first_name FROM users u WHERE u.id <> $1")) {
     const me = p[0];
     const ids = new Set<string>();
     const mine = W.pairs.filter((r) => r.a_id === me || r.b_id === me);
     const other = (r: Row) => (r.a_id === me ? r.b_id : r.a_id);
     const byName = new Set(mine.filter((r) => r.origin === "member").map(other).filter((o) => !mine.some((r) => other(r) === o && r.intro_sent_at)));
-    for (const n of W.nudges) { if (n.person_id === me) ids.add(n.candidate_id); if (n.candidate_id === me) ids.add(n.person_id); }
-    for (const o of W.optIns) { if (o.person_id === me && !byName.has(o.candidate_id)) ids.add(o.candidate_id); if (o.candidate_id === me && !byName.has(o.person_id)) ids.add(o.person_id); }
-    for (const o of W.offers) { if (o.person_id === me) { if (o.candidate_id) ids.add(o.candidate_id); for (const c of o.candidate_ids ?? []) ids.add(c); } if ((o.candidate_id === me || (o.candidate_ids ?? []).includes(me)) && !byName.has(o.person_id)) ids.add(o.person_id); }
+    const anonymousTo = (o: Row) => W.nudges.some((n) => n.event_id === o.event_id && n.person_id === o.person_id && n.candidate_id === o.candidate_id && n.anonymous);
+    for (const n of W.nudges) if (n.person_id === me && !n.anonymous && !n.pending) ids.add(n.candidate_id);
+    for (const o of W.offers) if (o.person_id === me && o.candidate_id && o.kind !== "additive" && o.opened_at && !["queued", "sending"].includes(o.status)) ids.add(o.candidate_id);
+    for (const o of W.optIns) if (o.person_id === me && !byName.has(o.candidate_id) && !anonymousTo(o)) ids.add(o.candidate_id);
+    for (const r of mine) if (r.intro_sent_at) ids.add(other(r));
+    for (const o of W.optIns) {
+      if (o.person_id !== me || o.status !== "interested") continue;
+      const back = W.optIns.some((r) => r.event_id === o.event_id && r.person_id === o.candidate_id && r.candidate_id === me && r.status === "interested");
+      if (back && !mine.some((r) => r.event_id === o.event_id && other(r) === o.candidate_id)) ids.add(o.candidate_id);
+    }
     ids.delete(me);
     return R([...new Set([...ids].map((id) => W.members.get(id)?.first_name).filter(Boolean))].map((first_name) => ({ first_name })));
   }
