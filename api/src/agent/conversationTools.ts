@@ -1732,13 +1732,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
           );
         // One retry, then the truth in the log: a failure used to be logged as "requested". The member's answer stays the neutral one
         // either way (saying it failed would tell them the person was found); the morning review sees the failure.
+        // A throw is retried once. A false is never retried: it means the intro email didn't go (failed, no address, or held by the
+        // matching pause), and the pause would hold it again (review of #284: a false was logged "requested" too).
         let failure: string | null = null;
         for (let attempt = 0; attempt < 2; attempt++) {
           failure = await ask().then(
-            () => null,
+            (went) => (went === false ? "the intro email didn't go (failed, no address, or held by the pause)" : null),
             (err: any) => String(err?.message ?? err),
           );
-          if (!failure) break;
+          if (!failure || /didn't go/.test(failure)) break;
         }
         if (failure) console.error("requestEventIntro: requestIntroToNamedGuest failed twice:", failure);
         await recordDecision({
@@ -1746,10 +1748,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
           decision: "reply.requestEventIntro",
           userId: ctx.userId,
           outcome: failure ? "skip" : "act",
-          action: failure ? "failed" : "requested",
+          action: failure ? "not_sent" : "requested",
           proposal: { personName, eventId: resolved.eventId, targetId: resolved.target.user_id },
           ...(failure ? { checks: [{ name: "request_sent", pass: false, reason: failure.slice(0, 200) }] } : {}),
         }).catch(() => {});
+        // Not sent: not ok, so the guard never records an intro as started (or refuses a later try at it), with the same neutral answer as
+        // when nobody resolves, so saying it never tells them the person was found.
+        if (failure) {
+          return {
+            ok: false,
+            error: "Not requested right now. Tell them the same neutral thing: if it's someone you know from that event, you'll check whether they're open to it too. Never say it failed, never confirm or deny that you know the person, and don't try again this turn.",
+          };
+        }
         // The same answer as when nobody resolves, so the reply never tells
         // them whether the person is a Co member (see the note above).
         ctx.facts?.add(

@@ -30,7 +30,8 @@ check("shareLink: a link whose send failed is never recorded as sent, and the to
 
 // requestEventIntro: a failed request is logged as failed (after one retry), never "requested"; the member's line stays neutral.
 const ct = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-check("requestEventIntro: one retry, then the outcome follows the send (failed, not requested)", /for \(let attempt = 0; attempt < 2; attempt\+\+\)/.test(ct) && /action: failure \? "failed" : "requested"/.test(ct) && !/requestIntroToNamedGuest\([\s\S]{0,300}\)\.catch\(\(err: any\) => console\.error\("requestEventIntro/.test(ct));
+check("requestEventIntro: a throw retried once, a false never; the outcome follows the send (not_sent, not requested)", /for \(let attempt = 0; attempt < 2; attempt\+\+\)/.test(ct) && /went === false \?/.test(ct) && /action: failure \? "not_sent" : "requested"/.test(ct) && !/requestIntroToNamedGuest\([\s\S]{0,300}\)\.catch\(\(err: any\) => console\.error\("requestEventIntro/.test(ct));
+check("requestEventIntro: not sent is not ok (the guard never records it as started), with the neutral line", /if \(failure\) \{\s*return \{\s*ok: false,\s*error: "Not requested right now\. Tell them the same neutral thing/.test(ct));
 
 console.log(`outside actions: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
