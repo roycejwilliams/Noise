@@ -67,6 +67,21 @@ export function unconsentedSensitive(text: string, privateTexts: string[], ownSh
   return null;
 }
 
+// Pure: the set-aside phrases (an event, a venue, a name) the sensitive-word test may take out first: never one that is nothing but a
+// sensitive word. Setting a phrase aside takes out every place the text has it, so a venue called "Rehab" let "fresh out of rehab"
+// through (review of #274, 2026-10-27). A longer name ("Sober Social Founders Night") only ever takes out itself, so it stays.
+export function sensitiveSafeAllow(allow: string[], sensitive: RegExp[]): string[] {
+  return allow.filter((a) => {
+    let plain = ` ${fold(a)} `, joined = ` ${fold(joinHyphens(a))} `;
+    for (const re of sensitive) {
+      const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+      plain = plain.replace(g, " ");
+      joined = joined.replace(g, " ");
+    }
+    return words(plain).length > 0 && words(joined).length > 0;
+  });
+}
+
 // Pure: why a text echoes one of these hidden texts, or null.
 // allowedTexts: words the text may carry whoever else said them (the other member's shared asks, the reader's own asks and
 // goals), for the word-for-word and distinctive-word tests. They never let a sensitive word through (decided 2026-10-19).
@@ -85,10 +100,7 @@ export function hiddenEcho(text: string, hidden: string[], allowedTexts: string[
   const allowedShingles = shingles(words(allowedAll.join(" . ")), 3);
   const textStems = stemsOf(t);
   const textShingles = shingles(words(t), 3);
-  // A phrase set aside (an event, a venue, a name) that itself carries a sensitive word never clears that word: setting it aside takes
-  // out every place the text has it, not only where it names the place (review of #274, 2026-10-27: a venue called "Rehab" let
-  // "fresh out of rehab" through).
-  const sensitiveAllow = allow.filter((a) => !sensitive.some((re) => matchesOf(re, sensitiveForm(re, ` ${fold(a)} `, ` ${fold(joinHyphens(a))} `)).length));
+  const sensitiveAllow = sensitiveSafeAllow(allow, sensitive);
   for (const h of hidden.map(String).filter((x) => x.trim())) {
     // Quoted as the text has it (folded): the redraft feedback names only words the draft itself already carried.
     const said = unconsentedSensitive(text, [h], ownShareable, sensitive, true, sensitiveAllow);

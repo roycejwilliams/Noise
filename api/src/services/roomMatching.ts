@@ -107,7 +107,7 @@
 //     other side's answer or outcome.
 //   - Value lines: the line for one side is stored under that side and drafted only into that side's text.
 import { anthropic } from "@ai-sdk/anthropic";
-import { checkNoHiddenEcho, unconsentedSensitive } from "../harness/hiddenEcho.js";
+import { checkNoHiddenEcho, sensitiveSafeAllow, unconsentedSensitive } from "../harness/hiddenEcho.js";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
@@ -597,7 +597,7 @@ export function checkValueLines(j: ValueJudgment | null, x: ValueSide, y: ValueS
     checks.push(checkNoPrivateQuote(line, reader.privateAsks, reader.shared, `own_private_ask_${label}`, allow));
     // A sensitive word the other member's private material carries: only their own shareable ask, quoted word for word, lets it
     // through; the reader's own asks and goals never do (decided 2026-10-19: words in another person's text never whitelist).
-    const hit = unconsentedSensitive(line, other.privateTexts, other.shared, sensitive, false, allow);
+    const hit = unconsentedSensitive(line, other.privateTexts, other.shared, sensitive, false, sensitiveSafeAllow(allow, sensitive));
     if (hit) checks.push({ name: `sensitive_${label}`, pass: false, reason: `leans on "${hit}", which is ${other.firstName}'s private matter` });
   }
   return { ok: checks.every((c) => c.pass), checks };

@@ -194,12 +194,17 @@ export function candidateLinesWithLabels<T extends ScorableCandidate>(candidates
   return candidates.map((c) => {
     const own = fold(firstNameOf(c));
     // Everyone else's name; the asker's even when it is theirs too.
-    const find = nameFinder(everyone.filter((n) => fold(n) !== own || (asker.length >= 2 && fold(n) === asker)));
+    const others = everyone.filter((n) => fold(n) !== own || (asker.length >= 2 && fold(n) === asker));
     // Their own name is taken out first, so a shorter name inside it ("Sarah" in "Sarah Hao") never reads as someone else; an
-    // underscore splits words ("@noor_designs" names Noor). Review of #274's second read, 2026-10-27.
+    // underscore splits words ("@noor_designs" names Noor). A longer name that holds theirs ("Sarah Hao" beside "Sarah") is looked
+    // for before that, on the text as written, or taking theirs out would hide it. Review of #274's second and third reads, 2026-10-27.
     const ownRe = own.length >= 2 && own !== asker ? new RegExp(`(?<![\\p{L}\\p{N}])${own.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}(?![\\p{L}\\p{N}])`, "giu") : null;
+    const holdsOwn = (n: string) => !!ownRe && fold(n) !== own && new RegExp(ownRe.source, "iu").test(fold(n));
+    const findLonger = nameFinder(others.filter(holdsOwn));
+    const find = nameFinder(others.filter((n) => !holdsOwn(n)));
     const named = (item: string) => {
       const plain = String(item).replace(/_/g, " ");
+      if (findLonger(plain) !== null) return true;
       // Accents off, case kept: a capitalized word-name ("Grant") reads as a person more readily than a lowercase one.
       return find(ownRe ? plain.normalize("NFD").replace(/\p{M}+/gu, "").replace(ownRe, " ") : plain) !== null;
     };

@@ -201,6 +201,11 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
     { user_id: "s", first_name: "Sarah", intent: [] },
   ]);
   check("their own two-word name never reads as the shorter one beside it; naming the other Sarah still drops", sh.line.includes("sarah hao studio launch") && !/kiln/.test(sh.line), sh.line);
+  const [sarah] = M.candidateLinesWithLabels([
+    { user_id: "s", first_name: "Sarah", goals: ["coffee with Sarah Hao about her studio", "a gallery of my own"], intent: [] },
+    { user_id: "sh", first_name: "Sarah Hao", intent: [] },
+  ]);
+  check("a longer name that holds their own ('Sarah Hao' beside 'Sarah') is still someone else: dropped", !/Hao/.test(sarah.line) && sarah.line.includes("a gallery of my own"), sarah.line);
   const [el] = M.candidateLinesWithLabels([{ user_id: "e", first_name: "Ellis", goals: ["collab with @noor_designs", "a gallery of my own"], intent: [] }, { user_id: "n", first_name: "Noor", intent: [] }]);
   check("an underscore splits a handle ('@noor_designs' names Noor)", !/noor_designs/.test(el.line) && el.line.includes("a gallery of my own"), el.line);
   const lines = M.candidateLines([

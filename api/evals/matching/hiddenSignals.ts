@@ -181,6 +181,8 @@ const BLOCKER = "my divorce is dragging on";
   const rehabCtx = { otherUserIds: [samR.id], said: ["backing climate hardware founders at seed"], facts: { otherFirstName: "Sam", recipientFirstName: "Jordan" } as any, event: { name: "Founders Night", venue: "Rehab" } };
   check("draft: a venue named like a sensitive word never lets that word through", (await C.hiddenEchoCheck("Sam is at Founders Night, fresh out of rehab, and backs climate hardware founders at seed.", rehabCtx))?.pass === false);
   check("draft: ... the same on the value lines' path (hiddenEcho with that allow)", E.hiddenEcho("Sam is fresh out of rehab and backs founders.", ["staying sober after rehab"], [], ["Rehab", "Sam"], G.SENSITIVE) !== null);
+  check("allow: a phrase that is only a sensitive word is never set aside for the sensitive test; a longer name is", JSON.stringify(E.sensitiveSafeAllow(["Rehab", "The Rehab", "Sober Social Founders Night", "Sam"], G.SENSITIVE)) === JSON.stringify(["Sober Social Founders Night", "Sam"]), E.sensitiveSafeAllow(["Rehab", "The Rehab", "Sober Social Founders Night", "Sam"], G.SENSITIVE));
+  check("allow: naming a 'Sober Social Founders Night' event never trips a member's private 'sober'", E.hiddenEcho("Sam is at Sober Social Founders Night and backs founders.", ["staying sober after a hard year"], [], ["Sober Social Founders Night", "Sam"], G.SENSITIVE) === null);
   const sentBefore = W.sent.length;
   const drafted = await C.draftWithConsent(
     { decision: "eval.hiddenSignals", recipientId: jordan.id, facts: { otherFirstName: "Noor", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: "Jordan", otherStatedAsks: ["backing climate hardware founders at seed"] } as any, otherUserIds: [noor.id], said: ["backing climate hardware founders at seed"] },
@@ -224,6 +226,10 @@ const BLOCKER = "my divorce is dragging on";
   const vlGay = samReads("Ellis backs climate hardware founders at seed, and he's gay too, so he'd get your dinner.");
   check("value line (whose words): the reader's own goal and ask never clear a word the other keeps private", !vlGay.ok && vlGay.checks.some((c) => !c.pass && /^(?:hidden|sensitive)_first$/.test(c.name)), vlGay.checks.filter((c) => !c.pass));
   check("value line (whose words): the sensitive backstop alone refuses it too (privateTexts)", vlGay.checks.some((c) => c.name === "sensitive_first" && !c.pass), vlGay.checks);
+  // Review of #280's re-read: the value lines' own sensitive backstop never clears a word through a venue named like it ("Rehab").
+  const rehabLine = { forFirst: "Ellis backs climate hardware founders at seed; he's fresh out of rehab, so keep it easy at Rehab.", forSecond: "Sam is putting together a founders dinner and would value your climate hardware view.", verdict: "strong" as const, why: "fit", judged: { first: true, second: true } };
+  const vlRehab = RM.checkValueLines(rehabLine, vs, { ...ve, privateTexts: [...ve.privateTexts, "three weeks out of rehab"] }, G.SENSITIVE, ["Noise Supper", "Rehab", "Sam", "Ellis"]);
+  check("value line: a venue called 'Rehab' never lets the other member's 'rehab' through", !vlRehab.ok && vlRehab.checks.some((c) => c.name === "sensitive_first" && !c.pass), vlRehab.checks.filter((c) => !c.pass));
 }
 
 // ---------------------------------------------------------------- 4. pins: the checks sit on every path, and no path proposes without a share reason
