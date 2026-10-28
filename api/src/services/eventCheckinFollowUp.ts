@@ -149,7 +149,8 @@ export function debriefForPresence(p: DebriefPresence, came: boolean): "send" | 
 
 // The same decision for one member and one event, read now. The door is only read when it could change the answer. A read that
 // fails waits: a "how was tonight?" to someone who never came is the thing this guards.
-export async function debriefForEvent(userId: string, eventApiId: string): Promise<"send" | "skip" | "wait"> {
+export type DebriefDeps = { guestList?: (eventId: string) => Promise<import("./luma.js").LumaGuest[]> };
+export async function debriefForEvent(userId: string, eventApiId: string, deps: DebriefDeps = {}): Promise<"send" | "skip" | "wait"> {
   try {
     const { rows } = await pool.query(
       `SELECT ep.not_going_at, ep.noshow_asked_at, ep.noshow_settled_at, ep.noshow_outcome, u.email, u.phone_number
@@ -160,9 +161,13 @@ export async function debriefForEvent(userId: string, eventApiId: string): Promi
     if (!r || (r.not_going_at == null && r.noshow_asked_at == null)) return "send";
     const { cameTonight, lumaCheckedIn } = await import("./eventUnmatchedFollowUp.js");
     const { isTestEvent } = await import("./roomMatching.js");
-    const guests = isTestEvent(eventApiId) ? undefined : await (await import("./luma.js")).getEventGuestList(eventApiId).catch(() => undefined);
+    // A door list that can't be read is unknown, not empty: when the answer turns on it, wait (review of #275).
+    let doorUnknown = false;
+    const read = deps.guestList ?? (async (id: string) => (await import("./luma.js")).getEventGuestList(id));
+    const guests = isTestEvent(eventApiId) && !deps.guestList ? undefined : await read(eventApiId).catch(() => ((doorUnknown = true), undefined));
     const came = await cameTonight(eventApiId, { user_id: userId, email: r.email, phone_number: r.phone_number }, lumaCheckedIn(guests));
-    return debriefForPresence(r, came);
+    const said = debriefForPresence(r, came);
+    return said !== "send" && doorUnknown ? "wait" : said;
   } catch {
     return "wait";
   }
