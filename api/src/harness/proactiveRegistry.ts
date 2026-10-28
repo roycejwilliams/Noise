@@ -97,6 +97,12 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     const end = endOfLocalDay(date, tz);
     if (end.getTime() > Date.now()) return { defer: nextLocalHour(end, tz, 10), reason: `"${p.eventName}" is on ${date}, which hasn't happened yet` };
   }
+  // A Noise event they didn't make it to: the no-show flow covers the night (services/eventCheckinFollowUp.ts debriefForEvent).
+  if (p.eventApiId) {
+    const said = await (await import("../services/eventCheckinFollowUp.js")).debriefForEvent(c.userId, p.eventApiId);
+    if (said === "skip") return skip("they didn't make it: the no-show flow covers that night");
+    if (said === "wait") return { defer: new Date(Date.now() + 2 * 3_600_000), reason: "whether they made it isn't settled yet" };
+  }
   // A follow-up on something Co sent needs a record that Co sent it.
   const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds) : null;
   const onlyAboutASend = !p.eventApiId && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
