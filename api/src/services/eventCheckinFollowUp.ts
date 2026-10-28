@@ -132,6 +132,20 @@ export async function recordEventCheckinOutcome(
 }
 
 
+// A guest who didn't make it belongs to the no-show flow (services/eventNoShow.ts): they get its "sorry you couldn't make it"
+// note, never a "how was tonight?" as well (found walking the flow board against the code, 2026-10-27). Pure: what the
+// morning-after check-in does for one guest, from their event_presence row. Evidence they came wins; a "not going" or a no-show
+// settled as not there skips it; a no-show ask still being settled waits for the next pass. No row: as before.
+export type CheckinPresence = { arrived_at?: unknown; not_going_at?: unknown; noshow_asked_at?: unknown; noshow_settled_at?: unknown; noshow_outcome?: string | null } | null;
+export function checkinForPresence(p: CheckinPresence): "send" | "skip" | "wait" {
+  if (!p) return "send";
+  if (p.arrived_at) return "send";
+  if (p.not_going_at) return "skip";
+  if (/^(said_no|no_answer|gone)/.test(String(p.noshow_outcome ?? ""))) return "skip";
+  if (p.noshow_asked_at && !p.noshow_settled_at) return "wait";
+  return "send";
+}
+
 // Layer 7 (2026-09-14): no longer sends at end+3h. Merged into the same
 // per-event "debrief" candidate as the recommendation outcome follow-up
 // (recommendationOutcome.ts enqueueDebrief), due the morning after.
@@ -146,6 +160,17 @@ export async function enqueueDueEventCheckinFollowUps(): Promise<void> {
      LIMIT 50`,
   );
   for (const row of rows) {
+    const presence = await pool
+      .query(`SELECT arrived_at, not_going_at, noshow_asked_at, noshow_settled_at, noshow_outcome FROM event_presence WHERE event_api_id = $1 AND user_id = $2`, [row.event_api_id, row.user_id])
+      .then((r) => r.rows[0] ?? null)
+      .catch(() => undefined);
+    // An unreadable row waits for the next pass: a "how was tonight?" to someone who never came is the thing this guards.
+    const decided = presence === undefined ? "wait" : checkinForPresence(presence);
+    if (decided === "wait") continue;
+    if (decided === "skip") {
+      await pool.query(`UPDATE event_checkin_followups SET harness_status = 'skipped_noshow' WHERE id = $1`, [row.id]);
+      continue;
+    }
     const timezone = await memberZone(row.user_id);
     // send_at was scheduled as end_at + CHECKIN_FOLLOWUP_DELAY_HOURS.
     const eventEnd = new Date(new Date(row.send_at).getTime() - CHECKIN_FOLLOWUP_DELAY_HOURS * 60 * 60 * 1000);
