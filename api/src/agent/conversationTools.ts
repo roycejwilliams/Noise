@@ -309,9 +309,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // two separate SMS bubbles). A second call is paced with a real gap, the
     // same way co-test's version double-texts.
     sendReply: tool({
-      description: ctx.isVoice
-        ? "Send your voice-note reply to the user and log it. Call this exactly once, with your full response — always respond to what they actually said before any secondary gesture."
-        : toolUse("sendReply"),
+      // The same for every turn, so it caches with the other tools (review of #277: it changed for a voice note, and as the first
+      // tool that rewrote the whole cached block). A voice note's "exactly once, the full response" is in the turn rules instead
+      // (agent/conversationReply.ts TOOL_TURN_RULES).
+      description: toolUse("sendReply"),
       inputSchema: z.object({
         message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the advice, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. A question to them is always its own last paragraph. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question. Most replies are one to three short beats, up to five when each earns its place."),
       }),
