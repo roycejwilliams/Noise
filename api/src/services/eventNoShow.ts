@@ -204,14 +204,17 @@ async function sendAsk(event: { api_id: string; name: string; start_at: string; 
   return "held";
 }
 
-// Their open ask, for a "no" that comes after the night is over (agent/conversationTools.ts updateGoing): the latest ask in the
-// last NOSHOW_SETTLE_HOURS that hasn't been settled.
+// Their open ask, for a "no" that comes after the night is over (agent/conversationTools.ts updateGoing): the latest ask that hasn't
+// been settled. Settling owns the timing (runNoShowNotes: silence stays open until the event's end plus NOSHOW_SETTLE_HOURS); the
+// window here is only a backstop for an ask that never settles, wide enough for a long night. It counted NOSHOW_SETTLE_HOURS from the
+// ask (45 minutes in), so the last hours of the settle window found nothing open (review of #281, 2026-10-27).
+export const NOSHOW_ASK_OPEN_HOURS = NOSHOW_SETTLE_HOURS * 2;
 export async function openNoShowAsk(userId: string): Promise<{ eventApiId: string } | null> {
   const { rows } = await pool
     .query(
       `SELECT event_api_id FROM event_presence WHERE user_id = $1 AND noshow_asked_at > NOW() - ($2 || ' hours')::interval AND noshow_settled_at IS NULL
        ORDER BY noshow_asked_at DESC LIMIT 1`,
-      [userId, NOSHOW_SETTLE_HOURS],
+      [userId, NOSHOW_ASK_OPEN_HOURS],
     )
     .catch(() => ({ rows: [] as any[] }));
   return rows[0] ? { eventApiId: String(rows[0].event_api_id) } : null;
@@ -249,8 +252,10 @@ export async function runNoShowNotes(now = new Date(), opts: { approved?: boolea
       }
       const came = await cameTonight(eventId, p, d?.lumaIn ?? { emails: new Set(), phones: new Set() });
       const v = verdict(came, { asked_at: new Date(r.noshow_asked_at), not_going_at: r.not_going_at ? new Date(r.not_going_at) : null, last_inbound_at: await lastInboundAt(userId).catch(() => null) });
-      // Without the guest list, silence can't be told from a door check-in: tried again next pass, until the settle window ends.
-      if (v === "no_answer" && !d && now.getTime() - end.getTime() < NOSHOW_SETTLE_HOURS * 3_600_000) continue;
+      // Without a tracked door (the guest list unread, or no one checked in at it), silence can't be told from coming: it stays open
+      // and is tried again next pass, until the settle window ends, so a "no, I couldn't make it" the next morning still finds it
+      // (review of #274, 2026-10-27: an untracked door settled silence on the first pass after the night).
+      if (v === "no_answer" && !d?.tracked && now.getTime() - end.getTime() < NOSHOW_SETTLE_HOURS * 3_600_000) continue;
       const zone = await memberZone(userId).catch(() => null);
       const due = noteDueAt(v, { end, zone, doorTracked: !!d?.tracked });
       if (due && mayText(p.phone_number)) {
