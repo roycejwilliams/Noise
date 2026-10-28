@@ -40,7 +40,7 @@ check("a start that carries the city zone's own offset: the zone only names it, 
 const UNCLEAR = 'The listing for "Launch Night" doesn\'t say what time zone its start time is in. Check the page before you plan around it.';
 check("COPY: a UTC start with no zone established: no time at all, the listing's zone said to be unclear", JSON.stringify(L.timeFact("2026-10-08T00:00:00Z", null, "Launch Night")) === JSON.stringify({ said: null, note: UNCLEAR, assumed: false }));
 check("an offset-less start with no zone: no time either", L.timeFact("2026-10-07T17:00:00", null, "Launch Night").said === null);
-check("a start with its own offset and no zone: the listing's own time, said as listed (nothing converted)", /^Wednesday, October 7 at 5:00 PM /.test(L.timeFact("2026-10-07T17:00:00-07:00", null, "Launch Night").said ?? ""), L.timeFact("2026-10-07T17:00:00-07:00", null, "Launch Night"));
+check("a start with its own offset and no zone: the listing's own time, said as listed (nothing converted)", L.timeFact("2026-10-07T17:00:00-07:00", null, "Launch Night").said === "Wednesday, October 7 at 5 PM (UTC\u22127, as listed)", L.timeFact("2026-10-07T17:00:00-07:00", null, "Launch Night"));
 asked.length = 0;
 const onlinePage = page({ name: "x", startDate: "2026-10-08T00:00:00Z", eventAttendanceMode: "https://schema.org/OnlineEventAttendanceMode", location: { name: "Zoom", address: { addressLocality: "San Francisco" } } });
 const online = L.structuredEvent(onlinePage)!;
@@ -92,7 +92,11 @@ check("a start carrying the zone's offset isn't a guess", !exact?.zoneGuessed &&
 
 // Final review of #298: no zone of its own but an offset in its start: its own offset, as listed, never the next day in UTC.
 const listed = ED.renderEventDetails("Launch Night", { ...guessed!, zoneGuessed: undefined, timezone: null, startAt: "2026-10-07T17:00:00-07:00", endAt: "2026-10-07T20:00:00-07:00" });
-check("COPY: an offset start with no zone keeps its own offset (Wednesday 5:00 PM, never Thursday 12:00 AM UTC)", listed[0] === `"Launch Night" starts Wednesday, October 7 at 5:00 PM UTC-7 and ends 8:00 PM, as listed.` && !/Thursday|12:00 AM/.test(listed[0]), listed[0]);
+check("COPY (approved by Royce 2026-10-28): an offset start with no zone, as listed, with its end", listed[0] === `"Launch Night" starts Wednesday, October 7 at 5 PM (UTC\u22127, as listed) and ends at 8 PM.` && !/Thursday|12:00 AM/.test(listed[0]), listed[0]);
+const lineFor = (startAt: string, endAt: string | null) => ED.renderEventDetails("Launch Night", { ...guessed!, zoneGuessed: undefined, timezone: null, startAt, endAt })[0];
+check("on the half hour: 5:30 PM; a half-hour offset: UTC+5:30", lineFor("2026-10-07T17:30:00+05:30", null) === `"Launch Night" starts Wednesday, October 7 at 5:30 PM (UTC+5:30, as listed).`, lineFor("2026-10-07T17:30:00+05:30", null));
+check("an end on another day names the day", lineFor("2026-10-07T21:00:00-07:00", "2026-10-08T01:00:00-07:00") === `"Launch Night" starts Wednesday, October 7 at 9 PM (UTC\u22127, as listed) and ends Thursday at 1 AM.`, lineFor("2026-10-07T21:00:00-07:00", "2026-10-08T01:00:00-07:00"));
+check("no end in the listing: none said; the true minus sign, never a hyphen", lineFor("2026-10-07T17:00:00-07:00", null) === `"Launch Night" starts Wednesday, October 7 at 5 PM (UTC\u22127, as listed).` && !/UTC-/.test(lineFor("2026-10-07T17:00:00-07:00", null)));
 
 // The live check ("still spots?"): a time with no zone isn't said; the listing's zone is said to be unclear in its place.
 const A = await import("../../src/services/asOf.js");

@@ -57,7 +57,8 @@ const read = {
   fields: { start: { value: "2026-10-06T18:00:00-07:00", quote: "6pm", verified: true }, cost: { value: "$20", quote: "maybe $20", verified: false } },
 };
 const d = L.describeRead("Demo Night", read, new Date("2026-09-28T21:00:00Z"));
-check("verified fields are facts, in the event's own time", d.facts.some((f) => /start: Tuesday, October 6 at 6:00 PM/.test(f)));
+// 2026-10-28 (#298, approved by Royce): a start with its own offset and no zone is said as listed, "6 PM (UTC−7, as listed)".
+check("verified fields are facts, in the event's own time", d.facts.some((f) => /start: Tuesday, October 6 at 6 PM \(UTC\u22127, as listed\)/.test(f)), d.facts);
 check("unverified fields and Cue's own summary are only hints", !d.facts.some((f) => /\$20|Good for builders/.test(f)) && d.hints.some((h) => /\$20/.test(h)) && d.hints.some((h) => /Good for builders/.test(h)));
 check("what the page doesn't state is said plainly", d.facts.some((f) => /doesn't state: venue/.test(f)));
 const stale = L.describeRead("Demo Night", read, new Date("2026-09-29T08:00:00Z"));
