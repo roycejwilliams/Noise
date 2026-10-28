@@ -132,7 +132,9 @@ export async function queueHeavyCheckins(now = new Date()): Promise<number> {
       [u.user_id, new Date(now.getTime() - HEAVY.lookbackHours * 3_600_000)],
     );
     const tz = await memberZone(u.user_id);
-    const ep = pickEpisode(sig.map((s: any) => ({ ...s, at: new Date(s.at) })), now, tz);
+    // Their words through the forget guard (harness/emotion.ts forgetGuardedSignals): the episode's labels stay, removed words don't.
+    const guarded = await (await import("../harness/emotion.js")).forgetGuardedSignals(u.user_id, sig);
+    const ep = pickEpisode(guarded.map((s: any) => ({ ...s, at: new Date(s.at) })), now, tz);
     if (!ep || ep.expiresAt <= now) continue;
     const { queued: ok } = await enqueueCandidate({
       userId: u.user_id,

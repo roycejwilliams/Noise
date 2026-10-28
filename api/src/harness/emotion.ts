@@ -360,6 +360,26 @@ function rank(i: Intensity): number {
   return i === "high" ? 3 : i === "medium" ? 2 : 1;
 }
 
+// Their words in an emotion read (about, quote) through the forget guard (services/whatCoKnows.ts): words a removal or correction
+// touches are left out, and the feeling's labels (emotion, intensity, valence, when) stay, so timing and tone still read the hard day.
+// Nothing here deletes (forget-delete-spec.md row 24 waits on Royce). forgotten null: the guard couldn't be read, so every word is left
+// out (fails closed). Context-sources review, 2026-10-27: emotion_signals had no forget guard on any reader.
+export function guardSignalWords<T extends { about?: unknown; quote?: unknown }>(rows: T[], forgotten: import("../services/whatCoKnows.js").ForgottenRow[] | null, guardText: (text: string, rows: any[]) => string | null): T[] {
+  const keep = (x: unknown) => {
+    if (x == null || String(x).trim() === "") return x ?? null;
+    if (!forgotten) return null;
+    return guardText(String(x), forgotten) === String(x) ? x : null;
+  };
+  return rows.map((r) => ("about" in r || "quote" in r ? { ...r, ...("about" in r ? { about: keep(r.about) } : {}), ...("quote" in r ? { quote: keep(r.quote) } : {}) } : r));
+}
+// The same, reading their removals (q: a replay's own reader).
+export async function forgetGuardedSignals<T extends { about?: unknown; quote?: unknown }>(userId: string, rows: T[], q?: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> }): Promise<T[]> {
+  if (!rows.some((r) => (r.about != null && String(r.about).trim()) || (r.quote != null && String(r.quote).trim()))) return rows;
+  const W = await import("../services/whatCoKnows.js").catch(() => null);
+  const forgotten = W ? await W.forgottenRows(userId, q).catch(() => null) : null;
+  return guardSignalWords(rows, forgotten, W ? W.guardText : () => null);
+}
+
 export async function getEmotionalContext(userId: string, now = new Date()): Promise<EmotionalContext> {
   const voice = recentVoiceFlags(userId).catch(() => null);
   const { rows } = await pool
@@ -369,8 +389,9 @@ export async function getEmotionalContext(userId: string, now = new Date()): Pro
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
+  const guarded = await forgetGuardedSignals(userId, rows);
   const summary = summarizeSignals(
-    rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null, basis: r.basis ?? null })),
+    guarded.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null, basis: r.basis ?? null })),
     now,
   );
   // The stretch's start from its own read (review of #253: the newest hundred reads alone could hold a heavy texter's stretch under the

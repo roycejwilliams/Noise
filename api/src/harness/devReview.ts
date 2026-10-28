@@ -511,6 +511,8 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
     ),
     pool
       .query(`SELECT created_at, source, emotion, intensity, about, quote, target FROM emotion_signals WHERE user_id = $1 AND created_at >= $2 AND created_at < $3`, range)
+      // The team's review reads their words through the forget guard too (harness/emotion.ts forgetGuardedSignals).
+      .then(async (r) => ({ rows: await (await import("./emotion.js")).forgetGuardedSignals(userId, r.rows) }))
       .catch(() => ({ rows: [] as any[] })),
     pool
       .query(`SELECT created_at, message, summary, category, severity FROM user_reported_issues WHERE user_id = $1 AND created_at >= $2 AND created_at < $3`, range)

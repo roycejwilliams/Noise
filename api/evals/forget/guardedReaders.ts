@@ -87,6 +87,32 @@ const texts = [
   check("guardText: a safety line is kept whole", W.guardText(line, removed()) === line);
 }
 
+// ================================================================ emotion reads (context-sources review, 2026-10-27)
+// emotion_signals had no forget guard on any reader: a removed fact came back in "scared about the custody hearing". Its words go;
+// the feeling's labels stay (timing and tone still read the hard day). Nothing is deleted (spec row 24 waits on Royce).
+{
+  const E = await import("../../src/harness/emotion.js");
+  const sig = (about: string, quote: string, h: number) => ({ source: "text", emotion: "scared", intensity: "high", valence: "negative", about, quote, created_at: ago(h), target: "life", basis: null });
+  const sigs = [sig("the custody hearing in May", "the custody hearing is in May", 1), sig("meeting climate founders", "I really want to meet climate founders", 2)];
+  const prev = (pool as any).query;
+  const withSignals = async (sql: string, p: any[] = []) => (/FROM emotion_signals\s+WHERE user_id = \$1 AND created_at > NOW\(\) - INTERVAL '14 days'/.test(sql) ? { rows: sigs } : handle(sql, p));
+  (pool as any).query = withSignals;
+  const ctx = await E.getEmotionalContext(U, NOW);
+  const shown = E.renderEmotionalContext(ctx, NOW);
+  check("emotion: the removed fact's words never come back in the emotional context", !GONE.test(JSON.stringify(ctx)) && !GONE.test(shown));
+  check("emotion: the feeling stays (struggling, high, scared): timing and tone still read the hard day", ctx.current?.emotion === "scared" && ctx.current?.intensity === "high" && !!ctx.needsCare);
+  const guarded = await E.forgetGuardedSignals(U, sigs);
+  check("emotion: words a removal doesn't touch stay; the touched ones go, labels kept", guarded[1].about === "meeting climate founders" && CANARY.test(String(guarded[1].quote)) && guarded[0].about === null && guarded[0].quote === null && guarded[0].emotion === "scared");
+  // A failed guard read leaves out every word (fails closed), never the feeling.
+  (pool as any).query = async (sql: string, p: any[] = []) => (/FROM profile_corrections/.test(sql) ? Promise.reject(new Error("db down")) : withSignals(sql, p));
+  const blind = await E.getEmotionalContext(U, NOW);
+  const blindRows = await E.forgetGuardedSignals(U, sigs);
+  check("emotion: a failed guard read leaves out every word, keeps the feeling", !GONE.test(JSON.stringify(blind)) && blind.current?.emotion === "scared" && blindRows.every((r) => r.about === null && r.quote === null && r.emotion === "scared"));
+  (pool as any).query = prev;
+  // Every reader that puts their words in a prompt or a report reads through it.
+  check("emotion: heavy moments, the picker's replay and the team review read through the guard", /forgetGuardedSignals\(u\.user_id, sig\)/.test(src("services/heavyMoment.ts")) && /forgetGuardedSignals\(userId, feelRaw/.test(src("services/sweepSelectContext.ts")) && /forgetGuardedSignals\(userId, r\.rows\)/.test(src("harness/devReview.ts")));
+}
+
 console.log(`forget guarded readers: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();

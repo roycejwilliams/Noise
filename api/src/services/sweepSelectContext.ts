@@ -170,7 +170,9 @@ async function factsAsOf(q: Q, userId: string, now: Date, zone: string, safe: ((
     from: /^User/i.test(t.content) ? ("member" as const) : ("co" as const),
     text: safe ? (safe(String(t.content)) ?? "").replace(/^(User said|Co replied|Cue replied|User|Co|Cue):\s*/i, "") : "",
   })).filter((t: any) => t.text).map((t: any, i: number) => ({ ...t, id: `T${i + 1}` }));
-  const feel = await q(`SELECT emotion, intensity, about FROM emotion_signals WHERE user_id = $1 AND created_at < $2 AND created_at >= $2::timestamptz - INTERVAL '3 days' AND COALESCE(target, 'life') = 'life' ORDER BY created_at DESC LIMIT 4`, [userId, now]).catch(() => [] as any[]);
+  const feelRaw = await q(`SELECT emotion, intensity, about FROM emotion_signals WHERE user_id = $1 AND created_at < $2 AND created_at >= $2::timestamptz - INTERVAL '3 days' AND COALESCE(target, 'life') = 'life' ORDER BY created_at DESC LIMIT 4`, [userId, now]).catch(() => [] as any[]);
+  // Their words through the forget guard (harness/emotion.ts), read with this replay's own reader.
+  const feel = await (await import("../harness/emotion.js")).forgetGuardedSignals(userId, feelRaw, { query: async (sql: string, args: unknown[]) => ({ rows: await q(sql, args) }) });
   // Where they are headed: the lens every candidate is judged against alongside their asks (services/goalJourney.ts). No goal
   // states as of a past day exist, so the replay reads the goals on file.
   const [prof] = await q(`SELECT goals, intent FROM co_profiles WHERE user_id = $1`, [userId]);
