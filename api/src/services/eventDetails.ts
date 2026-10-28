@@ -173,9 +173,13 @@ export async function readLumaPage(url: string): Promise<{ html: string | null; 
 export function renderEventDetails(name: string, d: EventDetails): string[] {
   const lines: string[] = [];
   if (d.startAt) {
+    // No zone of its own but an offset in its start: its own offset, as listed (final review of #298: "UTC" here turned a Wednesday 5pm
+    // -07:00 start into "Thursday, October 8 at 12:00 AM (UTC)"), the way linkReader.ts timeFact says it.
+    const ownOffset = !d.timezone && listedWithOffset(d.startAt);
     const zone = d.timezone ?? "UTC";
-    const start = DateTime.fromISO(d.startAt).setZone(zone);
-    const end = d.endAt ? DateTime.fromISO(d.endAt).setZone(zone) : null;
+    const at = (iso: string) => (ownOffset ? DateTime.fromISO(iso, { setZone: true }) : DateTime.fromISO(iso).setZone(zone));
+    const start = at(d.startAt);
+    const end = d.endAt ? at(d.endAt) : null;
     const sameDay = end && end.hasSame(start, "day");
     const ends = end ? ` and ends ${sameDay ? end.toFormat("h:mm a") : end.toFormat("cccc, LLLL d 'at' h:mm a")}` : "";
     // The zone assumed from its city (Royce, 2026-10-28 ruling: never "around"; the time as listed, the city named, zoneWords.ts):
@@ -184,6 +188,7 @@ export function renderEventDetails(name: string, d: EventDetails): string[] {
     const assumed = d.zoneGuessed && d.timezone && d.city ? assumedZoneTime(d.startAt, d.timezone) : null;
     if (assumed) lines.push(`"${name}" starts ${assumed}${end ? ` and ends ${clockTime(end)}` : ""}. ${ZONE_ASSUMED(d.city!)}`);
     else if (!d.timezone && !listedWithOffset(d.startAt)) lines.push(ZONE_UNCLEAR(name));
+    else if (ownOffset) lines.push(`"${name}" starts ${start.toFormat("cccc, LLLL d 'at' h:mm a ZZZZ")}${ends}, as listed.`);
     else lines.push(`"${name}" starts ${start.toFormat("cccc, LLLL d 'at' h:mm a")}${ends} (${zone}).`);
   }
   if (d.online) lines.push(`"${name}" is online.`);
