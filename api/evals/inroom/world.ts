@@ -686,10 +686,11 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R([]);
   }
   if (has("UPDATE event_match_offers SET status = 'expired'")) {
-    // The statuses the query names (status IN (...)), read from the SQL itself.
-    const live = (sql.match(/status IN \(([^)]*)\)/)?.[1] ?? "").split(",").map((x) => x.trim().replace(/'/g, ""));
+    // The statuses the query expires (its WHERE ... status IN (...)), read from the SQL itself; an ask that never went out (queued,
+    // sending) loses its opened_at as it expires, as the real statement does (review of #295).
+    const live = (sql.match(/WHERE[\s\S]*?status IN \(([^)]*)\)/)?.[1] ?? "").split(",").map((x) => x.trim().replace(/'/g, ""));
     const hit = W.offers.filter((o) => o.event_id === p[0] && live.includes(o.status));
-    for (const o of hit) Object.assign(o, { status: "expired", answered_at: null });
+    for (const o of hit) Object.assign(o, { status: "expired", answered_at: null, ...(o.status === "queued" || o.status === "sending" ? { opened_at: null } : {}) });
     return R(hit.map((o) => ({ person_id: o.person_id })));
   }
   if (has("UPDATE deferred_sends SET due_at = $2 WHERE status = 'queued' AND after_kind = 'event_direct_ask'")) return R([]);
