@@ -1,7 +1,7 @@
 // Real imagery for Co's artifacts (founder's brief, 2026-10-12: "No artifact ships with zero images"). Found by code when an artifact
 // is made, never written by the model, and only ever what it's labelled as. In order:
 //   1. the member's own images (their cover, a slide's or section's picture) and a venue's own og:image (ogImage.ts);
-//   2. a real venue's photos from Google Places (GOOGLE_PLACES_API_KEY), kept only as the place id and which photo (Google's terms: no
+//   2. a real venue's photos from Google Places (the Google key, geocoding.ts googleKey), kept only as the place id and which photo (Google's terms: no
 //      Google data is stored), the photo and its author's credit fetched each time it's shown (cached a few minutes at most), and only
 //      when the place Google found is the place Co named, in the city named (sameVenue);
 //   3. a mood image from Unsplash, only when UNSPLASH_ACCESS_KEY is set (gated on the key, never a toggle): hotlinked from Unsplash's
@@ -16,7 +16,8 @@ import os from "os";
 import path from "path";
 import { venueKey, type ArtImage, type ArtMap, type Credit, type Grammar, type MapPin } from "./coPages/art.js";
 
-const GOOGLE_KEY = () => process.env.GOOGLE_PLACES_API_KEY ?? "";
+// Same key as geocoding.ts googleKey (GOOGLE_API_KEY, the old name as fallback); read here directly so this file stays free of the db.
+const GOOGLE_KEY = () => process.env.GOOGLE_API_KEY || process.env.GOOGLE_PLACES_API_KEY || "";
 const UNSPLASH_KEY = () => process.env.UNSPLASH_ACCESS_KEY ?? "";
 export const imageryAvailable = () => ({ places: !!GOOGLE_KEY(), unsplash: !!UNSPLASH_KEY() });
 export const ART_DEADLINE_MS = 9_000;
