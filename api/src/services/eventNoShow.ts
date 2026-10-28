@@ -204,20 +204,21 @@ async function sendAsk(event: { api_id: string; name: string; start_at: string; 
   return "held";
 }
 
-// Their open ask, for a "no" that comes after the night is over (agent/conversationTools.ts updateGoing): the latest ask that hasn't
-// been settled. Settling owns the timing (runNoShowNotes: silence stays open until the event's end plus NOSHOW_SETTLE_HOURS); the
+// Their open ask, for a "no" that comes after the night is over (agent/conversationTools.ts updateGoing): the latest ask Cue made,
+// while it hasn't been settled. Never an older one behind a settled newer one: a "no" answers the last night Cue asked about, and an
+// older unsettled ask would turn a night they came to into "sorry you couldn't make it" (review of #281). Settling owns the timing (runNoShowNotes: silence stays open until the event's end plus NOSHOW_SETTLE_HOURS); the
 // window here is only a backstop for an ask that never settles, wide enough for a long night. It counted NOSHOW_SETTLE_HOURS from the
 // ask (45 minutes in), so the last hours of the settle window found nothing open (review of #281, 2026-10-27).
 export const NOSHOW_ASK_OPEN_HOURS = NOSHOW_SETTLE_HOURS * 2;
 export async function openNoShowAsk(userId: string): Promise<{ eventApiId: string } | null> {
   const { rows } = await pool
     .query(
-      `SELECT event_api_id FROM event_presence WHERE user_id = $1 AND noshow_asked_at > NOW() - ($2 || ' hours')::interval AND noshow_settled_at IS NULL
+      `SELECT event_api_id, noshow_settled_at FROM event_presence WHERE user_id = $1 AND noshow_asked_at > NOW() - ($2 || ' hours')::interval
        ORDER BY noshow_asked_at DESC LIMIT 1`,
       [userId, NOSHOW_ASK_OPEN_HOURS],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return rows[0] ? { eventApiId: String(rows[0].event_api_id) } : null;
+  return rows[0] && !rows[0].noshow_settled_at ? { eventApiId: String(rows[0].event_api_id) } : null;
 }
 
 // ---------------------------------------------------------------- 2. after the night (cron, every 15 minutes): settle each ask
