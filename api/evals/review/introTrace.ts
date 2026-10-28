@@ -194,6 +194,42 @@ const internal = () => W.decisions.filter((d) => d.decision === "reply.requestEv
   check("an ask that didn't go out is still noted for a pair Cue suggested, and never for one the member asked for by name", coNote === 1 && memberNote === 0, { coNote, memberNote });
 }
 
+// ------------------------------------------------------------ 3. one reading of a name (review of #294)
+{
+  const { personKey } = await import("../../src/agent/toolGuard.js");
+  const H = await import("../../src/services/eventGuestMatchHandoff.js");
+  check("the guard reads a hyphenated name the way the lookup does: 'Mary-Kate Olsen' and 'Mary-Kate' + 'Olsen' are one person, Mary-Ann another", personKey({ personName: "Mary-Kate Olsen" }) === personKey({ personName: "Mary-Kate", lastName: "Olsen" }) && personKey({ personName: "Mary-Kate", lastName: "Olsen" }) !== personKey({ personName: "Mary-Ann", lastName: "Olsen" }), [personKey({ personName: "Mary-Kate Olsen" }), personKey({ personName: "Mary-Kate", lastName: "Olsen" }), personKey({ personName: "Mary-Ann", lastName: "Olsen" })]);
+  check("a curly apostrophe (an iPhone's default) is the same name as a straight one, to the guard", ["O’Brien", "O‘Brien", "Oʼ Brien".replace(" ", ""), "O′Brien", "O＇Brien", "O´Brien"].every((l) => personKey({ personName: "Liam", lastName: l }) === "liam o'brien"), ["O’Brien", "O′Brien", "O´Brien"].map((l) => personKey({ personName: "Liam", lastName: l })));
+  // Through the real guard: Mary-Kate's finished request doesn't block Mary-Ann, and does block 'Mary-Kate Olsen'.
+  const w = build();
+  await turn(w, { personName: "Mary-Kate", lastName: "Olsen" }, 0);
+  const kate = await turn(w, { personName: "Mary-Kate Olsen" }, 1);
+  const ann = await turn(w, { personName: "Mary-Ann", lastName: "Olsen" }, 2);
+  check("…and through the guard: Mary-Kate's request blocks 'Mary-Kate Olsen' and not Mary-Ann", /Already requested/.test(kate.result?.error ?? "") && ann.result?.ok === true, { kate: kate.result, ann: ann.result });
+  // The lookup: a stored "O'Brien" is found when they type "O’Brien".
+  reset();
+  const asker = addMember({ first_name: "Jo", last_name: "Lee" });
+  const liam = addMember({ first_name: "Liam", last_name: "O'Brien" });
+  addEvent({ api_id: "evt-apos", name: "Cue Night" }, [{ m: asker }, { m: liam }]);
+  W.checkinFollowups.push({ user_id: asker.id, event_api_id: "evt-apos", event_name: "Cue Night" });
+  const curly = await quiet(() => H.resolveNamedEventGuest(asker.id, "Liam", "O’Brien"));
+  const straight = await quiet(() => H.resolveNamedEventGuest(asker.id, "Liam O'Brien"));
+  check("the guest-list lookup finds a stored O'Brien whether they type a curly or a straight apostrophe", "target" in curly && curly.target.user_id === liam.id && "target" in straight && straight.target.user_id === liam.id, { curly, straight });
+}
+
+// ------------------------------------------------------------ 4. a deploy waits for the ask (review of #294)
+// The found path asks in the background after answering. A SIGTERM right after the answer waits for it (services/shutdown.ts track),
+// so the ask and its internal row aren't cut off while the guard has already logged the request. Last: shutdown stays on.
+{
+  const w = build();
+  const S = await import("../../src/services/shutdown.js");
+  const t = await turn(w, { personName: "Sarah", lastName: "Kim" }, 0);
+  const inFlight = S.inflightCount();
+  await quiet(() => S.gracefulShutdown("SIGTERM", null, 5_000));
+  const row = W.decisions.filter((d) => d.decision === "reply.requestEventIntro").map((d) => `${d.outcome}/${d.action}`);
+  check("the background ask is tracked: shutdown waits for it, and the ask and its internal row are done before it ends", t.result?.ok === true && inFlight >= 1 && JSON.stringify(row) === JSON.stringify(["act/requested"]) && W.sent.filter((x) => x.to === w.sarah.phone_number).length === 1 && S.inflightCount() === 0, { inFlight, row, sent: W.sent });
+}
+
 console.log(`intro trace: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();

@@ -14,6 +14,7 @@ import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
 import { galleryEmail } from "./emailDesign.js";
 import { recordDecision } from "../harness/core.js";
+import { foldName, guestName } from "./guestName.js";
 
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
@@ -480,11 +481,9 @@ export type ResolvedEventGuest = { eventId: string; eventName: string; target: M
 // Who they mean is found only by an exact first AND last name (2026-10-07): a prefix match told Jo about Noor when Noor
 // met Jordan, and answering "two people have that name" told a probe who's a member. So Co always asks for the last
 // name first, the same way whoever they name and whether or not anyone matches; only then is the guest list read.
-const foldName = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z' -]+/g, " ").replace(/\s+/g, " ").trim();
+// Names are read through services/guestName.ts, the same reading the guard's once-per-person key uses (review of #294).
 export async function resolveNamedEventGuest(userId: string, nameGuess: string, lastNameGuess?: string | null): Promise<ResolvedEventGuest> {
-  const parts = foldName(nameGuess).split(" ").filter(Boolean);
-  const first = parts[0] ?? "";
-  const last = foldName(lastNameGuess ?? "") || parts.slice(1).join(" ");
+  const { first, last } = guestName(nameGuess, lastNameGuess);
   if (!first) return { error: "no name given" };
   if (!last) return { needsDetail: true };
   const { rows: recent } = await pool.query(

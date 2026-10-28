@@ -32,6 +32,7 @@ import { googleTools } from "../services/googleTools.js";
 import { loopTools, newLoopState, type LoopState } from "./loopTools.js";
 import { FIND_READS_PER_TURN, findsRedraftNote, ignoresFinds, isPost, realFindUseRead, turnFinds, unlinkedFinds } from "./findGuards.js";
 import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
+import { track } from "../services/shutdown.js";
 import { carryLaneNotes, LANE_WORDS, laneNote, laneStoreFor, lookoutRestatesTask, moveLane, noteLabel, offersMove, ruleFor } from "../services/laneMoves.js";
 
 // A date as the member would say it, in their own zone (2026-09-22 code
@@ -1768,7 +1769,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
             ...(failure ? { checks: [{ name: "request_sent", pass: false, reason: failure.slice(0, 200) }] } : {}),
           }).catch(() => {});
         };
-        void request().then(logged, (err: any) => logged(String(err?.message ?? err)));
+        // Tracked (services/shutdown.ts): a deploy's SIGTERM right after the answer waits for the ask and its internal row instead of
+        // cutting it off with no record, while the guard has already logged the request as done (review of #294).
+        void track(request().then(logged, (err: any) => logged(String(err?.message ?? err))));
         return neutral();
       },
     }),
