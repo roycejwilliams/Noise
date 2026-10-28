@@ -1672,7 +1672,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         for (const url of went) ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
         const missed = [...known.filter((u) => !went.includes(u)), ...unknown];
         if (!went.length) return { ok: false, error: `the link${known.length > 1 ? "s" : ""} didn't send` };
-        return missed.length ? { ok: true, note: `These weren't sent: ${missed.join(", ")}` } : { ok: true };
+        return missed.length ? { ok: true, note: `These weren't sent: ${missed.join(", ")}`, recordAs: { urls: went } } : { ok: true };
       },
     }),
 
@@ -1687,6 +1687,17 @@ export function createConversationTools(ctx: ConversationToolContext) {
         lastName: z.string().optional().describe("Their last name, once the member has told you. Never guess it."),
       }),
       execute: async ({ personName, lastName }) => {
+        // Found and asked, not found, or found but the request didn't go: one answer, the same fact, the same receipt, so nothing the
+        // reply reads (now or on a later turn) tells them whether the person was found, is a member, or already said yes (2026-09-22;
+        // review of #284: a second ask for the same name used to answer differently when the first didn't go). The honest status is
+        // only in the internal reply.requestEventIntro row.
+        const neutral = () => {
+          ctx.facts?.add(
+            "did_this_turn",
+            `Cue will check with the person they named whether they're open to an intro, only if that's someone Cue knows from that event. Nothing happens unless both say yes. Don't confirm whether Cue knows the person.`,
+          );
+          return { ok: true, note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list, and don't say whether you found them." };
+        };
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would look up "${personName}" for ${ctx.userId} to request an intro`);
           return { ok: true, note: "dry run" };
@@ -1712,10 +1723,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // neutral answer covers both, and the internal reason stays in the
           // decision log only. Two guests with the same full name get this
           // same answer too (no one is contacted).
-          return {
-            ok: true,
-            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list, and don't say whether you found them.",
-          };
+          return neutral();
         }
         const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
         const requester = rows[0];
@@ -1730,47 +1738,28 @@ export function createConversationTools(ctx: ConversationToolContext) {
             { user_id: ctx.userId, first_name: requester.first_name, phone_number: requester.phone_number, email: requester.email },
             resolved.target,
           );
-        // One retry, then the truth in the log: a failure used to be logged as "requested". The member's answer stays the neutral one
-        // either way (saying it failed would tell them the person was found); the morning review sees the failure.
-        // A throw is retried once. A false is never retried: it means the intro email didn't go (failed, no address, or held by the
-        // matching pause), and the pause would hold it again (review of #284: a false was logged "requested" too).
+        // One retry, then the truth in the internal log: a failure used to be logged as "requested". A throw is retried once. A false is
+        // never retried: the intro email didn't go yet (failed, no address, or held by the matching pause, which sends it later), and a
+        // retry would only hold it again (review of #284).
         let failure: string | null = null;
         for (let attempt = 0; attempt < 2; attempt++) {
           failure = await ask().then(
-            (went) => (went === false ? "the intro email didn't go (failed, no address, or held by the pause)" : null),
+            (went) => (went === false ? "the intro email didn't go yet (failed, no address, or held by the pause to send later)" : null),
             (err: any) => String(err?.message ?? err),
           );
-          if (!failure || /didn't go/.test(failure)) break;
+          if (!failure || /didn't go yet/.test(failure)) break;
         }
-        if (failure) console.error("requestEventIntro: requestIntroToNamedGuest failed twice:", failure);
+        if (failure) console.error("requestEventIntro: the intro request didn't go:", failure);
         await recordDecision({
           layer: 3,
           decision: "reply.requestEventIntro",
           userId: ctx.userId,
           outcome: failure ? "skip" : "act",
-          action: failure ? "not_sent" : "requested",
+          action: failure ? "held_or_failed" : "requested",
           proposal: { personName, eventId: resolved.eventId, targetId: resolved.target.user_id },
           ...(failure ? { checks: [{ name: "request_sent", pass: false, reason: failure.slice(0, 200) }] } : {}),
         }).catch(() => {});
-        // Not sent: exactly the answer the not-found path gives (no fact, the same note), so nothing the reply reads tells them the person
-        // was found; notStarted keeps the guard from recording it as started or refusing a later try (re-review of #284).
-        if (failure) {
-          return {
-            ok: true,
-            notStarted: true,
-            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list, and don't say whether you found them.",
-          };
-        }
-        // The same answer as when nobody resolves, so the reply never tells
-        // them whether the person is a Co member (see the note above).
-        ctx.facts?.add(
-          "did_this_turn",
-          `Cue will check with the person they named whether they're open to an intro, only if that's someone Cue knows from that event. Nothing happens unless both say yes. Don't confirm whether Cue knows the person.`,
-        );
-        return {
-          ok: true,
-          note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list.",
-        };
+        return neutral();
       },
     }),
 
