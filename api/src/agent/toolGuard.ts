@@ -163,11 +163,13 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       if (failed && !made && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
       if (made) ctx.notDone(`${name} made ${made}, but the text with it didn't send.`);
       else if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
-      await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : {});
-      // Co's record of what it did for them (services/coFacts.ts).
       // recordAs: a tool that did only part of what it was asked names the part that happened (shareLink: only the links that went),
-      // so the lasting record never says more than the turn's facts do (review of #284).
-      const recordAs = !!result && typeof result === "object" && result.recordAs && typeof result.recordAs === "object" ? result.recordAs : input;
+      // so the lasting record never says more than the turn's facts do. It's logged too, so the every-boot backfill rebuilds from it,
+      // never from the full ask (review of #284).
+      const partial = !!result && typeof result === "object" && result.recordAs && typeof result.recordAs === "object" ? result.recordAs : null;
+      const recordAs = partial ?? input;
+      await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : partial ? { recordAs: partial } : {});
+      // Co's record of what it did for them (services/coFacts.ts).
       if ((!failed || made) && !ctx.dryRun) await recordToolAction(ctx.userId, name, recordAs);
       return result;
     };

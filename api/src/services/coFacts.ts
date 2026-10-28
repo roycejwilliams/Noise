@@ -338,7 +338,8 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
   // Co's tool calls that went through (agent/toolGuard.ts logs).
   const { rows } = await pool
     .query(
-      `SELECT user_id, decision, created_at, proposal->'input' AS input FROM harness_decisions
+      // recordAs: the part a tool actually did, when it did only part (agent/toolGuard.ts), never the full ask.
+      `SELECT user_id, decision, created_at, COALESCE(proposal->'recordAs', proposal->'input') AS input FROM harness_decisions
        WHERE decision LIKE 'tool.%' AND action = 'done' AND user_id IS NOT NULL AND created_at > NOW() - INTERVAL '90 days'`,
     )
     .catch(() => ({ rows: [] as any[] }));
