@@ -1666,9 +1666,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "none of those links are on file, so they can't be sent" };
         }
         state.pendingLinks.push(...known);
-        for (const url of known) ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
         await flushLinks();
-        return unknown.length ? { ok: true, note: `These weren't on file and weren't sent: ${unknown.join(", ")}` } : { ok: true };
+        // Only what actually went is "sent": the fact used to be written before the send, so a failed send still read as done.
+        const went = known.filter((u) => state.sentMessages.includes(u));
+        for (const url of went) ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
+        const missed = [...known.filter((u) => !went.includes(u)), ...unknown];
+        if (!went.length) return { ok: false, error: `the link${known.length > 1 ? "s" : ""} didn't send` };
+        return missed.length ? { ok: true, note: `These weren't sent: ${missed.join(", ")}` } : { ok: true };
       },
     }),
 
@@ -1719,19 +1723,32 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`The intro request for ${personName} was not made.`);
           return { ok: false, error: "couldn't look up their own contact details" };
         }
-        await requestIntroToNamedGuest(
-          resolved.eventId,
-          resolved.eventName,
-          { user_id: ctx.userId, first_name: requester.first_name, phone_number: requester.phone_number, email: requester.email },
-          resolved.target,
-        ).catch((err: any) => console.error("requestEventIntro: requestIntroToNamedGuest failed (non-fatal):", err?.message ?? err));
+        const ask = () =>
+          requestIntroToNamedGuest(
+            resolved.eventId,
+            resolved.eventName,
+            { user_id: ctx.userId, first_name: requester.first_name, phone_number: requester.phone_number, email: requester.email },
+            resolved.target,
+          );
+        // One retry, then the truth in the log: a failure used to be logged as "requested". The member's answer stays the neutral one
+        // either way (saying it failed would tell them the person was found); the morning review sees the failure.
+        let failure: string | null = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          failure = await ask().then(
+            () => null,
+            (err: any) => String(err?.message ?? err),
+          );
+          if (!failure) break;
+        }
+        if (failure) console.error("requestEventIntro: requestIntroToNamedGuest failed twice:", failure);
         await recordDecision({
           layer: 3,
           decision: "reply.requestEventIntro",
           userId: ctx.userId,
-          outcome: "act",
-          action: "requested",
+          outcome: failure ? "skip" : "act",
+          action: failure ? "failed" : "requested",
           proposal: { personName, eventId: resolved.eventId, targetId: resolved.target.user_id },
+          ...(failure ? { checks: [{ name: "request_sent", pass: false, reason: failure.slice(0, 200) }] } : {}),
         }).catch(() => {});
         // The same answer as when nobody resolves, so the reply never tells
         // them whether the person is a Co member (see the note above).

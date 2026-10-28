@@ -234,6 +234,7 @@
     "evals/llm/structuredJudge.ts",
     "evals/cache/toolOrder.ts",
     "evals/review/changes.ts",
-    "evals/review/audience.ts"
+    "evals/review/audience.ts",
+    "evals/review/outsideActions.ts"
   ]
 }
