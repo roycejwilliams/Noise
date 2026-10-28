@@ -789,6 +789,9 @@ export function deckTools(
         if (composing && !was) return { ok: false, error: "That deck can't be opened to change it." };
         let refused: string | null = null;
         let r: any = null;
+        // The version this write was based on, and what was written (a retry after a conflict re-reads it), for the changed-slides line.
+        let basis: any = null;
+        let written: any = null;
         let reread = false;
         let updateQa: any = null;
         for (let attempt = 0; ; attempt++) {
@@ -877,6 +880,8 @@ export function deckTools(
               updateQa = q;
             } else if (q) updateQa = { ...q, final: q.first };
           }
+          basis = was;
+          written = next;
           r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source, { expectVersion: was ? before?.version : null });
           if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
           // Another change landed while this one was written (concurrency audit, 2026-10-12): never written over. A change written
@@ -921,7 +926,9 @@ export function deckTools(
           }
         }
         const short = updateQa ? (await import("../services/designQa.js")).qaShortfall(updateQa.final.findings) : null;
-        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${partial ? ` One part I couldn't do: ${partial}.` : ""}${lookLine}${short ? ` ${short}` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
+        const said = input.changed.trim().replace(/[.\s]+$/, "");
+        const slidesLine = basis && written ? slidesChangedLine(changedSlides(basis, written)) : null;
+        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${slidesLine ? `${slidesLine} (${said})` : said}.${partial ? ` One part I couldn't do: ${partial}.` : ""}${lookLine}${short ? ` ${short}` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
@@ -933,4 +940,19 @@ export function deckTools(
       },
     }),
   };
+}
+
+// Pure: which slides changed, by number (1-based), compared in code: a slide whose headline, points, picture or notes differ from the
+// one at its place before, or that is new. What the line says changed is checked, not taken from Cue's own words (Royce, 2026-10-27).
+export function changedSlides(was: any, next: any): number[] {
+  const key = (x: any) => JSON.stringify({ h: x?.headline ?? "", b: x?.bullets ?? [], i: x?.image ?? null, n: x?.notes ?? null });
+  const before: any[] = Array.isArray(was?.slides) ? was.slides : [];
+  const after: any[] = Array.isArray(next?.slides) ? next.slides : [];
+  return after.map((x, i) => (i >= before.length || key(x) !== key(before[i]) ? i + 1 : 0)).filter(Boolean);
+}
+// Pure: "slide 3 changed", "slides 3 and 5 changed", "slides 2, 3 and 6 changed"; null when no slide's content changed.
+export function slidesChangedLine(nums: number[]): string | null {
+  if (!nums.length) return null;
+  if (nums.length === 1) return `slide ${nums[0]} changed`;
+  return `slides ${nums.slice(0, -1).join(", ")} and ${nums[nums.length - 1]} changed`;
 }
