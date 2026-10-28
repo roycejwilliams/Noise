@@ -13,13 +13,25 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 export type PlanSend = { ok: true; hasCalendar: boolean } | { ok: false; why: string };
 
 // The files and the email, ready to send. Null for the sheet means Chrome wasn't available.
-export async function buildPlanFiles(plan: Plan, o: { firstName: string; seed: string; now?: Date }) {
-  const pdf = await renderPdf(planHtml(plan, o.firstName));
+// qa: the design QA of the sheet that is actually sent (planHtml), measured before it's rendered; null when it couldn't run in time.
+// It used to run on a different document (the text fallback's layout) and was logged as the plan's (Royce, 2026-10-27: check the real
+// output, not a stand-in).
+export const PLAN_QA_MS = 8_000;
+export async function buildPlanFiles(plan: Plan, o: { firstName: string; seed: string; now?: Date }, deps: { qa?: (html: string, plan: Plan) => Promise<import("./designQa.js").QaResult | null>; render?: (html: string) => Promise<Buffer | null> } = {}) {
+  const html = planHtml(plan, o.firstName);
+  const measure =
+    deps.qa ??
+    (async (h: string, p: Plan) => {
+      const Q = await import("./designQa.js");
+      return Q.runQa(h, "doc", planAsDoc(p), { screenshot: false });
+    });
+  const qa = await Promise.race([measure(html, plan).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), PLAN_QA_MS))]);
+  const pdf = await (deps.render ?? renderPdf)(html);
   if (!pdf) return null;
   const calendar = hasTimedSteps(plan);
   const ics = calendar ? Buffer.from(buildIcs(plan, { seed: o.seed, now: o.now ?? new Date() }), "utf8") : null;
   const mail = planEmail(plan, { firstName: o.firstName, calendar });
-  return { pdf, ics, mail, calendar, base: slug(plan.title) };
+  return { pdf, ics, mail, calendar, base: slug(plan.title), qa };
 }
 
 export type PlanFiles = NonNullable<Awaited<ReturnType<typeof buildPlanFiles>>>;

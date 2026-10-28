@@ -781,7 +781,10 @@ export function loopTools(
           // ("partnership_plan" only names it a plan in that line.)
           const caption = await D.captionFor({ line: input.line, title: plan.title, kind: "partnership_plan", sendAt: now, zone });
           const withEmail = emailed ? `${caption.replace(/[.?]$/, ".")} It's in your email too${files?.calendar ? ", with a calendar hold for each time" : ""}.` : caption;
-          const deps = await D.deliverDepsWith({ render: async () => files?.pdf ?? null });
+          // The sheet sent is planHtml, measured in buildPlanFiles: no stand-in QA of another layout runs here, and the real one is what's
+          // recorded (Royce, 2026-10-27).
+          const deps = await D.deliverDepsWith({ render: async () => files?.pdf ?? null, qa: undefined });
+          if (files?.qa) D.noteDocQa(ctx.userId, files.qa);
           const rd = await D.deliverAndRecord(doc, { userId: ctx.userId, firstName, phone: ctx.phoneNumber, zone, now, line: withEmail }, { askedForGoogle: false, source: "reply:plan", resend: D.asksToResend(theirWords()) }, { deliver: (d, t, target) => D.deliverDocument(d, t, target, deps) });
           if (rd.duplicate) duplicateWhy = String((rd.results[0] as any).why);
           else if (rd.sentOk.length) {

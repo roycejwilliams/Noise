@@ -139,7 +139,7 @@ for (const t of ["plan sunday for me and three friends", "text me the pdf", "wha
 check("with no email on file an email request becomes a text, and Cue is told to say so", /\(asked === "email" && !email\)/.test(tool) && /They have no email on file, so it went by text: say so/.test(tool));
 // 2026-10-08: the text send goes through the document delivery (deliverAndRecord): the sheet itself as the attachment (cached at a
 // short-lived address by the PDF sender), a receipt, the one line, and the text fallback when the sheet won't render.
-check("the text send attaches the plan's own sheet through the recorded delivery, and logs it", /deliverDepsWith\(\{ render: async \(\) => files\?\.pdf \?\? null \}\)/.test(tool) && /D\.deliverAndRecord\(doc,/.test(tool) && /cache: cachePlanFile/.test(read("src/services/documentDelivery.ts")) && /logDeliveredPlan\(`Co replied: \[sent a plan:/.test(tool));
+check("the text send attaches the plan's own sheet through the recorded delivery, and logs it", /deliverDepsWith\(\{ render: async \(\) => files\?\.pdf \?\? null, qa: undefined \}\)/.test(tool) && /D\.deliverAndRecord\(doc,/.test(tool) && /cache: cachePlanFile/.test(read("src/services/documentDelivery.ts")) && /logDeliveredPlan\(`Co replied: \[sent a plan:/.test(tool));
 check("it takes sendBy only as text, email or both", /sendBy: z\.enum\(\["text", "email", "both"\]\)/.test(tool));
 check("the text goes to the member's own number, never another", /phone: ctx\.phoneNumber/.test(tool) && !/phone: (?!ctx\.phoneNumber)/.test(tool));
 check("one of the two failing is said, not hidden", /One of the two didn't go out: say which/.test(tool));
@@ -176,6 +176,16 @@ check("the plan is logged for the review", /decision: "loop\.emailPlan"/.test(to
 
 check("a downgraded email request tells Cue why, and the email path logs itself for a replay", /They hadn't asked for email, so it went by text/.test(tool) && /logDeliveredPlan\(`Co replied: \[emailed a plan:/.test(tool));
 check("numbers are checked against what was read or said, not the capability text", !/ctx\.facts\?\.text\(\)/.test(tool.slice(tool.indexOf("const facts ="), tool.indexOf("const plan = resolvePlan"))));
+
+// The design QA measures the sheet that is actually sent (Royce, 2026-10-27): it ran on another layout and was logged as the plan's.
+{
+  const PE = await import("../../src/services/planEmail.js");
+  let measured: string | null = null;
+  await PE.buildPlanFiles(plan, { firstName: "Jordan", seed: "t" }, { qa: async (h) => { measured = h; return { ran: true, findings: [], screenshot: null, measured: 1 } as any; }, render: async () => null }).catch(() => null);
+  check("plan QA: it measures the very sheet that's sent (planHtml)", measured === P.planHtml(plan, "Jordan"));
+  const lt = (await import("node:fs")).readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8");
+  check("plan QA: the stand-in QA of the text layout doesn't run, and the real one is what's recorded", /deliverDepsWith\(\{ render: async \(\) => files\?\.pdf \?\? null, qa: undefined \}\)/.test(lt) && /D\.noteDocQa\(ctx\.userId, files\.qa\)/.test(lt));
+}
 
 console.log(`plan rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

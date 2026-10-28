@@ -267,7 +267,20 @@ export function pageTools(
         const carried = AI.carryArt(next0, was);
         const art = ctx.dryRun ? null : await AI.fillPageArt(carried, { mood: input.coverMood ?? null }).catch(() => null);
         for (const loc of art?.report.track ?? []) AI.trackUnsplash(loc).catch(() => {});
-        const next = art && store.checkPage(art.data, source).ok ? art.data : store.checkPage(carried, source).ok ? carried : next0;
+        const unchecked = art && store.checkPage(art.data, source).ok ? art.data : store.checkPage(carried, source).ok ? carried : next0;
+        // The same design QA a new page gets (makePage above), on the changed page before it goes: measured at laptop and phone width
+        // with its real pictures, what code can fix is fixed, what's left is said in the update's one line. A changed page used to go
+        // unmeasured (Royce, 2026-10-27: Cue checks its work first).
+        const Q = await import("../services/designQa.js");
+        const { renderCoPage } = await import("../services/coPages/template.js");
+        const art2 = ctx.dryRun ? undefined : await AI.artDataUris(unchecked).catch(() => undefined);
+        const imageSrc = ctx.dryRun ? undefined : await qaImageSrc(ctx.userId, unchecked).catch(() => undefined);
+        const qa = ctx.dryRun ? null : await Q.qaPage(unchecked, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc: art2?.src, credit: art2?.credit }), { screenshot: false }).catch(() => null);
+        const fixedOk = qa?.fixed.length ? store.checkPage(qa.data, source) : null;
+        const next = fixedOk?.ok ? fixedOk.data : unchecked;
+        // What ships is what's said: the unfixed page goes with what QA first found.
+        const shipped = qa ? (!qa.fixed.length || fixedOk?.ok ? qa.final : qa.first) : null;
+        const short = shipped ? Q.qaShortfall(shipped.findings) : null;
         const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null });
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         // Another change landed after this one read the page (concurrency audit, 2026-10-12): never written over.
@@ -280,7 +293,7 @@ export function pageTools(
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
         if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: r.moved?.id ?? pick.id, medium: "page", event: "revised" }).catch(() => {});
-        const { text, confirm } = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.${short ? ` ${short}` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The page is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
