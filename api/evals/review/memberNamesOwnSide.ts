@@ -9,6 +9,7 @@
 //   2. Through the real double opt-in: Sarah's yes and an ask to Jo that didn't reach him leave Jo's list as it was; the ask that
 //      reaches him adds her.
 //   3. Cue's records: a tease that never named the person adds no one; a named offer does.
+import { readFileSync } from "node:fs";
 import { W, reset, addMember, addEvent, ask } from "../inroom/world.js";
 
 // Pinned to 18:00 UTC, as evals/review/introTrace.ts: a member with no time zone is texted 16:00-24:00 UTC, so a direct ask goes now.
@@ -154,6 +155,8 @@ for (const c of cases) {
   check("no event read takes a name from the other side: nothing reads WHERE candidate_id = $1 or $1 = ANY(candidate_ids)", !/candidate_id = \$1|\$1 = ANY\(candidate_ids\)|unnest\(candidate_ids\)/.test(ev), ev);
 }
 
+// A stuck send expired at room close never counts as reached (review of #295): its opened_at is cleared as it expires.
+check("room close clears opened_at on asks that never went out", /opened_at = CASE WHEN status IN \('queued', 'sending'\) THEN NULL ELSE opened_at END/.test(readFileSync(new URL("../../src/services/roomMatching.ts", import.meta.url), "utf8")));
 console.log(`member names, own side: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();
