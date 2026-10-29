@@ -40,7 +40,7 @@ check("ack takes one fitting emoji (a plane for a landing), never words, several
   check("Cue sees its recent reactions before it decides", T.describeTapbacks({ recent: [{ emoji: "👀", at: ago(3) }, { emoji: "✍️", at: ago(90) }], textsSinceLast: 2 }, now) === "👀 3 min ago (2 of their texts since), ✍️ 2h ago" && R.reactionsLine("👀 3 min ago").includes("not with the same one each time") && R.reactionsLine(null) === "");
   check("❤️ and 😂 go as the native tapbacks", T.reactionFor("❤️") === "love" && T.reactionFor("❤") === "love" && T.reactionFor("😂") === "laugh" && T.reactionFor("👍") === "like" && T.reactionFor("👀") === "👀");
   const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-  check("the closing tapback is any single emoji under the ack's rules, never the last one again", /reaction: z\.string\(\)/.test(ct) && /parseAck\(picked\)/.test(ct) && /sameReaction\(ctx\.lastReaction, reaction\)/.test(ct) && /sendReaction\(ctx\.messageHandle, reactionFor\(reaction\)\)/.test(ct));
+  check("the closing tapback is any single emoji under the ack's rules, never the last one again", /reaction: z\.string\(\)/.test(ct) && /parseAck\(picked\)/.test(ct) && /sameReaction\(ctx\.lastReaction, reaction\)/.test(ct) && /sendReaction\(ctx\.messageHandle, reactionFor\(reaction\)(?:, \{ answerFor: ctx\.phoneNumber \})?\)/.test(ct));
   const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
   check("the reply knows Cue's last reaction (this turn's ack first)", /const lastReaction = ackSent \?\? \(await tapbacksP/.test(sb) && /\blastReaction,/.test(sb));
   check("searches no longer add a 👀 of their own", !/sendReaction\(ownHandle, "👀"\)/.test(sb) && /HOLD_NO_ACK_MS/.test(sb));

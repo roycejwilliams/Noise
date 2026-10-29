@@ -205,7 +205,7 @@ const sendblue = {
         ? Promise.resolve({ message_handle: testHandle(), status: "SENT", test: true })
         : client.messages.send({ ...body, content }, options);
       return sent.then((res: any) => {
-        noteSent(content);
+        noteSent({ to, content, media: !!(body as { media_url?: string }).media_url });
         // Every message Co sends, kept by its handle so a later reply can
         // thread under it (services/inlineReply.ts sentMessageHandle).
         if (res?.message_handle) recordOutbound(String(res.message_handle), to ?? "", content ?? "");
@@ -270,7 +270,10 @@ export async function markRead(number: string): Promise<void> {
 // thumbs up ... or just send an emoji when it doesn't have anything to say").
 // Apple only delivers these on iMessage, so the caller falls back to a plain
 // emoji text when this returns false.
-export async function sendReaction(messageHandle: string, reaction: string): Promise<boolean> {
+// answerFor: the turn's member, when this tapback is the turn's answer (Cue chose it instead of replying, agent/conversationTools.ts).
+// It then counts as the turn having answered them (services/turnReplies.ts), so a turn that dies after it is never replayed as a
+// full turn. The early "on it" tapback passes nothing: like a "looking" line, it answers nothing.
+export async function sendReaction(messageHandle: string, reaction: string, o: { answerFor?: string } = {}): Promise<boolean> {
   // A message gets one reaction from Co, whichever path asks (services/tapbacks.ts).
   // The message already has one, so there's nothing more to send.
   if (!claimReaction(messageHandle)) {
@@ -279,6 +282,7 @@ export async function sendReaction(messageHandle: string, reaction: string): Pro
   }
   // A test member's message: the tapback counts as given, nothing is sent.
   if (isTestHandle(messageHandle)) {
+    if (o.answerFor) noteSent({ to: o.answerFor, reaction: true });
     confirmReaction(messageHandle);
     return true;
   }
@@ -302,6 +306,7 @@ export async function sendReaction(messageHandle: string, reaction: string): Pro
       releaseReaction(messageHandle);
       return false;
     }
+    if (o.answerFor) noteSent({ to: o.answerFor, reaction: true });
     confirmReaction(messageHandle);
     return true;
   } catch (err: any) {

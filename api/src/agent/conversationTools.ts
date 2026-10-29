@@ -1172,7 +1172,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         let how = "dry_run";
         if (!ctx.dryRun) {
-          const tapped = ctx.messageHandle ? await sendReaction(ctx.messageHandle, reactionFor(reaction)) : false;
+          // The turn's answer: counts as having answered them, so a turn that dies after it isn't replayed (services/turnReplies.ts).
+          const tapped = ctx.messageHandle ? await sendReaction(ctx.messageHandle, reactionFor(reaction), { answerFor: ctx.phoneNumber }) : false;
           if (!tapped) {
             // No tapback (SMS, an old message, or Sendblue refused it): the same emoji as a text says the same.
             const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: reaction, asVoice: false });
