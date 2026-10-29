@@ -32,6 +32,13 @@ globalThis.fetch = (async (input: any, init?: any) => {
     claimReads++;
     const about = norm(body.split("Message Cue is about to send:").pop() ?? "");
     text = JSON.stringify({ claims: script.filter((c) => about.includes(norm(c.text))).map((c) => ({ quote: null, ...c })) });
+  } else if (/about a failure on its own side/.test(body) && /onlyDescribes/.test(body)) {
+    // The failure-line judge, following its own question: a line describing the failure, its cause or what it means for them is fine;
+    // one saying Cue did something about it (flagged, reported, logged, fixed, escalated, passed it on, told the team) is not.
+    const line = norm(body).match(/its own side[^\n]*:\\n"(.*?)"\\n/)?.[1] ?? "";
+    admissionReads.push(line);
+    const didSomething = /\b(flagg\w*|report(ed|ing)|logg\w*|fix(ed|ing)|escalat\w*|pass(ed|ing) (it|this|that) (on|along)|shared|let [^.]* know|the team (has|got)|sent (it|this|that) to|on record)\b|^flagged$/.test(line);
+    text = JSON.stringify({ onlyDescribes: !didSomething });
   } else if (/Does this line assert anything that happened/.test(body)) {
     // The one line it's asked about, exactly: a longer line that only starts with an admission is not one.
     const line = norm(body).match(/about to send this line:\\n"(.*?)"\\n/)?.[1] ?? "";
@@ -137,6 +144,12 @@ for (const s of ["It didn't go through on my end.", "The call just didn't go thr
 }
 for (const rec of ["call_unreported", "call_reported"] as RecState[]) await outcome("citing what failed", "It's a setup problem on my side.", rec, [whole("It's a setup problem on my side.", "F2", true, "detail")], true);
 for (const rec of ["call_unreported", "unreported", "reported"] as RecState[]) await outcome("citing what failed", "That's on my side, not you.", rec, [whole("That's on my side, not you.", "F2", true, "detail")], true);
+// The instructed dial-failure line and a plain cause, citing what failed: a reason or a stated fact about the failure is fine for the
+// failure-line question (5th review: the admission question cut both, leaving "Honestly, I'm not sure on that one.").
+for (const rec of ["call_unreported", "call_reported"] as RecState[]) {
+  await outcome("citing what failed", "The call didn't go through, and asking again right now won't help.", rec, [whole("The call didn't go through, and asking again right now won't help.", "F2")], true);
+  await outcome("citing what failed", "The phone service I call through turned it down before your phone rang.", rec, [whole("The phone service I call through turned it down before your phone rang.", "F2", true, "detail")], true);
+}
 // An admission carrying an invented action, and false admissions.
 for (const rec of ["unreported", "reported", "call_unreported"] as RecState[]) {
   await outcome("one claim, unsupported", "The call didn't go through, so I booked the table instead.", rec, [whole("The call didn't go through, so I booked the table instead.", null, false)], false);
@@ -214,6 +227,16 @@ for (const [s, cite] of honest) for (const rec of ["unreported", "reported", "no
   check("the admission prompt says a flag, report, log or pass-on is an action, never only an admission", /Saying something was flagged, reported, logged or passed on \(to the team or anyone\) is asserting an action, never only an admission\./.test(G.admissionPrompt("x")));
   check("nor a sentence the claim read found nothing in", !G.failureBackedSentence(mixed, "On my end, all good."));
   check("nor a fragment of a backed claim said on its own", !G.failureBackedSentence(mixed, "On my end."));
+  // Cue's own earlier lines back nothing while a failure is unreported (5th review: a quote of "I've flagged it…" let a repeat through).
+  const own = { message: "and?", recentConversation: "User said: What happened?\nCo replied: I've flagged it so it gets looked at." };
+  const repeat = { text: "It's flagged", type: "detail" as const, supported: true, factId: null, quote: "I've flagged it so it gets looked at" };
+  check("a quote of Cue's own line backs nothing while a failure is unreported", G.claimChecks([repeat], facts("unreported"), own as any)[0].pass === false && G.claimChecks([repeat], facts("unknown"), own as any)[0].pass === false);
+  check("with a report on record, or no failure in view, the quote counts as before", G.claimChecks([repeat], facts("reported"), own as any)[0].pass === true && G.claimChecks([repeat], facts("none"), own as any)[0].pass === true);
+  const theirs = { message: "and?", recentConversation: "User said: the team has the logs already\nCo replied: Okay." };
+  check("a quote of their own words still counts while a failure is unreported", G.claimChecks([{ text: "The team has the logs", type: "detail", supported: true, factId: null, quote: "the team has the logs already" }], facts("unreported"), theirs as any)[0].pass === true);
+  // The failure-line question is the one asked for a claim citing what failed; the admission question for the rest.
+  check("the failure-line question asks only about describing the failure, never about anything Cue did about it", /only describe the failure, its cause, or what it means for them/.test(G.failureLinePrompt("x")) && /flagged, reported, logged, fixed, escalated or passed it on/.test(G.failureLinePrompt("x")));
+  // A first-hand line no fact backs: section 2 covers the cut.
   // A machinery-sounding line on a failure turn is read for claims even when it isn't claim-shaped, so it can stand on what failed.
   claimReads = 0;
   script = [whole("That's on my side, not you.", "F2", true, "detail")];
@@ -243,6 +266,8 @@ for (const [s, cite] of honest) for (const rec of ["unreported", "reported", "no
   const flags = D.logFlags({ userId: "u", firstName: "Jordan", messages: [{ at: "2026-10-28T22:54:04Z", from: "member", text: "Call me" } as any], decisions: [{ id: 1, at: "2026-10-28T22:54:09Z", decision: "turn.failed", outcome: "act", action: "told_member", reason: null, proposal: { source: "turn_error", errorClass: "RestException", detail: { status: 401, code: "8001", message: "actor doesn't have any assertions" } }, checks: [] } as any], emotions: [], issues: [] });
   const f = flags.find((x) => x.type === "turn_failed");
   check("a broken turn is a high flag in the morning review, with its cause", f?.severity === "high" && /RestException, HTTP 401, code 8001, actor doesn't have any assertions/.test(f?.cause ?? "") && f?.causeConfirmed === true, flags);
+  const withheld = D.logFlags({ userId: "u", firstName: "Jordan", messages: [], decisions: [{ id: 2, at: "2026-10-28T22:54:09Z", decision: "turn.failed", outcome: "act", action: "told_member", reason: null, proposal: { source: "turn_error", errorClass: "Error", detail: { status: null, code: null, message: R.DETAIL_WITHHELD } }, checks: [] } as any], emotions: [], issues: [] }).find((x) => x.type === "turn_failed");
+  check("a withheld message is never a confirmed cause", withheld?.causeConfirmed === false && /message withheld/.test(withheld?.cause ?? ""), withheld);
 }
 
 console.log(`failure record: ${total - failed}/${total} passed`);

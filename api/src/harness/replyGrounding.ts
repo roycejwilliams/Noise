@@ -898,6 +898,11 @@ export function theirOwnWords(text: string | undefined): string {
     .join("\n");
 }
 
+// Cue's own lines in the sources: its replies in the thread and what it already sent this turn.
+export function cueOwnLines(src: GroundingSources): string {
+  const own = (src.recentConversation ?? "").split("\n").filter((l) => /^(?:Co|Cue) replied:/.test(l));
+  return norm([...own, ...(src.sentThisTurn ?? [])].join("\n"));
+}
 export function sourceText(rf: ReplyFacts, src: GroundingSources, claimType?: string): string {
   const realFacts = rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text).join("\n");
   const memories = theirOwnWords(src.recentMemories);
@@ -1318,6 +1323,32 @@ Does this line assert anything that happened or is true (an action, a state, or 
 
 Return ONLY JSON: {"onlyAdmission": true} if the line only admits something didn't happen and/or owns it, else {"onlyAdmission": false}.`;
 }
+// Pure: the question for a line that cites what failed (services/turnFailure.ts). The admission question above counts a reason or a
+// stated fact as asserting something, which cut the instructed dial-failure line ("…and asking again right now won't help") and a plain
+// cause ("The phone service I call through turned it down"). This one asks only what the failure fact can back: the failure, its cause,
+// and what it means for them, and never anything Cue did about it.
+export function failureLinePrompt(claim: string): string {
+  return `Cue, a texting companion, is about to send this line about a failure on its own side (a call that didn't go through, or an answer that broke):
+"${claim}"
+
+Does this line only describe the failure, its cause, or what it means for them (for example that asking again right now won't help, or that it's nothing they did), without saying Cue did something about it (flagged, reported, logged, fixed, escalated or passed it on, to the team or anyone)?
+
+Return ONLY JSON: {"onlyDescribes": true} if it only describes the failure, its cause or what it means for them, else {"onlyDescribes": false}.`;
+}
+const failureLineCache = new Map<string, boolean>();
+export async function judgeFailureLine(claim: string, judge: AdmissionJudge = haikuAdmission): Promise<boolean | null> {
+  const key = claim.trim();
+  if (failureLineCache.has(key)) return failureLineCache.get(key)!;
+  try {
+    const out = parseModelJson<{ onlyDescribes?: unknown }>(await judge(failureLinePrompt(key)));
+    if (typeof out?.onlyDescribes !== "boolean") return null;
+    if (failureLineCache.size > 500) failureLineCache.clear();
+    failureLineCache.set(key, out.onlyDescribes);
+    return out.onlyDescribes;
+  } catch {
+    return null;
+  }
+}
 const admissionCache = new Map<string, boolean>();
 export async function judgeAdmission(claim: string, judge: AdmissionJudge = haikuAdmission): Promise<boolean | null> {
   const key = claim.trim();
@@ -1352,9 +1383,14 @@ export async function admitNarratedSentences(draft: string, rf: ReplyFacts, judg
 // that fact only as an admission of the failure (claimChecks), whatever type the reader gave it.
 export async function admissionsFor(claims: Claim[], judge?: AdmissionJudge, facts: Fact[] = []): Promise<Map<string, boolean>> {
   const citesWhatFailed = (c: Claim) => !!c.factId && facts.some((f) => f.id === c.factId && isFailureFact(f));
-  const asks = [...new Set(claims.filter((c) => ((c.type === "past_action" || c.type === "detail") && MAY_ADMIT.test(c.text)) || citesWhatFailed(c)).map((c) => c.text))];
+  // A claim citing what failed gets the failure-line question; the rest, the admission question.
+  const failureLines = [...new Set(claims.filter(citesWhatFailed).map((c) => c.text))];
+  const asks = [...new Set(claims.filter((c) => !citesWhatFailed(c) && (c.type === "past_action" || c.type === "detail") && MAY_ADMIT.test(c.text)).map((c) => c.text))].filter((t) => !failureLines.includes(t));
   const out = new Map<string, boolean>();
-  await Promise.all(asks.map(async (t) => { if ((await judgeAdmission(t, judge)) === true) out.set(t, true); }));
+  await Promise.all([
+    ...asks.map(async (t) => { if ((await judgeAdmission(t, judge)) === true) out.set(t, true); }),
+    ...failureLines.map(async (t) => { if ((await judgeFailureLine(t, judge)) === true) out.set(t, true); }),
+  ]);
   return out;
 }
 
@@ -1547,7 +1583,9 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     const absence = (c.type === "detail" || c.type === "member_life") && CO_DENIES_HAVING.test(c.text);
     if (pass && !absence) {
       const factOk = !!c.factId && factIds.has(c.factId);
-      const quoteOk = !!c.quote && norm(c.quote).length >= 6 && sources.includes(norm(c.quote));
+      // While a failure is in view and no report of it is on record, Cue's own earlier lines ("I've flagged it…") back nothing: a quote
+      // found in them doesn't count (5th review: a quote of its own line let a repeat through).
+      const quoteOk = !!c.quote && norm(c.quote).length >= 6 && sources.includes(norm(c.quote)) && !(failureUnreported && cueOwnLines(src).includes(norm(c.quote)));
       if (!factOk && !quoteOk) {
         pass = false;
         reason += " (cited support not found)";
