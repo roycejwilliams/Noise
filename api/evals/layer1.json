@@ -99,6 +99,7 @@
     "evals/emotion/labels.ts",
     "evals/voiceFlags/rules.ts",
     "evals/voiceRead/rules.ts",
+    "evals/emotion/uncertainWording.ts",
     "evals/calls/sep23Bugs.ts",
     "evals/calls/pr46Review.ts",
     "evals/auth/rules.ts",

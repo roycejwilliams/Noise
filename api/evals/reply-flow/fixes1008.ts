@@ -69,7 +69,7 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   check("F6: the false line is gone, the true one is there", !/Nothing follows up on a promise you make yourself/.test(cr) && /Only promise what a tool you called this turn, or a task in the facts, will do\./.test(cr));
   const g = src("harness/replyGrounding.ts");
   check("F7: the rewrite never teaches 'Want me to look?'", !/Want me to look\?/.test(g) && /say what you're doing about it now/.test(g));
-  check("F9: no 'Hume's read' in the reply prompts", !/Hume's read/.test(cr) && (cr.match(/from a read of what they texted and said on recent calls/g) ?? []).length === 2);
+  check("F9: no 'Hume's read' in the reply prompts", !/Hume's read/.test(cr) && (cr.match(/may have been feeling: reads of their recent texts and calls/g) ?? []).length === 2);
   const rules = CR.TOOL_TURN_RULES(false);
   check("B1: work first, then sendReply from its result", /startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp, moveLane\), call that tool first/.test(rules) && /sendReply says what happened, from its result/.test(rules));
   check("B7: one sendReply, except a separate thought after a tool result; independent tools together", /One sendReply per turn/.test(rules) && /separate thought after a tool result/.test(rules) && /same step/.test(rules));
