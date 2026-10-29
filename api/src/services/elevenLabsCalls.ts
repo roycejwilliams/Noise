@@ -30,9 +30,9 @@ import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import { memberZone } from "./memberTime.js";
 import { TEAM_BUILDER_LINE, isTeamMember } from "./extensions.js";
-import { voiceReadAllowed, voiceReadPrereqs, voiceStreamUrl, withVoiceFork } from "./voiceRead.js";
+import { voiceReadAllowed, voiceReadPrereqs, voiceStreamUrl, withVoiceFork, type VoiceReadConsent } from "./voiceRead.js";
+import { readVoiceReadConsent } from "./voiceReadConsent.js";
 import { issueVoiceStreamLink, type VoiceStreamLinkStore } from "./voiceStreamLink.js";
-import { isTestNumber } from "./testNumbers.js";
 
 let client: ElevenLabsClient | null = null;
 export function elevenLabs(): ElevenLabsClient {
@@ -140,23 +140,20 @@ export async function registerElevenLabsCall(o: {
 }
 
 // ElevenLabs' TwiML, with the voice read's fork added when it may run for this member (voiceReadAllowed: the Hume key,
-// our URL and Twilio's token are set, off production, and a test member or one who agreed, users.voice_read_ok). The fork
-// carries a one-time stream id, never the member's id or token (services/voiceStreamLink.ts). Anything that goes wrong
-// returns the TwiML exactly as ElevenLabs gave it: the call never depends on the read.
-export async function voiceReadConsented(userId: string): Promise<boolean> {
-  const { rows } = await pool.query(`SELECT voice_read_ok FROM users WHERE id = $1`, [userId]);
-  return rows[0]?.voice_read_ok === true;
-}
+// our URL and Twilio's token are set, off production, and their own yes on file and not taken back, or a test member;
+// services/voiceReadConsent.ts). users.voice_read_ok is never read: a database switch isn't consent. The fork carries a
+// one-time stream id, never the member's id or token (services/voiceStreamLink.ts). Anything that goes wrong, a failed
+// consent read included, returns the TwiML exactly as ElevenLabs gave it: the call never depends on the read.
 export async function withVoiceReadFork(
   twiml: string,
   o: { userId: string; callToken: string; memberPhone: unknown },
   env: NodeJS.ProcessEnv = process.env,
-  d: { consented?: (userId: string) => Promise<boolean>; links?: VoiceStreamLinkStore } = {},
+  d: { consent?: (userId: string) => Promise<VoiceReadConsent | null>; links?: VoiceStreamLinkStore } = {},
 ): Promise<string> {
   try {
     if (typeof twiml !== "string" || !voiceReadPrereqs(env)) return twiml;
-    const consented = isTestNumber(o.memberPhone, env) ? false : await (d.consented ?? voiceReadConsented)(o.userId).catch(() => false);
-    if (!voiceReadAllowed({ memberPhone: o.memberPhone, consented }, env)) return twiml;
+    const consent = await (d.consent ?? ((id: string) => readVoiceReadConsent(id)))(o.userId);
+    if (!voiceReadAllowed({ memberPhone: o.memberPhone, consent }, env)) return twiml;
     const streamUrl = voiceStreamUrl(env.API_URL);
     if (!streamUrl || !/<Response(?:\s[^>]*)?>/.test(twiml)) return twiml;
     const streamId = await issueVoiceStreamLink(o.userId, `${o.userId}:${o.callToken}`, d.links);

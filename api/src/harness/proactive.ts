@@ -146,7 +146,10 @@ export type ProactiveType =
   | "name_change"
   // An update announcement (services/announcements.ts, 2026-10-19): fixed, approved words, once per member per key, its own text on a
   // quiet day, never riding in another.
-  | "announcement";
+  | "announcement"
+  // The one question about the voice read on calls (services/voiceReadConsent.ts, 2026-10-28): fixed words, once per member ever,
+  // after their first call. No answer means off.
+  | "voice_read_ask";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -223,6 +226,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   name_change: { priority: 1 },
   // Just above it: only on a day nothing else is ready (announcements.ts quietDayOnly), and a week apart at least, so two never land close.
   announcement: { priority: 2, typeGapDays: 7 },
+  // Once per member ever (its own target key). Not time-bound: anything about their life goes first.
+  voice_read_ask: { priority: 15 },
   // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
   // One deadline heads-up a day at most (final review of #108).
   deadline_nudge: { priority: 75, typeGapDays: 1 },

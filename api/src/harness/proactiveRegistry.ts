@@ -964,6 +964,20 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // The voice read's one question (services/voiceReadConsent.ts): fixed words, read again at send time. Asked already, answered, the
+  // read not available here, or nothing on file to ask about means nothing goes; no answer means it stays off.
+  voice_read_ask: {
+    async draft(c) {
+      const C = await import("../services/voiceReadConsent.js");
+      const { voiceReadAskDue } = await import("../services/voiceRead.js");
+      if (!voiceReadAskDue(await C.readVoiceReadConsent(c.userId))) return skip("asked already, answered, or the voice read can't run here");
+      return { messages: [C.VOICE_READ_ASK], text: C.VOICE_READ_ASK, rules: C.VOICE_READ_ASK_RULES };
+    },
+    async onSent(c) {
+      await (await import("../services/voiceReadConsent.js")).noteVoiceReadAsked(c.userId);
+    },
+  },
+
   // Fixed, approved wording, not a draft (services/announcements.ts): one update announcement, its own text, on a day nothing else
   // goes. Re-read at send time: already told means nothing goes; a member the name notice hasn't reached gets it in the same text.
   announcement: {

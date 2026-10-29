@@ -3056,6 +3056,22 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS voice_stream_links_expires ON voice_stream_links (expires_at)`))
     .catch((err: Error) => console.error("voice read init failed:", err));
+  // The member's own yes to the voice read (services/voiceReadConsent.ts, 2026-10-28): users.voice_read_ok above is no longer read
+  // (a database switch isn't consent). One row per member: when Cue asked, their answer and when, their yes in their own words
+  // (dropped when they take it back), and when they took it back. New and empty: nothing existing is touched.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS voice_read_consents (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        asked_at TIMESTAMPTZ,
+        answer TEXT CHECK (answer IN ('yes', 'no')),
+        answered_at TIMESTAMPTZ,
+        yes_quote TEXT,
+        withdrawn_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("voice_read_consents init failed:", err));
   await concurrencyMigrations();
 }
 

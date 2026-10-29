@@ -37,6 +37,15 @@ for (const t of registered) {
     check("registry tool askedWalkin exists only on a turn with the walk-in question due", walkinTools.includes(t) && !toolNames.includes(t));
     continue;
   }
+  if (t === "voiceRead") {
+    // The voice read's answers exist only where the read can run at all (services/voiceRead.ts voiceReadPrereqs; never in production).
+    const keep = { HUME_API_KEY: process.env.HUME_API_KEY, API_URL: process.env.API_URL, TWILIO_AUTH: process.env.TWILIO_AUTH, RAILWAY_ENVIRONMENT_NAME: process.env.RAILWAY_ENVIRONMENT_NAME };
+    Object.assign(process.env, { HUME_API_KEY: "dummy", API_URL: "https://co-test.example.app", TWILIO_AUTH: "dummy", RAILWAY_ENVIRONMENT_NAME: "co-test" });
+    const voiceTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true } as any).tools);
+    for (const [k, v] of Object.entries(keep)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    check("registry tool voiceRead exists only where the voice read can run", voiceTools.includes(t) && !toolNames.includes(t));
+    continue;
+  }
   if (t === "leaveItAtReaction") {
     check("registry tool leaveItAtReaction exists only after a reaction went out", ackedTools.includes(t) && !toolNames.includes(t));
     continue;
@@ -49,8 +58,8 @@ check("ability ids are unique", new Set(ABILITIES.map((a) => a.id)).size === ABI
 check("every ability says what Cue can do", ABILITIES.every((a) => a.can.trim().length > 20));
 
 const facts = baseReplyFacts().facts.filter((f) => f.kind === "capability").map((f) => f.text);
-// The walk-in ask is listed only on a turn known to have it due (services/capabilities.ts ONLY_WHEN_KNOWN).
-check("Cue reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly && a.tool !== "askedWalkin").length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
+// The walk-in ask is listed only on a turn known to have it due, the voice read only where it can run (services/capabilities.ts ONLY_WHEN_KNOWN).
+check("Cue reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly && a.tool !== "askedWalkin" && a.tool !== "voiceRead").length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
 check("Cue knows it can send its card", facts.some((f) => /contact card/.test(f)));
 check("Cue knows it can't start a group text", facts.some((f) => /never starts a group text/.test(f)));
 check("Cue knows it never writes a phone number", facts.some((f) => /never writes a phone number/.test(f)));

@@ -390,6 +390,17 @@ export const ABILITIES: Ability[] = [
     use: "They said yes to sharing their location for today's Noise event (after you offered). Quote their yes from this message. It covers only today's event; if they say stop, it stops.",
   },
   {
+    // The voice read on calls (services/voiceRead.ts, services/voiceReadConsent.ts, 2026-10-28): off unless they said yes to Cue's
+    // one question about it. Listed only where the read can run at all (voiceReadPrereqs: never in production), so every other
+    // reply's sheet and tools are unchanged.
+    id: "voice_read",
+    can: "On calls, Cue can listen to how they sound (tone, not just words) to notice when something sits heavier than they say, but only after they said yes to Cue's one question about it, which says what it is and what it keeps. Without that yes it's off. Cue never keeps the audio, and they can stop it anytime, which deletes what it noted.",
+    tool: "voiceRead",
+    onCall: true,
+    limits: { perTurn: 1 },
+    use: "Their answer about Cue listening to how they sound on calls, with their words copied exactly from this message. yes: they said yes to it (to Cue's question, or asking for it themselves); if they haven't had Cue's explanation yet, code puts it in your reply and only a yes after it counts. no: they said no; it stays off and Cue never asks again. stop: they want it off (\"stop reading my voice\", \"turn that off\"); it stops at once, this call included, what it noted is deleted, and code puts the one confirming line in your reply. explain: they asked what it is or whether Cue does it; code puts Cue's explanation in your reply. Never use it to raise the subject yourself.",
+  },
+  {
     id: "ask_shareable",
     can: "Every ask they give Cue is private. Cue can mention one of their asks, in their own words, when it introduces them to someone (in the room or in the network) only once they say that ask is okay to share, and they can take it back any time.",
     tool: "shareAskInIntros",
@@ -696,7 +707,9 @@ export const LIMITS: string[] = [
 // their LinkedIn. Without a situation (tests, the review), everything is listed.
 // door: a new member's first read is still Co's to give (services/theDoor.ts doorOpen).
 // walkin: the walk-in question is due this turn (routes/sendblue.ts walkinAskDue); without it the walk-in ask isn't listed.
-export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean; door?: boolean; walkin?: boolean };
+// voiceRead: the voice read can run here at all (services/voiceRead.ts voiceReadPrereqs; never in production); without it the voice
+// read's entry isn't listed.
+export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean; door?: boolean; walkin?: boolean; voiceRead?: boolean };
 const SITUATIONAL: Record<string, keyof Situation> = {
   kit: "kit",
   task_update: "tasks",
@@ -705,13 +718,14 @@ const SITUATIONAL: Record<string, keyof Situation> = {
   event_going: "eventToday",
   first_read: "door",
   walkin_ask: "walkin",
+  voice_read: "voiceRead",
 };
-export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean; doorOpen?: boolean; walkinDue?: boolean }): Situation {
-  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday, walkin: !!o.walkinDue, ...(o.doorOpen === undefined ? {} : { door: o.doorOpen }) };
+export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean; doorOpen?: boolean; walkinDue?: boolean; voiceRead?: boolean }): Situation {
+  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday, walkin: !!o.walkinDue, ...(o.doorOpen === undefined ? {} : { door: o.doorOpen }), ...(o.voiceRead ? { voiceRead: true } : {}) };
 }
 // An entry is left out only when its situation is known not to apply; one the caller didn't read (door) stays. The walk-in ask is
 // the other way round: listed only on a turn known to have it due (one turn of one night; every other reply's sheet is unchanged).
-const ONLY_WHEN_KNOWN = new Set<keyof Situation>(["walkin"]);
+const ONLY_WHEN_KNOWN = new Set<keyof Situation>(["walkin", "voiceRead"]);
 const outOf = (s: Situation | undefined, key: keyof Situation) => (ONLY_WHEN_KNOWN.has(key) ? s?.[key] !== true : !!s && s[key] === false);
 export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
   const active = (a: Ability) => !SITUATIONAL[a.id] || !outOf(opts.situation, SITUATIONAL[a.id]);

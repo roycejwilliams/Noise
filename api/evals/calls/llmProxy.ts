@@ -375,7 +375,9 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const none = CT.buildCallTools({ userId: "u-real", callKey: "u-real:t", turnWords: "hi", callWords: "hi", lastCoLine: null, member, dryRun: true, stubSearch: true });
     check("with no open task, updateTask and closeTask aren't offered (the same situations as texting)", !none.names.has("updateTask") && !none.names.has("closeTask") && none.names.has("startTask"), [...none.names]);
     const C = await import("../../src/services/capabilities.js");
-    check("the real call toolset is the texting tools: every one, described by its registry entry", CT.CALL_TOOL_NAMES.every((n) => real.names.has(n)) && real.defs.every((d) => d.description === C.toolUse(d.name)), [...real.names]);
+    // The voice read's answers only where the read can run (services/voiceRead.ts voiceReadPrereqs), as by text.
+    const runsHere = (await import("../../src/services/voiceRead.js")).voiceReadPrereqs();
+    check("the real call toolset is the texting tools: every one, described by its registry entry", CT.CALL_TOOL_NAMES.every((n) => real.names.has(n) || (n === "voiceRead" && !runsHere)) && real.defs.every((d) => d.description === C.toolUse(d.name)), [...real.names]);
     check("each schema is a JSON object schema with the guard's fields", real.defs.every((d: any) => d.input_schema.type === "object" && d.input_schema.properties?.why) && JSON.stringify(real.defs.find((d) => d.name === "researchBrief")?.input_schema).includes("theirYes"));
   }
 }
