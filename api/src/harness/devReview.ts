@@ -95,7 +95,9 @@ export type FlagType =
   | "call_flagged"
   | "elevenlabs_delete_stuck"
   | "call_never_started"
-  | "turn_failed";
+  | "turn_failed"
+  | "place_not_searched"
+  | "place_far_from_home";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -125,6 +127,8 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   elevenlabs_delete_stuck: "ElevenLabs delete stuck (retried once a day)",
   call_never_started: "A call never started (the phone service refused the dial, or its setup failed)",
   turn_failed: "A text turn broke after the member's text was read",
+  place_not_searched: "An ask or goal wasn't searched because of its place (ambiguous, didn't resolve, or inferred far from home)",
+  place_far_from_home: "An ask or goal was searched far from home (they named the place, or a trip window covers it)",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -267,6 +271,15 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
       const det = p.detail ?? {};
       const cause = [p.errorClass ?? null, det.status != null ? `HTTP ${det.status}` : null, det.code != null ? `code ${det.code}` : null, det.message || null].filter(Boolean).join(", ");
       add(d, "turn_failed", "high", `the turn on "${messageBefore(d.at) ?? "?"}" broke (${p.source ?? "turn_error"}; ${d.action ?? "?"})`, cause || "no cause logged", !!det.message && det.message !== DETAIL_WITHHELD);
+    }
+    // Where a want's place landed on the map (services/placeResolve.ts, 2026-10-29: "Bay Area" was searched in Houston for weeks and
+    // nothing flagged it). The resolved place and miles only, never their words.
+    if (d.decision === "place.far_from_home" || d.decision === "place.ambiguous" || d.decision === "place.rejected") {
+      const what = String(p.key ?? "").split(":")[0] || "want";
+      const where = p.place ?? (Array.isArray(p.options) && p.options.length ? p.options.join(" / ") : "no match");
+      const blocked = d.outcome === "skip";
+      const why = d.decision === "place.far_from_home" ? `${where}, ${p.miles ?? "?"} mi from home (${p.how ?? "?"})` : `${d.decision === "place.ambiguous" ? "ambiguous" : "didn't resolve"}: ${where}`;
+      add(d, blocked ? "place_not_searched" : "place_far_from_home", blocked ? "medium" : "low", `${what} ${blocked ? "not searched" : "searched"}: ${why}`, d.action ?? d.decision, true);
     }
     if (d.decision === "router.decideActions" && p.confidence === "low") {
       add(d, "router_unsure", "low", `"${messageBefore(d.at) ?? "?"}": ${p.reason ?? ""}`, "router confidence low", true);

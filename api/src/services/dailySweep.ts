@@ -67,6 +67,9 @@ export type ItemResult = {
   unverified?: number;
   // Per tier (1 Noise's events, 2 event pages, 3 web and X openings): searched, found, kept, dropped (sweepFind.ts TierCounts).
   tiers?: TierCounts;
+  // Where on the map it was searched, or why its place kept it from being searched (services/placeResolve.ts): the resolved place,
+  // miles from home, and whether the member named it (confirmed) or Cue inferred it. Shown on /sweeps when it's far or not searched.
+  place?: import("./placeResolve.js").PlaceOnMap;
   // Which finds (SurfacingReport.foundKeys / pooledKeys), so a retry counts a find it finds again once (mergeRetried).
   foundKeys?: string[];
   pooledKeys?: string[];
@@ -139,10 +142,11 @@ export function searchFailed(rep: { sources: { events: boolean; web: boolean; x:
 // Pure: what one search that looked somewhere did: "searched", or "incomplete" when a place failed or timed out with nothing back
 // (Royce, 2026-10-28: "treat a timeout as incomplete with a bounded retry". That morning Exa timed out on all four web queries for
 // "apply to South Park Commons or Blueprint II"; events and X ran, so the goal counted as searched and nothing retried it).
-export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text: string }>(b: B, rep: { sources: { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: string[]; lasting?: string[]; unverified?: number; tiers?: TierCounts }; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[] }): ItemResult {
+export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text: string }>(b: B, rep: { sources: { events: boolean; web: boolean; x: boolean; failures: string[]; outages?: string[]; lasting?: string[]; unverified?: number; tiers?: TierCounts }; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[]; place?: import("./placeResolve.js").PlaceOnMap | null }): ItemResult {
   const outages = rep.sources.outages ?? [];
   return {
     ...b,
+    ...(rep.place ? { place: rep.place } : {}),
     status: outages.length ? "incomplete" : "searched",
     ...(outages.length ? { why: `${outages.join(", ")} failed or timed out: ${rep.sources.failures.join(" | ").slice(0, 240)}`, outages } : {}),
     sources: { events: rep.sources.events, web: rep.sources.web, x: rep.sources.x },
@@ -505,6 +509,9 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
       return;
     }
     const r = rep as import("./eventSurfacingSweep.js").SurfacingReport | null;
+    // Not searched because of its place (an ambiguous or rejected place, or one Cue inferred far from home): skipped, with why. Not an
+    // error (a retry wouldn't settle it), and never searched at home instead.
+    if (r?.placeSkip) { items.push({ ...b, status: "skipped", why: `place: ${r.placeSkip}`, ...(r.place ? { place: r.place } : {}) }); return; }
     if (searchFailed(r)) {
       items.push({ ...b, status: "error", why: `it looked nowhere: ${(r?.sources.failures ?? ["the search returned without a report"]).join(" | ").slice(0, 300)}`, ...(r ? { failures: r.sources.failures } : {}) });
       return;
@@ -715,6 +722,22 @@ export function rollupDay(all: { outcome: string; action: string; reason: string
   const out = rollupFloorDay(records, sends, dayOver, started);
   return manual.length ? { ...out, detail: `${out.detail} · on-demand runs: ${manual.length} (last: ${manual[manual.length - 1].action})` } : out;
 }
+// Pure: the day's places worth a look on /sweeps (services/placeResolve.ts): a place searched far from home, or one not searched
+// because of where it is. By item kind and id with the resolved place and miles: never the member's words.
+export function placeNotes(items: ItemResult[]): string | null {
+  const notes = items
+    .filter((i) => i.place && i.place.verdict !== "near")
+    .map((i) => {
+      const p = i.place!;
+      const what = `${i.kind} ${i.id.slice(0, 8)}`;
+      if (p.verdict === "ambiguous") return `${what}: place ambiguous (${p.label}), not searched`;
+      if (p.verdict === "rejected") return `${what}: place didn't resolve (${p.label || "no match"}), not searched`;
+      if (p.verdict === "unresolved") return null;
+      return `${what}: ${p.label} ${p.miles ?? "?"} mi from home (${p.how})${p.verdict === "far_not_searched" ? ", not searched" : p.verdict === "far_in_window" ? ", searched in its window" : ", searched: they named it"}`;
+    })
+    .filter(Boolean);
+  return notes.length ? `places: ${notes.join("; ")}` : null;
+}
 function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends" | "incomplete" | "failed" | "placesDown" | "unverified" | "tiers"> {
   const final = [...records].reverse().find((r) => r.action !== "error");
   const errors = records.filter((r) => r.action === "error");
@@ -724,7 +747,8 @@ function rollupFloorDay(records: { outcome: string; action: string; reason: stri
   const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends, incomplete: lastT.incomplete ?? 0, failed: lastT.errors ?? 0, placesDown: lastT.placesDown ?? 0, unverified: lastT.unverified ?? 0, tiers: sumTiers([(records[records.length - 1]?.proposal?.totals ?? {}).tiers]) };
   if (final) {
     const status = final.action === "missed" ? "missed" : final.action === "opted_out" ? "opted out" : final.action === "tapered" ? "tapered" : final.outcome === "act" ? "ran" : "nothing to search";
-    return { status, detail: final.reason ?? final.action, ...counts };
+    const places = placeNotes((final.proposal?.items ?? []) as ItemResult[]);
+    return { status, detail: [final.reason ?? final.action, places].filter(Boolean).join(" · "), ...counts };
   }
   if (errors.length) return { status: "error", detail: `${errors.length} failed run(s): ${errors[errors.length - 1].reason ?? "no reason"}`, ...counts };
   if (!started) return { status: "not yet", detail: "before 9am their time", ...counts };
