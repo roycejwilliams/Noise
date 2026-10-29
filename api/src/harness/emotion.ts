@@ -230,6 +230,8 @@ export function frustrationMoments(scored: ScoredLine[], textRead: Pick<EmotionS
 // ---------------------------------------------------------------------------
 // Store
 
+// A voice-read row (basis "voice") never lands once they've said no or taken their yes back, decided in the insert itself, so a stop
+// racing a call's post-call write keeps nothing: the stop writes the withdrawal before it deletes (services/voiceReadConsent.ts).
 export async function recordEmotionSignals(
   userId: string,
   signals: (Omit<EmotionSignal, "at"> & { memoryId?: string | null })[],
@@ -239,7 +241,9 @@ export async function recordEmotionSignals(
     .query(
       `INSERT INTO emotion_signals (user_id, source, emotion, intensity, valence, about, quote, memory_id, target, basis)
        SELECT $1, x.source, x.emotion, x.intensity, x.valence, x.about, x.quote, x.memory_id, x.target, x.basis
-       FROM jsonb_to_recordset($2::jsonb) AS x(source text, emotion text, intensity text, valence text, about text, quote text, memory_id uuid, target text, basis text)`,
+       FROM jsonb_to_recordset($2::jsonb) AS x(source text, emotion text, intensity text, valence text, about text, quote text, memory_id uuid, target text, basis text)
+       WHERE x.basis IS DISTINCT FROM 'voice'
+          OR NOT EXISTS (SELECT 1 FROM voice_read_consents c WHERE c.user_id = $1 AND (c.answer = 'no' OR c.withdrawn_at IS NOT NULL))`,
       [
         userId,
         JSON.stringify(

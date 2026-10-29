@@ -339,7 +339,12 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "goal_recheck",
   "name_change",
   "announcement",
+  // The voice read's one question (services/voiceReadConsent.ts): a permission ask about their calls waits out a hard day (timing only).
+  "voice_read_ask",
 ]);
+
+// Fixed texts that also wait out a safety hold (delay only: they stay pending and go once it lifts): the voice read's question.
+export const SAFETY_HOLD_ALSO = new Set<ProactiveType>(["voice_read_ask"]);
 
 // Pure: whether a hard day holds what waits on it now (the emotional_timing check, the stopped-looking line riding a paced text, a find
 // the composer skipped while they were struggling).
@@ -783,6 +788,8 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   }
   if (state.safetyHold && (PROACTIVE_PURPOSE_MAP[c.type] === "offer" || c.type === "name_change" || c.type === "announcement")) {
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
+  } else if (state.safetyHold && SAFETY_HOLD_ALSO.has(c.type)) {
+    checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; this waits" });
   }
   // Away from home, in their own words (services/away.ts, 2026-10-11: Jacqueline said she was traveling and SF finds kept coming):
   // a find Co started that brings them into a room waits until they're back; an answer to their own ask never does (awayHoldsCandidate).

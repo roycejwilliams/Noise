@@ -67,6 +67,13 @@ export function removalReceipt(name: string, input: any): { removal: true; chang
   return { removal: true, changes: { remove: changes.filter((c) => c?.action === "remove").length, correct: changes.filter((c) => c?.action === "correct").length }, kinds: [...new Set(refs.map((r: unknown) => logKind(String(r))))].slice(0, 10) };
 }
 
+// Pure: the receipt for a voiceRead call (services/voiceReadConsent.ts): which answer the model read, never their words or message, so
+// a yes taken back leaves no copy of what they said in the decision log. Null for any other tool.
+export function voiceReadReceipt(name: string, input: any): { answer: string } | null {
+  if (name !== "voiceRead") return null;
+  return { answer: ["yes", "no", "stop", "explain"].includes(input?.answer) ? input.answer : "other" };
+}
+
 export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCtx): T {
   const usedThisTurn = new Map<string, number>();
   const retried = new Set<string>();
@@ -92,7 +99,8 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
     t.execute = async (input: any, options: any) => {
       // A removal asked through correctWhatCoKnows: the receipt holds kinds and counts only (removalReceipt), never their message,
       // their yes, the why, the refs (their hash part is made from the text) or a judge's words about it (forget-delete-spec.md §2.26).
-      const removal = removalReceipt(name, input);
+      // A voiceRead call the same way: the answer read, never their words (voiceReadReceipt).
+      const removal = removalReceipt(name, input) ?? voiceReadReceipt(name, input);
       const log = (receipt: Receipt, detail: Record<string, unknown> = {}) =>
         ctx.dryRun
           ? Promise.resolve()

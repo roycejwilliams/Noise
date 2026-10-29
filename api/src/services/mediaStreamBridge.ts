@@ -368,7 +368,16 @@ export function handleTwilioStream(ws: SocketLike): void {
               pendingSession.key = link.sessionHash;
               pendingSession.verified = true;
               sessions.set(link.sessionHash, pendingSession);
-              openHume(pendingSession);
+              // Read once more now that a stop can reach the session (endVoiceSessionsFor): a stop that landed during the read above
+              // ended nothing, so Hume opens only if it's still on and the session wasn't ended meanwhile.
+              return d.allowed(link.userId).catch(() => false).then((still) => {
+                if (ended || s !== pendingSession || sessions.get(link.sessionHash) !== pendingSession) return;
+                if (!still) {
+                  sessions.delete(link.sessionHash);
+                  return refuse("not consented");
+                }
+                openHume(pendingSession);
+              });
             });
           })
           .catch(() => refuse("link check failed"));
