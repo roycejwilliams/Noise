@@ -71,11 +71,11 @@ import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../servi
 import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { callLine } from "../services/capabilities.js";
-import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
+import { callNotPlacedReason, callNotPlacedFacts, failureDetail } from "../services/callReasons.js";
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
-import { OWED_AFTER, owedFromRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
+import { FAILURE_RECORD_WINDOW_MINUTES, failureRecordFacts, OWED_AFTER, owedFromRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked, type FailureRow } from "../services/turnFailure.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
 import { learnFromTextTurn } from "../services/turnLearning.js";
@@ -1797,6 +1797,21 @@ export function sendblueRouter(io: Server): Router {
         // A photo sent as the look they want is read before anything is said about using it (design audit: a "this is the vibe" image
         // was never read, and Co said it was saved as their look).
         if (imageForVision && photoAssetN) addInstruction(replyFacts, `If they sent this photo as the look they want for what you make them (a vibe, a style, "make it look like this"), read it with readReference (their image #${photoAssetN}) in this turn before saying anything about using it. Never say a look is saved or applied unless a tool did it this turn.`);
+        // Cue's own recent failure, read back from where it was reported (services/turnFailure.ts): what happened, and whether its report
+        // is on record, so "I've flagged it" is said only when it is (2026-10-28). Null when the read fails: then that's what Cue knows.
+        if (hasText) {
+          const failureRows = await pool
+            .query(
+              `SELECT decision, created_at FROM harness_decisions
+               WHERE user_id = $1 AND created_at > NOW() - make_interval(mins => $2)
+                 AND ((decision = 'call.dial' AND action = 'dial_failed') OR decision = 'turn.failed')
+               ORDER BY created_at DESC LIMIT 5`,
+              [user.id, FAILURE_RECORD_WINDOW_MINUTES],
+            )
+            .then((r) => r.rows.map((x: { decision: string; created_at: string | Date }): FailureRow => ({ decision: x.decision, at: new Date(x.created_at) })))
+            .catch(() => null);
+          for (const f of failureRecordFacts(failureRows, { afterFailure: !!owed?.afterFailure, now: new Date() })) addFact(replyFacts, "known", f);
+        }
         if (owed?.afterFailure) {
           addInstruction(replyFacts, `Their message before this one ("${owed.text.slice(0, 400)}") never got a real answer: something broke on your side. Answer it in this reply along with what they just said. Don't make them repeat it, and don't apologize again beyond a word.`);
         }
@@ -2840,7 +2855,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           console.error("sendblue: error after early webhook ack (non-fatal, already ack'd):", (error as any)?.message ?? error);
           // They already see "Read"; don't leave them with nothing.
           if (lockKey && isGenuineInbound && !isGroupMessage) {
-            await tellMemberTurnFailed(lockKey, replay?.receivedAt ?? turnStartedAt, "turn_error", (error as any)?.constructor?.name ?? "Error");
+            await tellMemberTurnFailed(lockKey, replay?.receivedAt ?? turnStartedAt, "turn_error", (error as any)?.constructor?.name ?? "Error", { detail: failureDetail(error) });
             // Then the turn runs once more from their saved text, unless this
             // was already that second run (2026-10-01 code review: nothing
             // retried a crashed turn).
@@ -3011,7 +3026,9 @@ export async function replayOwedTurn(handle: string, o: { neverRan?: boolean } =
 // A turn died after the text was marked read: send the one honest line
 // (services/turnFailure.ts), unless Co answered anyway, they've opted out,
 // or they were just told. Never throws.
-export async function tellMemberTurnFailed(phone: string, receivedAt: Date, source: "turn_error" | "restart", errorClass: string, o: { neverRan?: boolean } = {}): Promise<boolean> {
+// detail: what the error said, without anything private (services/callReasons.ts failureDetail), so the turn.failed row is a real
+// report of the failure the morning review can act on, not just "Error" (2026-10-28: the cause was only in Railway's log).
+export async function tellMemberTurnFailed(phone: string, receivedAt: Date, source: "turn_error" | "restart", errorClass: string, o: { neverRan?: boolean; detail?: ReturnType<typeof failureDetail> } = {}): Promise<boolean> {
   try {
     const { rows } = await pool.query(
       `SELECT u.id, u.sms_opted_out, u.archived_at,
@@ -3041,7 +3058,7 @@ export async function tellMemberTurnFailed(phone: string, receivedAt: Date, sour
       userId: row?.id ?? null,
       outcome: sent ? "act" : "skip",
       action: sent ? "told_member" : blocked ?? "send_failed",
-      proposal: { source, errorClass },
+      proposal: { source, errorClass, ...(o.detail ? { detail: o.detail } : {}) },
       checks: [{ name: "member_not_left_silent", pass: sent || blocked === "already_answered", reason: blocked ?? (sent ? "sent the note" : "the note itself failed to send") }],
     }).catch(() => {});
     return sent;

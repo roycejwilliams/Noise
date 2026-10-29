@@ -93,7 +93,8 @@ export type FlagType =
   | "goals_starved"
   | "call_flagged"
   | "elevenlabs_delete_stuck"
-  | "call_never_started";
+  | "call_never_started"
+  | "turn_failed";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -122,6 +123,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   call_flagged: "Call flagged by the after-call check (held at ElevenLabs until reviewed)",
   elevenlabs_delete_stuck: "ElevenLabs delete stuck (retried once a day)",
   call_never_started: "A call never started (the phone service refused the dial, or its setup failed)",
+  turn_failed: "A text turn broke after the member's text was read",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -257,6 +259,13 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     if (d.decision === "call.dial" && d.action === "dial_failed") {
       const cause = [p.status != null ? `HTTP ${p.status}` : null, p.code != null ? `code ${p.code}` : null, p.message || null].filter(Boolean).join(", ");
       add(d, "call_never_started", "high", `${p.requested ?? "a"} call never started (${p.stage === "link" ? "call setup failed" : "the phone service refused the dial"})`, cause || "no cause logged", !!cause);
+    }
+    // A text turn that broke after their text was read (routes/sendblue.ts tellMemberTurnFailed): the report of it, with the error's
+    // class and what it said (nothing private), so a failure Cue tells the member is on record is really in front of the team.
+    if (d.decision === "turn.failed") {
+      const det = p.detail ?? {};
+      const cause = [p.errorClass ?? null, det.status != null ? `HTTP ${det.status}` : null, det.code != null ? `code ${det.code}` : null, det.message || null].filter(Boolean).join(", ");
+      add(d, "turn_failed", "high", `the turn on "${messageBefore(d.at) ?? "?"}" broke (${p.source ?? "turn_error"}; ${d.action ?? "?"})`, cause || "no cause logged", !!det.message);
     }
     if (d.decision === "router.decideActions" && p.confidence === "low") {
       add(d, "router_unsure", "low", `"${messageBefore(d.at) ?? "?"}": ${p.reason ?? ""}`, "router confidence low", true);
