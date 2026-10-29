@@ -1,6 +1,6 @@
 // A heads-up when something Co sent goes stale (Royce, 2026-09-29, from
 // Instinct: "Constant's listing just went down, so I'm swapping in another").
-// Pages of things Co sent in the last 3 days are re-read once a week
+// Pages of things Co sent in the last 7 days are re-read once a week
 // (services/linkReader.ts; the schedule is in jobs/index.ts). If one someone said they were interested in sold
 // out, moved, or disappeared, they hear it once, in Co's own words, through
 // the same path as Co's other event-change texts (their hours, STOP, sent once).
@@ -78,15 +78,15 @@ async function tell(row: Row, change: Change): Promise<boolean> {
   return sent.sent || sent.queued;
 }
 
-// Weekly since 2026-10-29 (jobs/index.ts): re-read what's due, compare with the read before, tell the people who said they were
-// interested. At most 25 pages a run.
+// Weekly since 2026-10-29 (jobs/index.ts), over the last 7 days of sends so a weekly run sees every one: re-read what's due,
+// compare with the read before, tell the people who said they were interested. At most 25 pages a run.
 export async function watchSentPages(now = new Date()): Promise<{ checked: number; changed: number; told: number }> {
   const { rows } = await pool.query(
     `SELECT ro.user_id, ro.item_key, ro.item_name, ro.url, u.phone_number, u.first_name, cp.city
      FROM revealed_offers ro
      JOIN users u ON u.id = ro.user_id AND COALESCE(u.sms_opted_out, false) = false AND u.archived_at IS NULL AND u.phone_number IS NOT NULL
      LEFT JOIN co_profiles cp ON cp.user_id = ro.user_id
-     WHERE ro.sent_at > NOW() - INTERVAL '3 days' AND ro.url IS NOT NULL`,
+     WHERE ro.sent_at > NOW() - INTERVAL '7 days' AND ro.url IS NOT NULL`,
   );
   const byUrl = new Map<string, Row[]>();
   for (const r of rows as Row[]) byUrl.set(r.url, [...(byUrl.get(r.url) ?? []), r]);
