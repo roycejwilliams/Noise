@@ -88,12 +88,19 @@ export function noteLabel(label: string | null | undefined, itemText: string): s
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // The note as written, any case, with or without its period.
 const notePattern = (note: string) => new RegExp(`${escape(note).replace(/ /g, "\\s+")}\\.?`, "gi");
-const asSentence = (note: string) => `${note.charAt(0).toUpperCase()}${note.slice(1)}.`;
+// A note stored without its period gets one; a fixed line already ending its sentence (an approved line, services/voiceReadConsent.ts)
+// is carried exactly as written, never "Want me to?." (2026-10-28).
+const ENDS_SENTENCE = /[.!?]["')\]]*$/;
+const ASKS = /\?["')\]]*$/;
+const asSentence = (note: string) => {
+  const t = `${note.charAt(0).toUpperCase()}${note.slice(1)}`;
+  return ENDS_SENTENCE.test(t.trim()) ? t : `${t}.`;
+};
 const tidy = (t: string) => t.split(/\n\s*\n/).map((p) => p.replace(/[ \t]{2,}/g, " ").trim()).filter(Boolean).join("\n\n");
 
 // Pure: the reply carries each pending note exactly once, and nothing already sent this turn again. A note already in the draft stays
 // where Co put it (first time only); one missing goes at the end of the first paragraph that isn't a question, so it rides in a text
-// that's going anyway, never as a text of its own.
+// that's going anyway, never as a text of its own. A fixed line that is itself a question goes last, as its own paragraph.
 export function carryLaneNotes(draft: string, pending: readonly string[], sent: readonly string[] = []): { text: string; carried: string[] } {
   let text = draft;
   for (const n of sent) text = text.replace(notePattern(n), "");
@@ -105,7 +112,9 @@ export function carryLaneNotes(draft: string, pending: readonly string[], sent: 
     if (!seen) {
       const paras = tidy(text).split(/\n\n/).filter(Boolean);
       const at = paras.findIndex((p) => !/\?\s*["')\]]*$/.test(p));
-      if (!paras.length) paras.push(asSentence(n));
+      // A fixed line that asks them something is the reply's question: its own last paragraph, word for word, never spliced into
+      // Co's text ahead of another paragraph.
+      if (!paras.length || ASKS.test(n.trim())) paras.push(asSentence(n));
       else if (at >= 0) paras[at] = `${paras[at].replace(/\s+$/, "")}${/[.!?]["')\]]*$/.test(paras[at].trim()) ? "" : "."} ${asSentence(n)}`;
       else paras[0] = `${asSentence(n)} ${paras[0]}`;
       text = paras.join("\n\n");
