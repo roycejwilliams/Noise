@@ -292,10 +292,6 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Things Co sent in the last 3 days are re-read every few hours
-  // (services/linkReader.ts); if one that someone was interested in sold out,
-  // moved or disappeared, they hear it once (services/staleWatch.ts). Luma
-  // reads are free; others about $0.007 each.
   // Co's own tasks (services/coTasks.ts): each wakes when Co said it would.
   cron.schedule("*/15 * * * *", async () => {
     try {
@@ -343,14 +339,17 @@ export function registerJobs(io: Server) {
     }
   });
 
-  cron.schedule("40 * * * *", async () => {
+  // Things Cue sent in the last 3 days are re-read (services/linkReader.ts); if one that someone was interested in sold out, moved or
+  // disappeared, they hear it once (services/staleWatch.ts). Weekly, not hourly (efficiency audit, 2026-10-29: 0 changes found in a
+  // month of hourly runs). Mondays 10:40 Pacific. Retire on 2026-11-26 unless it has found something.
+  cron.schedule("40 10 * * 1", async () => {
     try {
       const { watchSentPages } = await import("../services/staleWatch.js");
       await watchSentPages();
     } catch (err: any) {
       console.error("stale watch cron error (non-fatal):", err?.message ?? err);
     }
-  });
+  }, { timezone: "America/Los_Angeles" });
 
   // Every 10 min — queue the post-call text for recent calls (sent within
   // local hours by the harness, dropped if it would land >24h after the call).

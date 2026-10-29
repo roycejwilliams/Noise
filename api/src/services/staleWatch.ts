@@ -1,7 +1,7 @@
 // A heads-up when something Co sent goes stale (Royce, 2026-09-29, from
 // Instinct: "Constant's listing just went down, so I'm swapping in another").
-// Pages of things Co sent in the last 3 days are re-read every few hours
-// (services/linkReader.ts). If one someone said they were interested in sold
+// Pages of things Co sent in the last 3 days are re-read once a week
+// (services/linkReader.ts; the schedule is in jobs/index.ts). If one someone said they were interested in sold
 // out, moved, or disappeared, they hear it once, in Co's own words, through
 // the same path as Co's other event-change texts (their hours, STOP, sent once).
 import { DateTime } from "luxon";
@@ -14,6 +14,10 @@ import { humanTime, timeFact, readLink, REREAD_AFTER_MS, VOLATILE_AFTER_MS, save
 import { lineInVoice } from "./voiceLine.js";
 
 export type Change = { kind: "sold_out" | "moved" | "gone"; detail: string };
+
+// Weekly, Mondays 10:40 Pacific (jobs/index.ts). It ran hourly and, from 09-29 to 10-29, made 365 runs that found 0 changes and told
+// 0 members (efficiency audit, 2026-10-29), while paying for the page re-reads behind them.
+// Retire on 2026-11-26 unless it has found something (a stale.watch row with "changed" above 0 by then).
 
 function minutesApart(a: string, b: string): number {
   const x = DateTime.fromISO(a, { setZone: true });
@@ -74,8 +78,8 @@ async function tell(row: Row, change: Change): Promise<boolean> {
   return sent.sent || sent.queued;
 }
 
-// Hourly: re-read what's due, compare with the read before, tell the people
-// who said they were interested. At most 25 pages a run.
+// Weekly since 2026-10-29 (jobs/index.ts): re-read what's due, compare with the read before, tell the people who said they were
+// interested. At most 25 pages a run.
 export async function watchSentPages(now = new Date()): Promise<{ checked: number; changed: number; told: number }> {
   const { rows } = await pool.query(
     `SELECT ro.user_id, ro.item_key, ro.item_name, ro.url, u.phone_number, u.first_name, cp.city
