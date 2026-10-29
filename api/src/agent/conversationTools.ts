@@ -315,7 +315,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       // (agent/conversationReply.ts TOOL_TURN_RULES).
       description: toolUse("sendReply"),
       inputSchema: z.object({
-        message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the advice, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. A question to them is always its own last paragraph. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question. Most replies are one to three short beats, up to five when each earns its place."),
+        message: z.string().describe("Your reply, no em dashes. Each paragraph goes out as its own text: keep what belongs together in one paragraph, and start a new one only for a real new beat. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question."),
       }),
       execute: async ({ message: draft }, call?: { toolCallId?: string }) => {
         // Rule 2 (Royce, 2026-10-11): a page or deck goes as ONE text, the line plus the link. Told so, Co still added a second

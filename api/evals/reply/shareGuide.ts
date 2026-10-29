@@ -26,10 +26,21 @@ for (const [name, g] of [["sharing", D.SHARING_GUIDE], ["feedback", D.FEEDBACK_G
 }
 // Royce's points, each present in the guide (wording reviewed by Royce before it ships).
 const G = D.SHARING_GUIDE;
-check("questions are optional and never stacked", /A question is optional and never more than one/.test(G));
+check("the sharing guide no longer caps questions at one", !/never more than one|one real question/.test(G) && /questions when there's something you genuinely want to understand/.test(G));
+// The question principle has one home, every text reply's rhythm (Royce, 2026-10-28: as many as it takes, one continuous thread).
+const RH = (await import("../../src/services/textRhythm.js")).MESSAGE_RHYTHM;
+check("questions: what genuinely helps, following the thread across turns", /Questions are how you understand them: ask what genuinely helps, and follow the thread across turns/.test(RH));
+check("questions: several are fine when they are one continuous thought", /Several in one message are fine when they are one continuous thought, each building on the last/.test(RH));
+check("questions: never unrelated, a questionnaire, a re-ask, or forced onto a complete moment", /a list of unrelated questions, a questionnaire, re-asking what they already answered, or a question forced onto a moment that is complete is not/.test(RH));
+check("no one-question cap left in the text rhythm or the send tool", !/One question per reply/.test(RH) && !/A question to them is always its own last paragraph/.test(fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8")));
+check("related content stays together; a new message only for a real new beat", /a reaction and the thought or question that grows from it are one message/.test(RH) && /Start a new paragraph only for a real new beat/.test(RH));
+check("no repeated mirror-then-ask shape; contribute instead", /Don't settle into one shape turn after turn, such as mirroring them and then asking something/.test(RH) && /An observation, an opinion of your own or a bit of humor/.test(RH));
+check("the rhythm quotes no line for Cue to copy", !/["“”]/.test(RH));
+const RP = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+check("the reply prompt drops the fixed two-paragraph cap and its quoted sample exchange", !/that still means about two short paragraphs/.test(RP) && !/You: "Welcome back\. How was Austin\?"/.test(RP));
 check("a complete moment gets a short warm line, nothing pulled out of them", /When the moment is complete, a short warm line is the whole reply/.test(G));
 check("contributes, not only mirroring", /Add something of your own rather than only mirroring/.test(G));
-check("carries the thread forward, no re-asking, never a scheduled feelings check-in", /instead of asking it again/.test(G) && /never as a scheduled check-in/.test(G));
+check("carries the thread forward from what they told, never a scheduled feelings check-in", /Use what they've already told you, in this thread or before/.test(G) && /never as a scheduled check-in/.test(G));
 check("context shapes tone, never facts; curious, not guessing causes", /shapes your tone, never your facts/.test(G) && /be curious instead/.test(G));
 check("timing (belated)", /something already behind them is said as past/.test(G));
 check("no therapy or plan turn unless asked", /don't turn it into a question about what would help, a therapy question, or a plan/.test(G));
