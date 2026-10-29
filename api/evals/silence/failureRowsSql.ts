@@ -31,13 +31,17 @@ const bin = (name: string) => {
   return null;
 };
 const initdb = bin("initdb"), postgres = bin("postgres");
-// Set up a throwaway cluster, or say why not (no binaries, or they won't run here, e.g. as root): the database part is skipped then.
+// Set up a throwaway cluster. Missing binaries skip the database part, visibly (a SKIP line the layer-1 summary lists); binaries that
+// are there but won't set up or start a cluster fail the run, so a full shared-memory table (or anything else) never turns into a
+// quiet skip behind a green layer 1.
 // postgres runs as this test's own child, in its process group, never daemonized: the layer-1 runner's timeout kills the whole group,
-// so it can't be left running; a normal exit (or a crash) stops it and removes its folder here too. Folders a killed run left behind
-// are swept on the next run.
-type Cluster = { sock: string; stop: () => void };
-async function startCluster(): Promise<Cluster | string> {
-  if (!initdb || !postgres) return "no local postgres binaries";
+// so it can't be left running. It is stopped with SIGINT (a fast shutdown that releases its SysV shared memory; SIGKILL leaks one
+// segment per run, and macOS allows 32), waited for, and killed only if it doesn't stop in time. Folders a killed run left behind are
+// swept on the next run.
+type Cluster = { sock: string; stop: () => Promise<void> };
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+async function startCluster(): Promise<{ ok: Cluster } | { skip: string } | { fail: string }> {
+  if (!initdb || !postgres) return { skip: "no local postgres binaries (initdb, postgres)" };
   for (const old of fs.readdirSync(os.tmpdir()).filter((n) => /^cue-failrows-/.test(n))) {
     const at = path.join(os.tmpdir(), old);
     try { if (Date.now() - fs.statSync(at).mtimeMs > 60 * 60_000) fs.rmSync(at, { recursive: true, force: true }); } catch {}
@@ -46,23 +50,48 @@ async function startCluster(): Promise<Cluster | string> {
   const data = path.join(dir, "d");
   const remove = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
   const init = spawnSync(initdb, ["-D", data, "-A", "trust", "-U", "postgres", "--no-sync"], { encoding: "utf8", timeout: 60_000 });
-  if (init.status !== 0) { remove(); return `initdb didn't run here (${(init.stderr || init.error?.message || "").split("\n")[0].slice(0, 120)})`; }
-  const child = spawn(postgres, ["-D", data, "-k", dir, "-c", "listen_addresses=", "-c", "fsync=off"], { stdio: "ignore" });
-  const stop = () => { try { child.kill("SIGKILL"); } catch {} remove(); };
-  process.on("exit", stop);
-  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { stop(); process.exit(1); });
+  if (init.status !== 0) { remove(); return { fail: `initdb is installed but failed (${(init.stderr || init.error?.message || "").split("\n").filter(Boolean)[0]?.slice(0, 160) ?? "no output"})` }; }
+  const child = spawn(postgres, ["-D", data, "-k", dir, "-c", "listen_addresses=", "-c", "fsync=off"], { stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  child.stderr?.on("data", (d) => (stderr += d));
+  const alive = () => child.exitCode === null && child.signalCode === null;
+  // A normal stop: fast shutdown, then SIGKILL only if it hasn't exited in 10s.
+  const stop = async () => {
+    if (alive()) {
+      child.kill("SIGINT");
+      for (let i = 0; i < 100 && alive(); i++) await new Promise((r) => setTimeout(r, 100));
+      if (alive()) child.kill("SIGKILL");
+    }
+    remove();
+  };
+  // An exit that skips the finally below: the same, synchronously.
+  process.on("exit", () => {
+    if (alive()) {
+      try { child.kill("SIGINT"); } catch {}
+      for (let i = 0; i < 50; i++) { try { process.kill(child.pid!, 0); } catch { break; } sleepSync(100); }
+      try { process.kill(child.pid!, 0); child.kill("SIGKILL"); } catch {}
+    }
+    remove();
+  });
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(1));
   const sockFile = path.join(dir, ".s.PGSQL.5432");
   for (let i = 0; i < 100 && !fs.existsSync(sockFile); i++) {
-    if (child.exitCode !== null) break;
+    if (!alive()) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-  if (!fs.existsSync(sockFile)) { stop(); return "postgres didn't start here"; }
-  return { sock: dir, stop };
+  if (!fs.existsSync(sockFile)) { await stop(); return { fail: `postgres is installed but didn't start (${stderr.split("\n").filter(Boolean).slice(-1)[0]?.slice(0, 160) ?? "no output"})` }; }
+  return { ok: { sock: dir, stop } };
 }
-const cluster = await startCluster();
-if (typeof cluster === "string") {
-  console.log(`failureRowsSql: ${cluster}; the database part was skipped (text checks above still ran)`);
+// SysV shared-memory segments now (null where ipcs isn't there): a stopped cluster must leave the count where it was.
+const shmSegments = () => { const r = spawnSync("ipcs", ["-m"], { encoding: "utf8" }); return r.status === 0 ? r.stdout.split("\n").filter((l) => /^\s*m\s|^0x/.test(l)).length : null; };
+const shmBefore = shmSegments();
+const started = await startCluster();
+if ("skip" in started) {
+  console.log(`SKIP failureRowsSql: ${started.skip}; the database part didn't run (the SQL text checks above did)`);
+} else if ("fail" in started) {
+  check(`the throwaway database starts where postgres is installed: ${started.fail}`, false);
 } else {
+  const cluster = started.ok;
   try {
     const { default: pg } = await import("pg");
     const c = new pg.Client({ host: cluster.sock, user: "postgres", database: "postgres" });
@@ -122,8 +151,10 @@ if (typeof cluster === "string") {
   } catch (err: any) {
     check("the throwaway database ran", false, err?.message ?? err);
   } finally {
-    cluster.stop();
+    await cluster.stop();
   }
+  const shmAfter = shmSegments();
+  if (shmBefore !== null && shmAfter !== null) check("stopping the cluster leaks no shared memory (SIGINT, not SIGKILL)", shmAfter <= shmBefore, { shmBefore, shmAfter });
 }
 
 console.log(`failure rows sql: ${total - failed}/${total} passed`);

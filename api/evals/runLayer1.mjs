@@ -69,4 +69,8 @@ const totalStubbed = Object.values(stubbed).reduce((a, n) => a + n, 0);
 console.log(`\nLAYER 1: ${list.length - bad.length}/${list.length} files passed, ${checks.toLocaleString()} checks, ${((Date.now() - t0) / 1000).toFixed(1)}s | model calls: 0 real, ${totalStubbed} stubbed | tokens: 0 | cost: $0.00`);
 if (totalStubbed) console.log(`  stubbed (the test got a canned answer, so it must not depend on what a model says): ${Object.entries(stubbed).map(([f, n]) => `${f} x${n}`).join(", ")}`);
 if (refused.length) console.log(`  REFUSED outside calls (a logic test must make none): ${refused.join(", ")}`);
+// A part of a test that couldn't run here (e.g. no local postgres for evals/silence/failureRowsSql.ts) says so with a "SKIP " line; it's
+// listed, never hidden behind a green run.
+const skipped = results.flatMap((r) => r.out.split("\n").filter((l) => /^SKIP /.test(l)).map((l) => `${r.f}: ${l.slice(5)}`));
+if (skipped.length) console.log(`  SKIPPED parts (didn't run here):\n    ${skipped.join("\n    ")}`);
 process.exit(bad.length || refused.length ? 1 : 0);

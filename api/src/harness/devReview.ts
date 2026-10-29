@@ -28,6 +28,7 @@
 // nothing. The morning digest is texted to Royce from Co's number without
 // being logged as a Co message, so Co never treats it as part of their
 // conversation and the next review never reads it.
+import { DETAIL_WITHHELD } from "../services/callReasons.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { createHash } from "crypto";
@@ -265,7 +266,7 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     if (d.decision === "turn.failed") {
       const det = p.detail ?? {};
       const cause = [p.errorClass ?? null, det.status != null ? `HTTP ${det.status}` : null, det.code != null ? `code ${det.code}` : null, det.message || null].filter(Boolean).join(", ");
-      add(d, "turn_failed", "high", `the turn on "${messageBefore(d.at) ?? "?"}" broke (${p.source ?? "turn_error"}; ${d.action ?? "?"})`, cause || "no cause logged", !!det.message);
+      add(d, "turn_failed", "high", `the turn on "${messageBefore(d.at) ?? "?"}" broke (${p.source ?? "turn_error"}; ${d.action ?? "?"})`, cause || "no cause logged", !!det.message && det.message !== DETAIL_WITHHELD);
     }
     if (d.decision === "router.decideActions" && p.confidence === "low") {
       add(d, "router_unsure", "low", `"${messageBefore(d.at) ?? "?"}": ${p.reason ?? ""}`, "router confidence low", true);
