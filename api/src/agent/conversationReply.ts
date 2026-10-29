@@ -40,7 +40,7 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
   return [
     "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp, moveLane), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
     "- Call tools that don't depend on each other in the same step.",
-    `- One sendReply per turn.${isVoice ? " Your reply goes back as a voice note: call sendReply exactly once, with your full response, answering what they actually said before any secondary gesture." : " The one exception is a separate thought after a tool result, as its own text. Never split one thought into pieces."}`,
+    `- One sendReply per turn.${isVoice ? " Your reply goes back as a voice note: call sendReply exactly once, with your full response, answering what they actually said before any secondary gesture." : " The one exception is something new from another tool's result after your reply went out, as its own text; your own sent reply isn't one. Never split one thought into pieces."}`,
     `- ${TOOL_FAILURE_RULE}`,
   ].join("\n");
 }

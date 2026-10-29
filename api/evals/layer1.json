@@ -229,6 +229,7 @@
     "evals/checkins/rules.ts",
     "evals/reply/usesItsFinds.ts",
     "evals/reply/shareGuide.ts",
+    "evals/reply/oneReply.ts",
     "evals/forget/readers.ts",
     "evals/forget/removalLog.ts",
     "evals/forget/residueAudit.ts",
