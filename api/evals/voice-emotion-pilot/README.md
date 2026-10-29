@@ -42,6 +42,9 @@ the real-call pass showed short per-line reads are noise, so this is an upper bo
 
 ## Voice flags (built 2026-10-03): services/voiceFlags.ts
 
+Removed 2026-10-29 (switched off since 10-04; the code and its evals are in git history before the efficiency phase 1a PR). The
+voice_flag_runs and voice_flags tables are left in place.
+
 What came of it: after a call, one Gemini pass listens for moments where the caller's voice says more than their words
 (sigh, forced cheer, sarcasm, laugh). Kept flags reach Co beside the text read in its emotional-context block; they never
 enter emotion_signals. VOICE_FLAGS=test runs it for test numbers only (no "on" yet). Every pass is logged in

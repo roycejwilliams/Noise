@@ -6,11 +6,7 @@
 // becomes a note. Up to MAX_NOTES per member, newest kept, and a new note
 // replaces an older one it contradicts. Co reads them before every reply
 // (harness/replyGrounding.ts gatherReplyFacts).
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText } from "ai";
 import pool from "../db/db.js";
-import { MODELS } from "../models.js";
-import { parseModelJson } from "./modelJson.js";
 import { recordDecision } from "../harness/core.js";
 
 export const MAX_NOTES = 6;
@@ -44,24 +40,6 @@ export function mergeNotes(notes: unknown): string[] {
     out.push(t);
   }
   return out.slice(-MAX_NOTES);
-}
-
-export async function learnTextingStyle(userId: string, coSaid: string | null, theySaid: string): Promise<string[] | null> {
-  if (!coSaid?.trim() || !theySaid?.trim()) return null;
-  const { rows } = await pool.query(`SELECT texting_style FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-  if (!rows[0]) return null;
-  const current: string[] = Array.isArray(rows[0].texting_style) ? rows[0].texting_style : [];
-  try {
-    const { text } = await generateText({
-      model: anthropic(MODELS.haiku),
-      maxOutputTokens: 300,
-      experimental_telemetry: { isEnabled: true, functionId: "textingStyle.learn" },
-      prompt: styleLearningPrompt(current, coSaid, theySaid),
-    });
-    return await applyStyleUpdate(userId, current, parseModelJson<{ changed?: boolean; notes?: unknown }>(text), theySaid);
-  } catch {
-    return null;
-  }
 }
 
 // The same write for output produced elsewhere (services/turnLearning.ts).

@@ -139,7 +139,6 @@ export function tally(day: string, rows: FailureRow[], memberTexts: number): Fai
 
 // Failures for members and the team (never test members). Redrafted-fine cuts are never failures.
 export const realFailures = (d: FailureDay) => (["member", "team"] as const).reduce((n, w) => n + d.fallbacks[w] + d.cuts[w] + d.noHelp[w], 0);
-export const memberFailures = (d: FailureDay) => d.fallbacks.member + d.cuts.member + d.noHelp.member;
 export const memberFacing = (d: FailureDay) => d.memberTexts > 0;
 // Pure: whether the day calls for the alert: a member hit a failure, on a day a member wrote to Cue. The team's and test members'
 // counts are on the dashboard, never in the text (Royce, 2026-10-17: "Keep team and test counts off the text and on the dashboard").

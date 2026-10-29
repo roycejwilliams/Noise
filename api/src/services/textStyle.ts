@@ -31,17 +31,6 @@ export function textsInLowercase(userLines: string[]): boolean {
   return lines.filter(isLower).length / lines.length >= 0.6;
 }
 
-// "User said: ..." lines from a recent-conversation block, plus the message
-// being answered.
-export function userLinesFrom(recentConversation: string, latestMessage?: string): string[] {
-  const lines = recentConversation
-    .split("\n")
-    .filter((l) => l.startsWith("User said: "))
-    .map((l) => l.replace(/^User said: /, ""));
-  if (latestMessage && lines[lines.length - 1] !== latestMessage) lines.push(latestMessage);
-  return lines;
-}
-
 // A drafted line that answers the drafting instruction instead of the person
 // (2026-09-16, onboarding: "I'm ready to be Co. Send me what you'd like me to
 // say, and I'll write a single message."). Short generated lines are checked

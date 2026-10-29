@@ -813,11 +813,6 @@ export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; li
     byText: MENU.filter((m) => callWords(m) === "by text" && m.text && live(m, "text")).map((m) => m.byTextOnCall ?? m.text!),
   };
 }
-// The menu's own check: every ability it names is an entry above (pure; the capability probe runs it).
-export function menuUnknownIds(): string[] {
-  const ids = new Set(ABILITIES.map((a) => a.id));
-  return MENU.map((m) => m.main).filter((id) => !ids.has(id));
-}
 
 // The tools that run on a call, from the entries (services/callTools.ts).
 export function callToolNames(): string[] {

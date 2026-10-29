@@ -89,4 +89,3 @@ export function createOutageAlert(deps: { send: (text: string) => Promise<boolea
     state: () => ({ failing: failing ? { ...failing } : null, alertedThisOutage, lastAlertAt, lastFailureAt }),
   };
 }
-export type OutageAlert = ReturnType<typeof createOutageAlert>;

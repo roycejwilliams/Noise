@@ -81,8 +81,3 @@ export function decayAction(r: LifecycleRow, now: Date, today: string): DecayAct
   return daysSince(r.lastConfirmedAt, now) >= ASK_AFTER_DAYS ? { kind: "ask" } : { kind: "none" };
 }
 
-// How a loop reads to a draft: only draftable loops are stated as current; the rest is background, labelled so.
-export function loopLine(title: string, state: LoopState, draftable: boolean, lastConfirmedAt: Date | null, now: Date): string {
-  if (draftable) return `${title} (${state}, confirmed ${Math.max(0, Math.floor(daysSince(lastConfirmedAt, now)))}d ago)`;
-  return `${title} (${state === "open" || state === "waiting" ? "not confirmed lately" : state})`;
-}

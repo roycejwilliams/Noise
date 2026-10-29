@@ -14,7 +14,6 @@
 //     Rows held under the old flow still run their work once sent (afterConfirmSent).
 // Co drafts the confirmation; code checks its voice (services/speakable.ts narratesInternalState, harness/proactive.ts checkDraft)
 // and its shape, redrafts once, and falls back to Co's own words from the call rather than send nothing.
-import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { COMMIT_PREFIX, trackCommitmentsFromTranscript } from "./callCommitments.js";
 import { narratesInternalState } from "./speakable.js";
@@ -22,7 +21,7 @@ import { cleanCoMessage } from "./sendblue.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, nextLocalHour, RULES, sendExempt } from "../harness/proactive.js";
 import { recordDecision, type GateCheck } from "../harness/core.js";
 import { callKey } from "./callKey.js";
-import { deliveryWords, nextDeliveryTime, wordsZone } from "./memberTime.js";
+import { deliveryWords, nextDeliveryTime } from "./memberTime.js";
 
 export const CONFIRM_TYPE = "call_confirm" as const;
 export const confirmKey = (key: string) => `call_confirm:${key}`;
@@ -108,28 +107,6 @@ export type FollowThroughResult = {
   // Resolves when every deliverable turn has finished (tests and the live check wait on it; the call path never does).
   work?: Promise<{ taskId: number; ran: boolean; action?: string }[]>;
 };
-
-// Drafts, checks, redrafts once, falls back. Returns the text and whether it was the fallback.
-export async function writeConfirmation(o: { firstName: string; commitments: Commitment[]; theirLines: string; now: Date; zone: string | null }, draft: FollowThroughDeps["draft"]): Promise<{ text: string; fallback: boolean } | null> {
-  const window = deliveryWindow(o.now, o.zone);
-  const local = DateTime.fromJSDate(o.now).setZone(wordsZone(o.zone));
-  const facts: Record<string, string> = {
-    co_commitment_on_call: o.commitments.map((c) => c.sentence).join(" | "),
-    their_words_on_the_call: o.theirLines.slice(-1500),
-    delivery_window: window,
-    their_local_time: local.isValid ? local.toFormat("h:mma cccc").toLowerCase() : "",
-  };
-  const bad = (t: string) => confirmationChecks(t, o.commitments, o.theirLines).filter((c) => !c.pass);
-  const first = await draft({ firstName: o.firstName, facts }).catch(() => null);
-  if (first && !bad(first).length) return { text: first, fallback: false };
-  if (first) {
-    const failed = bad(first).map((c) => c.reason ?? c.name).join("; ");
-    const second = await draft({ firstName: o.firstName, facts, redo: { draft: first, failed } }).catch(() => null);
-    if (second && !bad(second).length) return { text: second, fallback: false };
-  }
-  const fb = fallbackConfirmation(o.commitments, window);
-  return fb ? { text: fb, fallback: true } : null;
-}
 
 // The call ended: confirm what Co said it would send, then do it. Never throws; the call's own processing never waits on it.
 export async function followThroughOnCallEnd(o: { userId: string; transcript: string; startedAt?: Date | null; endedAt?: Date | null }, deps: FollowThroughDeps = realDeps): Promise<FollowThroughResult> {

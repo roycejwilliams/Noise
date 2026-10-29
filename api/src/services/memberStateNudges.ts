@@ -36,7 +36,6 @@ import { PARKED_TYPES } from "./proactivePause.js";
 
 export type NudgeType = "intro_nudge" | "deadline_nudge" | "goal_nudge" | "commitment_nudge";
 export const NUDGE_TYPES: NudgeType[] = ["intro_nudge", "deadline_nudge", "goal_nudge", "commitment_nudge"];
-export const NUDGE_KIND: Record<NudgeType, ProactiveKind> = { intro_nudge: "intro_followup", deadline_nudge: "deadline", goal_nudge: "goal_nudge", commitment_nudge: "member_commitment" };
 
 export const NUDGE = {
   // An intro is worth a word once it has had this long, and not after this long.

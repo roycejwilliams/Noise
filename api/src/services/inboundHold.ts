@@ -149,7 +149,6 @@ export function createInboundHold(o: { file?: string | null; now?: () => number;
     },
   };
 }
-export type InboundHold = ReturnType<typeof createInboundHold>;
 
 // Whether an error is the database itself being unreachable (down, refusing this login, out of connections, shutting down): a
 // Postgres SQLSTATE in those classes, or one of pg's own connection messages. 28P01 is the 2026-10-28 password rotation. A generic

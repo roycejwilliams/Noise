@@ -50,7 +50,7 @@
 //   First-shot acceptance = no QA finding left standing, built within one member turn of the ask, and no correction or revision within
 //   48 hours (isFirstShot, the view); keeps = co_pages.kept; shares = co_page_shares. Queryable per medium.
 import pool from "../db/db.js";
-import { DECK_MOODS, MOOD_STYLES, contrast, extrasFrom, normalHex, styleFrom, type DeckMood, type DeckStyle, type Density, type TitleLayout } from "./coPages/style.js";
+import { DECK_MOODS, contrast, extrasFrom, normalHex, styleFrom, type DeckMood, type DeckStyle, type Density, type TitleLayout } from "./coPages/style.js";
 import { DEFAULT_FONTS, validFont, type FontChoice } from "./designFonts.js";
 
 export type DesignContext = "professional" | "personal";
@@ -477,7 +477,6 @@ export async function pendingLookInstruction(userId: string, now: Date = new Dat
 
 // Pure: contrast is part of the check readers lean on (re-exported so QA and the renderers share one formula).
 export { contrast };
-export const moodBase = (m: DeckMood) => MOOD_STYLES[m];
 
 // Pure: deck lines that copy a reference image's own words (four words in a row from what it says) that the member never wrote
 // themselves. Provenance, not taste: where the line came from is the fact checked.

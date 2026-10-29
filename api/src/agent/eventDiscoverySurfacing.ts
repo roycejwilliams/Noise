@@ -9,12 +9,6 @@ import { identityDropped } from "../services/guardDrops.js";
 import { isShortNotice } from "../services/eventSurfacingSweep.js";
 import { audienceSayings, audienceTokens, isGroupAimed } from "../services/eventAudience.js";
 
-export type EventDiscoverySurfacingPerson = {
-  userId: string;
-  firstName: string;
-  phoneNumber: string;
-};
-
 // Layer 7 (2026-09-14): this file only drafts. The event/opportunity found by
 // the sweep (eventSurfacingSweep.ts) becomes an "event_offer" candidate, and
 // src/harness/proactive.ts decides whether it goes out today and sends it.

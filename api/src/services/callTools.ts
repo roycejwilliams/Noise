@@ -37,7 +37,6 @@ const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
 // written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
 import { VOICE_READ_OFF_ON_CALL_NOTE } from "./voiceReadConsent.js";
 export const CALL_TOOL_NAMES: readonly string[] = callToolNames();
-export type CallToolName = string;
 
 // The turn's bounds (steps, time) are in services/callLlmProxy.ts, where the rounds run.
 export type AnthropicTool = { name: string; description: string; input_schema: unknown };

@@ -93,8 +93,6 @@ Return ONLY valid JSON, no preamble:
  "lessons": [{"lesson": "...", "quote": "..."}]}`;
 }
 
-export type CallLesson = { lesson: string; quote: string };
-
 const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 
 // Pure: he/she and their forms become they/them/their, keeping a capital at the start of a word.

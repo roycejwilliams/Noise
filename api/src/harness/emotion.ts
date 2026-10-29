@@ -28,7 +28,6 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import type { GateCheck } from "./core.js";
 import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "../services/jevGateway.js";
-import { recentVoiceFlags, renderVoiceFlags, type ShownVoiceFlags } from "../services/voiceFlags.js";
 import { LAST_CALL_MOMENTS_HEADER } from "../services/callMomentsLine.js";
 
 export type Valence = "negative" | "positive" | "mixed";
@@ -277,10 +276,6 @@ export type EmotionalContext = {
   // Frustrated with Co itself in the last 48 hours (what it has or hasn't
   // found, its replies). Makes Co search wider and try harder; not a hard day.
   withCo: { frustrated: boolean; about: string | null; count: number; at?: Date | null; reads?: Date[] };
-  // Moments on their latest call where their voice said more than their words
-  // (services/voiceFlags.ts). Beside the call's text read, never in it: only
-  // the render shows them, nothing above is computed from them.
-  voice?: ShownVoiceFlags | null;
 };
 
 const HOUR = 3600_000;
@@ -386,7 +381,6 @@ export async function forgetGuardedSignals<T extends { about?: unknown; quote?: 
 }
 
 export async function getEmotionalContext(userId: string, now = new Date()): Promise<EmotionalContext> {
-  const voice = recentVoiceFlags(userId).catch(() => null);
   const { rows } = await pool
     .query(
       `SELECT source, emotion, intensity, valence, about, quote, created_at, target, basis FROM emotion_signals
@@ -420,7 +414,7 @@ export async function getEmotionalContext(userId: string, now = new Date()): Pro
       if (!summary.hardSince || since < summary.hardSince) summary.hardSince = since;
     }
   }
-  return { ...summary, voice: await voice };
+  return summary;
 }
 
 function ago(at: Date, now: Date): string {
@@ -448,8 +442,6 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
         .join("; ")}.`,
     );
   }
-  const voiceLine = ctx.voice ? renderVoiceFlags(ctx.voice, ago(ctx.voice.at, now)) : null;
-  if (voiceLine) lines.push(voiceLine);
   for (const r of ctx.recurring) lines.push(`Keeps coming up: ${r.emotions.join(", ")} about ${r.about} (${r.count} times in two weeks).`);
   if (ctx.needsCare) lines.push("The last day's reads point to a hard time.");
   if (ctx.withCo?.frustrated) {

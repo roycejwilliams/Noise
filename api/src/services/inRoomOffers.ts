@@ -195,12 +195,6 @@ export async function latestOpenOffer(personId: string): Promise<Offer | null> {
   return (rows[0] as Offer) ?? null;
 }
 
-// Whether this member has any offer rows at all (older nudges, from before this table, are read the old way).
-export async function hasAnyOffer(personId: string): Promise<boolean> {
-  const { rows } = await pool.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 LIMIT 1`, [personId]);
-  return rows.length > 0;
-}
-
 export async function answerOffer(eventId: string, personId: string, candidateKey: string, answer: "yes" | "no"): Promise<void> {
   await pool.query(
     `UPDATE event_match_offers SET status = 'answered', answered_at = NOW(), answer = $4 WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3`,

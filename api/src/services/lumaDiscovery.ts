@@ -173,53 +173,6 @@ export async function fetchPublicEvents(limit: number, city?: string | null, unt
 // gap between those two clusters, with real margin on both sides.
 const RELEVANCE_THRESHOLD = 0.35;
 
-// Shared ranking core — takes any list of {name, city}-shaped candidates
-// (public discovery events here, but also reused by tieredRecommendation.ts
-// for Co's own calendar events, since both are "rank real events against an
-// ask" with the same signal available) and returns the single best match if
-// it clears the bar, null otherwise. No point surfacing a weak match — same
-// reasoning as dropping the embedding-only fallback in eventScoring.ts.
-//
-// Proximity used to be a soft bias here (appending the user's city to the
-// ask text before embedding, Royce 2026-08-30: "city and the proximity to
-// each user matter") — replaced 2026-09-02 with a real hard radius filter
-// (geocoding.ts's withinRadius, applied by tieredRecommendation.ts's
-// tryTier1/tryTier2 BEFORE candidates ever reach this function) after Royce
-// pointed out the actual failure mode: a Walnut Creek user asking about
-// "the Bay Area" or "San Francisco" needs a real ~50mi radius, not a
-// literal city-string/embedding match, which would either miss real nearby
-// events (different city string) or let through a same-vibe event states
-// away (embedding similarity has no real distance sense). This function is
-// now purely topic relevance — geography is handled entirely upstream.
-// The best few, in order. One-shot ranking meant a single odd top pick
-// ("East Bay Neurotech Happy Hour" for "startup or tech meetups") took the
-// whole search down with it when the relevance check rejected it, while real
-// matches sat further down the same list (2026-09-16).
-export async function rankTopByRelevance<T extends { name: string; city?: string | null }>(
-  candidates: T[],
-  ask: StatedIntent,
-  limit = 4,
-  // Filled with the best few scores whether or not they cleared the bar, so
-  // a search that found nothing shows how close it came.
-  topScores?: { name: string; similarity: number }[],
-): Promise<(T & { similarity: number })[]> {
-  if (!ask.text || !candidates.length) return [];
-  const askEmbedding = ask.embedding?.length ? ask.embedding : await generateEmbedding(ask.text).catch(() => null);
-  if (!askEmbedding) return [];
-  const candidateEmbeddings = await Promise.all(candidates.map((c) => generateEmbedding(c.name).catch(() => null)));
-  const scored: (T & { similarity: number })[] = [];
-  const all: { name: string; similarity: number }[] = [];
-  candidates.forEach((candidate, i) => {
-    const embedding = candidateEmbeddings[i];
-    if (!embedding) return;
-    const similarity = cosineSimilarity(askEmbedding, embedding);
-    all.push({ name: candidate.name, similarity: Math.round(similarity * 1000) / 1000 });
-    if (similarity >= RELEVANCE_THRESHOLD) scored.push({ ...candidate, similarity });
-  });
-  if (topScores) topScores.push(...all.sort((a, b) => b.similarity - a.similarity).slice(0, 5));
-  return scored.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
-}
-
 export async function rankByRelevance<T extends { name: string; city?: string | null }>(
   candidates: T[],
   ask: StatedIntent,

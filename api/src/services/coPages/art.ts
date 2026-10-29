@@ -16,13 +16,6 @@
 
 export const GRAMMARS = ["catalog", "fieldguide", "menu", "editorial", "poster"] as const;
 export type Grammar = (typeof GRAMMARS)[number];
-export const GRAMMAR_NAMES: Record<Grammar, string> = {
-  catalog: "a gallery catalog: asymmetric spreads, large plates, captions",
-  fieldguide: "a field guide: a map, a timeline, photo strips",
-  menu: "a menu: courses on a centered column, set between rules",
-  editorial: "an editorial magazine: headline-led spreads",
-  poster: "a poster: oversized type, full-bleed pictures",
-};
 // How Co says it in its line of choices: only the grammar's name (what the artifact really has, a map or the cover, is said apart).
 export const GRAMMAR_SAID: Record<Grammar, string> = { catalog: "a gallery catalog", fieldguide: "a field guide", menu: "a menu", editorial: "an editorial magazine", poster: "a poster" };
 // For Co's tool descriptions: what each grammar is for.

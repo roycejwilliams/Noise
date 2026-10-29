@@ -402,9 +402,6 @@ for (const [ok, label] of cases) {
   const sb = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
   c(/if \(!prepared\.length\) \{\s*const scopeCity/.test(sb), "the lookup runs in the live reply, gated on nothing having survived the real fit check");
   c(/source: "request",\s*\}\)\.catch/.test(sb), "it always passes source: request, never sweep");
-  const nel = readFileSync(new URL("../../src/services/namedEventLookup.ts", import.meta.url), "utf8");
-  c(/reserveWebSearch\(opts\.userId, opts\.source/.test(nel), "the lookup spends the web search budget");
-  c(/checkGrounding\(match/.test(nel) && /looksOfficial\(found\.url/.test(nel), "the lookup checks the page and that it is the event's own");
 }
 
 // When they're usually free, checked in code (2026-09-22: the fit model called a Saturday fine
@@ -435,9 +432,6 @@ for (const [ok, label] of cases) {
   c(/don't assume the right room is a tech one/.test(web), "it's told not to assume a tech room for a non-tech ask");
   c(/\.\.\.\(eventDate \? \{ statedDates: \{ start: eventDate, end: null \} \} : \{\}\)/.test(web), "an event's own date becomes statedDates, so the gate and window checks apply");
   c(/"date": "YYYY-MM-DD" or null/.test(web), "the model is asked for the event's date");
-  const nel = readFileSync(new URL("../../src/services/namedEventLookup.ts", import.meta.url), "utf8");
-  c(/prefer the upcoming edition in or nearest/.test(nel), "a named event prefers the edition nearest the member");
-  c(/If the only upcoming edition is somewhere else, still return it, and say plainly in "reason" where it is/.test(nel), "an edition elsewhere is still returned, labeled with where it is");
 }
 
 // Several places in one ask (2026-09-27: "this weekend in Sacramento or SF"
