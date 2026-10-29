@@ -1,7 +1,7 @@
 {
   "hash": "a4ad37479890e281",
   "case": "hey-cue",
-  "recorded_at": "2026-10-28T01:31:34.249Z",
+  "recorded_at": "2026-10-29T03:14:52.144Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -4293,15 +4293,15 @@
       "text": "[tool_use sendReply {\"message\":\"Hey Jordan. What's on your mind?\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 10059,
-        "cache_read_input_tokens": 50214,
+        "cache_creation_input_tokens": 60273,
+        "cache_read_input_tokens": 0,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 10059,
+          "ephemeral_5m_input_tokens": 60273,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 86,
+        "output_tokens": 85,
         "output_tokens_details": {
-          "thinking_tokens": 23
+          "thinking_tokens": 22
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -4309,18 +4309,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgTmhk3HmiT2oiUoz2MQD",
+        "id": "msg_011CgVoPWSyoDqaLDR7waeBJ",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EvEDCsoCCBMYAipAUdsuvxbrTkWXyU0AHa4XIpaMOiTSFWNOGqR26uxG6Dvnpoi4v88E45x/4KoRNnVSiur0ZZjPMpyVv1K/lJknuzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB9aCF1wbCAUAIBhAAGhIBs8EB2wECq+EDTzcFDcMEJq0gAzIEEnHPJToEapuV40IEYxLyF0oEx/BdulBIWgTZBeFWYAJoAXAC2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBRMjt8E+VjZxRePZq3zeQLpKbJCBzAd6vWvfN37oOdBiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwSnTx0ihG8Dx0Awj4aDFiiKtP2rLD49Jc7XCIw2mN8rPdhMw/NFT5MOBy77V/rYfkSZL/0l61savQmx9EbJIAlwCTdsP0QBIzZ8LmDKlSkDAFtmbP2CvG/Md9GdqdFoaRV+EfLxceAAapPai+qRoUEW2e6ol3FW5xRBebqA2oaXfgbwnQ5Y9pJChQPidwPy6utUaYEfdv/fJ1W8roRuV0PPo4YAQ=="
+            "signature": "Eu4DCsoCCBMYAipAdN/i0MHQ4NPqHlUxIyTn95LPJX55TCTnZc+RRs8sUGlBiXNidgipb6nmu3qX1EdIPSBuvb0a12xhrF3MpM4JBDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBq/SK1wbCAUAIBhAAGhIBs8EB2wECq+EDTzcFDcMEJq0gAzIEEnHPJToEapuV40IEYxLyF0oEx/BdulBIWgTZBeFWYAJoAXAC2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBRMjt8E+VjZxRePZq3zeQLpKbJCBzAd6vWvfN37oOdBiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyeitkADi+tKBu6aWoaDG/PJtdjzfhFDwiKCCIwwlVI+CrXeWLuj0FHvwfSEK24qa3gJ2+cBrgZ5z39ArAThs+J7tnoI0LvBqBp++CSKlFUaJISfuM6Ex3AnRHGcfPQcHxr5z/0QV6r00Tz6mK3kjMECFBLr/e7TOsQ+/Z9JbGWZ6C+FTmdGjAu6nFEIBnSZzLnkNXV/npiG7zki0fdV6YYAQ=="
           },
           {
             "type": "tool_use",
-            "id": "toolu_01PeLseZwCEw13VsNhijUh5y",
+            "id": "toolu_01CESrC2GWXdx4roiBQYhNXW",
             "name": "sendReply",
             "input": {
               "message": "Hey Jordan. What's on your mind?"
@@ -4336,15 +4336,15 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 10059,
-          "cache_read_input_tokens": 50214,
+          "cache_creation_input_tokens": 60273,
+          "cache_read_input_tokens": 0,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 10059,
+            "ephemeral_5m_input_tokens": 60273,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 86,
+          "output_tokens": 85,
           "output_tokens_details": {
-            "thinking_tokens": 23
+            "thinking_tokens": 22
           },
           "service_tier": "standard",
           "inference_geo": "global",

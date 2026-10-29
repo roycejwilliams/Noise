@@ -1,7 +1,7 @@
 {
   "hash": "8d5f3a57113b9669",
   "case": "checkin-live-thread",
-  "recorded_at": "2026-10-28T01:29:19.718Z",
+  "recorded_at": "2026-10-29T03:17:32.281Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -4290,18 +4290,18 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"All good here. Still nothing from the Hayes Valley place, let me know the second they write back.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"All good here. Still nothing from the venue yet, I'll be glad to hear when they write back.\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 60350,
+        "cache_creation_input_tokens": 10136,
+        "cache_read_input_tokens": 50214,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 10136,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 100,
+        "output_tokens": 77,
         "output_tokens_details": {
-          "thinking_tokens": 22
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -4309,21 +4309,16 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgTmXoswhH4kDH7CYM9zs",
+        "id": "msg_011CgVobMH9TWaFnuGGoipw8",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EucDCsoCCBMYAipAao9nUtay4k4qs0u12Svj3pXHuVbs4pyA5JFZmzNnnITsAE0A4Iu/lgm/UV3lZMoGaZxcJxarZ1ZR3GCErTPzKzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB75+F1wbCAUAIBhAAGhIBs8EBIVwCq+EDTzcFKM4EJq0gAzIEEnHPJToEbOBvaUIEYxLyF0oEx/BdulBIWgTZBeFWYAJoAXAC2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBL6IScXpDIXVzEIeHTuabUrBQBCa+m0SdVI5G9IXWovyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgw6lO/sujJAK+0mPtoaDObf+KLySiMUscA5tSIw2a2nM++hBMpmn9o7S7YdqDy0MGgps9Fu0mVO1bQTh8/3DKG/j6w7tBxa8EXffBZ7KkpPRwHWcHpaJE7NHsXgTEtDdsHfoKWHwRDXR0AMrxLtRFvyX45H0KRH+HrDUgGr+gfKa517JvRjTIinEItrb4P+gKJ0S55MhyVsFBgB"
-          },
-          {
             "type": "tool_use",
-            "id": "toolu_01V8WcFdJW82fd72NbukPQrB",
+            "id": "toolu_011gJZSxhDM2SHdKU6UjAXXv",
             "name": "sendReply",
             "input": {
-              "message": "All good here. Still nothing from the Hayes Valley place, let me know the second they write back."
+              "message": "All good here. Still nothing from the venue yet, I'll be glad to hear when they write back."
             },
             "caller": {
               "type": "direct"
@@ -4336,15 +4331,15 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 60350,
+          "cache_creation_input_tokens": 10136,
+          "cache_read_input_tokens": 50214,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 10136,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 100,
+          "output_tokens": 77,
           "output_tokens_details": {
-            "thinking_tokens": 22
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

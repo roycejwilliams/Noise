@@ -1,7 +1,7 @@
 {
   "hash": "6e706e48dcea446e",
   "case": "checkin-waiting-on-them",
-  "recorded_at": "2026-10-28T01:28:31.761Z",
+  "recorded_at": "2026-10-29T03:17:15.923Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -4290,18 +4290,18 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Good to hear from you. The Harbor Light fellowship is still sitting there if funding timing is on your mind, no rush either way.\"}]",
+      "text": "Hey, good to hear from you.\n\nThe Harbor Light fellowship is still there if funding timing's on your mind.",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 10516,
-        "cache_read_input_tokens": 50214,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 60730,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 10516,
+          "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 133,
+        "output_tokens": 39,
         "output_tokens_details": {
-          "thinking_tokens": 43
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -4309,42 +4309,30 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgTmUG99EV1jdJc2eNLeL",
+        "id": "msg_011CgVoa9ibZZszN6XCuUSWH",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EqYECsoCCBMYAipA24EZki2mYM/Diws8efNubg0fvlO7j8jJdgqcdlyuZBkFMxVIJTiYo2CdvxDU1cgYmPgQbTkb8PKXlEhHjIDMDDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBv5+F1wbCAUAIBhAAGhIBs8EB1dMCq+EDTzcFKM4EJq0gAzIEEnHPJToEzFFROkIEYxLyF0oEx/BdulBIWgTZBeFWYAJoAXAC2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDEO+pE/OT32CVyYlTn0TuDbRZ2ZsjQXpEqg3WTGxuQcyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyeiAVYoGYxdBiZspkaDJGEXyhJhAu2xfTuZCIwRQfbwptwA2GUgS6bLnHqcA2stxh2t8qHmZjOMvKAg39WwOZYQVltWlhfbTFLYMEqKogBc1HWTty8Js8lc3BGN4J9edDzA85EvqXR8Xa0EF1B8gvUFF0r6HTApZIKvGnkveZB0X/rP6IJDo54oSCEn2NYyZm9zhdoIGFw+HA3+PUa6Y4Y2LmzU+pYi6NnUIxKsGoLO1Zhx9l45i7MBbWlzmV732RZL1lgQRBYCEropll9D92H0cd/8t3hvxgB"
-          },
-          {
-            "type": "tool_use",
-            "id": "toolu_01VwVX4zvP4VhoSH8FXtTAp7",
-            "name": "sendReply",
-            "input": {
-              "message": "Good to hear from you. The Harbor Light fellowship is still sitting there if funding timing is on your mind, no rush either way."
-            },
-            "caller": {
-              "type": "direct"
-            }
+            "type": "text",
+            "text": "Hey, good to hear from you.\n\nThe Harbor Light fellowship is still there if funding timing's on your mind."
           }
         ],
         "container": null,
-        "stop_reason": "tool_use",
+        "stop_reason": "end_turn",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 10516,
-          "cache_read_input_tokens": 50214,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 60730,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 10516,
+            "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 133,
+          "output_tokens": 39,
           "output_tokens_details": {
-            "thinking_tokens": 43
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

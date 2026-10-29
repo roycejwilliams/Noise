@@ -1,0 +1,95 @@
+{
+  "hash": "66f06ebaf5646653",
+  "case": "status-check",
+  "recorded_at": "2026-10-29T03:16:50.929Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you dr...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you draft the planning docs for Sequin?\".\n\nCue's text:\n\"\"\"This is already moving, I'm not starting from scratch. The timeline's outlined, venue walk-through Nov 3, invites out Nov 10.\n\nNext up is the partner section, which I'll get to tomorrow morning.\"\"\"\n\nDoes the text tell them Cue is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"This is already moving... timeline's outlined... Next up is the partner section, which I'll get to tomorrow morning\\\" shows status without offering, pausing, or starting new task.\"}",
+      "usage": {
+        "input_tokens": 374,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 123,
+        "output_tokens_details": {
+          "thinking_tokens": 50
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgVoYH7HnxZvCj2Mc4qtp",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EsMECsQCCBMYAipAPMLT72yiNVbSBLyevSmuo5c0EHLl82Wses7nw19POOzSUFu58KRhwxUHyVxzxO1/mo7yJhR+qV+FzvMRrvb11zIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBovWK1wbCAToIBBAAGgwC2ooDTzcFEqcEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiB6l4cimXU+dTdzO4w+pHIr7GzvrwFAHiZ2OWsbzAR2gSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxpcvdblXotUni4KkgaDESCfR56Hq9HisbNqiIw/xxgCE/3FOMhUZUvStiAorsc8ubbRmzthLw4OW8nmbozivlGHa4qu8T3UOX9xNHiKqsB7Hjy/9xNbZzZbwDq7T/CZH6iCIO7PSIgO2iXuf8XWkmFbPlXY4zc29b/mks1DGd0qyEmUxF6uRUKVEAGVPm4eFlmiLBduN5LJmm9yRithQFBcqUuXqaH9Se+9crPMdwJGsn+kQEf82z0UC/4MdYuVxwQlYhCVzKdNkJ4FB9vvw9pXnLFjxYeiH3kHUHjYoHp4NvV+XzhBmSE4/F/acA/9hZWq4NMWu4aRL5+GAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"This is already moving... timeline's outlined... Next up is the partner section, which I'll get to tomorrow morning\\\" shows status without offering, pausing, or starting new task.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 374,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 123,
+          "output_tokens_details": {
+            "thinking_tokens": 50
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

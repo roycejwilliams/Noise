@@ -1,0 +1,95 @@
+{
+  "hash": "e91212f81612b10c",
+  "case": "planned-before-first-run",
+  "recorded_at": "2026-10-29T03:16:32.921Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Yes, it's running.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 142,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 38,
+        "output_tokens_details": {
+          "thinking_tokens": 35
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgVoX1cbh7Z7MMLu2PXca",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSsAUKEAgTGAI4AUIIdGhpbmtpbmcSDI8iZ0hGtgIeEgfJ0hoMYtGA3j8gU7ggkSi3IjCTTE/pwhfeZy6dukAF/dKGgrzq9AqPVmoz7LQWzAF6wZ9Z4urCxZajkBzd4uTE6DAqzQQ3PG0Hp5h0qufmCtEzgZokbNsUHDBz+ZLQIUwghBP14NgN3PQQRgenpW18pc5KhaX+Dz0z03aT+wU0csT8b0Qf9l7UEde5qtHkRIZDqrvlhgAwGu5wwxPj/HgEG9HjqsCBEAmwhAKoSWse0BUWN2G3eTTnWGryxdfAxW9H617vdP1wJKlo1J4qqrUx8Wrf/BxqOk6lwi7vpBTBEPsIQPScB3xU5lbAtHi3c7nAedxYUys4si/IvEB7Tpi6EqVlWIdnlwfT9e3e7DoBCGnVWyoOjLWOokET9GsNTGYPuMukOPnMNQBTy0EWpfiVeIIjw6yqcsN1XMj7RzcVhnR1FC9Of4faQFfM/freOrGNCrANp0k2jbu5pR1jSqYi03AkUQO23ChwX3RnpzbCWBuHVSPbjVPH+Owz3OxOV+88XKuRyWfQKw0dunMWGqetHxHRVgvUaSimSJnA3NK2gvfG+4apdhgGCprm1hOm6ychNA22KM8/FnbT3DfkOrzR/Lxg8BmYYMZgzLwmZZ5OrhHYmoGyNlapvDjXacqu630FwmO/Te+QsLN5U66RAoVNn54pRRndmKwYMDHUDjAnZ0WJEGzyRO3RncALZh6/aZPrs/zFBBuY0qcIu/4UIpDZLQFm/vS7ztCdJVF7CUio+L7Uz1ID324uKjeQEdcRF1xvUZK5ip07QxNiixJhlFpFqShpzVz2OsuMek4oasQ4Cb9RXjASlHALKUrePD9TJD5HqgnKgaz4lqMvW0YxUqUREI1t/u8xCZfwZudvUWPeRAG7GAE="
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 142,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 38,
+          "output_tokens_details": {
+            "thinking_tokens": 35
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}
