@@ -5,7 +5,7 @@
 //   npx tsx evals/jev/gateway.ts
 import "dotenv/config";
 import { readFileSync } from "fs";
-import { jevForMemberText, JEV_GATEWAY_PROVIDER_OPTIONS, setJevGatewayForTests, JEV_SURE } from "../../src/services/jevGateway.js";
+import { jevForMemberText, JEV_GATEWAY_PROVIDER_OPTIONS, JEV_MODEL_ID, setJevGatewayForTests, JEV_SURE } from "../../src/services/jevGateway.js";
 
 let failed = 0;
 let total = 0;
@@ -23,6 +23,8 @@ check("every Jev request sets zero data retention", JEV_GATEWAY_PROVIDER_OPTIONS
 const g = src("services/jevGateway.ts");
 check("the gateway call always passes those options", /providerOptions: JEV_GATEWAY_PROVIDER_OPTIONS/.test(g) && (g.match(/evaluate\(\{/g) ?? []).length === 1);
 check("no retries, short timeout (a slow Jev never holds up a reply)", /maxRetries: 0/.test(g) && /AbortSignal\.timeout\(timeoutMs\)/.test(g) && /timeoutMs = 3000/.test(g));
+check("Jev is pinned to a versioned id (zero retention on all routes), not the bare alias", JEV_MODEL_ID === "typesafe-ai/jev-1.14.0" && /^typesafe-ai\/jev-\d+\.\d+\.\d+$/.test(JEV_MODEL_ID));
+check("the one gateway call uses the pinned id, and no other Jev id is named", /evaluationModel\(JEV_MODEL_ID\)/.test(g) && (g.match(/typesafe-ai\/jev/g) ?? []).length === 2 && (g.match(/typesafe-ai\/jev-1\.14\.0/g) ?? []).length === 1);
 check("errors log class and status only, never the request", /request failed \(non-fatal\): \$\{err\?\.constructor\?\.name/.test(g));
 
 // ---------------------------------------------------------------- who may send member text

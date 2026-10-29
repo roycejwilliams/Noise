@@ -36,6 +36,13 @@ export function setJevGatewayForTests(fn: typeof injected): void {
 
 export const JEV_GATEWAY_PROVIDER_OPTIONS = { gateway: { zeroDataRetention: true } } as const;
 
+// The one Jev every call uses, pinned to a version (2026-10-29). Vercel's model
+// list marks the bare "typesafe-ai/jev" alias zero-retention on only some
+// routes, and each versioned id on all of them; 1.14.0 is TypeSafe's newest
+// release (docs.typesafe.ai/models, from 2026-10-14). Moving to a newer Jev
+// is a deliberate change here, checked against the same list.
+export const JEV_MODEL_ID = "typesafe-ai/jev-1.14.0";
+
 // Probability of yes for each question, or null on any failure.
 export async function askJevZdr(state: unknown, questions: Record<string, JevBool>, timeoutMs = 3000): Promise<Record<string, number> | null> {
   if (injected) return injected(state, questions);
@@ -43,7 +50,7 @@ export async function askJevZdr(state: unknown, questions: Record<string, JevBoo
   try {
     provider ??= createGateway({ apiKey: process.env.AI_GATEWAY_API_KEY });
     const result: any = await evaluate({
-      model: provider.evaluationModel("typesafe-ai/jev"),
+      model: provider.evaluationModel(JEV_MODEL_ID),
       state: state as any,
       questions: questions as any,
       maxRetries: 0,

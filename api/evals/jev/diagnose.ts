@@ -3,13 +3,14 @@ import "../lib/requireMeter.js";
 // message (never the key). One tiny request, with and without zero data retention.
 import { experimental_evaluate as evaluate } from "ai7";
 import { createGateway } from "@ai-sdk/gateway";
+import { JEV_MODEL_ID } from "../../src/services/jevGateway.js";
 const key = process.env.AI_GATEWAY_API_KEY ?? "";
 console.log("key set:", !!key, "length:", key.length, "prefix:", key.slice(0, 4));
 const provider = createGateway({ apiKey: key });
 for (const zdr of [true, false]) {
   try {
     const r: any = await evaluate({
-      model: provider.evaluationModel("typesafe-ai/jev"),
+      model: provider.evaluationModel(JEV_MODEL_ID),
       state: { latest_message: "thanks!" } as any,
       questions: { closing: { type: "boolean", instructions: "Is `latest_message` just closing the conversation?" } } as any,
       maxRetries: 0,
