@@ -1314,7 +1314,7 @@ export function admissionPrompt(claim: string): string {
   return `Cue, a texting companion, is about to send this line:
 "${claim}"
 
-Does this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Cue or another person) beyond Cue admitting that something did NOT happen (including that it tried and couldn't: "I couldn't reach them"), or owning a mistake ("that's on me", "sorry", "you're right")? A reason or an aside that states a fact ("because Jordan already has your number", "since Ellis got it first") counts as asserting something.
+Does this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Cue or another person) beyond Cue admitting that something did NOT happen (including that it tried and couldn't: "I couldn't reach them"), or owning a mistake ("that's on me", "sorry", "you're right")? A reason or an aside that states a fact ("because Jordan already has your number", "since Ellis got it first") counts as asserting something. Saying something was flagged, reported, logged or passed on (to the team or anyone) is asserting an action, never only an admission.
 
 Return ONLY JSON: {"onlyAdmission": true} if the line only admits something didn't happen and/or owns it, else {"onlyAdmission": false}.`;
 }
@@ -1348,8 +1348,11 @@ export async function admitNarratedSentences(draft: string, rf: ReplyFacts, judg
 }
 
 // The past_action claims that might be admissions, judged; only a true answer is in the map.
-export async function admissionsFor(claims: Claim[], judge?: AdmissionJudge): Promise<Map<string, boolean>> {
-  const asks = [...new Set(claims.filter((c) => (c.type === "past_action" || c.type === "detail") && MAY_ADMIT.test(c.text)).map((c) => c.text))];
+// facts: this turn's facts. A claim of any type citing a fact about what failed (services/turnFailure.ts) is always judged: it stands on
+// that fact only as an admission of the failure (claimChecks), whatever type the reader gave it.
+export async function admissionsFor(claims: Claim[], judge?: AdmissionJudge, facts: Fact[] = []): Promise<Map<string, boolean>> {
+  const citesWhatFailed = (c: Claim) => !!c.factId && facts.some((f) => f.id === c.factId && isFailureFact(f));
+  const asks = [...new Set(claims.filter((c) => ((c.type === "past_action" || c.type === "detail") && MAY_ADMIT.test(c.text)) || citesWhatFailed(c)).map((c) => c.text))];
   const out = new Map<string, boolean>();
   await Promise.all(asks.map(async (t) => { if ((await judgeAdmission(t, judge)) === true) out.set(t, true); }));
   return out;
@@ -1454,10 +1457,10 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     if (pass && citedFact && isFailureReportFact(citedFact) && !reportFactBacks(citedFact)) {
       return { name: `claim_${c.type}`, pass: false, reason: `${reason} (that fact says no report of Cue's failure is on record, or that it couldn't be checked; it supports nothing)` };
     }
-    // What failed backs saying that it failed, nothing Cue did about it: a past action resting on it stands only when the admission judge
-    // reads the claim as only admitting the failure ("It didn't go through on my end"), never "I've flagged it" (that needs the report
+    // What failed backs saying that it failed, nothing Cue did about it: a claim of any type resting on it stands only when the admission
+    // judge reads the claim as only admitting the failure (4th review: "The team has it." typed as detail got through) ("It didn't go through on my end"), never "I've flagged it" (that needs the report
     // status). The judge reads meaning; this only guards which fact can back which.
-    if (pass && c.type === "past_action" && citedFact && isFailureFact(citedFact) && admissions.get(c.text) !== true) {
+    if (pass && citedFact && isFailureFact(citedFact) && admissions.get(c.text) !== true) {
       return { name: `claim_${c.type}`, pass: false, reason: `${reason} (what failed backs only saying it failed; anything Cue did about it needs its own fact)` };
     }
     // Agreeing to help is not a capability claim (row 10393, 2026-10-10: "Happy to." was cut as one, and the reply that asked her to
@@ -1554,12 +1557,13 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
   });
   // What each claim was found to rest on, for the machinery-talk check (failureBackedSentence): kept across a recheck's partial read.
   rf.claimCites ??= new Map();
-  // Rests on the failure: it cites the "what failed" fact (never the report status), or the admission judge passed it while a failure is
-  // in view (the claim reader may mark "that didn't go through" supported with no fact to cite).
+  // Rests on the failure: it cites the "what failed" fact or a status saying a report is on record, or the admission judge passed it
+  // while a failure is in view (the claim reader may mark "that didn't go through" supported with no fact to cite).
   claims.forEach((c, i) =>
     rf.claimCites!.set(sentenceKey(c.text).replace(/[.!?]+$/, ""), {
       pass: checks[i].pass,
-      failureFact: checks[i].pass && (!!rf.facts.find((f) => f.id === c.factId && isFailureFact(f)) || (failure.inView && admissions.get(c.text) === true)),
+      // An on-record status counts too: the status guard above keeps a "no report" citation from ever passing.
+      failureFact: checks[i].pass && (!!rf.facts.find((f) => f.id === c.factId && (isFailureFact(f) || reportFactBacks(f))) || (failure.inView && admissions.get(c.text) === true)),
     }),
   );
   return checks;
@@ -1981,7 +1985,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const extracted = await extractClaims(draft, rf, src, model);
-        if (extracted) return { checks: claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims)), ms: extracted.latencyMs };
+        if (extracted) return { checks: claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims, undefined, rf.facts)), ms: extracted.latencyMs };
         console.error(`replyGrounding: claim check returned unusable JSON on attempt ${attempt}${attempt === 1 ? ", retrying once" : ""}`);
       } catch (err: any) {
         console.error(`replyGrounding: claim check failed on attempt ${attempt}${attempt === 1 ? ", retrying once" : " (non-fatal, giving up)"}:`, err?.message ?? err);
@@ -1998,7 +2002,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
 export async function claimChecksOnly(draft: string, rf: ReplyFacts, src: GroundingSources, opts: { force?: boolean } = {}): Promise<GateCheck[]> {
   if (!opts.force && !needsClaimCheck(draft)) return [];
   const extracted = await extractClaims(draft, rf, src).catch(() => null);
-  return extracted ? claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims)) : [];
+  return extracted ? claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims, undefined, rf.facts)) : [];
 }
 
 // True when the claim read never came back for a draft that's claim-shaped

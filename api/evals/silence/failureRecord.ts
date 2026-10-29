@@ -18,8 +18,9 @@ type ScriptClaim = { text: string; type: string; supported: boolean; factId: str
 let script: ScriptClaim[] = [];
 // Claims the admission judge calls "only an admission it didn't happen": the worst case for a false denial, from the start (the judge's
 // answers are cached per claim for the whole run).
-let admits = new Set<string>(["On my side nothing broke", "It didn't go through on my end", "The call just didn't go through on my end", "The call didn't go through"]);
+let admits = new Set<string>(["On my side nothing broke", "It didn't go through on my end", "The call just didn't go through on my end", "The call didn't go through", "The call didn't go through on my end", "That's on my side, not you", "It's a setup problem on my side"]);
 let claimReads = 0;
+let admissionReads: string[] = [];
 const norm = (s: string) => s.replace(/\\"/g, '"').replace(/[’‘]/g, "'").toLowerCase();
 const prior = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -34,6 +35,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   } else if (/Does this line assert anything that happened/.test(body)) {
     // The one line it's asked about, exactly: a longer line that only starts with an admission is not one.
     const line = norm(body).match(/about to send this line:\\n"(.*?)"\\n/)?.[1] ?? "";
+    admissionReads.push(line);
     text = JSON.stringify({ onlyAdmission: [...admits].some((a) => norm(a) === line) });
   } else if (/Only the member knows where it stands/.test(body)) {
     text = JSON.stringify({ reports: [] });
@@ -150,17 +152,20 @@ for (const s of reports) {
   for (const rec of ALL) {
     await outcome("citing the feedback receipt", s, rec, [whole(s, "F1")], ON_RECORD.has(rec));
     await outcome("citing what failed", s, rec, [whole(s, "F2")], false);
+    // Typed as something other than a past action, citing what failed: never backed either (4th review: "The team has it." as detail).
+    for (const type of ["detail", "other_person"]) await outcome(`typed ${type}, citing what failed`, s, rec, [whole(s, "F2", true, type)], false);
     await outcome("citing the report status", s, rec, [whole(s, "F3")], ON_RECORD.has(rec));
+    await outcome("typed detail, citing the report status", s, rec, [whole(s, "F3", true, "detail")], ON_RECORD.has(rec));
     // With a report on record, TEAM_PASS's force-pass on the feedback receipt works as before; with none, it's skipped.
     await outcome("unsupported", s, rec, [whole(s, null, false)], ON_RECORD.has(rec) && G.TEAM_PASS.test(s) && !G.TEAM_PASS_PLUS.test(s));
   }
 }
-// A report said with an admission in machinery words: only what-failed citations exempt a sentence from the machinery-talk cut, so it
-// never goes out whole, as one claim or split, whatever it cites.
+// A report said with an admission in machinery words: kept only when a report IS on record and the report rests on that status (an
+// on-record status exempts it from the machinery-talk cut; the receipt, what failed, or a "no report" status never do).
 const both = "The call didn't go through on my end, and I've flagged it so it gets looked at.";
 for (const rec of ALL) {
-  for (const cite of ["F1", "F2", "F3"]) await outcome(`one claim citing ${cite}`, both, rec, [whole(both, cite)], false);
-  for (const cite of ["F1", "F2", "F3"]) await outcome(`split, the report citing ${cite}`, both, rec, [whole("The call didn't go through on my end", "F2"), whole("I've flagged it so it gets looked at", cite)], false);
+  for (const cite of ["F1", "F2", "F3"]) await outcome(`one claim citing ${cite}`, both, rec, [whole(both, cite)], cite === "F3" && ON_RECORD.has(rec));
+  for (const cite of ["F1", "F2", "F3"]) await outcome(`split, the report citing ${cite}`, both, rec, [whole("The call didn't go through on my end", "F2"), whole("I've flagged it so it gets looked at", cite)], cite === "F3" && ON_RECORD.has(rec));
 }
 // Honest past actions about other things: they stand on their own facts, failure or not.
 const honest: [string, string][] = [["I logged that run for you.", "F4"], ["I flagged that deadline.", "F5"], ["I let them know you're coming.", "F6"], ["I passed it along to Sarah.", "F7"], ["I flagged the two events you might like.", "F8"]];
@@ -193,7 +198,20 @@ for (const [s, cite] of honest) for (const rec of ["unreported", "reported", "no
   G.claimChecks([adm, { text: "my end is clear now", type: "detail", supported: true, factId: "F4", quote: null }, { text: "I've flagged it on my end", type: "past_action", supported: true, factId: "F3", quote: null }], mixed, srcFor as any, await G.admissionsFor([adm]));
   check("a sentence whose claims all rest on what failed is exempt from the machinery-talk cut", G.failureBackedSentence(mixed, "It didn't go through on my end."));
   check("one with a claim resting on anything else is not", !G.failureBackedSentence(mixed, "It didn't go through on my end, and my end is clear now."));
-  check("a claim resting on the report status (even on record) exempts nothing", !G.failureBackedSentence(mixed, "I've flagged it on my end."));
+  check("a claim resting on an on-record report status is exempt too", G.failureBackedSentence(mixed, "I've flagged it on my end."));
+  const unrep = facts("unreported");
+  const flag = { text: "I've flagged it on my end", type: "past_action" as const, supported: true, factId: "F3", quote: null };
+  const [flagCheck] = G.claimChecks([flag], unrep, srcFor as any, await G.admissionsFor([flag], undefined, unrep.facts));
+  check("a 'no report' status citation never passes, so it never exempts", flagCheck.pass === false && !G.failureBackedSentence(unrep, "I've flagged it on my end."), flagCheck);
+  // No negation in it, so only citing what failed sends it to the judge.
+  const typed = { text: "The team got it covered", type: "other_person" as const, supported: true, factId: "F2", quote: null };
+  admissionReads = [];
+  const ad = await G.admissionsFor([typed], undefined, unrep.facts);
+  check("admissionsFor judges any claim citing what failed, whatever its type", admissionReads.includes(norm(typed.text)) && G.claimChecks([typed], unrep, srcFor as any, ad)[0].pass === false, admissionReads);
+  admissionReads = [];
+  await G.admissionsFor([{ ...typed, text: "The team got all of it covered", factId: "F4" }], undefined, unrep.facts);
+  check("and not one citing anything else", admissionReads.length === 0, admissionReads);
+  check("the admission prompt says a flag, report, log or pass-on is an action, never only an admission", /Saying something was flagged, reported, logged or passed on \(to the team or anyone\) is asserting an action, never only an admission\./.test(G.admissionPrompt("x")));
   check("nor a sentence the claim read found nothing in", !G.failureBackedSentence(mixed, "On my end, all good."));
   check("nor a fragment of a backed claim said on its own", !G.failureBackedSentence(mixed, "On my end."));
   // A machinery-sounding line on a failure turn is read for claims even when it isn't claim-shaped, so it can stand on what failed.
