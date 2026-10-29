@@ -3,7 +3,8 @@
 //   npx tsx evals/review/introClose.ts
 // 2026-10-28, Royce: "give every unresolved request the same neutral closure after a consistent window, regardless of whether
 // someone was found, declined or stayed silent. Don't expose the reason. Don't promise to keep looking unless the member asks."
-//   1. The words: fixed, one line, nothing about what happened, no offer to keep looking, passes the proactive draft checks.
+//   1. The words: fixed, one line (option A, approved 2026-10-28), nothing about what happened, no offer to keep looking, passes the
+//      proactive draft checks; the name is only ever the one the member wrote, else the no-name line.
 //   2. Found and declined, found and silent, found and not reached, not found: the same request record a turn could read, the same
 //      candidate due at the same moment, the same gate verdicts and the same text. Nothing is queued before 7 days. Both said yes
 //      (the intro email went): no close. The intro email going after the close was queued: nothing goes.
@@ -96,6 +97,8 @@ const settle = async (n: number) => { for (let i = 0; i < 200 && W.decisions.fil
     check(`it never offers to keep looking or try again: ${t}`, !/\b(keep|still|again|later|look(ing)?|watch|let you know|if (you|they)|anyone else|someone else)\b/i.test(t), t);
     check(`it passes the proactive draft checks: ${t}`, P.checkDraft(t, IC.INTRO_CLOSE_RULES).every((k) => k.pass), P.checkDraft(t, IC.INTRO_CLOSE_RULES).filter((k) => !k.pass));
   }
+  check("the name is kept only when it is a word of theirs", IC.nameFromTheirWords("Sarah", ["I met sarah at the dinner"]) === "Sarah" && IC.nameFromTheirWords("sarah kim", ["Sarah's the one"]) === "Sarah" && IC.nameFromTheirWords("Sarah", ["the founder from the dinner"]) === "" && IC.nameFromTheirWords("Sara", ["I met Sarah"]) === "" && IC.nameFromTheirWords("", ["Sarah"]) === "", [IC.nameFromTheirWords("Sarah", ["I met sarah at the dinner"]), IC.nameFromTheirWords("sarah kim", ["Sarah's the one"])]);
+  check("their lines are the Member lines of the exchange, never Cue's", JSON.stringify(IC.memberLinesOf("Member: hi Sarah\nCue: Sarah Kim?\nMember: yes")) === JSON.stringify(["hi Sarah", "yes"]));
   check("the name is their own word, first letter up, letters only", IC.nameSaid("sarah kim") === "Sarah" && IC.nameSaid("  Mary-Kate  Olsen") === "Mary-Kate" && IC.nameSaid("O’Brien!") === "O’Brien" && IC.nameSaid("") === "" && IC.nameSaid("??") === "", [IC.nameSaid("sarah kim"), IC.nameSaid("  Mary-Kate  Olsen"), IC.nameSaid("O’Brien!")]);
 }
 
@@ -111,9 +114,11 @@ const build = (): World => {
   W.checkinFollowups.push({ user_id: jo.id, event_api_id: "evt-close", event_name: "Cue Night" });
   return { jo, sarah };
 };
-const turn = async (w: World, input: Record<string, string>) => {
+// Jo named Sarah in her own earlier text; this message is the yes. recentExchange overrides it (a name Jo never wrote).
+const SAID_SARAH = "Member: I met Sarah at Cue Night, could you connect us?\nCue: Happy to look into it. What's her last name?";
+const turn = async (w: World, input: Record<string, string>, recentExchange: string = SAID_SARAH) => {
   const tools: any = createConversationTools({
-    userId: w.jo.id, phoneNumber: w.jo.phone_number, resolvedContent: "yes please, I'd love an intro", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
+    userId: w.jo.id, phoneNumber: w.jo.phone_number, resolvedContent: "yes please, I'd love an intro", recentExchange, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
     sendCoReply: async () => true, facts: { add: () => {}, text: () => "" },
   } as any).tools;
   const result = await quiet(() => tools.requestEventIntro.execute({ ...input, theirYes: "yes please", why: "they asked for the intro" }, { toolCallId: "t0", messages: [] }));
@@ -195,6 +200,18 @@ const run = async (outcome: "not_found" | "declined" | "silent" | "unreached" | 
   check("an intro made after the close was queued: the close is skipped at send time", "skip" in draft && /intro was made/.test(draft.skip), draft);
   await proactiveRegistry.intro_close.onDropped!(c, "skipped", "the intro was made");
   check("…and dropped, the request row is forgotten", requests.length === 0, requests);
+}
+
+// A name Jo never wrote (Cue said it, or the model passed it on its own): the close names no one.
+{
+  const w = build();
+  const askedAt = Date.now();
+  await turn(w, { personName: "Sarah", lastName: "Kim" }, "Member: the founder I met at Cue Night, could you connect us?\nCue: Was that Sarah Kim?");
+  check("a name only Cue said is never recorded as theirs", requests.length === 1 && requests[0].name_said === "", requests.map((r) => r.name_said));
+  await quiet(() => IC.queueDueIntroCloses(new Date(askedAt + 7 * DAY + 60_000)));
+  const c = asCandidate(W.candidates[0]);
+  const draft = await proactiveRegistry.intro_close.draft(c, { userId: w.jo.id, firstName: "Jo", phoneNumber: w.jo.phone_number!, city: null, timezone: null });
+  check("…and the close is the no-name line", "messages" in draft && JSON.stringify(draft.messages) === JSON.stringify(["The intro you asked about didn't come together, so I've closed it."]), draft);
 }
 
 // ------------------------------------------------------------ 3. exactly once
