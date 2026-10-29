@@ -261,7 +261,7 @@ check("a bad query or a model error is not", !H.isDbUnreachable(Object.assign(ne
       locked = run.then(() => undefined, () => undefined);
       return run;
     };
-    const hold = H.createInboundHold();
+    const hold = H.createInboundHold({ now: () => at });
     for (const [h, m] of [["q1", 20], ["q2", 15]] as const) hold.hold({ handle: h, payload: { number: PHONE, content: SECRET, message_handle: h }, receivedAt: at - m * 60_000, active: false });
     const claimed = new Set<string>();
     const answered: string[] = [];
@@ -312,7 +312,7 @@ check("a bad query or a model error is not", !H.isDbUnreachable(Object.assign(ne
     const handled = (h: string) => answered.includes(h) || filed.includes(h);
     check("a live text arriving mid-batch waits for the phone's lock: every held text is answered or on file, none lost to 'newer_text'", handled("q1") && handled("q2") && answered.includes("live") && hold.size() === 0, { answered, filed, held: hold.size() });
     check("... and the newest held text was answered before the live one ran, never alongside it (one turn per phone at a time)", answered.indexOf("q2") > -1 && answered.indexOf("q2") < answered.indexOf("live") && most === 1, { answered, most });
-    const kept = H.createInboundHold();
+    const kept = H.createInboundHold({ now: () => at });
     kept.hold({ handle: "w1", payload: { number: PHONE, content: SECRET }, receivedAt: at - 60_000, active: false });
     await R.takeHeldIntoLiveTurn(kept.readyFor(PHONE), { foldIn: async () => false, release: (h) => kept.release(h) });
     check("a held text the live turn couldn't claim is never let go there (whoever has it, or the drain, settles it)", kept.has("w1"));
