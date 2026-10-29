@@ -126,7 +126,9 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // retireAsk: the find ask this reply may ask about (services/askRetire.ts); stopNote: the one stopped-looking line code carries in it.
 // world: the member's world this turn (services/memberWorld.ts): what the check-in rule draws on, and what the reply check reads to
 // keep a backed world line and to end dead air with a true one.
-export type ReplyFacts = { retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+// moment: what they're doing in this message, from the turn's moment read (services/connectDots.ts readMoment: "sharing", "feedback",
+// ...). The reply check reads it to tell a cut that left a sharing reply flat (repairShareCut); never rendered into a prompt.
+export type ReplyFacts = { moment?: string | null; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -2049,6 +2051,143 @@ export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; 
   return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.answeredThisTurn ?? o.src.sentThisTurn });
 }
 
+// A cut that leaves a reply to something they shared flat (Royce, 2026-10-28). He wrote "I'm just getting back from my birthday/vacation.
+// I'm honestly feeling hopeful and recharged"; the draft's closing line invented "the gym today", the check rightly cut it, and what went
+// out was "That's a good place to come back from.": true, and generic enough to fit anyone. Removing an invented detail is right; sending
+// a reply that no longer engages is not. So when they're sharing something (or telling Cue how it's coming across) and the cut took the
+// part that engaged with them, Cue gets one rewrite from supported context, checked again like any rewrite. Never a second rewrite.
+// Signals, all already on hand: the turn's moment read (rf.moment), how much of the draft the cut took, whether a question to them
+// survived, and whether what's left still carries any of their own words. Those only decide whether to ask; the rewrite call itself
+// decides first whether what's left still responds to them (a short warm line that fits them is a complete reply, Royce 2026-10-28:
+// "respect when the moment is complete"), the way the dead-air redraft decides check-in (WORLD_REDRAFT_NOTE). One Sonnet call, plus
+// the usual recheck when the rewrite is claim-shaped, only on such a cut.
+export const SHARE_MOMENTS = new Set(["sharing", "feedback"]);
+// Everyday words that say nothing about what they shared ("honestly", "getting", "about"), so carrying one isn't engaging with them.
+const EVERYDAY = new Set("about after again also always another around because before being better could doing every going getting gonna honestly maybe might never other really since something still their there these thing things think those though today tomorrow tonight wanna where which while would yeah yesterday".split(" "));
+const wordCount = (t: string) => t.split(/\s+/).filter(Boolean).length;
+// Pure: their own content words (5+ letters, not everyday filler), for telling whether what's left still touches what they said.
+export function theirContentWords(message: string): Set<string> {
+  return new Set((message.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z][a-z']+/g) ?? []).map((w) => w.replace(/'s$|'/g, "")).filter((w) => w.length >= 5 && !EVERYDAY.has(w)));
+}
+export function echoesThem(text: string, message: string): boolean {
+  const theirs = theirContentWords(message);
+  return [...theirContentWords(text)].some((w) => theirs.has(w));
+}
+// Pure: whether a cut on a sharing (or feedback) turn may have left a stub, so the one rewrite call is asked. Not merely short: the cut
+// took at least a third of the draft, no question to them survived, and nothing left carries their own words. The rewrite call still
+// decides whether what's left already fits them.
+export function shareCutStub(o: { moment: string | null | undefined; draft: string; cut: string; message: string }): boolean {
+  if (!o.moment || !SHARE_MOMENTS.has(o.moment)) return false;
+  const cut = o.cut.trim();
+  const draft = o.draft.trim();
+  if (!cut || cut === draft || cut.includes("?")) return false;
+  if (wordCount(cut) > (wordCount(draft) * 2) / 3) return false;
+  return !echoesThem(cut, o.message);
+}
+
+// The removed claims' own words, for the rewrite to steer clear of and for code to hold it to.
+export function removedClaims(failed: GateCheck[]): string[] {
+  return failed.map((f) => claimWords(f) ?? (f.reason ?? "").match(/"([^"]{6,})"/)?.[1] ?? null).filter((x): x is string => !!x && x.trim().length >= 6);
+}
+
+export function shareRewritePrompt(o: { facts: string; tail: string; theirWords: string; message: string; draft: string; removed: string[]; cut: string }): string {
+  return `${CO_VOICE}
+
+${CO_TEXT_CHANNEL}
+
+${o.facts}
+
+Recent conversation:
+${o.tail || "(none)"}
+${o.theirWords ? `\nWhat they've told you before (their own words about their own life):\n${o.theirWords}\n` : ""}
+They just said: "${o.message}"
+
+Your draft reply:
+"${o.draft}"
+
+The reply check took out these parts, because nothing they've said and none of the facts above support them. Don't say them again, in any wording:
+${o.removed.length ? o.removed.map((r) => `- "${r}"`).join("\n") : "- (a detail that wasn't theirs)"}
+
+What's left: "${o.cut || "(nothing)"}"
+
+They were telling you something that matters to them, or how you're coming across, so the reply has to respond to that. First decide whether what's left still responds to what they actually said, in a way that wouldn't fit just anyone. A short warm line that fits them is a complete reply; it doesn't need a question. If it does, return {"engages": true, "reply": ""}.
+
+If it doesn't, write the reply again from their words and the facts above only. Keep what the draft was doing and its warmth. Respond to what they shared and what it means to them: a specific reaction, a small observation or opinion of your own, or one real question if there's something worth opening. Never more than one question, and never one they've already answered. Use what they've already told you rather than asking it again, and don't just repeat their words back. Wishing them well or reacting to their news needs no source; any activity, plan, date, place, person, history or reason you mention must be in their words or the facts, and when you don't know it, leave it out. Don't guess why they feel what they feel. No advice or plan unless they asked for one. Their register, at most one short line longer than the draft. Return ONLY JSON: {"engages": false, "reply": "the message"}.`;
+}
+
+export function parseShareRewrite(text: string | null | undefined): { engages: boolean; reply: string } | null {
+  let j: { engages?: unknown; reply?: unknown } | null = null;
+  try {
+    j = parseModelJson<{ engages?: unknown; reply?: unknown }>(String(text ?? ""));
+  } catch {
+    return null;
+  }
+  return typeof j?.engages === "boolean" ? { engages: j.engages, reply: typeof j.reply === "string" ? j.reply.trim() : "" } : null;
+}
+
+// Pure: the code guard on the share rewrite (the share-turn form of rewriteAddsNothing). The removed claims stay out; any name, number,
+// day or link is from what's left, the facts or their words (never from the cut sentences); a feeling word only as they said it; no new
+// recommendation; at most one question; no feelings named back at them.
+export function shareRewriteAddsNothing(o: { rewrite: string; draft: string; cut: string; removed: string[]; allowed: string; message: string }): { ok: boolean; why: string | null } {
+  const flat = (t: string) => ` ${t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+  const r = o.rewrite.trim();
+  if (!r) return { ok: false, why: "empty" };
+  if (r.length > o.draft.length + 60) return { ok: false, why: "longer than the draft" };
+  if ((r.match(/\?/g) ?? []).length > 1) return { ok: false, why: "more than one question" };
+  if (!checkNoEmotionLabel(r).pass) return { ok: false, why: "names their feelings" };
+  const fr = flat(r);
+  const back = o.removed.find((x) => fr.includes(flat(x)));
+  if (back) return { ok: false, why: `says a removed claim again: "${back}"` };
+  const known = `${o.cut}\n${o.allowed}\n${o.message}`.toLowerCase();
+  const said = o.message.toLowerCase();
+  const kept = flat(o.cut);
+  for (const sentence of (r.match(SENTENCES) ?? []).map((x) => x.trim()).filter((x) => x && !kept.includes(flat(x)))) {
+    const feelings = sentence.match(new RegExp(FEELING_WORDS.source, "gi")) ?? [];
+    const notTheirs = feelings.filter((w) => !said.includes(w.toLowerCase()));
+    if (notTheirs.length) return { ok: false, why: `adds something about how they feel: "${sentence}"` };
+    if (RECOMMENDS.test(sentence)) return { ok: false, why: `adds a recommendation: "${sentence}"` };
+    const added = specifics(sentence).filter((t) => !known.includes(t));
+    if (added.length) return { ok: false, why: `adds ${added.join(", ")} that isn't in what's left, the facts or their words` };
+  }
+  return { ok: true, why: null };
+}
+
+export type ShareRepair = { final: string | null; how: "kept" | "rewrite" | "rewrite_trimmed" | "none"; checks: GateCheck[]; why: string };
+export type ShareRepairDeps = {
+  // The one rewrite call: its raw answer, or null.
+  write: () => Promise<string | null>;
+  // The usual re-read of a rewrite (recheck): code checks on the whole, the claim read on what changed.
+  recheck: (rewrite: string) => Promise<{ checks: GateCheck[]; modelOk: boolean }>;
+  // Code checks alone, for a trimmed rewrite (no model call).
+  codeFails: (text: string) => GateCheck[];
+};
+// The bounded repair, with its model calls injected (the layer-1 tests drive it with fakes). At most one rewrite and one recheck: a
+// rewrite that fails the recheck keeps only its sentences that passed (no new call), when that still says something; otherwise the
+// caller sends what it had (the cut). Never a second rewrite, never a loop.
+export async function repairShareCut(o: { draft: string; cut: string; failed: GateCheck[]; message: string; allowed: string }, deps: ShareRepairDeps): Promise<ShareRepair> {
+  let raw: string | null = null;
+  try {
+    raw = await deps.write();
+  } catch (err: any) {
+    return { final: null, how: "none", checks: [], why: `the rewrite call failed: ${String(err?.message ?? err).slice(0, 120)}` };
+  }
+  const parsed = parseShareRewrite(raw);
+  if (!parsed) return { final: null, how: "none", checks: [], why: "the rewrite didn't come back in shape" };
+  if (parsed.engages) return o.cut.trim() ? { final: o.cut, how: "kept", checks: [], why: "what's left still responds to them" } : { final: null, how: "none", checks: [], why: "nothing left to keep" };
+  const rewrite = cleanCoMessage(parsed.reply);
+  const removed = removedClaims(o.failed);
+  const guard = shareRewriteAddsNothing({ rewrite, draft: o.draft, cut: o.cut, removed, allowed: o.allowed, message: o.message });
+  if (!guard.ok) return { final: null, how: "none", checks: [], why: `rewrite rejected: ${guard.why}` };
+  const r = await deps.recheck(rewrite);
+  const failed2 = claimReadUnavailable(rewrite, r) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
+  if (!failed2.length) return { final: rewrite, how: "rewrite", checks: r.checks, why: "rewrite passed the recheck" };
+  // Still unsupported somewhere: keep only the rewrite's sentences that passed, if that still says something and passes the code checks.
+  const trimmed = stripUnsupported(rewrite, failed2).trim();
+  const trimmedOk = !!trimmed && trimmed !== rewrite.trim() && wordCount(trimmed) >= 3 && !danglingQuestion(trimmed) && !apologyOnly(trimmed) && !deps.codeFails(trimmed).length && !removed.some((x) => norm(trimmed).includes(norm(x)));
+  if (trimmedOk) return { final: trimmed, how: "rewrite_trimmed", checks: r.checks, why: "the rewrite's unsupported part was cut; the rest passed" };
+  return { final: null, how: "none", checks: r.checks, why: "the rewrite failed the recheck too" };
+}
+
 export async function groundReply(
   rawDraft: string,
   rf: ReplyFacts,
@@ -2108,7 +2247,45 @@ export async function groundReply(
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
     const cutStands = enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent;
-    if (cutStands && !threadCut) {
+    // A sharing (or feedback) turn whose cut left too little, or left a stub (shareCutStub), gets the one share rewrite (repairShareCut)
+    // instead of the smallest-true-reply redraft. Every other path that says something truer keeps its turn: a safety or discreet turn,
+    // a cut thread report, dead air, an invite, a false "I don't have that", the nothing-running line.
+    const shareTurn = !!rf.moment && SHARE_MOMENTS.has(rf.moment) && !redraftHeldBack(rf, effectiveFailed1) && !threadCut && !silent && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf });
+    const shareRepair = async (): Promise<ShareRepair> => {
+      const t0 = Date.now();
+      const allowed = [...rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text), theirOwnWords(src.recentMemories), theirOwnWords(src.recentConversation)].join("\n");
+      const r = await repairShareCut(
+        { draft, cut, failed: effectiveFailed1, message: src.message, allowed },
+        {
+          write: async () =>
+            (
+              await generateText({
+                model: anthropic(LAYER3_MODELS.redraft),
+                maxOutputTokens: 1000,
+                providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
+                abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
+                experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.share_rewrite" },
+                prompt: shareRewritePrompt({ facts: renderReplyFacts(rf), tail: src.recentConversation.split("\n").slice(-14).join("\n"), theirWords: theirOwnWords(src.recentMemories), message: src.message, draft, removed: removedClaims(effectiveFailed1), cut }),
+              })
+            ).text,
+          recheck: async (rewrite) => {
+            const t1 = Date.now();
+            const rc = await recheck(draft, rewrite, effectiveFailed1, rf, src);
+            stages.secondCheckMs = Date.now() - t1;
+            return rc;
+          },
+          codeFails: (text) => codeChecks(text, rf, src).filter((c) => !c.pass),
+        },
+      );
+      stages.redraftMs = Date.now() - t0;
+      return r;
+    };
+    const shareChecks = (r: ShareRepair): GateCheck[] => [...r.checks.map((c) => ({ ...c, name: `redraft.${c.name}` })), { name: "share_repair", pass: true, reason: `${r.how}: ${r.why}` }];
+    if (cutStands && !threadCut && shareTurn && shareCutStub({ moment: rf.moment, draft, cut, message: src.message })) {
+      // The cut left a stub on a sharing turn: one rewrite, rechecked; what's left goes out if it can't be kept.
+      const r = await shareRepair();
+      result = { final: r.final ?? cut, outcome: r.how === "rewrite" || r.how === "rewrite_trimmed" ? "redrafted" : "cut", checks: [...first.checks, ...shareChecks(r)], latencyMs: Date.now() - started, firstCheckMs, stages };
+    } else if (cutStands && !threadCut) {
       result = { final: nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf }) ? await withNothingRunningLine(cut, effectiveFailed1, rf) : cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else if (cutStands) {
       // A thread report was cut and enough is left: one repair that keeps every remaining sentence (keepsEverySentence), rechecked
@@ -2138,8 +2315,11 @@ export async function groundReply(
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
       let kept: { text: string; checks: GateCheck[] } | null = null;
       let checkin: boolean | null = null;
+      // A sharing turn cut to too little: the share rewrite is its one rewrite (repairShareCut), never this redraft as well.
+      const share = shareTurn ? await shareRepair() : null;
+      if (share?.final) kept = { text: share.final, checks: share.checks };
       const t0 = Date.now();
-      try {
+      if (!share) try {
         // The same redraft path: the dead-air note (and its {checkin, reply} answer) when that's the reason, the thread note when a
         // thread report was cut, both when both.
         const note = [silent ? WORLD_REDRAFT_NOTE : null, threadCut ? THREAD_REDRAFT_NOTE : null].filter(Boolean).join("\n");
@@ -2166,7 +2346,9 @@ export async function groundReply(
       } catch (err: any) {
         console.error("replyGrounding: redraft failed (non-fatal, cutting instead):", err?.message ?? err);
       }
-      if (kept) {
+      if (kept && share) {
+        result = { final: kept.text, outcome: share.how === "kept" ? "cut" : "redrafted", checks: [...first.checks, ...shareChecks(share)], latencyMs: Date.now() - started, firstCheckMs, stages };
+      } else if (kept) {
         result = { final: kept.text, outcome: "redrafted", checks: [...first.checks, ...kept.checks.map((c) => ({ ...c, name: `redraft.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs, stages };
       } else {
         // 3. The cut, or the minimal honest line. The invite line only helps
@@ -2187,7 +2369,7 @@ export async function groundReply(
         // Code acts only on Co's own answer: the lead when the redraft said check-in; otherwise at most what the cut sentence named.
         const world = silent && after === "cut" ? deadAirLine({ checkin, world: rf.world, draft, cut }) : null;
         const out = world ? [cut.trim(), world].filter(Boolean).join(" ") : workCut ? await withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final;
-        result = { final: out, outcome: "stripped", notSure: !world && !workCut && after === "honest", checks: world ? [...first.checks, { name: "world_line", pass: true, reason: `dead air after the cut (check-in: ${checkin === null ? "unread" : checkin}); said from their world: "${world}"` }] : first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+        result = { final: out, outcome: "stripped", notSure: !world && !workCut && after === "honest", checks: world ? [...first.checks, { name: "world_line", pass: true, reason: `dead air after the cut (check-in: ${checkin === null ? "unread" : checkin}); said from their world: "${world}"` }] : share ? [...first.checks, ...shareChecks(share)] : first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }
   }
