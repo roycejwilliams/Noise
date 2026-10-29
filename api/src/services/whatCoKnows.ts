@@ -80,6 +80,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { safetySignal } from "./safetyText.js";
 import * as designPure from "./designSystem.js";
+import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
@@ -167,6 +168,8 @@ export type RawKnown = {
   calendar?: { since: string } | null;
   // Their Docs grant (services/cueGrants.ts): Drive files Co makes only; removing it disconnects.
   docs?: { since: string } | null;
+  // Their yes to the voice read on calls (services/voiceReadConsent.ts), while it's on; removing it is taking it back.
+  voiceRead?: { since: string } | null;
   // Their design system (member_design_signals), the way decks and pages read it: per context with signals of its own, the look
   // and the fonts in plain words; and each confirmed reference read Co took the look from.
   design?: { context: "professional" | "personal"; look: string | null; fonts: string | null }[];
@@ -268,6 +271,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
   if (r.calendar) add("grant:calendar", "grant", "where", `your calendar, connected ${r.calendar.since}: I see only when you're busy or free, never what, where or with whom, and it's never shared`, null, false);
   if (r.docs) add("grant:docs", "grant", "where", `Google Docs, connected ${r.docs.since}: I save documents I make for you to your Drive and see only those, nothing else there`, null, false);
+  if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   return out;
 }
@@ -592,6 +596,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     freeTimes: freeRows,
     calendar: await import("./cueGrants.js").then((C) => C.calendarConnected(userId, db as any)).catch(() => null),
     docs: await import("./cueGrants.js").then((C) => C.docsConnected(userId, db as any)).catch(() => null),
+    voiceRead: await import("./voiceReadConsent.js").then((V) => V.voiceReadOnSince(userId, db as any)).catch(() => null),
     files,
     ...designKnown(signals),
   };
@@ -853,7 +858,7 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     case "grant": {
       // Their calendar or Docs grant: disconnected (revoked with Google, deleted). Docs already made stay in their Drive.
       const { disconnectGrant } = await import("./cueGrants.js");
-      if (a !== "calendar" && a !== "docs") return { why: "not something Cue can change" };
+      if (a !== "calendar" && a !== "docs") return a === "voice_read" ? removeVoiceRead(userId, item.ref, was) : { why: "not something Cue can change" };
       if (!(await disconnectGrant(a, userId))) throw new NotApplied();
       return { ref: item.ref, source: "grant", was, now: null };
     }
@@ -874,6 +879,14 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
   return { why: "not something Cue can change" };
 }
 
+// Their yes to the voice read, taken back from what Cue knows: off at once, live reads ended, what it noted deleted
+// (services/voiceReadConsent.ts turnVoiceReadOff). Nothing to take back (already off) is not applied.
+async function removeVoiceRead(userId: string, ref: string, was: string) {
+  const V = await import("./voiceReadConsent.js");
+  if ((await V.turnVoiceReadOff(userId, "stop")).was !== "yes") throw new NotApplied();
+  return { ref, source: "grant" as const, was, now: null };
+}
+
 // The corrections record's field for a ref: the co_profiles field itself for profile refs (so the extraction's own guard,
 // profileExtraction.ts recentlyCorrected, matches it), else a plain name every reader can print.
 export function fieldFor(ref: string): string {
@@ -885,7 +898,7 @@ export function fieldFor(ref: string): string {
   if (kind === "place") return "where Cue looks for one of their wants";
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
-  if (kind === "grant") return a === "docs" ? "their Google Docs connection" : "their calendar connection";
+  if (kind === "grant") return a === "docs" ? "their Google Docs connection" : a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
   return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
 }
 

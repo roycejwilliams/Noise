@@ -97,6 +97,9 @@ export type BridgeDeps = {
   // The session's summary, for the audit (harness_decisions). Never audio, never their words.
   record: (userId: string, summary: ReturnType<typeof sessionSummary>) => void;
   apiKey: () => string | undefined;
+  // May the read run for this member now (services/voiceReadConsent.ts voiceReadOnFor: their yes on file and not taken back, or a
+  // test number). Read again when the stream starts and after the call, so a withdrawal since the call began counts. Fails closed.
+  allowed: (userId: string) => Promise<boolean>;
 };
 
 const OPEN = 1;
@@ -143,6 +146,7 @@ function defaultDeps(): BridgeDeps {
         .catch(() => {});
     },
     apiKey: () => process.env.HUME_API_KEY,
+    allowed: (userId) => import("./voiceReadConsent.js").then((c) => c.voiceReadOnFor(userId)).catch(() => false),
   };
 }
 let deps: BridgeDeps | null = null;
@@ -355,11 +359,17 @@ export function handleTwilioStream(ws: SocketLike): void {
             prune(d.now());
             // One stream per call.
             if (sessions.has(link.sessionHash)) return refuse("this call already has one");
-            pendingSession.userId = link.userId;
-            pendingSession.key = link.sessionHash;
-            pendingSession.verified = true;
-            sessions.set(link.sessionHash, pendingSession);
-            openHume(pendingSession);
+            // Their consent, read again now: taken back since the call's TwiML was made means no read at all.
+            return d.allowed(link.userId).catch(() => false).then((ok) => {
+              if (!ok) return refuse("not consented");
+              if (ended || s !== pendingSession) return;
+              if (sessions.has(link.sessionHash)) return refuse("this call already has one");
+              pendingSession.userId = link.userId;
+              pendingSession.key = link.sessionHash;
+              pendingSession.verified = true;
+              sessions.set(link.sessionHash, pendingSession);
+              openHume(pendingSession);
+            });
           })
           .catch(() => refuse("link check failed"));
       } else if (m?.event === "media" && s) {
@@ -409,6 +419,12 @@ export async function takeVoiceMoments(callKey: string, callerTurns: CallerTurn[
     if (t) clearTimeout(t);
   }
   sessions.delete(key);
+  // Taken back during or since the call: nothing from it is judged or kept.
+  if (!(await D().allowed(s.userId).catch(() => false))) {
+    s.windows = [];
+    D().log(`voiceRead: after call ${JSON.stringify({ user: s.userId.slice(0, 8), callSid: s.stats.callSid, dropped: "not consented" })}`);
+    return [];
+  }
   const noisy = s.noisy ?? voiceCrosstalk({ heardSpeechMs: s.stats.heardSpeechMs, callerLines: callerTurns.map((t) => t.text) }).why;
   // One judge call for the whole call (services/voiceRead.ts judgeVoiceMoments; the rule unless a Jev judge is plugged in).
   const judged = noisy ? { moments: [] as VoiceMoment[], judgedBy: "none (noisy)", candidates: 0 } : await judgeVoiceMoments(s.windows, callerTurns, judge);
@@ -416,6 +432,24 @@ export async function takeVoiceMoments(callKey: string, callerTurns: CallerTurn[
   D().log(`voiceRead: after call ${JSON.stringify({ user: s.userId.slice(0, 8), callSid: s.stats.callSid, windows: s.windows.length, noisy: noisy ?? null, candidates: judged.candidates, judgedBy: judged.judgedBy, moments: moments.map((m) => ({ dim: m.dim, kind: m.kind, p: Math.round(m.p * 1000) / 1000, intensity: m.intensity, mismatch: m.mismatch, judge: m.judge })) })}`); // mood: logs which moments the judge kept (labels only, no words), decides nothing
   s.windows = [];
   return moments;
+}
+
+// They took their yes back (services/voiceReadConsent.ts turnVoiceReadOff): every read of theirs ends now, this call's included.
+// Hume is closed, the scores so far are dropped, and the session is gone, so the call brain gets no further line and nothing is
+// kept after the call. Returns how many were ended.
+export function endVoiceSessionsFor(userId: string): number {
+  let n = 0;
+  for (const [k, s] of sessions) {
+    if (s.userId !== userId) continue;
+    endHume(s);
+    s.windows = [];
+    s.stats.closedBy ??= "consent withdrawn";
+    if (s.finishedAt == null) s.finishedAt = D().now();
+    s.resolveDone();
+    sessions.delete(k);
+    n++;
+  }
+  return n;
 }
 
 // For tests and the audit: what a session holds (never audio; the buffers are listed by size only).

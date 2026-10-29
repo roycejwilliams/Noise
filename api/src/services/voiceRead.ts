@@ -331,15 +331,36 @@ export const momentSignals = (m: VoiceMoment[]): Omit<EmotionSignal, "at">[] => 
 // ---------------------------------------------------------------- who it runs for
 
 // No switch (Royce: gate on what the feature needs). It needs the Hume key, a public URL for Twilio to stream to, and
-// Twilio's auth token to check the stream's signature (voiceReadPrereqs), and runs only off production. Who: a test
-// member (a 555-01xx number, services/testNumbers.ts), or a member who agreed to it, one by one (users.voice_read_ok,
-// default false; nobody is opted in by code, review of #269). Being on the team is not consent.
+// Twilio's auth token to check the stream's signature (voiceReadPrereqs), and runs only off production.
+// Who (Royce, 2026-10-28: "A database switch isn't consent ... knowing about it isn't automatically agreeing to it"): a
+// member whose own yes is on file (voice_read_consents, services/voiceReadConsent.ts: their words, quoted, with the time,
+// after Cue told them what it is and what it keeps) and not taken back; or a test member (a 555-01xx number,
+// services/testNumbers.ts), for tests only. users.voice_read_ok, the old hand-set flag, counts for nothing. A member who said
+// no or took it back is off, test number or not.
 export function voiceReadPrereqs(env: NodeJS.ProcessEnv = process.env): boolean {
   return !!env.HUME_API_KEY && !!env.API_URL && !!env.TWILIO_AUTH && testNumbersEnabled(env);
 }
-export function voiceReadAllowed(o: { memberPhone: unknown; consented: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
+
+// Their answer on file, as voice_read_consents keeps it. null: never asked, nothing on file.
+export type VoiceReadConsent = { askedAt: Date | null; answer: "yes" | "no" | null; answeredAt: Date | null; withdrawnAt: Date | null };
+export type VoiceReadState = "unasked" | "asked" | "yes" | "no" | "withdrawn";
+// Pure: where they stand. Only a yes not taken back is "yes"; asked with no answer is "asked" (off: no answer means no).
+export function voiceReadState(c: VoiceReadConsent | null | undefined): VoiceReadState {
+  if (!c) return "unasked";
+  if (c.answer === "yes") return c.withdrawnAt ? "withdrawn" : "yes";
+  if (c.answer === "no") return "no";
+  return c.askedAt ? "asked" : "unasked";
+}
+export function voiceReadAllowed(o: { memberPhone: unknown; consent: VoiceReadConsent | null }, env: NodeJS.ProcessEnv = process.env): boolean {
   if (!voiceReadPrereqs(env)) return false;
-  return isTestNumber(o.memberPhone, env) || o.consented === true;
+  const state = voiceReadState(o.consent);
+  if (state === "no" || state === "withdrawn") return false;
+  return state === "yes" || isTestNumber(o.memberPhone, env);
+}
+// Pure: Cue asks once, ever. Not after a no, not after they took a yes back, not while a question is already out (no answer
+// means it stays off; it is never asked again), and only where the read can run at all.
+export function voiceReadAskDue(c: VoiceReadConsent | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  return voiceReadPrereqs(env) && voiceReadState(c) === "unasked";
 }
 
 // ---------------------------------------------------------------- the fork in the call's TwiML

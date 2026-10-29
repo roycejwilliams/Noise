@@ -35,6 +35,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   name_change: "ops",
   // An update announcement (services/announcements.ts): what changed and what it means for them, fixed words.
   announcement: "ops",
+  // The voice read's one question (services/voiceReadConsent.ts): a permission, not an offer of anything.
+  voice_read_ask: "ops",
   // Member-state nudges (services/memberStateNudges.ts): about their own life and what they said, except a deadline on a find.
   intro_nudge: "companion",
   goal_nudge: "companion",

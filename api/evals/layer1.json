@@ -248,6 +248,7 @@
     "evals/review/googleKey.ts",
     "evals/review/previews.ts",
     "evals/review/memberNamesOwnSide.ts",
+    "evals/review/voiceReadConsent.ts",
     "evals/review/healthDb.ts",
     "evals/review/lumaLogPrivacy.ts"
   ]

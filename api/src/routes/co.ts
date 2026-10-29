@@ -1013,6 +1013,9 @@ async function processEndedCallInScope(o: {
       if (callUser) {
         await scheduleFollowUpText(user_id, cleanTranscript);
       }
+      // After their first call: the voice read's one question, queued once ever, only where the read can run and only if it was
+      // never asked or answered (services/voiceReadConsent.ts). Sent by the proactive queue; no answer means it stays off.
+      if (callUser) import("../services/voiceReadConsent.js").then((m) => m.queueVoiceReadAsk(user_id)).catch(() => {});
 
       // The transcript is stored and the processing completed: what ElevenLabs' copy may be deleted against (the raw transcript,
       // the one stored above).

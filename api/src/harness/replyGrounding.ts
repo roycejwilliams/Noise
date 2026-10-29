@@ -32,6 +32,7 @@ import { GENTLE_AFTER_HARD, MOOD_HOLD_CAP_HOURS, OKAY_AFTER_HOURS, moodHold, not
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
+import { voiceReadPrereqs } from "../services/voiceRead.js";
 import { kitLines } from "../services/memberKit.js";
 import { situationFor, type Situation } from "../services/capabilities.js";
 import { carryingBlock, sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
@@ -236,7 +237,7 @@ export async function gatherReplyFacts(
   opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext; walkinDue?: boolean } = {},
 ): Promise<ReplyFacts> {
   const t = opts.turn;
-  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false, walkinDue: !!opts.walkinDue }) : undefined);
+  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false, walkinDue: !!opts.walkinDue, voiceRead: voiceReadPrereqs() }) : undefined);
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // What Co knows about them from the one member-knowledge layer, with the member-level rules (addMemberKnowledge): their taste
   // (what's landed with them), what they corrected, restraint, quiet hours, delivery shape. Without the layer (no turn), taste is read

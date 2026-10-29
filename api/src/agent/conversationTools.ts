@@ -18,6 +18,7 @@ import { closeAsk } from "../services/askKind.js";
 import { recordSuggestionOutcome } from "../services/outcomes.js";
 import { REACTION_RESULT, sentItems } from "../services/reactionCatchup.js";
 import { quoteIsTheirs } from "../services/provenance.js";
+import { voiceReadPrereqs } from "../services/voiceRead.js";
 import { findSent, type TurnContext } from "../services/turnContext.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
@@ -988,6 +989,57 @@ export function createConversationTools(ctx: ConversationToolContext) {
         return { ok: true, event: today.name };
       },
     }),
+    // The voice read on calls (services/voiceReadConsent.ts): their answer, in their words. The model reads what they meant; code
+    // checks only that the words are theirs, from this message, and what's on file. Offered only where the read can run (below).
+    voiceRead: tool({
+      description: toolUse("voiceRead"),
+      inputSchema: z.object({ answer: z.enum(["yes", "no", "stop", "explain"]), theirWords: z.string().describe("Their words, copied exactly from this message.") }),
+      execute: async ({ answer, theirWords }) => {
+        const C = await import("../services/voiceReadConsent.js");
+        const V = await import("../services/voiceRead.js");
+        if (!quoteIsTheirs(theirWords, ctx.resolvedContent)) {
+          notDone("Nothing about the voice read changed: the quote isn't in their words.");
+          return { ok: false, error: "Quote their own words from this message." };
+        }
+        // The fixed line goes in their reply by code (the lane-note carry), or is said in these words on a call.
+        const carry = (line: string, did: string) => {
+          ctx.facts?.add("did_this_turn", `${ctx.dryRun ? "(dry run) " : ""}${did}`);
+          if (ctx.onCall) return { ok: true, say: line, note: "Say this line in these words, once, and nothing more about it." };
+          if (!state.laneNotes.includes(line) && !state.laneNotesSent.includes(line)) state.laneNotes.push(line);
+          if (state.replyCount > 0) return { ok: true, line, note: "Your reply already went, so send one short reply now with sendReply; code puts that line in it. Don't say it in your own words too." };
+          return { ok: true, line, note: "Code puts that line in your reply once; don't say it in your own words too." };
+        };
+        const onFile = ctx.dryRun ? null : await C.readVoiceReadConsent(ctx.userId);
+        const was = V.voiceReadState(onFile);
+        if (answer === "stop" || answer === "no") {
+          // Off at once, whatever was on file: live reads end, what it noted is deleted, and it's never asked again.
+          if (!ctx.dryRun) await C.turnVoiceReadOff(ctx.userId, answer);
+          if (answer === "stop") return carry(C.VOICE_READ_STOP_LINE, "They turned the voice read off. Cue stopped listening to how they sound on calls (this call too), deleted what it noted, and won't ask again.");
+          ctx.facts?.add("did_this_turn", "They said no to the voice read. It stays off, and Cue won't ask about it again.");
+          return { ok: true, note: "It stays off. Say so in a few words if it fits; don't ask again." };
+        }
+        if (answer === "yes" && was === "yes") return { ok: true, note: "It's already on. Nothing changed." };
+        if (answer === "explain" && (was === "no" || was === "withdrawn")) {
+          notDone("The voice read's question wasn't asked again: they said no to it.");
+          return { ok: false, error: "They turned it down, so don't ask again. If they want it on, their own clear yes turns it on." };
+        }
+        if (answer === "explain" && was === "yes") return { ok: true, note: "It's on, since they said yes. Answer plainly, and remind them they can say stop anytime." };
+        // Not explained yet: a yes to something they haven't been told about isn't consent. The question goes now; only a yes after it counts.
+        if (!onFile?.askedAt) {
+          if (!ctx.dryRun) await C.noteVoiceReadAsked(ctx.userId);
+          return carry(C.VOICE_READ_ASK, "Cue told them what the voice read is and what it keeps, and asked if they want it. It's off until they say yes after this.");
+        }
+        if (answer === "explain") return carry(C.VOICE_READ_ASK, "Cue told them again what the voice read is and what it keeps. It's off until they say yes.");
+        if (!ctx.dryRun) {
+          const r = await C.recordVoiceReadYes(ctx.userId, theirWords);
+          if (!r.ok) {
+            notDone("The voice read wasn't turned on: there's no question about it on file.");
+            return { ok: false, error: "There's no question about it on file. Don't say it's on." };
+          }
+        }
+        return carry(C.VOICE_READ_YES_LINE, "They said yes to the voice read: from their next call, Cue listens to how they sound. They can say stop anytime.");
+      },
+    }),
     answerShareAsks: tool({
       description: toolUse("answerShareAsks"),
       inputSchema: z.object({}),
@@ -1869,9 +1921,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // Tools that can't apply this turn aren't offered (capabilities.ts situations).
   if (ctx.turn) {
     const t = ctx.turn;
-    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, walkinDue: !!ctx.walkinAsk, doorOpen: t.door ? doorOpen(t.door).open : false });
+    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, walkinDue: !!ctx.walkinAsk, doorOpen: t.door ? doorOpen(t.door).open : false, voiceRead: voiceReadPrereqs() });
     for (const name of toolsOutOfSituation(s)) delete (tools as Record<string, unknown>)[name];
   }
+  // The voice read's answers exist only where the read can run at all (never in production), turn or no turn.
+  if (!voiceReadPrereqs()) delete (tools as Record<string, unknown>).voiceRead;
 
   // Finding things: Co's own loop (agent/loop.ts), general tools it chains itself.
   turnLoop = newLoopState(ctx.turnStartedAt);
