@@ -49,6 +49,12 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
 export function firstArrival(replay: { receivedAt: Date } | null | undefined, arrivedAt: Date): Date {
   return replay?.receivedAt ?? arrivedAt;
 }
+// Tests only: sees the context each attempt hands the tools (evals/review/voiceReadConsent.ts reads its clocks). Never set in production.
+let toolContextTap: ((ctx: Record<string, unknown>) => void) | null = null;
+export function tapToolContextForTests(fn: ((ctx: Record<string, unknown>) => void) | null): void {
+  toolContextTap = fn;
+}
+const tapToolContext = <T extends object>(ctx: T): T => (toolContextTap?.(ctx as Record<string, unknown>), ctx);
 // Pure: the tools' two clocks for one attempt. The reply's deadline restarts on a retry; when their message arrived never does.
 export function toolClocks(input: Pick<ConversationReplyInput, "turnStartedAt" | "messageArrivedAt">, attempt: number, now: number = Date.now()): { turnStartedAt: number; messageArrivedAt: number | undefined } {
   return { turnStartedAt: attempt === 1 && input.turnStartedAt ? input.turnStartedAt.getTime() : now, messageArrivedAt: input.messageArrivedAt?.getTime() };
@@ -309,7 +315,7 @@ export async function runConversationReplyAgent(
   let cutFirstDone = false;
   // Steps finished, so a guard knows whether a redraft can still follow (conversationTools.ts sendReply redraftLeft).
   let stepsDone = 0;
-  const { tools, state, flushLinks } = createConversationTools({
+  const { tools, state, flushLinks } = createConversationTools(tapToolContext({
     redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
     onFirstRead: (p) => {
       firstRead = p;
@@ -374,7 +380,7 @@ export async function runConversationReplyAgent(
       // same question as one of Co's last two texts (2026-09-23).
       return capitalizeSentences(dropRepeatedQuestion(result.final, input.recentConversation));
     },
-  });
+  }));
 
   // What Co tried and what worked, recorded as each tool runs, so they're
   // known even when a model call times out mid-turn and the move counts only

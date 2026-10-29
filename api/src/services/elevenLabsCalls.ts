@@ -31,7 +31,7 @@ import { DateTime } from "luxon";
 import { memberZone } from "./memberTime.js";
 import { TEAM_BUILDER_LINE, isTeamMember } from "./extensions.js";
 import { voiceReadAllowed, voiceReadPrereqs, voiceStreamUrl, withVoiceFork, type VoiceReadConsent } from "./voiceRead.js";
-import { readVoiceReadConsent } from "./voiceReadConsent.js";
+import { readVoiceReadConsent, VOICE_READ_CALL_RULE } from "./voiceReadConsent.js";
 import { issueVoiceStreamLink, type VoiceStreamLinkStore } from "./voiceStreamLink.js";
 
 let client: ElevenLabsClient | null = null;
@@ -84,6 +84,11 @@ export function callSituation(o: { direction: "inbound" | "outbound"; team: bool
   ].filter(Boolean);
   return lines.join("\n");
 }
+// Pure: the call's starting context with the voice read's rule for a stop on a call, only while the read is on for them.
+export function withVoiceReadRule(contextSummary: string, voiceOn: boolean): string {
+  return voiceOn ? `${contextSummary}\n\n${VOICE_READ_CALL_RULE}` : contextSummary;
+}
+
 export function withCallSituation(contextSummary: string, o: { direction: "inbound" | "outbound"; team: boolean }): string {
   return [callSituation(o), contextSummary.trim()].filter(Boolean).join("\n\n");
 }
@@ -107,6 +112,9 @@ export async function registerElevenLabsCall(o: {
   if (!agentId) throw new Error("ELEVENLABS_AGENT_ID is not set");
   const callToken = issueCallToken(o.userId);
   const team = await isTeamMember(o.userId).catch(() => false);
+  // While the voice read is on for them, the call is told how a stop works on a call (VOICE_READ_CALL_RULE).
+  const voiceOn = await import("./voiceReadConsent.js").then((m) => m.voiceReadOnFor(o.userId)).catch(() => false);
+  o = { ...o, contextSummary: withVoiceReadRule(o.contextSummary, voiceOn) };
   const twiml = (await elevenLabs().conversationalAi.twilio.registerCall({
     agentId,
     fromNumber: o.from,
