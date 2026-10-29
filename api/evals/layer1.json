@@ -115,6 +115,7 @@
     "evals/relay/rules.ts",
     "evals/google/rules.ts",
     "evals/companion/rules.ts",
+    "evals/companion/staleWeekly.ts",
     "evals/companion/longRun.ts",
     "evals/guards/rules.ts",
     "evals/tasks/rules.ts",
