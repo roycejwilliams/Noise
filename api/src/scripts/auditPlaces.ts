@@ -2,17 +2,20 @@ import "dotenv/config";
 import pool from "../db/db.js";
 import * as R from "../services/placeResolve.js";
 import { haversineMiles, type GeoPoint } from "../services/geocoding.js";
+import { regionFor, STATE_NAMES } from "../services/areaCodes.js";
 import type { PlaceSource } from "../services/wantPlace.js";
 
 // One-time audit of places already on file (Royce, 2026-10-29), after "Bay Area" was found cached as Bay Area, Texas.
 //
-//   npx tsx src/scripts/auditPlaces.ts            dry run (the default): lists what disagrees, writes nothing
+//   npx tsx src/scripts/auditPlaces.ts            dry run (the default): lists what disagrees, writes nothing at all
 //   npx tsx src/scripts/auditPlaces.ts --apply    also clears inferred places' stored resolutions and deletes bad cache rows
 //
 // Listed: every want place whose resolution now is ambiguous, rejected, differs from what's stored, or (inferred) is far from home;
-// every bare geocode_cache row that lands far from the home of a member who uses that name; every qualified row that's far from
-// where it resolves now. Each says how it was set: confirmed (their words or their correction), inferred (Cue's read), or cached.
-// A confirmed place is never written, with or without --apply. Geocoder lookups run for each row (Google, and the free open geocoder).
+// every cache row that disagrees with where its uses resolve now (a member's place by that name, a member's home city by that name in
+// their home region, or for a qualified row its own resolution). Each says how it was set: confirmed (their words or their
+// correction), inferred (Cue's read), or cached. A confirmed place is never written, with or without --apply.
+// Reads only: the cache is read by its rows and the geocoders are asked directly (placeResolve.ts lookupPlace writes nothing); the
+// one write path is applyAudit, and only with --apply.
 const apply = process.argv.includes("--apply");
 
 async function main() {
@@ -21,12 +24,7 @@ async function main() {
        FROM want_places wp LEFT JOIN co_profiles cp ON cp.user_id = wp.user_id WHERE wp.place IS NOT NULL`,
   );
   const { rows: cacheRows } = await pool.query(`SELECT query, lat, lng FROM geocode_cache`);
-  const homes = new Map<string, GeoPoint | null>();
-  const homeOf = async (city: string | null) => {
-    if (!city) return null;
-    if (!homes.has(city)) homes.set(city, await R.realResolveDeps.home(city).catch(() => null));
-    return homes.get(city)!;
-  };
+  const cached = new Map<string, GeoPoint>(cacheRows.map((r: any) => [String(r.query), { lat: Number(r.lat), lng: Number(r.lng) }]));
   const lookups = new Map<string, R.PlaceCandidate[]>();
   const candidatesFor = async (place: string) => {
     if (!lookups.has(place)) {
@@ -35,42 +33,60 @@ async function main() {
     }
     return lookups.get(place)!;
   };
+  // A home, read only: its cache row as the sweep reads it, else its most prominent hit; its country from the hits at that point.
+  const homes = new Map<string, R.Home | null>();
+  const homeOf = async (city: string | null) => {
+    if (!city) return null;
+    if (!homes.has(city)) {
+      const c = await candidatesFor(city);
+      const pick = R.pickPlace(city, c, null);
+      const p = cached.get(city.trim()) ?? (pick.status === "resolved" ? { lat: pick.place.lat, lng: pick.place.lng } : null);
+      homes.set(city, p ? { point: p, country: R.countryAt(p, c) } : null);
+    }
+    return homes.get(city)!;
+  };
 
   const wants = [];
+  // Where each bare name's uses resolve now (by lowercased name).
+  const uses = new Map<string, { at: GeoPoint; with: "want" | "home" }[]>();
+  const use = (name: string, at: GeoPoint, w: "want" | "home") => {
+    const k = name.trim().toLowerCase();
+    uses.set(k, [...(uses.get(k) ?? []), { at, with: w }]);
+  };
   for (const r of wantRows) {
-    const homePt = await homeOf(r.home);
-    const fresh = homePt ? R.pickPlace(r.place, await candidatesFor(r.place), { point: homePt, country: R.inUS(homePt) ? "US" : null }) : null;
+    const home = await homeOf(r.home);
+    const fresh = home ? R.pickPlace(r.place, await candidatesFor(r.place), home) : null;
     const stored: R.StoredResolution | null = r.resolved_status ? { forPlace: r.resolved_for, forHome: r.resolved_home, status: r.resolved_status, label: r.resolved_label, lat: r.resolved_lat, lng: r.resolved_lng, options: r.resolved_options ?? [] } : null;
     const at = stored?.lat != null && stored?.lng != null ? { lat: Number(stored.lat), lng: Number(stored.lng) } : fresh?.status === "resolved" ? { lat: fresh.place.lat, lng: fresh.place.lng } : null;
-    wants.push({ w: { userId: r.user_id, key: r.want_key, place: r.place, source: r.source as PlaceSource, homeCity: r.home, resolution: stored }, fresh, homeMiles: homePt && at ? Math.round(haversineMiles(homePt, at)) : null });
+    if (fresh?.status === "resolved") use(r.place, { lat: fresh.place.lat, lng: fresh.place.lng }, "want");
+    wants.push({ w: { userId: r.user_id, key: r.want_key, place: r.place, source: r.source as PlaceSource, homeCity: r.home, resolution: stored }, fresh, homeMiles: home && at ? Math.round(haversineMiles(home.point, at)) : null });
+  }
+  // A home city's row, against that city in the member's home region (their phone's state, or the state their city names).
+  const { rows: profileRows } = await pool.query(`SELECT cp.city, u.phone_number FROM co_profiles cp JOIN users u ON u.id = cp.user_id WHERE cp.city IS NOT NULL AND u.archived_at IS NULL`);
+  for (const r of profileRows) {
+    const st = regionFor({ city: r.city, phone: r.phone_number });
+    if (!st || String(r.city).includes(",")) continue;
+    const pick = R.pickPlace(`${r.city}, ${STATE_NAMES[st] ?? st}`, await candidatesFor(`${r.city}, ${st}`), null);
+    if (pick.status === "resolved") use(r.city, { lat: pick.place.lat, lng: pick.place.lng }, "home");
   }
 
-  // Who uses each bare name: their want places and their home cities.
-  const users = new Map<string, Set<string>>();
-  const { rows: profileRows } = await pool.query(`SELECT user_id, city FROM co_profiles WHERE city IS NOT NULL`);
-  const use = (name: string, home: string | null) => {
-    if (!home) return;
-    const k = name.trim().toLowerCase();
-    users.set(k, (users.get(k) ?? new Set()).add(home));
-  };
-  for (const r of wantRows) use(r.place, r.home);
-  for (const r of profileRows) use(r.city, r.city);
   const cache = [];
   for (const row of cacheRows) {
     const q = String(row.query);
     if (/^(venue|near):/.test(q)) continue;
     const pt = { lat: Number(row.lat), lng: Number(row.lng) };
-    let worstHomeMiles: number | null = null;
-    for (const home of users.get(q.toLowerCase()) ?? []) {
-      const h = await homeOf(home);
-      if (h) worstHomeMiles = Math.max(worstHomeMiles ?? 0, Math.round(haversineMiles(h, pt)));
-    }
-    let freshMiles: number | null = null;
+    let conflictMiles: number | null = null;
+    let conflictWith: "want" | "home" | "itself" | null = null;
     if (q.includes(",")) {
       const pick = R.pickPlace(q, await candidatesFor(q), null);
-      if (pick.status === "resolved") freshMiles = Math.round(haversineMiles(pt, { lat: pick.place.lat, lng: pick.place.lng }));
+      if (pick.status === "resolved") (conflictMiles = Math.round(haversineMiles(pt, { lat: pick.place.lat, lng: pick.place.lng }))), (conflictWith = "itself");
+    } else {
+      for (const u of uses.get(q.toLowerCase()) ?? []) {
+        const m = Math.round(haversineMiles(pt, u.at));
+        if (conflictMiles == null || m > conflictMiles) (conflictMiles = m), (conflictWith = u.with);
+      }
     }
-    cache.push({ row: { query: q, lat: pt.lat, lng: pt.lng }, worstHomeMiles, freshMiles });
+    cache.push({ row: { query: q, lat: pt.lat, lng: pt.lng }, conflictMiles, conflictWith });
   }
 
   const findings = R.auditPlan(wants, cache);
