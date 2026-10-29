@@ -13,6 +13,7 @@
 //      pending), it is never handed to a task (payload first), and sent or dropped, the request row is forgotten.
 //   5. Review of #307: an intro made through network_introductions is never closed; a failed onSent leaves no row behind (the
 //      hourly sweep) and still nothing goes twice; a safety hold delays it, never drops it.
+//   6. Re-review: an archived member's requests are deleted instead of queued; a member who texted STOP keeps theirs.
 import { W, reset, addMember, addEvent, ask, uuid } from "../inroom/world.js";
 
 // Pinned to 18:00 UTC, as evals/review/introTrace.ts: a member with no time zone is texted 16:00-24:00 UTC, so the direct ask goes now.
@@ -72,6 +73,10 @@ const handler = async (sql: string, p: any[] = []) => {
       const r = requests[i];
       if (r.close_queued_at && +r.close_queued_at <= +new Date(p[0]) && !W.candidates.some((c) => c.user_id === r.user_id && c.target_key === `intro_close:${r.id}` && c.status === "pending")) requests.splice(i, 1);
     }
+    return { rows: [] };
+  }
+  if (/^DELETE FROM intro_requests r USING users u WHERE u\.id = r\.user_id AND u\.archived_at IS NOT NULL$/.test(flat.trim())) {
+    for (let i = requests.length - 1; i >= 0; i--) if (W.members.get(requests[i].user_id)?.archived_at) requests.splice(i, 1);
     return { rows: [] };
   }
   if (/DELETE FROM intro_requests WHERE id = \$1/.test(flat)) {
@@ -339,6 +344,22 @@ const run = async (outcome: "not_found" | "declined" | "silent" | "unreached" | 
   const held = P.evaluateCandidates(pickState(c, now, { safetyHold: true }));
   check("5. a safety hold holds it (delay only: it stays pending, never expires)", P.SAFETY_HOLD_ALSO.has("intro_close") && held.eligible.length === 0 && held.perCandidate[0].checks.some((k: any) => k.name === "safety_hold" && !k.pass) && W.candidates[0].status === "pending" && c.expiresAt === null, held.perCandidate[0].checks.filter((k: any) => !k.pass));
   check("5. …and goes once it lifts", P.evaluateCandidates(pickState(c, now)).eligible.length === 1);
+}
+
+// ------------------------------------------------------------ 6. re-review: an archived member's requests are deleted, a STOP member's kept
+{
+  const w = build();
+  const askedAt = Date.now();
+  await turn(w, { personName: "Sarah", lastName: "Park" });
+  W.members.get(w.jo.id)!.archived_at = new Date().toISOString();
+  const n = await quiet(() => IC.queueDueIntroCloses(new Date(askedAt + 7 * DAY + 60_000)));
+  check("6. archived: no close is queued, and the request (the name they said, the target) is deleted", n === 0 && !W.candidates.some((c) => c.type === "intro_close") && requests.length === 0, { n, requests });
+  const w2 = build();
+  const asked2 = Date.now();
+  await turn(w2, { personName: "Sarah", lastName: "Park" });
+  W.members.get(w2.jo.id)!.sms_opted_out = true;
+  const n2 = await quiet(() => IC.queueDueIntroCloses(new Date(asked2 + 7 * DAY + 60_000)));
+  check("6. a member who texted STOP keeps theirs: queued, delayed by the send's own gates, never dropped", n2 === 1 && requests.length === 1 && W.candidates.some((c) => c.type === "intro_close" && c.status === "pending"), { n2, requests: requests.length });
 }
 
 console.log(`intro close: ${total - failed}/${total} passed`);

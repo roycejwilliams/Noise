@@ -100,11 +100,16 @@ const INTRODUCED_SQL = `(r.target_id IS NOT NULL AND (EXISTS (SELECT 1 FROM co_p
 export const INTRO_CLOSE_SWEEP_SQL = `DELETE FROM intro_requests r WHERE r.close_queued_at IS NOT NULL AND r.close_queued_at <= $1
   AND NOT EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = r.user_id AND c.target_key = '${INTRO_CLOSE_KEY_PREFIX}' || r.id::text AND c.status = 'pending')`;
 
+export const INTRO_CLOSE_ARCHIVED_SQL = `DELETE FROM intro_requests r USING users u WHERE u.id = r.user_id AND u.archived_at IS NOT NULL`;
+
 // Hourly (jobs/index.ts): every request past its 7 days that hasn't been handled. Exactly once per request, across restarts: the
 // candidate's key is the request's id (enqueueCandidate is idempotent per key, and a key already sent is never queued again), and
 // the row is marked queued only after the candidate is in, so a crash in between queues the same candidate again, harmlessly.
 export async function queueDueIntroCloses(now: Date = new Date(), enqueue?: (c: EnqueueInput) => Promise<{ queued: boolean }>): Promise<number> {
   const add = enqueue ?? (await import("../harness/proactive.js")).enqueueCandidate;
+  // An archived member gets no close: their requests (the name they said, the target) are deleted, never held. A member who only
+  // texted STOP keeps theirs, delayed by the send's own gates and never dropped.
+  await pool.query(INTRO_CLOSE_ARCHIVED_SQL).catch((err: any) => console.error("introRequestClose: forgetting archived members' requests failed (non-fatal):", err?.message ?? err));
   await pool.query(INTRO_CLOSE_SWEEP_SQL, [new Date(now.getTime() - 3600_000)]).catch((err: any) => console.error("introRequestClose: sweeping handled requests failed (non-fatal):", err?.message ?? err));
   const { rows } = await pool.query(
     `SELECT r.id, r.user_id, r.close_due_at, ${INTRODUCED_SQL} AS introduced FROM intro_requests r
