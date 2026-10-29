@@ -175,9 +175,11 @@ check("no line when the want said where, when they corrected it, or when it's th
   const db = { query: async (sql: string, args?: unknown[]) => (set.push({ sql, args: args ?? [] }), { rows: [], rowCount: 1 }) };
   const raw: any = { places: [{ key: "goal:x", want: "founder dinners", place: "SF" }] };
   const a = await K.applyOne(db, "u", raw, sf!, "correct", "Oakland", "actually Oakland");
-  check("'actually Oakland' changes that want's place, at its source", "now" in a && a.now === "Oakland" && (a as any).was === "SF" && /UPDATE want_places SET place = \$3, source = \$4/.test(set[0]?.sql ?? "") && set[0].args[2] === "Oakland" && set[0].args[3] === "corrected");
+  // Only the place writes (a correction also reads that want's pooled finds: placeResolve.ts, 2026-10-29).
+  const ups = () => set.filter((x) => /UPDATE want_places SET place/.test(x.sql));
+  check("'actually Oakland' changes that want's place, at its source", "now" in a && a.now === "Oakland" && (a as any).was === "SF" && /UPDATE want_places SET place = \$3, source = \$4/.test(ups()[0]?.sql ?? "") && ups()[0].args[2] === "Oakland" && ups()[0].args[3] === "corrected");
   const r = await K.applyOne(db, "u", raw, sf!, "remove", null, "forget where");
-  check("removing it leaves the want with no place (the home city stands in, never read again)", "now" in r && r.now === null && set[1].args[2] === null && set[1].args[3] === "removed");
+  check("removing it leaves the want with no place (the home city stands in, never read again)", "now" in r && r.now === null && ups()[1].args[2] === null && ups()[1].args[3] === "removed");
   check("removed or corrected, it's never re-read: a stored row is always used (only a window's 'unread' row is read)", /if \(have && have\.source !== "unread"\) return have;/.test(src("services/wantPlace.ts")));
 }
 
