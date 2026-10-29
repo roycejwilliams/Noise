@@ -95,6 +95,7 @@
     "evals/companion/heavy.ts",
     "evals/promises/rules.ts",
     "evals/calls/cues.ts",
+    "evals/calls/turnTaking.ts",
     "evals/emotion/callRules.ts",
     "evals/emotion/labels.ts",
     "evals/voiceFlags/rules.ts",
