@@ -33,9 +33,10 @@ export function askLifeState(r: { resolved_at: unknown; closed_reason?: string |
 export function isFailedAttempt(skipReason: string | null | undefined): boolean {
   // A queue window that ended unsent on an undated find is not a decision either (Phase B, B2: services/sendCheck.ts WINDOW_ENDED).
   // "recheck:": what it rested on was corrected (services/whatCoKnows.ts cancelQueued): judged again with what's true now.
+  // "place corrected": queued for a want whose place they then corrected (cancelQueued): found for the wrong place, never judged.
   // "their ask has since closed": the row was dropped for the ask that queued it, not judged; the same find may still serve another,
   // open ask (the row's key has no ask in it), so it never decides the thing (review of the sweep fixes, 2026-10-12).
-  return /^(?:draft failed|send failed|send_failed|draft_failed|send error|window ended unsent|recheck:|(?:draft skipped: )?their ask has since closed)/i.test(String(skipReason ?? "").trim());
+  return /^(?:draft failed|send failed|send_failed|draft_failed|send error|window ended unsent|recheck:|place corrected|(?:draft skipped: )?their ask has since closed)/i.test(String(skipReason ?? "").trim());
 }
 // Pure: do these finished rows for one thing decide it? Any row that isn't a failed attempt does; failed attempts alone don't.
 export function decidedByRows(rows: { skip_reason?: string | null }[]): boolean {

@@ -147,8 +147,8 @@ export async function markNoted(userId: string, key: string): Promise<void> {
 // Their correction (whatCoKnows.ts): the place they said, or none (the home city stands in, and it's never read again).
 // The correction also clears this want's resolved place (placeResolve.ts: resolved again, for the new place, on its next search) and
 // drops the finds pooled for this want from the old place (Royce, 2026-10-29: "invalidates that ask's old cached location and its
-// cached results"). Only this want: never their home, never another want's finds. Finds already queued to send are left to go (the
-// 10-15 ruling: a correction redirects future finds).
+// cached results"). Only this want: never their home, never another want's finds. Its finds queued but not yet sent are cancelled too,
+// on the same change (whatCoKnows.ts cancelQueued, "place corrected"; Royce 2026-10-29, replacing the 10-15 "queued finds still go").
 export async function setPlace(db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> }, userId: string, key: string, place: string | null, theirWords: string) {
   const r = await db.query(
     `UPDATE want_places SET place = $3, source = $4, quote = $5, noted_at = COALESCE(noted_at, NOW()), updated_at = NOW(),
