@@ -1,7 +1,7 @@
 {
   "hash": "4f0084ac4531c719",
   "case": "planned-before-first-run",
-  "recorded_at": "2026-10-28T01:27:21.895Z",
+  "recorded_at": "2026-10-29T03:16:26.111Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -4290,7 +4290,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Yes, it's live. Cue checks every morning for a quiet cocktail bar in Hayes Valley, and I'll text you the moment one looks right.\"}]",
+      "text": "Yes, it's running. Every morning I'm checking for a quiet spot in Hayes Valley that fits 8 for work drinks, and I'll text you the moment one looks right.",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 10103,
@@ -4299,9 +4299,9 @@
           "ephemeral_5m_input_tokens": 10103,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 131,
+        "output_tokens": 60,
         "output_tokens_details": {
-          "thinking_tokens": 32
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -4309,29 +4309,17 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgTmP6pS1YNEvcoDRB2ky",
+        "id": "msg_011CgVoWSSpPc6bNp3N4ice3",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EoYECsoCCBMYAipAGyMXnCQx4dF6AX1z03f13hbx1xFLTxoE7Q5oMsQk9ghSdqnK94+BXPdwp0PxBjRd3tmR46ODOSZuZ4uCox0cQTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB+Z6F1wbCAUAIBhAAGhIBs8EBrvMCq+EDTzcFh0gEJq0gAzIEEnHPJToEdyjpDUIEYxLyF0oEx/BdulBIWgTZBeFWYAJoAXAC2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAClzlKZZ3eukVmy6cgyQRiQQtYq8ofMXiZgCXWwrOk7yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxFynp6N2VVnECDYYsaDJzhcBAm6sms6+yAdSIwP4Rv5ZQy9OLmIxA11bko5Nb4+WaoVH43Oa5CiwQ3cuIZ2iKucYzszro3xVzKy7UYKmkuPQvL2HK2kGPsDiUCQW2FemS5e+JEjwtUzuu6Jteslpk4CRTi0HK2DsscB72W+YeGK++P2ajQBGW3wnsIwPOxnrynSgtO4GTE5UdkTV0VqTwthOFMVA1eFMm952R7NEmIbZT9x8VX460YAQ=="
-          },
-          {
-            "type": "tool_use",
-            "id": "toolu_01CSRZRwVcBneiu6dth2B8ME",
-            "name": "sendReply",
-            "input": {
-              "message": "Yes, it's live. Cue checks every morning for a quiet cocktail bar in Hayes Valley, and I'll text you the moment one looks right."
-            },
-            "caller": {
-              "type": "direct"
-            }
+            "type": "text",
+            "text": "Yes, it's running. Every morning I'm checking for a quiet spot in Hayes Valley that fits 8 for work drinks, and I'll text you the moment one looks right."
           }
         ],
         "container": null,
-        "stop_reason": "tool_use",
+        "stop_reason": "end_turn",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
@@ -4342,9 +4330,9 @@
             "ephemeral_5m_input_tokens": 10103,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 131,
+          "output_tokens": 60,
           "output_tokens_details": {
-            "thinking_tokens": 32
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

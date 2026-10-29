@@ -1,7 +1,7 @@
 {
   "hash": "e0bcfe4f34d53f49",
   "case": "status-check",
-  "recorded_at": "2026-10-28T01:27:50.981Z",
+  "recorded_at": "2026-10-29T03:16:39.219Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -4290,7 +4290,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "This is already moving. I've got the launch timeline outlined, venue walk-through Nov 3 and invites out Nov 10, and I'm drafting the partner section next.\n\nI'll have that done and send you the full draft Wednesday morning.",
+      "text": "This is already moving, I'm not starting from scratch. The timeline's outlined, venue walk-through Nov 3, invites out Nov 10.\n\nNext up is the partner section, which I'll get to tomorrow morning. I'll send you the draft once that's done.",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 10090,
@@ -4299,7 +4299,7 @@
           "ephemeral_5m_input_tokens": 10090,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 78,
+        "output_tokens": 86,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -4309,13 +4309,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgTmRH5dFGEyrMzeWuU5f",
+        "id": "msg_011CgVoXQkdrEmwc793i8jYe",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "This is already moving. I've got the launch timeline outlined, venue walk-through Nov 3 and invites out Nov 10, and I'm drafting the partner section next.\n\nI'll have that done and send you the full draft Wednesday morning."
+            "text": "This is already moving, I'm not starting from scratch. The timeline's outlined, venue walk-through Nov 3, invites out Nov 10.\n\nNext up is the partner section, which I'll get to tomorrow morning. I'll send you the draft once that's done."
           }
         ],
         "container": null,
@@ -4330,7 +4330,7 @@
             "ephemeral_5m_input_tokens": 10090,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 78,
+          "output_tokens": 86,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

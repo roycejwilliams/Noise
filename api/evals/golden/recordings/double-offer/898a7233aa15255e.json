@@ -1,7 +1,7 @@
 {
   "hash": "898a7233aa15255e",
   "case": "double-offer",
-  "recorded_at": "2026-10-28T01:26:55.456Z",
+  "recorded_at": "2026-10-29T03:19:01.637Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-haiku-5-5",
-      "text": "Yes.",
+      "text": "Yes",
       "usage": {
         "input_tokens": 104,
         "cache_creation_input_tokens": 0,
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 6,
+        "output_tokens": 54,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 49
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,13 +54,18 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgTmMG9Cu5Js2ZfecF4QT",
+        "id": "msg_011CgVohzvyxJtBautaztqRx",
         "type": "message",
         "role": "assistant",
         "content": [
           {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS5gUKEAgTGAI4AUIIdGhpbmtpbmcSDAxaC0UuxQ9p03vu8xoMxFSBNo775JXMESVyIjCoByYJUmSeO1h/NcyDhjGplW3Ofv1959KK2GodqVJJDVsYfD6tsFTZpkducl5rPocqgwXLXiq/PubzivXp7Z26/mPFtovVSrDAnxIulrluh9V65nTBT1IFR1W2OQDAonb5am+fF3CAdyknYuLW7YV0VxWY+6XfpJGQjmst9ESBiVM7Ln2CN3tNPbP8a7QGW5hlGfuttqr5Z4qER2I1winSNozIUAOGEETxCT/N4Ff+eAUZKfrjplscGbIpoNFp2fbH5RcYXuHjqzx3n8JgKH67MXUN5dt8NIusGIPCqGCgtRBMxdZIMw4EKZ2ECOFRESFIlXf2dpE4zng+WqARIhGhqXFguggkiya/+alxYolB7U5U+RcM4G6lI58YGR1dPE1dpOnfREewTB6ejdAymQGr2lEqjpMBFCMnwMNagHbn2ILRDWbbOWbUFQpULy2HvfVy2es5s1hBogqm4uS0HkJgA36VgE2YbksloLwMgNYHOW4MlhATOQU3IAtY3HEQDplaInt0C5oHMRQpwkAzXz5XOAMAnpTe3qmXFk4OG8VvZUksyoV3kKUi4p6vHBiDuZCRDdtabCykFLq2L5TFjBZG5g5HTRNnk57l3MzzzEKbByuboThs5WTUjxg/gc/ftZl5tby8DSY4ua2Wj4Qm4ZFDHXEitAjQ63AHVVtPqyiGsh25zR36kvDYC5LQ5mnI0RWICPKQyCGlGpL4V5LB2IQr/19CjayJSKb4xon+pVrRfql2CuQ8oSrIUjob1Kw9mWkTtNMWxaKjYZ2aTJBg1v2AH2Q2xdzEYfLrjlsmszmvpJmzTwHM8rvBrTwrjjd2J9qzqN0A7+NaGFiru/B21O98DvzD2w20i/PJk8ZBoO0tUPKf/GLNBjBDzFcfQpimR2rxEQAJGu11q7c8XWfZas6RLlxTrBYiGAE="
+          },
+          {
             "type": "text",
-            "text": "Yes."
+            "text": "Yes"
           }
         ],
         "container": null,
@@ -75,9 +80,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 6,
+          "output_tokens": 54,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 49
           },
           "service_tier": "standard",
           "inference_geo": "global",

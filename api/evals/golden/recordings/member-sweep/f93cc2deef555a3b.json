@@ -1,7 +1,7 @@
 {
   "hash": "f93cc2deef555a3b",
   "case": "member-sweep",
-  "recorded_at": "2026-10-28T01:31:54.416Z",
+  "recorded_at": "2026-10-29T03:19:31.981Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -4290,7 +4290,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "I'm Cue. Think of me as the one who actually keeps track of this stuff for you, like which dinner fits and why.",
+      "text": "I'm Cue. I help you find the right people, events, and plans, and keep track of what matters to you so you don't have to repeat yourself.",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 10265,
@@ -4299,7 +4299,7 @@
           "ephemeral_5m_input_tokens": 10265,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 41,
+        "output_tokens": 46,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -4309,13 +4309,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgTmjBYExe7CVuACNCbkY",
+        "id": "msg_011CgVokBVHbQsi1WHZ7bE99",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "I'm Cue. Think of me as the one who actually keeps track of this stuff for you, like which dinner fits and why."
+            "text": "I'm Cue. I help you find the right people, events, and plans, and keep track of what matters to you so you don't have to repeat yourself."
           }
         ],
         "container": null,
@@ -4330,7 +4330,7 @@
             "ephemeral_5m_input_tokens": 10265,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 41,
+          "output_tokens": 46,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

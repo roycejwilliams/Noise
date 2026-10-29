@@ -1,0 +1,95 @@
+{
+  "hash": "51ef1b3cd98921c3",
+  "case": "checkin-live-thread",
+  "recorded_at": "2026-10-29T03:17:37.121Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2088,
+    "system": "",
+    "messages": 1,
+    "last": "user: Cue, a texting companion, is about to send this line: \"Still nothing from the venue yet\" Does this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Cue or another person) beyond Cue admitting that something did NOT happen (including that it tried a...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2088,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Cue, a texting companion, is about to send this line:\n\"Still nothing from the venue yet\"\n\nDoes this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Cue or another person) beyond Cue admitting that something did NOT happen (including that it tried and couldn't: \"I couldn't reach them\"), or owning a mistake (\"that's on me\", \"sorry\", \"you're right\")? A reason or an aside that states a fact (\"because Jordan already has your number\", \"since Ellis got it first\") counts as asserting something.\n\nReturn ONLY JSON: {\"onlyAdmission\": true} if the line only admits something didn't happen and/or owns it, else {\"onlyAdmission\": false}.",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"onlyAdmission\": true}",
+      "usage": {
+        "input_tokens": 241,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 183,
+        "output_tokens_details": {
+          "thinking_tokens": 169
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgVobiPtt7wev1NHS3Yny",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS6AgKEAgTGAI4AUIIdGhpbmtpbmcSDDXhMj7OC04JVUM4lxoMEx+38YJBs9iR4e42IjAHw3JcFpaS8AgyenBzu/lQLwsRAwDWhIez/Nrm/JOurDRyGihm5KEMMb2+6eSinO4qhQioAVutU0HvSntZFOhFYQxd55i7UFPU+UxvJz5vWrsTtBvyVArrSoLJW0LtJXhMkEoKX6ZMuQyk01bWiX5CH5lXkTyMZAxY9J41X0d7ahohz8VrjjIP0YK7B0hTZECdJseA66x8aZcVazDfO5FhB5n381c4CHDWrCe1abaGptwZ3BAXI+SCqfE3p0Os7TJcr3yIUy/nA3LbaEs1AWUggM1KtgC8eY4mF562TNftsUuxEQIijGrGxGfQpzxGLK0TCrra32U3o9d2QDtazadhscaO3XYezK6qYTvxg6xQuhCeSSmAgWrEF6EdZyyd6GYRXNV1k1Ega055hoIRnZu8AuyAmE0VU3XzDPZryJnU/EO9DP4VhA3MeN6g87jd71dnwJi762TCvSZX23xf6YylGRFOsoV2Q8mfE9Chxfxa4YyiB4+FKXf/rtzbW3Qc4E+J5rJm4oUB5PfDtD73Nie1us2km4pUEZsSpeOs71he9SZgBdk78xRCGfeqEfkx0ZGQ9AA1b5p9W1EJT2kTO+OdwwXwZ1KqnpXVLwC85Lj9uLh1p3arVUubyK7T58ySE2PN1j4CJvGpxN8D4+mVkudsZwYA5w85oICLsObifVAAhWKqgykX7sS1yi70fPC+logF0FZv+6ukvZMzvLearqFH816nvI4uRvmyxTWJVQmoJo/a5TJ0LeLYzu4zgf8QkDM3LFCwrcw44RraD1u9ANg8YEZlHS/Yx3NB7iQKOe6A0Kk+MZ94T0o3+6qTM56htt/duKCn9DVV+84Q61nSRLEyQKNKSFGNBWosaObOZC5RKKCdRCZRrIyI+evN+CfzIO/4seTEHLcwNeNgqXdsjQiJLYCgYWCcYjQmX+QkeifSiyzHlkyFE2JDhO6uRn2lYp41f0xnLD3x23C3PXIGMHqUpUvWyWrTSRj5vMUf01qG72KyeS/ABpgJX1K4D/T8w0/rbU2FtP1aAQsk72lsswj31EMj4E64mqfnMTMDfNup6fcdhLLje/ZpXUaosCcq9TZgvtgGi33vm5oPdeHNo/IEc+SNDzL2tsnlyVY5pQkIY+/S1Fk4wNk+4LnCr0CB1Yfs8ICTsPdcyQFHvOa4/pqmjnXKZ3nL+sSRNcdWSyPpUqUUQ96qqcjCklbq/p8qwYbKBPUSoaSPWlFJ/j1ke6yb3irOTr1jrl7MxGjWKa7JGSbBi5rO6xcNQCQ7eg2kawa42PW5UJXAPJV8K32yhRiL/r+FUVZf0/sFuMmD9flOYyEuki9UFk3Zc+hGX909iFS+N5nOyg8/wLbR1TRhNCnmvzyB7AlCvJrG+tnWOeRNLtFAOlaWJJU6qXjrv0+2zWF+W+Ibv7t8SvhrjKsQP/G+Zot++EnYvOQYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"onlyAdmission\": true}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 241,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 183,
+          "output_tokens_details": {
+            "thinking_tokens": 169
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

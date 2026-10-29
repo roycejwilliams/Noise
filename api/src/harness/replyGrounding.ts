@@ -126,7 +126,9 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // retireAsk: the find ask this reply may ask about (services/askRetire.ts); stopNote: the one stopped-looking line code carries in it.
 // world: the member's world this turn (services/memberWorld.ts): what the check-in rule draws on, and what the reply check reads to
 // keep a backed world line and to end dead air with a true one.
-export type ReplyFacts = { retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+// moment: what they're doing in this message, from the turn's moment read (services/connectDots.ts readMoment: "sharing", "feedback",
+// ...). The reply check reads it to tell a cut that left a sharing reply flat (repairShareCut); never rendered into a prompt.
+export type ReplyFacts = { moment?: string | null; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -1387,13 +1389,14 @@ Claims to find (one type each):
 Never claims (don't list these):
 - The member's own words and choices from this conversation, restated or built on ("you already called the daytonaio night your pick", "since you said you're in"). The member is never "another person".
 - Opinions, feelings, questions (an offer asked as a question, "Want me to look now?", is a question), encouragement, and how Cue will talk ("I'll keep it short").
+- Warmth: wishing them well, congratulating them, or reacting to what they just told you ("glad you're back", "hope the week back is kind to you"), and a question about what they shared. When a wish, reaction or question carries a specific about their life they haven't told Cue (an activity, a place, a plan, a date, a person, a reason), list only that specific, as member_life.
 - Saying yes to what they just asked ("Happy to.", "Sure.", "Glad to help.", "Let's do it."): that's agreeing, not a capability. Inviting them to send or share something ("Send it over", "Walk me through the key slides") is a request, not a claim.
 - What Cue's own draft, prompt, plan or advice should do for them ("That should give you clean, reusable drafts"): that's advice about Cue's own work, not a prediction about the world.
 - Advice and possibilities: general know-how about how things usually go ("personal invites beat a mass email"); what kind of people events like this tend to draw; where this could take them ("could be a good place to find the dependable builder people you're after"); a plan or schedule Cue proposes for them; a conclusion reasoned from the sources ("if Oct 10 is under 30 days out, the permit may not clear").
 
 Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Cue about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
 
-Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Cue did or didn't do (past_action, including "I never sent that") needs a FACT: Cue's own earlier words aren't evidence of what it did, and if a FACT shows Cue sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. Saying Cue did NOT do something ("it never sent, and that's on me", "that didn't go through") is supported when no FACT shows it happened; mark it supported with no factId. A FACT listed under DONE THIS TURN is something that really happened this turn, what Cue's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. An offer Cue makes in this reply, framed as something it can do if they say yes ("I can text you a nudge on the 27th", "I can sketch name directions"), is supported by a capability FACT that says Cue offered it in this reply; cite that FACT. A promise said as already set ("I'll text you on the 27th") is not an offer and needs a FACT that it will actually happen. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Cue's working notes for them); an open task Cue is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A work_status claim needs a FACT naming that exact work as running now: an open task, a research brief being put together, a look-out, or Cue's daily search for something the running-work FACT lists under it; an open ask that line doesn't list, or Cue's working notes, are not work running on it. When the FACTS say nothing is running for it, a claim that it is running is unsupported, and when the running-work FACT lists it, a claim that nothing is running on it is unsupported too. A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Cue before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. Their own texts in this conversation are a source for their own life and plans, said back in Cue's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day ("today's meeting" backs "later today" for it, never "tonight"); quote their words. What they've told Cue before (their own words, below) can support member_life; what Cue knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Noise is never part of their own life. Never count something as supported because it's plausible.
+Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Cue did or didn't do (past_action, including "I never sent that") needs a FACT: Cue's own earlier words aren't evidence of what it did, and if a FACT shows Cue sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. Saying Cue did NOT do something ("it never sent, and that's on me", "that didn't go through") is supported when no FACT shows it happened; mark it supported with no factId. Owning a mistake in something Cue sent, as they describe it ("that link shouldn't have gone out dead"), is supported when their message or Cue's own sent line in the conversation shows Cue sent it: quote those words. A FACT listed under DONE THIS TURN is something that really happened this turn, what Cue's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. An offer Cue makes in this reply, framed as something it can do if they say yes ("I can text you a nudge on the 27th", "I can sketch name directions"), is supported by a capability FACT that says Cue offered it in this reply; cite that FACT. A promise said as already set ("I'll text you on the 27th") is not an offer and needs a FACT that it will actually happen. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Cue's working notes for them); an open task Cue is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A work_status claim needs a FACT naming that exact work as running now: an open task, a research brief being put together, a look-out, or Cue's daily search for something the running-work FACT lists under it; an open ask that line doesn't list, or Cue's working notes, are not work running on it. When the FACTS say nothing is running for it, a claim that it is running is unsupported, and when the running-work FACT lists it, a claim that nothing is running on it is unsupported too. A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Cue before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. Their own texts in this conversation are a source for their own life and plans, said back in Cue's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day ("today's meeting" backs "later today" for it, never "tonight"); quote their words. What they've told Cue before (their own words, below) can support member_life; what Cue knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Noise is never part of their own life. Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
@@ -1427,6 +1430,22 @@ export const TEAM_PASS = /\b(pass(ed|ing)?|sen[dt]|shar(ed|ing)|flagg(ed|ing)|fo
 
 // More than the pass-along ("and they'll fix it by Friday"): a promise, a day or a fix still needs its own source.
 export const TEAM_PASS_PLUS = /\b(will|won'?t|going to|gonna|fix(es|ed|ing)?|today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|soon|by \w+)\b|\w['’]ll\b|\d/i;
+
+// Pure: a past action owned on a feedback turn whose quote is their own report of what Cue sent, or Cue's own sent line in the thread.
+export function ownsWhatItSent(c: Pick<Claim, "quote">, rf: Pick<ReplyFacts, "moment">, src: Pick<GroundingSources, "message" | "recentConversation">): boolean {
+  if (rf.moment !== "feedback" || !c.quote || norm(c.quote).length < 6) return false;
+  const q = norm(c.quote);
+  return norm(src.message).includes(q) || coLinesIn(src.recentConversation).some((l) => norm(l).includes(q));
+}
+// Pure: the claim cites the world line, quoting its thread part.
+export function citesTheirThread(c: Pick<Claim, "factId" | "quote">, rf: Pick<ReplyFacts, "facts" | "world">): boolean {
+  const thread = rf.world?.thread?.fact;
+  const cited = rf.facts.find((f) => f.id === c.factId);
+  if (!thread || !cited || !WORLD_FACT.test(cited.text) || !c.quote || norm(c.quote).length < 6) return false;
+  const q = norm(c.quote).replace(/[.\s]+$/, "");
+  const t = norm(thread).replace(/[.\s]+$/, "");
+  return t.includes(q) || q.includes(t);
+}
 
 // A model's "supported" only counts if its citation checks out in code.
 export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources, admissions: Map<string, boolean> = new Map()): GateCheck[] {
@@ -1497,6 +1516,11 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     // What Co did is only backed by the record, never by Co's own earlier
     // words in the thread (2026-09-27: an earlier false "I never sent it"
     // was quoted as support for saying it again).
+    // Owning a mistake in what Cue sent, on a feedback turn (Royce, 2026-10-28: "that link shouldn't have gone out dead" was cut, and what
+    // went out neither owned nor fixed it): the record of what Cue sent backs it, their own report of it or Cue's sent line in the thread.
+    if (pass && c.type === "past_action" && ownsWhatItSent(c, rf, src)) {
+      return { name: `claim_${c.type}`, pass: true, reason: `${reason} (owning what Cue sent, backed by ${norm(src.message).includes(norm(c.quote ?? "")) ? "their message" : "Cue's sent line"})` };
+    }
     if (pass && c.type === "past_action" && !(c.factId && factIds.has(c.factId))) {
       pass = false;
       reason += " (what Cue did has to come from a fact, not from the conversation)";
@@ -1511,6 +1535,13 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     if (pass && citesStaleAsCurrent(c.text, rf.facts.find((f) => f.id === c.factId)?.text)) {
       pass = false;
       reason += " (that detail is from an earlier read, not checked since: say it as of then, or check it live)";
+    }
+    // Their thread is theirs to tell (services/memberWorld.ts: "ask, never report"): the world line's thread part never backs saying where
+    // it stands (2026-10-28 re-record: "Still nothing from the venue yet" passed citing it, caught only by the thread check). Asking about
+    // it is a followup, and stays.
+    if (pass && c.type !== "followup" && !/\?\s*["')\]]*$/.test(c.text.trim()) && citesTheirThread(c, rf)) {
+      pass = false;
+      reason += " (their thread is theirs to tell: the world line never backs saying where it stands)";
     }
     if (pass && c.factId && hintIds.has(c.factId) && !(c.quote && norm(c.quote).length >= 6 && sources.includes(norm(c.quote)))) {
       pass = false;
@@ -1690,7 +1721,7 @@ export function cutTrailingClaims(sentence: string, failed: GateCheck[]): string
 }
 
 // Last resort: drop the sentences that carry an unsupported claim.
-export function stripUnsupported(draft: string, failed: GateCheck[], opts: { allow?: (sentence: string) => boolean } = {}): string {
+export function stripUnsupported(draft: string, failed: GateCheck[], opts: { allow?: (sentence: string) => boolean; message?: string } = {}): string {
   // A sentence whose unsupported claim is only its last clause keeps the rest (row 10393, 2026-10-10: "Send over the deck or walk me
   // through the key slides and I'll give you a real read." lost the invitation with the promise). See cutTrailingClaim.
   const sentences = (draft.match(SENTENCES_SP) ?? [draft]).map((s) => cutTrailingClaims(s, failed));
@@ -1724,7 +1755,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[], opts: { all
     // any sentence that could carry a checkable claim, since nothing
     // verified it either way — same shape test needsClaimCheck uses to
     // decide whether a whole draft needs the model read.
-    if (failed.some((f) => f.name === "claim_read_failed") && needsClaimCheck(s)) return false;
+    if (failed.some((f) => f.name === "claim_read_failed") && needsClaimCheck(s, opts.message)) return false;
     return !bad.some((b) => b.length >= 6 && (ns.includes(b) || b.includes(ns.replace(/[.!?]+$/, ""))));
   });
   // A sentence that leans on the one just cut goes with it ("The doc isn't made yet. What would unblock it is..." 2026-10-12): it
@@ -1916,8 +1947,20 @@ const CLAIM_SHAPED = [
   /\b(?:it|each slide|every section|the first|the last)\s+(?:covers|includes|contains|opens with|ends with|lays out|walks through)\b/i,
 ];
 
-export function needsClaimCheck(draft: string): boolean {
-  return CLAIM_SHAPED.some((re) => re.test(draft));
+export function needsClaimCheck(draft: string, message?: string): boolean {
+  return CLAIM_SHAPED.some((re) => re.test(draft)) || warmthWithASpecific(draft, message);
+}
+// A wish or reaction that names a specific of their life (2026-10-28 live check: "Glad the runs along the river gave you some space too."
+// went out unread, since nothing in it looked claim-shaped). Narrow: a warm opener, then "the", "your" or "those" and a word that isn't
+// in their message. Warmth on its own ("Glad you're back.", "Hope it lands well.") still skips the read.
+const WARM_SPECIFIC = /\b(?:glad|hope|hoping|hopefully|sounds like|sounded like|love that|nice that|good that|bet)\b[^.?!\n]{0,40}?\b(?:the|your|those)\s+([a-z][a-z'-]{2,})/gi;
+export function warmthWithASpecific(draft: string, message?: string): boolean {
+  const theirs = ` ${(message ?? "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z' ]+/g, " ")} `;
+  for (const m of draft.replace(/[’‘]/g, "'").matchAll(WARM_SPECIFIC)) {
+    const word = m[1].toLowerCase().replace(/'s$/, "");
+    if (!theirs.includes(` ${word}`)) return true;
+  }
+  return false;
 }
 
 // One retry before giving up on a claim-shaped draft (2026-09-17 code
@@ -1927,7 +1970,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
   // The admission read, the thread read and the claim read start together (review, 2026-10-14: the thread read ran first and held the
   // claim read back a whole Haiku round trip); the code checks read the first two's answers, so they run once all have settled.
   const pre = Promise.all([admitNarratedSentences(draft, rf), judgeThreadReports(draft, rf, src)]);
-  if (!needsClaimCheck(draft)) {
+  if (!needsClaimCheck(draft, src.message)) {
     await pre;
     return { checks: [...codeChecks(draft, rf, src), { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   }
@@ -1950,7 +1993,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
 
 // The claim read alone (the grounding evals use it): only the claim checks, none of Co's own code checks.
 export async function claimChecksOnly(draft: string, rf: ReplyFacts, src: GroundingSources, opts: { force?: boolean } = {}): Promise<GateCheck[]> {
-  if (!opts.force && !needsClaimCheck(draft)) return [];
+  if (!opts.force && !needsClaimCheck(draft, src.message)) return [];
   const extracted = await extractClaims(draft, rf, src).catch(() => null);
   return extracted ? claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims)) : [];
 }
@@ -1959,8 +2002,8 @@ export async function claimChecksOnly(draft: string, rf: ReplyFacts, src: Ground
 // (a number, a link, a name, an action, a promise, ...) — code checks alone
 // aren't enough to trust it, so this is treated as a failed check rather
 // than silently shipped "unchecked" (2026-09-17 code review).
-function claimReadUnavailable(draft: string, result: { modelOk: boolean }): boolean {
-  return !result.modelOk && needsClaimCheck(draft);
+function claimReadUnavailable(draft: string, result: { modelOk: boolean }, message?: string): boolean {
+  return !result.modelOk && needsClaimCheck(draft, message);
 }
 const CLAIM_READ_FAILED_CHECK: GateCheck = {
   name: "claim_read_failed",
@@ -2049,6 +2092,181 @@ export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; 
   return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.answeredThisTurn ?? o.src.sentThisTurn });
 }
 
+// A cut that leaves a reply to something they shared flat (Royce, 2026-10-28). He wrote "I'm just getting back from my birthday/vacation.
+// I'm honestly feeling hopeful and recharged"; the draft's closing line invented "the gym today", the check rightly cut it, and what went
+// out was "That's a good place to come back from.": true, and generic enough to fit anyone. Removing an invented detail is right; sending
+// a reply that no longer engages is not. So when they're sharing something (or telling Cue how it's coming across) and the cut took the
+// part that engaged with them, Cue gets one rewrite from supported context, checked again like any rewrite. Never a second rewrite.
+// Signals, all already on hand: the turn's moment read (rf.moment), how much of the draft the cut took, whether a question to them
+// survived, and whether what's left still carries any of their own words. Those only decide whether to ask; the rewrite call itself
+// decides first whether what's left still responds to them (a short warm line that fits them is a complete reply, Royce 2026-10-28:
+// "respect when the moment is complete"), the way the dead-air redraft decides check-in (WORLD_REDRAFT_NOTE). One Sonnet call, plus
+// the usual recheck when the rewrite is claim-shaped, only on such a cut.
+export const SHARE_MOMENTS = new Set(["sharing", "feedback"]);
+// Everyday words that say nothing about what they shared ("honestly", "getting", "about"), so carrying one isn't engaging with them.
+const EVERYDAY = new Set("about after again also always another around because before being better could doing every going getting gonna honestly maybe might never other really since something still their there these thing things think those though today tomorrow tonight wanna where which while would yeah yesterday".split(" "));
+const wordCount = (t: string) => t.split(/\s+/).filter(Boolean).length;
+// Pure: their own content words (5+ letters, not everyday filler), for telling whether what's left still touches what they said.
+export function theirContentWords(message: string): Set<string> {
+  return new Set((message.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z][a-z']+/g) ?? []).map((w) => w.replace(/'s$|'/g, "")).filter((w) => w.length >= 5 && !EVERYDAY.has(w)));
+}
+export function echoesThem(text: string, message: string): boolean {
+  const theirs = theirContentWords(message);
+  return [...theirContentWords(text)].some((w) => theirs.has(w));
+}
+// Pure: whether a cut on a sharing (or feedback) turn may have left a stub, so the one rewrite call is asked. Not merely short: the cut
+// took at least a third of the draft, no question to them survived, and nothing left carries their own words. The rewrite call still
+// decides whether what's left already fits them.
+export function shareCutStub(o: { moment: string | null | undefined; draft: string; cut: string; message: string }): boolean {
+  if (!o.moment || !SHARE_MOMENTS.has(o.moment)) return false;
+  const cut = o.cut.trim();
+  const draft = o.draft.trim();
+  if (!cut || cut === draft || cut.includes("?")) return false;
+  if (wordCount(cut) > (wordCount(draft) * 2) / 3) return false;
+  return !echoesThem(cut, o.message);
+}
+
+// The removed claims' own words, for the rewrite to steer clear of and for code to hold it to.
+export function removedClaims(failed: GateCheck[]): string[] {
+  return failed.map((f) => claimWords(f) ?? (f.reason ?? "").match(/"([^"]{6,})"/)?.[1] ?? null).filter((x): x is string => !!x && x.trim().length >= 6);
+}
+
+// Pure: Cue's reply mostly says their own words back to them (2026-10-28 run: "A week in Lisbon with your brother, the first trip since
+// your dad passed, that's not nothing."). A fact-level signal, not a read of intent: three or more of their content words, making up more than
+// half of the reply's. A short warm line that uses two of their words ("Glad you're back hopeful and recharged.") isn't it. It
+// only asks for the one share rewrite; it never cuts anything.
+export function restatesThem(text: string, message: string): boolean {
+  const theirs = theirContentWords(message);
+  const mine = [...theirContentWords(text)];
+  const echoed = mine.filter((w) => theirs.has(w));
+  return echoed.length >= 3 && echoed.length * 2 > mine.length;
+}
+
+// Questions (Royce, 2026-10-28): as many as it takes to understand, when they're one continuous thought. Whether they follow one thread
+// is the model's call, from the guidance (Cue decides; code guards facts); a word-overlap rule rejected real follow-ups ("What made
+// this one land? Was it the people or the place?"). Code holds only the questionnaire line: more than three in one message.
+export const QUESTIONNAIRE_AT = 4;
+export function questionCount(text: string): number {
+  return (text.match(SENTENCES) ?? []).map((x) => x.trim()).filter((x) => /\?["')\]]*$/.test(x)).length;
+}
+
+// On a feedback turn the rewrite may offer to fix what Cue got wrong in what it sent: redo or replace that one thing, asked as a
+// question (Royce, 2026-10-28). Never a new recommendation or an unrelated offer.
+const REDO = /\b(?:another|a new|a working|a better|again|instead|replace|resend|re-send|redo|fix|correct(?:ed)?|the right one|updated)\b/i;
+const OFFER = /^\W*(?:(?:so|and|or),?\s+)?(?:want me to|should i|do you want me to|i can|i could|happy to|shall i)\b/i;
+// An offer to do something for them, asked: a share rewrite adds none, except the one fix on a feedback turn.
+const OFFER_ASK = /\b(?:want me to|do you want me to|should i|shall i)\b/i;
+export function offersToFixIt(sentence: string): boolean {
+  return /\?["')\]]*$/.test(sentence.trim()) && OFFER.test(sentence) && REDO.test(sentence);
+}
+
+export function shareRewritePrompt(o: { facts: string; tail: string; theirWords: string; message: string; draft: string; removed: string[]; cut: string; offerKeep: boolean; restates?: boolean; feedback?: boolean }): string {
+  const cutPart = o.removed.length
+    ? `\nThe reply check took out these parts, because nothing they've said and none of the facts above support them. Don't say them again, in any wording:\n${o.removed.map((r) => `- "${r}"`).join("\n")}\n\nWhat's left: "${o.cut || "(nothing)"}"\n`
+    : "";
+  const restatePart = o.restates ? `\nYour draft mostly says their own words back to them. They know what they said; respond to it in your own words.\n` : "";
+  const decide = o.offerKeep
+    ? `First decide whether what's left still responds to what they actually said, in a way that wouldn't fit just anyone. A short warm line that fits them is a complete reply; it doesn't need a question. If it does, return {"engages": true, "reply": ""}.\n\nIf it doesn't, write the reply again`
+    : `Write the reply again`;
+  return `${CO_VOICE}
+
+${CO_TEXT_CHANNEL}
+
+${o.facts}
+
+Recent conversation:
+${o.tail || "(none)"}
+${o.theirWords ? `\nWhat they've told you before (their own words about their own life):\n${o.theirWords}\n` : ""}
+They just said: "${o.message}"
+
+Your draft reply:
+"${o.draft}"
+${cutPart}${restatePart}
+They were telling you something that matters to them, or how you're coming across, so the reply has to respond to that. ${decide} from their words and the facts above only. Keep what the draft was doing and its warmth. Respond to what they shared and what it means to them: a specific reaction, a small observation or opinion of your own, or questions that follow one thread when there's something worth understanding; never unrelated ones, never one they've already answered. Use what they've already told you rather than asking it again, and don't repeat their words back to them. ${o.feedback ? "If something you sent was wrong, own it plainly and you may offer to fix that one thing (redo or replace it); no other offer or recommendation. " : ""}Wishing them well or reacting to their news needs no source; any activity, plan, date, place, person, history or reason you mention must be in their words or the facts, and when you don't know it, leave it out. Don't guess why they feel what they feel. No advice or plan unless they asked for one. Their register, at most one short line longer than the draft. Return ONLY JSON: {"engages": false, "reply": "the message"}.`;
+}
+
+export function parseShareRewrite(text: string | null | undefined): { engages: boolean; reply: string } | null {
+  let j: { engages?: unknown; reply?: unknown } | null = null;
+  try {
+    j = parseModelJson<{ engages?: unknown; reply?: unknown }>(String(text ?? ""));
+  } catch {
+    return null;
+  }
+  return typeof j?.engages === "boolean" ? { engages: j.engages, reply: typeof j.reply === "string" ? j.reply.trim() : "" } : null;
+}
+
+// Pure: the code guard on the share rewrite (the share-turn form of rewriteAddsNothing). The removed claims stay out; any name, number,
+// day or link is from what's left, the facts or their words (never from the cut sentences); a feeling word only as they said it; no new
+// recommendation (on a feedback turn, an offer to fix what Cue sent is allowed); no questionnaire; it doesn't say their words
+// back to them; no feelings named back at them.
+export function shareRewriteAddsNothing(o: { rewrite: string; draft: string; cut: string; removed: string[]; allowed: string; message: string; feedback?: boolean }): { ok: boolean; why: string | null } {
+  const flat = (t: string) => ` ${t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+  const r = o.rewrite.trim();
+  if (!r) return { ok: false, why: "empty" };
+  if (r.length > o.draft.length + 60) return { ok: false, why: "longer than the draft" };
+  if (questionCount(r) >= QUESTIONNAIRE_AT) return { ok: false, why: "a questionnaire" };
+  if (!checkNoEmotionLabel(r).pass) return { ok: false, why: "names their feelings" };
+  if (restatesThem(r, o.message)) return { ok: false, why: "says their own words back to them" };
+  const fr = flat(r);
+  const back = o.removed.find((x) => fr.includes(flat(x)));
+  if (back) return { ok: false, why: `says a removed claim again: "${back}"` };
+  const known = `${o.cut}\n${o.allowed}\n${o.message}`.toLowerCase();
+  const said = o.message.toLowerCase();
+  const kept = flat(o.cut);
+  let fixOffers = 0;
+  for (const sentence of (r.match(SENTENCES) ?? []).map((x) => x.trim()).filter((x) => x && !kept.includes(flat(x)))) {
+    const feelings = sentence.match(new RegExp(FEELING_WORDS.source, "gi")) ?? [];
+    const notTheirs = feelings.filter((w) => !said.includes(w.toLowerCase()));
+    if (notTheirs.length) return { ok: false, why: `adds something about how they feel: "${sentence}"` };
+    const fixOffer = !!o.feedback && offersToFixIt(sentence) && ++fixOffers === 1;
+    if (RECOMMENDS.test(sentence) && !fixOffer) return { ok: false, why: `adds a recommendation: "${sentence}"` };
+    if (OFFER_ASK.test(sentence) && !fixOffer) return { ok: false, why: `adds an offer: "${sentence}"` };
+    const added = specifics(sentence).filter((t) => !known.includes(t));
+    if (added.length) return { ok: false, why: `adds ${added.join(", ")} that isn't in what's left, the facts or their words` };
+  }
+  return { ok: true, why: null };
+}
+
+export type ShareRepair = { final: string | null; how: "kept" | "rewrite" | "rewrite_trimmed" | "none"; checks: GateCheck[]; why: string };
+export type ShareRepairDeps = {
+  // The one rewrite call: its raw answer, or null.
+  write: () => Promise<string | null>;
+  // The usual re-read of a rewrite (recheck): code checks on the whole, the claim read on what changed.
+  recheck: (rewrite: string) => Promise<{ checks: GateCheck[]; modelOk: boolean }>;
+  // Code checks alone, for a trimmed rewrite (no model call).
+  codeFails: (text: string) => GateCheck[];
+};
+// The bounded repair, with its model calls injected (the layer-1 tests drive it with fakes). At most one rewrite and one recheck: a
+// rewrite that fails the recheck keeps only its sentences that passed (no new call), when that still says something; otherwise the
+// caller sends what it had. Never a second rewrite, never a loop.
+// offerKeep: the call may answer that what's left already fits them. Only when what's left carries their own words (Royce, 2026-10-28:
+// live, the call kept "That's a good place to come back from." as fitting); with none of their words, or when the reason is that it says
+// their words back (restates), it has to write the reply, and an "it fits" answer is not taken.
+export async function repairShareCut(o: { draft: string; cut: string; failed: GateCheck[]; message: string; allowed: string; offerKeep: boolean; feedback?: boolean }, deps: ShareRepairDeps): Promise<ShareRepair> {
+  let raw: string | null = null;
+  try {
+    raw = await deps.write();
+  } catch (err: any) {
+    return { final: null, how: "none", checks: [], why: `the rewrite call failed: ${String(err?.message ?? err).slice(0, 120)}` };
+  }
+  const parsed = parseShareRewrite(raw);
+  if (!parsed) return { final: null, how: "none", checks: [], why: "the rewrite didn't come back in shape" };
+  if (parsed.engages && o.offerKeep) return o.cut.trim() ? { final: o.cut, how: "kept", checks: [], why: "what's left still responds to them" } : { final: null, how: "none", checks: [], why: "nothing left to keep" };
+  if (!parsed.reply) return { final: null, how: "none", checks: [], why: parsed.engages ? "answered that it fits, which wasn't on offer (none of their words left)" : "no rewrite came back" };
+  const rewrite = cleanCoMessage(parsed.reply);
+  const removed = removedClaims(o.failed);
+  const guard = shareRewriteAddsNothing({ rewrite, draft: o.draft, cut: o.cut, removed, allowed: o.allowed, message: o.message, feedback: o.feedback });
+  if (!guard.ok) return { final: null, how: "none", checks: [], why: `rewrite rejected: ${guard.why}` };
+  const r = await deps.recheck(rewrite);
+  const failed2 = claimReadUnavailable(rewrite, r, o.message) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
+  if (!failed2.length) return { final: rewrite, how: "rewrite", checks: r.checks, why: "rewrite passed the recheck" };
+  // Still unsupported somewhere: keep only the rewrite's sentences that passed, if that still says something and passes the code checks.
+  const trimmed = stripUnsupported(rewrite, failed2, { message: o.message }).trim();
+  const trimmedOk = !!trimmed && trimmed !== rewrite.trim() && wordCount(trimmed) >= 3 && !danglingQuestion(trimmed) && !apologyOnly(trimmed) && !deps.codeFails(trimmed).length && !removed.some((x) => norm(trimmed).includes(norm(x)));
+  if (trimmedOk) return { final: trimmed, how: "rewrite_trimmed", checks: r.checks, why: "the rewrite's unsupported part was cut; the rest passed" };
+  return { final: null, how: "none", checks: r.checks, why: "the rewrite failed the recheck too" };
+}
+
 export async function groundReply(
   rawDraft: string,
   rf: ReplyFacts,
@@ -2085,15 +2303,57 @@ export async function groundReply(
   // A claim-shaped draft whose claim read failed twice is treated as a
   // failed check, not sent as "unchecked" on code checks alone (2026-09-17
   // code review) — it goes through the same redraft-then-strip path below.
-  const effectiveFailed1 = claimReadUnavailable(draft, first) ? [...failed1, CLAIM_READ_FAILED_CHECK] : failed1;
+  const effectiveFailed1 = claimReadUnavailable(draft, first, src.message) ? [...failed1, CLAIM_READ_FAILED_CHECK] : failed1;
+
+  // The one share rewrite (repairShareCut), for a sharing or feedback turn: after a cut that left a stub or too little, or when the reply
+  // says their own words back to them (restatesThem). Never more than one a reply.
+  const shareMoment = !!rf.moment && SHARE_MOMENTS.has(rf.moment);
+  const runShare = async (o: { cut: string; failed: GateCheck[]; offerKeep: boolean; restates: boolean }): Promise<ShareRepair> => {
+    const t0 = Date.now();
+    const allowed = [...rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text), theirOwnWords(src.recentMemories), theirOwnWords(src.recentConversation)].join("\n");
+    const feedback = rf.moment === "feedback";
+    const r = await repairShareCut(
+      { draft, cut: o.cut, failed: o.failed, message: src.message, allowed, offerKeep: o.offerKeep, feedback },
+      {
+        write: async () =>
+          (
+            await generateText({
+              model: anthropic(LAYER3_MODELS.redraft),
+              maxOutputTokens: 1000,
+              providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
+              abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
+              experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.share_rewrite" },
+              prompt: shareRewritePrompt({ facts: renderReplyFacts(rf), tail: src.recentConversation.split("\n").slice(-14).join("\n"), theirWords: theirOwnWords(src.recentMemories), message: src.message, draft, removed: removedClaims(o.failed), cut: o.cut, offerKeep: o.offerKeep, restates: o.restates, feedback }),
+            })
+          ).text,
+        recheck: async (rewrite) => {
+          const t1 = Date.now();
+          const rc = await recheck(draft, rewrite, o.failed, rf, src);
+          stages.secondCheckMs = Date.now() - t1;
+          return rc;
+        },
+        codeFails: (text) => codeChecks(text, rf, src).filter((c) => !c.pass),
+      },
+    );
+    stages.redraftMs = Date.now() - t0;
+    return r;
+  };
+  const shareChecks = (r: ShareRepair, why: string): GateCheck[] => [...r.checks.map((c) => ({ ...c, name: `redraft.${c.name}` })), { name: "share_repair", pass: true, reason: `${why}; ${r.how}: ${r.why}` }];
 
   if (!effectiveFailed1.length) {
-    result = { final: draft, outcome: "as_drafted", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+    // Nothing to cut, but on a sharing turn a reply that says their own words back to them gets the one rewrite (2026-10-28 run). It
+    // only ever replaces the whole reply with a checked rewrite; nothing is cut for it, and if the rewrite fails the draft goes.
+    if (shareMoment && !redraftHeldBack(rf, []) && restatesThem(draft, src.message)) {
+      const r = await runShare({ cut: draft, failed: [], offerKeep: false, restates: true });
+      result = { final: r.final ?? draft, outcome: r.final ? "redrafted" : "as_drafted", checks: [...first.checks, ...shareChecks(r, "says their words back")], latencyMs: Date.now() - started, firstCheckMs, stages };
+    } else {
+      result = { final: draft, outcome: "as_drafted", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+    }
   } else {
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
     // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
-    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) };
+    const allowArrival = { message: src.message, allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) };
     let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);
@@ -2108,7 +2368,18 @@ export async function groundReply(
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
     const cutStands = enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent;
-    if (cutStands && !threadCut) {
+    // A sharing (or feedback) turn whose cut left too little, or left a stub (shareCutStub), gets the one share rewrite (repairShareCut)
+    // instead of the smallest-true-reply redraft. Every other path that says something truer keeps its turn: a safety or discreet turn,
+    // a cut thread report, dead air, an invite, a false "I don't have that", the nothing-running line.
+    const shareTurn = shareMoment && !redraftHeldBack(rf, effectiveFailed1) && !threadCut && !silent && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf });
+    const stub = shareCutStub({ moment: rf.moment, draft, cut, message: src.message });
+    const cutRestates = !stub && restatesThem(cut, src.message);
+    if (cutStands && !threadCut && shareTurn && (stub || cutRestates)) {
+      // The cut left a stub (none of their words left, so the call must write the reply), or what's left says their words back: one
+      // rewrite, rechecked; what's left goes out if it can't be kept.
+      const r = await runShare({ cut, failed: effectiveFailed1, offerKeep: false, restates: cutRestates });
+      result = { final: r.final ?? cut, outcome: r.how === "rewrite" || r.how === "rewrite_trimmed" ? "redrafted" : "cut", checks: [...first.checks, ...shareChecks(r, stub ? "the cut left a stub" : "what's left says their words back")], latencyMs: Date.now() - started, firstCheckMs, stages };
+    } else if (cutStands && !threadCut) {
       result = { final: nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf }) ? await withNothingRunningLine(cut, effectiveFailed1, rf) : cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else if (cutStands) {
       // A thread report was cut and enough is left: one repair that keeps every remaining sentence (keepsEverySentence), rechecked
@@ -2126,7 +2397,7 @@ export async function groundReply(
           const t1 = Date.now();
           const r = await recheck(cut, cleaned, effectiveFailed1, rf, src);
           stages.secondCheckMs = Date.now() - t1;
-          const failed2 = claimReadUnavailable(cleaned, r) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
+          const failed2 = claimReadUnavailable(cleaned, r, src.message) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
           if (!failed2.length) repaired = cleaned;
         } else if (cleaned && cleaned.trim() !== cut.trim()) console.error("replyGrounding: thread repair changed more than the words pointing back, sending the cut");
       } catch (err: any) {
@@ -2138,8 +2409,12 @@ export async function groundReply(
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
       let kept: { text: string; checks: GateCheck[] } | null = null;
       let checkin: boolean | null = null;
+      // A sharing turn cut to too little: the share rewrite is its one rewrite (repairShareCut), never this redraft as well.
+      // It may answer that what's left already fits them only when what's left carries their own words.
+      const share = shareTurn ? await runShare({ cut, failed: effectiveFailed1, offerKeep: !!cut.trim() && echoesThem(cut, src.message), restates: false }) : null;
+      if (share?.final) kept = { text: share.final, checks: share.checks };
       const t0 = Date.now();
-      try {
+      if (!share) try {
         // The same redraft path: the dead-air note (and its {checkin, reply} answer) when that's the reason, the thread note when a
         // thread report was cut, both when both.
         const note = [silent ? WORLD_REDRAFT_NOTE : null, threadCut ? THREAD_REDRAFT_NOTE : null].filter(Boolean).join("\n");
@@ -2158,7 +2433,7 @@ export async function groundReply(
           const t1 = Date.now();
           const r = await recheck(draft, cleaned, effectiveFailed1, rf, src);
           stages.secondCheckMs = Date.now() - t1;
-          const failed2 = claimReadUnavailable(cleaned, r) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
+          const failed2 = claimReadUnavailable(cleaned, r, src.message) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
           if (!failed2.length) kept = { text: cleaned, checks: r.checks };
         } else if (cleaned) {
           console.error(`replyGrounding: rewrite rejected (${guard.why}), cutting instead`);
@@ -2166,7 +2441,9 @@ export async function groundReply(
       } catch (err: any) {
         console.error("replyGrounding: redraft failed (non-fatal, cutting instead):", err?.message ?? err);
       }
-      if (kept) {
+      if (kept && share) {
+        result = { final: kept.text, outcome: share.how === "kept" ? "cut" : "redrafted", checks: [...first.checks, ...shareChecks(share, "the cut left too little")], latencyMs: Date.now() - started, firstCheckMs, stages };
+      } else if (kept) {
         result = { final: kept.text, outcome: "redrafted", checks: [...first.checks, ...kept.checks.map((c) => ({ ...c, name: `redraft.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs, stages };
       } else {
         // 3. The cut, or the minimal honest line. The invite line only helps
@@ -2187,7 +2464,7 @@ export async function groundReply(
         // Code acts only on Co's own answer: the lead when the redraft said check-in; otherwise at most what the cut sentence named.
         const world = silent && after === "cut" ? deadAirLine({ checkin, world: rf.world, draft, cut }) : null;
         const out = world ? [cut.trim(), world].filter(Boolean).join(" ") : workCut ? await withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final;
-        result = { final: out, outcome: "stripped", notSure: !world && !workCut && after === "honest", checks: world ? [...first.checks, { name: "world_line", pass: true, reason: `dead air after the cut (check-in: ${checkin === null ? "unread" : checkin}); said from their world: "${world}"` }] : first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+        result = { final: out, outcome: "stripped", notSure: !world && !workCut && after === "honest", checks: world ? [...first.checks, { name: "world_line", pass: true, reason: `dead air after the cut (check-in: ${checkin === null ? "unread" : checkin}); said from their world: "${world}"` }] : share ? [...first.checks, ...shareChecks(share, "the cut left too little")] : first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }
   }
