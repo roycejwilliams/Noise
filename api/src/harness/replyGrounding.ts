@@ -60,7 +60,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { arrivalDenial, recordSaysNothingReadable } from "../services/inboundFile.js";
-import { failureAdmitted, failureInView, failureSpoken, flagClaim } from "../services/turnFailure.js";
+import { failureInView, isFailureFact } from "../services/turnFailure.js";
 import { enrichMatch, fetchLumaEventDetails, isLumaLink, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { citesStaleAsCurrent, liveDetailFacts, renderDetailsAsOf, staleCurrentClaims } from "../services/asOf.js";
 import { recentCallCorrections } from "./callGrounding.js";
@@ -127,7 +127,7 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // retireAsk: the find ask this reply may ask about (services/askRetire.ts); stopNote: the one stopped-looking line code carries in it.
 // world: the member's world this turn (services/memberWorld.ts): what the check-in rule draws on, and what the reply check reads to
 // keep a backed world line and to end dead air with a true one.
-export type ReplyFacts = { retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+export type ReplyFacts = { claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -1255,7 +1255,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   const nothingReadable = recordSaysNothingReadable(rf.facts);
   // A line about their world that names an item on file isn't machinery (services/memberWorld.ts worldLineAllowed, Royce 2026-10-14);
   // the claim read below still holds it to the facts.
-  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureSpoken(rf.facts, sentence) });
+  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureBackedSentence(rf, sentence) });
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Cue's own state instead of what they get (${narrated})` });
   // Their thread is asked about, never reported (Royce, 2026-10-14): Co has no record of where it stands. Only a sentence the thread
   // read said reports its status is cut (judgeThreadReports, run before this); a read that failed or never ran keeps it. Quoted, so
@@ -1435,21 +1435,19 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
   const factIds = new Set(rf.facts.filter((f) => f.kind !== "hint").map((f) => f.id));
   const hintIds = new Set(rf.facts.filter((f) => f.kind === "hint").map((f) => f.id));
   const nothingReadable = recordSaysNothingReadable(rf.facts);
-  const savedForTeamThisTurn = rf.facts.some((f) => f.kind === "did_this_turn" && /^Saved for the team:/.test(f.text));
+  const isFeedbackReceipt = (f: Fact | undefined) => !!f && f.kind === "did_this_turn" && /^Saved for the team:/.test(f.text);
+  const savedForTeamThisTurn = rf.facts.some(isFeedbackReceipt);
+  // A failure of Cue's own is in the facts, and no report of it is on record (services/turnFailure.ts). Then nothing about the team
+  // is taken on a feedback receipt: the 2026-10-28 "What happened?" turn saved his question as feedback, and that receipt backed "I've
+  // flagged it". Claims about the failure are judged against the failure's own fact, which says whether a report is on record.
   const failure = failureInView(rf.facts);
-  return claims.map((c) => {
+  const failureUnreported = failure.inView && !failure.onRecord;
+  const checks = claims.map((c) => {
     const sources = sourceText(rf, src, c.type);
     let pass = c.supported;
     let reason = `${c.type}: "${c.text}"`;
-    // Cue's own failure said to be flagged or reported while its report isn't verifiably on record (services/turnFailure.ts): never
-    // backed, whatever was cited (2026-10-28: a saveFeedbackForTeam receipt for their "What happened?" backed "I've flagged it").
-    if ((c.type === "past_action" || c.type === "detail") && failure.inView && !failure.onRecord && flagClaim(c.text)) {
-      return { name: `claim_${c.type}`, pass: false, reason: `${reason} (says Cue's failure was flagged or reported, but no report of it is on record)` };
-    }
-    // Cue saying plainly that it failed, with that failure in its facts: true, whatever was cited (the same day: "the call just didn't
-    // go through on my end" was cut, and only the flag claim went out).
-    if (!pass && (c.type === "past_action" || c.type === "detail") && failureAdmitted(rf.facts, c.text)) {
-      return { name: `claim_${c.type}`, pass: true, reason: `${reason} (its own failure, which the record shows)` };
+    if (pass && failureUnreported && isFeedbackReceipt(rf.facts.find((f) => f.id === c.factId))) {
+      return { name: `claim_${c.type}`, pass: false, reason: `${reason} (a saved feedback note isn't a report of Cue's failure, and no report of that is on record)` };
     }
     // Agreeing to help is not a capability claim (row 10393, 2026-10-10: "Happy to." was cut as one, and the reply that asked her to
     // send the deck became "I don't have a solid read on your deck"). Only the bare yes: "Happy to search X" is still a capability.
@@ -1463,10 +1461,11 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     // An honest admission it didn't happen is never cut as a false past action (2026-10-12 four-artifact test: "it never sent, and
     // that's on me" was cut while the doc truly never sent). Nothing on record says it happened: kept. Something does: the model's
     // read decides, without needing a fact to cite for an absence.
-    if ((c.type === "past_action" || c.type === "detail") && admissions.get(c.text) === true && (!doneOnRecord(rf.facts) || pass)) {
+    // A failure of Cue's own in the facts counts as something on record: an admission about it stands on that fact, not on an absence.
+    if ((c.type === "past_action" || c.type === "detail") && admissions.get(c.text) === true && ((!doneOnRecord(rf.facts) && !failure.inView) || pass)) {
       return { name: `claim_${c.type}`, pass: true, reason: `${reason} (an admission it didn't happen${pass ? "" : ", and nothing on record says it did"})` };
     }
-    if (!pass && c.type === "past_action" && savedForTeamThisTurn && TEAM_PASS.test(c.text) && !TEAM_PASS_PLUS.test(c.text)) {
+    if (!pass && c.type === "past_action" && savedForTeamThisTurn && !failureUnreported && TEAM_PASS.test(c.text) && !TEAM_PASS_PLUS.test(c.text)) {
       pass = true;
       reason += " (saved for the team this turn)";
       return { name: `claim_${c.type}`, pass, reason };
@@ -1542,6 +1541,21 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     }
     return { name: `claim_${c.type}`, pass, reason };
   });
+  // What each claim was found to rest on, for the machinery-talk check (failureBackedSentence): kept across a recheck's partial read.
+  rf.claimCites ??= new Map();
+  claims.forEach((c, i) => rf.claimCites!.set(sentenceKey(c.text).replace(/[.!?]+$/, ""), { pass: checks[i].pass, failureFact: checks[i].pass && !!rf.facts.find((f) => f.id === c.factId && isFailureFact(f)) }));
+  return checks;
+}
+
+// A sentence whose claims all stand on a fact about Cue's own failure ("It didn't go through on my end", citing that fact) is a true
+// account of what failed, not machinery talk; it's never cut as such. Only when the claim read found claims in it and every one cites
+// that fact.
+export function failureBackedSentence(rf: ReplyFacts, sentence: string): boolean {
+  if (!rf.claimCites?.size) return false;
+  const s = sentenceKey(sentence).replace(/[.!?]+$/, "");
+  // A claim inside the sentence, or the sentence as most of one claim (a bare "On my end." inside a longer claim isn't).
+  const inIt = [...rf.claimCites].filter(([t]) => t.length > 0 && (s.includes(t) || (t.includes(s) && s.length >= t.length * 0.6)));
+  return inIt.length > 0 && inIt.every(([, v]) => v.failureFact);
 }
 
 // The redraft's extra line when the cut left dead air (deadAir): Co decides whether their message was a check-in.
@@ -1939,7 +1953,9 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
   // The admission read, the thread read and the claim read start together (review, 2026-10-14: the thread read ran first and held the
   // claim read back a whole Haiku round trip); the code checks read the first two's answers, so they run once all have settled.
   const pre = Promise.all([admitNarratedSentences(draft, rf), judgeThreadReports(draft, rf, src)]);
-  if (!needsClaimCheck(draft)) {
+  // With a failure of Cue's own in the facts, a line about it ("It didn't go through on my end") is read for claims even when it isn't
+  // claim-shaped, so it can stand on that fact instead of being cut as machinery talk unread.
+  if (!needsClaimCheck(draft) && !(failureInView(rf.facts).inView && narratesInternalState(draft))) {
     await pre;
     return { checks: [...codeChecks(draft, rf, src), { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   }
@@ -2105,7 +2121,7 @@ export async function groundReply(
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
     // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
-    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureSpoken(rf.facts, sentence) };
+    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureBackedSentence(rf, sentence) };
     let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);
