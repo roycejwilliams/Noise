@@ -161,7 +161,8 @@ export type RawKnown = {
   asks: { id: string; text: string }[];
   files: { n: number; sentOn: string }[];
   // Where Co looks for each of their wants (services/wantPlace.ts): the want's own place, or none (their home city stands in).
-  places?: { key: string; want: string; place: string | null; source?: string | null; until?: string | null }[];
+  // searching: where on the map Cue searches it (services/placeResolve.ts), when that's said differently from their place.
+  places?: { key: string; want: string; place: string | null; source?: string | null; until?: string | null; searching?: string | null }[];
   // When they said they're free (services/wantWhen.ts): stated gaps, proposed against, never held.
   freeTimes?: { id: string; text: string; quote: string }[];
   // Their calendar grant (services/cueGrants.ts): free/busy only; removing it disconnects.
@@ -267,7 +268,9 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const x of r.places ?? []) if (x.until) add(`window:${x.key}`, "window", "where", `"${x.want.slice(0, 120)}" is for until ${x.until}`, null, false);
   for (const f of r.freeTimes ?? []) add(`free:${f.id}`, "free", "where", `free: ${f.text}`, f.quote, false);
   // A row made only by a window ("unread") has no place read yet: nothing true to say about where.
-  for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}` : `where I look for "${x.want.slice(0, 120)}": near home${p?.city ? ` (${p.city})` : ""}`);
+  // Where on the map it's searched, after their place, when it reads differently (Royce, 2026-10-29: "Bay Area" was searched in Houston
+  // and nothing they could see said so): "... : Bay Area · searching San Francisco Bay Area, California". Corrected the same way.
+  for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}${searchingNote(x.place, x.searching)}` : `where I look for "${x.want.slice(0, 120)}": near home${p?.city ? ` (${p.city})` : ""}`);
   // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
   if (r.calendar) add("grant:calendar", "grant", "where", `your calendar, connected ${r.calendar.since}: I see only when you're busy or free, never what, where or with whom, and it's never shared`, null, false);
   if (r.docs) add("grant:docs", "grant", "where", `Google Docs, connected ${r.docs.since}: I save documents I make for you to your Drive and see only those, nothing else there`, null, false);
@@ -560,7 +563,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     // Where Co looks for each want they have open: an open ask's row, or a goal's (kept only if it's still one of their goals, below).
     // A removed place is shown as "near home" (still correctable: "actually SF" lands on it). Goal rows are read wide and filtered to
     // goals still theirs before the 20 shown (livePlaces), so a dropped goal's row never crowds a live one out.
-    q(`SELECT want_key, want_text, place, source, window_end FROM want_places WHERE user_id = $1
+    q(`SELECT want_key, want_text, place, source, window_end, resolved_for, resolved_status, resolved_label FROM want_places WHERE user_id = $1
          AND (want_key LIKE 'goal:%' OR want_key IN (SELECT 'ask:' || id::text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL))
        ORDER BY updated_at DESC LIMIT 200`, [userId]).catch(() => [] as any[]),
   ]);
@@ -602,6 +605,13 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
   };
 }
 
+// Pure: " · searching <the place on the map>", when it says more than their own word for it ("Bay Area" -> "San Francisco Bay Area,
+// California"); nothing when it's the same place said the same way ("Portland" and "Portland").
+export function searchingNote(place: string | null, searching: string | null | undefined): string {
+  if (!place || !searching) return "";
+  return searching.trim().toLowerCase() === place.trim().toLowerCase() ? "" : ` · searching ${searching}`;
+}
+
 // The places of goals still theirs (a goal's place row outlives a goal they dropped; it's left out), and of their open asks (the read
 // already keeps only those).
 export async function livePlaces(rows: any[], p: any): Promise<NonNullable<RawKnown["places"]>> {
@@ -615,7 +625,11 @@ export async function livePlaces(rows: any[], p: any): Promise<NonNullable<RawKn
     const until = r.window_end ? (r.window_end instanceof Date ? r.window_end.toISOString().slice(0, 10) : String(r.window_end).slice(0, 10)) : null;
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
     const ended = !!until && until < yesterday;
-    return { key: String(r.want_key), want: String(r.want_text ?? ""), place: ended && (r.source === "their_words" || r.source === "told") ? null : (r.place ?? null), source: r.source ? String(r.source) : null, until: ended ? null : until };
+    const place = ended && (r.source === "their_words" || r.source === "told") ? null : (r.place ?? null);
+    // Only a resolution made for the place it has now (placeResolve.ts), only one that resolved, and only for a place they named or
+    // corrected (always searched once resolved; a place Cue inferred far from home may be held, so it never says "searching" there).
+    const searching = place && (r.source === "their_words" || r.source === "corrected") && r.resolved_status === "resolved" && r.resolved_for === place && r.resolved_label ? String(r.resolved_label) : null;
+    return { key: String(r.want_key), want: String(r.want_text ?? ""), place, source: r.source ? String(r.source) : null, until: ended ? null : until, ...(searching ? { searching } : {}) };
   });
 }
 
