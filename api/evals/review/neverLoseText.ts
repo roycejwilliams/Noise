@@ -503,7 +503,7 @@ check("a recovered text may be up to a day old; a crashed turn's replay stays at
   const sendIt = (text: string) => SB.default.messages.send({ number: NUM, content: text, from_number: "+14155550100" } as any);
   const aTurn = async (lines: { text: string; hold?: boolean }[], during?: () => Promise<unknown>) => {
     await Promise.resolve();
-    const st = { replied: false, isReply: S.isRealReply };
+    const st = { replied: false, phone: NUM, isReply: S.isRealReply };
     TR.trackTurnReplies(st);
     for (const l of lines) await (l.hold ? TR.asHoldSend(() => sendIt(l.text)) : sendIt(l.text));
     if (during) await during();
@@ -522,6 +522,19 @@ check("a recovered text may be up to a day old; a crashed turn's replay stays at
   check("a proactive text to the same number during the turn is not this turn's reply (no per-number counting)", quiet === false);
   const [t1, t2] = await Promise.all([aTurn([{ text: "Looking now, give me a minute." }]), aTurn([{ text: "Here's the plan for Saturday." }])]);
   check("two turns at once each keep their own flag", t1 === false && t2 === true);
+  // Last review of #301: a voice note counts, a send to someone else doesn't, and a tapback the turn chose as its answer counts.
+  const inTurn = async (fn: () => Promise<unknown>) => {
+    await Promise.resolve();
+    const st = { replied: false, phone: NUM, isReply: S.isRealReply };
+    TR.trackTurnReplies(st);
+    await fn();
+    return st.replied;
+  };
+  check("a voice-note reply (no words, a media_url) is a real reply", (await inTurn(() => SB.default.messages.send({ number: NUM, content: "", media_url: "https://cdn.example/voice.caf", from_number: "+14155550100" } as any))) === true);
+  check("a send to another member inside the turn (a direct ask) is not this turn's reply", (await inTurn(() => SB.default.messages.send({ number: "+14155550168", content: "Would you be up for meeting Jordan Thursday?", from_number: "+14155550100" } as any))) === false);
+  check("a tapback the turn chose as its answer, to its own member, counts as having answered", (await inTurn(() => SB.sendReaction("test-tap-1", "love", { answerFor: NUM }))) === true);
+  check("... the early 'on it' tapback (no answerFor) doesn't, nor one aimed at someone else", (await inTurn(() => SB.sendReaction("test-tap-2", "like"))) === false && (await inTurn(() => SB.sendReaction("test-tap-3", "love", { answerFor: "+14155550168" }))) === false);
+  check("the turn's flag is opened with its own member's number; the reply tool's tapback passes the member as answerFor", /const turnReplies: TurnReplies = \{ replied: false, phone: String\(req\.body\?\.number \?\? ""\), isReply: isRealReply \};/.test(flat(read("routes/sendblue.ts"))) && /sendReaction\(ctx\.messageHandle, reactionFor\(reaction\), \{ answerFor: ctx\.phoneNumber \}\)/.test(read("agent/conversationTools.ts")));
   check("isRealReply: the logged 'Co is looking:' form and the fixed hold lines are not answers; words are", !S.isRealReply("Co is looking: checking now") && !S.isRealReply("Let me look, one sec.") && !S.isRealReply("") && S.isRealReply("Sorry for the wait, here it is: the Fillmore at 9."));
 
   // Follow-up review of #301 (low): a crash replay never takes the claim of a text the drain owns, and never loses one on a blip.
@@ -588,7 +601,7 @@ check("a recovered text may be up to a day old; a crashed turn's replay stays at
   check("a failed handle or payload save is noticed (no more .catch(() => true) / .catch(() => {}) that hid it)", /\.catch\(\(\) => \{ saveFailed = true; return true; \}\)/.test(src) && /\.catch\(\(\) => \{ saveFailed = true; \}\)/.test(src) && /if \(saveFailed && holdable\) held = holdInbound\(handle, req\.body, arrivedAt, true\)/.test(src));
   check("the turn's outcome decides (settleAction): answered leaves the hold, a database failure before any text goes to the drain", /await settleInbound\(\{ handle: typeof handle === "string" && handle \? handle : null, holdable, body: req\.body, arrivedAt: replay\?\.receivedAt \?\? arrivedAt, held, turnError, replied: repliedBeforeFailure \?\? false,/.test(src) && /const dbDown = failed && \(t\.held \|\| \(await dbDownFor\(t\.turnError, dbAnswers\)\)\)/.test(src));
   check("(2) whether it really answered them is the turn's own flag, opened after the late line, read at the failure before any failure note", /turnError = error; notePossibleReply\(\);.*tellMemberTurnFailed\(lockKey/.test(src) && /turnError = err; notePossibleReply\(\);/.test(src) && /repliedBeforeFailure \?\?= turnReplies\.replied;/.test(src) && /if \(!\(await beforeTurn\(\)\)\) return; \/\/[^\n]*? trackTurnReplies\(turnReplies\);/.test(src) && !/sendsTo/.test(src));
-  check("(2) Cue's own 'looking' lines are sent as holds, in the turn and in the loop's search tool; every send reports through noteSent", /const sent = await \(hold \? asHoldSend\(send\) : send\(\)\);/.test(src) && /if \(await asHoldSend\(\(\) => say\(line\.trim\(\), `\$\{HOLD_PREFIX\} \$\{line\.trim\(\)\}`\)\)\)/.test(flat(read("agent/loopTools.ts"))) && /return sent\.then\(\(res: any\) => \{ noteSent\(content\);/.test(flat(read("services/sendblue.ts"))));
+  check("(2) Cue's own 'looking' lines are sent as holds, in the turn and in the loop's search tool; every send reports through noteSent", /const sent = await \(hold \? asHoldSend\(send\) : send\(\)\);/.test(src) && /if \(await asHoldSend\(\(\) => say\(line\.trim\(\), `\$\{HOLD_PREFIX\} \$\{line\.trim\(\)\}`\)\)\)/.test(flat(read("agent/loopTools.ts"))) && /return sent\.then\(\(res: any\) => \{ noteSent\(\{ to, content, media: !!\(body as \{ media_url\?: string \}\)\.media_url \}\);/.test(flat(read("services/sendblue.ts"))));
   check("(3) the drain answers each member's held texts under their phone's lock; their replays don't take it again", /withLock: \(phone, fn\) => withPhoneLock\(phone, fn\)/.test(src) && /await replayHandler\(payload, receivedAt, \{ late: o\.late && !keyword, lockHeld: true \}\)/.test(src) && /await track\(lockKey && !replay\?\.lockHeld \? withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)\);/.test(src));
   check("(5) recovered texts: checks strict and before the claim, STOP/START never blocked, one-shot claim, up to a day", /const member = await replayCheckRow\(phone, receivedAt, \{ strict: true \}\); const blocked = keyword \? null : turnReplayBlocked\(/.test(src) && /if \(!\(await claimRetry\(t\.handle, \{ strict: true \}\)\)\) return false;/.test(src) && /maxAgeMs: RECOVERED_MAX_AGE_MS/.test(src));
   check("(1) a live text behind a held STOP/START joins the hold instead of running first", /if \(taken === "defer" && holdable\) \{ inboundHold\.hold\(.*deferred = true; holdDrain\.kick\(\); return false; \}/.test(src) && /if \(!\(await beforeTurn\(\)\)\) return;/.test(src));

@@ -620,10 +620,11 @@ export function sendblueRouter(io: Server): Router {
       // The turn's error, if it failed (decides, at the end, whether the text waits in the hold).
       let turnError: unknown = undefined;
       // Whether this turn had really answered them when it failed (reviews of #301: a reply that went out and then failed to log
-      // must never be replayed, or they're answered twice). The turn's own flag (services/sendblue.ts trackTurnReplies), set by a
-      // send of this turn that answers something: never a "looking" line, the late line or a failure note (isRealReply), never another
-      // flow's text to the same number. Read at the failure, before any failure note goes.
-      const turnReplies: TurnReplies = { replied: false, isReply: isRealReply };
+      // must never be replayed, or they're answered twice). The turn's own flag (services/turnReplies.ts trackTurnReplies), set by a
+      // send of this turn to this member that answers something: real words (never a "looking" line, the late line or a failure
+      // note: isRealReply), a voice note, or the tapback Cue chose as its answer. Never another flow's text to the same number, never
+      // a text to someone else. Read at the failure, before any failure note goes.
+      const turnReplies: TurnReplies = { replied: false, phone: String(req.body?.number ?? ""), isReply: isRealReply };
       let repliedBeforeFailure: boolean | null = null;
       const notePossibleReply = () => {
         repliedBeforeFailure ??= turnReplies.replied;
