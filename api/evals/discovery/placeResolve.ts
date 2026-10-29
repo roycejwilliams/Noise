@@ -44,17 +44,19 @@ const GOOGLE_SF_BAY: C = { name: "San Francisco Bay Area", admin1: "California",
 const cands = (place: string, google: C[] = []) => R.mergeCandidates(google, OPEN[R.normName(R.parseQualified(place).name)] ?? [], place);
 
 const HOME = {
-  sacramento: { lat: 38.5781342, lng: -121.4944209 },
-  houston: { lat: 29.7604, lng: -95.3698 },
-  bangor: { lat: 44.8012, lng: -68.7778 },
-  eugene: { lat: 44.0521, lng: -123.0868 },
-  boston: { lat: 42.3601, lng: -71.0589 },
-  london: { lat: 51.5072, lng: -0.1276 },
-  chicago: { lat: 41.8781, lng: -87.6298 },
-  kcmo: { lat: 39.0997, lng: -94.5786 },
-  wichita: { lat: 37.6872, lng: -97.3301 },
+  sacramento: { lat: 38.5781342, lng: -121.4944209, country: "US" },
+  houston: { lat: 29.7604, lng: -95.3698, country: "US" },
+  bangor: { lat: 44.8012, lng: -68.7778, country: "US" },
+  eugene: { lat: 44.0521, lng: -123.0868, country: "US" },
+  boston: { lat: 42.3601, lng: -71.0589, country: "US" },
+  london: { lat: 51.5072, lng: -0.1276, country: "GB" },
+  chicago: { lat: 41.8781, lng: -87.6298, country: "US" },
+  kcmo: { lat: 39.0997, lng: -94.5786, country: "US" },
+  wichita: { lat: 37.6872, lng: -97.3301, country: "US" },
+  seattle: { lat: 47.6062, lng: -122.3321, country: "US" },
+  toronto: { lat: 43.6532, lng: -79.3832, country: "CA" },
 };
-const home = (p: { lat: number; lng: number }) => ({ point: p, country: R.inUS(p) ? "US" : null });
+const home = (h: { lat: number; lng: number; country: string }) => ({ point: { lat: h.lat, lng: h.lng }, country: h.country });
 const pick = (place: string, h: keyof typeof HOME | null, google: C[] = []) => R.pickPlace(place, cands(place, google), h ? home(HOME[h]) : null);
 const at = (p: ReturnType<typeof pick>) => (p.status === "resolved" ? `${p.place.name}|${p.place.admin1}` : p.status);
 
@@ -83,7 +85,15 @@ check("'Portland, CA' (no Portland in California) is rejected, not moved to anot
 const wrongCountry = pick("Dublin, US", "london");
 check("'Dublin, US' from London never resolves to Ireland (it's California or Ohio: ambiguous)", wrongCountry.status === "ambiguous" && !wrongCountry.options.some((o) => /Leinster|IE/.test(o)), wrongCountry);
 check("hits that aren't the name asked for are rejected (the geocoder answered something else)", R.pickPlace("Bay Area", [om("Bay Area Park", "Texas", "US", 29.6, -95.1, null)], home(HOME.sacramento)).status === "rejected");
-check("the label is qualified, so geocoding it again downstream can't land elsewhere", R.placeLabel(OPEN.portland[1]) === "Portland, Maine" && R.placeLabel(OPEN.cambridge[0]) === "Cambridge, England, GB" && R.placeLabel(R.REGIONS[0]) === "San Francisco Bay Area, California");
+check("the label is always qualified (a state itself too), so geocoding it again downstream can't land elsewhere", R.placeLabel(OPEN.portland[1]) === "Portland, Maine" && R.placeLabel(OPEN.cambridge[0]) === "Cambridge, England, GB" && R.placeLabel(R.REGIONS[0]) === "San Francisco Bay Area, California" && R.placeLabel(om("Washington", "Washington", "US", 47.5, -120.5, 7_700_000)) === "Washington, US");
+// Canada's provinces, and any region code the geocoder returns.
+const VANCOUVER: C[] = [{ name: "Vancouver", admin1: "British Columbia", admin1Code: "BC", country: "CA", lat: 49.2827, lng: -123.1207, population: null, source: "google" }, om("Vancouver", "Washington", "US", 45.6387, -122.6615, 190915)];
+check("'Vancouver, BC' resolves in British Columbia (a confirmed place with a province code isn't rejected)", (() => { const r = R.pickPlace("Vancouver, BC", VANCOUVER, home(HOME.sacramento)); return r.status === "resolved" && r.place.country === "CA"; })());
+check("'Vancouver BC' (no comma) too, and plain 'Vancouver' from Sacramento is Vancouver, Washington (nearer, same country)", (() => { const a = R.pickPlace("Vancouver BC", VANCOUVER, home(HOME.sacramento)); const b = R.pickPlace("Vancouver", VANCOUVER, home(HOME.sacramento)); return a.status === "resolved" && a.place.country === "CA" && b.status === "resolved" && b.place.admin1 === "Washington"; })());
+check("'London, ON' resolves in Ontario, not England", (() => { const r = R.pickPlace("London, ON", [om("London", "England", "GB", 51.5072, -0.1276, 8_961_989), om("London", "Ontario", "CA", 42.9849, -81.2453, 383822)], home(HOME.sacramento)); return r.status === "resolved" && r.place.admin1 === "Ontario"; })());
+check("a region code only the geocoder knows ('Sydney, NSW') matches its admin1 code", (() => { const r = R.pickPlace("Sydney, NSW", [{ name: "Sydney", admin1: "New South Wales", admin1Code: "NSW", country: "AU", lat: -33.8688, lng: 151.2093, population: null, source: "google" }, om("Sydney", "Nova Scotia", "CA", 46.1368, -60.1942, 31597)], home(HOME.sacramento)); return r.status === "resolved" && r.place.country === "AU"; })());
+check("an unsized Google hit near home never beats a known bigger place by that name (the 5k floor holds for Google too)", at(R.pickPlace("Austin", [{ name: "Austin", admin1: "Nevada", country: "US", lat: 39.49326, lng: -117.06953, population: null, source: "google" }, OPEN.austin[0]], home(HOME.sacramento))) === "Austin|Texas");
+check("their country comes from the geocoder, not a box on the map: a Toronto member's 'Cambridge' is Cambridge, Ontario", R.countryAt(HOME.toronto, [om("Toronto", "Ontario", "CA", 43.70011, -79.4163, 2_600_000)]) === "CA" && at(pick("Cambridge", "toronto")) === "Cambridge|Ontario");
 
 // ---------------------------------------------------------------- 3. the far-from-home check: confirmed vs inferred, and windows
 check("how: their words and their correction are confirmed; Cue's read of their lines is inferred", R.placeHow("their_words") === "confirmed" && R.placeHow("corrected") === "confirmed" && R.placeHow("told") === "inferred" && R.placeHow("home") === "inferred");
@@ -93,13 +103,16 @@ check("... unless this want's own window covers it, and only until the window en
 check("near home is never held", R.farCheck({ miles: 80, how: "inferred", windowEnd: null, today: "2026-10-29" }) === "near");
 
 // The full resolution of one want, with its record stubbed.
-function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<string, C[]>; homeCity?: Record<string, { lat: number; lng: number }> } = {}) {
+function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<string, C[]>; homeCity?: Record<string, { lat: number; lng: number; country: string }> } = {}) {
   const logs: any[] = [];
   const stores: any[] = [];
   const seeds: any[] = [];
   const lookups: string[] = [];
   const d: import("../../src/services/placeResolve.js").ResolveDeps = {
-    home: async (city) => (o.homeCity ?? { Sacramento: HOME.sacramento, Houston: HOME.houston })[city] ?? null,
+    home: async (city) => {
+      const h = (o.homeCity ?? { Sacramento: HOME.sacramento, Houston: HOME.houston, Seattle: HOME.seattle })[city];
+      return h ? home(h as any) : null;
+    },
     lookup: async (place) => (lookups.push(place), { google: o.google?.[R.normName(place)] ?? [], openMeteo: OPEN[R.normName(R.parseQualified(place).name)] ?? [] }),
     row: async () => ({ windowEnd: o.windowEnd ?? null, resolution: o.stored ?? null }),
     store: async (_u, _k, r) => void stores.push(r),
@@ -213,7 +226,7 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
   const amb = await E.placeToSearch({ askId: "profile", userId: "u7", askText: "x", city: "Sacramento", want: { key: "goal:s", text: "meetups in Springfield", createdAt: null } }, { place: placeDeps("Springfield", "their_words"), resolve: deps().d });
   check("an ambiguous place: the search is skipped, and home isn't searched instead", amb.city === null && !!amb.skip && amb.searchedIn.source !== "home");
   const ess = src("services/eventSurfacingSweep.ts");
-  check("wiring: a skipped place returns before the backlog is read or anything is searched, and says so", /const where = await placeToSearch\(candidate\);\s*if \(where\.skip\) \{[\s\S]{0,700}placeSkip: where\.skip[\s\S]{0,120}return \{ queued: false \};\s*\}\s*const readAtStart/.test(ess) && /findFreshPending\(candidate, zone, where\)/.test(ess));
+  check("wiring: a skipped place returns before the backlog is read or anything is searched, and says so", /const where = await placeToSearch\(candidate\);[\s\S]{0,900}?if \(where\.skip\) \{[\s\S]{0,700}placeSkip: where\.skip[\s\S]{0,120}return \{ queued: false \};\s*\}\s*const readAtStart/.test(ess) && /findFreshPending\(candidate, zone, where\)/.test(ess));
   const ds = src("services/dailySweep.ts");
   check("wiring: the 9am sweep shows a place skip as a skipped item with why (not an error that retries)", /if \(r\?\.placeSkip\) \{ items\.push\(\{ \.\.\.b, status: "skipped", why: `place: \$\{r\.placeSkip\}`/.test(ds) && ds.indexOf("r?.placeSkip") < ds.indexOf("if (searchFailed(r))"));
 
@@ -279,6 +292,85 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
   check("the morning review flags a place not searched (medium) and one searched far from home (low)", flags.filter((f) => f.type === "place_not_searched").length === 2 && flags.some((f) => f.type === "place_far_from_home" && f.severity === "low") && flags.every((f) => f.type !== "place_not_searched" || f.severity === "medium"), flags.map((f) => [f.type, f.severity, f.snippet]));
 }
 
+// ---------------------------------------------------------------- 9. review of #314: outages retry, shared rows, home by name, queued finds
+{
+  // An outage (Portland, both geocoders down): nothing searched this run, retried, never the bare word.
+  const t = deps();
+  t.d.lookup = async () => { throw new Error("both geocoders failed"); };
+  const r = await R.resolveWantPlace({ userId: "u10", key: "ask:pdx", place: "Portland", source: "their_words", homeCity: "Sacramento" }, t.d);
+  check("geocoders down: the want waits for the next run (no city, no skip, a retry), never the bare 'Portland'", r.city === null && !r.skip && !!r.retry && t.logs.some((l) => l.decision === "place.unresolved" && l.outcome === "skip" && l.action === "lookup_failed") && t.stores.length === 0, r);
+  const nh = deps();
+  nh.d.lookup = async () => ({ google: [], openMeteo: [] });
+  const n2 = await R.resolveWantPlace({ userId: "u10", key: "ask:x", place: "Zzyzxville", source: "their_words", homeCity: "Sacramento" }, nh.d);
+  check("no hit at all: waits for the next run too", n2.city === null && !!n2.retry);
+  const hd = deps({ homeCity: {} });
+  const h2 = await R.resolveWantPlace({ userId: "u10", key: "ask:pdx", place: "Portland", source: "their_words", homeCity: "Sacramento" }, hd.d);
+  check("their home couldn't be placed: waits for the next run", h2.city === null && !!h2.retry && hd.lookups.length === 0);
+  const E = await import("../../src/services/eventSurfacingSweep.js");
+  const pd = (place: string) => ({ since: async () => null, row: async (_u: string, key: string) => ({ key, place, source: "their_words" as const, quote: place, notedAt: null }), told: async () => [], model: async () => "{}", save: async () => {}, log: async () => {} });
+  const w = await E.placeToSearch({ askId: "a", userId: "u10", askText: "x", city: "Sacramento", want: { key: "ask:pdx", text: "Portland", createdAt: null } }, { place: pd("Portland"), resolve: t.d });
+  check("... through the sweep: nothing to search this run, and the retry carried", w.city === null && !!w.retry && !w.skip);
+  const ess = src("services/eventSurfacingSweep.ts");
+  check("wiring: a retry returns before anything is searched; the 9am item is incomplete (retried on a later hour)", /if \(where\.retry\) \{[\s\S]{0,600}placeRetry: where\.retry[\s\S]{0,60}return \{ queued: false \};/.test(ess) && /if \(r\?\.placeRetry\) \{ items\.push\(\{ \.\.\.b, status: "incomplete"/.test(src("services/dailySweep.ts")));
+  const homeNamed = await E.placeToSearch({ askId: "a", userId: "u10", askText: "x", city: "Portland, ME", want: { key: "ask:h", text: "runs in Portland", createdAt: null } }, { place: pd("Portland"), resolve: deps().d });
+  check("a place that is their home by name searches their home as on file ('Portland, ME'), never the bare word", homeNamed.city === "Portland, ME" && !homeNamed.place);
+}
+{
+  // A Seattle member's "Washington": the state, under a qualified label; the shared bare row is never written.
+  const t = deps();
+  t.d.lookup = async () => ({ google: [], openMeteo: [om("Washington", "Washington", "US", 47.50012, -120.50147, 7_705_281), om("Washington", "District of Columbia", "US", 38.89511, -77.03637, 689545)] });
+  const r = await R.resolveWantPlace({ userId: "u11", key: "ask:wa", place: "Washington", source: "their_words", homeCity: "Seattle" }, t.d);
+  check("a Seattle member's 'Washington' is the state, seeded as 'Washington, US' (never the bare name)", r.city === "Washington, US" && t.seeds.length === 1 && t.seeds[0].label === "Washington, US", { r, seeds: t.seeds });
+  const { default: pool } = await import("../../src/db/db.js");
+  const realQuery = (pool as any).query;
+  const sql: { sql: string; args: unknown[] }[] = [];
+  (pool as any).query = async (q: string, args: unknown[] = []) => (sql.push({ sql: q, args }), { rows: [], rowCount: 0 });
+  try {
+    await R.realResolveDeps.seed("Washington", { lat: 47.5, lng: -120.5 });
+    await R.realResolveDeps.seed("Washington, US", { lat: 47.5, lng: -120.5 });
+  } finally {
+    (pool as any).query = realQuery;
+  }
+  check("the bare 'Washington' row is untouched: a bare label is never seeded", !sql.some((x) => x.args[0] === "Washington") && R.seedable("Washington") === false);
+  check("a qualified label is seeded only where no row exists (DO NOTHING: one member's resolution never moves a shared row)", sql.length === 1 && /ON CONFLICT \(query\) DO NOTHING/.test(sql[0].sql) && !/DO UPDATE/.test(sql[0].sql));
+  const G = await import("../../src/services/geocoding.js");
+  check("the open geocoder fallback takes populated places only: a bare 'Bay Area' can't re-cache Bay Area Park", G.openMeteoHit([{ name: "Bay Area Park", admin1: "Texas", country_code: "US", feature_code: "PRK" }, { name: "Bay Area Hospital Heliport", country_code: "US", feature_code: "AIRH" }], "") === undefined && G.openMeteoHit([{ name: "Bay Area Park", country_code: "US", feature_code: "PRK" }, { name: "Portland", admin1: "Oregon", country_code: "US", feature_code: "PPLA2" }], "")?.name === "Portland");
+}
+{
+  // A correction cancels that want's queued-but-unsent finds, and nothing else.
+  const K = await import("../../src/services/whatCoKnows.js");
+  const WS = await import("../../src/services/workingSet.js");
+  const cand = (id: number, type: string, payload: any) => ({ id, type, target_key: `t${id}`, summary: `find ${id}`, payload: JSON.stringify(payload) });
+  const queued = [
+    cand(1, "event_offer", { askId: "A1", match: { name: "Austin founders" } }),
+    cand(2, "event_offer", { askId: "profile", match: { name: "Austin builders", searchedIn: { key: "ask:A1", place: "Austin" } } }),
+    cand(3, "event_offer", { askId: "A2", match: { name: "Austin other ask", searchedIn: { key: "ask:A2", place: "Austin" } } }),
+    cand(4, "event_offer", { askId: "profile", match: { name: "Portland goal one", searchedIn: { key: "goal:G1", place: "Portland" } } }),
+    cand(5, "companion", { askId: "A1" }),
+    cand(6, "event_offer", { askId: "profile", match: { name: "Portland goal two", searchedIn: { key: "goal:G2", place: "Portland" } } }),
+    cand(7, "event_offer", { askId: "profile", match: { name: "Portland profile find" } }),
+  ];
+  const run = async (ref: string, was: string, now: string) => {
+    const ups: { id: unknown; reason: unknown }[] = [];
+    const db = { query: async (q: string, args: unknown[] = []) => {
+      if (/FROM proactive_candidates/.test(q)) return { rows: queued };
+      if (/^\s*SELECT/.test(q)) return { rows: [] };
+      if (/UPDATE proactive_candidates/.test(q)) ups.push({ id: args[0], reason: args[2] });
+      return { rows: [], rowCount: 1 };
+    } };
+    const out = await K.cancelQueued(db as any, "u12", [{ ref, source: "place", was, now } as any]);
+    return { ups, out };
+  };
+  const a = await run("place:ask:A1", "Austin", "Boston");
+  check("Austin -> Boston on an ask cancels that ask's queued finds (by askId, and a find searched for it), 'place corrected'", JSON.stringify(a.ups.map((u) => u.id).sort()) === "[1,2]" && a.ups.every((u) => /^place corrected/.test(String(u.reason))), a.ups);
+  check("... another ask's find, a goal's find, a profile find and a non-find are untouched", !a.ups.some((u) => [3, 4, 5, 6, 7].includes(Number(u.id))));
+  const g = await run("place:goal:G1", "Portland", "Portland, ME");
+  check("Portland -> Portland, ME on a goal cancels only that goal's queued find (by its searchedIn key, never the shared profile askId)", JSON.stringify(g.ups.map((u) => u.id)) === "[4]", g.ups);
+  check("a 'place corrected' skip is no decision: the same event can queue again when found for the right place", WS.isFailedAttempt("place corrected: corrected at their request: x") && !WS.isFailedAttempt("not for them"));
+  const live = await K.livePlaces([{ want_key: "ask:s", want_text: "meetups in Springfield", place: "Springfield", source: "their_words", resolved_for: "Springfield", resolved_status: "ambiguous", resolved_label: null }], { goals: [], intent: [] });
+  check("an ambiguous (skipped) place never says it's being searched", !live[0].searching);
+}
+
 // ---------------------------------------------------------------- 8. the one-time audit
 {
   const wants = [
@@ -287,14 +379,16 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
     { w: { userId: "u2", key: "ask:c", place: "Bay Area", source: "corrected" as const, homeCity: "Sacramento", resolution: { forPlace: "Bay Area", forHome: "Sacramento", status: "resolved" as const, label: "Bay Area Houston, Texas", lat: 29.55, lng: -95.11, options: [] } }, fresh: R.pickPlace("Bay Area", cands("Bay Area"), home(HOME.sacramento)), homeMiles: 1600 },
   ];
   const cache = [
-    { row: { query: "Bay Area", lat: 29.59523, lng: -95.08715 }, worstHomeMiles: 1600, freshMiles: null },
-    { row: { query: "Sacramento", lat: 38.578, lng: -121.494 }, worstHomeMiles: 0, freshMiles: null },
-    { row: { query: "venue:1 Main St", lat: 1, lng: 1 }, worstHomeMiles: 5000, freshMiles: null },
+    { row: { query: "Bay Area", lat: 29.59523, lng: -95.08715 }, conflictMiles: 1600, conflictWith: "want" as const },
+    { row: { query: "Sacramento", lat: 38.578, lng: -121.494 }, conflictMiles: 0, conflictWith: "home" as const },
+    // Far from a Sacramento member's home, and exactly where their own "Austin" resolves: legitimate, not flagged.
+    { row: { query: "Austin", lat: 30.26715, lng: -97.74306 }, conflictMiles: 0, conflictWith: "want" as const },
+    { row: { query: "venue:1 Main St", lat: 1, lng: 1 }, conflictMiles: 5000, conflictWith: null },
   ];
   const plan = R.auditPlan(wants, cache);
   check("the audit lists each disagreement with how it was set", plan.some((f) => f.ref === "u1:ask:a" && f.how === "confirmed") && plan.some((f) => f.ref === "u1:goal:b" && f.how === "inferred") && plan.some((f) => f.ref === "u2:ask:c" && f.how === "confirmed") && plan.some((f) => f.ref === "Bay Area" && f.how === "cached"), plan);
   check("... a confirmed place is only ever reported", plan.filter((f) => f.how === "confirmed").every((f) => f.action === "report_only"));
-  check("... the stale bare 'Bay Area' row is marked for deletion; a good row and a venue row are left", plan.some((f) => f.ref === "Bay Area" && f.action === "delete_cache_row") && !plan.some((f) => f.ref === "Sacramento" || f.ref.startsWith("venue:")));
+  check("... the stale bare 'Bay Area' row is marked for deletion; a good row, a legitimately far row and a venue row are left", plan.some((f) => f.ref === "Bay Area" && f.action === "delete_cache_row") && !plan.some((f) => f.ref === "Sacramento" || f.ref === "Austin" || f.ref.startsWith("venue:")));
   const dry: string[] = [];
   const would = await R.applyAudit(plan, { query: async (sql: string) => void dry.push(sql) }, false);
   check("the dry run writes nothing at all", dry.length === 0 && would.length === 2, would);
@@ -302,7 +396,8 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
   await R.applyAudit(plan, { query: async (sql: string, args: unknown[] = []) => void wet.push({ sql, args }) }, true);
   check("--apply never writes a confirmed place (and its SQL refuses one even if asked)", !wet.some((w) => w.args.includes("ask:a") || w.args.includes("ask:c")) && wet.filter((w) => /UPDATE want_places/.test(w.sql)).every((w) => /source NOT IN \('their_words', 'corrected'\)/.test(w.sql)) && !wet.some((w) => /SET place/.test(w.sql)), wet);
   check("... it clears the inferred place's resolution and deletes the bad cache row", wet.some((w) => /UPDATE want_places SET resolved_for = NULL/.test(w.sql) && w.args[1] === "goal:b") && wet.some((w) => /DELETE FROM geocode_cache/.test(w.sql) && w.args[0] === "Bay Area"));
-  check("the audit script is a dry run unless --apply is given", /const apply = process\.argv\.includes\("--apply"\)/.test(src("scripts/auditPlaces.ts")) && /applyAudit\(findings, pool, apply\)/.test(src("scripts/auditPlaces.ts")));
+  const script = src("scripts/auditPlaces.ts");
+  check("the audit script is a dry run unless --apply is given, and its dry run writes nothing (no geocodeCity or seed, which cache)", /const apply = process\.argv\.includes\("--apply"\)/.test(script) && /applyAudit\(findings, pool, apply\)/.test(script) && !/geocodeCity|realResolveDeps|\.seed\(|INSERT|UPDATE|DELETE/.test(script));
 }
 
 console.log(`places resolve near home: ${total - failed}/${total} passed`);
