@@ -50,8 +50,13 @@ for (const name of removed) {
 const E = await import("../../src/harness/emotion.js");
 check("getEmotionalContext no longer queries voice_flags", !/voice_flags|VoiceFlags/.test(E.getEmotionalContext.toString()));
 const now = new Date("2026-10-29T18:00:00Z");
-const line = E.renderEmotionalContext({ current: { source: "text", emotion: "anxious", intensity: "medium", valence: "negative", about: "the move", quote: null, at: new Date(now.getTime() - 3_600_000) } as any, lastCall: null, recurring: [], needsCare: false, withCo: { frustrated: false, about: null, count: 0 } }, now);
-check("the emotional-context render is as before", line === "Right now (their texts, 1 hour ago): medium anxious about the move.", line);
+const ctx = { current: { source: "text", emotion: "anxious", intensity: "medium", valence: "negative", about: "the move", quote: null, at: new Date(now.getTime() - 3_600_000) } as any, lastCall: null, recurring: [], needsCare: false, withCo: { frustrated: false, about: null, count: 0 } };
+// A context still carrying an old voice-flag read (the shape the removed code attached) renders exactly as one without it: the voice
+// line is gone and nothing else changed. Compared render to render, so it holds whatever the other lines' wording is.
+const plain = E.renderEmotionalContext(ctx as any, now);
+const withOldFlags = E.renderEmotionalContext({ ...ctx, voice: { at: new Date(now.getTime() - 3_600_000), flags: [{ quote: "it's fine", cue: "sigh", feeling: "tired", reading: "x" }] } } as any, now);
+check("the emotional-context render ignores any voice-flag read: same output with or without one", withOldFlags === plain, { plain, withOldFlags });
+check("and never carries the voice-flag line", !/their voice said more than their words/.test(withOldFlags) && plain.length > 0, withOldFlags);
 
 console.log(`\n${total - failed}/${total} passed`);
 if (failed) process.exit(1);
