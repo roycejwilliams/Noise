@@ -190,7 +190,8 @@ router.post(
 
       const result = await triggerCallForUser(user_id, _io, { kind: "user_initiated" });
       if (!result.success) {
-        const status = result.error === "User not found." ? 404 : 403;
+        // A dial that never started is the phone service's or Cue's own failure, not a refusal of this member.
+        const status = result.error === "User not found." ? 404 : result.dialFailed ? 502 : 403;
         return res.status(status).send(result.error);
       }
 

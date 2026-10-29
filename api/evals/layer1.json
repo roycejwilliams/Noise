@@ -87,6 +87,7 @@
     "evals/exa/followups.ts",
     "evals/calls/elevenlabs.ts",
     "evals/calls/callLink.ts",
+    "evals/calls/dialFailure.ts",
     "evals/calls/elevenLabsForget.ts",
     "evals/calls/callHealth.ts",
     "evals/calls/opening.ts",

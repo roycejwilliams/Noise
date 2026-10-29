@@ -9,7 +9,8 @@ import { dropCallLink, issueCallLink } from "./callLink.js";
 import { prebuildCallBriefing } from "./callBriefing.js";
 import { prebuildOpening } from "./callOpening.js";
 import { buildCallContextSummary } from "./callContext.js";
-import { recordDecision } from "../harness/core.js";
+import { recordDecision, recordDecisionLanded } from "../harness/core.js";
+import { dialFailureError, failureDetail, type DialFailure } from "./callReasons.js";
 import { decideCall, gatherCallState, LIVE_CALL_RECLAIM_MINUTES, LIVE_CALL_STATUSES, type CallAuthorization } from "../harness/callGate.js";
 
 // Extracted from co.ts's POST /call/:user_id so a second call site (Co
@@ -26,7 +27,17 @@ const twilioClient = twilio(
 
 export type TriggerCallResult =
   | { success: true; call_sid: string }
-  | { success: false; error: string };
+  // dialFailed: the gate allowed it but the call never started (the call link or Twilio's create threw); the error then says whether
+  // the call.dial report landed (services/callReasons.ts dialFailureError).
+  | { success: false; error: string; dialFailed?: true };
+
+// Twilio's create, swappable in layer-1 tests (no test may reach Twilio).
+type Dial = (opts: Parameters<typeof twilioClient.calls.create>[0]) => Promise<{ sid: string }>;
+const twilioDial: Dial = (opts) => twilioClient.calls.create(opts);
+let dial: Dial = twilioDial;
+export function setDialForTests(fn: Dial | null): void {
+  dial = fn ?? twilioDial;
+}
 
 // Every dial goes through the Layer 8 gate (src/harness/callGate.ts): live
 // call status (with the 30-minute reclaim for a status stuck after a missed
@@ -94,7 +105,7 @@ export async function triggerCallForUser(
   let callId: string | null = null;
   try {
     callId = await issueCallLink(userId);
-    call = await twilioClient.calls.create({
+    call = await dial({
     to: user.phone_number,
     from: process.env.TWILIO_PHONE_NUMBER!,
     url: `${process.env.API_URL}/co/el/outbound-twiml?c=${encodeURIComponent(callId)}`,
@@ -107,7 +118,23 @@ export async function triggerCallForUser(
   } catch (err) {
     if (callId) await dropCallLink(callId).catch(() => {});
     await releaseDial(userId, claim).catch(() => {});
-    throw err;
+    // A refused dial is a call that never started, not a crash (2026-10-28: Twilio's 401 "actor doesn't have any assertions", a
+    // restricted API key with no permissions, was thrown up through the text turn, which then sent "something broke", replayed the
+    // turn and dialed again). It's reported in the decision log (call.dial, flagged by the morning review), with the vendor's status,
+    // code and message and nothing private; the caller gets the plain reason, including whether that report landed.
+    const failure: DialFailure = { stage: callId ? "dial" : "link", ...failureDetail(err) };
+    console.error(`callTrigger: the call never started for user ${userId} (${failure.stage}): ${[failure.status, failure.code, failure.message].filter((x) => x !== null).join(" ")}`);
+    const reported = await recordDecisionLanded({
+      layer: 8,
+      decision: "call.dial",
+      userId,
+      outcome: "skip",
+      action: "dial_failed",
+      proposal: { requested: auth?.kind ?? null, ...failure },
+      checks: [{ name: "dial_started", pass: false, reason: failure.stage === "dial" ? "the phone service refused the dial" : "the call link couldn't be issued" }],
+      reason: failure.message,
+    });
+    return { success: false, error: dialFailureError(failure, reported), dialFailed: true };
   }
   await recordCallPlaced(userId, user.first_name, call.sid, io);
   return { success: true, call_sid: call.sid };
