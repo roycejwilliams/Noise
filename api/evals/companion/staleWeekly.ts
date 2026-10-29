@@ -27,7 +27,8 @@ check("in Pacific time (not the server's UTC)", /timezone: "America\/Los_Angeles
 check("the retirement date is in the code beside the schedule", /Retire on 2026-11-26 unless it has found something/.test(jobs) && /Retire on 2026-11-26 unless it has found something/.test(src("services/staleWatch.ts")));
 // What a run does is unchanged: the same 3-day window, the same 25-page cap, the same "only the interested hear it".
 const sw = src("services/staleWatch.ts");
-check("a run is unchanged (3-day window, 25 pages, interested members only, event-change path)", /ro\.sent_at > NOW\(\) - INTERVAL '3 days'/.test(sw) && /\.slice\(0, 25\)/.test(sw) && /result IN \('interested', 'acted'\)/.test(sw) && /sendExemptWhenAllowed/.test(sw));
+check("a weekly run looks back a full week, so every send is seen once", /ro\.sent_at > NOW\(\) - INTERVAL '7 days'/.test(sw) && !/INTERVAL '3 days'/.test(sw));
+check("a run is otherwise unchanged (25 pages, interested members only, event-change path)", /\.slice\(0, 25\)/.test(sw) && /result IN \('interested', 'acted'\)/.test(sw) && /sendExemptWhenAllowed/.test(sw));
 
 console.log(`\n${total - failed}/${total} passed`);
 if (failed) process.exit(1);

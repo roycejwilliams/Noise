@@ -339,7 +339,7 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Things Cue sent in the last 3 days are re-read (services/linkReader.ts); if one that someone was interested in sold out, moved or
+  // Things Cue sent in the last 7 days are re-read (services/linkReader.ts); if one that someone was interested in sold out, moved or
   // disappeared, they hear it once (services/staleWatch.ts). Weekly, not hourly (efficiency audit, 2026-10-29: 0 changes found in a
   // month of hourly runs). Mondays 10:40 Pacific. Retire on 2026-11-26 unless it has found something.
   cron.schedule("40 10 * * 1", async () => {
