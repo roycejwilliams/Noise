@@ -179,6 +179,8 @@ check("…not one from further back than Cue's turn before their previous messag
   const leave = await tools.leaveItAtReaction.execute({}, {});
   check("a move's line never rides on a tapback: the turn needs words", tap.ok === false && leave.ok === false && !state.reacted);
   await tools.sendReply.execute({ message: "Done, I'll keep watching for those.\n\nAnything else on your mind?" }, {});
+  // Another tool ran since the reply: without one, a second text this turn is held whole (agent/conversationTools.ts wrapSendsForOneReply).
+  state.workSinceSend = true;
   await tools.sendReply.execute({ message: "Moved the jazz nights from goals to lookouts. Talk soon." }, {});
   console.log = quiet;
   const all = state.sentMessages.join("\n");

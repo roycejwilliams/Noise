@@ -98,7 +98,7 @@ check("pure: nothing sent yet, a send is always allowed", T.anotherSendAllowed({
 
 // Wiring: the real tool set is wrapped before the guard, and the turn rule says the same thing.
 const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-check("the real tool set is wrapped for one reply, before the tool guard", /wrapSendsForOneReply\(tools as Record<string, any>, state, \(\) => !!ctx\.answerOwed, ctx\.dryRun\);\s+\/\/ Switches, limits, their yes, receipts and the decision log \(toolGuard\.ts\)\.\s+guardTools\(tools,/.test(ct));
+check("the real tool set is wrapped for one reply, outermost (after the tool guard)", /guardTools\(tools, \{[^\n]*\}\);\n(?:\s*\/\/[^\n]*\n)+\s*wrapSendsForOneReply\(tools as Record<string, any>, state, \(\) => !!ctx\.answerOwed, ctx\.dryRun\);\n\s*return \{ tools: orderForCache\(tools\)/.test(ct));
 const cr = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
 check("the turn rule: the exception is another tool's result, never its own sent reply", /something new from another tool's result after your reply went out, as its own text; your own sent reply isn't one/.test(cr));
 

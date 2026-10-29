@@ -1916,15 +1916,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
   Object.assign(tools, googleTools(ctx, notDone));
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 
+  // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
+  guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });
   // One reply, unless something new came in (2026-10-28 before/after run: a job-offer reply sent "That's huge, Priya. Congratulations."
   // then a second text, "Congratulations. That it's the first one in years...", and golden nothing-at-all records the same shape: a
   // sendReply, its ok, then another step and a second text). The loop doesn't stop after a send, and the send's own "ok" read as a
   // tool result the one-reply rule allowed a second text after. So a second sendReply goes only when another tool ran since the last
   // send (its result can be new to say), or the last one left something owed: the rest of a partly sent reply, a lane move's line, an
   // answer meant to ride with a link. Parallel calls in one step count: the first claims the turn's reply before it awaits anything.
+  // Outermost, after the guard, so a held second text never reaches the guard's log as a send.
   wrapSendsForOneReply(tools as Record<string, any>, state, () => !!ctx.answerOwed, ctx.dryRun);
-
-  // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
-  guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });
   return { tools: orderForCache(tools), state, flushLinks, loop: () => turnLoop };
 }
