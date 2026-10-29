@@ -62,6 +62,34 @@ export function stockSentence(sentence: string): boolean {
   return rest === "";
 }
 
+// Pure: a text reply without its stock-only sentences (Royce, 2026-10-28: "I hear you" and "Makes sense" reached his texts once the
+// filter existed only for calls). The same rule as a call: only a sentence that is nothing but a stock phrase is dropped, never a
+// question, never a sentence that goes on to say something. If every sentence is stock, the reply is left as it was, so they're never
+// left with nothing. Paragraph breaks are kept.
+// Texts only: a sentence that is nothing but "Makes sense." (or "That makes sense.", "Yeah, totally makes sense."), agreement that fits
+// any answer (Royce's text, 2026-10-28: "I was honestly burnt out before" got "Makes sense. Glad you got the break..."). Not in the call
+// list above: a call's "That makes sense." is left to the call's own rules (evals/calls/llmProxy.ts times its first sentence on it).
+const BARE_MAKES_SENSE = /^(?:(?:and|but|yeah|okay|ok|so)\b[\s,]*)*(?:that |it |totally |that totally )?makes (?:total |complete |a lot of )?sense\s*[.!]*["')\]]*$/i;
+export function textStockSentence(sentence: string): boolean {
+  const t = norm(sentence).trim();
+  return stockSentence(t) || BARE_MAKES_SENSE.test(t);
+}
+const TEXT_SENTENCE = /[^.!?\n]+[.!?]+["')\]]*\s*|[^.!?\n]+$/g;
+export function dropStockSentences(text: string): string {
+  const parts = text.split(/(\n+)/);
+  let dropped = false;
+  const kept = parts.map((p) => {
+    if (/^\n+$/.test(p) || !p.trim()) return p;
+    const sentences = p.match(TEXT_SENTENCE) ?? [p];
+    const keep = sentences.filter((x) => !textStockSentence(x.trim()));
+    if (keep.length !== sentences.length) dropped = true;
+    return keep.join("").trim();
+  });
+  if (!dropped) return text;
+  const out = kept.join("").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "").trim();
+  return out || text;
+}
+
 export function stockReport(lines: string[]): { stock: { line: string; phrase: string }[]; repeated: string[] } {
   const stock = lines.flatMap((line) => { const phrase = stockLine(line); return phrase ? [{ line, phrase }] : []; });
   return { stock, repeated: repeatedOpeners(lines) };

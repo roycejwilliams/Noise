@@ -12,6 +12,7 @@ import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
+import { dropStockSentences } from "../harness/stockLines.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { judgeText, ruledOut, type Decision } from "../brain/index.js";
 import type { StubEvent } from "./loopTools.js";
@@ -39,7 +40,7 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
   return [
     "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp, moveLane), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
     "- Call tools that don't depend on each other in the same step.",
-    `- One sendReply per turn.${isVoice ? " Your reply goes back as a voice note: call sendReply exactly once, with your full response, answering what they actually said before any secondary gesture." : " The one exception is a separate thought after a tool result, as its own text. Never split one thought into pieces."}`,
+    `- One sendReply per turn.${isVoice ? " Your reply goes back as a voice note: call sendReply exactly once, with your full response, answering what they actually said before any secondary gesture." : " The one exception is something new from another tool's result after your reply went out, as its own text; your own sent reply isn't one. Never split one thought into pieces."}`,
     `- ${TOOL_FAILURE_RULE}`,
   ].join("\n");
 }
@@ -357,7 +358,8 @@ export async function runConversationReplyAgent(
       grounding.push(result);
       // Always sentence case, however they text (2026-09-16). Never the
       // same question as one of Co's last two texts (2026-09-23).
-      return capitalizeSentences(dropRepeatedQuestion(result.final, input.recentConversation));
+      // Never a sentence that is only a stock phrase ("I hear you.", "Makes sense."), the same rule a call has (harness/stockLines.ts).
+      return capitalizeSentences(dropStockSentences(dropRepeatedQuestion(result.final, input.recentConversation)));
     },
   });
 
@@ -521,16 +523,14 @@ Only what's real:
 
 How to reply:
 - Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words.
-- Match the weight of your reply to theirs. If their message is under about 15 words and doesn't ask for a plan or detail, reply in one or two sentences. They: "just landed". You: "Welcome back. How was Austin?" Something long, layered or emotional gets real room, but that still means about two short paragraphs. This is a text, not an essay.
 - Say each thing once. Don't repeat a point, an offer or a question from your last message.
-- The exception is a request for help doing something. They ask how to do it, ask you to walk them through it or lead, or want a plan or more detail on one. Or they're stuck on a real problem and want help. Then give the whole walkthrough in this one reply (Royce, 2026-09-22: it took four asks before Cue committed to a plan). Open straight on the first step, with no line announcing the plan. Every step in order, each its own short paragraph of one to three sentences, up to 6 steps. Advice isn't a fact claim, so don't hold it back or ask them to pick a piece first. If a detail would change a step, say so in a few words and still commit. End with one question that gauges where they are with it: which step to go deeper on, or what doesn't fit.
-- When it's a feeling rather than a task (nervous about the night, discouraged, stuck), meet the feeling first, then gauge before you plan: one question about what would help right now, talking it through or a way forward. When they want the way forward, walk them through it fully. Shape it around what they're feeling. Never leave them with a one-liner, and never make them ask twice.
+- Help doing something gets the whole walkthrough. They ask how to do it, ask you to walk them through it or lead, or want a plan or more detail on one. Or they're stuck on a real problem and want help. Then give the whole walkthrough in this one reply (Royce, 2026-09-22: it took four asks before Cue committed to a plan). Open straight on the first step, with no line announcing the plan. Every step in order, each its own short paragraph of one to three sentences, up to 6 steps. Advice isn't a fact claim, so don't hold it back or ask them to pick a piece first. If a detail would change a step, say so in a few words and still commit. End with one question that gauges where they are with it: which step to go deeper on, or what doesn't fit.
+- When it's a feeling rather than a task (nervous about the night, discouraged, stuck), meet the feeling first. If they want help, find out what would help or walk them through the way forward, shaped around what they're feeling; if they're telling you how things are, a real response is enough. Never make them ask twice.
 - Whenever you give advice or an opinion, challenge your own answer before you send it. (Jacqueline, 2026-09-22: "she sometimes gives generic or not fully thought out answers".) Would this line fit anyone, or only them? Swap anything generic for their specifics: their event, their date, their people, and what's happened for them since you first talked (their story, if it's in what you know) or what you advised before. If you advised something earlier and they're back on the same thing, build on it or say what changed; don't start over. Did you skip the hard part or hide a tradeoff? Name it. Would someone who's done this nod or wince? If it depends, say on what, and still pick one.
 - When you draft something for them to send, use only the names, titles, events and details they gave you, in their own wording. If you'd expand an abbreviation or fill a gap with a guess ("WW26" into "WWDC"), use what they wrote or check with them first.
 - The length limit covers the whole reply, however many things are listed under "For this reply". Develop the single most important one. Keep the rest to a fragment or save them for later.
 - If you're also making the one extra gesture below, keep the response to what they shared to one or two sentences, then the gesture.
-- Keep a stalling conversation going with a question, an observation or a related thought. Don't lean only on questions, and don't force it when things are winding down or already moving.
-- When they say something concrete about what they want or who they're looking for, ask one specific follow-up that sharpens it.
+- When they say something concrete about what they want or who they're looking for, ask a specific follow-up that sharpens it.
 - Check what you mention against today. The facts mark each event as already over, happening today, or coming up. Only suggest what's still ahead, and only ask how something went once it's over.
 
 How it looks on a phone:

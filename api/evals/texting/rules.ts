@@ -28,7 +28,7 @@ check("the reply prompt is written in short sentences", sentences.filter((s) => 
 check("no quoted bad openers for Cue to copy", !/"That's a big call\."|"That \[noun phrase\]/.test(prompt));
 check("texts get Cue's shared core (how Cue listens included), not the full call guide", /const sharedSystem = `\$\{CO_CORE\}\n\n\$\{MOVES_GUIDE\}\n\n\$\{MESSAGE_RHYTHM\}\n\n\$\{COACHING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
 check("the call guide isn't fetched from Hume on every text", !/renderCoPersonaPrompt\(/.test(src("routes/sendblue.ts")));
-check("the length rule is concrete", /under about 15 words and doesn't ask for a plan or detail, reply in one or two sentences/.test(reply));
+check("the length rule is concrete, said once, computed for the message (replyLengthLine), not repeated as a fixed cap in the prompt", /Reply in one or two sentences\./.test(reply) && /const lengthLine = input\.imageForVision \? null : replyLengthLine\(input\.resolvedContent\);/.test(reply) && !/under about 15 words and doesn't ask for a plan or detail/.test(reply));
 check("say each thing once", /Say each thing once\. Don't repeat a point, an offer or a question from your last message\./.test(reply));
 
 check("the reply starts with Cue's own answer or reaction", /Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words\./.test(reply));

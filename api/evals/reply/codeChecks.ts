@@ -141,7 +141,7 @@ const formatCases: [boolean, string][] = [
   [paragraphize("First para already.\n\nSecond one. " + "x".repeat(400)).startsWith("First para already.\n\nSecond"), "text that already has paragraphs is left alone"],
   [/give the whole walkthrough in this one reply/.test(replyPrompt) && /End with one question that gauges where they are/.test(replyPrompt), "walkthroughs come whole, ending with a gauging question"],
   [/challenge your own answer before you send it/.test(replyPrompt), "advice is pressure-tested against their specifics"],
-  [/meet the feeling first, then gauge before you plan/.test(replyPrompt) && /never make them ask twice/.test(replyPrompt), "a feeling is met first, then gauged, then walked through"],
+  [/meet the feeling first\. If they want help, find out what would help or walk them through the way forward/.test(replyPrompt) && /if they're telling you how things are, a real response is enough/.test(replyPrompt) && /Never make them ask twice/.test(replyPrompt), "a feeling is met first; help when they want it, a real response when they are telling you how it is"],
   [/each idea its own short paragraph with a blank line between them/.test(replyPrompt), "reply prompt asks for paragraphs"],
   [/Never claims \(don't list these\)/.test(groundingPrompt) && /Advice and possibilities: general know-how about how things usually go/.test(groundingPrompt), "the fact check doesn't strip ordinary advice as a prediction"],
   // A photo they send is written down once, for the record and the fact check (2026-09-22).

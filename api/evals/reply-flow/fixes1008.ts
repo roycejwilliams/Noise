@@ -72,7 +72,7 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   check("F9: no 'Hume's read' in the reply prompts", !/Hume's read/.test(cr) && (cr.match(/from a read of what they texted and said on recent calls/g) ?? []).length === 2);
   const rules = CR.TOOL_TURN_RULES(false);
   check("B1: work first, then sendReply from its result", /startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp, moveLane\), call that tool first/.test(rules) && /sendReply says what happened, from its result/.test(rules));
-  check("B7: one sendReply, except a separate thought after a tool result; independent tools together", /One sendReply per turn/.test(rules) && /separate thought after a tool result/.test(rules) && /same step/.test(rules));
+  check("B7: one sendReply, except something new from another tool's result (never its own sent reply); independent tools together", /One sendReply per turn/.test(rules) && /something new from another tool's result after your reply went out/.test(rules) && /your own sent reply isn't one/.test(rules) && /same step/.test(rules));
   check("B7: on a voice turn, no second-text exception", !/separate thought/.test(CR.TOOL_TURN_RULES(true)));
   check("B4: the tool-failure rule (lead with what they get, pending only when backed, no machinery, no 'try again')", /lead with what they get now/.test(CR.TOOL_FAILURE_RULE) && /only when a receipt or a task in the facts backs it/.test(CR.TOOL_FAILURE_RULE) && /Never mention tools, searches, limits, errors or retries/.test(CR.TOOL_FAILURE_RULE) && /never ask them to try again/.test(CR.TOOL_FAILURE_RULE));
   check("B1/B4/B7: both prompts carry the rules once", (cr.match(/\$\{TOOL_TURN_RULES\(input\.isVoice\)\}/g) ?? []).length === 2 && (cr.match(/TOOL_FAILURE_RULE/g) ?? []).length === 2);

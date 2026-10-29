@@ -14,7 +14,19 @@ const { baseReplyFacts } = await import("../../src/harness/replyGrounding.js");
 
 const here = new URL(".", import.meta.url).pathname;
 const casesPath = process.env.TEXTING_CASES ?? `${here}cases.local.json`;
-const cases: { person: string; message: string; recentConversation: string; contextSummary: string }[] = JSON.parse(readFileSync(casesPath, "utf8")).cases;
+const { momentInstruction } = await import("../../src/services/connectDots.js");
+const { addInstruction } = await import("../../src/harness/replyGrounding.js");
+// mode/pushback (optional): the turn's moment read, as the text route hands it over (routes/sendblue.ts), so a case can exercise the
+// sharing and feedback guidance (services/connectDots.ts) and the reply check's share rewrite. A case without them runs as before.
+const cases: { person: string; message: string; recentConversation: string; contextSummary: string; mode?: string; topic?: string; pushback?: string | null }[] = JSON.parse(readFileSync(casesPath, "utf8")).cases;
+function factsFor(c: (typeof cases)[number]) {
+  const f = baseReplyFacts();
+  if (!c.mode) return f;
+  Object.assign(f, { moment: c.mode }); // read by the reply check's share rewrite (fix/grounding-cut-keeps-reply-whole); ignored before it
+  const note = momentInstruction({ mode: c.mode as any, topic: c.topic ?? "", pushback: c.pushback ?? null, lesson: null, dots: [] });
+  if (note) addInstruction(f, note);
+  return f;
+}
 const out = process.argv[2];
 
 async function one(c: (typeof cases)[number], id: number) {
@@ -35,7 +47,7 @@ async function one(c: (typeof cases)[number], id: number) {
       isFirstContact: false,
       missingTopic: null,
       missingTopicDescription: null,
-      facts: baseReplyFacts(),
+      facts: factsFor(c),
       toneContext: "",
       seekingModeContext: "",
       styleHint: "",
