@@ -512,6 +512,8 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     // Not searched because of its place (an ambiguous or rejected place, or one Cue inferred far from home): skipped, with why. Not an
     // error (a retry wouldn't settle it), and never searched at home instead.
     if (r?.placeSkip) { items.push({ ...b, status: "skipped", why: `place: ${r.placeSkip}`, ...(r.place ? { place: r.place } : {}) }); return; }
+    // Its place couldn't be resolved this run (a geocoder down, no hit): incomplete, so a later hour tries again; nothing searched.
+    if (r?.placeRetry) { items.push({ ...b, status: "incomplete", why: `place: ${r.placeRetry}`, outages: ["place"] }); return; }
     if (searchFailed(r)) {
       items.push({ ...b, status: "error", why: `it looked nowhere: ${(r?.sources.failures ?? ["the search returned without a report"]).join(" | ").slice(0, 300)}`, ...(r ? { failures: r.sources.failures } : {}) });
       return;

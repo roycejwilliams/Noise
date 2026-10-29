@@ -67,17 +67,19 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
 // The want's place resolved against their home (services/placeResolve.ts, Royce 2026-10-29: "Bay Area" from a Sacramento member was
 // searched in Houston): city is the qualified place to search ("San Francisco Bay Area, California"); skip says why this want isn't
 // searched at all (an ambiguous or rejected place, or one Cue inferred far from home), and then nothing searches it, not even their
-// home. A want with no place, or no home city on file, is as before.
-export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null };
+// home. retry: it couldn't be placed on the map this run (a geocoder down, no hit): nothing is searched, the next run tries again
+// (never the bare word, never a guess). A want with no place, or no home city on file, is as before.
+export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null; retry?: string | null };
 export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps: { place?: import("./wantPlace.js").PlaceDeps; resolve?: import("./placeResolve.js").ResolveDeps } = {}): Promise<SearchWhere> {
   const where = await searchPlace(candidate, deps.place).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } as SearchedIn }));
   if (!where.searchedIn.key || where.searchedIn.source === "home" || !where.city) return { ...where, skip: null, place: null };
-  // Their home city by another spelling ("Sacramento" for a Sacramento member) is home, searched as before.
-  if ((await import("./wantPlace.js")).samePlace(where.city, candidate.city)) return { ...where, skip: null, place: null };
+  // Their home city by another spelling ("Portland" for a "Portland, ME" member) is home, searched as their home is on file (the
+  // qualified one, never the bare word).
+  if ((await import("./wantPlace.js")).samePlace(where.city, candidate.city)) return { ...where, city: candidate.city, skip: null, place: null };
   const R = await import("./placeResolve.js");
   const r = await R.resolveWantPlace({ userId: candidate.userId, key: where.searchedIn.key, place: where.city, source: where.searchedIn.source, homeCity: candidate.city }, deps.resolve ?? R.realResolveDeps).catch(() => null);
-  if (!r) return { ...where, skip: null, place: null };
-  return { city: r.skip ? null : (r.city ?? where.city), searchedIn: where.searchedIn, skip: r.skip, place: r.place };
+  if (!r) return { ...where, city: null, skip: null, place: null, retry: "its place couldn't be resolved this run; tried again next run" };
+  return { city: r.skip || r.retry ? null : r.city, searchedIn: where.searchedIn, skip: r.skip, place: r.place, retry: r.retry ?? null };
 }
 // Where a find was searched, kept on the find (its match) so the send can say so once (wantPlace.ts noteDue).
 export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" };
@@ -440,7 +442,8 @@ export function movesEmptyRuns(t: { searched?: boolean; found: unknown[]; source
   return !!t.searched && (t.found.length > 0 || !t.sources?.outages?.length);
 }
 // placeSkip: this want wasn't searched because of its place (placeToSearch); place: where on the map it was searched, when it has one.
-export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[]; placeSkip?: string; place?: import("./placeResolve.js").PlaceOnMap | null };
+// placeRetry: its place couldn't be resolved this run (incomplete: the 9am sweep retries it).
+export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[]; placeSkip?: string; placeRetry?: string; place?: import("./placeResolve.js").PlaceOnMap | null };
 
 async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null, where: SearchWhere): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
   // Their time zone (memberTime.ts), so event dates are their local calendar dates.
@@ -759,6 +762,11 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // Where this want is searched, resolved first: a want whose place can't be searched (placeToSearch skip) isn't searched anywhere,
   // and says why, on its own record and in the 9am sweep's item.
   const where = await placeToSearch(candidate);
+  if (where.retry) {
+    await recordDecision({ layer: 5, decision: "sweep.surface", userId: candidate.userId, outcome: "skip", action: "place_retry", proposal: { askId: candidate.askId, wantKey: where.searchedIn.key, fromProfile: candidate.fromProfile ?? false, why: where.retry } }).catch(() => {});
+    candidate.onReport?.({ sources: { events: false, web: false, x: false, failures: [`place: ${where.retry}`] }, found: 0, pooled: 0, queued: 0, outcome: "place not resolved this run", placeRetry: where.retry });
+    return { queued: false };
+  }
   if (where.skip) {
     await recordDecision({ layer: 5, decision: "sweep.surface", userId: candidate.userId, outcome: "skip", action: "place_not_searched", proposal: { askId: candidate.askId, wantKey: where.searchedIn.key, fromProfile: candidate.fromProfile ?? false, place: where.place, why: where.skip } }).catch(() => {});
     candidate.onReport?.({ sources: { events: false, web: false, x: false, failures: [] }, found: 0, pooled: 0, queued: 0, outcome: "place not searched", placeSkip: where.skip, place: where.place });

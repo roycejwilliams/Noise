@@ -41,6 +41,8 @@ export type PlaceCandidate = {
   lat: number;
   lng: number;
   admin1: string | null;
+  // The region's short code when the geocoder gives one (Google's administrative_area_level_1 short_name: "BC", "ON", "CA").
+  admin1Code?: string | null;
   country: string | null;
   population: number | null;
   source: "google" | "open_meteo" | "region";
@@ -65,54 +67,64 @@ export const normName = (s: string | null | undefined): string => {
 const COUNTRIES: Record<string, string> = { us: "US", usa: "US", "united states": "US", "united states of america": "US", america: "US", uk: "GB", gb: "GB", "united kingdom": "GB", "great britain": "GB", britain: "GB", canada: "CA", mexico: "MX", ireland: "IE", france: "FR", germany: "DE", australia: "AU", japan: "JP", india: "IN" };
 // A part of the UK said as the region: its country is GB.
 const UK_PARTS = new Set(["england", "scotland", "wales", "northern ireland"]);
+// Canada's provinces and territories by their codes ("Vancouver, BC", "London, ON"). Any other country's region code is matched against
+// the code the geocoder itself returns (admin1Code).
+export const CA_PROVINCES: Record<string, string> = { AB: "Alberta", BC: "British Columbia", MB: "Manitoba", NB: "New Brunswick", NL: "Newfoundland and Labrador", NS: "Nova Scotia", NT: "Northwest Territories", NU: "Nunavut", ON: "Ontario", PE: "Prince Edward Island", QC: "Quebec", SK: "Saskatchewan", YT: "Yukon" };
+const isState = (low: string) => Object.values(STATE_NAMES).some((x) => x.toLowerCase() === low);
+const isProvince = (low: string) => Object.values(CA_PROVINCES).some((x) => x.toLowerCase() === low);
 
 export type Qualified = { name: string; region: string | null; country: string | null };
 
 // Pure: a place with its qualifiers taken apart. "Portland, ME" -> Portland in Maine; "San Francisco Bay Area, CA, US" -> that, in
-// California, in the US; "Portland ME" (no comma) too. A two-letter part is a US state when it is one ("CA" is California).
+// California, in the US; "Portland ME" and "Vancouver BC" (no comma) too. A two-letter part is a US state when it is one ("CA" is
+// California), else a Canadian province ("BC"), else a region code matched against the geocoder's own.
 export function parseQualified(place: string): Qualified {
   const raw = String(place ?? "").trim().replace(/\s+/g, " ");
   let parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
   if (parts.length === 1) {
     const m = /^(.*\S)\s+([A-Z]{2})$/.exec(parts[0]);
-    if (m && STATE_NAMES[m[2]]) parts = [m[1], m[2]];
+    if (m && (STATE_NAMES[m[2]] || CA_PROVINCES[m[2]])) parts = [m[1], m[2]];
   }
   const out: Qualified = { name: parts[0] ?? "", region: null, country: null };
   for (const p of parts.slice(1)) {
     const up = p.toUpperCase();
     const low = p.toLowerCase();
     if (STATE_NAMES[up]) out.region = STATE_NAMES[up].toLowerCase();
-    else if (Object.values(STATE_NAMES).some((s) => s.toLowerCase() === low)) out.region = low;
+    else if (isState(low)) out.region = low;
+    else if (CA_PROVINCES[up]) (out.region = CA_PROVINCES[up].toLowerCase()), (out.country = out.country ?? "CA");
+    else if (isProvince(low)) (out.region = low), (out.country = out.country ?? "CA");
     else if (UK_PARTS.has(low)) (out.region = low), (out.country = out.country ?? "GB");
     else if (COUNTRIES[low]) out.country = COUNTRIES[low];
     else if (!out.region) out.region = low;
   }
   // A US state named without a country is in the US.
-  if (out.region && !out.country && Object.values(STATE_NAMES).some((s) => s.toLowerCase() === out.region)) out.country = "US";
+  if (out.region && !out.country && isState(out.region)) out.country = "US";
   return out;
 }
 
-const stateName = (admin1: string | null) => {
-  const a = String(admin1 ?? "").trim();
-  return (STATE_NAMES[a.toUpperCase()] ?? a).toLowerCase();
+// Pure: every way a candidate's region can be said: its name, its code, and the full name behind a known code.
+const regionNames = (c: PlaceCandidate): string[] => {
+  const name = String(c.admin1 ?? "").trim();
+  const code = String(c.admin1Code ?? "").trim().toUpperCase();
+  return [name, code, STATE_NAMES[name.toUpperCase()] ?? "", STATE_NAMES[code] ?? "", CA_PROVINCES[name.toUpperCase()] ?? "", CA_PROVINCES[code] ?? ""].filter(Boolean).map((x) => x.toLowerCase());
 };
 export const matchesQualifier = (c: PlaceCandidate, q: Qualified): boolean =>
-  (!q.region || stateName(c.admin1) === q.region) && (!q.country || String(c.country ?? "").toUpperCase() === q.country);
+  (!q.region || regionNames(c).includes(q.region)) && (!q.country || String(c.country ?? "").toUpperCase() === q.country);
 
 const namesOf = (c: PlaceCandidate) => [c.name, ...(c.keys ?? [])].map(normName);
 export const sameName = (c: PlaceCandidate, name: string) => namesOf(c).includes(normName(name));
 
-// Pure: how a place is shown and searched: "Portland, Maine", "San Francisco Bay Area, California", "Cambridge, England, GB".
-// Qualified, so the code downstream that geocodes it by name (geocoding.ts geocodeCity) can't mistake it for another one.
+// Pure: how a place is shown and searched: "Portland, Maine", "San Francisco Bay Area, California", "Cambridge, England, GB",
+// "Washington, US" (the state itself). Always qualified (it always has a comma), so the code downstream that geocodes it by name
+// (geocoding.ts geocodeCity) can't mistake it for another one, and it's never a bare shared cache key.
 export function placeLabel(c: PlaceCandidate): string {
   const admin = c.admin1 && normName(c.admin1) !== normName(c.name) ? c.admin1 : null;
-  if (String(c.country ?? "").toUpperCase() === "US") return [c.name, admin].filter(Boolean).join(", ");
-  return [c.name, admin, c.country].filter(Boolean).join(", ");
+  const country = String(c.country ?? "").toUpperCase();
+  if (country === "US" && admin) return `${c.name}, ${admin}`;
+  return [c.name, admin, country || null].filter(Boolean).join(", ");
 }
 
 const point = (c: PlaceCandidate): GeoPoint => ({ lat: c.lat, lng: c.lng });
-// Pure: roughly whether a point is in the US (the 50 states' box), for "their country" when nothing else says it.
-export const inUS = (p: GeoPoint): boolean => p.lat >= 18 && p.lat <= 72 && p.lng >= -170 && p.lng <= -66;
 
 export type Home = { point: GeoPoint; country?: string | null };
 export type PickWhy = "near_home" | "only_one" | "most_prominent" | "top_hit";
@@ -137,7 +149,10 @@ export function pickPlace(asked: string, cands: PlaceCandidate[], home: Home | n
   }
   const miles = (c: PlaceCandidate) => (home ? haversineMiles(home.point, point(c)) : null);
   const resolved = (c: PlaceCandidate, why: PickWhy): Pick => ({ status: "resolved", place: c, label: placeLabel(c), miles: miles(c), why });
-  const real = named.filter((c) => c.source !== "open_meteo" || (c.population ?? 0) >= PLACE_RESOLVE.minPopulation);
+  // A real place: at least minPopulation, or of unknown size when nothing by that name is known to be bigger (a Google hit with no
+  // twin, a region). Austin, Nevada (192 people) never wins on nearness while Austin, Texas is a candidate; nor does an unsized hit.
+  const bigger = named.some((c) => (c.population ?? 0) >= PLACE_RESOLVE.minPopulation);
+  const real = named.filter((c) => (c.population ?? 0) >= PLACE_RESOLVE.minPopulation || (c.population == null && !bigger));
   if (home) {
     const near = real.filter((c) => (miles(c) ?? Infinity) <= PLACE_RESOLVE.nearHomeMiles).sort((a, b) => miles(a)! - miles(b)!);
     if (near.length) return resolved(near[0], "near_home");
@@ -196,7 +211,8 @@ export function farCheck(o: { miles: number | null; how: PlaceHow; windowEnd: st
 export type StoredResolution = { forPlace: string; forHome: string; status: "resolved" | "ambiguous" | "rejected"; label: string | null; lat: number | null; lng: number | null; options: string[] };
 export type WantRow = { windowEnd: string | null; resolution: StoredResolution | null };
 export type ResolveDeps = {
-  home: (city: string) => Promise<GeoPoint | null>;
+  // Their home on the map, and its country as the geocoder gives it (null when it doesn't say).
+  home: (city: string) => Promise<Home | null>;
   // The place as they said it ("Portland, ME"): Google reads it whole, the open geocoder by its name. partial: one of them failed.
   lookup: (place: string) => Promise<{ google: PlaceCandidate[]; openMeteo: PlaceCandidate[]; partial?: boolean }>;
   row: (userId: string, key: string) => Promise<WantRow | null>;
@@ -208,28 +224,31 @@ export type ResolveDeps = {
 };
 
 export type PlaceOnMap = { label: string; miles: number | null; how: PlaceHow; verdict: FarVerdict | "ambiguous" | "rejected" | "unresolved"; from: "stored" | "fresh" };
-export type ResolvedSearch = { city: string | null; skip: string | null; place: PlaceOnMap | null };
+// retry: this run couldn't place it on the map (a geocoder or their home's lookup down, or no hit at all): nothing is searched this
+// run, and the next run tries again (never a guessed place, never the bare word).
+export type ResolvedSearch = { city: string | null; skip: string | null; place: PlaceOnMap | null; retry?: string | null };
 
-// One want's place, resolved against their home: the city to search (a qualified label), or why its search is skipped. Nothing here
-// ever falls back to their home for a want that has a place. Never throws: a failed lookup leaves the place word as it was.
+// One want's place, resolved against their home: the city to search (a qualified label), or why its search is skipped or waits for
+// the next run. Nothing here ever falls back to their home for a want that has a place. Never throws.
 export async function resolveWantPlace(i: { userId: string; key: string | null; place: string; source: PlaceSource | "home"; homeCity: string | null }, deps: ResolveDeps): Promise<ResolvedSearch> {
-  const asIs: ResolvedSearch = { city: i.place, skip: null, place: null };
-  if (!i.homeCity || !i.key) return asIs;
+  // No home city on file (or no want): the place word as before this existed.
+  if (!i.homeCity || !i.key) return { city: i.place, skip: null, place: null };
   const how = placeHow(i.source);
-  const homePt = await deps.home(i.homeCity).catch(() => null);
-  if (!homePt) return asIs;
-  const home: Home = { point: homePt, country: inUS(homePt) ? "US" : null };
+  const base = { key: i.key, how };
+  const retry = async (action: string, why: string): Promise<ResolvedSearch> => {
+    await deps.log({ decision: "place.unresolved", userId: i.userId, outcome: "skip", action, proposal: base }).catch(() => {});
+    return { city: null, skip: null, place: null, retry: why };
+  };
+  const home = await deps.home(i.homeCity).catch(() => null);
+  if (!home) return retry("home_unplaced", "their home city couldn't be placed on the map this run; tried again next run");
+  const homePt = home.point;
   const row = await deps.row(i.userId, i.key).catch(() => null);
   let stored = row?.resolution && row.resolution.forPlace === i.place && row.resolution.forHome === i.homeCity ? row.resolution : null;
   const from: PlaceOnMap["from"] = stored ? "stored" : "fresh";
-  const base = { key: i.key, how };
   if (!stored) {
     const hits = await deps.lookup(i.place).catch(() => null);
     const pick = pickPlace(i.place, mergeCandidates(hits?.google ?? [], hits?.openMeteo ?? [], i.place), home);
-    if (pick.status === "unresolved") {
-      await deps.log({ decision: "place.unresolved", userId: i.userId, outcome: "act", action: hits ? "no_hits" : "lookup_failed", proposal: base }).catch(() => {});
-      return asIs;
-    }
+    if (pick.status === "unresolved") return retry(hits ? "no_hits" : "lookup_failed", hits ? "no place by that name came back this run; tried again next run" : "the geocoders were down this run; tried again next run");
     stored =
       pick.status === "resolved"
         ? { forPlace: i.place, forHome: i.homeCity, status: "resolved", label: pick.label, lat: pick.place.lat, lng: pick.place.lng, options: [] }
@@ -255,11 +274,14 @@ export async function resolveWantPlace(i: { userId: string; key: string | null; 
   return { city: stored.label, skip: null, place };
 }
 
+// Pure: whether a label may go into the shared geocode cache: qualified only.
+export const seedable = (label: string): boolean => label.includes(",");
+
 // ---------------------------------------------------------------- the real lookups and record
 
 // Google types that are a place someone means, not a business, a park or a street.
 const GOOGLE_PLACE_TYPES = new Set(["locality", "colloquial_area", "administrative_area_level_1", "administrative_area_level_2", "administrative_area_level_3", "sublocality", "neighborhood", "postal_town"]);
-async function googleLookup(name: string): Promise<PlaceCandidate[]> {
+export async function googleLookup(name: string): Promise<PlaceCandidate[]> {
   if (!googleKey()) return [];
   const { Client } = await import("@googlemaps/google-maps-services-js");
   const r = await new Client({}).geocode({ params: { address: name, region: "us", key: googleKey() } });
@@ -267,7 +289,7 @@ async function googleLookup(name: string): Promise<PlaceCandidate[]> {
     .filter((x: any) => !x.partial_match && (x.types ?? []).some((t: string) => GOOGLE_PLACE_TYPES.has(t)))
     .map((x: any) => {
       const comp = (t: string) => (x.address_components ?? []).find((c: any) => (c.types ?? []).includes(t));
-      return { name: String(x.address_components?.[0]?.long_name ?? name), lat: x.geometry.location.lat, lng: x.geometry.location.lng, admin1: comp("administrative_area_level_1")?.long_name ?? null, country: comp("country")?.short_name ?? null, population: null, source: "google" as const };
+      return { name: String(x.address_components?.[0]?.long_name ?? name), lat: x.geometry.location.lat, lng: x.geometry.location.lng, admin1: comp("administrative_area_level_1")?.long_name ?? null, admin1Code: comp("administrative_area_level_1")?.short_name ?? null, country: comp("country")?.short_name ?? null, population: null, source: "google" as const };
     });
 }
 async function openMeteoLookup(name: string): Promise<PlaceCandidate[]> {
@@ -286,8 +308,20 @@ export async function lookupPlace(place: string): Promise<{ google: PlaceCandida
   return { google: g.status === "fulfilled" ? g.value : [], openMeteo: o.status === "fulfilled" ? o.value : [], partial: g.status === "rejected" || o.status === "rejected" };
 }
 
+// Pure: the country of a home point, from the geocoder's hits for its city (the same-named hit at that point), or null.
+export function countryAt(p: GeoPoint, cands: PlaceCandidate[]): string | null {
+  const hit = cands.find((c) => haversineMiles(p, point(c)) <= PLACE_RESOLVE.mergeMiles && c.country);
+  return hit ? String(hit.country).toUpperCase() : null;
+}
+
 export const realResolveDeps: ResolveDeps = {
-  home: async (city) => (await import("./geocoding.js")).geocodeCity(city),
+  home: async (city) => {
+    const p = await (await import("./geocoding.js")).geocodeCity(city);
+    if (!p) return null;
+    // Its country from the geocoders (never guessed from a box on the map); unknown leaves no country preference.
+    const hits = await lookupPlace(city).catch(() => null);
+    return { point: p, country: hits ? countryAt(p, [...hits.google, ...hits.openMeteo]) : null };
+  },
   lookup: lookupPlace,
   row: async (userId, key) => {
     const { default: pool } = await import("../db/db.js");
@@ -309,9 +343,12 @@ export const realResolveDeps: ResolveDeps = {
       [userId, key, s.forPlace, s.forHome, s.status, s.label, s.lat, s.lng, JSON.stringify(s.options)],
     );
   },
+  // Only a qualified label (it has a comma), and never over a row already there: one member's resolution must not change a shared row
+  // other members and other code read (review of #314: a Seattle member's "Washington" would have moved the bare row to the state).
   seed: async (label, p) => {
+    if (!seedable(label)) return;
     const { default: pool } = await import("../db/db.js");
-    await pool.query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng, timezone = NULL`, [label, p.lat, p.lng]);
+    await pool.query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [label, p.lat, p.lng]);
   },
   log: async (d) => {
     const { recordDecision } = await import("../harness/core.js");
@@ -332,11 +369,13 @@ export type AuditFinding = { kind: "want" | "cache"; ref: string; how: PlaceHow 
 // Pure: what the audit says about each want place and cache row, and what --apply would do. A confirmed place (their words or their
 // correction) is reported, never changed. An inferred place's stored resolution is cleared (the next sweep resolves it again). A
 // shared cache row is a lookup, not anyone's place: a bad one is deleted.
-// fresh: each want's resolution now (pickPlace against their home); cacheFresh: each bare cache row's distance from the homes of the
-// members whose places or home use that name, and each qualified row's distance from its own fresh resolution.
+// fresh: each want's resolution now (pickPlace against their home). conflictMiles: how far a cache row is from where its uses resolve
+// now: for a bare row, each member want that names it (resolved against that member's home) and each home city it is (resolved in
+// that member's home region); for a qualified row, its own resolution. A bare row that's simply far from someone's home (Austin for a
+// Sacramento member who named Austin) agrees with its use and isn't flagged.
 export function auditPlan(
   wants: { w: AuditWant; fresh: Pick | null; homeMiles: number | null }[],
-  cache: { row: AuditCacheRow; worstHomeMiles: number | null; freshMiles: number | null }[],
+  cache: { row: AuditCacheRow; conflictMiles: number | null; conflictWith: "want" | "home" | "itself" | null }[],
 ): AuditFinding[] {
   const out: AuditFinding[] = [];
   for (const { w, fresh, homeMiles } of wants) {
@@ -348,12 +387,10 @@ export function auditPlan(
     else if (fresh?.status === "resolved" && w.resolution?.label && w.resolution.label !== fresh.label) out.push({ kind: "want", ref, how, finding: `stored ${w.resolution.label}, resolves now to ${fresh.label}`, action: act });
     else if (homeMiles != null && homeMiles > PLACE_RESOLVE.farFromHomeMiles && how === "inferred") out.push({ kind: "want", ref, how, finding: `inferred place ${homeMiles} mi from home`, action: act });
   }
-  for (const { row, worstHomeMiles, freshMiles } of cache) {
+  for (const { row, conflictMiles, conflictWith } of cache) {
     if (/^(venue|near):/.test(row.query)) continue;
-    if (worstHomeMiles != null && worstHomeMiles > PLACE_RESOLVE.farFromHomeMiles && !row.query.includes(","))
-      out.push({ kind: "cache", ref: row.query, how: "cached", finding: `bare name ${worstHomeMiles} mi from the home of a member who uses it`, action: "delete_cache_row" });
-    else if (freshMiles != null && freshMiles > PLACE_RESOLVE.mergeMiles)
-      out.push({ kind: "cache", ref: row.query, how: "cached", finding: `${freshMiles} mi from where it resolves now`, action: "delete_cache_row" });
+    if (conflictMiles != null && conflictMiles > PLACE_RESOLVE.mergeMiles)
+      out.push({ kind: "cache", ref: row.query, how: "cached", finding: `${conflictMiles} mi from where ${conflictWith === "want" ? "a member's place by that name" : conflictWith === "home" ? "a member's home by that name" : "it"} resolves now`, action: "delete_cache_row" });
   }
   return out;
 }
