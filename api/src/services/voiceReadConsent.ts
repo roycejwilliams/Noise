@@ -48,8 +48,10 @@ export const VOICE_READ_CALL_LINE = "I'll text you how it works, and you can ans
 export const VOICE_READ_OFF_ON_CALL_NOTE = "For the rest of this call, don't use or mention anything in your context about how they sounded on calls (voice notes); treat it as gone.";
 // Model-facing only, in a call's starting context while the read is on for them. With the call brain endpoint (routes/callLlm.ts) the
 // voiceRead tool stops it; on the direct path (no endpoint, voice-only, or tools off) Cue has no tool on the call and can't stop it
-// there, so it must not say it did: a text saying stop turns it off at once.
-export const VOICE_READ_CALL_RULE = "How they sound on calls is being read on this call (they said yes to it). If they ask you to stop listening to how they sound, only your voiceRead tool stops it. If you don't have that tool, don't say it's stopped or that you'll stop: tell them a text saying stop turns it off right away.";
+// there, so it must not say it did: a text asking for it off, in a sentence, turns it off at once. Never the bare word STOP: that
+// is the carrier opt-out (routes/sendblue.ts isOptOutKeyword), caught before any reply, which stops every text and call and never
+// reaches the voiceRead tool, so their yes would stay on file. True for a test number too (on there without a yes).
+export const VOICE_READ_CALL_RULE = "The read of how they sound is on for this call. If they ask you to stop listening to how they sound, only your voiceRead tool stops it. If you don't have that tool, don't say it's stopped or that you'll stop: tell them to text you, in a sentence, that they want the voice read off (like \"turn off the voice read\"). Never tell them to text the single word stop: that unsubscribes them from all texts and calls and leaves the voice read on file.";
 // The call's starting context line that carries the last call's moments (harness/emotion.ts renderEmotionalContext), voice-read
 // moments among them. After a stop or a no on a call it is taken out of every later turn's messages (stripVoiceReadLines).
 const LAST_CALL_MOMENTS_LINE = /^[ \t]*On your call [^\n]*?, their voice showed: [^\n]*(\r?\n|$)/gm;
