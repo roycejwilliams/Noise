@@ -79,11 +79,80 @@ const honest = { text: "the call just didn't go through on my end", type: "past_
   check("an admission it wasn't flagged isn't a flag claim", !F.flagClaim("I haven't flagged it yet.") && F.flagClaim("I've flagged it so it gets looked at.") && F.flagClaim("It's been logged.") && F.flagClaim("I passed it along."));
 }
 
+// ---- 2b. review of #303 (2026-10-28)
+// 1. A flag claim next to an admission, or after a negation in another clause, is still a flag claim.
+{
+  const both = "The call didn't go through on my end, and I've flagged it so it gets looked at.";
+  const nothing = "Nothing you did, I've flagged it.";
+  check("a negation in another clause doesn't hide the flag claim", F.flagClaim(both) && F.flagClaim(nothing) && !F.flagClaim("I haven't flagged it yet."));
+  const notOn = incidentFacts(F.failureRecordFacts([], { afterFailure: true, now }));
+  const asClaims = [both, nothing].map((text) => ({ text, type: "past_action" as const, supported: true, factId: "F1", quote: null }));
+  const cutChecks = G.claimChecks(asClaims, notOn, empty as any);
+  check("not on record: both are cut, whatever they cite", cutChecks.every((c) => c.pass === false), cutChecks);
+  check("an admission that also claims a report is never passed as its own failure", !F.failureAdmitted(notOn.facts, both));
+  const cutBoth = G.stripUnsupported(`${both} ${nothing}`, cutChecks.filter((c) => !c.pass), { allow: (x) => F.failureSpoken(notOn.facts, x) });
+  check("not on record: neither sentence goes out", !/flagged/.test(cutBoth), cutBoth);
+  const on = incidentFacts(F.failureRecordFacts([{ decision: "turn.failed", at: new Date("2026-10-28T22:54:09Z"), action: "told_member" }], { afterFailure: true, now }));
+  const onId = on.facts.find((f) => f.text.endsWith(R.FAILURE_ON_RECORD))!.id;
+  const keptChecks = G.claimChecks(asClaims.map((c) => ({ ...c, factId: onId })), on, empty as any);
+  check("on record: both stand, citing the record", keptChecks.every((c) => c.pass === true), keptChecks);
+  const narr = G.codeChecks(both, on, empty as any).find((c) => c.name === "no_internal_narration");
+  check("on record: 'didn't go through on my end, and I've flagged it' isn't cut as machinery talk", !narr, narr);
+}
+// 2. The call's fact says who asked for it.
+{
+  const at = new Date("2026-10-28T22:50:48Z");
+  const asked = F.failureRecordFacts([{ decision: "call.dial", at, requested: "router_decision" }], { afterFailure: false, now });
+  const app = F.failureRecordFacts([{ decision: "call.dial", at, requested: "user_initiated" }], { afterFailure: false, now });
+  check("a call they asked for is called that", /the call they asked for 4 minutes ago never started/.test(asked[0]) && /the call they asked for/.test(app[0]), asked);
+  for (const kind of ["auto_intake", "checkin_cadence", "scheduled_call"]) {
+    const own = F.failureRecordFacts([{ decision: "call.dial", at, requested: kind }], { afterFailure: false, now });
+    check(`a call Cue started on its own (${kind}) is never "the call they asked for"`, /a call Cue started on its own 4 minutes ago \(they didn't ask for it\) never started/.test(own[0]) && !/they asked for/.test(own[0]), own);
+  }
+  const unknown = F.failureRecordFacts([{ decision: "call.dial", at, requested: null }], { afterFailure: false, now });
+  check("a call with no recorded asker says neither", /a call to them 4 minutes ago never started/.test(unknown[0]), unknown);
+  const sb = src("routes/sendblue.ts");
+  check("the record read selects who asked for the call", /hd\.proposal->>'requested' AS requested/.test(sb) && /requested: x\.requested/.test(sb));
+}
+// 3. Only reports of the failure itself, only admissions of Cue's own failure, and only a turn that's still unanswered.
+{
+  const notOn = incidentFacts(F.failureRecordFacts([], { afterFailure: true, now }));
+  const honest = ["I logged your 5k", "I let them know you're coming", "I passed it along to Sarah", "I flagged the two events you might like", "I flagged it for you", "I noted that you're vegetarian"];
+  const hc = G.claimChecks(honest.map((text) => ({ text, type: "past_action" as const, supported: true, factId: "F1", quote: null })), notOn, empty as any);
+  check("honest past actions about other things aren't cut as flag claims", hc.every((c) => c.pass === true), hc.filter((c) => !c.pass));
+  for (const t of ["I've flagged it.", "It's been logged.", "I passed it along.", "I let the team know.", "I sent it to the team.", "I reported the issue."]) check(`"${t}" is a flag claim`, F.flagClaim(t));
+  const notAdm = ["Something went wrong with your landlord", "That didn't work for you, huh", "It didn't work out with the venue."];
+  check("a failure in their life is not Cue admitting its own", notAdm.every((t) => !F.failureAdmitted(notOn.facts, t) && !F.failureSpoken(notOn.facts, t)));
+  const nc = G.claimChecks(notAdm.map((text) => ({ text, type: "past_action" as const, supported: false, factId: null, quote: null })), notOn, empty as any);
+  check("so those still need their own source", nc.every((c) => c.pass === false), nc);
+  for (const t of ["the call just didn't go through on my end", "I couldn't get the call out", "Something broke on my end.", "My last reply broke."]) check(`"${t}" is Cue admitting its own failure`, F.failureAdmitted(notOn.facts, t));
+  const at = new Date("2026-10-28T22:54:09Z");
+  check("a broken turn the replay answered isn't carried", F.failureRecordFacts([{ decision: "turn.failed", at, action: "told_member", answeredSince: true }], { afterFailure: false, now }).length === 0);
+  check("nor one Cue had already answered", F.failureRecordFacts([{ decision: "turn.failed", at, action: "already_answered" }], { afterFailure: false, now }).length === 0);
+  check("one still unanswered is", F.failureRecordFacts([{ decision: "turn.failed", at, action: "told_member", answeredSince: false }], { afterFailure: false, now }).length === 1);
+  const sb = src("routes/sendblue.ts");
+  check("the record read checks for a real reply since (not a hold or 'something broke' line)", /AS answered_since/.test(sb) && /\[\.\.\.HOLD_LINES, \.\.\.OWED_AFTER\]\.map\(\(l\) => `Co replied: \$\{l\}`\)\],\s*\)\s*\.then/.test(sb) && /answeredSince: !!x\.answered_since/.test(sb));
+}
+// 5. The call-failure instruction splits by cause (Royce's copy, 2026-10-28).
+{
+  const sb = src("routes/sendblue.ts");
+  const m = sb.match(/dialFailure\s*\?\s*(`[^`]*`)\s*:\s*(`[^`]*`),/);
+  const dial = m?.[1] ?? "", gate = m?.[2] ?? "";
+  check("a dial failure gets its own instruction", /const dialFailure = parseDialFailure\(callResult\.error\);/.test(sb) && !!m);
+  check("dial failure: it says the call didn't go through, on Cue's side, in a line", /Cue did try, but the call didn't go through/.test(dial) && /Say plainly, in a line, that the call didn't go through and that it's a problem on Cue's side\./.test(dial));
+  check("dial failure: on a 401/403, asking again right now won't help", /\$\{dialFailure\.setup \? " Add that asking again right now won't help\." : ""\}/.test(dial));
+  check("dial failure: never sends them to ask again, never promises a callback, never 'calling you now'", /Don't suggest they ask again, don't promise to call back on your own, and never say you're calling them now\./.test(dial) && !/call me/.test(dial));
+  check("dial failure: no quoted example lines", !/"/.test(dial.replace(/\$\{[^}]*\}/g, "")));
+  check("a gate block keeps today's meaning: no call went out, why, ask again once allowed, never say you tried", /no call went out this time: \$\{why\}/.test(gate) && /text "call me" again once it's allowed/.test(gate) && /Never say you tried or that it didn't go through/.test(gate));
+}
+// 6. The co-test dashboard's call route: a call that never started is 502, like the app's.
+check("co-test's call route answers 502 for a dial that never started", /res\.status\(result\.dialFailed \? 502 : 404\)/.test(fs.readFileSync(new URL("../../../co-test/src/routes/phone.ts", import.meta.url), "utf8")));
+
 // ---- 3. the report: the cause is on the turn.failed row, and the morning review flags it
 {
   const sb = src("routes/sendblue.ts");
   check("a crashed turn's report carries what the error said (nothing private)", /tellMemberTurnFailed\(lockKey, replay\?\.receivedAt \?\? turnStartedAt, "turn_error", \(error as any\)\?\.constructor\?\.name \?\? "Error", \{ detail: failureDetail\(error\) \}\)/.test(sb) && /proposal: \{ source, errorClass, \.\.\.\(o\.detail \? \{ detail: o\.detail \} : \{\}\) \}/.test(sb));
-  check("each text reads its recent failures back from the decision log, null when the read fails", /decision = 'call\.dial' AND action = 'dial_failed'\) OR decision = 'turn\.failed'/.test(sb) && /\.catch\(\(\) => null\);\s*for \(const f of failureRecordFacts\(failureRows, \{ afterFailure: !!owed\?\.afterFailure, now: new Date\(\) \}\)\) addFact\(replyFacts, "known", f\);/.test(sb));
+  check("each text reads its recent failures back from the decision log, null when the read fails", /hd\.decision = 'call\.dial' AND hd\.action = 'dial_failed'\) OR hd\.decision = 'turn\.failed'/.test(sb) && /\.catch\(\(\) => null\);\s*for \(const f of failureRecordFacts\(failureRows, \{ afterFailure: !!owed\?\.afterFailure, now: new Date\(\) \}\)\) addFact\(replyFacts, "known", f\);/.test(sb));
   const flags = D.logFlags({ userId: "u", firstName: "Jordan", messages: [{ at: "2026-10-28T22:54:04Z", from: "member", text: "Call me" } as any], decisions: [{ id: 1, at: "2026-10-28T22:54:09Z", decision: "turn.failed", outcome: "act", action: "told_member", reason: null, proposal: { source: "turn_error", errorClass: "RestException", detail: { status: 401, code: "8001", message: "actor doesn't have any assertions" } }, checks: [] } as any], emotions: [], issues: [] });
   const f = flags.find((x) => x.type === "turn_failed");
   check("a broken turn is a high flag in the morning review, with its cause", f?.severity === "high" && /RestException, HTTP 401, code 8001, actor doesn't have any assertions/.test(f?.cause ?? "") && f?.causeConfirmed === true, flags);
