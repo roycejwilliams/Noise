@@ -1,0 +1,59 @@
+// How Cue answers what a member shared, and "you're dry" feedback (Royce, 2026-10-28). Layer 1, no model calls.
+//   TZ=UTC node evals/runLayer1.mjs evals/reply/shareGuide.ts
+// What code can hold: the guidance reaches only sharing and feedback turns, it quotes no sample line for Cue to copy, and a text never
+// goes out with a sentence that is only a stock phrase. Whether the replies got better is a model question (the texting eval).
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+import fs from "node:fs";
+const D = await import("../../src/services/connectDots.js");
+const L = await import("../../src/harness/stockLines.js");
+let total = 0, failed = 0;
+const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
+const moment = (mode: any, pushback: string | null = null) => D.momentInstruction({ mode, topic: "coming back from a birthday trip", pushback, lesson: null, dots: [] }) ?? "";
+
+// ---- The guidance, only where it belongs ----
+check("a sharing turn gets the sharing guidance", moment("sharing").includes(D.SHARING_GUIDE));
+check("a feedback turn gets the feedback guidance", moment("feedback", "replies feel dry").includes(D.FEEDBACK_GUIDE));
+check("feedback keeps the pushback line beside it", /They're pushing back on what you said: replies feel dry/.test(moment("feedback", "replies feel dry")));
+for (const m of ["asking", "logistics", "planning", "small_talk", "reacting"]) check(`a ${m} turn gets neither`, !moment(m).includes(D.SHARING_GUIDE) && !moment(m).includes(D.FEEDBACK_GUIDE));
+check("no moment read, no guidance", D.momentInstruction(null) === null);
+
+// ---- Principles, never sample lines (Cue copies the wording of its instructions) ----
+for (const [name, g] of [["sharing", D.SHARING_GUIDE], ["feedback", D.FEEDBACK_GUIDE]] as const) {
+  check(`${name} guide quotes no line for Cue to copy`, !/["“”]/.test(g));
+  check(`${name} guide carries no stock phrase`, L.stockLine(g) === null);
+  check(`${name} guide has no dashes (Cue copies them)`, !/[—–]/.test(g));
+}
+// Royce's points, each present in the guide (wording reviewed by Royce before it ships).
+const G = D.SHARING_GUIDE;
+check("questions are optional and never stacked", /A question is optional and never more than one/.test(G));
+check("a complete moment gets a short warm line, nothing pulled out of them", /When the moment is complete, a short warm line is the whole reply/.test(G));
+check("contributes, not only mirroring", /Add something of your own rather than only mirroring/.test(G));
+check("carries the thread forward, no re-asking, never a scheduled feelings check-in", /instead of asking it again/.test(G) && /never as a scheduled check-in/.test(G));
+check("context shapes tone, never facts; curious, not guessing causes", /shapes your tone, never your facts/.test(G) && /be curious instead/.test(G));
+check("timing (belated)", /something already behind them is said as past/.test(G));
+check("no therapy or plan turn unless asked", /don't turn it into a question about what would help, a therapy question, or a plan/.test(G));
+const F = D.FEEDBACK_GUIDE;
+check("feedback: brief ownership, then the better reply to what they shared", /Own it in a few words at most, then show it/.test(F) && /their earlier message deserved/.test(F));
+check("feedback: no tone explanation, no long apology, no asking to repeat, honest if asked", /Don't explain your tone or how you work/.test(F) && /don't apologize at length/.test(F) && /don't ask them to say it again/.test(F) && /If they ask what went wrong, say honestly/.test(F));
+
+// ---- Stock sentences on texts ----
+check("'Makes sense.' alone is a stock sentence on a text", L.textStockSentence("Makes sense.") && L.textStockSentence("That makes sense.") && L.textStockSentence("Yeah, totally makes sense!"));
+check("'makes sense' that goes on to say something isn't", !L.textStockSentence("That makes sense, but I'd still wait a week.") && !L.textStockSentence("It makes sense to wait until Friday.") && !L.textStockSentence("You took the week off, which makes sense."));
+check("a question is never stock", !L.textStockSentence("Does that make sense?") && !L.textStockSentence("I hear you?"));
+check("calls are unchanged: 'That makes sense.' isn't in the call's stock list", L.stockLine("That makes sense.") === null && !L.stockSentence("That makes sense."));
+check("the call's stock sentences count on texts too", L.textStockSentence("I hear you.") && L.textStockSentence("And I hear you."));
+check("Royce's text: the 'Makes sense.' opener is dropped, the rest kept", L.dropStockSentences("Makes sense. Glad you got the break before it wore you down further.") === "Glad you got the break before it wore you down further.");
+check("'I hear you.' as its own paragraph is dropped, the paragraph break kept tidy", L.dropStockSentences("I hear you.\n\nComing back recharged after a birthday trip is a good place to start from.\n\nWhat made it land?") === "Coming back recharged after a birthday trip is a good place to start from.\n\nWhat made it land?");
+check("a sentence that goes on ('I hear you, not just processing it.') is the model's to fix, not code's", L.dropStockSentences("Fair call, that one was flat. I hear you, not just processing it.") === "Fair call, that one was flat. I hear you, not just processing it.");
+check("a reply that is only stock is left whole, never emptied", L.dropStockSentences("I hear you.") === "I hear you." && L.dropStockSentences("Makes sense.") === "Makes sense.");
+check("a reply with no stock sentence is untouched, byte for byte", L.dropStockSentences("Happy belated birthday.\n\nWhat felt different this time?") === "Happy belated birthday.\n\nWhat felt different this time?");
+check("the call's stock lines still caught (unchanged)", ["I hear you.", "That's a lot to carry.", "Thank you for sharing that."].every((x) => L.stockLine(x) !== null));
+
+// ---- Wiring ----
+const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+check("every text reply passes the stock filter after the reply check", /return capitalizeSentences\(dropStockSentences\(dropRepeatedQuestion\(result\.final, input\.recentConversation\)\)\);/.test(src("agent/conversationReply.ts")));
+check("the moment guidance reaches the reply as an instruction", /const momentNote = momentInstruction\(moment\);\s+if \(momentNote\) addInstruction\(replyFacts, momentNote\);/.test(src("routes/sendblue.ts")));
+
+console.log(`reply share guide: ${total - failed}/${total} passed`);
+process.exit(failed ? 1 : 0);

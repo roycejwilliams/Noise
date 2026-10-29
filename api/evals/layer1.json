@@ -133,6 +133,7 @@
     "evals/memory/claims.ts",
     "evals/memory/loopLifecycle.ts",
     "evals/reply/doubleDown.ts",
+    "evals/reply/shareGuide.ts",
     "evals/calls/callConfig.ts",
     "evals/calls/callTasks.ts",
     "evals/calls/callEvals.ts",

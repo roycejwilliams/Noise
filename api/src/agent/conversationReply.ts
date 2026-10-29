@@ -12,6 +12,7 @@ import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
+import { dropStockSentences } from "../harness/stockLines.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { judgeText, ruledOut, type Decision } from "../brain/index.js";
 import type { StubEvent } from "./loopTools.js";
@@ -357,7 +358,8 @@ export async function runConversationReplyAgent(
       grounding.push(result);
       // Always sentence case, however they text (2026-09-16). Never the
       // same question as one of Co's last two texts (2026-09-23).
-      return capitalizeSentences(dropRepeatedQuestion(result.final, input.recentConversation));
+      // Never a sentence that is only a stock phrase ("I hear you.", "Makes sense."), the same rule a call has (harness/stockLines.ts).
+      return capitalizeSentences(dropStockSentences(dropRepeatedQuestion(result.final, input.recentConversation)));
     },
   });
 
