@@ -64,6 +64,21 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
   const wp = await W.placeFor(candidate.userId, want, deps ?? W.realPlaceDeps).catch(() => null);
   return wp?.place ? { city: wp.place, searchedIn: { key: want.key, place: wp.place, source: wp.source } } : { city: candidate.city, searchedIn: { key: want.key, place: candidate.city, source: "home" } };
 }
+// The want's place resolved against their home (services/placeResolve.ts, Royce 2026-10-29: "Bay Area" from a Sacramento member was
+// searched in Houston): city is the qualified place to search ("San Francisco Bay Area, California"); skip says why this want isn't
+// searched at all (an ambiguous or rejected place, or one Cue inferred far from home), and then nothing searches it, not even their
+// home. A want with no place, or no home city on file, is as before.
+export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null };
+export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps: { place?: import("./wantPlace.js").PlaceDeps; resolve?: import("./placeResolve.js").ResolveDeps } = {}): Promise<SearchWhere> {
+  const where = await searchPlace(candidate, deps.place).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } as SearchedIn }));
+  if (!where.searchedIn.key || where.searchedIn.source === "home" || !where.city) return { ...where, skip: null, place: null };
+  // Their home city by another spelling ("Sacramento" for a Sacramento member) is home, searched as before.
+  if ((await import("./wantPlace.js")).samePlace(where.city, candidate.city)) return { ...where, skip: null, place: null };
+  const R = await import("./placeResolve.js");
+  const r = await R.resolveWantPlace({ userId: candidate.userId, key: where.searchedIn.key, place: where.city, source: where.searchedIn.source, homeCity: candidate.city }, deps.resolve ?? R.realResolveDeps).catch(() => null);
+  if (!r) return { ...where, skip: null, place: null };
+  return { city: r.skip ? null : (r.city ?? where.city), searchedIn: where.searchedIn, skip: r.skip, place: r.place };
+}
 // Where a find was searched, kept on the find (its match) so the send can say so once (wantPlace.ts noteDue).
 export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" };
 
@@ -424,15 +439,16 @@ type SweepSearchTrace = {
 export function movesEmptyRuns(t: { searched?: boolean; found: unknown[]; sources?: { outages?: string[] } }): boolean {
   return !!t.searched && (t.found.length > 0 || !t.sources?.outages?.length);
 }
-export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[] };
+// placeSkip: this want wasn't searched because of its place (placeToSearch); place: where on the map it was searched, when it has one.
+export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string; foundKeys?: string[]; pooledKeys?: string[]; placeSkip?: string; place?: import("./placeResolve.js").PlaceOnMap | null };
 
-async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
+async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null, where: SearchWhere): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
   // Their time zone (memberTime.ts), so event dates are their local calendar dates.
   // Co finds and judges in its own loop, reading their record (services/sweepFind.ts, Phase A1): what they've said they want and ruled
   // out, how they've been, what was already sent. Feelings shape how Co says it, never whether they hear about something (2026-09-18);
   // frustration with what Co has found sends the real thing instead of a tease (attemptEventSurfacing, revealNow).
-  // Where this want is (Royce, 2026-10-15): the search looks there, the home city only when the want has no place of its own.
-  const where = await searchPlace(candidate).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } }));
+  // Where this want is (Royce, 2026-10-15): the search looks there, the home city only when the want has no place of its own. The
+  // place comes resolved on the map (placeToSearch), so where.city is the one place it means for them.
   const result = await sweepFind(
     { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: where.city, homeCity: candidate.city, ...(candidate.placeBound !== undefined ? { placeBound: candidate.placeBound } : {}) },
     { timezone, allSources: candidate.allSources },
@@ -740,9 +756,17 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // soon) move to the front so they aren't stuck behind a later event.
   // Their zone (or Pacific): "today", "past" and "short notice" are their days, never the server's.
   const zone = await memberZone(candidate.userId);
+  // Where this want is searched, resolved first: a want whose place can't be searched (placeToSearch skip) isn't searched anywhere,
+  // and says why, on its own record and in the 9am sweep's item.
+  const where = await placeToSearch(candidate);
+  if (where.skip) {
+    await recordDecision({ layer: 5, decision: "sweep.surface", userId: candidate.userId, outcome: "skip", action: "place_not_searched", proposal: { askId: candidate.askId, wantKey: where.searchedIn.key, fromProfile: candidate.fromProfile ?? false, place: where.place, why: where.skip } }).catch(() => {});
+    candidate.onReport?.({ sources: { events: false, web: false, x: false, failures: [] }, found: 0, pooled: 0, queued: 0, outcome: "place not searched", placeSkip: where.skip, place: where.place });
+    return { queued: false };
+  }
   const readAtStart = await getBacklog(candidate.userId, candidate.askId);
   const queued = await dropStaleFront(candidate.userId, readAtStart, zone);
-  const { items: rawFound, trace } = await findFreshPending(candidate, zone);
+  const { items: rawFound, trace } = await findFreshPending(candidate, zone, where);
   // What each new find IS, read at capture (services/findForm.ts): a dated event or an opening. An event whose date its page doesn't
   // state, or one already past, exits with its fact; an exited find found again stays out (services/workingSet.ts).
   const found = await settleNewFinds(candidate.userId, rawFound, localDay(new Date(), zone), candidate.askText, zone);
@@ -776,7 +800,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   await saveBacklogMerged(candidate.userId, candidate.askId, readAtStart, pending);
   // For the daily sweep's summary: what was searched, kept by the search, and is now in the pool (this ask's backlog).
   const report = (outcome: string, queued = 0): void =>
-    candidate.onReport?.({ sources: trace.sources ?? { events: false, web: false, x: false, failures: ["nothing searched: their record, or the limits in it, couldn't be read"] }, found: trace.found.length, pooled: found.filter((i) => !i.unread).length, queued, outcome, foundKeys: trace.found.map((f) => `${f.name}|${f.date ?? ""}`), pooledKeys: found.filter((i) => !i.unread).map((i) => ("url" in i.match && i.match.url ? String(i.match.url) : i.match.name)) });
+    candidate.onReport?.({ sources: trace.sources ?? { events: false, web: false, x: false, failures: ["nothing searched: their record, or the limits in it, couldn't be read"] }, found: trace.found.length, pooled: found.filter((i) => !i.unread).length, queued, outcome, place: where.place, foundKeys: trace.found.map((f) => `${f.name}|${f.date ?? ""}`), pooledKeys: found.filter((i) => !i.unread).map((i) => ("url" in i.match && i.match.url ? String(i.match.url) : i.match.name)) });
 
   // Every run is recorded, so a quiet week can be traced to where things
   // were dropped instead of guessed at (2026-09-18).
@@ -794,6 +818,8 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
         cooldownCleared: candidate.cooldownCleared,
         ...trace,
         backlog: pending.map((i) => ({ name: i.match.name, tier: i.match.tier, date: relevantDate(i.match), source: i.source })),
+        // Where on the map it looked (placeResolve.ts): the resolved place, its distance from home, and how the place was set.
+        ...(where.place ? { place: where.place } : {}),
         ...extra,
       },
     });
