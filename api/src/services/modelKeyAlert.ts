@@ -66,11 +66,19 @@ export type KeyAlertDeps = {
 export function createKeyAlert(deps: KeyAlertDeps) {
   const now = deps.now ?? Date.now;
   const lastAt = new Map<Provider, number>();
+  // The decision row has its own hour: written once an hour per provider whether or not the text went (no TEAM_ALERT_PHONE, or
+  // sends off), so a refused key never writes a row per request.
+  const recordedAt = new Map<Provider, number>();
   return {
     // One refused request. Returns true when this one started the hour's alert.
     note(provider: Provider, f: ModelFailure): boolean {
       if (f.kind !== "auth") return false;
       const t = now();
+      const rec = recordedAt.get(provider);
+      if (rec === undefined || t - rec >= KEY_ALERT_EVERY_MS) {
+        recordedAt.set(provider, t);
+        deps.record?.(provider, f).catch(() => {});
+      }
       const before = lastAt.get(provider);
       if (before !== undefined && t - before < KEY_ALERT_EVERY_MS) return false;
       lastAt.set(provider, t);
@@ -89,7 +97,6 @@ export function createKeyAlert(deps: KeyAlertDeps) {
           console.error(`model key alert: the team text failed (${err?.status ?? err?.code ?? "error"})`);
           giveBack();
         });
-      deps.record?.(provider, f).catch(() => {});
       return true;
     },
   };

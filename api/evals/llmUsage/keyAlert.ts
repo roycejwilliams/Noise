@@ -85,6 +85,24 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
   check("after a send that didn't go, the next refused request tries again", a.note("anthropic", auth) === true);
   await flush();
   check("so the alert isn't lost", sent.length === 5);
+  // The decision row: once an hour per provider, whether or not the text went.
+  {
+    let t2 = 5_000_000;
+    const rows2: string[] = [];
+    const texts: string[] = [];
+    const b = createKeyAlert({ send: async (text) => (texts.push(text), false), record: async (p) => void rows2.push(p), now: () => t2 });
+    for (let i = 0; i < 30; i++) {
+      b.note("anthropic", auth);
+      await flush();
+    }
+    check("no team phone (the text never goes): 30 refused requests write one decision row, not 30", rows2.length === 1, rows2);
+    check("and the text is still retried on each refused request (a failed send doesn't burn the hour)", texts.length === 30, texts.length);
+    t2 += KEY_ALERT_EVERY_MS;
+    b.note("anthropic", auth);
+    b.note("openai", auth);
+    await flush();
+    check("an hour later: one more row; another provider has its own", rows2.join() === "anthropic,anthropic,openai", rows2);
+  }
   for (const [p, line] of Object.entries(KEY_DEAD_TEXT) as [Provider, string][]) {
     check(`${p}: the line is team-facing, names the key, carries no member data`, /^Cue alert: /.test(line) && /_KEY\)/.test(line) && !/\$\{/.test(line));
   }
@@ -161,6 +179,31 @@ setKeyAlertForTests({ note: (provider: Provider, f: ModelFailure) => (noted.push
   check("a refused call turn still throws as before", threw);
   check("a refused call turn writes its failed call.turn row (auth (401), $0)", rows.length === 1 && rows[0].functionId === "call.turn" && rows[0].error === "auth (401)" && rows[0].costUsd === 0 && rows[0].userId === "11111111-2222-4333-8444-555555555555", rows);
   check("and raises the alert as Anthropic's", noted.length === 1 && noted[0].provider === "anthropic", noted);
+}
+
+// ---------------------------------------------------------------- an embedding request OpenAI refuses (the openai SDK, no AI SDK span)
+{
+  // A real openai client, answered by a stub server response: a 401 with OpenAI's own error body.
+  const { default: OpenAI } = await import("openai");
+  let embedCalls = 0;
+  const stubFetch = (async () => {
+    embedCalls++;
+    return new Response(JSON.stringify({ error: { message: "Incorrect API key provided: ci", type: "invalid_request_error", code: "invalid_api_key" } }), { status: 401, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  const EM = await import("../../src/services/embeddings.js");
+  EM.setEmbeddingsClientForTests(new OpenAI({ apiKey: "ci", fetch: stubFetch, maxRetries: 0 }));
+  try {
+    noted.length = 0;
+    const one = await EM.generateEmbedding("hello").then(() => "ok", (err: any) => String(err?.status ?? err?.message ?? err));
+    check("a refused embedding still fails for its caller, as before", one === "401", one);
+    check("and raises the alert as OpenAI's", noted.length === 1 && noted[0].provider === "openai" && noted[0].f.kind === "auth" && noted[0].f.status === 401, noted);
+    noted.length = 0;
+    const many = await EM.generateEmbeddings(["a", "b"]).then(() => "ok", (err: any) => String(err?.status ?? err?.message ?? err));
+    check("the batch embedding too", many === "401" && noted.length === 1 && noted[0].provider === "openai", { many, noted });
+    check("the stub was what answered (no real request)", embedCalls === 2, embedCalls);
+  } finally {
+    EM.setEmbeddingsClientForTests(null);
+  }
 }
 
 // ---------------------------------------------------------------- wiring
