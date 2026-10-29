@@ -14,6 +14,7 @@
 // anywhere. Any failure returns null and the caller uses Claude as before.
 import { experimental_evaluate as evaluate } from "ai7";
 import { createGateway } from "@ai-sdk/gateway";
+import { classifyModelFailure, noteModelFailure } from "./modelKeyAlert.js";
 
 export type JevBool = { type: "boolean"; instructions: string; criteria?: { true?: string; false?: string } };
 
@@ -60,6 +61,8 @@ export async function askJevZdr(state: unknown, questions: Record<string, JevBoo
   } catch (err: any) {
     // Class and status only; the message can echo the request.
     console.error(`jevGateway: request failed (non-fatal): ${err?.constructor?.name ?? "Error"} ${err?.statusCode ?? err?.status ?? ""}`.trim());
+    // A refused gateway key raises the team alert (services/modelKeyAlert.ts); nothing else here changes.
+    noteModelFailure("jev", classifyModelFailure(err));
     return null;
   }
 }
