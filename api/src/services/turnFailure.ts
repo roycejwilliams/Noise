@@ -1,3 +1,4 @@
+import { notToTeammate } from "./teamLines.js";
 import { FAILURE_FACT_PREFIX, FAILURE_ON_RECORD, FAILURE_REPORT_PREFIX, FAILURE_RECORD_UNKNOWN, failureReportFact } from "./callReasons.js";
 export { FAILURE_FACT_PREFIX, FAILURE_REPORT_PREFIX, FAILURE_RECORD_UNKNOWN };
 
@@ -26,7 +27,7 @@ export const TURN_FAILED_NOTE = "Sorry, something broke on my end on that last o
 // line is that note, its turn.failed row is always inside the read, and the facts never say "no report" while one exists.
 export const FAILURE_RECORD_WINDOW_MINUTES = 30;
 // action: the row's action (turn.failed's told_member / already_answered / ...). requested: what asked for the call (call.dial's
-// proposal.requested). answeredSince: a real Cue reply (not a hold or "something broke" line) went out after the row.
+// proposal.requested). answeredSince: a real Cue reply (not a hold or "something broke" line) answered a text of theirs sent after the row.
 export type FailureRow = { decision: string; at: Date; action?: string | null; requested?: string | null; answeredSince?: boolean };
 // Calls the member asked for: a "call me" text, the app's call button, or a call they scheduled. The rest Cue started on its own
 // (auto intake, the check-in cadence).
@@ -40,7 +41,7 @@ export function failureRecordFacts(rows: FailureRow[] | null, o: { afterFailure:
     return m <= 1 ? "just now" : `${m} minutes ago`;
   };
   if (rows === null) return o.afterFailure ? [`${FAILURE_FACT_PREFIX} something broke on Cue's side on their last text.`, failureReportFact("unknown")] : [];
-  // A failure a real reply has gone out after is over, a failed call too (whoever started it): it isn't carried into later replies.
+  // A failure their follow-up has had a real reply to is over, a failed call too (whoever started it): it isn't carried into later replies.
   const live = rows.filter((r) => !r.answeredSince && r.action !== "already_answered");
   const dial = live.find((r) => r.decision === "call.dial");
   // While their last line from Cue is still the "something broke" note, that text's failure is the one in front of them.
@@ -56,13 +57,20 @@ export function failureRecordFacts(rows: FailureRow[] | null, o: { afterFailure:
 }
 
 // The member's failures in the window, newest first, read from the decision log (sendblue.ts, every text). requested: who asked for a
-// failed call. answered_since: a real Cue reply to THIS member went out AFTER the row, never one of the lines that answer nothing
-// (notAnAnswer: the hold lines and the "something broke" lines, said as logged, "Co replied: ..."). Null when the read fails.
+// failed call. answered_since: a real Cue reply to THIS member went out after a text of theirs that itself came after the failure, never
+// one of the lines that answer nothing (notAnAnswer: the hold lines and the "something broke" lines, said as logged, "Co replied: ...").
+// So the first follow-up still sees the failure (4th review: a dial fails, Cue says so honestly that turn, and "What happened?" must
+// still get the facts); the reply to that follow-up ends it. Null when the read fails.
 export const FAILURE_ROWS_SQL = `SELECT hd.decision, hd.created_at, hd.action, hd.proposal->>'requested' AS requested,
        EXISTS (
          SELECT 1 FROM co_memories r
          WHERE r.user_id = hd.user_id AND r.memory_type = 'text_exchange' AND r.content LIKE 'Co replied:%'
-           AND r.created_at > hd.created_at AND r.content <> ALL($3::text[])
+           AND r.content <> ALL($3::text[])
+           AND r.created_at > (
+             SELECT MIN(u.created_at) FROM co_memories u
+             WHERE u.user_id = hd.user_id AND u.memory_type = 'text_exchange'
+               AND (u.content LIKE 'User said:%' OR u.content LIKE 'User sent a voice memo:%') AND ${notToTeammate("u")} AND u.created_at > hd.created_at
+           )
        ) AS answered_since
 FROM harness_decisions hd
 WHERE hd.user_id = $1 AND hd.created_at > NOW() - make_interval(mins => $2)

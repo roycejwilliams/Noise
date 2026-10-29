@@ -15,7 +15,7 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 {
   const sql = F.FAILURE_ROWS_SQL.replace(/\s+/g, " ");
   check("answered_since is scoped to this member (r.user_id = hd.user_id)", /WHERE r\.user_id = hd\.user_id/.test(sql));
-  check("answered_since only counts a reply after the failure (r.created_at > hd.created_at)", /AND r\.created_at > hd\.created_at/.test(sql));
+  check("answered_since only counts a reply after a text of theirs that came after the failure", /AND r\.created_at > \( SELECT MIN\(u\.created_at\) FROM co_memories u WHERE u\.user_id = hd\.user_id AND u\.memory_type = 'text_exchange' AND \(u\.content LIKE 'User said:%' OR u\.content LIKE 'User sent a voice memo:%'\) AND u\.content !~ ' \\\[to \[A-Za-z\]\+\\\]\$' AND u\.created_at > hd\.created_at \)/.test(sql));
   check("answered_since skips the lines that answer nothing ($3)", /AND r\.content <> ALL\(\$3::text\[\]\)/.test(sql));
   check("the rows are this member's, in the window, newest first", /WHERE hd\.user_id = \$1 AND hd\.created_at > NOW\(\) - make_interval\(mins => \$2\)/.test(sql) && /ORDER BY hd\.created_at DESC/.test(sql));
   const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
@@ -74,32 +74,50 @@ if (typeof cluster === "string") {
       c.query(`INSERT INTO harness_decisions (decision, user_id, action, proposal, created_at) VALUES ($1, $2, $3, $4, $5)`, [decision, user, action, proposal ? JSON.stringify(proposal) : null, ago(m)]);
     const said = (user: string, content: string, m: number) => c.query(`INSERT INTO co_memories (user_id, memory_type, content, created_at) VALUES ($1, 'text_exchange', $2, $3)`, [user, content, ago(m)]);
     const notAnAnswer = ["On it, give me a sec.", F.TURN_FAILED_NOTE, ...F.OWED_AFTER];
-    const read = () => F.readFailureRows((sql, values) => c.query(sql, values as any[]), "member-a", notAnAnswer);
+    const read = (who = "member-a") => F.readFailureRows((sql, values) => c.query(sql, values as any[]), who, notAnAnswer);
+    const facts = (rows: Awaited<ReturnType<typeof read>>) => F.failureRecordFacts(rows ?? [], { afterFailure: false, now: new Date() });
 
-    await dec("member-a", "turn.failed", "told_member", { source: "turn_error" }, 5);
-    await dec("member-a", "call.dial", "dial_failed", { requested: "auto_intake", status: 401 }, 6);
-    await dec("member-a", "call.dial", "dial_failed", { requested: "router_decision" }, 40); // outside the window
-    await dec("member-b", "turn.failed", "told_member", null, 2); // another member
-    await dec("member-a", "router.decideActions", "place_call", null, 5); // not a failure
-    await said("member-a", "Co replied: Here's what I found for Saturday.", 7); // a real reply BEFORE the failure
-    await said("member-b", "Co replied: A real answer, to someone else.", 3); // a real reply to ANOTHER member after it
-    await said("member-a", `Co replied: ${F.TURN_FAILED_NOTE}`, 4); // the "something broke" line after it
-    await said("member-a", "Co replied: On it, give me a sec.", 4); // a hold line after it
-    await said("member-a", "User said: what happened?", 3); // their own text after it
+    // The main flow (4th review): "Call me" (member-a), the dial fails, Cue says so honestly in that same turn.
+    await said("member-a", "User said: Call me", 10.2); // their text BEFORE the failure
+    await dec("member-a", "call.dial", "dial_failed", { requested: "router_decision", status: 401 }, 10);
+    await said("member-a", "Co replied: The call didn't go through, it's a problem on my side.", 9.9); // Cue's honest reply, same turn
+    await dec("member-a", "call.dial", "dial_failed", { requested: "auto_intake" }, 40); // outside the window
+    await dec("member-a", "router.decideActions", "place_call", null, 10); // not a failure
+    // Another member's texts and replies after it never count for member-a.
+    await said("member-b", "User said: hey", 9);
+    await said("member-b", "Co replied: A real answer, to someone else.", 8.9);
 
     let rows = await read();
     check("the read ran against the database", Array.isArray(rows), rows);
-    rows ??= [];
-    check("only this member's failures in the window, newest first", rows.map((r) => r.decision).join() === "turn.failed,call.dial", rows);
-    check("who asked for the failed call comes back", rows.find((r) => r.decision === "call.dial")?.requested === "auto_intake", rows);
-    const turn = () => rows!.find((r) => r.decision === "turn.failed");
-    check("not answered: a reply before the failure, a reply to another member, the 'something broke' line, a hold line and their own text don't count", turn()?.answeredSince === false, turn());
-    check("so the broken turn is still carried", F.failureRecordFacts(rows, { afterFailure: false, now: new Date() }).some((t) => /Cue's answer to their text/.test(t)));
+    const dial = () => rows?.find((r) => r.decision === "call.dial");
+    check("only this member's failures in the window", rows?.length === 1 && dial()?.requested === "router_decision", rows);
+    check("Cue's honest reply in the failure's own turn doesn't end it (no text of theirs came after the failure yet)", dial()?.answeredSince === false, dial());
 
-    await said("member-a", "Co replied: Sorry about that. Here's the Saturday list again.", 2); // the replay's real answer
-    rows = (await read()) ?? [];
-    check("a real reply to this member after the failure counts as answered", turn()?.answeredSince === true, turn());
-    check("so neither the broken turn nor the failed call (Cue-started) is carried any more", F.failureRecordFacts(rows, { afterFailure: false, now: new Date() }).length === 0, F.failureRecordFacts(rows, { afterFailure: false, now: new Date() }));
+    // Their follow-up, "What happened?": the failure facts are still there for this reply.
+    await said("member-a", "User said: What happened?", 8);
+    await said("member-a", "Co replied: On it, give me a sec.", 7.9); // a hold line
+    await said("member-a", `Co replied: ${F.TURN_FAILED_NOTE}`, 7.8); // a "something broke" line
+    await said("member-b", "Co replied: Another real answer, to someone else.", 7.7); // after their follow-up, but to another member
+    rows = await read();
+    check("'What happened?' still sees the failed call (a hold line, a 'something broke' line and a reply to another member answer nothing)", dial()?.answeredSince === false && facts(rows).some((t) => /the call they asked for/.test(t)), rows);
+
+    // Cue answers the follow-up: the failure is over for the reply after that.
+    await said("member-a", "Co replied: The phone service turned the call down on my side; a report of it is on record.", 7.5);
+    rows = await read();
+    check("once their follow-up got a real reply, the failure is answered", dial()?.answeredSince === true, dial());
+    check("so the reply after that gets no failure facts", facts(rows).length === 0, facts(rows));
+
+    // member-c: a broken turn. The replay's answer alone (no text of theirs after the failure) doesn't end it; a reply to their next does.
+    await said("member-c", "User said: what's on saturday?", 5.2);
+    await dec("member-c", "turn.failed", "told_member", { source: "turn_error" }, 5);
+    await said("member-c", `Co replied: ${F.TURN_FAILED_NOTE}`, 4.9);
+    await said("member-c", "Co replied: Here's the Saturday list.", 4); // the replay's answer
+    let c1 = await read("member-c");
+    check("a replayed answer alone doesn't end a broken turn", c1?.[0]?.answeredSince === false && facts(c1).some((t) => /Cue's answer to their text/.test(t)), c1);
+    await said("member-c", "User said: thanks, what broke?", 3);
+    await said("member-c", "Co replied: My answer broke before it finished; a report of it is on record.", 2.5);
+    c1 = await read("member-c");
+    check("the reply to their next text does", c1?.[0]?.answeredSince === true && facts(c1).length === 0, c1);
     await c.end();
   } catch (err: any) {
     check("the throwaway database ran", false, err?.message ?? err);
