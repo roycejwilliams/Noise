@@ -1,7 +1,7 @@
 {
-  "hash": "5ea5fa9c9b38a6bc",
+  "hash": "e92353f4efbfee13",
   "case": "checkin-live-thread",
-  "recorded_at": "2026-10-28T01:29:31.257Z",
+  "recorded_at": "2026-10-29T16:38:01.690Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -20,7 +20,7 @@
         {
           "content": [
             {
-              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Good here. Any word from the Hayes Valley place yet?\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Good to hear from you. Any word yet from the Hayes Valley place?\"\n\nReturn ONLY \"yes\" or \"no\".",
               "type": "text"
             }
           ],
@@ -37,7 +37,7 @@
       "model": "claude-haiku-5-5",
       "text": "no",
       "usage": {
-        "input_tokens": 155,
+        "input_tokens": 159,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation": {
@@ -54,7 +54,7 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgTmYkxN7RM1XzznGhsSB",
+        "id": "msg_011CgWrdrcRELxYjpqMPjHb9",
         "type": "message",
         "role": "assistant",
         "content": [
@@ -68,7 +68,7 @@
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 155,
+          "input_tokens": 159,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
