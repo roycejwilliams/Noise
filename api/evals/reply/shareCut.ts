@@ -39,7 +39,7 @@ const deps = (answer: string | (() => never), recheckFails: (rw: string) => stri
     codeFails: () => [],
   },
 });
-const base = { draft: DRAFT, cut: STUB, failed: [GYM_FAIL], message: MESSAGE, allowed: "" };
+const base = { draft: DRAFT, cut: STUB, failed: [GYM_FAIL], message: MESSAGE, allowed: "", offerKeep: false };
 const GOOD = "Happy belated birthday. Coming back hopeful is a good sign the trip did its job. What made this one land?";
 {
   const { d, calls } = deps(JSON.stringify({ engages: false, reply: GOOD }));
@@ -64,9 +64,18 @@ const GOOD = "Happy belated birthday. Coming back hopeful is a good sign the tri
   check("a rewrite that says the removed claim again is refused in code, before any recheck", r.how === "none" && calls.recheck === 0);
 }
 {
-  const { d, calls } = deps(JSON.stringify({ engages: false, reply: "Happy belated birthday. Where did you go? Who'd you go with?" }));
+  const { d, calls } = deps(JSON.stringify({ engages: false, reply: "Happy belated birthday. Was the trip for the birthday? Are you still training for the half marathon?" }));
   const r = await G.repairShareCut(base, d);
-  check("stacked questions are refused in code", r.how === "none" && /more than one question/.test(r.why) && calls.recheck === 0);
+  check("questions that don't follow one thread are refused in code", r.how === "none" && /unrelated questions/.test(r.why) && calls.recheck === 0, r.why);
+}
+{
+  // Royce, 2026-10-28: as many questions as it takes when they're one continuous thought.
+  const THREAD = "Happy belated birthday. What made the vacation feel like a reset? Was it the vacation itself, or the birthday on top of it?";
+  const { d } = deps(JSON.stringify({ engages: false, reply: THREAD }));
+  const r = await G.repairShareCut(base, d);
+  check("two questions on one thread pass (no one-question cap)", r.how === "rewrite" && r.final === THREAD, r.why);
+  check("…more than three is a questionnaire", !G.questionsFollowOneThread("Birthday trip? Birthday plans? Birthday cake? Birthday gifts?", MESSAGE).ok && /questionnaire/.test(G.questionsFollowOneThread("Birthday trip? Birthday plans? Birthday cake? Birthday gifts?", MESSAGE).why ?? ""));
+  check("…a later question tied to their message passes", G.questionsFollowOneThread("How are you landing? What made the vacation feel hopeful?", MESSAGE).ok);
 }
 {
   const { d } = deps(JSON.stringify({ engages: false, reply: "Happy belated birthday. Sounds like you were exhausted before it." }));
@@ -85,8 +94,19 @@ const GOOD = "Happy belated birthday. Coming back hopeful is a good sign the tri
 }
 {
   const { d, calls } = deps(JSON.stringify({ engages: true, reply: "" }));
-  const r = await G.repairShareCut({ ...base, cut: "Love that for you." }, d);
-  check("the rewrite call may decide what's left already fits them: it goes out as is, no recheck", r.how === "kept" && r.final === "Love that for you." && calls.recheck === 0);
+  const r = await G.repairShareCut({ ...base, cut: FITTING, offerKeep: true }, d);
+  check("when what's left carries their words, the call may decide it already fits: it goes out as is, no recheck", r.how === "kept" && r.final === FITTING && calls.recheck === 0);
+}
+{
+  // Royce, 2026-10-28: live, the call answered {"engages": true} for the stub itself. With none of their words left, that answer isn't taken.
+  const { d, calls } = deps(JSON.stringify({ engages: true, reply: "" }));
+  const r = await G.repairShareCut(base, d);
+  check("none of their words left: an 'it fits' answer isn't taken, the stub is never kept as fitting", r.how === "none" && r.final === null && calls.recheck === 0 && /wasn't on offer/.test(r.why), r);
+}
+{
+  const { d } = deps(JSON.stringify({ engages: true, reply: GOOD }));
+  const r = await G.repairShareCut(base, d);
+  check("…and a reply that comes back anyway is used, checked like any rewrite", r.how === "rewrite" && r.final === GOOD);
 }
 {
   const { d, calls } = deps(() => { throw new Error("timeout"); });
@@ -103,6 +123,8 @@ const realFetch = globalThis.fetch;
 type Script = { claims: (toSend: string) => unknown[]; rewrite: string };
 let script: Script = { claims: () => [], rewrite: "" };
 const counts = { claimRead: 0, shareRewrite: 0, otherRedraft: 0 };
+let lastShare = "";
+const readSends: string[] = [];
 const reply = (text: string) => new Response(JSON.stringify({ id: "msg_t", type: "message", role: "assistant", model: "claude-test", content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
 globalThis.fetch = (async (input: any, init: any) => {
   const url = typeof input === "string" ? input : input?.url ?? "";
@@ -112,20 +134,21 @@ globalThis.fetch = (async (input: any, init: any) => {
   if (prompt.includes("You check a text message Cue is about to send")) {
     counts.claimRead++;
     const toSend = JSON.parse(`"${(prompt.match(/Message Cue is about to send:\\n\\"([\s\S]*?)\\"\\n\\nReturn ONLY JSON/)?.[1] ?? "")}"`);
+    readSends.push(toSend);
     return reply(JSON.stringify({ claims: script.claims(toSend) }));
   }
-  if (prompt.includes("They were telling you something that matters to them")) { counts.shareRewrite++; return reply(script.rewrite); }
+  if (prompt.includes("They were telling you something that matters to them")) { counts.shareRewrite++; lastShare = JSON.parse(prompt)[0]?.content?.[0]?.text ?? prompt; return reply(script.rewrite); }
   if (prompt.includes("write the smallest true reply instead")) { counts.otherRedraft++; return reply("Got it."); }
   if (prompt.includes("Does this line assert anything")) return reply(JSON.stringify({ onlyAdmission: false }));
   return reply("stub");
 }) as any;
 const gymClaim = (toSend: string) => (toSend.includes("gym") ? [{ text: GYM, type: "member_life", supported: false, factId: null, quote: null }] : []);
-const ground = (draft: string, moment: string | null) => {
+const ground = (draft: string, moment: string | null, message = MESSAGE, recentConversation = "") => {
   const rf = G.baseReplyFacts();
   rf.moment = moment;
-  return G.groundReply(draft, rf, { message: MESSAGE, recentConversation: "", contextSummary: "", recentMemories: "" }, { record: false });
+  return G.groundReply(draft, rf, { message, recentConversation, contextSummary: "", recentMemories: "" }, { record: false });
 };
-const reset = () => { counts.claimRead = 0; counts.shareRewrite = 0; counts.otherRedraft = 0; };
+const reset = () => { counts.claimRead = 0; counts.shareRewrite = 0; counts.otherRedraft = 0; lastShare = ""; readSends.length = 0; };
 
 reset();
 script = { claims: gymClaim, rewrite: JSON.stringify({ engages: false, reply: GOOD }) };
@@ -133,7 +156,15 @@ script = { claims: gymClaim, rewrite: JSON.stringify({ engages: false, reply: GO
   const r = await ground(DRAFT, "sharing");
   check("replay of the birthday turn: the rewrite goes out, not the stub", r.final === GOOD && r.outcome === "redrafted");
   check("  one rewrite call, the invented gym never goes out", counts.shareRewrite === 1 && !/gym/i.test(r.final));
-  check("  the final reply was checked again (the rewrite's claim read or code checks are on the record)", r.checks.some((c) => c.name.startsWith("redraft.")) && r.checks.some((c) => c.name === "share_repair" && /^rewrite:/.test(c.reason ?? "")));
+  check("  the final reply was checked again (the rewrite's claim read or code checks are on the record)", r.checks.some((c) => c.name.startsWith("redraft.")) && r.checks.some((c) => c.name === "share_repair" && /rewrite: rewrite passed/.test(c.reason ?? "")));
+  // Royce, 2026-10-28 (live: the call kept the stub as fitting): with none of their words left, "it fits" isn't offered at all.
+  check("  the stub's rewrite call is never offered the 'it fits' answer: it must write the reply", !!lastShare && !/"engages": true/.test(lastShare) && /Write the reply again from their words/.test(lastShare), lastShare.slice(-900));
+}
+reset();
+script = { claims: gymClaim, rewrite: JSON.stringify({ engages: true, reply: "" }) };
+{
+  const r = await ground(DRAFT, "sharing");
+  check("live replay: the call answers 'it fits' for the stub anyway; that isn't taken as keeping it (logged, the cut goes)", r.final === STUB && r.checks.some((c) => c.name === "share_repair" && /wasn't on offer/.test(c.reason ?? "")));
 }
 reset();
 script = { claims: (t) => [...gymClaim(t), ...(t.includes("hike") ? [{ text: "The hike on day two sounds like it reset you.", type: "member_life", supported: false, factId: null, quote: null }] : [])], rewrite: JSON.stringify({ engages: false, reply: "Happy belated birthday. The hike on day two sounds like it reset you." }) };
@@ -171,6 +202,84 @@ script = { claims: gymClaim, rewrite: JSON.stringify({ engages: false, reply: GO
 {
   const r = await ground(GYM, "sharing");
   check("cut to nothing on a sharing turn, good rewrite: it goes out", r.final === GOOD && r.outcome === "redrafted" && counts.shareRewrite === 1);
+}
+
+
+{
+  const P = G.shareRewritePrompt({ facts: "", tail: "", theirWords: "", message: MESSAGE, draft: DRAFT, removed: [GYM], cut: STUB, offerKeep: false });
+  check("the rewrite prompt: questions follow one thread, no one-question cap", /questions that follow one thread when there's something worth understanding; never unrelated ones, never one they've already answered/.test(P) && !/Never more than one question/.test(P));
+  check("the rewrite prompt: don't repeat their words back", /don't repeat their words back to them/.test(P));
+  check("the rewrite prompt offers 'it fits' only when asked to", /"engages": true/.test(G.shareRewritePrompt({ facts: "", tail: "", theirWords: "", message: MESSAGE, draft: DRAFT, removed: [GYM], cut: FITTING, offerKeep: true })) && !/"engages": true/.test(P));
+}
+
+// ---- 3b. Saying their own words back (2026-10-28 run, Lisbon): a fact-level signal that only asks for the one rewrite ----
+const LISBON = "Back from a week in Lisbon with my brother. First real trip we've taken together since our dad passed";
+const LISBON_REPLY = "A week in Lisbon with your brother, the first trip together since your dad passed, that's not nothing.";
+check("restates: the Lisbon reply mostly says his words back", G.restatesThem(LISBON_REPLY, LISBON));
+check("restates: a fitting short warm line using two of their words isn't it", !G.restatesThem(FITTING, MESSAGE));
+check("restates: Royce's own tone example isn't it", !G.restatesThem("Happy belated birthday, Royce. Glad you're coming back feeling hopeful and recharged. What felt different for you?", MESSAGE));
+reset();
+const LISBON_GOOD = "Trips like that usually say more afterward than during. What surprised you about him out there?";
+script = { claims: () => [], rewrite: JSON.stringify({ engages: false, reply: LISBON_GOOD }) };
+{
+  const r = await ground(LISBON_REPLY, "sharing", LISBON);
+  check("a sharing reply that says their words back gets the one rewrite (nothing cut)", r.final === LISBON_GOOD && r.outcome === "redrafted" && counts.shareRewrite === 1);
+  check("  the call is told it says their words back, and isn't offered 'it fits'", /Your draft mostly says their own words back to them/.test(lastShare) && !/"engages": true/.test(lastShare));
+}
+reset();
+script = { claims: () => [], rewrite: JSON.stringify({ engages: false, reply: LISBON_REPLY }) };
+{
+  const r = await ground(LISBON_REPLY, "sharing", LISBON);
+  check("a rewrite that says their words back again is refused; the draft goes as drafted (never cut for it)", r.final === LISBON_REPLY && r.outcome === "as_drafted" && r.checks.some((c) => c.name === "share_repair" && /their own words back/.test(c.reason ?? "")));
+}
+reset();
+{
+  const r = await ground(LISBON_REPLY, "asking", LISBON);
+  check("not on an asking turn", r.final === LISBON_REPLY && counts.shareRewrite === 0);
+}
+
+// ---- 3c. A feedback turn: owning what Cue sent, and offering to fix that one thing (2026-10-28 live check, Inez) ----
+const INEZ = "That link you sent goes to a page saying the event was cancelled. Kind of annoying";
+const INEZ_THREAD = "User said: any good small music nights this week?\nCo replied: This one looks like your speed. https://lu.ma/smallmusic";
+const OWN = { text: "that link shouldn't have gone out dead", type: "past_action" as const, supported: true, factId: null, quote: "That link you sent goes to a page saying the event was cancelled" };
+const fb = G.baseReplyFacts();
+fb.moment = "feedback";
+check("feedback: owning the dead link is backed by their own report of what Cue sent", G.claimChecks([OWN], fb, { message: INEZ, recentConversation: INEZ_THREAD }).every((c) => c.pass));
+check("…or by Cue's own sent line in the thread", G.claimChecks([{ ...OWN, quote: "https://lu.ma/smallmusic" }], fb, { message: INEZ, recentConversation: INEZ_THREAD }).every((c) => c.pass));
+const sh = G.baseReplyFacts();
+sh.moment = "sharing";
+check("…only on a feedback turn: elsewhere a past action still needs a fact", G.claimChecks([OWN], sh, { message: INEZ, recentConversation: INEZ_THREAD }).some((c) => !c.pass));
+check("…and a quote that isn't in their message or Cue's sent lines backs nothing", G.claimChecks([{ ...OWN, quote: "Cue sent the wrong link on purpose" }], fb, { message: INEZ, recentConversation: INEZ_THREAD }).some((c) => !c.pass));
+const inezBase = { draft: "That's on me, that link shouldn't have gone out dead. Sorry for the runaround.", cut: "Sorry for the runaround.", removed: [], allowed: "", message: INEZ };
+check("feedback: the rewrite may offer to fix the one thing it sent", G.shareRewriteAddsNothing({ ...inezBase, rewrite: "That's on me, that link was dead. Want me to find another one worth going to instead?", feedback: true }).ok);
+check("…not on a sharing turn (still a recommendation there)", !G.shareRewriteAddsNothing({ ...inezBase, rewrite: "That's on me, that link was dead. Want me to find another one worth going to instead?" }).ok);
+check("…and never an unrelated offer", !G.shareRewriteAddsNothing({ ...inezBase, rewrite: "That's on me, that link was dead. Want me to set up a call this week?", feedback: true }).ok);
+check("…and only one fix offer", !G.shareRewriteAddsNothing({ ...inezBase, rewrite: "Want me to find another one worth going to instead? Should I resend the right one?", feedback: true }).ok);
+check("the claim read is told owning a mistake in what Cue sent is supported by the record of the send", /Owning a mistake in something Cue sent, as they describe it \("that link shouldn't have gone out dead"\), is supported when their message or Cue's own sent line in the conversation shows Cue sent it: quote those words\./.test(fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
+check("the share rewrite on a feedback turn says it may offer the one fix", /you may offer to fix that one thing/.test(G.shareRewritePrompt({ facts: "", tail: "", theirWords: "", message: INEZ, draft: "x", removed: [], cut: "", offerKeep: false, feedback: true })) && !/you may offer to fix/.test(G.shareRewritePrompt({ facts: "", tail: "", theirWords: "", message: INEZ, draft: "x", removed: [], cut: "", offerKeep: false })));
+
+// ---- 3d. Their thread is theirs to tell: the world line never backs a report of it (re-record of checkin-live-thread) ----
+{
+  const rf = G.baseReplyFacts();
+  const THREAD_FACT = "Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner (said Mon Oct 12)";
+  rf.world = { thread: { fact: THREAD_FACT } } as any;
+  G.addFact(rf, "known", `Their world right now: Nothing waits on them (not a thing to say). Their thread (theirs to tell: ask, never report): ${THREAD_FACT}.`);
+  const id = rf.facts[rf.facts.length - 1].id;
+  const src0 = { message: "hey", recentConversation: "" };
+  check("a report of where their thread stands, citing the world line, fails", G.claimChecks([{ text: "Still nothing from the venue yet", type: "detail", supported: true, factId: id, quote: THREAD_FACT }], rf, src0).some((c) => !c.pass && /theirs to tell/.test(c.reason ?? "")));
+  check("asking about it still passes", G.claimChecks([{ text: "Any word from the Hayes Valley place yet?", type: "followup", supported: true, factId: id, quote: THREAD_FACT }], rf, src0).every((c) => c.pass));
+}
+
+// ---- 3e. A wish that names a specific of their life gets a claim read (live check: the river runs skipped it) ----
+const MARCUS = "Honestly the trip was a lot, with everything about dad";
+check("'Glad the runs along the river...' is read for claims", G.needsClaimCheck("That's a lot to carry into a trip. Glad the runs along the river gave you some space too.", MARCUS));
+check("…plain warmth still skips the read", !G.needsClaimCheck("Glad you're back hopeful and recharged.", MESSAGE) && !G.needsClaimCheck("Glad you're back.", MESSAGE));
+check("…a specific they named themselves doesn't count", !G.warmthWithASpecific("Glad the trip gave you room.", MARCUS));
+reset();
+script = { claims: (t) => (t.includes("river") ? [{ text: "Glad the runs along the river gave you some space too.", type: "member_life", supported: false, factId: null, quote: null }] : []), rewrite: JSON.stringify({ engages: false, reply: "That's a lot to carry into a trip. Glad you had it anyway." }) };
+{
+  const r = await ground("That's a lot to carry into a trip. Glad the runs along the river gave you some space too.", "sharing", MARCUS);
+  check("through groundReply: the invented runs are read and cut", counts.claimRead >= 1 && !/river/.test(r.final), r.final);
 }
 
 // ---- 4. Warmth isn't a claim; an invented activity still is ----
