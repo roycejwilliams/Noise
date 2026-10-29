@@ -3,7 +3,7 @@ import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
 import { situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
-import { guardTools } from "./toolGuard.js";
+import { guardTools, isGuardRefusal } from "./toolGuard.js";
 import { doorOpen } from "../services/theDoor.js";
 import { proactivePaused } from "../services/proactivePause.js";
 import { sendLimiter } from "../services/sendLimiter.js";
@@ -226,7 +226,8 @@ export function orderForCache<T extends Record<string, any>>(tools: T): T {
   return out as T;
 }
 
-// Tools that change nothing they'd hear about: running one doesn't open a second text (wrapSendsForOneReply).
+// Tools that change nothing they'd hear about: running one doesn't open a second text (wrapSendsForOneReply). Neither does any call the
+// tool guard refused (toolGuard.ts isGuardRefusal).
 export const NOT_NEW_TO_SAY = new Set(["sendReply", "markTopicAsked"]);
 export const ONE_REPLY_NOTE = "Your reply already went out this turn and nothing new has come in since, so this one didn't send. That reply stands; stop here.";
 type SendState = { sent: boolean; sentMessages: string[]; partialUnsent: string | null; laneNotes: string[]; workSinceSend: boolean; sendsInFlight: number; extraSendsRefused: number };
@@ -241,11 +242,10 @@ export function wrapSendsForOneReply(tools: Record<string, any>, state: SendStat
     if (NOT_NEW_TO_SAY.has(name) || typeof t?.execute !== "function") continue;
     const run = t.execute;
     t.execute = async (...args: any[]) => {
-      try {
-        return await run(...args);
-      } finally {
-        state.workSinceSend = true;
-      }
+      const out = await run(...args);
+      // A call the guard refused did nothing, so it's nothing new to say (a call that throws isn't either).
+      if (!isGuardRefusal(out)) state.workSinceSend = true;
+      return out;
     };
   }
   const send = tools.sendReply?.execute;

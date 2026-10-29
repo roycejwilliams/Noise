@@ -67,6 +67,17 @@ export function removalReceipt(name: string, input: any): { removal: true; chang
   return { removal: true, changes: { remove: changes.filter((c) => c?.action === "remove").length, correct: changes.filter((c) => c?.action === "correct").length }, kinds: [...new Set(refs.map((r: unknown) => logKind(String(r))))].slice(0, 10) };
 }
 
+// The guard's own refusals (switched off, a limit, no yes yet), remembered by identity so what the model reads is unchanged: a refused
+// call did nothing, so it's never "something new" that may open a second text (agent/conversationTools.ts wrapSendsForOneReply).
+const GUARD_REFUSALS = new WeakSet<object>();
+export function markGuardRefusal<T extends object>(result: T): T {
+  GUARD_REFUSALS.add(result);
+  return result;
+}
+export function isGuardRefusal(result: unknown): boolean {
+  return !!result && typeof result === "object" && GUARD_REFUSALS.has(result as object);
+}
+
 export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCtx): T {
   const usedThisTurn = new Map<string, number>();
   const retried = new Set<string>();
@@ -110,7 +121,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       const refuse = async (receipt: Receipt, receiptText: string, tell: string, detail: Record<string, unknown> = {}) => {
         ctx.notDone(receiptText);
         await log(receipt, detail);
-        return { ok: false, error: tell };
+        return markGuardRefusal({ ok: false, error: tell });
       };
 
       if (await isSwitchedOff(ability.id)) {

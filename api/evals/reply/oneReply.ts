@@ -7,6 +7,7 @@ process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 import fs from "node:fs";
 const T = await import("../../src/agent/conversationTools.js");
+const G = await import("../../src/agent/toolGuard.js");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 400)}` : ""}`); } };
 const quiet = console.log;
@@ -18,6 +19,10 @@ function harness(o: { answerOwed?: boolean } = {}) {
   const tools: Record<string, any> = {
     sendReply: { execute: async ({ message }: { message: string }) => { await new Promise((r) => setTimeout(r, 5)); went.push(message); state.sentMessages.push(message); state.sent = true; return { ok: true }; } },
     startTask: { execute: async () => ({ ok: true }) },
+    // A tool the guard refused (switched off, a limit, no yes yet): it did nothing.
+    refusedTool: { execute: async () => G.markGuardRefusal({ ok: false, error: "This is switched off right now." }) },
+    // A tool's own failure is still a result to say.
+    failedTool: { execute: async () => ({ ok: false, error: "Couldn't reach the venue's page." }) },
     markTopicAsked: { execute: async () => ({ ok: true }) },
   };
   T.wrapSendsForOneReply(tools, state, () => !!o.answerOwed, false);
@@ -46,6 +51,19 @@ const PRIYA_2 = "Congratulations. That it's the first one in years you actually 
   check("another tool ran after the reply: its result may go as its own text", h.went.length === 2);
   await h.tools.sendReply.execute({ message: "Anything else?" });
   check("…and only once: a third text after it, with nothing new again, doesn't go", h.went.length === 2);
+}
+{
+  const h = harness();
+  await h.tools.sendReply.execute({ message: PRIYA_1 });
+  await h.tools.refusedTool.execute({});
+  await h.tools.sendReply.execute({ message: PRIYA_2 });
+  check("a tool the guard refused is nothing new: no second text after it", h.went.length === 1, h.went);
+  await h.tools.failedTool.execute({});
+  await h.tools.sendReply.execute({ message: "That page wouldn't load, so I couldn't check the time." });
+  check("…a tool's own failure is a result: the text about it goes", h.went.length === 2, h.went);
+}
+{
+  check("isGuardRefusal reads only the guard's mark: a plain ok:false isn't one, and what the model reads is unchanged", !G.isGuardRefusal({ ok: false }) && G.isGuardRefusal(G.markGuardRefusal({ ok: false, error: "x" })) && JSON.stringify(G.markGuardRefusal({ ok: false, error: "x" })) === '{"ok":false,"error":"x"}');
 }
 {
   const h = harness();
@@ -99,6 +117,8 @@ check("pure: nothing sent yet, a send is always allowed", T.anotherSendAllowed({
 // Wiring: the real tool set is wrapped before the guard, and the turn rule says the same thing.
 const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
 check("the real tool set is wrapped for one reply, outermost (after the tool guard)", /guardTools\(tools, \{[^\n]*\}\);\n(?:\s*\/\/[^\n]*\n)+\s*wrapSendsForOneReply\(tools as Record<string, any>, state, \(\) => !!ctx\.answerOwed, ctx\.dryRun\);\n\s*return \{ tools: orderForCache\(tools\)/.test(ct));
+check("the guard marks every refusal it returns", /return markGuardRefusal\(\{ ok: false, error: tell \}\);/.test(fs.readFileSync(new URL("../../src/agent/toolGuard.ts", import.meta.url), "utf8")));
+check("the send wrap skips a guard refusal when counting new work", /if \(!isGuardRefusal\(out\)\) state\.workSinceSend = true;/.test(ct));
 const cr = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
 check("the turn rule: the exception is another tool's result, never its own sent reply", /something new from another tool's result after your reply went out, as its own text; your own sent reply isn't one/.test(cr));
 
