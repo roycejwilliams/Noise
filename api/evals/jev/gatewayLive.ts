@@ -8,7 +8,7 @@ import { CASES, type Feel } from "./cases.js";
 import { detectSeekingMode } from "../../src/services/emotionalTone.js";
 import { classifyIssue } from "../../src/services/issueReports.js";
 import { readTextEmotion } from "../../src/harness/emotion.js";
-import { JEV_MODEL_ID, jevForMemberText, setJevGatewayForTests, type JevBool } from "../../src/services/jevGateway.js";
+import { jevForMemberText, setJevGatewayForTests, type JevBool } from "../../src/services/jevGateway.js";
 import { experimental_evaluate as evaluate } from "ai7";
 import { createGateway } from "@ai-sdk/gateway";
 
@@ -20,7 +20,7 @@ setJevGatewayForTests(async (state: unknown, questions: Record<string, JevBool>)
   stats.asked++;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const r: any = await evaluate({ model: gw.evaluationModel(JEV_MODEL_ID), state: state as any, questions: questions as any, maxRetries: 0, providerOptions: { gateway: { zeroDataRetention: true } } });
+      const r: any = await evaluate({ model: gw.evaluationModel("typesafe-ai/jev"), state: state as any, questions: questions as any, maxRetries: 0, providerOptions: { gateway: { zeroDataRetention: true } } });
       stats.answered++;
       return Object.fromEntries(Object.keys(questions).map((k) => [k, r.answers[k].probability]));
     } catch (e: any) {
