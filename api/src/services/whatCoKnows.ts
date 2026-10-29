@@ -1118,11 +1118,32 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
     const [kind, id] = a.ref.split(":");
     const removing = a.now == null;
     const because = `${removing ? "removed" : "corrected"} at their request: ${fieldFor(a.ref)}`;
+    // A want's place changed (Royce, 2026-10-29): its finds queued but not sent were found for the old place, so they're cancelled
+    // ("place corrected", which workingSet.ts isFailedAttempt treats as no decision: the same event can queue again if it's found for
+    // the right place). Tied only by the want: an ask's by its askId or a find searched for it; a goal's ONLY by a find searched for
+    // it (goals share the profile askId, so an askId match would take every goal's finds). Nothing else is matched by its words.
+    if (kind === "place") {
+      const wantKey = a.ref.slice("place:".length);
+      const askId = wantKey.startsWith("ask:") ? wantKey.slice(4) : null;
+      for (const c of cands) {
+        const k = `c${c.id}`;
+        if (done.has(k) || String(c.type) !== "event_offer") continue;
+        let pl: any = null;
+        try { pl = JSON.parse(String(c.payload)); } catch { pl = null; }
+        const byAsk = !!askId && String(pl?.askId ?? "") === askId;
+        const bySearch = pl?.match?.searchedIn?.key === wantKey;
+        if (!byAsk && !bySearch) continue;
+        done.add(k);
+        const r = await db.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $3, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'pending'`, [c.id, userId, `place corrected: ${because}`.slice(0, 300)]);
+        if (r.rowCount) out.push({ kind: "candidate", id: String(c.id), what: `${c.type}: ${String(c.summary).slice(0, 120)}`, action: "cancelled", because });
+      }
+    }
     const tied = (key: string, payload: string) =>
       (kind === "ask" && (key.startsWith(`ask_checkin:${id}:`) || payload.includes(`"askId": "${id}"`) || payload.includes(`"askId":"${id}"`))) ||
       (kind === "goal" && (payload.includes(`"goalId": "${id}"`) || payload.includes(`"goalId":"${id}"`))) ||
       (kind === "thread" && (key === `thread:${id}` || key.startsWith(`companion:thread:${id}:`)));
-    for (const c of cands) {
+    // A place's queued finds were handled above, by the want only; another want's finds are never matched by the old place's name.
+    for (const c of kind === "place" ? [] : cands) {
       const k = `c${c.id}`;
       if (done.has(k)) continue;
       if (!tied(String(c.target_key), String(c.payload)) && !queuedSays(`${c.summary}\n${c.payload}`, a)) continue;
