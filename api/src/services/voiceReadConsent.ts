@@ -98,11 +98,12 @@ export async function noteVoiceReadAsked(userId: string, db: Db = dbOr()): Promi
 
 export type YesResult = { ok: true } | { ok: false; why: "not_asked" };
 // Their yes, in their words. Only after they've had the question: a yes to something never explained isn't consent.
-export async function recordVoiceReadYes(userId: string, quote: string, db: Db = dbOr()): Promise<YesResult> {
+// receivedAt: when their message arrived. A yes already on its way before the question went (asked_at after it) isn't an answer to it.
+export async function recordVoiceReadYes(userId: string, quote: string, db: Db = dbOr(), receivedAt: Date = new Date()): Promise<YesResult> {
   const r = await db.query(
     `UPDATE voice_read_consents SET answer = 'yes', answered_at = NOW(), yes_quote = $2, withdrawn_at = NULL, updated_at = NOW()
-     WHERE user_id = $1 AND asked_at IS NOT NULL`,
-    [userId, quote.slice(0, 200)],
+     WHERE user_id = $1 AND asked_at IS NOT NULL AND asked_at <= $3`,
+    [userId, quote.slice(0, 200), receivedAt],
   );
   if (!r.rowCount) return { ok: false, why: "not_asked" };
   await recordDecision({ layer: 6, decision: "voice_read.consent", userId, outcome: "act", action: "yes" }).catch(() => {});
@@ -115,7 +116,8 @@ export async function forgetVoiceReadResults(userId: string, db: Db = dbOr()): P
   return r.rowCount ?? 0;
 }
 
-export type StopDeps = { endLive?: (userId: string) => number | Promise<number> };
+export type StopDeps = { endLive?: (userId: string) => number | Promise<number>; forgetTrace?: (userId: string, why: string) => Promise<number> };
+const forgetTraceDefault = async (userId: string, why: string) => (await import("./llmTraceText.js")).forgetTraceText(userId, why);
 const endLiveReads = async (userId: string) => (await import("./mediaStreamBridge.js")).endVoiceSessionsFor(userId);
 
 // A no (to the question) or a stop (taking a yes back): off from now, never asked again, live reads ended, results deleted.
@@ -135,6 +137,10 @@ export async function turnVoiceReadOff(userId: string, kind: "no" | "stop", db: 
   const deleted = await forgetVoiceReadResults(userId, db);
   // Each call's read log (mediaStreamBridge.ts call.voice_read: per-feeling counts and timings) goes too.
   await db.query(`DELETE FROM harness_decisions WHERE user_id = $1 AND decision = 'call.voice_read'`, [userId]).catch(() => {});
+  // And our own copy of their model calls' text (services/llmTraceText.ts, 14 days): prompts that carried voice moments, and the
+  // voiceRead tool call with their words. The same forget the what-Cue-knows removal runs (whatCoKnows.ts). Later reply prompts read
+  // voice moments only from emotion_signals (harness/emotion.ts getEmotionalContext, read fresh each turn), deleted above.
+  await (d.forgetTrace ?? forgetTraceDefault)(userId, "voice read off").catch(() => 0);
   // The fingerprint: what changed and how many rows went, never their words.
   await recordDecision({ layer: 6, decision: "voice_read.consent", userId, outcome: "act", action: kind === "stop" ? "withdrawn" : "no", proposal: { was, deleted, endedLive } }).catch(() => {});
   return { was, deleted, endedLive };
@@ -152,6 +158,7 @@ export async function keepVoiceIfStillOn<T>(userId: string, voiced: T[], db: Db 
 // The one question, by text, through the proactive queue (proactiveRegistry.ts voice_read_ask), which reads the state again before it
 // goes. After a call ends (routes/co.ts): queued once per member ever (its own target key), only when nothing is on file. When they
 // ask on a call (theyAsked; no yes is taken there): queued for soon after, under that day's key, unless it's already on.
+// True when the question will go (queued now, or already waiting under that key); false when it won't (already sent, or not due).
 export async function queueVoiceReadAsk(
   userId: string,
   d: { db?: Db; env?: NodeJS.ProcessEnv; now?: Date; theyAsked?: boolean; enqueue?: (input: import("../harness/proactive.js").EnqueueInput) => Promise<{ queued: boolean }> } = {},

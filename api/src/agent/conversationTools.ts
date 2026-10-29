@@ -1036,10 +1036,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // On a call no yes is taken (2026-10-28): Cue says it will text the question, the question goes by text through the queue
         // (proactiveRegistry.ts voice_read_ask), and only a yes by text after it counts. A stop or a no above works on a call too.
         if (ctx.onCall) {
-          const queued = ctx.dryRun ? true : await C.queueVoiceReadAsk(ctx.userId, { theyAsked: true }).then(() => true, () => false);
-          if (!queued) {
+          const queued = ctx.dryRun ? true : await C.queueVoiceReadAsk(ctx.userId, { theyAsked: true }).catch(() => null);
+          if (queued === null) {
             notDone("The voice read's question wasn't queued to go by text.");
             return { ok: false, error: "It couldn't be set up just now. Say plainly you'll come back to it by text; don't say it's on." };
+          }
+          // Nothing will go: the question already went by text and is unanswered (or went after they asked). No new line about a text.
+          if (!queued) {
+            ctx.facts?.add("did_this_turn", "Cue already texted them how the voice read works. Nothing new is sent now; it stays off unless they say yes by text.");
+            return { ok: true, note: "You already texted them the question about it. Don't promise another text; if it fits, say they can answer that text. It's off until they do." };
           }
           return carry(C.VOICE_READ_CALL_LINE, "Cue will text them how the voice read works. It stays off until they say yes by text, after reading it.");
         }
@@ -1050,7 +1055,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return carry(C.VOICE_READ_ASK, onFile?.askedAt ? "Cue told them again what the voice read is and what it keeps. It's off until they say yes." : "Cue told them what the voice read is and what it keeps, and asked if they want it. It's off until they say yes after this.");
         }
         if (!ctx.dryRun) {
-          const r = await C.recordVoiceReadYes(ctx.userId, theirWords);
+          // Only a yes sent after the question went counts (when their text arrived, not when this turn runs).
+          const r = await C.recordVoiceReadYes(ctx.userId, theirWords, undefined, ctx.turnStartedAt ? new Date(ctx.turnStartedAt) : new Date());
           if (!r.ok) {
             notDone("The voice read wasn't turned on: there's no question about it on file.");
             return { ok: false, error: "There's no question about it on file. Don't say it's on." };
