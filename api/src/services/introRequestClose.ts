@@ -21,7 +21,7 @@ export const INTRO_CLOSE_KEY_PREFIX = "intro_close:";
 // Team-facing, the same for every request (the pick and the decision log read it; never sent).
 export const INTRO_CLOSE_SUMMARY = "Close an intro they asked for a week ago, in the same words whatever happened";
 
-// ---------------------------------------------------------------- the words (Copy: waiting on Royce's approval in the PR)
+// ---------------------------------------------------------------- the words (Copy: option A, approved by Royce 2026-10-28)
 
 // The name as they said it: the first word, letters only, first letter up. Their own word, never one from the guest list, so it
 // reads the same whoever is or isn't on it. Empty when nothing usable was given.
@@ -31,7 +31,24 @@ export function nameSaid(personName: unknown): string {
   return clean ? clean[0].toLocaleUpperCase() + clean.slice(1) : "";
 }
 
-// The closing line. Never says whether the person was found, asked, declined or silent, and never offers to keep looking.
+// The name only ever as the member gave it (Royce, 2026-10-28): kept when it is a word of theirs, in this message or in their own
+// lines of the recent exchange; a name they never wrote (one Cue said, one from the guest list, the model's own guess) gives the
+// no-name line. Their spelling, first letter up; "Sarah's" counts as "Sarah".
+export function nameFromTheirWords(personName: unknown, theirLines: readonly (string | null | undefined)[]): string {
+  const name = nameSaid(personName);
+  if (!name) return "";
+  const key = name.toLocaleLowerCase();
+  const said = theirLines.some((l) =>
+    (String(l ?? "").normalize("NFC").match(/[\p{L}'’-]+/gu) ?? []).some((w) => w.replace(/['’]s$/iu, "").replace(/^['’-]+|['’-]+$/gu, "").toLocaleLowerCase() === key),
+  );
+  return said ? name : "";
+}
+// Their own lines in a recent exchange ("Member: ..."), the format agent/conversationReply.ts hands the tools.
+export function memberLinesOf(exchange: string | null | undefined): string[] {
+  return String(exchange ?? "").split("\n").filter((l) => l.startsWith("Member: ")).map((l) => l.slice("Member: ".length));
+}
+
+// The closing line (option A, approved 2026-10-28, word for word). Never says whether the person was found, asked, declined or silent, and never offers to keep looking.
 export function introCloseText(name: string): string {
   return name ? `The intro to ${name} you asked about didn't come together, so I've closed it.` : "The intro you asked about didn't come together, so I've closed it.";
 }
