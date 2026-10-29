@@ -23,7 +23,7 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
 
 // The text reply: both prompts (default and flow) introduce the reads as uncertain, for delivery, outranked by their words.
 const reply = src("agent/conversationReply.ts");
-const header = /How \$\{input\.firstName\} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls\. Reads can be wrong: they shape how you say things, never what you claim, and their words now outrank them\./g;
+const header = /How \$\{input\.firstName\} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls\. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them\./g;
 check("both reply prompts say the reads can be wrong, shape delivery only, and are outranked by their words", (reply.match(header) ?? []).length === 2);
 check("the old header that read the score as their words is gone", !/their words, plus a frustration score from calls\):/.test(reply));
 check("the reads are no longer where the reply starts from", !/Start from this\. Decide what they most need/.test(reply));
@@ -59,6 +59,8 @@ check("every kind of voice line was produced", lines.length === 10, lines.length
 check("the lead says the read can be wrong and never weighs against what they said", /can be wrong/.test(V.VOICE_LINE_LEAD) && /never whether you believe what they said/.test(V.VOICE_LINE_LEAD));
 check("every voice line is a maybe", lines.every((l) => /\bmay\b/.test(l.slice(V.VOICE_LINE_LEAD.length))), lines);
 check("no voice line tells Cue to doubt or override their words", lines.every((l) => !/face value|don't take|don't believe|really means|not what they say/i.test(l)), lines);
+// A masked low mood still gets room (Royce, "emotion is everything"), as an offer, never a probe of the read.
+check("flat and low mismatches still leave room for one open question", lines.filter((l) => /flatter than their words|lower than their words/.test(l)).length === 2 && lines.filter((l) => /flatter than their words|lower than their words/.test(l)).every((l) => /one open question/.test(l)), lines);
 check("a safety call still gets no voice line", V.voiceLine({ windows: 3, dims: { flat: 0.9, tight: 0, low: 0, sharp: 0, bright: 0 }, strongest: "flat", score: 0.9 } as any, "I'm fine", { noisy: false, safety: true }).line === null);
 
 console.log(`uncertainWording: ${total - failed}/${total} passed`);

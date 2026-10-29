@@ -433,7 +433,7 @@ ${input.firstName} is texting you. You already have their number, so never ask f
 What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
 ${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
 
-How ${input.firstName} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls. Reads can be wrong: they shape how you say things, never what you claim, and their words now outrank them.
+How ${input.firstName} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them.
 ${input.toneContext || "(nothing notable)"}
 
 Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.
@@ -484,7 +484,7 @@ ${input.firstName} is texting you. You already have their number, so never ask f
 What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
 ${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
 
-How ${input.firstName} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls. Reads can be wrong: they shape how you say things, never what you claim, and their words now outrank them.
+How ${input.firstName} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them.
 ${input.toneContext || "(nothing notable)"}
 
 Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.

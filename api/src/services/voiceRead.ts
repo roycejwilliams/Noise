@@ -138,7 +138,7 @@ const opposes = (d: VoiceDim, w: WordsTone): boolean => (d === "bright" ? w === 
 export const VOICE_LINE_LEAD = "A rough read of their voice, which can be wrong (never mention it or describe their voice to them). It shapes how you speak, never whether you believe what they said:";
 const LINES: Record<VoiceDim, { mismatch: string; neutral: string }> = {
   flat: {
-    mismatch: "their voice may sound flatter than their words. Take their words as they are; take it a little slower and leave room.",
+    mismatch: "their voice may sound flatter than their words. Take their words as they are; take it a little slower, leave room, and one open question can give them space to say more.",
     neutral: "their voice may sound flat and slow. Go easy on asks.",
   },
   tight: {
@@ -146,7 +146,7 @@ const LINES: Record<VoiceDim, { mismatch: string; neutral: string }> = {
     neutral: "their voice may sound tight. Keep your reply short and calm.",
   },
   low: {
-    mismatch: "their voice may sound lower than their words. Be gentle, no agenda.",
+    mismatch: "their voice may sound lower than their words. Be gentle, no agenda; one open question can leave room.",
     neutral: "their voice may sound low and quiet. Be gentle and unhurried.",
   },
   sharp: {
