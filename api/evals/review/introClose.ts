@@ -11,6 +11,8 @@
 //   3. Exactly once: the job run twice, a crash between queueing and marking, a close already sent.
 //   4. Delivery is the normal proactive path: caps and pauses apply (not an "answer"), a hard day holds it (timing only, it stays
 //      pending), it is never handed to a task (payload first), and sent or dropped, the request row is forgotten.
+//   5. Review of #307: an intro made through network_introductions is never closed; a failed onSent leaves no row behind (the
+//      hourly sweep) and still nothing goes twice; a safety hold delays it, never drops it.
 import { W, reset, addMember, addEvent, ask, uuid } from "../inroom/world.js";
 
 // Pinned to 18:00 UTC, as evals/review/introTrace.ts: a member with no time zone is texted 16:00-24:00 UTC, so the direct ask goes now.
@@ -41,7 +43,15 @@ const cofacts: { owner: string; label: string }[] = [];
 const requests: any[] = [];
 let failMarkOnce = false;
 const proposalOf = (d: any) => (typeof d.proposal === "string" ? JSON.parse(d.proposal) : d.proposal) ?? {};
-const introduced = (r: any) => !!r.target_id && W.pairs.some((p) => p.a_id === [r.user_id, r.target_id].sort()[0] && p.b_id === [r.user_id, r.target_id].sort()[1] && p.intro_sent_at);
+let failForgetOnce = false;
+// Read the way the statement reads it: the event pair's intro email, and the network intro only when the statement asks about it.
+const introduced = (r: any, flat: string) => {
+  if (!r.target_id) return false;
+  const [lo, hi] = [r.user_id, r.target_id].sort();
+  return W.pairs.some((p) => p.a_id === lo && p.b_id === hi && p.intro_sent_at) ||
+    (/FROM network_introductions n WHERE n\.person_a_id = LEAST\(r\.user_id, r\.target_id\) AND n\.person_b_id = GREATEST\(r\.user_id, r\.target_id\) AND \(n\.status = 'introduced' OR n\.introduced_at IS NOT NULL\)/.test(flat) &&
+      W.networkIntros.some((n) => n.a === lo && n.b === hi && (n.status === "introduced" || n.introduced_at)));
+};
 const handler = async (sql: string, p: any[] = []) => {
   const flat = sql.replace(/\s+/g, " ");
   if (/INSERT INTO intro_requests/.test(flat)) {
@@ -49,15 +59,23 @@ const handler = async (sql: string, p: any[] = []) => {
     return { rows: [] };
   }
   if (/FROM intro_requests r WHERE r\.close_due_at <= \$1 AND r\.close_queued_at IS NULL/.test(flat)) {
-    return { rows: requests.filter((r) => +r.close_due_at <= +new Date(p[0]) && !r.close_queued_at).sort((a, b) => +a.close_due_at - +b.close_due_at).map((r) => ({ id: r.id, user_id: r.user_id, close_due_at: r.close_due_at, introduced: introduced(r) })) };
+    return { rows: requests.filter((r) => +r.close_due_at <= +new Date(p[0]) && !r.close_queued_at).sort((a, b) => +a.close_due_at - +b.close_due_at).map((r) => ({ id: r.id, user_id: r.user_id, close_due_at: r.close_due_at, introduced: introduced(r, flat) })) };
   }
   if (/UPDATE intro_requests SET close_queued_at/.test(flat)) {
     if (failMarkOnce) { failMarkOnce = false; throw new Error("connection reset (a restart mid-run)"); }
     for (const r of requests) if (r.id === p[0] && !r.close_queued_at) r.close_queued_at = new Date(p[1]);
     return { rows: [] };
   }
-  if (/SELECT r\.name_said, .* FROM intro_requests r WHERE r\.id = \$1/.test(flat)) return { rows: requests.filter((r) => r.id === p[0]).map((r) => ({ name_said: r.name_said, introduced: introduced(r) })) };
-  if (/DELETE FROM intro_requests WHERE id = \$1/.test(flat)) { const i = requests.findIndex((r) => r.id === p[0]); if (i >= 0) requests.splice(i, 1); return { rows: [] }; }
+  if (/SELECT r\.name_said, .* FROM intro_requests r WHERE r\.id = \$1/.test(flat)) return { rows: requests.filter((r) => r.id === p[0]).map((r) => ({ name_said: r.name_said, introduced: introduced(r, flat) })) };
+  if (/DELETE FROM intro_requests r WHERE r\.close_queued_at IS NOT NULL AND r\.close_queued_at <= \$1 AND NOT EXISTS \(SELECT 1 FROM proactive_candidates c WHERE c\.user_id = r\.user_id AND c\.target_key = 'intro_close:' \|\| r\.id::text AND c\.status = 'pending'\)/.test(flat)) {
+    for (let i = requests.length - 1; i >= 0; i--) {
+      const r = requests[i];
+      if (r.close_queued_at && +r.close_queued_at <= +new Date(p[0]) && !W.candidates.some((c) => c.user_id === r.user_id && c.target_key === `intro_close:${r.id}` && c.status === "pending")) requests.splice(i, 1);
+    }
+    return { rows: [] };
+  }
+  if (/DELETE FROM intro_requests WHERE id = \$1/.test(flat)) {
+    if (failForgetOnce) { failForgetOnce = false; throw new Error("connection reset (onSent's delete)"); } const i = requests.findIndex((r) => r.id === p[0]); if (i >= 0) requests.splice(i, 1); return { rows: [] }; }
   if (/SELECT 1 FROM harness_decisions/.test(flat)) {
     const key = (d: any) => { const pr = proposalOf(d); const i = pr.input ?? {}; return pr.person ?? (i.lastName ? `${String(i.personName ?? "").toLowerCase().split(" ")[0]} ${String(i.lastName).toLowerCase()}` : String(i.personName ?? "").toLowerCase()); };
     return { rows: W.decisions.filter((d) => d.decision === p[0] && d.user_id === p[1] && d.outcome === "act" && key(d) === p[2]).map(() => ({ x: 1 })) };
@@ -260,6 +278,67 @@ const run = async (outcome: "not_found" | "declined" | "silent" | "unreached" | 
   check("spacing from another text Cue sent holds it, it doesn't drop it", paced.eligible.length === 0 && paced.perCandidate[0].checks.some((k: any) => !k.pass && /spacing|daily_cap/.test(k.name)), paced.perCandidate[0].checks.filter((k: any) => !k.pass));
   const night = P.evaluateCandidates({ ...pickState(c, new Date(new Date(now).setUTCHours(9, 0, 0, 0) + DAY)) });
   check("quiet hours hold it (a member with no zone, 09:00 UTC)", !night.userOk, night.userChecks);
+}
+
+// ------------------------------------------------------------ 5. review of #307: network intros, a failed onSent, the safety hold
+{
+  // An intro made the network way (network_introductions) is never "closed".
+  const w = build();
+  const askedAt = Date.now();
+  await turn(w, { personName: "Sarah", lastName: "Kim" });
+  const [lo, hi] = [w.jo.id, w.sarah.id].sort();
+  W.networkIntros.push({ a: lo, b: hi, status: "introduced", introduced_at: new Date() } as any);
+  const n = await quiet(() => IC.queueDueIntroCloses(new Date(askedAt + 7 * DAY + 60_000)));
+  check("5. introduced through a network intro: no close, and the request is forgotten", n === 0 && !W.candidates.some((c) => c.type === "intro_close") && requests.length === 0, { n, requests });
+}
+{
+  // The same, made after the close was queued: nothing goes at send time.
+  const w = build();
+  const askedAt = Date.now();
+  await turn(w, { personName: "Sarah", lastName: "Kim" });
+  await quiet(() => IC.queueDueIntroCloses(new Date(askedAt + 7 * DAY + 60_000)));
+  const [lo, hi] = [w.jo.id, w.sarah.id].sort();
+  W.networkIntros.push({ a: lo, b: hi, status: "introduced", introduced_at: new Date() } as any);
+  const draft = await proactiveRegistry.intro_close.draft(asCandidate(W.candidates[0]), { userId: w.jo.id, firstName: "Jo", phoneNumber: w.jo.phone_number!, city: null, timezone: null });
+  check("5. a network intro made after queueing: skipped at send time", "skip" in draft && /intro was made/.test(draft.skip), draft);
+}
+{
+  // onSent's delete failed: the row isn't left forever, and nothing goes twice.
+  const w = build();
+  const askedAt = Date.now();
+  await turn(w, { personName: "Sarah", lastName: "Park" });
+  const at = new Date(askedAt + 7 * DAY + 60_000);
+  await quiet(() => IC.queueDueIntroCloses(at));
+  W.candidates[0].status = "sent";
+  W.proactiveSends.push({ user_id: w.jo.id, type: "intro_close", target_key: W.candidates[0].target_key });
+  failForgetOnce = true;
+  await quiet(() => proactiveRegistry.intro_close.onSent!(asCandidate(W.candidates[0]), { userId: w.jo.id, firstName: "Jo", phoneNumber: "", city: null, timezone: null }, []).catch(() => {}));
+  const stuck = requests.length;
+  await quiet(() => IC.queueDueIntroCloses(new Date(at.getTime() + 30 * 60_000)));
+  const withinHour = requests.length;
+  await quiet(() => IC.queueDueIntroCloses(new Date(at.getTime() + 2 * 3600_000)));
+  check("5. onSent failed: the row stays only until the next run past an hour, then goes", stuck === 1 && withinHour === 1 && requests.length === 0, { stuck, withinHour, left: requests.length });
+  check("5. …and the close was never queued again (exactly once)", W.candidates.filter((c) => c.type === "intro_close").length === 1);
+  // A close still pending is never swept.
+  const w2 = build();
+  const asked2 = Date.now();
+  await turn(w2, { personName: "Sarah", lastName: "Park" });
+  const at2 = new Date(asked2 + 7 * DAY + 60_000);
+  await quiet(() => IC.queueDueIntroCloses(at2));
+  await quiet(() => IC.queueDueIntroCloses(new Date(at2.getTime() + 3 * DAY)));
+  check("5. a close still pending keeps its row", requests.length === 1 && W.candidates[0].status === "pending", requests);
+}
+{
+  // A safety hold delays it, the same for every outcome, never drops it.
+  const w = build();
+  const askedAt = Date.now();
+  await turn(w, { personName: "Sarah", lastName: "Park" });
+  await quiet(() => IC.queueDueIntroCloses(new Date(askedAt + 7 * DAY + 60_000)));
+  const c = asCandidate(W.candidates[0]);
+  const now = new Date(c.dueAt.getTime() + 60_000);
+  const held = P.evaluateCandidates(pickState(c, now, { safetyHold: true }));
+  check("5. a safety hold holds it (delay only: it stays pending, never expires)", P.SAFETY_HOLD_ALSO.has("intro_close") && held.eligible.length === 0 && held.perCandidate[0].checks.some((k: any) => k.name === "safety_hold" && !k.pass) && W.candidates[0].status === "pending" && c.expiresAt === null, held.perCandidate[0].checks.filter((k: any) => !k.pass));
+  check("5. …and goes once it lifts", P.evaluateCandidates(pickState(c, now)).eligible.length === 1);
 }
 
 console.log(`intro close: ${total - failed}/${total} passed`);
