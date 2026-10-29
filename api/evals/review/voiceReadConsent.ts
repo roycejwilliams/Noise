@@ -220,7 +220,16 @@ check("4. no regex reads what they meant: the model picks yes/no/stop/explain", 
 
 // ---------------------------------------------------------------- the words (Copy, for Royce)
 check("the question passes the send's own checks", PR.checkDraft(C.VOICE_READ_ASK, C.VOICE_READ_ASK_RULES).every((c) => c.pass), PR.checkDraft(C.VOICE_READ_ASK, C.VOICE_READ_ASK_RULES).filter((c) => !c.pass));
-check("the question says what it is, who hears it, what's kept and for how long, that it's off without a yes, and that it stops", /how you sound/.test(C.VOICE_READ_ASK) && /Hume/.test(C.VOICE_READ_ASK) && /keeps none of it/.test(C.VOICE_READ_ASK) && /don't keep the audio/.test(C.VOICE_READ_ASK) && /until you ask me to drop them/.test(C.VOICE_READ_ASK) && /off unless you say yes/.test(C.VOICE_READ_ASK) && /stop anytime/.test(C.VOICE_READ_ASK));
+check("the question says what it is, who hears it, what's kept and for how long, that it's off without a yes, and that it stops", /how you sound/.test(C.VOICE_READ_ASK) && /Hume/.test(C.VOICE_READ_ASK) && /keeps none of it/.test(C.VOICE_READ_ASK) && /don't keep the audio/.test(C.VOICE_READ_ASK) && /until you ask me to drop them/.test(C.VOICE_READ_ASK) && /off unless you say yes/.test(C.VOICE_READ_ASK) && /turn it off anytime/.test(C.VOICE_READ_ASK));
+// Byte for byte: the approved words (2026-10-28), with "turn it off anytime" for "stop anytime" (2026-10-29: the STOP-keyword trap).
+check("the question is the approved text, byte for byte", C.VOICE_READ_ASK === "One thing about our calls. If you'd like, I can listen to how you sound while we talk, not just your words, so I notice when something sits heavier than you let on. Your side of the call goes to Hume, a service that reads tone as it happens and has told us it keeps none of it. I don't keep the audio either, just a few short notes on moments that stood out, until you ask me to drop them. It's off unless you say yes, and you can tell me to turn it off anytime. Want me to?", C.VOICE_READ_ASK);
+check("the yes line, stop line and what-Cue-knows line are the approved text, byte for byte", C.VOICE_READ_YES_LINE === "Thank you. It starts on our next call, and you can tell me to turn it off anytime." && C.VOICE_READ_STOP_LINE === "Done. I won't listen to how you sound on our calls anymore, and anything I noted from it is deleted." && C.voiceReadKnownLine("2026-10-28") === "how you sound on our calls, since you said yes on 2026-10-28: a few short notes on moments that stood out, never the audio");
+{
+  // A reply of only "stop" is the carrier opt-out: no member-facing voice-read line ever invites the word.
+  const OO = await import("../../src/services/optOut.js");
+  const memberLines = [C.VOICE_READ_ASK, C.VOICE_READ_YES_LINE, C.VOICE_READ_STOP_LINE, C.VOICE_READ_CALL_LINE, C.voiceReadKnownLine("2026-10-28")];
+  check("no member-facing voice-read line contains the word stop (a bare STOP unsubscribes them from everything)", memberLines.every((l) => !/\bstop\b/i.test(l)) && OO.isOptOutKeyword("stop"), memberLines.filter((l) => /\bstop\b/i.test(l)));
+}
 check("no line names Noise or a role, and none has an em dash", [C.VOICE_READ_ASK, C.VOICE_READ_YES_LINE, C.VOICE_READ_STOP_LINE, C.voiceReadKnownLine("2026-10-28")].every((l) => !/Noise|matchmaker|AI\b|[—–]/.test(l)));
 check("the stop confirmation is one line", C.VOICE_READ_STOP_LINE.split(/(?<=[.!?])\s+/).length <= 2 && !C.VOICE_READ_STOP_LINE.includes("\n"));
 
@@ -672,7 +681,7 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   check("16. it's true for a test number too (on there without a yes): no claim they said yes", !/said yes/.test(C.VOICE_READ_CALL_RULE));
   const tsrc = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
   const vtool = tsrc.slice(tsrc.indexOf("    voiceRead: tool({"), tsrc.indexOf("    answerShareAsks: tool({"));
-  check("16. nothing the voiceRead tool tells the model suggests they say or text bare stop", !/say stop anytime|text stop|saying stop/i.test(vtool + C.VOICE_READ_CALL_RULE + C.VOICE_READ_OFF_ON_CALL_NOTE));
+  check("16. nothing the voiceRead tool tells the model suggests they say or text bare stop", !/stop( it)? anytime|tell (me|you|cue) to stop\b|text stop|saying stop|say stop/i.test(vtool + C.VOICE_READ_CALL_RULE + C.VOICE_READ_OFF_ON_CALL_NOTE + JSON.stringify(CAP.ABILITIES.find((a: any) => a.id === "voice_read"))));
 
   // Two turns of one call: the stop on turn 1, then turn 2.
   CT._resetCallMemoryForTest();
