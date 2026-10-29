@@ -664,7 +664,15 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   twilio.registerCall = realRegister;
   const ctxOf = (a: any) => String(a?.conversationInitiationClientData?.dynamicVariables?.context_summary ?? "");
   check("16. a call placed while it's on opens with the rule; one placed while it's off doesn't", registered.length === 2 && ctxOf(registered[0]).includes(C.VOICE_READ_CALL_RULE) && !ctxOf(registered[1]).includes(C.VOICE_READ_CALL_RULE), registered.map(ctxOf));
-  check("16. the rule never lets Cue claim a stop it can't make: without the tool, it points to a text", /If you don't have that tool, don't say it's stopped/.test(C.VOICE_READ_CALL_RULE) && /a text saying stop/.test(C.VOICE_READ_CALL_RULE));
+  const OO = await import("../../src/services/optOut.js");
+  check("16. the rule never lets Cue claim a stop it can't make: without the tool, it points to a text asking for it off", /If you don't have that tool, don't say it's stopped/.test(C.VOICE_READ_CALL_RULE) && /text you, in a sentence, that they want the voice read off/.test(C.VOICE_READ_CALL_RULE));
+  // The bare word is the carrier opt-out, caught before any reply: it would stop every text and call and leave the yes on file.
+  const example = /\(like "([^"]+)"\)/.exec(C.VOICE_READ_CALL_RULE)?.[1] ?? "";
+  check("16. what the rule tells them to text never trips the opt-out; it warns off the single word, which does", OO.isOptOutKeyword("stop") && !!example && !OO.isOptOutKeyword(example) && /Never tell them to text the single word stop/.test(C.VOICE_READ_CALL_RULE), example);
+  check("16. it's true for a test number too (on there without a yes): no claim they said yes", !/said yes/.test(C.VOICE_READ_CALL_RULE));
+  const tsrc = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  const vtool = tsrc.slice(tsrc.indexOf("    voiceRead: tool({"), tsrc.indexOf("    answerShareAsks: tool({"));
+  check("16. nothing the voiceRead tool tells the model suggests they say or text bare stop", !/say stop anytime|text stop|saying stop/i.test(vtool + C.VOICE_READ_CALL_RULE + C.VOICE_READ_OFF_ON_CALL_NOTE));
 
   // Two turns of one call: the stop on turn 1, then turn 2.
   CT._resetCallMemoryForTest();
@@ -678,6 +686,17 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   check("16. turn 1: the stop is real (off on file), and before it no turn carried the off note", r1?.ok !== false && !(await C.voiceReadOnFor(M16, db, env())) && !before.includes(C.VOICE_READ_OFF_ON_CALL_NOTE), r1);
   check("16. turn 2 of the same call: the note is in the call's tools note, from code, not the model's memory", t2.note.includes(C.VOICE_READ_OFF_ON_CALL_NOTE) && CT.callVoiceReadOff(callKey));
   check("16. another call isn't touched", !CT.callVoiceReadOff(`${M16}:tok-other`) && !CT.buildCallTools({ userId: M16, callKey: `${M16}:tok-other`, member, turnWords: "hi", callWords: "hi", lastCoLine: null } as any).note.includes(C.VOICE_READ_OFF_ON_CALL_NOTE));
+  // F2: only a real stop or no that went through sets the call's flag.
+  const F2 = "25252525-1111-2222-3333-444444444444";
+  db.users.set(F2, { phone_number: REAL, voice_read_ok: false });
+  const f2Turn = (key: string, words: string) => CT.buildCallTools({ userId: F2, callKey: key, member, turnWords: words, callWords: words, lastCoLine: null } as any);
+  const rYes: any = await f2Turn(`${F2}:a`, "yes you can listen to my voice").run("voiceRead", { answer: "yes", theirWords: "yes you can listen to my voice" }, "f2a");
+  const rExplain: any = await f2Turn(`${F2}:b`, "how does the voice thing work").run("voiceRead", { answer: "explain", theirWords: "how does the voice thing work" }, "f2b");
+  const rFailed: any = await f2Turn(`${F2}:c`, "anyway about dinner").run("voiceRead", { answer: "stop", theirWords: "stop listening to my voice" }, "f2c");
+  check("16 F2. a yes or an explain on a call doesn't set the flag", rYes?.ok !== false && rExplain?.ok !== false && !CT.callVoiceReadOff(`${F2}:a`) && !CT.callVoiceReadOff(`${F2}:b`), { rYes, rExplain });
+  check("16 F2. a stop that didn't go through (ok:false: not their words) doesn't set it", rFailed?.ok === false && !CT.callVoiceReadOff(`${F2}:c`), rFailed);
+  const rNo: any = await f2Turn(`${F2}:d`, "no thanks, don't read my voice").run("voiceRead", { answer: "no", theirWords: "no thanks" }, "f2d");
+  check("16 F2. a no that went through does", rNo?.ok !== false && CT.callVoiceReadOff(`${F2}:d`), rNo);
   const msgs = [{ role: "system", content: system }, { role: "user", content: [{ type: "text", text: `earlier\n${ctxLine}\nmore` }] }, { role: "assistant", content: "Sure." }];
   const stripped = C.stripVoiceReadLines(msgs as any);
   const flatText = JSON.stringify(stripped);

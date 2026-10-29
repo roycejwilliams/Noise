@@ -1039,7 +1039,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("The voice read's question wasn't asked again: they said no to it.");
           return { ok: false, error: "They turned it down, so don't ask again. If they want it on, their own clear yes turns it on." };
         }
-        if (answer === "explain" && was === "yes") return { ok: true, note: "It's on, since they said yes. Answer plainly, and remind them they can say stop anytime." };
+        if (answer === "explain" && was === "yes") return { ok: true, note: "It's on, since they said yes. Answer plainly, and remind them they can tell you anytime to stop listening to how they sound (in a sentence; never suggest texting the single word stop, which unsubscribes them from everything)." };
         // On a call no yes is taken (2026-10-28): Cue says it will text the question, the question goes by text through the queue
         // (proactiveRegistry.ts voice_read_ask), and only a yes by text after it counts. A stop or a no above works on a call too.
         if (ctx.onCall) {
@@ -1075,7 +1075,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: false, error: "There's no question about it on file. Don't say it's on." };
           }
         }
-        return carry(C.VOICE_READ_YES_LINE, "They said yes to the voice read: from their next call, Cue listens to how they sound. They can say stop anytime.");
+        return carry(C.VOICE_READ_YES_LINE, "They said yes to the voice read: from their next call, Cue listens to how they sound. They can tell Cue anytime to stop listening (in a sentence, never the single word stop, which unsubscribes them from everything).");
       },
     }),
     answerShareAsks: tool({
