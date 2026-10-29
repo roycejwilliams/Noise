@@ -14,7 +14,7 @@ const cases: [string, string, boolean, string][] = [
 ];
 for (const [msg, co, inline, want] of cases) {
   const r = await startJevShadow(msg, co, inline)!;
-  const top = r.feeling ? Object.entries(r.feeling).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(", ") : "unavailable";
-  const hit = r.feeling ? (r.feeling as any)[want] : null;
+  const top = r.answers ? Object.entries(r.answers).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(", ") : "unavailable";
+  const hit = r.answers ? (r.answers as any)[want] : null;
   console.log(`${hit !== null && hit >= 0.8 ? "ok  " : hit !== null && hit > 0.2 ? "weak" : "MISS"} ${JSON.stringify(msg)} want ${want} ${hit?.toFixed(2) ?? "-"} | top: ${top} | ${r.ms}ms`);
 }

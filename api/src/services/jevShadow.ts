@@ -88,12 +88,12 @@ export const JEV_FEELING_QUESTIONS = {
 
 export type JevFeeling = Record<keyof typeof JEV_FEELING_QUESTIONS, number>;
 
-export function startJevShadow(message: string, coLastMessage: string | null, repliedToCo: boolean): Promise<{ feeling: JevFeeling | null; ms: number }> | null {
+export function startJevShadow(message: string, coLastMessage: string | null, repliedToCo: boolean): Promise<{ answers: JevFeeling | null; ms: number }> | null {
   if (!jevForMemberText() || !message.trim()) return null;
   const started = Date.now();
   return askJevZdr({ latest_message: message.slice(0, 1000), co_last_message: (coLastMessage ?? "").slice(0, 600), replied_inline_to_co: repliedToCo }, JEV_FEELING_QUESTIONS, 3000)
-    .then((p) => ({ feeling: p as JevFeeling | null, ms: Date.now() - started }))
-    .catch(() => ({ feeling: null, ms: Date.now() - started }));
+    .then((p) => ({ answers: p as JevFeeling | null, ms: Date.now() - started }))
+    .catch(() => ({ answers: null, ms: Date.now() - started }));
 }
 
 // The emotion word from the read, kept only when it's one of these; anything
@@ -125,19 +125,19 @@ const round = (p: JevFeeling): JevFeeling => Object.fromEntries(Object.entries(p
 // The row, pure so its shape can be checked (evals/jev/feelingShadow.ts).
 // proposal keys: v (question wording version), jev (probability per question,
 // or null when Jev didn't answer), sonnet (sonnetSide), jevMs, sonnetMs.
-export function buildFeelingRow(userId: string, feeling: JevFeeling | null, ms: number, read: TurnRead) {
+export function buildFeelingRow(userId: string, answers: JevFeeling | null, ms: number, read: TurnRead) {
   return {
     layer: 2 as const,
     decision: "jev.shadow.feeling",
     userId,
-    outcome: feeling ? ("act" as const) : ("skip" as const),
-    action: feeling ? "read" : "unavailable",
-    proposal: { v: JEV_FEELING_VERSION, jev: feeling ? round(feeling) : null, sonnet: sonnetSide(read), jevMs: ms, sonnetMs: read.latencyMs },
+    outcome: answers ? ("act" as const) : ("skip" as const),
+    action: answers ? "read" : "unavailable",
+    proposal: { v: JEV_FEELING_VERSION, jev: answers ? round(answers) : null, sonnet: sonnetSide(read), jevMs: ms, sonnetMs: read.latencyMs },
   };
 }
 
 // Fire and forget: returns at once, logs when Jev answers (or fails).
 export function logJevShadow(userId: string, jevP: ReturnType<typeof startJevShadow>, read: TurnRead | null): void {
   if (!jevP || !read) return;
-  jevP.then(({ feeling, ms }) => recordDecision(buildFeelingRow(userId, feeling, ms, read))).catch(() => {});
+  jevP.then(({ answers, ms }) => recordDecision(buildFeelingRow(userId, answers, ms, read))).catch(() => {});
 }
