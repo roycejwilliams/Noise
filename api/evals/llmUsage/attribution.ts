@@ -195,7 +195,7 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   }
   const m = src("db/migrations.ts");
   check("migration: nullable user_id added idempotently", /ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS user_id UUID`/.test(m));
-  check("the writer inserts user_id", /cost_usd, user_id\) VALUES/.test(src("services/llmUsage.ts")));
+  check("the writer inserts user_id", /cost_usd, user_id(, error)?\) VALUES/.test(src("services/llmUsage.ts")));
 }
 
 // ---------------------------------------------------------------- wrong-member cases from review

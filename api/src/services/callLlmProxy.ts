@@ -13,7 +13,8 @@ import { stockSentence } from "../harness/stockLines.js";
 import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
 import { memberStateSignal } from "./memberState.js";
 import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.js";
-import { recordAnthropicUsage } from "./llmUsage.js";
+import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
+import { classifyModelFailure, failureLabel, noteModelFailure } from "./modelKeyAlert.js";
 import { plainPunctuation } from "./safetyText.js";
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
@@ -664,7 +665,15 @@ export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHR
     headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify(req),
   });
-  if (!res.ok || !res.body) throw new Error(`anthropic ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+  if (!res.ok || !res.body) {
+    const detail = `anthropic ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`;
+    // The refused request has its cost row too, saying it failed (kind and status only), and a refused key raises the team alert
+    // (services/modelKeyAlert.ts).
+    const failure = classifyModelFailure({ status: res.status, message: detail });
+    noteModelFailure("anthropic", failure);
+    recordUsage({ functionId: "call.turn", userId: userId === null ? null : (asMemberId(userId) ?? scopeMember()), traceId: null, model: req.model, inputUncached: 0, cacheRead: 0, cacheWrite: 0, output: 0, webSearches: 0, costUsd: 0, error: failureLabel(failure) });
+    throw new Error(detail);
+  }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";

@@ -10,6 +10,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { classifyModelFailure, failureLabel, noteModelFailure, providerOf } from "./modelKeyAlert.js";
 
 // USD per million tokens (Anthropic list prices, checked 2026-09-23).
 // Cache writes are the 5-minute kind (1.25x input); reads are 0.1x input.
@@ -44,6 +45,9 @@ export type UsageRow = {
   output: number;
   webSearches: number;
   costUsd: number | null;
+  // A request that failed (2026-10-29: a rejected key wrote five days of silent $0 rows): its kind and status ("auth (401)"), never
+  // the error's message. null for a request that went through.
+  error?: string | null;
 };
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -78,7 +82,7 @@ function userIdOf(attrs: Record<string, unknown>, fromScope: string | null): str
 }
 
 // Pure, so the mapping can be checked without a span (evals/llmUsage/rules.ts).
-export function usageFromSpan(name: string, attrs: Record<string, unknown>, traceId: string | null = null, scopeUserId: string | null = null): UsageRow | null {
+export function usageFromSpan(name: string, attrs: Record<string, unknown>, traceId: string | null = null, scopeUserId: string | null = null, error: string | null = null): UsageRow | null {
   if (!/^ai\.(generateText|streamText|generateObject|streamObject)\.do(Generate|Stream)$/.test(name)) return null;
   const model = String(attrs["ai.response.model"] ?? attrs["ai.model.id"] ?? "unknown");
   const cacheRead = num(attrs["ai.usage.inputTokenDetails.cacheReadTokens"]);
@@ -108,7 +112,16 @@ export function usageFromSpan(name: string, attrs: Record<string, unknown>, trac
     output,
     webSearches,
     costUsd,
+    error,
   };
+}
+
+// Pure: a request span that ended in an error, as a failure (its message is read to classify it, never kept), or null. Only the
+// request spans (doGenerate, doStream, doEmbed): the call around them fails with the same error and isn't counted twice.
+export function spanFailure(name: string, status: { code?: number; message?: string } | undefined, events: { name: string; attributes?: Record<string, unknown> }[] = []) {
+  if (!/^ai\.[A-Za-z]+\.do(Generate|Stream|Embed)$/.test(name) || status?.code !== 2) return null;
+  const exception = events.find((e) => e.name === "exception");
+  return classifyModelFailure({ message: `${status.message ?? ""} ${String(exception?.attributes?.["exception.message"] ?? "")}`.trim() });
 }
 
 // Rows are written in batches so a reply never waits on the database.
@@ -123,12 +136,12 @@ async function flush(): Promise<void> {
     const { default: pool } = await import("../db/db.js");
     const values: unknown[] = [];
     const tuples = rows.map((r, i) => {
-      values.push(r.functionId, r.traceId, r.model, r.inputUncached, r.cacheRead, r.cacheWrite, r.output, r.webSearches, r.costUsd, r.userId);
-      const b = i * 10;
-      return `(${Array.from({ length: 10 }, (_, k) => `$${b + k + 1}`).join(",")})`;
+      values.push(r.functionId, r.traceId, r.model, r.inputUncached, r.cacheRead, r.cacheWrite, r.output, r.webSearches, r.costUsd, r.userId, r.error ?? null);
+      const b = i * 11;
+      return `(${Array.from({ length: 11 }, (_, k) => `$${b + k + 1}`).join(",")})`;
     });
     await pool.query(
-      `INSERT INTO llm_usage (function_id, trace_id, model, input_uncached, cache_read, cache_write, output, web_searches, cost_usd, user_id) VALUES ${tuples.join(",")}`,
+      `INSERT INTO llm_usage (function_id, trace_id, model, input_uncached, cache_read, cache_write, output, web_searches, cost_usd, user_id, error) VALUES ${tuples.join(",")}`,
       values,
     );
   } catch (err: any) {
@@ -190,7 +203,11 @@ export class LlmUsageSpanProcessor implements SpanProcessor {
     const id = span.spanContext().spanId;
     const fromScope = this.started.get(id) ?? null;
     this.started.delete(id);
-    const row = usageFromSpan(span.name, span.attributes as Record<string, unknown>, span.spanContext().traceId, fromScope);
+    const attrs = span.attributes as Record<string, unknown>;
+    const failure = spanFailure(span.name, span.status, span.events as any);
+    // A refused key raises the team alert (services/modelKeyAlert.ts, at most hourly per provider); the row records the failure.
+    if (failure) noteModelFailure(providerOf(String(attrs["ai.model.provider"] ?? attrs["ai.model.id"] ?? "")), failure);
+    const row = usageFromSpan(span.name, attrs, span.spanContext().traceId, fromScope, failure ? failureLabel(failure) : null);
     if (row) recordUsage(row);
   }
   async forceFlush(): Promise<void> {

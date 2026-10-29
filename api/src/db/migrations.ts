@@ -65,6 +65,8 @@ export async function runMigrations(): Promise<void> {
     // member and a row for a call about no single member stays null.
     .then(() => pool.query(`ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS user_id UUID`))
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_user ON llm_usage (user_id, created_at DESC) WHERE user_id IS NOT NULL`))
+    // A request that failed says so (2026-10-29: a rejected key wrote five days of $0 rows): its kind and status, never its message.
+    .then(() => pool.query(`ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS error TEXT`))
     .catch((err: Error) => console.error("llm_usage table init failed:", err));
 
   // Each model request's prompt and answer, ours only (2026-10-18): Langfuse gets no text, so the trace id it shows is
