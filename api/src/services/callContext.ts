@@ -217,7 +217,7 @@ function profileLines(p: ContextParts, keep: (text: string) => boolean = () => t
   return [
     profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
     profile?.city ? `City: ${profile.city}` : null,
-    p.emotionalLine ? `How they've been feeling:\n${p.emotionalLine}` : null,
+    p.emotionalLine ? `How they may have been feeling (reads that can be wrong; what they say on this call comes first):\n${p.emotionalLine}` : null,
     goals.length ? `Goals: ${goals.slice(0, 4).join("; ")}` : null,
     profile?.blockers?.length ? `Blockers: ${profile.blockers.filter((b: unknown) => keep(String(b))).slice(0, 2).join("; ")}` : null,
     !p.openAsks.length && statedAsk ? `Stated ask: ${statedAsk}` : null,

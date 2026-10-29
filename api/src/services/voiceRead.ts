@@ -133,28 +133,29 @@ const opposes = (d: VoiceDim, w: WordsTone): boolean => (d === "bright" ? w === 
 // ---------------------------------------------------------------- the line for the call brain
 
 // What the call brain is told. Voice words only (flat, tight, quiet, an edge, lifts) and what to do: no feeling is named,
-// so there is nothing to say back. The lead says it is never to be mentioned.
-export const VOICE_LINE_LEAD = "How they sound right now, from their voice (never mention or hint that you can hear this, and never describe their voice to them):";
+// so there is nothing to say back. The lead says it is never to be mentioned. Every line is a maybe that shapes delivery and
+// never overrides their words (Royce, 2026-10-28: scores are uncertain context, never proof).
+export const VOICE_LINE_LEAD = "A rough read of their voice, which can be wrong (never mention it or describe their voice to them). It shapes how you speak, never whether you believe what they said:";
 const LINES: Record<VoiceDim, { mismatch: string; neutral: string }> = {
   flat: {
-    mismatch: "their voice has gone flat while the words stay positive. Don't take the upbeat words at face value: take it slower, leave room, and ask one open question rather than moving on.",
-    neutral: "their voice has gone flat and slow. Go easy on asks and give them room.",
+    mismatch: "their voice may sound flatter than their words. Take their words as they are; take it a little slower and leave room.",
+    neutral: "their voice may sound flat and slow. Go easy on asks.",
   },
   tight: {
-    mismatch: "their voice is tight and quick while the words say it's fine. Don't rush past it: keep your reply short and calm, and let them lead.",
-    neutral: "their voice has tightened. Keep your reply short and calm, and let them lead.",
+    mismatch: "their voice may sound tighter than their words. Keep your reply short and calm, and let them lead.",
+    neutral: "their voice may sound tight. Keep your reply short and calm.",
   },
   low: {
-    mismatch: "their voice is low and quiet while the words stay positive. Be gentle: one open question, no agenda.",
-    neutral: "their voice is low and quiet. Be gentle and unhurried.",
+    mismatch: "their voice may sound lower than their words. Be gentle, no agenda.",
+    neutral: "their voice may sound low and quiet. Be gentle and unhurried.",
   },
   sharp: {
-    mismatch: "their voice has an edge the words don't. Get to the point, no padding.",
-    neutral: "their voice has an edge. Get to the point, no padding.",
+    mismatch: "their voice may have an edge the words don't. Get to the point, no padding.",
+    neutral: "their voice may have an edge. Get to the point, no padding.",
   },
   bright: {
-    mismatch: "their voice lifts while the words make little of it. This matters to them: stay on it and let them tell you more.",
-    neutral: "their voice lifts on this. It matters to them: stay with it a little longer.",
+    mismatch: "their voice may lift while the words make little of it. If it matters to them, stay with it a little longer.",
+    neutral: "their voice may lift on this. If it matters to them, stay with it a little longer.",
   },
 };
 
