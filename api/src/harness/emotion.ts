@@ -446,7 +446,7 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
   const voiceLine = ctx.voice ? renderVoiceFlags(ctx.voice, ago(ctx.voice.at, now)) : null;
   if (voiceLine) lines.push(voiceLine);
   for (const r of ctx.recurring) lines.push(`Keeps coming up: ${r.emotions.join(", ")} about ${r.about} (${r.count} times in two weeks).`);
-  if (ctx.needsCare) lines.push("Reads from the last day lean toward a hard time.");
+  if (ctx.needsCare) lines.push("The last day's reads point to a hard time.");
   if (ctx.withCo?.frustrated) {
     lines.push(
       `Reads suggest they're frustrated with what Cue has turned up lately${ctx.withCo.about ? ` (${ctx.withCo.about})` : ""}. If so, that's about Cue, not a hard day in their life: look wider and try harder rather than going quiet or getting smaller.`,

@@ -23,7 +23,7 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
 
 // The text reply: both prompts (default and flow) introduce the reads as uncertain, for delivery, outranked by their words.
 const reply = src("agent/conversationReply.ts");
-const header = /How \$\{input\.firstName\} may have been feeling: a model's read of their recent texts and calls, and a frustration score from calls\. Reads can be wrong: they shape how you say things, never what you claim, and what they tell you now outranks them\./g;
+const header = /How \$\{input\.firstName\} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls\. Reads can be wrong: they shape how you say things, never what you claim, and their words now outrank them\./g;
 check("both reply prompts say the reads can be wrong, shape delivery only, and are outranked by their words", (reply.match(header) ?? []).length === 2);
 check("the old header that read the score as their words is gone", !/their words, plus a frustration score from calls\):/.test(reply));
 check("the reads are no longer where the reply starts from", !/Start from this\. Decide what they most need/.test(reply));
@@ -39,12 +39,12 @@ const atCue = { source: "text" as const, emotion: "frustrated", intensity: "high
 const rendered = E.renderEmotionalContext(E.summarizeSignals([text, score, atCue], now), now);
 check("a text read is labeled a read", /Right now \(read from their texts, /.test(rendered), rendered);
 check("a call moment (a frustration score reads words, not voice) is a read of the call, not what their voice showed", /a read of the call picked up: frustrated \(high\)/.test(rendered) && !/their voice showed/.test(rendered), rendered);
-check("a hard day is a lean of the reads, not a fact", /Reads from the last day lean toward a hard time\./.test(rendered) && !/They've been struggling/.test(rendered), rendered);
+check("a hard day is a lean of the reads, not a fact", /The last day's reads point to a hard time\./.test(rendered) && !/They've been struggling/.test(rendered), rendered);
 check("frustration with Cue is what the reads suggest, still pointed at Cue doing better", /Reads suggest they're frustrated with what Cue has turned up lately \(the event picks\)\. If so, that's about Cue, not a hard day in their life: look wider and try harder/.test(rendered), rendered);
 check("the rendered reads name no diagnosis words", !/\b(?:diagnos\w*|disorder|depress\w*|anxiety disorder)\b/i.test(rendered));
 
 // The call: the context's emotion heading (dynamic variable, filled per call).
-check("the call context heads the reads as maybe-wrong, their words on the call first", /How they may have been feeling \(reads that can be wrong; what they say on this call comes first\):/.test(src("services/callContext.ts")));
+check("the call context heads the reads as maybe-wrong, not something they told (the block above says to treat context as told)", /How they may have been feeling \(reads that can be wrong, not something they told you\):/.test(src("services/callContext.ts")));
 
 // The live voice line on a call: every line is a maybe for delivery and never tells Cue to doubt their words.
 const lines: string[] = [];
