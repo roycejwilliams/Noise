@@ -75,7 +75,7 @@ import { callNotPlacedReason, callNotPlacedFacts, failureDetail, parseDialFailur
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
-import { FAILURE_RECORD_WINDOW_MINUTES, failureRecordFacts, OWED_AFTER, owedFromRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked, type FailureRow } from "../services/turnFailure.js";
+import { failureRecordFacts, OWED_AFTER, owedFromRows, readFailureRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
 import { learnFromTextTurn } from "../services/turnLearning.js";
@@ -1800,32 +1800,7 @@ export function sendblueRouter(io: Server): Router {
         // Cue's own recent failure, read back from where it was reported (services/turnFailure.ts): what happened, and whether its report
         // is on record, so "I've flagged it" is said only when it is (2026-10-28). Null when the read fails: then that's what Cue knows.
         if (hasText) {
-          const failureRows = await pool
-            .query(
-              // requested: who asked for the call (the member, or Cue on its own). answered_since: a real reply went out after it (a
-              // replayed turn that answered), so a broken turn that's been answered isn't carried on.
-              `SELECT hd.decision, hd.created_at, hd.action, hd.proposal->>'requested' AS requested,
-                      EXISTS (
-                        SELECT 1 FROM co_memories r
-                        WHERE r.user_id = hd.user_id AND r.memory_type = 'text_exchange' AND r.content LIKE 'Co replied:%'
-                          AND r.created_at > hd.created_at AND r.content <> ALL($3::text[])
-                      ) AS answered_since
-               FROM harness_decisions hd
-               WHERE hd.user_id = $1 AND hd.created_at > NOW() - make_interval(mins => $2)
-                 AND ((hd.decision = 'call.dial' AND hd.action = 'dial_failed') OR hd.decision = 'turn.failed')
-               ORDER BY hd.created_at DESC LIMIT 5`,
-              [user.id, FAILURE_RECORD_WINDOW_MINUTES, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
-            )
-            .then((r) =>
-              r.rows.map((x: { decision: string; created_at: string | Date; action: string | null; requested: string | null; answered_since: boolean }): FailureRow => ({
-                decision: x.decision,
-                at: new Date(x.created_at),
-                action: x.action,
-                requested: x.requested,
-                answeredSince: !!x.answered_since,
-              })),
-            )
-            .catch(() => null);
+          const failureRows = await readFailureRows((sql, values) => pool.query(sql, values), user.id, [...HOLD_LINES, ...OWED_AFTER]);
           for (const f of failureRecordFacts(failureRows, { afterFailure: !!owed?.afterFailure, now: new Date() })) addFact(replyFacts, "known", f);
         }
         if (owed?.afterFailure) {

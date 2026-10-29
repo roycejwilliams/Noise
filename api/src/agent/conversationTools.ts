@@ -136,6 +136,14 @@ export type ConversationToolContext = {
 // The exchange a yes answers: the caller's, else Co's last line alone.
 // Pure: their words, when the quote is copied from what they said: this message, or on a call this turn and the call's last turns (their
 // lines only, never Cue's). Anything else is null: a place, a window or a free time is never kept on Cue's paraphrase.
+// What saveFeedbackForTeam really saved: their feedback, by its summary, and nothing else. The 2026-10-28 receipt said only "Saved for
+// the team" plus the summary, and it backed "I've flagged it" about a failed call no one had reported (harness/replyGrounding.ts
+// claimChecks no longer takes a feedback receipt for anything while a failure is unreported). Keeps the "Saved for the team:" opening
+// the claim reader's rules name.
+export function feedbackReceipt(summary: string): string {
+  return `Saved for the team: their feedback, summarized as "${summary.slice(0, 200)}". Only that feedback was saved; it is not a report of anything that broke on Cue's side.`;
+}
+
 export function theirQuote(message: string, recent: string | null | undefined, quote: string | null | undefined): string | null {
   const q = String(quote ?? "").trim();
   if (q.length < 3) return null;
@@ -1074,7 +1082,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ feedback }) => {
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would save feedback for ${ctx.userId}: ${feedback}`);
-          ctx.facts?.add("did_this_turn", `Saved for the team: "${feedback.slice(0, 200)}"`);
+          ctx.facts?.add("did_this_turn", feedbackReceipt(feedback));
           return { ok: true };
         }
         const { saveFeedback } = await import("../services/issueReports.js");
@@ -1083,7 +1091,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`Their feedback wasn't saved for the team: "${feedback.slice(0, 120)}".`);
           return { ok: false, error: "Couldn't save that for the team. Don't say it was passed along." };
         }
-        ctx.facts?.add("did_this_turn", `Saved for the team: "${feedback.slice(0, 200)}"`);
+        ctx.facts?.add("did_this_turn", feedbackReceipt(feedback));
         return { ok: true, note: "Saved. You can say it's been passed to the team; don't promise when or whether it changes." };
       },
     }),

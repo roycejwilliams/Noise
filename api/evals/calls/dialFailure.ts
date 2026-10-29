@@ -80,17 +80,23 @@ let failDecisionWrite = false;
   const on = R.dialFailureError({ stage: "dial", status: 401, code: "8001", message: "x" }, true);
   const off = R.dialFailureError({ stage: "dial", status: 401, code: "8001", message: "x" }, false);
   const why = R.callNotPlacedReason(on);
-  check("the reason says the call never went out and their phone never rang", /never went out/.test(why) && /never rang/.test(why), why);
+  check("the reason says the phone service turned it down on Cue's side, before their phone rang", /turned it down on Cue's side, before their phone rang/.test(why), why);
   check("a 401 is a setup problem: asking again right away would hit the same problem", /same problem/.test(why), why);
   check("the reason says it's on record only when it is", why.includes(R.FAILURE_ON_RECORD) && R.callNotPlacedReason(off).includes(R.FAILURE_NOT_ON_RECORD) && !R.callNotPlacedReason(off).includes(R.FAILURE_ON_RECORD));
   const transient = R.callNotPlacedReason(R.dialFailureError({ stage: "dial", status: 503, code: "20500", message: "x" }, true));
   check("a 503 isn't called a setup problem", !/same problem/.test(transient), transient);
-  check("the facts carry the same reason, as a call that was never placed", R.callNotPlacedFacts(on).some((f) => f.kind === "known" && /^No call was placed this turn\. The call never went out/.test(f.text)));
+  check("the facts carry the same reason, as Cue's own failure: it tried, and the call didn't go through", R.callNotPlacedFacts(on).some((f) => f.kind === "known" && f.text.startsWith(`${R.FAILURE_FACT_PREFIX} Cue tried to call them just now, and the call didn't go through:`)));
   check("the gate's own reasons are unchanged", /isn't clear/.test(R.callNotPlacedReason("weird")) && /8am to 9pm/.test(R.callNotPlacedReason("Call blocked: outside 8am-9pm their time")));
   const detail = R.failureDetail(Object.assign(new Error("The 'To' number +1 415 555 0200 is not valid for jordan@example.com"), { status: 400, code: 21211 }));
   check("an error's phone numbers, emails and quoted values never reach the report", !/555|jordan@|'To'/.test(detail.message) && detail.status === 400 && detail.code === "21211", detail);
   const curly = R.failureDetail(new Error("Call to “Sarah Kim” at ‘home’ refused"));
   check("curly-quoted values never reach the report either", !/Sarah|Kim|home/.test(curly.message) && /Call to \[quoted\] at \[quoted\] refused/.test(curly.message), curly);
+  const apos = R.failureDetail(new Error("No route for 'Jordan's phone' at 'Sarah O'Neil's' today"));
+  check("a quoted value holding an apostrophe is scrubbed whole", apos.message === "No route for [quoted] at [quoted] today", apos);
+  const openStraight = R.failureDetail(new Error('Bad value "Sarah Kim at home, call later'));
+  const openCurly = R.failureDetail(new Error("Bad value “Sarah Kim at home"));
+  const openSingle = R.failureDetail(new Error("Bad value ‘Sarah Kim at home"));
+  check("an opening quote never closed is scrubbed to the end", openStraight.message === "Bad value [quoted]" && openCurly.message === "Bad value [quoted]" && openSingle.message === "Bad value [quoted]", [openStraight, openCurly, openSingle]);
   check("contractions aren't mistaken for quotes", R.failureDetail(new Error("actor doesn't have any assertions and can't dial")).message === "actor doesn't have any assertions and can't dial");
 }
 

@@ -4,8 +4,14 @@
 // "something broke" and later claimed it had "flagged it"). services/callTrigger.ts returns this as the error, with whether its
 // report reached the decision log (call.dial, read by the morning review), so what Cue says about it is only what's on record.
 export const CALL_NEVER_STARTED = "Call never started:";
-export const FAILURE_ON_RECORD = "The failure is on record for the team.";
-export const FAILURE_NOT_ON_RECORD = "The failure isn't on record for the team.";
+// Whether a report of a failure is on record, said the same way wherever Cue is told about one (here and services/turnFailure.ts), so
+// the fact check reads it from the facts: an honest "it didn't go through on my end" cites that fact, and "I've flagged it" is only
+// supported by one that says a report is on record.
+export const FAILURE_ON_RECORD = "A report of it is on record for the team.";
+export const FAILURE_NOT_ON_RECORD = "No report of it is on record for the team.";
+export const FAILURE_RECORD_UNKNOWN = "Whether a report of it is on record couldn't be checked.";
+// Every fact about a failure of Cue's own starts with this (harness/replyGrounding.ts reads it structurally).
+export const FAILURE_FACT_PREFIX = "Cue's own failure:";
 export type DialFailure = { stage: "link" | "dial"; status: number | null; code: string | null; message: string };
 
 // What a vendor or database error says, without anything private: no phone numbers or other long digit runs, no email addresses,
@@ -16,7 +22,8 @@ export function failureDetail(err: unknown): { status: number | null; code: stri
   const code = e.code === undefined || e.code === null ? null : String(e.code).slice(0, 40);
   const message = String(e.message ?? e)
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
-    .replace(/"[^"]*"|“[^”]*”|(?<!\w)'[^']*'(?!\w)|(?<!\w)‘[^’]*’(?!\w)|`[^`]*`/g, "[quoted]")
+    // A quoted value may hold an apostrophe ('Jordan's number'), and one left open is scrubbed to the end.
+    .replace(/"[^"]*(?:"|$)|“[^”]*(?:”|$)|(?<!\w)'(?:[^']|'(?=\w))*(?:'(?!\w)|$)|(?<!\w)‘(?:[^’]|’(?=\w))*(?:’(?!\w)|$)|`[^`]*(?:`|$)/g, "[quoted]")
     .replace(/\+?\d[\d\s().-]{5,}\d/g, "[number]")
     .replace(/\s+/g, " ")
     .trim()
@@ -41,7 +48,7 @@ export function parseDialFailure(error: string | null | undefined): { stage: "li
 export function callNotPlacedReason(error: string | null | undefined): string {
   const e = String(error ?? "");
   const dial = parseDialFailure(e);
-  if (dial) return `The call never went out: ${dial.stage === "dial" ? "the phone service Cue calls through turned it down" : "setting it up failed"} on Cue's side, so their phone never rang, and nothing they did caused it.${dial.setup ? " It's a setup problem on Cue's side, so asking again right away would hit the same problem." : ""} ${dial.reported ? FAILURE_ON_RECORD : FAILURE_NOT_ON_RECORD}`;
+  if (dial) return `${dial.stage === "dial" ? "the phone service Cue calls through turned it down" : "setting it up failed"} on Cue's side, before their phone rang, and nothing they did caused it.${dial.setup ? " It's a setup problem on Cue's side, so asking again right away would hit the same problem." : ""} ${dial.reported ? FAILURE_ON_RECORD : FAILURE_NOT_ON_RECORD}`;
   const recent = e.match(/Co called (\d+) min ago \(needs (\d+)\)/);
   if (recent) return `Cue called them ${recent[1]} minute${recent[1] === "1" ? "" : "s"} ago and waits ${recent[2]} minutes between calls, so it can call again in about ${Math.max(1, Number(recent[2]) - Number(recent[1]))} minute${Math.max(1, Number(recent[2]) - Number(recent[1])) === 1 ? "" : "s"}.`;
   if (/already in progress/i.test(e)) return "A call to them still shows as in progress, so a second one can't start yet.";
@@ -61,6 +68,11 @@ export function callNotPlacedFacts(error: string | null | undefined): { kind: "d
     const left = Math.max(1, Number(recent[2]) - Number(recent[1]));
     out.push({ kind: "did_before", text: `Cue called them ${recent[1]} minute${recent[1] === "1" ? "" : "s"} ago.` });
     out.push({ kind: "known", text: `No new call was placed this turn: Cue waits ${recent[2]} minutes between calls, so it can call them again in about ${left} minute${left === 1 ? "" : "s"} if they ask (text "call me" again).` });
+    return out;
+  }
+  // A dial that never started is Cue's own failure: Cue tried. Said as one fact the fact check can cite.
+  if (parseDialFailure(e)) {
+    out.push({ kind: "known", text: `${FAILURE_FACT_PREFIX} Cue tried to call them just now, and the call didn't go through: ${callNotPlacedReason(e)}` });
     return out;
   }
   out.push({ kind: "known", text: `No call was placed this turn. ${callNotPlacedReason(e)}` });
