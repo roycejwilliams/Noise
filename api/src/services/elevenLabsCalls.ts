@@ -373,8 +373,9 @@ export const AGENT_DEFAULTS = {
   turnModel: "turn_v3",
   // 2026-10-28 (Royce: "one personality, two rhythms"): a "yeah" or "mm" while Cue talks is them listening, not taking the turn.
   // ElevenLabs' turn config takes a list of words that never interrupt (interruption_ignore_terms, case-insensitive exact match on
-  // what they said) plus its own curated English list (merge_with_default_ignore_terms). Only pure listening sounds here: an "okay"
-  // or "yes" can be an answer or a stop, so those are left to interrupt. Live only after an agent push that Royce approves; measured
+  // what they said). ElevenLabs' own curated English list isn't merged in (merge_with_default_ignore_terms false): it isn't published
+  // and could hold an "okay" or "yes". Only pure listening sounds here: an "okay" or "yes" can be an answer or a stop, so those are
+  // left to interrupt. Live only after an agent push that Royce approves; measured
   // by call_health talk_over (services/callHealth.ts).
   interruptionIgnoreTerms: ["mm", "mhm", "mm-hmm", "uh-huh", "yeah", "right"],
   interruptionIgnoreTermLanguages: ["en"],
@@ -424,7 +425,8 @@ export function buildAgentConfig(o: {
         turn_model: AGENT_DEFAULTS.turnModel,
         interruption_ignore_terms: [...AGENT_DEFAULTS.interruptionIgnoreTerms],
         interruption_ignore_term_languages: [...AGENT_DEFAULTS.interruptionIgnoreTermLanguages],
-        merge_with_default_ignore_terms: true,
+        // Our list is the whole list: ElevenLabs' curated defaults aren't published and could include "okay" or "yes".
+        merge_with_default_ignore_terms: false,
         silence_end_call_timeout: AGENT_DEFAULTS.silenceEndCallSecs,
       },
       conversation: { max_duration_seconds: AGENT_DEFAULTS.maxDurationSecs },

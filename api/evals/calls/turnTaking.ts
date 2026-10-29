@@ -40,7 +40,7 @@ check("the call says it is the same Cue as in texts, spoken", /same Cue as in te
 check("no 'most turns are two or three' cap", !/most turns are two or three/.test(built));
 check("no every-turn 'reflection and your next question together' formula", !/Say the reflection and your next question together/.test(built));
 check("the duplicate ACKNOWLEDGING section is gone", !/ACKNOWLEDGING/.test(built));
-check("the bare-reflection fix is kept", /Never end a turn on a bare reflection/.test(built));
+check("the bare-reflection fix is kept, unqualified", /Never end a turn on a bare reflection; leave them something to answer/.test(built));
 // What other tests pin stays (evals/calls/sep23Bugs.ts, evals/calls/cues.ts).
 check("one question per turn is kept", /Ask one question per turn\./.test(built) && /never follow it with the same question in other words/.test(built));
 check("the cue guide still slots in before the spoken-rhythm line", /\n\nShort sentences, one thought each/.test(built));
@@ -54,13 +54,14 @@ check("'Okay, so' is still ruled out once", (voice.match(/Okay, so/g) ?? []).len
 check("stock lines of empathy are still ruled out (line 16)", /stock lines of empathy/.test(voice));
 check("an odd-sounding word is still never repeated back", /don't repeat it back word for word/.test(voice));
 
-// The turn config: listening sounds never interrupt; anything that can be an answer or a stop still does.
+// The turn config: listening sounds made while Cue is talking never interrupt ("yeah" mid-sentence is listening; once Cue's
+// turn has ended, ignore terms don't apply, so a "yeah" answering a playback still lands); a clear answer or stop word still interrupts.
 const cfg: any = buildAgentConfig({ name: "t", prompt: voice, voiceId: "v", apiUrl: "https://x.test" });
 const turn = cfg.conversation_config.turn;
 check("turn eagerness stays normal (Royce, 2026-10-08)", turn.turn_eagerness === "normal");
 check("listening sounds are ignore terms", ["mm", "mhm", "mm-hmm", "uh-huh", "yeah"].every((t) => turn.interruption_ignore_terms.includes(t)));
 check("words that can be an answer or a stop still interrupt", !["okay", "ok", "yes", "no", "wait", "stop", "hold on", "sorry", "what"].some((t) => turn.interruption_ignore_terms.includes(t)));
-check("ElevenLabs' curated English list is merged in", turn.merge_with_default_ignore_terms === true && JSON.stringify(turn.interruption_ignore_term_languages) === JSON.stringify(["en"]));
+check("our list is the whole list (ElevenLabs' unpublished defaults are not merged in)", turn.merge_with_default_ignore_terms === false);
 check("the ignore list comes from AGENT_DEFAULTS", JSON.stringify(turn.interruption_ignore_terms) === JSON.stringify(AGENT_DEFAULTS.interruptionIgnoreTerms));
 check("the opening line still can't be cut off by a hello", cfg.conversation_config.agent.disable_first_message_interruptions === true);
 
