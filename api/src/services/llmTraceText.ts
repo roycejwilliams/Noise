@@ -228,6 +228,13 @@ export function traceTextBuffered(): { rows: number; chars: number } {
   return { rows: buffer.length, chars: bufferedChars };
 }
 
+// When a span started (OpenTelemetry HrTime [seconds, nanoseconds]); now when it can't be read.
+export function spanStartedAt(span: Pick<ReadableSpan, "startTime"> | { startTime?: unknown }): Date {
+  const t = (span as { startTime?: unknown }).startTime;
+  if (Array.isArray(t) && typeof t[0] === "number" && typeof t[1] === "number") return new Date(t[0] * 1000 + Math.floor(t[1] / 1e6));
+  return new Date();
+}
+
 // Reads the original span (before the Langfuse filter). Never throws.
 export class TraceTextSpanProcessor implements SpanProcessor {
   private marks = new WeakMap<object, Mark>();
@@ -247,6 +254,9 @@ export class TraceTextSpanProcessor implements SpanProcessor {
         userId: userIdFor(span.attributes as Record<string, unknown>, mark?.userId ?? null),
         status: span.status,
         errorType: typeof exception?.attributes?.["exception.type"] === "string" ? (exception.attributes["exception.type"] as string) : null,
+        // Stamped with when the call started, not when it ended: a call already in flight when their trace text was forgotten is
+        // dropped at write time (wasForgotten), however late it ends.
+        at: spanStartedAt(span),
       });
       if (row) recordTraceText(row);
     } catch (err: any) {

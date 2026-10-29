@@ -44,6 +44,8 @@ export const VOICE_READ_ASK =
 export const VOICE_READ_ASK_RULES = { maxChars: 600, maxSentences: 7, allowGreeting: false, mustIncludeAny: ["stop anytime"] };
 // On a call, when they bring it up or say yes there: no yes is taken on a call; the question goes by text (Copy: pending Royce).
 export const VOICE_READ_CALL_LINE = "I'll text you how it works, and you can answer there.";
+// Model-facing only, never said to them: after a stop or a no on a call, the rest of that call uses no voice notes.
+export const VOICE_READ_OFF_ON_CALL_NOTE = "For the rest of this call, don't use or mention anything in your context about how they sounded on calls (voice notes); treat it as gone.";
 // After their yes.
 export const VOICE_READ_YES_LINE = "Thank you. It starts on our next call, and you can tell me to stop anytime.";
 // After "stop": the one confirming line. True whether or not anything had been noted yet.
@@ -157,7 +159,8 @@ export async function keepVoiceIfStillOn<T>(userId: string, voiced: T[], db: Db 
 
 // The one question, by text, through the proactive queue (proactiveRegistry.ts voice_read_ask), which reads the state again before it
 // goes. After a call ends (routes/co.ts): queued once per member ever (its own target key), only when nothing is on file. When they
-// ask on a call (theyAsked; no yes is taken there): queued for soon after, under that day's key, unless it's already on.
+// ask on a call (theyAsked; no yes is taken there): queued for soon after, under that day's key, also only when nothing is on file.
+// Either way it goes once: whichever sends first, the other's draft sees it on file and skips.
 // True when the question will go (queued now, or already waiting under that key); false when it won't (already sent, or not due).
 export async function queueVoiceReadAsk(
   userId: string,

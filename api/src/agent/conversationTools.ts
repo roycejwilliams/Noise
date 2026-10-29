@@ -72,6 +72,8 @@ export type ConversationToolContext = {
   answerOwed?: string | null;
   // When their text arrived; the loop's time budget runs from here.
   turnStartedAt?: number;
+  // When their message first arrived (conversationReply.ts messageArrivedAt): the same on a replay and across retries.
+  messageArrivedAt?: number;
   // A confirmed lane move's line an earlier try at this reply never carried (conversationReply.ts retry): this reply carries it.
   laneNotesOwed?: string[];
   // The one stopped-looking line owed (services/askRetire.ts): carried in a reply that goes anyway, never forcing one.
@@ -1023,9 +1025,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (answer === "stop" || answer === "no") {
           // Off at once, whatever was on file: live reads end, what it noted is deleted, and it's never asked again.
           if (!ctx.dryRun) await C.turnVoiceReadOff(ctx.userId, answer);
-          if (answer === "stop") return carry(C.VOICE_READ_STOP_LINE, "They turned the voice read off. Cue stopped listening to how they sound on calls (this call too), deleted what it noted, and won't ask again.");
+          // On a call, the context it started with may still hold notes from earlier calls' voice reads: none of it is used from here.
+          const restOfCall = ctx.onCall ? ` ${C.VOICE_READ_OFF_ON_CALL_NOTE}` : "";
+          if (answer === "stop") {
+            const r = carry(C.VOICE_READ_STOP_LINE, "They turned the voice read off. Cue stopped listening to how they sound on calls (this call too), deleted what it noted, and won't ask again.");
+            return { ...r, note: `${r.note}${restOfCall}` };
+          }
           ctx.facts?.add("did_this_turn", "They said no to the voice read. It stays off, and Cue won't ask about it again.");
-          return { ok: true, note: "It stays off. Say so in a few words if it fits; don't ask again." };
+          return { ok: true, note: `It stays off. Say so in a few words if it fits; don't ask again.${restOfCall}` };
         }
         if (answer === "yes" && was === "yes") return { ok: true, note: "It's already on. Nothing changed." };
         if (answer === "explain" && (was === "no" || was === "withdrawn")) {
@@ -1041,10 +1048,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
             notDone("The voice read's question wasn't queued to go by text.");
             return { ok: false, error: "It couldn't be set up just now. Say plainly you'll come back to it by text; don't say it's on." };
           }
-          // Nothing will go: the question already went by text and is unanswered (or went after they asked). No new line about a text.
+          // Nothing will go. Say it was texted only when a send of the question is on record (asked_at, set when it actually went);
+          // otherwise make no claim about a text at all.
           if (!queued) {
-            ctx.facts?.add("did_this_turn", "Cue already texted them how the voice read works. Nothing new is sent now; it stays off unless they say yes by text.");
-            return { ok: true, note: "You already texted them the question about it. Don't promise another text; if it fits, say they can answer that text. It's off until they do." };
+            if (onFile?.askedAt) {
+              ctx.facts?.add("did_this_turn", "Cue texted them the question about the voice read before. Nothing new is sent now; it's off unless they say yes by text.");
+              return { ok: true, note: "You texted them the question about it before. Don't promise another text; if it fits, say they can answer that text. It's off unless they do." };
+            }
+            notDone("Nothing about the voice read was texted to them.");
+            return { ok: true, note: "Nothing was texted to them about it. Don't say you'll text them or that you did, and don't say it's on." };
           }
           return carry(C.VOICE_READ_CALL_LINE, "Cue will text them how the voice read works. It stays off until they say yes by text, after reading it.");
         }
@@ -1055,8 +1067,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return carry(C.VOICE_READ_ASK, onFile?.askedAt ? "Cue told them again what the voice read is and what it keeps. It's off until they say yes." : "Cue told them what the voice read is and what it keeps, and asked if they want it. It's off until they say yes after this.");
         }
         if (!ctx.dryRun) {
-          // Only a yes sent after the question went counts (when their text arrived, not when this turn runs).
-          const r = await C.recordVoiceReadYes(ctx.userId, theirWords, undefined, ctx.turnStartedAt ? new Date(ctx.turnStartedAt) : new Date());
+          // Only a yes sent after the question went counts: when their text first arrived (kept across replays and retries), not when
+          // this turn runs.
+          const r = await C.recordVoiceReadYes(ctx.userId, theirWords, undefined, new Date(ctx.messageArrivedAt ?? ctx.turnStartedAt ?? Date.now()));
           if (!r.ok) {
             notDone("The voice read wasn't turned on: there's no question about it on file.");
             return { ok: false, error: "There's no question about it on file. Don't say it's on." };
