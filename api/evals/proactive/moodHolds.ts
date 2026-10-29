@@ -95,7 +95,8 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
 // ================================================================ 1. check-ins held while struggling (checkin_hold)
 {
   const types = [...P.HOLD_WHILE_STRUGGLING];
-  check("the held types are the same eleven", types.sort().join() === ["announcement", "ask_checkin", "ask_solicitation", "calendar_follow", "commitment_nudge", "goal_checkin", "goal_nudge", "goal_recheck", "name_change", "product_update", "voice_read_ask"].sort().join(), types);
+  // intro_close (services/introRequestClose.ts, 2026-10-28): the one neutral close of an intro they asked for waits out a hard day too.
+  check("the held types are the same twelve", types.sort().join() === ["announcement", "ask_checkin", "ask_solicitation", "calendar_follow", "commitment_nudge", "goal_checkin", "goal_nudge", "goal_recheck", "intro_close", "name_change", "product_update", "voice_read_ask"].sort().join(), types);
   const held = read([hardSig(2)], ago(2.1));
   const okay = read([hardSig(8)], ago(1));
   const capped = read([hardSig(1), hardSig(20), hardSig(40), hardSig(49)], ago(1.5));

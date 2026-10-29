@@ -149,7 +149,10 @@ export type ProactiveType =
   | "announcement"
   // The one question about the voice read on calls (services/voiceReadConsent.ts, 2026-10-28): fixed words, once per member ever,
   // after their first call. No answer means off.
-  | "voice_read_ask";
+  | "voice_read_ask"
+  // The one neutral close for an intro they asked for by name, 7 days on, when no intro email went (services/introRequestClose.ts,
+  // 2026-10-28): fixed words, the same whatever happened.
+  | "intro_close";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -228,6 +231,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   announcement: { priority: 2, typeGapDays: 7 },
   // Once per member ever (its own target key). Not time-bound: anything about their life goes first.
   voice_read_ask: { priority: 15 },
+  // Once per request (its own target key); the caps, spacing and pauses apply as to any text Cue starts.
+  intro_close: { priority: 46 },
   // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
   // One deadline heads-up a day at most (final review of #108).
   deadline_nudge: { priority: 75, typeGapDays: 1 },
@@ -341,6 +346,8 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "announcement",
   // The voice read's one question (services/voiceReadConsent.ts): a permission ask about their calls waits out a hard day (timing only).
   "voice_read_ask",
+  // Closing an intro they asked for is news about something they wanted: on a hard day it waits until they're okay (timing only).
+  "intro_close",
 ]);
 
 // Fixed texts that also wait out a safety hold (delay only: they stay pending and go once it lifts): the voice read's question.
