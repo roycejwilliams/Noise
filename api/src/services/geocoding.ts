@@ -136,6 +136,15 @@ export async function geocodeVenue(address: string): Promise<GeoPoint | null> {
   }
 }
 
+// Pure: the open geocoder's hit for a city. Populated places and administrative areas only (its feature codes PPL*, ADM*): never a
+// park, an airport or a school field (2026-10-29: "Bay Area" took Bay Area Park, Texas, as the first US hit, and that bare row then
+// answered every "Bay Area"). In the region asked for; else the first US one; else the first one.
+export function openMeteoHit(results: any[], region: string): any | undefined {
+  const places = results.filter((r) => /^(PPL|ADM)/.test(String(r?.feature_code ?? "")));
+  const inRegion = region ? places.find((r) => String(r.admin1 ?? "").toLowerCase() === region || String(r.country ?? "").toLowerCase() === region) : undefined;
+  return inRegion ?? places.find((r) => r.country_code === "US") ?? places[0];
+}
+
 // Open-Meteo's geocoding API: free, no key, no billing.
 // It searches names only, so "Medford, MA" is searched as "Medford" and the hit in that region (else in the US) is taken.
 async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
@@ -148,10 +157,7 @@ async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
     const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(bare)}&count=10&language=en&format=json`);
     if (!res.ok) return null;
     const data: any = await res.json();
-    const results: any[] = Array.isArray(data?.results) ? data.results : [];
-    // In the region asked for; else the first US hit; else the first hit (a bias, never a reason to find nothing).
-    const inRegion = region ? results.find((r) => String(r.admin1 ?? "").toLowerCase() === region || String(r.country ?? "").toLowerCase() === region) : undefined;
-    const hit = inRegion ?? results.find((r) => r.country_code === "US") ?? results[0];
+    const hit = openMeteoHit(Array.isArray(data?.results) ? data.results : [], region);
     if (typeof hit?.latitude !== "number" || typeof hit?.longitude !== "number") return null;
     await pool
       .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [city, hit.latitude, hit.longitude])
