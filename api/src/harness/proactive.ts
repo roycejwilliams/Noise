@@ -351,7 +351,8 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
 ]);
 
 // Fixed texts that also wait out a safety hold (delay only: they stay pending and go once it lifts): the voice read's question.
-export const SAFETY_HOLD_ALSO = new Set<ProactiveType>(["voice_read_ask"]);
+// And the one neutral close of an intro they asked for, the same for every outcome, so the hold says nothing about what happened.
+export const SAFETY_HOLD_ALSO = new Set<ProactiveType>(["voice_read_ask", "intro_close"]);
 
 // Pure: whether a hard day holds what waits on it now (the emotional_timing check, the stopped-looking line riding a paced text, a find
 // the composer skipped while they were struggling).

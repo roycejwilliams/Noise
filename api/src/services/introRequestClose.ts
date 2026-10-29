@@ -90,14 +90,22 @@ export async function recordIntroRequest(userId: string, personName: string, tar
   );
 }
 
-// Whether the intro email to both went: the pair's intro_sent_at, at any event (an intro already made is never "closed").
-const INTRODUCED_SQL = `(r.target_id IS NOT NULL AND EXISTS (SELECT 1 FROM co_pairs p WHERE p.a_id = LEAST(r.user_id, r.target_id) AND p.b_id = GREATEST(r.user_id, r.target_id) AND p.intro_sent_at IS NOT NULL))`;
+// Whether they were introduced: the event pair's intro email went (co_pairs.intro_sent_at, at any event), or the network intro was
+// made (network_introductions, introduced). An intro already made is never "closed".
+const INTRODUCED_SQL = `(r.target_id IS NOT NULL AND (EXISTS (SELECT 1 FROM co_pairs p WHERE p.a_id = LEAST(r.user_id, r.target_id) AND p.b_id = GREATEST(r.user_id, r.target_id) AND p.intro_sent_at IS NOT NULL)
+  OR EXISTS (SELECT 1 FROM network_introductions n WHERE n.person_a_id = LEAST(r.user_id, r.target_id) AND n.person_b_id = GREATEST(r.user_id, r.target_id) AND (n.status = 'introduced' OR n.introduced_at IS NOT NULL))))`;
+// A close queued over an hour ago whose candidate is no longer pending (sent, skipped or expired) was handled: its row should be gone.
+// When onSent or onDropped failed to delete it, the job does, so no row outlives its close. Exactly once still holds: the row is
+// only deleted once its candidate can't go again, and a sent key is never queued again.
+export const INTRO_CLOSE_SWEEP_SQL = `DELETE FROM intro_requests r WHERE r.close_queued_at IS NOT NULL AND r.close_queued_at <= $1
+  AND NOT EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = r.user_id AND c.target_key = '${INTRO_CLOSE_KEY_PREFIX}' || r.id::text AND c.status = 'pending')`;
 
 // Hourly (jobs/index.ts): every request past its 7 days that hasn't been handled. Exactly once per request, across restarts: the
 // candidate's key is the request's id (enqueueCandidate is idempotent per key, and a key already sent is never queued again), and
 // the row is marked queued only after the candidate is in, so a crash in between queues the same candidate again, harmlessly.
 export async function queueDueIntroCloses(now: Date = new Date(), enqueue?: (c: EnqueueInput) => Promise<{ queued: boolean }>): Promise<number> {
   const add = enqueue ?? (await import("../harness/proactive.js")).enqueueCandidate;
+  await pool.query(INTRO_CLOSE_SWEEP_SQL, [new Date(now.getTime() - 3600_000)]).catch((err: any) => console.error("introRequestClose: sweeping handled requests failed (non-fatal):", err?.message ?? err));
   const { rows } = await pool.query(
     `SELECT r.id, r.user_id, r.close_due_at, ${INTRODUCED_SQL} AS introduced FROM intro_requests r
      WHERE r.close_due_at <= $1 AND r.close_queued_at IS NULL ORDER BY r.close_due_at LIMIT 200`,
