@@ -9,6 +9,9 @@
 //      analysis all stop at once; what it noted is deleted, their yes's words go, the times stay.
 //   4. No re-ask after a no (or after no answer, or a withdrawal): the question is queued once ever, and never in production.
 //   5. Nothing changes where the read can't run: the entry and its tool are left out unless the turn knows the read can run.
+//   6. When they raise it first, the approved question rides in Cue's reply word for word: the reply's checks (the fact check, its
+//      length and question cuts, the stock-line filter) see only Cue's own draft, the line is added after them as the reply's own last
+//      paragraph, and the send's clean-up changes no word of it. The yes and stop lines ride the same way.
 import { readFileSync } from "node:fs";
 const V = await import("../../src/services/voiceRead.js");
 const C = await import("../../src/services/voiceReadConsent.js");
@@ -178,7 +181,7 @@ check("4. no regex reads what they meant: the model picks yes/no/stop/explain", 
 
 // ---------------------------------------------------------------- the words (Copy, for Royce)
 check("the question passes the send's own checks", PR.checkDraft(C.VOICE_READ_ASK, C.VOICE_READ_ASK_RULES).every((c) => c.pass), PR.checkDraft(C.VOICE_READ_ASK, C.VOICE_READ_ASK_RULES).filter((c) => !c.pass));
-check("the question says what it is, who hears it, what's kept and for how long, that it's off without a yes, and that it stops", /how you sound/.test(C.VOICE_READ_ASK) && /Hume/.test(C.VOICE_READ_ASK) && /keeps none of it/.test(C.VOICE_READ_ASK) && /don't store the audio/.test(C.VOICE_READ_ASK) && /until you ask me to drop them/.test(C.VOICE_READ_ASK) && /off unless you say yes/.test(C.VOICE_READ_ASK) && /stop anytime/.test(C.VOICE_READ_ASK));
+check("the question says what it is, who hears it, what's kept and for how long, that it's off without a yes, and that it stops", /how you sound/.test(C.VOICE_READ_ASK) && /Hume/.test(C.VOICE_READ_ASK) && /keeps none of it/.test(C.VOICE_READ_ASK) && /don't keep the audio/.test(C.VOICE_READ_ASK) && /until you ask me to drop them/.test(C.VOICE_READ_ASK) && /off unless you say yes/.test(C.VOICE_READ_ASK) && /stop anytime/.test(C.VOICE_READ_ASK));
 check("no line names Noise or a role, and none has an em dash", [C.VOICE_READ_ASK, C.VOICE_READ_YES_LINE, C.VOICE_READ_STOP_LINE, C.voiceReadKnownLine("2026-10-28")].every((l) => !/Noise|matchmaker|AI\b|[—–]/.test(l)));
 check("the stop confirmation is one line", C.VOICE_READ_STOP_LINE.split(/(?<=[.!?])\s+/).length <= 2 && !C.VOICE_READ_STOP_LINE.includes("\n"));
 
@@ -197,6 +200,67 @@ const s1 = CAP.situationFor({ kitFields: 0, message: "hi", openTasks: 0, eventTo
 check("5. where it can run: listed, with its tool", !CAP.toolsOutOfSituation(s1).includes("voiceRead") && CAP.capabilitySheet({ situation: s1 }).some((l) => /how they sound/.test(l)));
 check("5. the prereqs are the read's own (never production)", !V.voiceReadPrereqs(env({ RAILWAY_ENVIRONMENT_NAME: "production" })) && V.voiceReadPrereqs(env()) && !V.voiceReadPrereqs({} as NodeJS.ProcessEnv));
 check("5. the reply tool is removed wherever the read can't run, with or without a turn", /if \(!voiceReadPrereqs\(\)\) delete \(tools as Record<string, unknown>\)\.voiceRead;/.test(tools));
+
+// ---------------------------------------------------------------- 6. the question rides in a reply word for word
+{
+  const { createConversationTools } = await import("../../src/agent/conversationTools.js");
+  const { toBeats } = await import("../../src/services/beats.js");
+  const { cleanCoMessage } = await import("../../src/services/sendblue.js");
+  const LM = await import("../../src/services/laneMoves.js");
+  const saved = { ...process.env };
+  Object.assign(process.env, env());
+  const words = (t: string) => t.replace(/\s+/g, " ").trim();
+  const ASKED = "wait, can you actually hear how I'm feeling on our calls?";
+  // The harshest reply check there is: every question dropped, every stock opener dropped, cut to 40 characters. It sees only Cue's draft.
+  const gateSaw: string[] = [];
+  const harsh = async (d: string) => {
+    gateSaw.push(d);
+    return d.split(/(?<=[.!?])\s+/).filter((x) => !/\?$/.test(x) && !/^(good question|great question)/i.test(x)).join(" ").slice(0, 40);
+  };
+  const turn = (gate: (d: string) => Promise<string>) => {
+    const t: any = createConversationTools({
+      userId: "u-6", phoneNumber: "+10000000000", resolvedContent: ASKED, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true,
+      ackSent: "👍", lastCoMessage: "How did the pitch go?", sendCoReply: async () => true, facts: { add: () => {}, text: () => "" }, gate,
+    } as any);
+    return { tools: t.tools as any, state: t.state as any };
+  };
+  const logLine = console.log;
+  console.log = () => {}; // the dry run's "would reply" lines
+  const drafts = ["Good question. Yes, if you want it.", "Fair to ask.\n\nHow did the pitch land, by the way?", "Of course"];
+  const sent: string[] = [];
+  for (const d of drafts) {
+    const { tools, state } = turn(harsh);
+    const r = await tools.voiceRead.execute({ answer: "explain", theirWords: ASKED }, {});
+    const s = await tools.sendReply.execute({ message: d }, {});
+    sent.push(r?.ok && s?.ok ? state.sentMessages[0] : "");
+  }
+  console.log = logLine;
+  check("6. the reply tool is offered where the read can run", sent.every(Boolean), sent);
+  check("6. the reply's checks never see the fixed question: they run on Cue's draft only", gateSaw.length === drafts.length && gateSaw.every((g) => !g.includes("Hume") && !g.includes("Want me to?")));
+  check("6. the question goes word for word as the reply's own last paragraph, once, even after the harshest cut", sent.every((m) => m.endsWith(`\n\n${C.VOICE_READ_ASK}`) && m.split(C.VOICE_READ_ASK).length === 2), sent);
+  check("6. no stray period after its question mark", sent.every((m) => !m.includes("?.")));
+  const beats = sent.map((m) => toBeats(m).map((b) => cleanCoMessage(b)));
+  check("6. as texted: its own last text, and the send's clean-up changes no word of it", beats.every((b) => words(b[b.length - 1]) === C.VOICE_READ_ASK), beats.map((b) => b[b.length - 1]));
+  // Cue already answered with its own text this turn: the question still goes, in a short second reply, word for word.
+  {
+    const { tools, state } = turn(async (d) => d);
+    await tools.sendReply.execute({ message: "Good timing, I was going to ask." }, {});
+    const r = await tools.voiceRead.execute({ answer: "explain", theirWords: ASKED }, {});
+    await tools.sendReply.execute({ message: "One more thing." }, {});
+    check("6. after a reply already went, the next one carries it word for word", /already went/.test(r.note) && state.sentMessages.length === 2 && state.sentMessages[1].endsWith(C.VOICE_READ_ASK) && !state.sentMessages[0].includes("Hume"));
+    await tools.sendReply.execute({ message: `Also: ${C.VOICE_READ_ASK}` }, {});
+    check("6. and never twice in a turn", state.sentMessages.length === 3 && !state.sentMessages[2].includes("Hume"), state.sentMessages[2]);
+  }
+  check("6. the tool tells Cue its own part asks nothing beside the question", /yours asks nothing/.test(tools.slice(tools.indexOf("    voiceRead: tool({"), tools.indexOf("    answerShareAsks: tool({"))));
+  // The yes and stop lines already end their sentence: carried as written, never "anytime..".
+  for (const [name, line] of [["yes", C.VOICE_READ_YES_LINE], ["stop", C.VOICE_READ_STOP_LINE]] as const) {
+    const out = LM.carryLaneNotes("Got it.", [line]).text;
+    check(`6. the ${name} line rides word for word, no doubled period`, out === `Got it. ${line}` && !out.includes(".."), out);
+  }
+  check("6. a lane note without its period still gets one (unchanged)", LM.carryLaneNotes("Sounds good.", ["moved the jazz nights from goals to lookouts"]).text === "Sounds good. Moved the jazz nights from goals to lookouts.");
+  for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  Object.assign(process.env, saved);
+}
 
 B.setBridgeDeps(null);
 console.error = errLog;

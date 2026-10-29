@@ -1002,12 +1002,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "Quote their own words from this message." };
         }
         // The fixed line goes in their reply by code (the lane-note carry), or is said in these words on a call.
+        // The question rides as the reply's own last paragraph (laneMoves.ts carryLaneNotes), so Co's part asks nothing beside it.
         const carry = (line: string, did: string) => {
           ctx.facts?.add("did_this_turn", `${ctx.dryRun ? "(dry run) " : ""}${did}`);
           if (ctx.onCall) return { ok: true, say: line, note: "Say this line in these words, once, and nothing more about it." };
           if (!state.laneNotes.includes(line) && !state.laneNotesSent.includes(line)) state.laneNotes.push(line);
-          if (state.replyCount > 0) return { ok: true, line, note: "Your reply already went, so send one short reply now with sendReply; code puts that line in it. Don't say it in your own words too." };
-          return { ok: true, line, note: "Code puts that line in your reply once; don't say it in your own words too." };
+          const asks = line === C.VOICE_READ_ASK ? " It ends your reply with its own question, so yours asks nothing." : "";
+          if (state.replyCount > 0) return { ok: true, line, note: `Your reply already went, so send one short reply now with sendReply; code puts that line in it. Don't say it in your own words too.${asks}` };
+          return { ok: true, line, note: `Code puts that line in your reply once; don't say it in your own words too.${asks}` };
         };
         const onFile = ctx.dryRun ? null : await C.readVoiceReadConsent(ctx.userId);
         const was = V.voiceReadState(onFile);

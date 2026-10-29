@@ -20,12 +20,13 @@ type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; row
 
 // ---------------------------------------------------------------- the words (Copy: Royce approves each before it ships)
 
-// The one question. What it is, what it keeps and for how long, who hears it, that it's off unless they say yes, and that they
-// can stop it. Facts behind it: Hume Expression Measurement hears the caller's side live (zero data retention, Hume, 2026-10-21);
-// Cue never stores audio; after a call a few moments are kept in emotion_signals (a feeling's label and the words they were
-// saying then), which nothing expires, so "until you ask me to drop them" is the true length.
+// The one question, approved by Royce 2026-10-28 word for word. What it is, what it keeps and for how long, who hears it, that it's
+// off unless they say yes, and that they can stop it. Facts behind it: Hume Expression Measurement hears the caller's side live
+// (zero data retention, Hume told us, 2026-10-21); Cue never stores audio; after a call a few moments are kept in emotion_signals
+// (a feeling's label and the words they were saying then), which nothing expires, so "until you ask me to drop them" is the true
+// length.
 export const VOICE_READ_ASK =
-  "One thing about our calls. If you'd like, I can listen to how you sound while we talk, not just to your words, so I notice when something sits heavier than you let on. Your side of the call goes to Hume, a service that reads tone as it happens and keeps none of it. I don't store the audio either: after a call I keep a few short notes on the moments that stood out, with your other notes, until you ask me to drop them. It stays off unless you say yes, and you can tell me to stop anytime. Want me to?";
+  "One thing about our calls. If you'd like, I can listen to how you sound while we talk, not just your words, so I notice when something sits heavier than you let on. Your side of the call goes to Hume, a service that reads tone as it happens and has told us it keeps none of it. I don't keep the audio either, just a few short notes on moments that stood out, until you ask me to drop them. It's off unless you say yes, and you can tell me to stop anytime. Want me to?";
 // The send's own checks (harness/proactive.ts checkDraft), as the queue runs them.
 export const VOICE_READ_ASK_RULES = { maxChars: 600, maxSentences: 7, allowGreeting: false, mustIncludeAny: ["stop anytime"] };
 // After their yes.
