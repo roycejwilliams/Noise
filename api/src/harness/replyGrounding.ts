@@ -2142,21 +2142,12 @@ export function restatesThem(text: string, message: string): boolean {
   return echoed.length >= 3 && echoed.length * 2 > mine.length;
 }
 
-// Questions in one message follow one thread (Royce, 2026-10-28: as many as it takes to understand, when they're one continuous
-// thought). The first always passes; each later one shares a content word (4+ letters, not filler) with an earlier question or their
-// message; more than three is a questionnaire.
-const QUESTION_FILLER = new Set("what what's that this with have your yours from they them then than when where were will would could should does doing done been being just like more most much some about into over there their here really also want kind sort thing things something anything make made going come came there's that's it's you're how's".split(" "));
-const questionWords = (t: string) => new Set((t.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z][a-z']+/g) ?? []).filter((w) => w.length >= 4 && !QUESTION_FILLER.has(w)).map((w) => w.replace(/'s$/, "")));
-export function questionsFollowOneThread(text: string, message: string): { ok: boolean; why: string | null } {
-  const qs = (text.match(SENTENCES) ?? []).map((x) => x.trim()).filter((x) => /\?["')\]]*$/.test(x));
-  if (qs.length > 3) return { ok: false, why: "a questionnaire" };
-  const seen = questionWords(message);
-  for (const [i, q] of qs.entries()) {
-    const words = questionWords(q);
-    if (i > 0 && ![...words].some((w) => seen.has(w))) return { ok: false, why: `unrelated questions: "${q}"` };
-    words.forEach((w) => seen.add(w));
-  }
-  return { ok: true, why: null };
+// Questions (Royce, 2026-10-28): as many as it takes to understand, when they're one continuous thought. Whether they follow one thread
+// is the model's call, from the guidance (Cue decides; code guards facts); a word-overlap rule rejected real follow-ups ("What made
+// this one land? Was it the people or the place?"). Code holds only the questionnaire line: more than three in one message.
+export const QUESTIONNAIRE_AT = 4;
+export function questionCount(text: string): number {
+  return (text.match(SENTENCES) ?? []).map((x) => x.trim()).filter((x) => /\?["')\]]*$/.test(x)).length;
 }
 
 // On a feedback turn the rewrite may offer to fix what Cue got wrong in what it sent: redo or replace that one thing, asked as a
@@ -2206,15 +2197,14 @@ export function parseShareRewrite(text: string | null | undefined): { engages: b
 
 // Pure: the code guard on the share rewrite (the share-turn form of rewriteAddsNothing). The removed claims stay out; any name, number,
 // day or link is from what's left, the facts or their words (never from the cut sentences); a feeling word only as they said it; no new
-// recommendation (on a feedback turn, an offer to fix what Cue sent is allowed); questions follow one thread; it doesn't say their words
+// recommendation (on a feedback turn, an offer to fix what Cue sent is allowed); no questionnaire; it doesn't say their words
 // back to them; no feelings named back at them.
 export function shareRewriteAddsNothing(o: { rewrite: string; draft: string; cut: string; removed: string[]; allowed: string; message: string; feedback?: boolean }): { ok: boolean; why: string | null } {
   const flat = (t: string) => ` ${t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
   const r = o.rewrite.trim();
   if (!r) return { ok: false, why: "empty" };
   if (r.length > o.draft.length + 60) return { ok: false, why: "longer than the draft" };
-  const thread = questionsFollowOneThread(r, o.message);
-  if (!thread.ok) return thread;
+  if (questionCount(r) >= QUESTIONNAIRE_AT) return { ok: false, why: "a questionnaire" };
   if (!checkNoEmotionLabel(r).pass) return { ok: false, why: "names their feelings" };
   if (restatesThem(r, o.message)) return { ok: false, why: "says their own words back to them" };
   const fr = flat(r);

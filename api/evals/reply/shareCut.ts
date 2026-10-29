@@ -7,7 +7,7 @@ process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 import fs from "node:fs";
 const G = await import("../../src/harness/replyGrounding.js");
 let total = 0, failed = 0;
-const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
+const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 300)}` : ""}`); } };
 
 const MESSAGE = "Cool, I'm just getting back from my birthday/vacation. I'm honestly feeling hopeful and recharged";
 const STUB = "That's a good place to come back from.";
@@ -64,18 +64,25 @@ const GOOD = "Happy belated birthday. Coming back hopeful is a good sign the tri
   check("a rewrite that says the removed claim again is refused in code, before any recheck", r.how === "none" && calls.recheck === 0);
 }
 {
-  const { d, calls } = deps(JSON.stringify({ engages: false, reply: "Happy belated birthday. Was the trip for the birthday? Are you still training for the half marathon?" }));
+  // Royce, 2026-10-28: as many questions as it takes to understand. Whether they're one thread is the model's call; code holds only the
+  // questionnaire line.
+  const LAND = "Happy belated birthday. What made this one land? Was it the people or the place?";
+  const { d, calls } = deps(JSON.stringify({ engages: false, reply: LAND }));
   const r = await G.repairShareCut(base, d);
-  check("questions that don't follow one thread are refused in code", r.how === "none" && /unrelated questions/.test(r.why) && calls.recheck === 0, r.why);
+  check("a continuous follow-up with no shared word passes ('What made this one land? Was it the people or the place?')", r.how === "rewrite" && r.final === LAND && calls.recheck === 1, r.why);
 }
 {
-  // Royce, 2026-10-28: as many questions as it takes when they're one continuous thought.
-  const THREAD = "Happy belated birthday. What made the vacation feel like a reset? Was it the vacation itself, or the birthday on top of it?";
-  const { d } = deps(JSON.stringify({ engages: false, reply: THREAD }));
+  const THREE = "Happy belated birthday. Where did you go? Who was there with you? What made it land?";
+  const { d } = deps(JSON.stringify({ engages: false, reply: THREE }));
+  const r3 = await G.repairShareCut(base, d);
+  check("three questions pass", r3.how === "rewrite", r3.why);
+}
+{
+  const FOUR = "Happy belated birthday. Where did you go? Who was there with you? What made it land? Going back next year?";
+  const { d, calls } = deps(JSON.stringify({ engages: false, reply: FOUR }));
   const r = await G.repairShareCut(base, d);
-  check("two questions on one thread pass (no one-question cap)", r.how === "rewrite" && r.final === THREAD, r.why);
-  check("…more than three is a questionnaire", !G.questionsFollowOneThread("Birthday trip? Birthday plans? Birthday cake? Birthday gifts?", MESSAGE).ok && /questionnaire/.test(G.questionsFollowOneThread("Birthday trip? Birthday plans? Birthday cake? Birthday gifts?", MESSAGE).why ?? ""));
-  check("…a later question tied to their message passes", G.questionsFollowOneThread("How are you landing? What made the vacation feel hopeful?", MESSAGE).ok);
+  check("four questions in one message is a questionnaire: refused in code", r.how === "none" && /questionnaire/.test(r.why) && calls.recheck === 0, r.why);
+  check("…counted as questions, not question marks inside one", G.questionCount("Was it the people? Or the place?") === 2 && G.questionCount("No questions here.") === 0);
 }
 {
   const { d } = deps(JSON.stringify({ engages: false, reply: "Happy belated birthday. Sounds like you were exhausted before it." }));
