@@ -426,6 +426,8 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   const humesBefore = humes.length;
   const link = await L.issueVoiceStreamLink(R, B.callKeyOf(R, "tok-r"), links, new Date(clock));
   const tw = await openWith(link);
+  // Wait for the outcome, not a fixed number of ticks: the stop inside the first read does real async work (up to 2s under load).
+  for (let i = 0; i < 400 && !tw.closed && humes.length === humesBefore; i++) await new Promise((r) => setTimeout(r, 5));
   for (let i = 0; i < 5; i++) await tick();
   check("12. stopped while the stream was starting: refused, Hume never opened, no session", humes.length === humesBefore && tw.closed && B.sessionShape(B.callKeyOf(R, "tok-r")) === null, { opened: humes.length - humesBefore, closed: tw.closed });
 }
