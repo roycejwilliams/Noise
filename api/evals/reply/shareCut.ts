@@ -183,6 +183,7 @@ script = { claims: () => [], rewrite: "" };
 }
 check("an invented activity inside a wish is still cut", G.stripUnsupported(DRAFT, [GYM_FAIL]).trim() === STUB);
 const rg = fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
+check("the claim read is told warmth isn't a claim, and that a specific inside a wish still is (member_life)", /- Warmth: wishing them well, congratulating them, or reacting to what they just told you/.test(rg) && /list only that specific, as member_life/.test(rg));
 check("the route hands the moment to the reply check", /replyFacts\.moment = moment\?\.mode \?\? null;/.test(fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")));
 
 globalThis.fetch = realFetch;
