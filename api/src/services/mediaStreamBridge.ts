@@ -134,6 +134,20 @@ function prune(now: number) {
   for (const [k, s] of sessions) if (s.finishedAt != null && now - s.finishedAt > BRIDGE.keepFinishedMs) sessions.delete(k);
 }
 
+// The call's read log (call.voice_read), written only while the read is still on for them: a stop during the close wait (or any
+// time before this runs) leaves no new row, since the stop already deleted theirs (services/voiceReadConsent.ts turnVoiceReadOff).
+export async function recordVoiceReadLog(
+  userId: string,
+  summary: ReturnType<typeof sessionSummary>,
+  d: { allowed?: (userId: string) => Promise<boolean>; write?: (row: Record<string, unknown>) => Promise<unknown> } = {},
+): Promise<boolean> {
+  const allowed = d.allowed ?? ((u: string) => import("./voiceReadConsent.js").then((c) => c.voiceReadOnFor(u)));
+  if (!(await allowed(userId).catch(() => false))) return false;
+  const write = d.write ?? ((row: Record<string, unknown>) => import("../harness/core.js").then((c) => c.recordDecision(row as any)));
+  await write({ layer: 8, decision: "call.voice_read", userId, outcome: summary.error ? "skip" : "act", action: summary.noisy ? "ignored_noisy" : summary.windows ? "read" : "no_scores", proposal: summary });
+  return true;
+}
+
 function defaultDeps(): BridgeDeps {
   return {
     connectHume: (apiKey) => new WebSocket(HUME_REALTIME_URL, { headers: { "X-Hume-Api-Key": apiKey }, handshakeTimeout: BRIDGE.openTimeoutMs }) as unknown as SocketLike,
@@ -141,9 +155,7 @@ function defaultDeps(): BridgeDeps {
     now: Date.now,
     log: (l) => console.log(l),
     record: (userId, summary) => {
-      void import("../harness/core.js")
-        .then((c) => c.recordDecision({ layer: 8, decision: "call.voice_read", userId, outcome: summary.error ? "skip" : "act", action: summary.noisy ? "ignored_noisy" : summary.windows ? "read" : "no_scores", proposal: summary }))
-        .catch(() => {});
+      void recordVoiceReadLog(userId, summary).catch(() => {});
     },
     apiKey: () => process.env.HUME_API_KEY,
     allowed: (userId) => import("./voiceReadConsent.js").then((c) => c.voiceReadOnFor(userId)).catch(() => false),

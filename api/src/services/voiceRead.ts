@@ -364,9 +364,15 @@ export function voiceReadAskDue(c: VoiceReadConsent | null | undefined, env: Nod
 }
 // Pure: whether the written question may go by text. Cue's own ask: only when nothing is on file (voiceReadAskDue). Their own ask,
 // made on a call (where no yes is taken): unless it's already on, so their yes can come by text, after the written question.
-export function voiceReadTextDue(c: VoiceReadConsent | null | undefined, theyAsked: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+// Never while the question already went and is unanswered ("asked"), and never when it went after this ask was made (createdAt: the
+// candidate's), so Cue's post-call ask and theirs can't both send it.
+export function voiceReadTextDue(c: VoiceReadConsent | null | undefined, theyAsked: boolean, env: NodeJS.ProcessEnv = process.env, createdAt: Date | null = null): boolean {
   if (!theyAsked) return voiceReadAskDue(c, env);
-  return voiceReadPrereqs(env) && voiceReadState(c) !== "yes";
+  if (!voiceReadPrereqs(env)) return false;
+  const st = voiceReadState(c);
+  if (st === "unasked") return true;
+  if (st === "yes" || st === "asked") return false;
+  return !(createdAt && c?.askedAt && c.askedAt.getTime() >= createdAt.getTime());
 }
 
 // ---------------------------------------------------------------- the fork in the call's TwiML
