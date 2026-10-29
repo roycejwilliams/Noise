@@ -332,6 +332,18 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Hourly: an intro a member asked for by name that's 7 days old with no intro email to both gets its one neutral close, queued for
+  // the dispatch like any text Cue starts (services/introRequestClose.ts). Only queues; the :15/:45 dispatch decides when.
+  cron.schedule("10 * * * *", async () => {
+    try {
+      const { queueDueIntroCloses } = await import("../services/introRequestClose.js");
+      const n = await queueDueIntroCloses();
+      if (n) console.log(`intro closes: queued ${n}`);
+    } catch (err: any) {
+      console.error("intro close cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   cron.schedule("40 * * * *", async () => {
     try {
       const { watchSentPages } = await import("../services/staleWatch.js");

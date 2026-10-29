@@ -3072,6 +3072,24 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("voice_read_consents init failed:", err));
+  // Intros a member asked for by name (services/introRequestClose.ts, 2026-10-28): one row per request, the same for every outcome,
+  // so that 7 days on an unresolved one gets the one neutral close. target_id is set only when one guest by that full name was found,
+  // and is read only by the close check. The row is deleted once the close went or was dropped, or the intro was made.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS intro_requests (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name_said TEXT NOT NULL DEFAULT '',
+        event_id TEXT,
+        target_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        asked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        close_due_at TIMESTAMPTZ NOT NULL,
+        close_queued_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS intro_requests_due ON intro_requests (close_due_at) WHERE close_queued_at IS NULL`))
+    .catch((err: Error) => console.error("intro_requests init failed:", err));
   await concurrencyMigrations();
 }
 

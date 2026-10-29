@@ -26,6 +26,7 @@ import { recordDecision } from "../harness/core.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
+import { recordIntroRequest } from "../services/introRequestClose.js";
 import { askEntries } from "../harness/profileWrite.js";
 import { localStamp, memberZone, memberZoneOrFallback } from "../services/memberTime.js";
 import { DateTime } from "luxon";
@@ -1810,6 +1811,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if ("needsDetail" in resolved) {
           return { ok: true, note: "Before anything else, ask for the person's last name, so you reach the right person. Ask it plainly, the same way you would for anyone; don't say whether you know anyone by that first name, how many, or whether they were there.", askedBack: true };
         }
+        // The request, on record for its one neutral close 7 days on (services/introRequestClose.ts, 2026-10-28, Royce): one insert,
+        // made here, the same way for every outcome, so the close comes in the same words at the same time whatever happened.
+        await recordIntroRequest(ctx.userId, personName, "error" in resolved ? null : { eventId: resolved.eventId, targetId: resolved.target.user_id }).catch((err: any) =>
+          console.error("requestEventIntro: recording the request for its close failed (non-fatal):", err?.message ?? err),
+        );
         if ("error" in resolved) {
           await recordDecision({
             layer: 3,

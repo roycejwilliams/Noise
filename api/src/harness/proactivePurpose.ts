@@ -37,6 +37,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   announcement: "ops",
   // The voice read's one question (services/voiceReadConsent.ts): a permission, not an offer of anything.
   voice_read_ask: "ops",
+  // The one neutral close for an intro they asked for by name (services/introRequestClose.ts): logistics of their own request.
+  intro_close: "ops",
   // Member-state nudges (services/memberStateNudges.ts): about their own life and what they said, except a deadline on a find.
   intro_nudge: "companion",
   goal_nudge: "companion",

@@ -987,6 +987,21 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // Fixed wording, not a draft (services/introRequestClose.ts): the one neutral close for an intro they asked for by name, 7 days on,
+  // the same words whatever happened. Re-read at send time: the intro email went since, or the request is gone, means nothing goes.
+  // Sent or dropped, the request row is forgotten.
+  intro_close: {
+    async draft(c) {
+      return (await import("../services/introRequestClose.js")).draftIntroClose(c);
+    },
+    async onSent(c) {
+      await (await import("../services/introRequestClose.js")).forgetIntroRequest(String(c.payload?.requestId ?? ""));
+    },
+    async onDropped(c) {
+      await (await import("../services/introRequestClose.js")).forgetIntroRequest(String(c.payload?.requestId ?? ""));
+    },
+  },
+
   // Fixed wording, not a draft: it names the date a page or deck expires, which has to be exactly right (services/coPages/expiry.ts).
   // Re-read at send time: kept, renewed, taken down or already past since it was queued means nothing goes.
   artifact_expiry: {

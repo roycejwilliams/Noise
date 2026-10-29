@@ -32,7 +32,7 @@ import { notToTeammate } from "../services/teamLines.js";
 // to an intro (seen by another person); an in-room match nudge is an intro; a
 // lapse notice is about paying. A companion check-in is the companion touch
 // itself (companion first): swapping it for a task update would lose it.
-export const PAYLOAD_FIRST_EXEMPT = new Set(["event_offer", "network_tease", "event_match_nudge", "artifact_expiry", "bounce_proposal", "bounce_watch", "bounce_calendar_offer", "companion", "brief_name_ask", "event_brief", "event_followthrough", "noshow_note", "loop_check", "goal_checkin", "goal_closed", "goal_recheck", "room_share_ask", "name_change", "announcement", "voice_read_ask"]);
+export const PAYLOAD_FIRST_EXEMPT = new Set(["event_offer", "network_tease", "event_match_nudge", "artifact_expiry", "bounce_proposal", "bounce_watch", "bounce_calendar_offer", "companion", "brief_name_ask", "event_brief", "event_followthrough", "noshow_note", "loop_check", "goal_checkin", "goal_closed", "goal_recheck", "room_share_ask", "name_change", "announcement", "voice_read_ask", "intro_close"]);
 
 // Work Co can do on its own and undo by saying nothing, and that a task turn
 // can deliver: it texts only verified results (taskTurn.ts). Drafting and
