@@ -29,7 +29,6 @@ import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/p
 import { proactiveRegistry } from "../harness/proactiveRegistry.js";
 import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
 import { typesWithPurpose } from "../harness/proactivePurpose.js";
-import { reviewEnabled } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
 import { classifyOpenAsks, syncClosedAsks } from "../services/askKind.js";
 import { companionPayloadFor } from "../harness/memberThreads.js";
@@ -1029,23 +1028,9 @@ export function registerJobs(io: Server) {
   // set MONITORING_ENABLED=true to turn it back on.
   // The morning "what broke" email is OFF (Royce, 2026-10-06: "No more morning emails"): no 8am run, no email, and no
   // daily model spend on it. Read the same digest on demand with `npm run broke` (prints, never sends).
-  if (reviewEnabled()) {
-    // The shadow week (services/sweepShadow.ts): Co's sweep selection on
-    // Royce's real candidates, after the 9am sweep, sending nothing. Read with
-    // `npm run shadow`.
-    cron.schedule("0 10 * * *", () => {
-      import("../services/sweepShadow.js")
-        .then((m) => m.runSweepShadowAll())
-        .catch((err: any) => console.error("sweep shadow cron error:", err?.message ?? err));
-    }, { timezone: "America/Los_Angeles" });
-    // The retry (Royce, 2026-10-12): a day whose run errored (the selection, the member layer, or applying the picks) or never ran
-    // is run again on the hour until it's done; once done it's a no-op. Capped per day (sweepShadow.ts PICK_ERRORS_PER_DAY).
-    cron.schedule("40 11-19 * * *", () => {
-      import("../services/sweepShadow.js")
-        .then((m) => m.runSweepShadowAll(new Date(), "retry"))
-        .catch((err: any) => console.error("sweep shadow retry cron error:", err?.message ?? err));
-    }, { timezone: "America/Los_Angeles" });
-  }
+  // The shadow week's own picker run (10am, the review account only) and its hourly retry are off (efficiency audit, 2026-10-29): the
+  // shadow week ended 10-09, and every member's picker, that account's included, runs right after each of their sweeps
+  // (services/sweepShadow.ts runPickerAfterSweep); an errored picker runs again after their next sweep, as for every member.
 
   if (process.env.MONITORING_ENABLED === "true") {
     cron.schedule("23 * * * *", () => {
