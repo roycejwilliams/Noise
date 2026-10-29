@@ -3017,6 +3017,16 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS member_free_times_user ON member_free_times (user_id) WHERE removed_at IS NULL`))
     .catch((err: Error) => console.error("want windows / member_free_times failed:", err));
+  // Where a want's place is on the map (services/placeResolve.ts, 2026-10-29: "Bay Area" was resolved to Houston for a Sacramento
+  // member): the resolution, kept on the want's own row with the place and home it was made for, so a bare shared geocode_cache row
+  // is never read for it and a correction (wantPlace.ts setPlace) clears exactly this want's.
+  await pool
+    .query(
+      `ALTER TABLE want_places ADD COLUMN IF NOT EXISTS resolved_for TEXT, ADD COLUMN IF NOT EXISTS resolved_home TEXT, ADD COLUMN IF NOT EXISTS resolved_status TEXT,
+         ADD COLUMN IF NOT EXISTS resolved_label TEXT, ADD COLUMN IF NOT EXISTS resolved_lat DOUBLE PRECISION, ADD COLUMN IF NOT EXISTS resolved_lng DOUBLE PRECISION,
+         ADD COLUMN IF NOT EXISTS resolved_options JSONB, ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) => console.error("want_places resolution columns failed:", err));
   // When a behavior first existed in this environment (Royce, 2026-10-15: "the new path should apply to wants created after the
   // behavior exists. A calendar cutoff invents a difference that isn't real"): written once, by the first deploy that has it.
   await pool

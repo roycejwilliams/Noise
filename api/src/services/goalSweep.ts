@@ -147,6 +147,23 @@ export async function latestPlan(userId: string): Promise<{ proposal: any; creat
   return rows[0] ?? null;
 }
 
+// Each active goal's place for the hourly split (wantPlace.ts splitByPlace): the stored one, else read now (once; placeFor stores it).
+// When a goal was recorded comes from their intent entry (dailySweep.ts goalRecordedAt), as the morning read has it, so both sweeps
+// read a goal the same way. A read that fails leaves that goal with no place this run (home), and it's read again next time.
+export async function goalPlaces(
+  row: { user_id: string; intent?: unknown },
+  goals: { key: string; goal: string }[],
+  deps: { stored?: (userId: string, keys: string[]) => Promise<{ key: string; place: string | null; source?: string }[]>; read?: (userId: string, w: { key: string; text: string; createdAt: Date | null }) => Promise<{ key: string; place: string | null }> } = {},
+): Promise<{ key: string; place: string | null }[]> {
+  const W = await import("./wantPlace.js");
+  const stored = await (deps.stored ?? ((u, k) => W.placesOf(u, k)))(row.user_id, goals.map((g) => g.key)).catch(() => [] as { key: string; place: string | null; source?: string }[]);
+  const have = new Map(stored.filter((p) => p.source !== "unread").map((p) => [p.key, p]));
+  const { goalRecordedAt } = await import("./dailySweep.js");
+  const read = deps.read ?? ((u, w) => W.placeFor(u, w));
+  const fresh = await Promise.all(goals.filter((g) => !have.has(g.key)).map((g) => read(row.user_id, { key: g.key, text: g.goal, createdAt: goalRecordedAt(row.intent, g.goal) }).catch(() => null)));
+  return [...have.values(), ...fresh.filter((p): p is { key: string; place: string | null } => !!p)].map((p) => ({ key: p.key, place: p.place }));
+}
+
 const realDeps: GoalSweepDeps = {
   rows: async () => (await pool.query(GOAL_SWEEP_SQL)).rows,
   plan: async (row, seedSig) => {
@@ -181,11 +198,13 @@ const realDeps: GoalSweepDeps = {
   surface: async (row, context, plan) => {
     // Where each goal is (services/wantPlace.ts; Royce, 2026-10-15: "hourly searches per-goal only for goals whose place differs from
     // home, everything else rides the shared search"): a goal with its own place on file, not their home city, is searched on its
-    // own, there; the rest go together in their home city. Only stored places are read here (the morning sweep reads each goal's).
+    // own, there; the rest go together in their home city. A goal whose place was never read is read here, once (placeFor stores it),
+    // the same read the morning sweep does (2026-10-29: a goal naming SF that the 9am sweep hadn't read yet rode the shared search, in
+    // Sacramento, because only stored places were read here).
     const { goalHash, edgeSearchText } = await import("./goalEdges.js");
     const W = await import("./wantPlace.js");
     const active = plan?.active ?? [];
-    const places = active.length ? await W.placesOf(row.user_id, active.map((e) => W.wantKeyForGoal(goalHash(e.goal)))).catch(() => []) : [];
+    const places = active.length ? await goalPlaces(row, active.map((e) => ({ key: W.wantKeyForGoal(goalHash(e.goal)), goal: e.goal }))) : [];
     const { home, own } = W.splitByPlace(active.map((e) => ({ key: W.wantKeyForGoal(goalHash(e.goal)), item: e })), places, row.city ?? null);
     const base = { askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared };
     // Nothing placed elsewhere: the one search, as it was.
