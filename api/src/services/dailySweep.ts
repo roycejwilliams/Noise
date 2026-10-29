@@ -23,7 +23,7 @@ import { memberZone } from "./memberTime.js";
 import { emptyTierCounts, type TierCounts } from "./tierCounts.js";
 
 export const DAILY_SWEEP_HOUR = 9;
-// A failed day is run again on a later hour, at most this many failed runs a day (the picker's rule, sweepShadow.ts PICK_ERRORS_PER_DAY).
+// A failed day is run again on a later hour, at most this many failed runs a day.
 export const DAILY_SWEEP_ERRORS_PER_DAY = 3;
 export const DAILY_SWEEP_CONCURRENCY = 3;
 

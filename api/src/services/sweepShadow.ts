@@ -194,12 +194,9 @@ async function noteGoalStarvation(q: Q, userId: string, now: Date, today: string
 // trigger "urgent_find": a sweep found something that ends before the next scheduled pick (eventSurfacingSweep.ts endsBeforeNextPick);
 // it runs the pick now, at most URGENT_PICK_RUNS_PER_DAY times a day.
 export const URGENT_PICK_RUNS_PER_DAY = 3;
-// trigger "retry": the hourly retry (jobs/index.ts) of a day whose run errored, or never ran. A day that keeps failing stops after
-// PICK_ERRORS_PER_DAY errors, so a failure that won't clear doesn't pay for a picker run every hour.
-export const PICK_ERRORS_PER_DAY = 3;
 // morning: the 9am floor's run (runPickerAfterSweep "daily"): one find per tier goes out (sweepSelect.ts tierPicks), and an unchanged
 // pool is still picked from (the morning send is every day; a quiet pool is no reason to send nothing).
-export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" | "retry" | "after_sweep"; morning?: boolean } = {}): Promise<ShadowRun | null> {
+export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" | "after_sweep"; morning?: boolean } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
   const zone = await memberZone(userId);
@@ -216,10 +213,6 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
      LIMIT 1`,
     [userId, today],
   );
-  if (opts.trigger === "retry" && !done.length && !opts.dryRun) {
-    const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 AND action = 'error'`, [userId, today]);
-    if (Number(n) >= PICK_ERRORS_PER_DAY) return null;
-  }
   // After a sweep (runPickerAfterSweep), the picker runs again whenever the pool changed: not once a day (the unchanged check below
   // skips it cheaply when nothing new came in).
   if (done.length && !opts.dryRun && opts.trigger !== "after_sweep") {
@@ -264,6 +257,13 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
       return { name: String(m.name ?? ""), date: dateOf(m), tier: Number(m.tier ?? 0), askId: p.askId && p.askId !== "profile" ? String(p.askId) : null, fromProfile: p.fromProfile === true, reminder: !!p.reminder, again: !!p.again, details: describeMatch(m), ident: identOf(m) };
     }),
   ];
+  // Nothing waiting at all: no pool to pick from, so the member's asks, knowledge and texts aren't loaded for it (efficiency audit,
+  // 2026-10-29: 24 of 58 runs in 14 days were empty pools, each loading the whole member layer to record "empty_pool"). The same record
+  // as before; no model call was ever made on this path, and none is now.
+  if (!raw.length) {
+    if (!opts.dryRun) await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "empty_pool", proposal: { day: today, signature: null, poolSize: 0 } });
+    return { day: today, signature: "", skipped: true, judgments: [], pool: [] };
+  }
   const askIds = [...new Set(raw.map((r) => r.askId).filter((x): x is string => !!x))];
   const { asks, idFor } = await loadAsks(q, userId, now, askIds, zone);
   // What they know about: the shared member layer (services/memberKnowledge.ts), read once for this run. null = it failed closed.
@@ -671,13 +671,6 @@ async function runPickerAfterSweepInScope(userId: string, after: "daily" | "hour
     console.error(`picker after the ${after} sweep failed for ${userId} (non-fatal, runs again after their next sweep):`, err?.message ?? err);
     await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: `the picker after the ${after} sweep failed: ${String(err?.message ?? err).slice(0, 200)}`, proposal: { after } });
   });
-}
-
-export async function runSweepShadowAll(now = new Date(), trigger?: "retry"): Promise<void> {
-  if (!reviewEnabled()) return;
-  for (const id of await shadowUserIds()) {
-    await withMember(id, () => runSweepShadow(id, now, trigger ? { trigger } : {})).catch((err: any) => console.error(`sweep shadow failed for ${id} (non-fatal):`, err?.message ?? err));
-  }
 }
 
 // For the internal report: a day's shadow run beside what the old rules
