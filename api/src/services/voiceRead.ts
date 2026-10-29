@@ -362,6 +362,12 @@ export function voiceReadAllowed(o: { memberPhone: unknown; consent: VoiceReadCo
 export function voiceReadAskDue(c: VoiceReadConsent | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
   return voiceReadPrereqs(env) && voiceReadState(c) === "unasked";
 }
+// Pure: whether the written question may go by text. Cue's own ask: only when nothing is on file (voiceReadAskDue). Their own ask,
+// made on a call (where no yes is taken): unless it's already on, so their yes can come by text, after the written question.
+export function voiceReadTextDue(c: VoiceReadConsent | null | undefined, theyAsked: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!theyAsked) return voiceReadAskDue(c, env);
+  return voiceReadPrereqs(env) && voiceReadState(c) !== "yes";
+}
 
 // ---------------------------------------------------------------- the fork in the call's TwiML
 

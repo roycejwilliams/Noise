@@ -398,7 +398,7 @@ export const ABILITIES: Ability[] = [
     tool: "voiceRead",
     onCall: true,
     limits: { perTurn: 1 },
-    use: "Their answer about Cue listening to how they sound on calls, with their words copied exactly from this message. yes: they said yes to it (to Cue's question, or asking for it themselves); if they haven't had Cue's explanation yet, code puts it in your reply and only a yes after it counts. no: they said no; it stays off and Cue never asks again. stop: they want it off (\"stop reading my voice\", \"turn that off\"); it stops at once, this call included, what it noted is deleted, and code puts the one confirming line in your reply. explain: they asked what it is or whether Cue does it; code puts Cue's explanation in your reply. Never use it to raise the subject yourself.",
+    use: "Their answer about Cue listening to how they sound on calls, with their words copied exactly from this message. yes: they said yes to it (to Cue's question, or asking for it themselves); if they haven't had Cue's explanation yet, code puts it in your reply and only a yes after it counts. no: they said no; it stays off and Cue never asks again. stop: they want it off (\"stop reading my voice\", \"turn that off\"); it stops at once, this call included, what it noted is deleted, and code puts the one confirming line in your reply. explain: they asked what it is or whether Cue does it; code puts Cue's explanation in your reply. On a call no yes is taken: for yes or explain, code texts them the question and gives you one line to say; only a yes by text after it counts. Never use it to raise the subject yourself.",
   },
   {
     id: "ask_shareable",

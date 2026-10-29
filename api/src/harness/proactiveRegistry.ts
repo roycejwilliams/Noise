@@ -969,8 +969,9 @@ export const proactiveRegistry: ProactiveRegistry = {
   voice_read_ask: {
     async draft(c) {
       const C = await import("../services/voiceReadConsent.js");
-      const { voiceReadAskDue } = await import("../services/voiceRead.js");
-      if (!voiceReadAskDue(await C.readVoiceReadConsent(c.userId))) return skip("asked already, answered, or the voice read can't run here");
+      const { voiceReadTextDue } = await import("../services/voiceRead.js");
+      // Their own ask on a call may go again (unless it's on); Cue's own ask only when nothing is on file.
+      if (!voiceReadTextDue(await C.readVoiceReadConsent(c.userId), (c.payload as { theyAsked?: boolean } | null)?.theyAsked === true)) return skip("asked already, answered, or the voice read can't run here");
       return { messages: [C.VOICE_READ_ASK], text: C.VOICE_READ_ASK, rules: C.VOICE_READ_ASK_RULES };
     },
     async onSent(c) {

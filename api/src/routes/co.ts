@@ -946,7 +946,8 @@ async function processEndedCallInScope(o: {
         const moments = await callEmotionMoments(cleanTranscript);
         const scored = await scoring;
         const frustrated = frustrationMoments(scored, moments); // mood: records the read (call frustration moments)
-        const voiced = await voicing;
+        // Read again right before the write: a stop during the read above keeps nothing of the voice (services/voiceReadConsent.ts).
+        const voiced = await import("../services/voiceReadConsent.js").then((c) => voicing.then((v) => c.keepVoiceIfStillOn(user_id, v))).catch(() => [] as Omit<EmotionSignal, "at">[]);
         await recordEmotionSignals(user_id, [...moments, ...frustrated, ...voiced].map((m) => ({ ...m, memoryId: transcriptMemoryId }))); // mood: records the read
       })().catch((err: any) => console.error("post-call: reading the call's feelings failed (non-fatal):", err?.message ?? err));
 

@@ -248,7 +248,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
   const answeredSent = () => state.sentMessages.filter((m) => !state.holdLines.includes(m.trim()));
   // What went out carries these lane lines: they're said now, and never again this turn.
-  const markLaneNotesSent = (went: string) => {
+  // A carried line whose going out is itself a fact (the voice read's question: asked only once it reached them), run once it went.
+  const laneNoteOnSent = new Map<string, () => Promise<void>>();
+  const markLaneNotesSent = async (went: string) => {
     const said = (n: string) => went.toLowerCase().replace(/\s+/g, " ").includes(n.toLowerCase());
     // The stopped-looking line too (services/askRetire.ts): said now, never again.
     const stops = state.stopNotes.filter(said);
@@ -258,6 +260,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
     if (!out.length) return;
     state.laneNotesSent.push(...out);
     state.laneNotes = state.laneNotes.filter((n) => !said(n));
+    for (const n of out) {
+      const after = laneNoteOnSent.get(n);
+      laneNoteOnSent.delete(n);
+      if (after) await after().catch((err: any) => console.error("conversationTools: recording a carried line as sent failed (non-fatal):", err?.message ?? err));
+    }
   };
   // A save or a start that may be an open task of Co's (services/statusCheck.ts): said once, Co decides. differentFrom that task's number
   // goes through, logged. The candidate's standing goes in the facts once a turn, through their fence, and not when the turn already
@@ -440,7 +447,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
               // (conversationReply.ts), never on the bare first beat.
               notDone(`Only part of the reply went out: "${beat.slice(0, 120)}" didn't send.`);
               const went = sentBeats.join("\n\n");
-              markLaneNotesSent(went);
+              await markLaneNotesSent(went);
               state.sentMessages.push(went);
               state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${went}` : went;
               state.sent = true;
@@ -457,7 +464,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             sentBeats.push(beat);
           }
           const sentText = sentBeats.join("\n\n");
-          markLaneNotesSent(sentText);
+          await markLaneNotesSent(sentText);
           state.partialUnsent = null;
           state.sentMessages.push(sentText);
           state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${sentText}` : sentText;
@@ -486,7 +493,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           }
         }
         state.partialUnsent = null;
-        markLaneNotesSent(message);
+        await markLaneNotesSent(message);
         state.sentMessages.push(message);
         state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${message}` : message;
         if (ctx.dryRun) {
@@ -1026,12 +1033,22 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "They turned it down, so don't ask again. If they want it on, their own clear yes turns it on." };
         }
         if (answer === "explain" && was === "yes") return { ok: true, note: "It's on, since they said yes. Answer plainly, and remind them they can say stop anytime." };
-        // Not explained yet: a yes to something they haven't been told about isn't consent. The question goes now; only a yes after it counts.
-        if (!onFile?.askedAt) {
-          if (!ctx.dryRun) await C.noteVoiceReadAsked(ctx.userId);
-          return carry(C.VOICE_READ_ASK, "Cue told them what the voice read is and what it keeps, and asked if they want it. It's off until they say yes after this.");
+        // On a call no yes is taken (2026-10-28): Cue says it will text the question, the question goes by text through the queue
+        // (proactiveRegistry.ts voice_read_ask), and only a yes by text after it counts. A stop or a no above works on a call too.
+        if (ctx.onCall) {
+          const queued = ctx.dryRun ? true : await C.queueVoiceReadAsk(ctx.userId, { theyAsked: true }).then(() => true, () => false);
+          if (!queued) {
+            notDone("The voice read's question wasn't queued to go by text.");
+            return { ok: false, error: "It couldn't be set up just now. Say plainly you'll come back to it by text; don't say it's on." };
+          }
+          return carry(C.VOICE_READ_CALL_LINE, "Cue will text them how the voice read works. It stays off until they say yes by text, after reading it.");
         }
-        if (answer === "explain") return carry(C.VOICE_READ_ASK, "Cue told them again what the voice read is and what it keeps. It's off until they say yes.");
+        // Not explained yet: a yes to something they haven't been told about isn't consent. The question goes now, and counts as asked
+        // only once the reply carrying it went (markLaneNotesSent); only a yes after it counts.
+        if (!onFile?.askedAt || answer === "explain") {
+          if (!onFile?.askedAt && !ctx.dryRun) laneNoteOnSent.set(C.VOICE_READ_ASK, () => C.noteVoiceReadAsked(ctx.userId));
+          return carry(C.VOICE_READ_ASK, onFile?.askedAt ? "Cue told them again what the voice read is and what it keeps. It's off until they say yes." : "Cue told them what the voice read is and what it keeps, and asked if they want it. It's off until they say yes after this.");
+        }
         if (!ctx.dryRun) {
           const r = await C.recordVoiceReadYes(ctx.userId, theirWords);
           if (!r.ok) {
