@@ -60,6 +60,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { arrivalDenial, recordSaysNothingReadable } from "../services/inboundFile.js";
+import { failureAdmitted, failureInView, flagClaim } from "../services/turnFailure.js";
 import { enrichMatch, fetchLumaEventDetails, isLumaLink, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { citesStaleAsCurrent, liveDetailFacts, renderDetailsAsOf, staleCurrentClaims } from "../services/asOf.js";
 import { recentCallCorrections } from "./callGrounding.js";
@@ -1254,7 +1255,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   const nothingReadable = recordSaysNothingReadable(rf.facts);
   // A line about their world that names an item on file isn't machinery (services/memberWorld.ts worldLineAllowed, Royce 2026-10-14);
   // the claim read below still holds it to the facts.
-  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) });
+  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureAdmitted(rf.facts, sentence) });
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Cue's own state instead of what they get (${narrated})` });
   // Their thread is asked about, never reported (Royce, 2026-10-14): Co has no record of where it stands. Only a sentence the thread
   // read said reports its status is cut (judgeThreadReports, run before this); a read that failed or never ran keeps it. Quoted, so
@@ -1435,10 +1436,21 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
   const hintIds = new Set(rf.facts.filter((f) => f.kind === "hint").map((f) => f.id));
   const nothingReadable = recordSaysNothingReadable(rf.facts);
   const savedForTeamThisTurn = rf.facts.some((f) => f.kind === "did_this_turn" && /^Saved for the team:/.test(f.text));
+  const failure = failureInView(rf.facts);
   return claims.map((c) => {
     const sources = sourceText(rf, src, c.type);
     let pass = c.supported;
     let reason = `${c.type}: "${c.text}"`;
+    // Cue's own failure said to be flagged or reported while its report isn't verifiably on record (services/turnFailure.ts): never
+    // backed, whatever was cited (2026-10-28: a saveFeedbackForTeam receipt for their "What happened?" backed "I've flagged it").
+    if ((c.type === "past_action" || c.type === "detail") && failure.inView && !failure.onRecord && flagClaim(c.text)) {
+      return { name: `claim_${c.type}`, pass: false, reason: `${reason} (says Cue's failure was flagged or reported, but no report of it is on record)` };
+    }
+    // Cue saying plainly that it failed, with that failure in its facts: true, whatever was cited (the same day: "the call just didn't
+    // go through on my end" was cut, and only the flag claim went out).
+    if (!pass && (c.type === "past_action" || c.type === "detail") && failureAdmitted(rf.facts, c.text)) {
+      return { name: `claim_${c.type}`, pass: true, reason: `${reason} (its own failure, which the record shows)` };
+    }
     // Agreeing to help is not a capability claim (row 10393, 2026-10-10: "Happy to." was cut as one, and the reply that asked her to
     // send the deck became "I don't have a solid read on your deck"). Only the bare yes: "Happy to search X" is still a capability.
     if (!pass && c.type === "capability" && WILLING.test(c.text.trim())) {
@@ -2093,7 +2105,7 @@ export async function groundReply(
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
     // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
-    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) };
+    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureAdmitted(rf.facts, sentence) };
     let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);

@@ -1,3 +1,5 @@
+import { FAILURE_NOT_ON_RECORD, FAILURE_ON_RECORD } from "./callReasons.js";
+
 // Never go silent (Royce, 2026-09-23). Co marks a text read the moment it
 // arrives, so when a turn then crashes (Claude down, a database error, a
 // search blowing up, a restart mid-turn), the member sees "Read" and nothing
@@ -9,6 +11,59 @@
 // (turnReplayBlocked); either way the note promises nothing, and their message
 // stays owed (see OWED_AFTER) until a real answer lands.
 export const TURN_FAILED_NOTE = "Sorry, something broke on my end on that last one.";
+
+// ---------------------------------------------------------------- what Cue knows about its own failure
+// 2026-10-28: "Call me" crashed (Twilio refused the dial), Royce asked "What happened?", and Cue said "I've flagged it so it gets
+// looked at". Nothing had reported the failure: the only thing saved for the team that turn was his question, turned into a
+// suggestion by saveFeedbackForTeam. A failure is reported where it happens (turn.failed with its cause, call.dial for a dial that
+// never started; the morning review flags both). What the next reply is told comes from reading that record back, so "flagged" stands
+// only when the report is really there, and when it isn't (or can't be read) Cue is told exactly that.
+export const FAILURE_RECORD_PREFIX = "Cue's own failure, from the record:";
+export const FAILURE_RECORD_UNKNOWN = "Whether the failure is on record for the team couldn't be checked.";
+// How far back a failure is still the one they're asking about.
+export const FAILURE_RECORD_WINDOW_MINUTES = 15;
+export type FailureRow = { decision: string; at: Date };
+
+// Pure. rows: the member's turn.failed and call.dial (dial_failed) rows in the window, newest first; null when the read failed.
+// afterFailure: Cue's last line to them was a "something broke" line (owedFromRows).
+export function failureRecordFacts(rows: FailureRow[] | null, o: { afterFailure: boolean; now: Date }): string[] {
+  const ago = (at: Date) => {
+    const m = Math.round((o.now.getTime() - at.getTime()) / 60_000);
+    return m <= 1 ? "just now" : `${m} minutes ago`;
+  };
+  if (rows === null) return o.afterFailure ? [`${FAILURE_RECORD_PREFIX} something broke on Cue's side on their last text. ${FAILURE_RECORD_UNKNOWN}`] : [];
+  const out: string[] = [];
+  const dial = rows.find((r) => r.decision === "call.dial");
+  const turn = rows.find((r) => r.decision === "turn.failed");
+  if (dial) out.push(`${FAILURE_RECORD_PREFIX} the call they asked for ${ago(dial.at)} never started: it failed on Cue's side before their phone rang, nothing they did. ${FAILURE_ON_RECORD}`);
+  if (turn) out.push(`${FAILURE_RECORD_PREFIX} Cue's answer to their text ${ago(turn.at)} broke on Cue's side before it finished. ${FAILURE_ON_RECORD}`);
+  if (!out.length && o.afterFailure) out.push(`${FAILURE_RECORD_PREFIX} something broke on Cue's side on their last text, and nothing about it is in the record. ${FAILURE_NOT_ON_RECORD}`);
+  return out;
+}
+
+// A failure of Cue's own is in this reply's facts (the record read back above, or this turn's own call that never started,
+// services/callReasons.ts), and whether its report is verifiably on record.
+export function failureInView(facts: { text: string }[]): { inView: boolean; onRecord: boolean } {
+  const has = (x: string) => facts.some((f) => f.text.includes(x));
+  const onRecord = has(FAILURE_ON_RECORD);
+  return { inView: onRecord || has(FAILURE_NOT_ON_RECORD) || has(FAILURE_RECORD_UNKNOWN), onRecord };
+}
+
+// Cue saying it reported something: "I've flagged it", "it's been logged", "I passed it along". Only a claim of reporting; a
+// negation ("I haven't flagged it") is an admission, not this.
+export const FLAG_CLAIM = /\b(?:flagg(?:ed|ing)|report(?:ed|ing)|logg(?:ed|ing)|escalat(?:ed|ing)|raised (?:it|this|that)|on record|let (?:the team|someone|them) know|pass(?:ed|ing) (?:it|this|that) (?:along|on)|(?:sent|sending) (?:it|this|that) to the team)\b/i;
+const NEGATED = /\b(?:not|never|haven'?t|hasn'?t|didn'?t|did not|wasn'?t|isn'?t|no one|nobody|nothing)\b/i;
+export function flagClaim(text: string): boolean {
+  return FLAG_CLAIM.test(text) && !NEGATED.test(text);
+}
+
+// Cue saying plainly that it failed: "the call didn't go through", "I couldn't get the call out", "something broke on my end".
+// True whenever a failure is in view, whether or not its report landed, so it's never cut as machinery talk or as an unbacked past
+// action (2026-10-28: "the call just didn't go through on my end" was cut and only "I've flagged it" went out).
+export const FAILURE_ADMISSION = /\b(?:call|it|that)\b[^.!?]{0,40}?\b(?:didn'?t|did not|never|couldn'?t|could not|wasn'?t|failed to)\b[^.!?]{0,25}?\b(?:go(?:ing)? (?:through|out)|went (?:through|out)|ring|connect|placed|start|work)\b|\bsomething (?:broke|went wrong|failed)\b|\b(?:couldn'?t|could not|wasn'?t able to) (?:get (?:the|a) call (?:out|through)|place (?:the|a) call|call you|ring you)\b/i;
+export function failureAdmitted(facts: { text: string }[], sentence: string): boolean {
+  return failureInView(facts).inView && FAILURE_ADMISSION.test(sentence) && !flagClaim(sentence);
+}
 
 // When a reply comes out empty (a timeout, no text), Co keeps their message
 // and tries again a minute later from it (agent/conversationReply.ts, 2026-10-01

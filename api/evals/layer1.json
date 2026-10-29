@@ -88,6 +88,7 @@
     "evals/calls/elevenlabs.ts",
     "evals/calls/callLink.ts",
     "evals/calls/dialFailure.ts",
+    "evals/silence/failureRecord.ts",
     "evals/calls/elevenLabsForget.ts",
     "evals/calls/callHealth.ts",
     "evals/calls/opening.ts",
