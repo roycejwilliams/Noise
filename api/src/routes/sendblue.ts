@@ -1659,7 +1659,7 @@ export function sendblueRouter(io: Server): Router {
               )
             : null;
         readP?.catch(() => {});
-        // Jev labels the same text in shadow, logged next to the read; never used for the reply (services/jevShadow.ts).
+        // Jev reads how the same text feels, in shadow, logged next to the read; never used for the reply (services/jevShadow.ts, review 2026-11-12).
         const jevShadowP = hasText && readP ? startJevShadow(resolvedContent, lastCoLine(recentConversation), !!inlineTarget?.fromCo) : null;
         const coverageP = readP
           ? readP.then((r) => coverageNudgeFrom(user.id, profile, r.coverage)).catch(() => ({ missingTopic: null, refresh: null }))

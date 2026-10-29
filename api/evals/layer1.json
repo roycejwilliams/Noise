@@ -34,6 +34,7 @@
     "evals/threads/rules.ts",
     "evals/jev/gateway.ts",
     "evals/jev/rules.ts",
+    "evals/jev/feelingShadow.ts",
     "evals/adaptable/rules.ts",
     "evals/llmUsage/rules.ts",
     "evals/logs/voiceMemo.ts",
