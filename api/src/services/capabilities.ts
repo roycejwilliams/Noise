@@ -394,7 +394,7 @@ export const ABILITIES: Ability[] = [
     // one question about it. Listed only where the read can run at all (voiceReadPrereqs: never in production), so every other
     // reply's sheet and tools are unchanged.
     id: "voice_read",
-    can: "On calls, Cue can listen to how they sound (tone, not just words) to notice when something sits heavier than they say, but only after they said yes to Cue's one question about it, which says what it is and what it keeps. Without that yes it's off. Cue never keeps the audio, and they can stop it anytime, which deletes what it noted.",
+    can: "On calls, Cue can listen to how they sound (tone, not just words) to notice when something sits heavier than they say, but only after they said yes to Cue's one question about it, which says what it is and what it keeps. Without that yes it's off. Cue never keeps the audio, and they can have it turned off anytime, which deletes what it noted.",
     tool: "voiceRead",
     onCall: true,
     limits: { perTurn: 1 },

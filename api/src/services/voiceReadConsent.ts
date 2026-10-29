@@ -33,15 +33,17 @@ const dbOr = (): Db => testDb ?? pool;
 
 // ---------------------------------------------------------------- the words (Copy: Royce approves each before it ships)
 
-// The one question, approved by Royce 2026-10-28 word for word. What it is, what it keeps and for how long, who hears it, that it's
+// "turn it off anytime", not "stop anytime" (changed 2026-10-29 under Royce's delegation): a reply of only "stop" is the carrier
+// opt-out (routes/sendblue.ts isOptOutKeyword), which unsubscribes them from everything and leaves the voice read on file.
+// The one question, approved by Royce 2026-10-28 word for word (but for that phrase). What it is, what it keeps and for how long, who hears it, that it's
 // off unless they say yes, and that they can stop it. Facts behind it: Hume Expression Measurement hears the caller's side live
 // (zero data retention, Hume told us, 2026-10-21); Cue never stores audio; after a call a few moments are kept in emotion_signals
 // (a feeling's label and the words they were saying then), which nothing expires, so "until you ask me to drop them" is the true
 // length.
 export const VOICE_READ_ASK =
-  "One thing about our calls. If you'd like, I can listen to how you sound while we talk, not just your words, so I notice when something sits heavier than you let on. Your side of the call goes to Hume, a service that reads tone as it happens and has told us it keeps none of it. I don't keep the audio either, just a few short notes on moments that stood out, until you ask me to drop them. It's off unless you say yes, and you can tell me to stop anytime. Want me to?";
+  "One thing about our calls. If you'd like, I can listen to how you sound while we talk, not just your words, so I notice when something sits heavier than you let on. Your side of the call goes to Hume, a service that reads tone as it happens and has told us it keeps none of it. I don't keep the audio either, just a few short notes on moments that stood out, until you ask me to drop them. It's off unless you say yes, and you can tell me to turn it off anytime. Want me to?";
 // The send's own checks (harness/proactive.ts checkDraft), as the queue runs them.
-export const VOICE_READ_ASK_RULES = { maxChars: 600, maxSentences: 7, allowGreeting: false, mustIncludeAny: ["stop anytime"] };
+export const VOICE_READ_ASK_RULES = { maxChars: 600, maxSentences: 7, allowGreeting: false, mustIncludeAny: ["turn it off anytime"] };
 // On a call, when they bring it up or say yes there: no yes is taken on a call; the question goes by text (Copy: pending Royce).
 export const VOICE_READ_CALL_LINE = "I'll text you how it works, and you can answer there.";
 // Model-facing only, never said to them: after a stop or a no on a call, the rest of that call uses no voice notes.
@@ -64,8 +66,8 @@ export function stripVoiceReadLines<M extends { role: string; content?: unknown 
     return m;
   });
 }
-// After their yes.
-export const VOICE_READ_YES_LINE = "Thank you. It starts on our next call, and you can tell me to stop anytime.";
+// After their yes ("turn it off anytime" since 2026-10-29, as above).
+export const VOICE_READ_YES_LINE = "Thank you. It starts on our next call, and you can tell me to turn it off anytime.";
 // After "stop": the one confirming line. True whether or not anything had been noted yet.
 export const VOICE_READ_STOP_LINE = "Done. I won't listen to how you sound on our calls anymore, and anything I noted from it is deleted.";
 // Their what-Cue-knows line while it's on.
