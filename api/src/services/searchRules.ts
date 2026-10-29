@@ -223,7 +223,7 @@ export function isOnlyUpdatesAsk(text: string): boolean {
 // Live replies don't run the web search (the sweep does), so "What's going on at AfroTech?"
 // could only ever say "nothing turned up". When the ask names ONE specific event and the
 // public Luma search found nothing, one web lookup for that event's own page runs
-// (services/namedEventLookup.ts). These are its checks on what the models say.
+// (services/namedEventLookup.ts, never wired in and removed 2026-10-29). These are its checks on what the models say.
 
 const compactText = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 const GENERIC_EVENT_NAMES = /^(events?|meetups?|conferences?|hackathons?|mixers?|parties|party|things|stuff|tech events?|networking)$/i;

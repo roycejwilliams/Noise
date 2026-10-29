@@ -47,7 +47,6 @@ import { memberKnowledge } from "../services/memberKnowledge.js";
 import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frustrationScores, recordEmotionSignals, type EmotionSignal, type ScoredLine } from "../harness/emotion.js";
 import { callKeyOf, takeVoiceMoments } from "../services/mediaStreamBridge.js";
 import { callerTurnsFrom, momentSignals } from "../services/voiceRead.js";
-import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { forgetAfterCall, transcriptHash } from "../services/elevenLabsForget.js";
 import { flagNotStored, recordCallHealth } from "../services/callHealth.js";
@@ -574,9 +573,6 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       queueUnstored();
       throw err;
     }
-    // Moments where their voice said more than their words, beside the text
-    // read (services/voiceFlags.ts). Test members only for now; never fails the call.
-    if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
     // The after-call health check (services/callHealth.ts): facts only, codes stored, never anyone's words. A flagged call is held at
     // ElevenLabs until reviewed and shows in the morning review. Not awaited and never throws.
     if (u[0])

@@ -19,7 +19,6 @@ import { venueKey, type ArtImage, type ArtMap, type Credit, type Grammar, type M
 // Same key as geocoding.ts googleKey (GOOGLE_API_KEY, the old name as fallback); read here directly so this file stays free of the db.
 const GOOGLE_KEY = () => process.env.GOOGLE_API_KEY || process.env.GOOGLE_PLACES_API_KEY || "";
 const UNSPLASH_KEY = () => process.env.UNSPLASH_ACCESS_KEY ?? "";
-export const imageryAvailable = () => ({ places: !!GOOGLE_KEY(), unsplash: !!UNSPLASH_KEY() });
 export const ART_DEADLINE_MS = 9_000;
 const UA = "CoArtifactMaps/1.0 (+https://copatible.com; low-volume static maps for members' plans)";
 
@@ -199,10 +198,6 @@ export async function osmRegion(area: string, deps: ImageryDeps = realDeps): Pro
 }
 
 export type OsmFound = { pin: MapPin; road: string | null; house: string | null } | "ambiguous" | null;
-export async function osmPin(named: string, deps: ImageryDeps = realDeps): Promise<MapPin | null> {
-  const f = await osmFind(named, deps);
-  return f && f !== "ambiguous" ? f.pin : null;
-}
 // Where OpenStreetMap puts the place Co named, checked the same way as a photo (the name both ways, the city named, or for an area its
 // state), and "ambiguous" when the city has more than one and no street address picks one. Cached thirty days (a miss one day).
 export async function osmFind(named: string, deps: ImageryDeps = realDeps): Promise<OsmFound> {

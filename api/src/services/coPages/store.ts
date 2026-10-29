@@ -290,10 +290,6 @@ export async function revokeShareLinks(pageId: string, ownerUserId: string): Pro
   const { rowCount } = await db.query(`UPDATE co_page_shares SET revoked_at = NOW() WHERE page_id = $1 AND owner_user_id = $2 AND revoked_at IS NULL`, [pageId, ownerUserId]);
   return rowCount ?? 0;
 }
-export async function liveShareCount(pageId: string, ownerUserId: string): Promise<number> {
-  const { rows } = await db.query(`SELECT COUNT(*)::int AS n FROM co_page_shares WHERE page_id = $1 AND owner_user_id = $2 AND revoked_at IS NULL`, [pageId, ownerUserId]);
-  return Number(rows[0]?.n ?? 0);
-}
 // For the public share route: the artifact behind a live share link, or null (revoked, unknown, or the artifact is gone).
 export async function loadShared(shareId: string): Promise<StoredCoPage | null> {
   if (!CO_PAGE_ID.test(shareId)) return null;

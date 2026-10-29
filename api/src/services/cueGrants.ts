@@ -107,7 +107,6 @@ export async function grantConsentUrlFor(kind: GrantKind, state: string): Promis
   if (!rows[0]) return null;
   return grantAuthUrl(kind, state, createHash("sha256").update(decryptToken(rows[0].code_verifier_enc)).digest("base64url"));
 }
-export const calendarConsentUrlFor = (state: string) => grantConsentUrlFor("calendar", state);
 
 type TokenResponse = { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error?: string };
 

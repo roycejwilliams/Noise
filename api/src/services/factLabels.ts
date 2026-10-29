@@ -17,7 +17,6 @@ import { DateTime } from "luxon";
 import { FALLBACK_ZONE } from "./localHours.js";
 
 export type Provenance = "user_said" | "co_inferred";
-export type Lifetime = "enduring" | "ephemeral";
 
 // kind -> lifetime, and how long an undated ephemeral claim lasts (days from when it was said or last re-confirmed).
 export const KINDS = {

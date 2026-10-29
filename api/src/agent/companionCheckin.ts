@@ -2,12 +2,6 @@ import { draftProactive, type OutputRules } from "../harness/proactive.js";
 import { splitRecap } from "../services/claims.js";
 import { judgeCheckin, ruledOut } from "../brain/index.js";
 
-export type CompanionCheckinPerson = {
-  userId: string;
-  firstName: string;
-  phoneNumber: string;
-};
-
 // One of their open threads (harness/memberThreads.ts), as the cron hands it.
 export type CompanionThread = { text: string; quote: string; dueDate: string | null; feeling: string | null };
 // At most one useful thing, already checked against its own page.

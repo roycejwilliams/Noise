@@ -168,7 +168,6 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
     ["services/profileExtraction.ts", "extractPlannedEventMention", "a[0]"],
     ["services/callContext.ts", "summarizeCallForTextContext", "a[0]"],
     ["services/eventUnmatchedFollowUp.ts", "sendClose", "a[2].user_id"],
-    ["services/namedEventLookup.ts", "lookupNamedEvent", "a[3].userId ?? scopeMember()"],
     ["routes/co.ts", "sendMissedCallFollowUp", "a[0].id"],
     ["services/eventScoring.ts", "scoreMatchedGroup", "null"],
     ["services/eventScoring.ts", "scoreGuestListForEvent", "null"],

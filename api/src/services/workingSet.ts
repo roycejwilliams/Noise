@@ -185,7 +185,6 @@ export async function exitGoneMembersAsks(deps: ExitDeps = realExitDeps): Promis
 
 // ------------------------------------------------------------------ the backlog
 
-export type BacklogEntry = { askId: string; index: number; item: any };
 // An undated or unreadable find is held (never offered) and read again once a day; it exits only after this many separate days
 // (review of #133: one failed read, or three passes in one day, used to exit it with a false "no date" fact).
 export const UNREAD_DAYS = 3;
