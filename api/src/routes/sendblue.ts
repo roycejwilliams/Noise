@@ -69,7 +69,7 @@ import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
-import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
+import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS, firstArrival } from "../agent/conversationReply.js";
 import { callLine } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts, failureDetail, parseDialFailure } from "../services/callReasons.js";
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
@@ -2774,6 +2774,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 threadNext: () => {
                   threadNextSend = true;
                 },
+                // When this text first arrived: a replay keeps its original time (the voice read's yes reads it).
+                messageArrivedAt: firstArrival(replay, arrivedAt),
                 turnStartedAt,
                 resumeLater: replay ? undefined : (retry) => scheduleReplyResume(typeof handle === "string" ? handle : null, user.phone_number, user.id, myInboundAt, turnStartedAt, retry),
               }),

@@ -22,6 +22,10 @@
 //  14. Re-review: a stop forgets their trace text and no voice moment reaches a later reply; the question goes once whichever ask
 //      was queued; no call line when nothing will go; a yes sent before the question went doesn't count; the read log is written
 //      only while it's on; the withdrawal is written before the delete.
+//  15. Third review: a replayed yes that arrived before the question is refused, a real one after it counts; a stop or no on a call
+//      tells the model to use no voice notes for the rest of the call; a call in flight at a trace forget isn't written; after a no
+//      or a withdrawal no queued ask sends, and the question goes once; no claim of a text that wasn't sent; the trace forget runs
+//      after the deletes.
 import { readFileSync } from "node:fs";
 const V = await import("../../src/services/voiceRead.js");
 const C = await import("../../src/services/voiceReadConsent.js");
@@ -187,7 +191,24 @@ check("4. after a withdrawal: never asked again", !(await C.queueVoiceReadAsk(U,
 check("4. the pure rule: due only when nothing is on file", V.voiceReadAskDue(null, env()) && (["asked", "yes", "no", "withdrawn"] as const).every((s) => !V.voiceReadAskDue({ askedAt: new Date(), answer: s === "yes" || s === "withdrawn" ? "yes" : s === "no" ? "no" : null, answeredAt: null, withdrawnAt: s === "withdrawn" ? new Date() : null }, env())));
 const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
 const regEntry = reg.slice(reg.indexOf("  voice_read_ask: {"), reg.indexOf("  // Fixed, approved wording, not a draft (services/announcements.ts)"));
-check("4. the queued send reads the state again and skips unless it's still due; it marks asked when sent", /voiceReadTextDue\(await C\.readVoiceReadConsent\(c\.userId\), \(c\.payload as \{ theyAsked\?: boolean \} \| null\)\?\.theyAsked === true, process\.env, c\.createdAt \? new Date\(c\.createdAt\) : null\)/.test(regEntry) && /return skip\(/.test(regEntry) && /noteVoiceReadAsked\(c\.userId\)/.test(regEntry));
+{
+  const { proactiveRegistry: REG } = await import("../../src/harness/proactiveRegistry.js");
+  const savedEnv = { ...process.env };
+  Object.assign(process.env, env());
+  C.setVoiceReadDepsForTests({ db });
+  const R4 = "17171717-1111-2222-3333-444444444444";
+  db.users.set(R4, { phone_number: REAL, voice_read_ok: false });
+  const c4 = { id: "c4", userId: R4, type: "voice_read_ask", targetKey: "voice_read_ask", topicKey: "voice_read_ask", summary: "", payload: {}, priority: 15, dueAt: new Date(), expiresAt: null, attempts: 0, createdAt: new Date() } as any;
+  const p4 = { userId: R4, firstName: "Jo", phoneNumber: REAL, city: null, timezone: null } as any;
+  const d1 = await REG.voice_read_ask.draft(c4, p4);
+  const askedBeforeSend = db.consents.get(R4)?.asked_at ?? null;
+  await REG.voice_read_ask.onSent!(c4, p4, [C.VOICE_READ_ASK]);
+  const d2 = await REG.voice_read_ask.draft(c4, p4);
+  check("4. the queued send reads the state again: due, it's the fixed question; it marks asked only when sent; then it skips", "messages" in d1 && JSON.stringify(d1.messages) === JSON.stringify([C.VOICE_READ_ASK]) && askedBeforeSend === null && db.consents.get(R4)?.asked_at instanceof Date && "skip" in d2, { d1, d2 });
+  C.setVoiceReadDepsForTests(null);
+  for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
+  Object.assign(process.env, savedEnv);
+}
 const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
 const toolSrc = tools.slice(tools.indexOf("    voiceRead: tool({"), tools.indexOf("    answerShareAsks: tool({"));
 check("4. the reply tool won't put the question to them again after a no or a withdrawal", /answer === "explain" && \(was === "no" \|\| was === "withdrawn"\)\) \{[^}]*return \{ ok: false/.test(toolSrc));
@@ -353,7 +374,7 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   const callExplain = make(Y, "how does the voice thing work?", { onCall: true });
   const ce = await callExplain.tools.voiceRead.execute({ answer: "explain", theirWords: "how does the voice thing work?" }, {});
   check("10. asking about it on a call after the question already went by text: nothing new is queued or promised, and it isn't a yes", !ce.say && queued9.length === before + 1 && !(await C.voiceReadOnFor(Y, db, env())), ce);
-  check("10. their own ask goes after a no or a withdrawal, never while it's on or already sent and unanswered; Cue's own ask only when nothing is on file", V.voiceReadTextDue({ askedAt: new Date(Date.now() - 86_400_000), answer: "no", answeredAt: new Date(), withdrawnAt: null }, true, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: null, answeredAt: null, withdrawnAt: null }, true, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: null, answeredAt: null, withdrawnAt: null }, false, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: "yes", answeredAt: new Date(), withdrawnAt: null }, true, env()) && !V.voiceReadTextDue(null, true, env({ RAILWAY_ENVIRONMENT_NAME: "production" })));
+  check("10. the question goes only while nothing is on file, whoever asked: never after a no, while it's out unanswered, or while it's on", !V.voiceReadTextDue({ askedAt: new Date(Date.now() - 86_400_000), answer: "no", answeredAt: new Date(), withdrawnAt: null }, true, env()) && V.voiceReadTextDue(null, true, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: null, answeredAt: null, withdrawnAt: null }, true, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: null, answeredAt: null, withdrawnAt: null }, false, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: "yes", answeredAt: new Date(), withdrawnAt: null }, true, env()) && !V.voiceReadTextDue(null, true, env({ RAILWAY_ENVIRONMENT_NAME: "production" })));
   // Then the written question went (the queue's onSent), and a yes by text counts.
   await C.noteVoiceReadAsked(Z, db);
   const textYes = make(Z, "yes please");
@@ -473,7 +494,7 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   await proactiveRegistry.voice_read_ask.onSent!(cues, person, [C.VOICE_READ_ASK]);
   const second = await proactiveRegistry.voice_read_ask.draft(theirs, person);
   check("14B. Cue's ask and theirs both queued: the question goes once (the second sees it sent and unanswered)", "messages" in first && "skip" in second, { first, second });
-  check("14B. the rule: never while sent and unanswered, never when it went after this ask was made", !V.voiceReadTextDue({ askedAt: new Date(), answer: null, answeredAt: null, withdrawnAt: null }, true, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: "no", answeredAt: new Date(), withdrawnAt: null }, true, env(), new Date(Date.now() - 1000)) && V.voiceReadTextDue({ askedAt: new Date(Date.now() - 86_400_000), answer: "no", answeredAt: new Date(), withdrawnAt: null }, true, env(), new Date()));
+  check("14B. the rule: never while sent and unanswered, never when it went after this ask was made", !V.voiceReadTextDue({ askedAt: new Date(), answer: null, answeredAt: null, withdrawnAt: null }, true, env()) && !V.voiceReadTextDue({ askedAt: new Date(), answer: "no", answeredAt: new Date(), withdrawnAt: null }, true, env(), new Date(Date.now() - 1000)) && !V.voiceReadTextDue({ askedAt: new Date(Date.now() - 86_400_000), answer: "no", answeredAt: new Date(), withdrawnAt: null }, true, env(), new Date()));
   // C: on a call, when nothing will go, Cue says nothing new about a text.
   const queuedC: any[] = [];
   C.setVoiceReadDepsForTests({ db, enqueue: async (i) => (queuedC.push(i), { queued: true }) });
@@ -485,7 +506,7 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   db.users.set(Cn, { phone_number: REAL, voice_read_ok: false });
   const callTools2 = (createConversationTools({ userId: Cn, phoneNumber: REAL, resolvedContent: "yes read my voice", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false, onCall: true, ackSent: "👍", lastCoMessage: "hi", sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any) as any).tools;
   const callR2 = await callTools2.voiceRead.execute({ answer: "yes", theirWords: "yes read my voice" }, {});
-  check("14C. the queue says it won't go (already sent under that key): no call line", !callR2.say && queuedC.length === 1, callR2);
+  check("14C. the queue says it won't go and no send of the question is on record: no call line, and no claim it was texted", !callR2.say && queuedC.length === 1 && /Nothing was texted to them about it/.test(callR2.note) && !/You texted them/.test(callR2.note), callR2);
   C.setVoiceReadDepsForTests(null);
   for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
   Object.assign(process.env, saved);
@@ -497,8 +518,6 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   await C.noteVoiceReadAsked(Dm, db);
   check("14D. a yes that arrived before the question went: refused", (await C.recordVoiceReadYes(Dm, "yes", db, new Date(sentAt - 5000))).ok === false && !(await C.voiceReadOnFor(Dm, db, env())));
   check("14D. a yes that arrived after: counts", (await C.recordVoiceReadYes(Dm, "yes", db, new Date(Date.now() + 1000))).ok === true);
-  const toolsSrc = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-  check("14D. the reply tool passes when their text arrived", /recordVoiceReadYes\(ctx\.userId, theirWords, undefined, ctx\.turnStartedAt \? new Date\(ctx\.turnStartedAt\) : new Date\(\)\)/.test(toolsSrc));
 
   // E: the call's read log is written only while it's on.
   const writes: any[] = [];
@@ -508,6 +527,103 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   check("14E. stopped before the close wait ended: no call.voice_read row; on: one", !off && on && writes.length === 1 && writes[0].decision === "call.voice_read");
   const mbSrc = readFileSync(new URL("../../src/services/mediaStreamBridge.ts", import.meta.url), "utf8");
   check("14E. the bridge's own writer is that one", /record: \(userId, summary\) => \{\s*void recordVoiceReadLog\(userId, summary\)/.test(mbSrc));
+}
+
+// ---------------------------------------------------------------- 15. third review
+{
+  const T = await import("../../src/services/llmTraceText.js");
+  const CR = await import("../../src/agent/conversationReply.js");
+  const { createConversationTools } = await import("../../src/agent/conversationTools.js");
+  const savedEnv = { ...process.env };
+  Object.assign(process.env, env());
+  C.setVoiceReadDepsForTests({ db, enqueue: async () => ({ queued: true }) });
+  const tools15 = (userId: string, message: string, o: { onCall?: boolean; turnStartedAt?: number; messageArrivedAt?: number } = {}) =>
+    (createConversationTools({ userId, phoneNumber: REAL, resolvedContent: message, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false, onCall: !!o.onCall, turnStartedAt: o.turnStartedAt, messageArrivedAt: o.messageArrivedAt, ackSent: "👍", lastCoMessage: "hi", sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any) as any).tools;
+
+  // D: a yes that arrived before the question went, replayed after it (crash or hold), is refused; a real yes after it counts.
+  const D15 = "18181818-1111-2222-3333-444444444444";
+  db.users.set(D15, { phone_number: REAL, voice_read_ok: false });
+  const yesArrived = new Date(Date.now() - 60_000); // their "yes" came in a minute ago
+  await C.noteVoiceReadAsked(D15, db); // the question went after it
+  const replayInput = { turnStartedAt: new Date(), messageArrivedAt: CR.firstArrival({ receivedAt: yesArrived }, new Date()) };
+  const replayClocks = CR.toolClocks(replayInput, 2); // a retry of the replayed turn
+  check("15D. the arrival time survives a replay and a retry (the deadline clock restarts, the arrival doesn't)", replayClocks.messageArrivedAt === yesArrived.getTime() && replayClocks.turnStartedAt > yesArrived.getTime() && CR.firstArrival(null, yesArrived).getTime() === yesArrived.getTime());
+  const replayed = await tools15(D15, "yes sure", replayClocks).voiceRead.execute({ answer: "yes", theirWords: "yes sure" }, {});
+  check("15D. the replayed yes that arrived before the question went is refused", replayed.ok === false && !(await C.voiceReadOnFor(D15, db, env())), replayed);
+  const liveAt = new Date(Date.now() + 1000);
+  const live = await tools15(D15, "yes please", CR.toolClocks({ turnStartedAt: liveAt, messageArrivedAt: CR.firstArrival(null, liveAt) }, 1)).voiceRead.execute({ answer: "yes", theirWords: "yes please" }, {});
+  check("15D. a real yes after the question is accepted", live.ok === true && (await C.voiceReadOnFor(D15, db, env())), live);
+
+  // 2: a stop or a no on a call tells the model to use no voice notes for the rest of that call.
+  const callStop = await tools15(D15, "stop reading my voice", { onCall: true }).voiceRead.execute({ answer: "stop", theirWords: "stop reading my voice" }, {});
+  const N15 = "19191919-1111-2222-3333-444444444444";
+  db.users.set(N15, { phone_number: REAL, voice_read_ok: false });
+  const callNo = await tools15(N15, "no thanks", { onCall: true }).voiceRead.execute({ answer: "no", theirWords: "no thanks" }, {});
+  const textNo = await tools15(N15, "no", {}).voiceRead.execute({ answer: "no", theirWords: "no" }, {});
+  check("15.2 on a call, a stop says its line and tells the model to use no voice notes for the rest of the call", callStop.say === C.VOICE_READ_STOP_LINE && callStop.note.includes(C.VOICE_READ_OFF_ON_CALL_NOTE), callStop);
+  check("15.2 on a call, a no does too; by text it doesn't (no call to carry on)", callNo.note.includes(C.VOICE_READ_OFF_ON_CALL_NOTE) && !textNo.note.includes(C.VOICE_READ_OFF_ON_CALL_NOTE), { callNo, textNo });
+  check("15.2 the note is for the model only: never said, no Noise or role", !/Noise|matchmaker/.test(C.VOICE_READ_OFF_ON_CALL_NOTE) && callStop.say !== C.VOICE_READ_OFF_ON_CALL_NOTE);
+
+  // 4: after a no or a withdrawal, neither queued ask sends; the question goes once per member, ever.
+  const { proactiveRegistry: REG } = await import("../../src/harness/proactiveRegistry.js");
+  const person = (u: string) => ({ userId: u, firstName: "Jo", phoneNumber: REAL, city: null, timezone: null }) as any;
+  const ask = (u: string, theyAsked: boolean, key: string) => ({ id: key, userId: u, type: "voice_read_ask", targetKey: key, topicKey: "voice_read_ask", summary: "", payload: theyAsked ? { theyAsked: true } : {}, priority: 15, dueAt: new Date(), expiresAt: null, attempts: 0, createdAt: new Date() }) as any;
+  const drafts = async (u: string) => Promise.all([REG.voice_read_ask.draft(ask(u, true, "voice_read_ask:asked:2026-10-28"), person(u)), REG.voice_read_ask.draft(ask(u, true, "voice_read_ask:asked:2026-10-29"), person(u)), REG.voice_read_ask.draft(ask(u, false, "voice_read_ask"), person(u))]);
+  const afterNo = await drafts(N15);
+  check("15.4 a no on file: no queued ask sends, theirs or Cue's", afterNo.every((d: any) => "skip" in d), afterNo);
+  const afterStop = await drafts(D15);
+  check("15.4 a withdrawal on file: none sends", afterStop.every((d: any) => "skip" in d), afterStop);
+  const O15 = "20202020-1111-2222-3333-444444444444";
+  db.users.set(O15, { phone_number: REAL, voice_read_ok: false });
+  const k1 = ask(O15, true, "voice_read_ask:asked:2026-10-28"), k2 = ask(O15, true, "voice_read_ask:asked:2026-10-29");
+  const s1 = await REG.voice_read_ask.draft(k1, person(O15));
+  await REG.voice_read_ask.onSent!(k1, person(O15), [C.VOICE_READ_ASK]);
+  const s2 = await REG.voice_read_ask.draft(k2, person(O15));
+  check("15.4 two of their asks queued on different days: the question goes once", "messages" in s1 && "skip" in s2, { s1, s2 });
+
+  // 5: enqueue false with no send recorded (today's was skipped): no claim it was texted. With a send recorded: says so.
+  C.setVoiceReadDepsForTests({ db, enqueue: async () => ({ queued: false }) });
+  const P15 = "21212121-1111-2222-3333-444444444444";
+  db.users.set(P15, { phone_number: REAL, voice_read_ok: false });
+  const skipped = await tools15(P15, "can you hear how I sound?", { onCall: true }).voiceRead.execute({ answer: "explain", theirWords: "can you hear how I sound?" }, {});
+  check("15.5 nothing queued and no send on record: no line, no claim it was texted", !skipped.say && /Nothing was texted to them about it/.test(skipped.note) && !/You texted them/.test(skipped.note), skipped);
+
+  // The trace forget runs after the deletes, so nothing a racing write reads back is left to copy.
+  const S15 = "22222222-9999-2222-3333-444444444444";
+  db.users.set(S15, { phone_number: REAL, voice_read_ok: false });
+  await C.noteVoiceReadAsked(S15, db);
+  await C.recordVoiceReadYes(S15, "yes", db);
+  const from = db.log.length;
+  let seenAtForget: string[] | null = null;
+  let forgets = 0;
+  await C.turnVoiceReadOff(S15, "stop", db, { endLive: () => 0, forgetTrace: async () => ((forgets++, (seenAtForget ??= db.log.slice(from))), 0) });
+  check("15. the trace forget runs once, after the withdrawal and both deletes", forgets === 1 && !!seenAtForget && seenAtForget.some((q) => q.startsWith("UPDATE voice_read_consents SET withdrawn_at")) && seenAtForget!.some((q) => q.startsWith("DELETE FROM emotion_signals")) && seenAtForget!.some((q) => q.startsWith("DELETE FROM harness_decisions")), seenAtForget);
+
+  // 3: a model call in flight at the forget is dropped when it ends; one that starts after is kept.
+  const inserted: (string | null)[] = [];
+  T.traceTextStore.db = async () => ({ query: async (sql: string, args: unknown[] = []) => {
+    if (/INSERT INTO llm_trace_text/.test(sql)) inserted.push(...((args[2] as (string | null)[]) ?? []));
+    return { rows: [], rowCount: 0 };
+  } }) as any;
+  const hr = (ms: number) => [Math.floor(ms / 1000), (ms % 1000) * 1e6];
+  const span = (id: string, startMs: number) => ({ name: "ai.generateText.doGenerate", startTime: hr(startMs), attributes: { "user.id": S15, "ai.prompt": "their last call: sounded tired (voice)", "ai.response.text": "ok", "ai.telemetry.functionId": "agent.conversationReply" }, spanContext: () => ({ traceId: id.padEnd(32, "0"), spanId: id.padEnd(16, "0") }), status: { code: 0 }, events: [] }) as any;
+  const proc = new T.TraceTextSpanProcessor();
+  const inFlight = span("a1", Date.now() - 5000);
+  proc.onStart(inFlight, {} as any);
+  await T.forgetTraceText(S15, "voice read off");
+  await new Promise((r) => setTimeout(r, 5));
+  proc.onEnd(inFlight);
+  const later = span("b2", Date.now() + 5);
+  await new Promise((r) => setTimeout(r, 10));
+  proc.onStart(later, {} as any);
+  proc.onEnd(later);
+  await T.flushTraceText();
+  check("15.3 a call in flight at the forget isn't written when it ends; one started after is", inserted.filter((u) => u === S15).length === 1, inserted);
+  check("15.3 a span's start time is what stamps the row", T.spanStartedAt({ startTime: hr(1_700_000_000_123) }).getTime() === 1_700_000_000_123);
+
+  C.setVoiceReadDepsForTests(null);
+  for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
+  Object.assign(process.env, savedEnv);
 }
 
 B.setBridgeDeps(null);

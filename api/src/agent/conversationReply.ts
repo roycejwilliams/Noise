@@ -44,12 +44,25 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
   ].join("\n");
 }
 
+// Pure: when their message first arrived. A replay (a held or crashed turn run again) keeps the original time; a live turn uses when
+// the webhook got it (routes/sendblue.ts).
+export function firstArrival(replay: { receivedAt: Date } | null | undefined, arrivedAt: Date): Date {
+  return replay?.receivedAt ?? arrivedAt;
+}
+// Pure: the tools' two clocks for one attempt. The reply's deadline restarts on a retry; when their message arrived never does.
+export function toolClocks(input: Pick<ConversationReplyInput, "turnStartedAt" | "messageArrivedAt">, attempt: number, now: number = Date.now()): { turnStartedAt: number; messageArrivedAt: number | undefined } {
+  return { turnStartedAt: attempt === 1 && input.turnStartedAt ? input.turnStartedAt.getTime() : now, messageArrivedAt: input.messageArrivedAt?.getTime() };
+}
+
 export type ConversationReplyInput = {
   // A confirmed lane move's line the first try at this reply never carried (laneMoves.ts): the retry carries it.
   laneNotesOwed?: string[];
   // When their text arrived. The reply's one deadline runs from here, so the
   // turn's prep counts against it (2026-10-01 code review).
   turnStartedAt?: Date;
+  // When their message first arrived, the same on a replay (a held or crashed turn run again) and across retries: the voice read's
+  // yes counts only if it arrived after the question went (services/voiceReadConsent.ts recordVoiceReadYes). Nothing else reads it.
+  messageArrivedAt?: Date;
   // The reaction already put on their text this turn, if any.
   ackSent?: string | null;
   // Thread the next text under theirs (routes/sendblue.ts threadedSend).
@@ -288,7 +301,8 @@ export async function runConversationReplyAgent(
   // The team gets the team-only tools; nobody else ever sees them.
   const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
   // A retry is its own attempt, with its own clock.
-  const turnStart = (opts.attempt ?? 1) === 1 && input.turnStartedAt ? input.turnStartedAt.getTime() : Date.now();
+  const clocks = toolClocks(input, opts.attempt ?? 1);
+  const turnStart = clocks.turnStartedAt;
   const replyDeadlineAt = () => turnStart + (LOOP_BUDGET.seconds + TURN_GRACE_S) * 1000;
   // A first read this turn (services/theDoor.ts), settled once the reply has gone out.
   let firstRead: import("../services/theDoor.js").FirstReadPending | null = null;
@@ -301,6 +315,7 @@ export async function runConversationReplyAgent(
       firstRead = p;
     },
     turnStartedAt: turnStart,
+    messageArrivedAt: clocks.messageArrivedAt,
     laneNotesOwed: input.laneNotesOwed ?? [],
     stopNotesOwed: input.facts.stopNote ? [input.facts.stopNote.line] : [],
     isTeam,
