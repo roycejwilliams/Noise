@@ -145,11 +145,33 @@ export async function markNoted(userId: string, key: string): Promise<void> {
 }
 
 // Their correction (whatCoKnows.ts): the place they said, or none (the home city stands in, and it's never read again).
+// The correction also clears this want's resolved place (placeResolve.ts: resolved again, for the new place, on its next search) and
+// drops the finds pooled for this want from the old place (Royce, 2026-10-29: "invalidates that ask's old cached location and its
+// cached results"). Only this want: never their home, never another want's finds. Finds already queued to send are left to go (the
+// 10-15 ruling: a correction redirects future finds).
 export async function setPlace(db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> }, userId: string, key: string, place: string | null, theirWords: string) {
-  return db.query(
-    `UPDATE want_places SET place = $3, source = $4, quote = $5, noted_at = COALESCE(noted_at, NOW()), updated_at = NOW() WHERE user_id = $1 AND want_key = $2`,
+  const r = await db.query(
+    `UPDATE want_places SET place = $3, source = $4, quote = $5, noted_at = COALESCE(noted_at, NOW()), updated_at = NOW(),
+       resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_at = NULL
+     WHERE user_id = $1 AND want_key = $2`,
     [userId, key, place, place ? "corrected" : "removed", theirWords.slice(0, 300)],
   );
+  if (r.rowCount) await dropWantFinds(db, userId, key);
+  return r;
+}
+
+// Pure: a backlog's items without this want's finds: the ask's own backlog (an ask's key), or finds searched for it (searchedIn.key).
+export function withoutWantFinds(askId: string, items: unknown[], key: string): unknown[] {
+  const askRow = key.startsWith("ask:") ? key.slice(4) : null;
+  return items.filter((it: any) => !(String(askId) === askRow || it?.match?.searchedIn?.key === key));
+}
+async function dropWantFinds(db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> }, userId: string, key: string): Promise<void> {
+  const { rows } = await db.query(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1 FOR UPDATE`, [userId]);
+  for (const b of rows) {
+    const items = Array.isArray(b.items) ? b.items : [];
+    const kept = withoutWantFinds(String(b.ask_id), items, key);
+    if (kept.length !== items.length) await db.query(`UPDATE event_backlogs SET items = $3, updated_at = NOW() WHERE user_id = $1 AND ask_id = $2`, [userId, b.ask_id, JSON.stringify(kept)]);
+  }
 }
 
 // The stored places of the wants they have open (for what Co knows).
