@@ -32,7 +32,7 @@ export const shadowKey = (name: string, date: string | null) => `${norm(name)}|$
 export const pickerLive = () => reviewEnabled();
 // Every member since 2026-10-13 (Royce: "turn it on for all members, but not as a once-a-day 10am gate. The picker runs after each sweep
 // completes for a member (floor and hourly)"; later: "I want the sweeps to run for everyone"): everyone's picker runs after each of
-// their sweeps (runPickerAfterSweep), and the shadow accounts (shadowUserIds) also keep their 10am run.
+// their sweeps (runPickerAfterSweep). The shadow accounts' own 10am run and its retry are off since 2026-10-29 (efficiency phase 1a).
 export const pickerUserIds = async (_env: NodeJS.ProcessEnv = process.env): Promise<string[]> =>
   (await pool.query(`SELECT id FROM users WHERE archived_at IS NULL AND phone_number IS NOT NULL AND phone_number NOT LIKE '%#%' AND identity_captured = true AND invite_verified = true`)).rows.map((r: any) => String(r.id));
 
@@ -655,8 +655,8 @@ export async function rerunPickerForTaste(userId: string): Promise<void> {
 }
 
 // The picker for one member, after one of their sweeps finishes (the 9am floor, the hourly ask sweep, the goal sweep), so a find from
-// noon never waits until tomorrow. Everyone, the 10am review account too (Royce, 2026-10-13: "I want the sweeps to run for everyone");
-// that account's 10am run stays on top. A failure is logged as that member's picker error; their next sweep runs it again.
+// noon never waits until tomorrow. Everyone, the review account too (Royce, 2026-10-13: "I want the sweeps to run for everyone");
+// its own 10am run is off since 2026-10-29. A failure is logged as that member's picker error; their next sweep runs it again.
 // Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
 export async function runPickerAfterSweep(...a: Parameters<typeof runPickerAfterSweepInScope>): ReturnType<typeof runPickerAfterSweepInScope> {
   return withMember(a[0], () => runPickerAfterSweepInScope(...a));
