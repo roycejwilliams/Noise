@@ -92,7 +92,8 @@ export type FlagType =
   | "goal_read_failed"
   | "goals_starved"
   | "call_flagged"
-  | "elevenlabs_delete_stuck";
+  | "elevenlabs_delete_stuck"
+  | "call_never_started";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -120,6 +121,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   held_back: "Ready texts held 2+ days with nothing sent",
   call_flagged: "Call flagged by the after-call check (held at ElevenLabs until reviewed)",
   elevenlabs_delete_stuck: "ElevenLabs delete stuck (retried once a day)",
+  call_never_started: "A call never started (the phone service refused the dial, or its setup failed)",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -249,6 +251,12 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     }
     if (d.decision === "reply.grounding" && (["cut", "redrafted", "stripped"].includes(d.action ?? "") || (p.draft && p.final && p.draft !== p.final))) {
       add(d, "reply_rewritten", d.action === "stripped" ? "high" : "low", `draft: "${clip(p.draft ?? "", 120)}" → sent: "${clip(p.final ?? "", 120)}"`, d.reason ?? `grounding ${d.action ?? "changed it"}`, !!d.reason);
+    }
+    // A call that never started (services/callTrigger.ts, 2026-10-28: a Twilio key with no permissions refused every dial for a week
+    // and nothing surfaced it). The vendor's status, code and message are the cause.
+    if (d.decision === "call.dial" && d.action === "dial_failed") {
+      const cause = [p.status != null ? `HTTP ${p.status}` : null, p.code != null ? `code ${p.code}` : null, p.message || null].filter(Boolean).join(", ");
+      add(d, "call_never_started", "high", `${p.requested ?? "a"} call never started (${p.stage === "link" ? "call setup failed" : "the phone service refused the dial"})`, cause || "no cause logged", !!cause);
     }
     if (d.decision === "router.decideActions" && p.confidence === "low") {
       add(d, "router_unsure", "low", `"${messageBefore(d.at) ?? "?"}": ${p.reason ?? ""}`, "router confidence low", true);

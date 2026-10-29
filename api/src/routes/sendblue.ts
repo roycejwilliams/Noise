@@ -2556,7 +2556,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // Falls through to the normal reply flow below on failure — a
           // failed dial attempt should never leave the conversation silent.
           // Every failure here is a call that was never placed: the gate or a
-          // precondition stopped it before dialing. Co says that, with the
+          // precondition stopped it before dialing, or the dial itself never
+          // started (2026-10-28: Twilio refused it, and the reason says whether
+          // that was reported, services/callReasons.ts). Co says that, with the
           // real reason (2026-10-01: blocked as "called 1 min ago", Co said
           // "Tried again just now and it didn't go through").
           const why = callNotPlacedReason(callResult.error);

@@ -48,7 +48,13 @@ export function describeFailed(failed: GateCheck[]): string {
 
 // Non-fatal: a logging failure never changes what happens to the person.
 export async function recordDecision(d: HarnessDecision): Promise<void> {
-  await pool
+  await recordDecisionLanded(d);
+}
+
+// The same write, saying whether the row landed. For a record Cue may tell a member about ("that's on record for the team",
+// services/callReasons.ts): it can only say so when this is true. Never throws.
+export async function recordDecisionLanded(d: HarnessDecision): Promise<boolean> {
+  return pool
     .query(
       `INSERT INTO harness_decisions (layer, decision, user_id, outcome, action, proposal, checks, confidence, reason)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -64,5 +70,9 @@ export async function recordDecision(d: HarnessDecision): Promise<void> {
         d.reason ?? null,
       ],
     )
-    .catch((err: any) => console.error(`recordDecision(${d.decision}) failed (non-fatal):`, err?.message ?? err));
+    .then(() => true)
+    .catch((err: any) => {
+      console.error(`recordDecision(${d.decision}) failed (non-fatal):`, err?.message ?? err);
+      return false;
+    });
 }

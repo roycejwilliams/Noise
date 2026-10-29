@@ -121,7 +121,7 @@ check("each call links to its ElevenLabs conversation", conversationLink("conv_1
   check("context built while it rings is used at the answer, once; a stale or missing one is rebuilt", a.prebuilt && a.summary === "ctx:m1" && !b.prebuilt && !c.prebuilt && built === 4);
 }
 const trig = readFileSync(new URL("../../src/services/callTrigger.ts", import.meta.url), "utf8");
-check("the context is started before Twilio dials", trig.indexOf("prebuildCallContext(userId, buildCallContextSummary)") > 0 && trig.indexOf("prebuildCallContext(userId, buildCallContextSummary)") < trig.indexOf("twilioClient.calls.create("));
+check("the context is started before Twilio dials", trig.indexOf("prebuildCallContext(userId, buildCallContextSummary)") > 0 && trig.indexOf("prebuildCallContext(userId, buildCallContextSummary)") < trig.indexOf("call = await dial({") && /const twilioDial: Dial = \(opts\) => twilioClient\.calls\.create\(opts\);/.test(trig));
 check("a misfired voicemail goes through as a conversation, logged; inbound statuses never send a missed-call text", /const kind = missedKind\(verdict, personTalked/.test(coSrc) && /decision: "call\.voicemail"/.test(coSrc) && /if \(inbound \|\| !\["no-answer"/.test(coSrc));
 
 // PR #58 review fixes (2026-10-03), one check each.
