@@ -1,11 +1,12 @@
 // The failure-record read (services/turnFailure.ts FAILURE_ROWS_SQL) run against a real Postgres: a throwaway cluster on a Unix socket in
 // a temp folder, started from the local postgres binaries, removed after. No network, no shared database. Where the binaries aren't
-// installed, the SQL's three answered_since conditions are still checked in its text, and the run says the database part was skipped.
+// installed or won't run here (e.g. as root), the SQL's three answered_since conditions are still checked in its text, and the run
+// says the database part was skipped.
 //   TZ=UTC node evals/runLayer1.mjs evals/silence/failureRowsSql.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 const F = await import("../../src/services/turnFailure.js");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
@@ -29,22 +30,42 @@ const bin = (name: string) => {
   }
   return null;
 };
-const initdb = bin("initdb"), pgctl = bin("pg_ctl");
-if (!initdb || !pgctl) {
-  console.log("failureRowsSql: no local postgres binaries; the database part was skipped (text checks above still ran)");
-} else {
+const initdb = bin("initdb"), postgres = bin("postgres");
+// Set up a throwaway cluster, or say why not (no binaries, or they won't run here, e.g. as root): the database part is skipped then.
+// postgres runs as this test's own child, in its process group, never daemonized: the layer-1 runner's timeout kills the whole group,
+// so it can't be left running; a normal exit (or a crash) stops it and removes its folder here too. Folders a killed run left behind
+// are swept on the next run.
+type Cluster = { sock: string; stop: () => void };
+async function startCluster(): Promise<Cluster | string> {
+  if (!initdb || !postgres) return "no local postgres binaries";
+  for (const old of fs.readdirSync(os.tmpdir()).filter((n) => /^cue-failrows-/.test(n))) {
+    const at = path.join(os.tmpdir(), old);
+    try { if (Date.now() - fs.statSync(at).mtimeMs > 60 * 60_000) fs.rmSync(at, { recursive: true, force: true }); } catch {}
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cue-failrows-"));
-  const data = path.join(dir, "data");
-  const sock = fs.mkdtempSync(path.join(os.tmpdir(), "s"));
-  let started = false;
+  const data = path.join(dir, "d");
+  const remove = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
+  const init = spawnSync(initdb, ["-D", data, "-A", "trust", "-U", "postgres", "--no-sync"], { encoding: "utf8", timeout: 60_000 });
+  if (init.status !== 0) { remove(); return `initdb didn't run here (${(init.stderr || init.error?.message || "").split("\n")[0].slice(0, 120)})`; }
+  const child = spawn(postgres, ["-D", data, "-k", dir, "-c", "listen_addresses=", "-c", "fsync=off"], { stdio: "ignore" });
+  const stop = () => { try { child.kill("SIGKILL"); } catch {} remove(); };
+  process.on("exit", stop);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { stop(); process.exit(1); });
+  const sockFile = path.join(dir, ".s.PGSQL.5432");
+  for (let i = 0; i < 100 && !fs.existsSync(sockFile); i++) {
+    if (child.exitCode !== null) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!fs.existsSync(sockFile)) { stop(); return "postgres didn't start here"; }
+  return { sock: dir, stop };
+}
+const cluster = await startCluster();
+if (typeof cluster === "string") {
+  console.log(`failureRowsSql: ${cluster}; the database part was skipped (text checks above still ran)`);
+} else {
   try {
-    const init = spawnSync(initdb, ["-D", data, "-A", "trust", "-U", "postgres", "--no-sync"], { encoding: "utf8" });
-    if (init.status !== 0) throw new Error(`initdb: ${init.stderr}`);
-    const start = spawnSync(pgctl, ["-D", data, "-o", `-k ${sock} -c listen_addresses='' -c fsync=off`, "-w", "-l", path.join(dir, "log"), "start"], { encoding: "utf8" });
-    if (start.status !== 0) throw new Error(`pg_ctl start: ${start.stderr || fs.readFileSync(path.join(dir, "log"), "utf8")}`);
-    started = true;
     const { default: pg } = await import("pg");
-    const c = new pg.Client({ host: sock, user: "postgres", database: "postgres" });
+    const c = new pg.Client({ host: cluster.sock, user: "postgres", database: "postgres" });
     await c.connect();
     await c.query(`CREATE TABLE harness_decisions (id bigserial PRIMARY KEY, decision text, user_id text, action text, proposal jsonb, created_at timestamptz)`);
     await c.query(`CREATE TABLE co_memories (id bigserial PRIMARY KEY, user_id text, memory_type text, content text, created_at timestamptz)`);
@@ -78,14 +99,12 @@ if (!initdb || !pgctl) {
     await said("member-a", "Co replied: Sorry about that. Here's the Saturday list again.", 2); // the replay's real answer
     rows = (await read()) ?? [];
     check("a real reply to this member after the failure counts as answered", turn()?.answeredSince === true, turn());
-    check("so the broken turn is no longer carried (the call still is)", !F.failureRecordFacts(rows, { afterFailure: false, now: new Date() }).some((t) => /Cue's answer to their text/.test(t)) && F.failureRecordFacts(rows, { afterFailure: false, now: new Date() }).some((t) => /call to them on its own/.test(t)));
+    check("so neither the broken turn nor the failed call (Cue-started) is carried any more", F.failureRecordFacts(rows, { afterFailure: false, now: new Date() }).length === 0, F.failureRecordFacts(rows, { afterFailure: false, now: new Date() }));
     await c.end();
   } catch (err: any) {
     check("the throwaway database ran", false, err?.message ?? err);
   } finally {
-    if (started) spawnSync(pgctl, ["-D", data, "-m", "immediate", "stop"], { encoding: "utf8" });
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.rmSync(sock, { recursive: true, force: true });
+    cluster.stop();
   }
 }
 

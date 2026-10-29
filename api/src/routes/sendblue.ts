@@ -75,7 +75,7 @@ import { callNotPlacedReason, callNotPlacedFacts, failureDetail, parseDialFailur
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
-import { failureRecordFacts, OWED_AFTER, owedFromRows, readFailureRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
+import { FAILURE_RECORD_WINDOW_MINUTES, failureRecordFacts, OWED_AFTER, owedFromRows, readFailureRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
 import { learnFromTextTurn } from "../services/turnLearning.js";
@@ -423,9 +423,10 @@ async function owedAnswer(userId: string): Promise<{ text: string; afterFailure:
   const { rows } = await pool
     .query(
       `SELECT content FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange' AND created_at > NOW() - INTERVAL '30 minutes'
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND created_at > NOW() - make_interval(mins => $2)
        ORDER BY created_at DESC LIMIT 6`,
-      [userId],
+      // The same window the failure record is read over (services/turnFailure.ts).
+      [userId, FAILURE_RECORD_WINDOW_MINUTES],
     )
     .catch(() => ({ rows: [] as any[] }));
   return owedFromRows(rows.map((r: any) => String(r.content)), HOLD_LINES);
@@ -1301,6 +1302,8 @@ export function sendblueRouter(io: Server): Router {
         // Step 3 — Store inbound message, generate embedding (in parallel)
         // Which text they replied to stays with their message, so later turns
         // still know what "I'm in" was about (services/inlineReply.ts).
+        // Cue's own recent failures (services/turnFailure.ts), read while the rest of the turn is gathered; used with the facts below.
+        const failureRowsP = hasText ? readFailureRows((sql, values) => pool.query(sql, values), user.id, [...HOLD_LINES, ...OWED_AFTER]) : Promise.resolve(null);
         const inlineTarget = await repliedToP;
         let dotsP: Promise<Moment | null> | null = null;
         // The one picture of this turn (services/turnContext.ts): what Co sent
@@ -1800,7 +1803,7 @@ export function sendblueRouter(io: Server): Router {
         // Cue's own recent failure, read back from where it was reported (services/turnFailure.ts): what happened, and whether its report
         // is on record, so "I've flagged it" is said only when it is (2026-10-28). Null when the read fails: then that's what Cue knows.
         if (hasText) {
-          const failureRows = await readFailureRows((sql, values) => pool.query(sql, values), user.id, [...HOLD_LINES, ...OWED_AFTER]);
+          const failureRows = await failureRowsP;
           for (const f of failureRecordFacts(failureRows, { afterFailure: !!owed?.afterFailure, now: new Date() })) addFact(replyFacts, "known", f);
         }
         if (owed?.afterFailure) {

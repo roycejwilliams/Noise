@@ -1,5 +1,5 @@
-import { FAILURE_FACT_PREFIX, FAILURE_NOT_ON_RECORD, FAILURE_ON_RECORD, FAILURE_RECORD_UNKNOWN } from "./callReasons.js";
-export { FAILURE_FACT_PREFIX, FAILURE_RECORD_UNKNOWN };
+import { FAILURE_FACT_PREFIX, FAILURE_ON_RECORD, FAILURE_REPORT_PREFIX, FAILURE_RECORD_UNKNOWN, failureReportFact } from "./callReasons.js";
+export { FAILURE_FACT_PREFIX, FAILURE_REPORT_PREFIX, FAILURE_RECORD_UNKNOWN };
 
 // Never go silent (Royce, 2026-09-23). Co marks a text read the moment it
 // arrives, so when a turn then crashes (Claude down, a database error, a
@@ -21,8 +21,10 @@ export const TURN_FAILED_NOTE = "Sorry, something broke on my end on that last o
 // back from that record: what failed, that Cue tried, and whether a report of it is on record. The fact check judges Cue's words
 // against that fact like any other (harness/replyGrounding.ts): an honest admission cites it, and "I've flagged it" is supported only
 // when it says a report is on record. No phrasing of Cue's is classified here.
-// How far back a failure is still the one they're asking about.
-export const FAILURE_RECORD_WINDOW_MINUTES = 15;
+// How far back a failure can still be the one they're asking about: an upper bound only (a failure leaves view as soon as a real reply
+// goes out after it). The same window owedAnswer (routes/sendblue.ts) looks back over for a "something broke" line, so when Cue's last
+// line is that note, its turn.failed row is always inside the read, and the facts never say "no report" while one exists.
+export const FAILURE_RECORD_WINDOW_MINUTES = 30;
 // action: the row's action (turn.failed's told_member / already_answered / ...). requested: what asked for the call (call.dial's
 // proposal.requested). answeredSince: a real Cue reply (not a hold or "something broke" line) went out after the row.
 export type FailureRow = { decision: string; at: Date; action?: string | null; requested?: string | null; answeredSince?: boolean };
@@ -37,19 +39,20 @@ export function failureRecordFacts(rows: FailureRow[] | null, o: { afterFailure:
     const m = Math.round((o.now.getTime() - at.getTime()) / 60_000);
     return m <= 1 ? "just now" : `${m} minutes ago`;
   };
-  if (rows === null) return o.afterFailure ? [`${FAILURE_FACT_PREFIX} something broke on Cue's side on their last text. ${FAILURE_RECORD_UNKNOWN}`] : [];
+  if (rows === null) return o.afterFailure ? [`${FAILURE_FACT_PREFIX} something broke on Cue's side on their last text.`, failureReportFact("unknown")] : [];
+  // A failure a real reply has gone out after is over, a failed call too (whoever started it): it isn't carried into later replies.
+  const live = rows.filter((r) => !r.answeredSince && r.action !== "already_answered");
+  const dial = live.find((r) => r.decision === "call.dial");
+  // While their last line from Cue is still the "something broke" note, that text's failure is the one in front of them.
+  const turn = live.find((r) => r.decision === "turn.failed") ?? (o.afterFailure ? rows.find((r) => r.decision === "turn.failed") : undefined);
   const out: string[] = [];
-  const dial = rows.find((r) => r.decision === "call.dial");
-  // A broken turn the replay (or Cue anyway) answered is over: it isn't carried into later replies.
-  // Unless their last line from Cue is still the "something broke" note: then that text's failure is the one in front of them.
-  const turn = rows.find((r) => r.decision === "turn.failed" && (o.afterFailure || (r.action !== "already_answered" && !r.answeredSince)));
   if (dial) {
     const which = dial.requested && MEMBER_ASKED_CALL.has(dial.requested) ? `Cue tried to place the call they asked for ${ago(dial.at)}` : dial.requested ? `Cue tried to place a call to them on its own ${ago(dial.at)} (they didn't ask for it)` : `Cue tried to place a call to them ${ago(dial.at)}`;
-    out.push(`${FAILURE_FACT_PREFIX} ${which}, and the call didn't go through: it failed on Cue's side before their phone rang, nothing they did. ${FAILURE_ON_RECORD}`);
+    out.push(`${FAILURE_FACT_PREFIX} ${which}, and the call didn't go through: it failed on Cue's side before their phone rang, nothing they did.`);
   }
-  if (turn) out.push(`${FAILURE_FACT_PREFIX} Cue's answer to their text ${ago(turn.at)} broke on Cue's side before it finished. ${FAILURE_ON_RECORD}`);
-  if (!out.length && o.afterFailure) out.push(`${FAILURE_FACT_PREFIX} something broke on Cue's side on their last text. ${FAILURE_NOT_ON_RECORD}`);
-  return out;
+  if (turn) out.push(`${FAILURE_FACT_PREFIX} Cue's answer to their text ${ago(turn.at)} broke on Cue's side before it finished.`);
+  if (out.length) return [...out, failureReportFact("on_record")];
+  return o.afterFailure ? [`${FAILURE_FACT_PREFIX} something broke on Cue's side on their last text.`, failureReportFact("not_on_record")] : [];
 }
 
 // The member's failures in the window, newest first, read from the decision log (sendblue.ts, every text). requested: who asked for a
@@ -85,10 +88,20 @@ export async function readFailureRows(query: Query, userId: string, notAnAnswer:
 export function isFailureFact(f: { text: string }): boolean {
   return f.text.startsWith(FAILURE_FACT_PREFIX);
 }
-// Whether a failure is in this reply's facts, and whether every one of them says a report of it is on record.
+// Pure. Its report status: on record, no report, or couldn't be checked.
+export function isFailureReportFact(f: { text: string }): boolean {
+  return f.text.startsWith(FAILURE_REPORT_PREFIX);
+}
+// A status fact backs a claim only when it says a report IS on record: one saying there's no report, or that it couldn't be checked,
+// is a fact about an absence and supports nothing.
+export function reportFactBacks(f: { text: string }): boolean {
+  return isFailureReportFact(f) && f.text.includes(FAILURE_ON_RECORD);
+}
+// Whether a failure is in this reply's facts, and whether every report status says a report of it is on record.
 export function failureInView(facts: { text: string }[]): { inView: boolean; onRecord: boolean } {
-  const failures = facts.filter(isFailureFact);
-  return { inView: failures.length > 0, onRecord: failures.length > 0 && failures.every((f) => f.text.includes(FAILURE_ON_RECORD)) };
+  const inView = facts.some(isFailureFact);
+  const statuses = facts.filter(isFailureReportFact);
+  return { inView, onRecord: inView && statuses.length > 0 && statuses.every(reportFactBacks) };
 }
 
 // When a reply comes out empty (a timeout, no text), Co keeps their message

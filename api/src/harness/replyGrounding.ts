@@ -60,7 +60,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { arrivalDenial, recordSaysNothingReadable } from "../services/inboundFile.js";
-import { failureInView, isFailureFact } from "../services/turnFailure.js";
+import { failureInView, isFailureFact, isFailureReportFact, reportFactBacks } from "../services/turnFailure.js";
 import { enrichMatch, fetchLumaEventDetails, isLumaLink, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { citesStaleAsCurrent, liveDetailFacts, renderDetailsAsOf, staleCurrentClaims } from "../services/asOf.js";
 import { recentCallCorrections } from "./callGrounding.js";
@@ -1446,8 +1446,19 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     const sources = sourceText(rf, src, c.type);
     let pass = c.supported;
     let reason = `${c.type}: "${c.text}"`;
-    if (pass && failureUnreported && isFeedbackReceipt(rf.facts.find((f) => f.id === c.factId))) {
+    const citedFact = rf.facts.find((f) => f.id === c.factId);
+    if (pass && failureUnreported && isFeedbackReceipt(citedFact)) {
       return { name: `claim_${c.type}`, pass: false, reason: `${reason} (a saved feedback note isn't a report of Cue's failure, and no report of that is on record)` };
+    }
+    // A report status that says there's no report, or that it couldn't be checked, is about an absence: it backs nothing.
+    if (pass && citedFact && isFailureReportFact(citedFact) && !reportFactBacks(citedFact)) {
+      return { name: `claim_${c.type}`, pass: false, reason: `${reason} (that fact says no report of Cue's failure is on record, or that it couldn't be checked; it supports nothing)` };
+    }
+    // What failed backs saying that it failed, nothing Cue did about it: a past action resting on it stands only when the admission judge
+    // reads the claim as only admitting the failure ("It didn't go through on my end"), never "I've flagged it" (that needs the report
+    // status). The judge reads meaning; this only guards which fact can back which.
+    if (pass && c.type === "past_action" && citedFact && isFailureFact(citedFact) && admissions.get(c.text) !== true) {
+      return { name: `claim_${c.type}`, pass: false, reason: `${reason} (what failed backs only saying it failed; anything Cue did about it needs its own fact)` };
     }
     // Agreeing to help is not a capability claim (row 10393, 2026-10-10: "Happy to." was cut as one, and the reply that asked her to
     // send the deck became "I don't have a solid read on your deck"). Only the bare yes: "Happy to search X" is still a capability.
@@ -1543,7 +1554,14 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
   });
   // What each claim was found to rest on, for the machinery-talk check (failureBackedSentence): kept across a recheck's partial read.
   rf.claimCites ??= new Map();
-  claims.forEach((c, i) => rf.claimCites!.set(sentenceKey(c.text).replace(/[.!?]+$/, ""), { pass: checks[i].pass, failureFact: checks[i].pass && !!rf.facts.find((f) => f.id === c.factId && isFailureFact(f)) }));
+  // Rests on the failure: it cites the "what failed" fact (never the report status), or the admission judge passed it while a failure is
+  // in view (the claim reader may mark "that didn't go through" supported with no fact to cite).
+  claims.forEach((c, i) =>
+    rf.claimCites!.set(sentenceKey(c.text).replace(/[.!?]+$/, ""), {
+      pass: checks[i].pass,
+      failureFact: checks[i].pass && (!!rf.facts.find((f) => f.id === c.factId && isFailureFact(f)) || (failure.inView && admissions.get(c.text) === true)),
+    }),
+  );
   return checks;
 }
 

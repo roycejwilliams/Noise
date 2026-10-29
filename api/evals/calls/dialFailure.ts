@@ -17,6 +17,8 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
 
+// A vendor's error: it carries a status and a code, so its (scrubbed) message is kept.
+const vendor = (message: string) => Object.assign(new Error(message), { status: 400, code: 21211 });
 // Twilio's own error for that key, the shape the SDK throws (RestException).
 const twilio401 = Object.assign(new Error("actor doesn't have any assertions"), { status: 401, code: 8001, moreInfo: "https://www.twilio.com/docs/errors/8001" });
 
@@ -89,15 +91,23 @@ let failDecisionWrite = false;
   check("the gate's own reasons are unchanged", /isn't clear/.test(R.callNotPlacedReason("weird")) && /8am to 9pm/.test(R.callNotPlacedReason("Call blocked: outside 8am-9pm their time")));
   const detail = R.failureDetail(Object.assign(new Error("The 'To' number +1 415 555 0200 is not valid for jordan@example.com"), { status: 400, code: 21211 }));
   check("an error's phone numbers, emails and quoted values never reach the report", !/555|jordan@|'To'/.test(detail.message) && detail.status === 400 && detail.code === "21211", detail);
-  const curly = R.failureDetail(new Error("Call to “Sarah Kim” at ‘home’ refused"));
+  const curly = R.failureDetail(vendor("Call to “Sarah Kim” at ‘home’ refused"));
   check("curly-quoted values never reach the report either", !/Sarah|Kim|home/.test(curly.message) && /Call to \[quoted\] at \[quoted\] refused/.test(curly.message), curly);
-  const apos = R.failureDetail(new Error("No route for 'Jordan's phone' at 'Sarah O'Neil's' today"));
+  const apos = R.failureDetail(vendor("No route for 'Jordan's phone' at 'Sarah O'Neil's' today"));
   check("a quoted value holding an apostrophe is scrubbed whole", apos.message === "No route for [quoted] at [quoted] today", apos);
-  const openStraight = R.failureDetail(new Error('Bad value "Sarah Kim at home, call later'));
-  const openCurly = R.failureDetail(new Error("Bad value “Sarah Kim at home"));
-  const openSingle = R.failureDetail(new Error("Bad value ‘Sarah Kim at home"));
+  const openStraight = R.failureDetail(vendor('Bad value "Sarah Kim at home, call later'));
+  const openCurly = R.failureDetail(vendor("Bad value “Sarah Kim at home"));
+  const openSingle = R.failureDetail(vendor("Bad value ‘Sarah Kim at home"));
   check("an opening quote never closed is scrubbed to the end", openStraight.message === "Bad value [quoted]" && openCurly.message === "Bad value [quoted]" && openSingle.message === "Bad value [quoted]", [openStraight, openCurly, openSingle]);
-  check("contractions aren't mistaken for quotes", R.failureDetail(new Error("actor doesn't have any assertions and can't dial")).message === "actor doesn't have any assertions and can't dial");
+  check("contractions aren't mistaken for quotes", R.failureDetail(Object.assign(new Error("actor doesn't have any assertions and can't dial"), { status: 401, code: 8001 })).message === "actor doesn't have any assertions and can't dial");
+  // Cue's own throws carry model or outbound text unquoted (readTurn.ts, messageRouter.ts, services/sendblue.ts): no status, no code,
+  // so the message is withheld and only a fixed line is kept.
+  for (const own of [new Error('readTurn returned no JSON: Sure! Jordan said she is pregnant and'), new Error("router returned no JSON: Maya's divorce came through"), new Error("sendblue: outbound content looked like leaked model meta-commentary, refusing to send: Jordan, your test results")]) {
+    const d = R.failureDetail(own);
+    check(`Cue's own throw keeps no text: "${own.message.slice(0, 30)}…"`, d.message === R.DETAIL_WITHHELD && d.status === null && d.code === null && !/Jordan|Maya|pregnant|divorce|results/.test(JSON.stringify(d)), d);
+  }
+  const pgErr = R.failureDetail(Object.assign(new Error('invalid input syntax for type uuid: "jordan-123"'), { code: "22P02" }));
+  check("a database error (it has a code) keeps its scrubbed message", pgErr.code === "22P02" && pgErr.message === "invalid input syntax for type uuid: [quoted]", pgErr);
 }
 
 // ---- 5. the morning review flags it
