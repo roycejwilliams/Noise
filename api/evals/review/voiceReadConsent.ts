@@ -26,6 +26,9 @@
 //      tells the model to use no voice notes for the rest of the call; a call in flight at a trace forget isn't written; after a no
 //      or a withdrawal no queued ask sends, and the question goes once; no claim of a text that wasn't sent; the trace forget runs
 //      after the deletes.
+//  16. Fourth review: after a stop on a call, every later turn of that call carries the off note from code and its messages lose the
+//      voice lines (two turns, and two requests through the real call endpoint); the call opens with the rule for a stop on a call;
+//      the reply agent hands the tools the replayed text's original arrival on the first attempt and on a retry.
 import { readFileSync } from "node:fs";
 const V = await import("../../src/services/voiceRead.js");
 const C = await import("../../src/services/voiceReadConsent.js");
@@ -622,6 +625,106 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   await T.flushTraceText();
   check("15.3 a call in flight at the forget isn't written when it ends; one started after is", inserted.filter((u) => u === S15).length === 1, inserted);
   check("15.3 a span's start time is what stamps the row", T.spanStartedAt({ startTime: hr(1_700_000_000_123) }).getTime() === 1_700_000_000_123);
+
+  C.setVoiceReadDepsForTests(null);
+  for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
+  Object.assign(process.env, savedEnv);
+}
+
+// ---------------------------------------------------------------- 16. fourth review: the rest of the call after a stop; the arrival's wiring
+{
+  const CT = await import("../../src/services/callTools.js");
+  const E = await import("../../src/harness/emotion.js");
+  const EL2 = await import("../../src/services/elevenLabsCalls.js");
+  const CR = await import("../../src/agent/conversationReply.js");
+  const savedEnv = { ...process.env };
+  Object.assign(process.env, env(), { CALL_LLM_PROXY_SECRET: "proxy-secret", ELEVENLABS_TOOL_SECRET: "tool-secret" });
+  C.setVoiceReadDepsForTests({ db, enqueue: async () => ({ queued: true }) });
+  const M16 = "23232323-1111-2222-3333-444444444444";
+  db.users.set(M16, { phone_number: REAL, voice_read_ok: false });
+  await C.noteVoiceReadAsked(M16, db);
+  await C.recordVoiceReadYes(M16, "yes", db);
+  // The call's starting context as the call opens with it: the last call's moments (a voice-read one among them) and the rule.
+  const now = new Date();
+  const ctxLine = E.renderEmotionalContext({ current: null, lastCall: { at: new Date(now.getTime() - 2 * 86_400_000), moments: [{ source: "call", emotion: "flat under upbeat words", intensity: "high", valence: "negative", about: null, quote: "it's fine", at: now, target: "life", basis: "voice" } as any] }, recurring: [], voice: null } as any, now);
+  const system = EL2.withVoiceReadRule(`Notes on them.\nThey live in Oakland.\n${ctxLine}\nThey like jazz.`, true);
+  check("16. the call opens with the last call's voice moments and the rule for a stop on a call (only while it's on)", /their voice showed: flat under upbeat words/.test(system) && system.includes(C.VOICE_READ_CALL_RULE) && !EL2.withVoiceReadRule("x", false).includes(C.VOICE_READ_CALL_RULE));
+  // The real call start, ElevenLabs' client stubbed: the rule rides in the call's context only while the read is on.
+  const registered: any[] = [];
+  const twilio = EL2.elevenLabs().conversationalAi.twilio as any;
+  const realRegister = twilio.registerCall;
+  twilio.registerCall = async (args: any) => (registered.push(args), "<Response/>");
+  process.env.ELEVENLABS_AGENT_ID = "agent-x";
+  const regOff = "24242424-1111-2222-3333-444444444444";
+  db.users.set(regOff, { phone_number: REAL, voice_read_ok: false });
+  const quietReg = console.log; console.log = () => {};
+  await EL2.registerElevenLabsCall({ userId: M16, firstName: "Jo", contextSummary: "Notes on them.", from: "+14155550100", to: REAL, direction: "outbound" }).catch(() => null);
+  await EL2.registerElevenLabsCall({ userId: regOff, firstName: "Al", contextSummary: "Notes on them.", from: "+14155550100", to: REAL, direction: "outbound" }).catch(() => null);
+  console.log = quietReg;
+  twilio.registerCall = realRegister;
+  const ctxOf = (a: any) => String(a?.conversationInitiationClientData?.dynamicVariables?.context_summary ?? "");
+  check("16. a call placed while it's on opens with the rule; one placed while it's off doesn't", registered.length === 2 && ctxOf(registered[0]).includes(C.VOICE_READ_CALL_RULE) && !ctxOf(registered[1]).includes(C.VOICE_READ_CALL_RULE), registered.map(ctxOf));
+  check("16. the rule never lets Cue claim a stop it can't make: without the tool, it points to a text", /If you don't have that tool, don't say it's stopped/.test(C.VOICE_READ_CALL_RULE) && /a text saying stop/.test(C.VOICE_READ_CALL_RULE));
+
+  // Two turns of one call: the stop on turn 1, then turn 2.
+  CT._resetCallMemoryForTest();
+  const callKey = `${M16}:tok-16`;
+  const member = { phone: REAL, firstName: "Jo", city: null, tasks: [], loops: null, avoid: [] } as any;
+  const turn = (words: string) => CT.buildCallTools({ userId: M16, callKey, member, turnWords: words, callWords: words, lastCoLine: null } as any);
+  const t1 = turn("please stop listening to how I sound");
+  const before = t1.note;
+  const r1: any = await t1.run("voiceRead", { answer: "stop", theirWords: "stop listening to how I sound" }, "tu1");
+  const t2 = turn("anyway, about the dinner");
+  check("16. turn 1: the stop is real (off on file), and before it no turn carried the off note", r1?.ok !== false && !(await C.voiceReadOnFor(M16, db, env())) && !before.includes(C.VOICE_READ_OFF_ON_CALL_NOTE), r1);
+  check("16. turn 2 of the same call: the note is in the call's tools note, from code, not the model's memory", t2.note.includes(C.VOICE_READ_OFF_ON_CALL_NOTE) && CT.callVoiceReadOff(callKey));
+  check("16. another call isn't touched", !CT.callVoiceReadOff(`${M16}:tok-other`) && !CT.buildCallTools({ userId: M16, callKey: `${M16}:tok-other`, member, turnWords: "hi", callWords: "hi", lastCoLine: null } as any).note.includes(C.VOICE_READ_OFF_ON_CALL_NOTE));
+  const msgs = [{ role: "system", content: system }, { role: "user", content: [{ type: "text", text: `earlier\n${ctxLine}\nmore` }] }, { role: "assistant", content: "Sure." }];
+  const stripped = C.stripVoiceReadLines(msgs as any);
+  const flatText = JSON.stringify(stripped);
+  check("16. the voice lines are taken out of the messages (strings and text parts); everything else stays", !/their voice showed/.test(flatText) && !flatText.includes(C.VOICE_READ_CALL_RULE) && /They live in Oakland/.test(flatText) && /They like jazz/.test(flatText) && /earlier/.test(flatText) && /more/.test(flatText) && (stripped[2] as any).content === "Sure.", stripped);
+
+  // Through the real call endpoint, two requests on one call: the second, after the stop, reaches the model without the lines.
+  const { createCallLlmRouter } = await import("../../src/routes/callLlm.js");
+  const seen: string[] = [];
+  const upstreamEvents = [{ type: "message_start", message: { id: "m", usage: { input_tokens: 0, output_tokens: 0 } } }, { type: "content_block_start", index: 0, content_block: { type: "text" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sure thing." } }, { type: "content_block_stop", index: 0 }, { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }, { type: "message_stop" }];
+  const router = createCallLlmRouter(((req: any) => { seen.push(JSON.stringify(req)); return (async function* () { for (const e of upstreamEvents) yield e as any; })(); }) as any);
+  const token = EL2.issueCallToken(M16);
+  const post = (key: string) => new Promise<void>((resolve) => {
+    const res: any = { statusCode: 200, headersSent: false, status(c: number) { this.statusCode = c; return this; }, json() { resolve(); return this; }, set() { return this; }, flushHeaders() {}, write() { return true; }, end() { resolve(); } };
+    const req: any = { method: "POST", url: "/", headers: { authorization: "Bearer proxy-secret" }, body: { model: "x", stream: false, messages: [{ role: "system", content: system }, { role: "assistant", content: "Hi Jo." }, { role: "user", content: "anyway, about the dinner" }], elevenlabs_extra_body: { user_id: M16, call_token: key } } };
+    (router as any).handle(req, res, () => resolve());
+  });
+  CT._resetCallMemoryForTest();
+  const quietLog = console.log; console.log = () => {};
+  await post(token);
+  // The stop, on this same call (the call's key is the user and the token, as the endpoint builds it).
+  const live = CT.buildCallTools({ userId: M16, callKey: `${M16}:${token}`, member, turnWords: "stop", callWords: "stop", lastCoLine: null } as any);
+  await live.run("voiceRead", { answer: "stop", theirWords: "stop" }, "tu2");
+  await post(token);
+  console.log = quietLog;
+  check("16. through the endpoint: before the stop the model sees the voice lines; after it, on the next turn of the same call, it doesn't", seen.length === 2 && /their voice showed/.test(seen[0]) && !/their voice showed/.test(seen[1]) && !seen[1].includes("only your voiceRead tool stops it") && /They live in Oakland/.test(seen[1]), seen.map((x) => x.slice(0, 80)));
+
+  // A2: the reply agent hands the tools the original arrival, on the first attempt and on a retry.
+  const taps: Record<string, unknown>[] = [];
+  CR.tapToolContextForTests((c) => taps.push(c));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init?: any) => {
+    const u = String(url instanceof URL ? url.href : typeof url === "string" ? url : url?.url);
+    if (/api\.anthropic\.com/.test(u)) return new Response(JSON.stringify({ id: "m", type: "message", role: "assistant", model: "stub", content: [{ type: "text", text: "Got it." }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
+    return realFetch(url, init);
+  }) as typeof fetch;
+  const { baseReplyFacts } = await import("../../src/harness/replyGrounding.js");
+  const arrived = new Date(Date.now() - 120_000);
+  const replyInput = (): any => ({ userId: M16, phoneNumber: REAL, firstName: "Jo", resolvedContent: "yes", isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts: baseReplyFacts(), safetyConcern: false, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: "", recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true, isTeam: false, turnStartedAt: new Date(), messageArrivedAt: CR.firstArrival({ receivedAt: arrived }, new Date()) });
+  console.log = () => {};
+  await CR.runConversationReplyAgent(replyInput(), { dryRun: true, record: false, stubSearch: true } as any).catch(() => null);
+  await CR.runConversationReplyAgent(replyInput(), { dryRun: true, record: false, stubSearch: true, attempt: 2 } as any).catch(() => null);
+  console.log = quietLog;
+  globalThis.fetch = realFetch;
+  CR.tapToolContextForTests(null);
+  check("16 A2. the reply agent hands the tools the replayed text's original arrival, on the first attempt and on a retry", taps.length >= 2 && taps.every((c) => c.messageArrivedAt === arrived.getTime()), taps.map((c) => c.messageArrivedAt));
+  const sb = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  check("16 A2. the webhook passes the replay into it (the full webhook can't run here; this pins the one call site)", /messageArrivedAt: firstArrival\(replay, arrivedAt\),/.test(sb));
 
   C.setVoiceReadDepsForTests(null);
   for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];

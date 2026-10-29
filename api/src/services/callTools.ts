@@ -35,6 +35,7 @@ const STILL_GOING = Symbol("still going");
 const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
 // The call subset is the registry's onCall entries (services/capabilities.ts), the same entries the call briefing's list is
 // written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
+import { VOICE_READ_OFF_ON_CALL_NOTE } from "./voiceReadConsent.js";
 export const CALL_TOOL_NAMES: readonly string[] = callToolNames();
 export type CallToolName = string;
 
@@ -63,7 +64,8 @@ You can act during the call with your tools, and the result is real. Whenever yo
 const CALL_MEMORY_MS = 60 * 60_000;
 
 // okAt: when a page or a deck (by kind) last went through on this call; failTextSent: the one honest text already went.
-type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean };
+// voiceReadOff: they said stop (or no) to the voice read on this call: every later turn drops its lines and carries the note.
+type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean };
 const callMemory = new Map<string, CallMem>();
 function memoryFor(key: string): CallMem {
   const now = Date.now();
@@ -74,6 +76,10 @@ function memoryFor(key: string): CallMem {
   return m;
 }
 export function _resetCallMemoryForTest(): void { callMemory.clear(); }
+// Whether they turned the voice read off earlier on this call (routes/callLlm.ts strips its lines from the call's messages).
+export function callVoiceReadOff(callKey: string): boolean {
+  return !!callMemory.get(callKey)?.voiceReadOff;
+}
 
 // avoid: the kinds they've asked Co to stop suggesting, read fresh after a tool acts, so a "no more X" said mid-call (or by text during
 // it) holds for the rest of the call without touching the cached prompt (callTools turnNote, past the cache breakpoint).
@@ -122,8 +128,8 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
   return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops, avoid: lim ? lim.avoid : undefined };
 }
 
-export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {
-  return [CALL_TOOLS_GUIDE, callRecords(m, didOnCall)].join("\n");
+export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[], o: { voiceReadOff?: boolean } = {}): string {
+  return [CALL_TOOLS_GUIDE, callRecords(m, didOnCall), o.voiceReadOff ? VOICE_READ_OFF_ON_CALL_NOTE : ""].filter(Boolean).join("\n");
 }
 
 // Co's records for the member, without the guide: what a spoken line may stand on (callLlmProxy.ts callSources).
@@ -304,13 +310,15 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
         if ((quick as any)?.ok !== false) mem.okAt = { ...(mem.okAt ?? {}), [name.endsWith("Deck") ? "deck" : "page"]: Date.now() };
       }
     } else result = await work;
+    // A stop or a no to the voice read on this call: from now on the call drops its lines and every turn's note says so.
+    if (name === "voiceRead" && result?.ok !== false && ((parsed.data as any)?.answer === "stop" || (parsed.data as any)?.answer === "no")) mem.voiceReadOff = true;
     if (!i.dryRun) recordDecision({ layer: 8, decision: "call.tool", userId: i.userId, outcome: result?.ok === false ? "skip" : "act", action: name, proposal: { ms: Date.now() - t0, turn: i.turnWords.slice(0, 200) }, reason: String(result?.error ?? "").slice(0, 200) }).catch(() => {});
     return result;
   };
   return {
     defs,
     names: new Set(Object.keys(picked)),
-    note: callToolsNote(i.member, mem.did),
+    note: callToolsNote(i.member, mem.did, { voiceReadOff: mem.voiceReadOff }),
     records: callRecords(i.member, mem.did),
     // This turn's facts; the brain writes the turn's note from them (brain/index.ts judgeCallTurn).
     turnFacts: { turnWords: i.turnWords, tasks: i.member.tasks, avoid: i.member.avoid, canWriteTasks: !!picked.updateTask },

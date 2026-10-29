@@ -46,6 +46,22 @@ export const VOICE_READ_ASK_RULES = { maxChars: 600, maxSentences: 7, allowGreet
 export const VOICE_READ_CALL_LINE = "I'll text you how it works, and you can answer there.";
 // Model-facing only, never said to them: after a stop or a no on a call, the rest of that call uses no voice notes.
 export const VOICE_READ_OFF_ON_CALL_NOTE = "For the rest of this call, don't use or mention anything in your context about how they sounded on calls (voice notes); treat it as gone.";
+// Model-facing only, in a call's starting context while the read is on for them. With the call brain endpoint (routes/callLlm.ts) the
+// voiceRead tool stops it; on the direct path (no endpoint, voice-only, or tools off) Cue has no tool on the call and can't stop it
+// there, so it must not say it did: a text saying stop turns it off at once.
+export const VOICE_READ_CALL_RULE = "How they sound on calls is being read on this call (they said yes to it). If they ask you to stop listening to how they sound, only your voiceRead tool stops it. If you don't have that tool, don't say it's stopped or that you'll stop: tell them a text saying stop turns it off right away.";
+// The call's starting context line that carries the last call's moments (harness/emotion.ts renderEmotionalContext), voice-read
+// moments among them. After a stop or a no on a call it is taken out of every later turn's messages (stripVoiceReadLines).
+const LAST_CALL_MOMENTS_LINE = /^[ \t]*On your call [^\n]*?, their voice showed: [^\n]*(\r?\n|$)/gm;
+// Pure: the call's messages with the last call's moments and the voice-read rule taken out (strings and text parts alike).
+export function stripVoiceReadLines<M extends { role: string; content?: unknown }>(messages: M[]): M[] {
+  const clean = (t: string) => t.replace(LAST_CALL_MOMENTS_LINE, "").split(VOICE_READ_CALL_RULE).join("");
+  return messages.map((m) => {
+    if (typeof m.content === "string") return { ...m, content: clean(m.content) };
+    if (Array.isArray(m.content)) return { ...m, content: m.content.map((part: any) => (part && typeof part.text === "string" ? { ...part, text: clean(part.text) } : part)) };
+    return m;
+  });
+}
 // After their yes.
 export const VOICE_READ_YES_LINE = "Thank you. It starts on our next call, and you can tell me to stop anytime.";
 // After "stop": the one confirming line. True whether or not anything had been noted yet.

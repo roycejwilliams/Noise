@@ -180,6 +180,8 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
     if (userId) {
       const rows = await liveGuardsFor(callKey, userId);
       if (rows.length) body.messages = (await import("../services/whatCoKnows.js")).guardCallMessages(body.messages, rows);
+      // They turned the voice read off earlier on this call: its lines are gone from every later turn (services/voiceReadConsent.ts).
+      if ((await import("../services/callTools.js")).callVoiceReadOff(callKey)) body.messages = (await import("../services/voiceReadConsent.js")).stripVoiceReadLines(body.messages);
     }
     const gen = runCallLlm(body, deps);
     const write = (c: OaiChunk) => res.write(`data: ${JSON.stringify(c)}\n\n`);
