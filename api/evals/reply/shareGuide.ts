@@ -39,7 +39,7 @@ check("the rhythm quotes no line for Cue to copy", !/["“”]/.test(RH));
 const RP = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
 check("the reply prompt drops the fixed two-paragraph cap and its quoted sample exchange", !/that still means about two short paragraphs/.test(RP) && !/You: "Welcome back\. How was Austin\?"/.test(RP));
 check("a complete moment gets a short warm line, nothing pulled out of them", /When the moment is complete, a short warm line is the whole reply/.test(G));
-check("contributes, not only mirroring", /Add something of your own rather than only mirroring/.test(G));
+check("contributes, never restating their words back (2026-10-28 run: the Lisbon and Camille replies recited what they said)", /Add something of your own instead of restating what they told you or simply agreeing; they know what they said/.test(G) && !/only mirroring/.test(G));
 check("carries the thread forward from what they told, never a scheduled feelings check-in", /Use what they've already told you, in this thread or before/.test(G) && /never as a scheduled check-in/.test(G));
 check("context shapes tone, never facts; curious, not guessing causes", /shapes your tone, never your facts/.test(G) && /be curious instead/.test(G));
 check("timing (belated)", /something already behind them is said as past/.test(G));
