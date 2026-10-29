@@ -80,11 +80,18 @@ async function startCluster(): Promise<{ ok: Cluster } | { skip: string } | { fa
     await new Promise((r) => setTimeout(r, 100));
   }
   if (!fs.existsSync(sockFile)) { await stop(); return { fail: `postgres is installed but didn't start (${stderr.split("\n").filter(Boolean).slice(-1)[0]?.slice(0, 160) ?? "no output"})` }; }
-  return { ok: { sock: dir, stop } };
+  return { ok: { sock: dir, stop, pid: child.pid! } };
 }
-// SysV shared-memory segments now (null where ipcs isn't there): a stopped cluster must leave the count where it was.
-const shmSegments = () => { const r = spawnSync("ipcs", ["-m"], { encoding: "utf8" }); return r.status === 0 ? r.stdout.split("\n").filter((l) => /^\s*m\s|^0x/.test(l)).length : null; };
-const shmBefore = shmSegments();
+// SysV shared-memory segments this cluster's postgres created (CPID), still there (null where ipcs isn't there). Counting only
+// its own keeps the check true when another layer-1 run (another worktree's merge gate) has a cluster up at the same time.
+const shmSegmentsOf = (pid: number) => {
+  const r = spawnSync("ipcs", ["-m", "-p"], { encoding: "utf8" });
+  if (r.status !== 0) return null;
+  const head = r.stdout.split("\n").find((l) => /\bCPID\b/.test(l));
+  const col = head ? head.trim().split(/\s+/).indexOf("CPID") : -1;
+  if (col < 0) return null;
+  return r.stdout.split("\n").filter((l) => /^\s*m\s/.test(l)).filter((l) => Number(l.trim().split(/\s+/)[col]) === pid).length;
+};
 const started = await startCluster();
 if ("skip" in started) {
   console.log(`SKIP failureRowsSql: ${started.skip}; the database part didn't run (the SQL text checks above did)`);
@@ -153,8 +160,8 @@ if ("skip" in started) {
   } finally {
     await cluster.stop();
   }
-  const shmAfter = shmSegments();
-  if (shmBefore !== null && shmAfter !== null) check("stopping the cluster leaks no shared memory (SIGINT, not SIGKILL)", shmAfter <= shmBefore, { shmBefore, shmAfter });
+  const leftBehind = shmSegmentsOf(cluster.pid);
+  if (leftBehind !== null) check("stopping the cluster leaks no shared memory (SIGINT, not SIGKILL)", leftBehind === 0, { leftBehind, pid: cluster.pid });
 }
 
 console.log(`failure rows sql: ${total - failed}/${total} passed`);
