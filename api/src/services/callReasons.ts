@@ -16,7 +16,7 @@ export function failureDetail(err: unknown): { status: number | null; code: stri
   const code = e.code === undefined || e.code === null ? null : String(e.code).slice(0, 40);
   const message = String(e.message ?? e)
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
-    .replace(/"[^"]*"|(?<!\w)'[^']*'(?!\w)|`[^`]*`/g, "[quoted]")
+    .replace(/"[^"]*"|“[^”]*”|(?<!\w)'[^']*'(?!\w)|(?<!\w)‘[^’]*’(?!\w)|`[^`]*`/g, "[quoted]")
     .replace(/\+?\d[\d\s().-]{5,}\d/g, "[number]")
     .replace(/\s+/g, " ")
     .trim()

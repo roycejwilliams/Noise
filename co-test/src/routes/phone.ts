@@ -123,7 +123,9 @@ router.post("/:user_id/call", requireOwnOrTeam("user_id"), async (req: Request, 
     // (liveCallState.ts), not api's JWT-authed socket rooms, so there's no
     // real consumer for triggerCallForUser's optional io?.emit calls.
     const result = await triggerCallForUser(String(req.params.user_id), null);
-    if (!result.success) return res.status(404).json({ success: false, error: result.error });
+    // A call that never started (the phone service refused the dial, or its setup failed) is a failure on Cue's side, not a missing
+    // session: 502, like the app's own call route (api/src/routes/co.ts).
+    if (!result.success) return res.status(result.dialFailed ? 502 : 404).json({ success: false, error: result.error });
     return res.status(200).json({ success: true, call_sid: result.call_sid });
   } catch (error) {
     next(error);

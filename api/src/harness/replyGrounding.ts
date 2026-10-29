@@ -60,7 +60,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { arrivalDenial, recordSaysNothingReadable } from "../services/inboundFile.js";
-import { failureAdmitted, failureInView, flagClaim } from "../services/turnFailure.js";
+import { failureAdmitted, failureInView, failureSpoken, flagClaim } from "../services/turnFailure.js";
 import { enrichMatch, fetchLumaEventDetails, isLumaLink, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { citesStaleAsCurrent, liveDetailFacts, renderDetailsAsOf, staleCurrentClaims } from "../services/asOf.js";
 import { recentCallCorrections } from "./callGrounding.js";
@@ -1255,7 +1255,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   const nothingReadable = recordSaysNothingReadable(rf.facts);
   // A line about their world that names an item on file isn't machinery (services/memberWorld.ts worldLineAllowed, Royce 2026-10-14);
   // the claim read below still holds it to the facts.
-  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureAdmitted(rf.facts, sentence) });
+  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureSpoken(rf.facts, sentence) });
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Cue's own state instead of what they get (${narrated})` });
   // Their thread is asked about, never reported (Royce, 2026-10-14): Co has no record of where it stands. Only a sentence the thread
   // read said reports its status is cut (judgeThreadReports, run before this); a read that failed or never ran keeps it. Quoted, so
@@ -2105,7 +2105,7 @@ export async function groundReply(
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
     // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
-    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureAdmitted(rf.facts, sentence) };
+    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) || failureSpoken(rf.facts, sentence) };
     let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);

@@ -89,6 +89,8 @@ let failDecisionWrite = false;
   check("the gate's own reasons are unchanged", /isn't clear/.test(R.callNotPlacedReason("weird")) && /8am to 9pm/.test(R.callNotPlacedReason("Call blocked: outside 8am-9pm their time")));
   const detail = R.failureDetail(Object.assign(new Error("The 'To' number +1 415 555 0200 is not valid for jordan@example.com"), { status: 400, code: 21211 }));
   check("an error's phone numbers, emails and quoted values never reach the report", !/555|jordan@|'To'/.test(detail.message) && detail.status === 400 && detail.code === "21211", detail);
+  const curly = R.failureDetail(new Error("Call to “Sarah Kim” at ‘home’ refused"));
+  check("curly-quoted values never reach the report either", !/Sarah|Kim|home/.test(curly.message) && /Call to \[quoted\] at \[quoted\] refused/.test(curly.message), curly);
   check("contractions aren't mistaken for quotes", R.failureDetail(new Error("actor doesn't have any assertions and can't dial")).message === "actor doesn't have any assertions and can't dial");
 }
 

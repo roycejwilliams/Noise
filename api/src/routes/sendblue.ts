@@ -71,7 +71,7 @@ import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../servi
 import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { callLine } from "../services/capabilities.js";
-import { callNotPlacedReason, callNotPlacedFacts, failureDetail } from "../services/callReasons.js";
+import { callNotPlacedReason, callNotPlacedFacts, failureDetail, parseDialFailure } from "../services/callReasons.js";
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
@@ -1802,13 +1802,29 @@ export function sendblueRouter(io: Server): Router {
         if (hasText) {
           const failureRows = await pool
             .query(
-              `SELECT decision, created_at FROM harness_decisions
-               WHERE user_id = $1 AND created_at > NOW() - make_interval(mins => $2)
-                 AND ((decision = 'call.dial' AND action = 'dial_failed') OR decision = 'turn.failed')
-               ORDER BY created_at DESC LIMIT 5`,
-              [user.id, FAILURE_RECORD_WINDOW_MINUTES],
+              // requested: who asked for the call (the member, or Cue on its own). answered_since: a real reply went out after it (a
+              // replayed turn that answered), so a broken turn that's been answered isn't carried on.
+              `SELECT hd.decision, hd.created_at, hd.action, hd.proposal->>'requested' AS requested,
+                      EXISTS (
+                        SELECT 1 FROM co_memories r
+                        WHERE r.user_id = hd.user_id AND r.memory_type = 'text_exchange' AND r.content LIKE 'Co replied:%'
+                          AND r.created_at > hd.created_at AND r.content <> ALL($3::text[])
+                      ) AS answered_since
+               FROM harness_decisions hd
+               WHERE hd.user_id = $1 AND hd.created_at > NOW() - make_interval(mins => $2)
+                 AND ((hd.decision = 'call.dial' AND hd.action = 'dial_failed') OR hd.decision = 'turn.failed')
+               ORDER BY hd.created_at DESC LIMIT 5`,
+              [user.id, FAILURE_RECORD_WINDOW_MINUTES, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
             )
-            .then((r) => r.rows.map((x: { decision: string; created_at: string | Date }): FailureRow => ({ decision: x.decision, at: new Date(x.created_at) })))
+            .then((r) =>
+              r.rows.map((x: { decision: string; created_at: string | Date; action: string | null; requested: string | null; answered_since: boolean }): FailureRow => ({
+                decision: x.decision,
+                at: new Date(x.created_at),
+                action: x.action,
+                requested: x.requested,
+                answeredSince: !!x.answered_since,
+              })),
+            )
             .catch(() => null);
           for (const f of failureRecordFacts(failureRows, { afterFailure: !!owed?.afterFailure, now: new Date() })) addFact(replyFacts, "known", f);
         }
@@ -2578,9 +2594,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // "Tried again just now and it didn't go through").
           const why = callNotPlacedReason(callResult.error);
           for (const f of callNotPlacedFacts(callResult.error)) addFact(replyFacts, f.kind, f.text);
+          // Split by cause (Royce, 2026-10-28). The gate or a precondition stopped it: no call went out, and they can ask again once
+          // it's allowed. The dial itself failed: Cue did try, so it says the call didn't go through, on Cue's side, and doesn't send
+          // them to ask again (on a 401/403 that would fail the same way until the key is fixed).
+          const dialFailure = parseDialFailure(callResult.error);
           addInstruction(
             replyFacts,
-            `They just asked you to call them. Cue genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`,
+            dialFailure
+              ? `They just asked you to call them, and Cue did try, but the call didn't go through: ${why} Say plainly, in a line, that the call didn't go through and that it's a problem on Cue's side.${dialFailure.setup ? " Add that asking again right now won't help." : ""} Don't suggest they ask again, don't promise to call back on your own, and never say you're calling them now.`
+              : `They just asked you to call them. Cue genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`,
           );
         }
 
