@@ -16,14 +16,20 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MIN_CHUNK, registrySignature } from "../lib/goldenSkeleton.mjs";
 
+// Review round 2 of #318: the rule-like sentences inside these (one question a reply, ask first, no questionnaire, a complete moment gets a
+// short line, earlier threads only when relevant, a feeling first, no therapy question, what not to do on feedback, no exclamation points
+// or em dashes) moved out into their own declarations (MESSAGE_RHYTHM_QUESTION, COACHING_ASK_FIRST, SHARE_NO_QUIZ, SHARE_EARLIER,
+// SHARE_FEELING, FEEDBACK_DONTS, VOICE_PUNCTUATION), which are behavior: the assembled text is byte for byte what it was.
 export const WORDING_ALLOWLIST = [
-  { file: "src/services/textRhythm.ts", decl: "MESSAGE_RHYTHM" }, // message pacing: paragraphs as beats
-  { file: "src/services/textRhythm.ts", decl: "COACHING_STYLE" }, // lines not lectures, ask first (not the follow-up task or the safety line)
+  { file: "src/services/textRhythm.ts", decl: "MESSAGE_RHYTHM_BEATS" }, // message pacing: paragraphs as beats (not the one-question rule)
+  { file: "src/services/textRhythm.ts", decl: "MESSAGE_RHYTHM_ENOUGH" }, // decide whether another message is needed
+  { file: "src/services/textRhythm.ts", decl: "COACHING_STYLE" }, // lines not lectures (not ask-first, the follow-up task or the safety line)
   { file: "src/services/coVoice.ts", decl: "VOICE_TONE" }, // "composed and warm ... say less than you could"
-  { file: "src/services/coVoice.ts", decl: "VOICE_STYLE" }, // punctuation and capitals
-  { file: "src/services/connectDots.ts", decl: "SHARE_TONE" }, // how a share is answered (not its scope or the never-fill-in rule)
-  { file: "src/services/connectDots.ts", decl: "SHARE_TONE_2" },
-  { file: "src/services/connectDots.ts", decl: "FEEDBACK_TONE" }, // how feedback is shown (not its scope or the honest-account rule)
+  { file: "src/services/coVoice.ts", decl: "VOICE_STYLE" }, // warmth from specifics, capitals (not the punctuation rule)
+  { file: "src/services/connectDots.ts", decl: "SHARE_TONE" }, // how a share is answered (not its scope, questions or the never-fill-in rule)
+  { file: "src/services/connectDots.ts", decl: "SHARE_TONE_OWN" }, // add something of your own
+  { file: "src/services/connectDots.ts", decl: "SHARE_TONE_2" }, // timing: past is said as past
+  { file: "src/services/connectDots.ts", decl: "FEEDBACK_TONE" }, // how feedback is shown (not its scope, the don'ts or the honest-account rule)
 ] as const;
 // The files the allowlist reads (kept for the docs and the tests).
 export const WORDING_FILES = [...new Set(WORDING_ALLOWLIST.map((a) => a.file))];
@@ -39,8 +45,9 @@ function ownerOf(node: ts.Node): string {
   return "(top)";
 }
 
-// Every 40+ character literal of a file, filed under its declaration (the allowlist picks from these).
-export function chunksOf(file: string, source = readFileSync(join(api, file), "utf8")): Chunk[] {
+// Every 40+ character literal of a file (or `min`+: the tests read short protected literals too), filed under its declaration (the
+// allowlist picks from these).
+export function chunksOf(file: string, source = readFileSync(join(api, file), "utf8"), min = MIN_CHUNK): Chunk[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
   const base = file.split("/").pop()!;
   const seen = new Map<string, number>();
@@ -49,7 +56,7 @@ export function chunksOf(file: string, source = readFileSync(join(api, file), "u
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
       // An import path or a property name is never prompt text.
       const text = (node as ts.LiteralLikeNode).text;
-      if (text.length >= MIN_CHUNK && !ts.isImportDeclaration(node.parent) && !ts.isExportDeclaration(node.parent)) {
+      if (text.length >= min && !ts.isImportDeclaration(node.parent) && !ts.isExportDeclaration(node.parent)) {
         const owner = ownerOf(node);
         const i = seen.get(owner) ?? 0;
         seen.set(owner, i + 1);

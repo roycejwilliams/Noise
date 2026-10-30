@@ -10,20 +10,52 @@
 // model's own earlier turns and every tool result; every fact line ("[F12] ...") and conversation line ("User said: ..."); every
 // interpolated value and every literal outside the allowlist (safety, grounding, consent, facts, gates, checker prompts); which
 // allowlisted literals are included at all. And within an allowlisted literal, a move is blocked when it changes the literal's
-// GUARD TERMS (numbers, tool-like names, and the words that carry rules: never, always, only, must, call, offer, question, safe,
-// member, share, private, invent, JSON...), or when it asks for an output format: the words may move, the rules they carry may not.
+// GUARD TERMS (numbers, tool-like names, links and money, and the words that carry rules: never, always, only, must, call, offer,
+// question, safe, member, share, private, invent, JSON, negations, permission, personal data, outreach, sales, care, conduct, order...), or when it asks for an output format: the words may move, the rules they carry may not.
 import { createHash } from "node:crypto";
 
-export const SKELETON_VERSION = 2;
+// 3: the guard terms widened (review round 2 of #318); a stamp made under 2 is never compared.
+export const SKELETON_VERSION = 3;
 export const MIN_CHUNK = 40;
 const sha = (s, n = 16) => createHash("sha256").update(s).digest("hex").slice(0, n);
 const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 
-// The terms a tone rewrite must keep (as a multiset): a changed count of any is a changed rule, not a rewording.
-const GUARD_WORDS = /\b(?:never|always|only|once|twice|must|every|each|no|not|don'?t|do not|call(?:s|ed|ing)?|phone|offer(?:s|ed)?|questions?|ask(?:s|ed)?|safe(?:ty)?|unsafe|hurt|harm|kill|emergency|crisis|members?|share[sd]?|sharing|private|privacy|invent(?:ed)?|plausible|guess|facts?|promise[sd]?|tasks?|tools?|links?|introduce[sd]?|consent|yes|json|one|two|three|four|five|six|seven|eight|nine|ten|several|few|couple|many|most|least)\b|\d+/gi;
+// The terms a tone rewrite must keep (as a multiset): a changed count of any is a changed rule, not a rewording. Review round 2 of #318
+// widened them past the rule words: negations, permission, personal data, outreach, sales and links, safety and care, conduct, numbers
+// past ten and quantity (more, less), and order. What they can't see: the same words reordered ("Ask first, advise second" -> "Advise first, ask second") keeps the
+// multiset, so it passes as a move (a known limit; the ledger entry and the quality run are what catch it).
+const GUARD_WORDS = new RegExp("\\b(?:" + [
+  // rules
+  "never", "always", "only", "once", "twice", "must", "every", "each", "no", "not", "don'?t", "do not", "call(?:s|ed|ing)?", "phone", "offer(?:s|ed)?",
+  "questions?", "ask(?:s|ed)?", "safe(?:ty)?", "unsafe", "hurt", "harm", "kill", "emergency", "crisis", "members?", "share[sd]?", "sharing", "private",
+  "privacy", "invent(?:ed)?", "plausible", "guess", "facts?", "promise[sd]?", "tasks?", "tools?", "links?", "introduce[sd]?", "consent", "yes", "json",
+  // negations
+  "won'?t", "can'?t", "cannot", "without", "avoid(?:s|ed|ing)?", "skip(?:s|ped|ping)?", "stop(?:s|ped|ping)?", "nothing", "none", "nobody", "unless",
+  "except", "instead",
+  // permission
+  "may", "can", "fine", "okay", "ok", "allow(?:s|ed)?", "free", "freely", "assum(?:e|es|ed|ing)",
+  // personal data
+  "people", "others", "anyone", "everyone", "names?", "address(?:es)?", "emails?", "birthdays?", "locations?",
+  // outreach
+  "voice", "chats?", "texts?", "texting", "messages?", "remind(?:s|ed|ers?)?", "follow(?:s|ed|ing)?", "check-ins?", "schedul(?:e|es|ed|ing)",
+  // sales
+  "buy(?:s|ing)?", "sell(?:s|ing)?", "tickets?", "pitch(?:es|ed|ing)?", "prices?", "pay(?:s|ing|ment)?",
+  // safety and care
+  "hotlines?", "therapists?", "therapy", "doctors?", "medical", "legal", "diagnos(?:e|es|is|ing)",
+  // conduct
+  "flirt\\w*", "romantic", "warm\\w*",
+  // numbers
+  "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+  "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundreds?", "thousands?",
+  "millions?", "dozens?", "several", "few", "fewer", "couple", "many", "most", "least", "more", "less",
+  // order
+  "first", "last", "before", "after",
+].join("|") + ")\\b|\\d+", "gi");
+// Money and links: a dollar sign, a scheme, www, or a bare domain (noise.club/apply).
+const LINKISH = /\$|https?:\/\/|\bwww\.|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/gi;
 // Tool-like names (startTask, sendReply): case-sensitive, or every word would match.
 const TOOL_NAMES = /\b[a-z]+[A-Z]\w*\b/g;
-export const guardTerms = (text) => [...(String(text ?? "").match(GUARD_WORDS) ?? []).map((w) => w.toLowerCase()), ...(String(text ?? "").match(TOOL_NAMES) ?? [])].sort().join(" ");
+export const guardTerms = (text) => [...[...(String(text ?? "").match(GUARD_WORDS) ?? []), ...(String(text ?? "").match(LINKISH) ?? [])].map((w) => w.toLowerCase()), ...(String(text ?? "").match(TOOL_NAMES) ?? [])].sort().join(" ");
 
 // A literal that tells the model what shape to answer in.
 export const looksLikeFormat = (text) => /\bJSON\b|"\w+"\s*:\s*["{[\d<]/.test(String(text ?? ""));
@@ -59,8 +91,8 @@ const maskContent = (content, role, chunks, found) => {
 // The skeleton of a request key ({ path, grader, beta, body }, as goldenReplay.mjs builds it) under the given wording chunks
 // ({ id, text }[], longest first). Returns its hash, the wording ids it contains with each one's text hash (so a match can say what
 // moved), the ids that ask for an output format, and a hash of the tool descriptions.
-export function skeletonOf(key, chunks) {
-  const found = new Set();
+// The request key's canonical text with the given wording chunks masked (`found` collects the ids seen).
+function maskedOf(key, chunks, found) {
   const body = key.body && typeof key.body === "object" ? { ...key.body } : key.body;
   if (body && typeof body === "object") {
     delete body.metadata;
@@ -70,7 +102,12 @@ export function skeletonOf(key, chunks) {
     if (Array.isArray(body.messages)) body.messages = body.messages.map((m) => (m && typeof m === "object" ? { ...m, content: maskContent(m.content, m.role, chunks, found) } : m));
     if (typeof body.prompt === "string") body.prompt = maskText(body.prompt, chunks, found);
   }
-  const text = JSON.stringify(canon({ path: key.path, grader: key.grader, beta: key.beta ?? null, body }));
+  return JSON.stringify(canon({ path: key.path, grader: key.grader, beta: key.beta ?? null, body }));
+}
+
+export function skeletonOf(key, chunks) {
+  const found = new Set();
+  const text = maskedOf(key, chunks, found);
   const byId = new Map(chunks.map((c) => [c.id, c.text]));
   const wording = Object.fromEntries([...found].sort().map((id) => [id, sha(byId.get(id), 8)]));
   const guard = Object.fromEntries([...found].sort().map((id) => [id, sha(guardTerms(byId.get(id)), 8)]));
@@ -85,4 +122,29 @@ export function movedBetween(stamp, now) {
   const moved = Object.keys(now.wording).filter((id) => stamp.wording?.[id] !== now.wording[id]).map((id) => ({ id, from: stamp.wording?.[id] ?? null, to: now.wording[id] }));
   const blocked = moved.filter((m) => (stamp.format ?? []).includes(m.id) || now.format.includes(m.id) || !stamp.guard?.[m.id] || stamp.guard[m.id] !== now.guard[m.id]).map((m) => m.id);
   return { moved, blocked };
+}
+
+// The text a moved literal had in a recording (for --ledger to show what moved): the recorded request with today's other wording masked,
+// read at the moved literal's places in today's masked request. Both have the same skeleton, so everything around the moved text lines
+// up. { id: text } for each id found; an id it can't line up is left out.
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export function wordingBefore(recordedKey, nowKey, chunks, ids) {
+  const want = new Set(ids);
+  if (!want.size) return {};
+  const now = maskedOf(nowKey, chunks, new Set());
+  const old = maskedOf(recordedKey, chunks.filter((c) => !want.has(c.id)), new Set());
+  const parts = now.split(new RegExp(`⟦(${[...want].map(reEscape).join("|")})⟧`));
+  const out = {};
+  // A scan, not one regex (a request is too long for one): the text between each pair of literal stretches is the old text.
+  if (parts.length < 3 || !old.startsWith(parts[0])) return out;
+  let at = parts[0].length;
+  for (let i = 1; i < parts.length; i += 2) {
+    const next = parts[i + 1];
+    const last = i + 2 >= parts.length;
+    const end = last ? (old.endsWith(next) && old.length - next.length >= at ? old.length - next.length : -1) : old.indexOf(next, at);
+    if (end < 0) return {};
+    if (!(parts[i] in out)) { try { out[parts[i]] = JSON.parse(`"${old.slice(at, end)}"`); } catch {} }
+    at = end + next.length;
+  }
+  return out;
 }

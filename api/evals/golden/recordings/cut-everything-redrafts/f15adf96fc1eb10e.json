@@ -4358,19 +4358,21 @@
     }
   ],
   "structure": {
-    "v": "d772ee43ea1b",
-    "hash": "0e9b4be58a84d4bc",
+    "v": "be0153bcbe53",
+    "hash": "0c43b6f00ff33b04",
     "wording": {
-      "coVoice.ts:VOICE_STYLE#0": "dcb324a6",
+      "coVoice.ts:VOICE_STYLE#0": "d3c1d29d",
       "coVoice.ts:VOICE_TONE#0": "d0c8198c",
-      "textRhythm.ts:COACHING_STYLE#0": "91a49796",
-      "textRhythm.ts:MESSAGE_RHYTHM#0": "8102ef4e"
+      "textRhythm.ts:COACHING_STYLE#0": "c9452f1d",
+      "textRhythm.ts:MESSAGE_RHYTHM_BEATS#0": "e0601b4a",
+      "textRhythm.ts:MESSAGE_RHYTHM_ENOUGH#0": "c6c2b0e7"
     },
     "guard": {
-      "coVoice.ts:VOICE_STYLE#0": "9a2d1186",
-      "coVoice.ts:VOICE_TONE#0": "c551d9d3",
-      "textRhythm.ts:COACHING_STYLE#0": "c4bce7d0",
-      "textRhythm.ts:MESSAGE_RHYTHM#0": "249f8458"
+      "coVoice.ts:VOICE_STYLE#0": "19f7d56f",
+      "coVoice.ts:VOICE_TONE#0": "4d576ea2",
+      "textRhythm.ts:COACHING_STYLE#0": "d656c478",
+      "textRhythm.ts:MESSAGE_RHYTHM_BEATS#0": "daa355f8",
+      "textRhythm.ts:MESSAGE_RHYTHM_ENOUGH#0": "e561b924"
     },
     "format": []
   }
