@@ -247,9 +247,10 @@ const day = () => "Oct 8";
     }
   }
   {
-    // Royce's call, 2026-10-08: "Done, I'll send that over now." and nothing went out. Nothing is sent on a call.
+    // Royce's call, 2026-10-08: "Done, I'll send that over now." and nothing went out. Since 2026-10-29 Cue can send on a call, but a
+    // send said as it happens ("I'll send that over now") is never true in the turn's words: dropped whole, the rest stays.
     const done = await run("Done, I'll send that over now. That one feels right for where you're at.");
-    check(`a leading "Done," is taken off; the promise stays ("${done}")`, /^I'll send that over now\./.test(done) && !/\bDone\b/.test(done));
+    check(`a send said as it happens is dropped with its "Done,"; the rest stays ("${done}")`, /^That one feels right for where you're at\./.test(done) && !/\bDone\b/.test(done) && !/send that over/.test(done));
     const sent = await run("I just sent it to you. It's the run on Saturday.");
     check(`a sentence claiming a send is dropped ("${sent}")`, !/sent it/.test(sent) && /run on Saturday/.test(sent));
     const truth = await run("I'll text it to you right after we hang up.");

@@ -43,6 +43,9 @@ export type Ability = {
   onCall?: true;
   // An ability without a tool that also works on a call (talking itself). Tool abilities use onCall.
   surfaces?: Surface[];
+  // How the tool is used on a call, when that differs from texting (shareLink on a call takes the names of things on file, since
+  // the call's prompt carries no links). Becomes the call tool's description.
+  callUse?: string;
 };
 
 // Co's calling line is a different number from the one it texts from
@@ -206,6 +209,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_artifact_resend_link",
     can: "If a link to a page or deck Cue made doesn't reach them, Cue can send it again; they can also ask for the link to one of theirs any time.",
+    onCall: true,
     tool: "resendLink",
     limits: { perTurn: 2, perDay: 12 },
     use: "When a page, deck or share link was made but its text didn't send (the tool says so), call this right away so they have it. Also when they ask for the link to one of their pages or decks again (\"send me the deck link\"): pass which.",
@@ -239,7 +243,6 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_inspo_pinterest",
     can: "Cue can read a public Pinterest board they send for the look of a deck or page (its pins and colors). A board that needs a Pinterest login, Cue can't open, and says so.",
-    onCall: true,
     tool: "readInspo",
     limits: { perTurn: 2, perDay: 10 },
     use: "When they send a Pinterest board link for the look (\"this is the vibe\", or with a deck or page ask). Read it: its look comes from its pins' own pictures. For a deck, call makeDeck next: it hands back the one confirm line to send, and the deck is built when they answer (readConfirmed). For a deck you already made, the board's look can only change the whole deck (updateDeck with taste), never one slide. For a page, build with taste from what you read. If it can't be read, say plainly it needs a login or isn't public, and ask them to describe the look or pick a look by name; never guess.",
@@ -329,9 +332,11 @@ export const ABILITIES: Ability[] = [
   {
     id: "share_link",
     can: "Cue can send a link that's on file, each as its own text so it previews.",
+    onCall: true,
     tool: "shareLink",
     limits: { perTurn: 3 },
     use: "Share the link (or links) for what you're about to tell them about. Each one is sent as its own message so it previews, and they go out BEFORE your reply, in the order you list them, so call this first and then describe them with sendReply. If you mention two things, share both links. Only links that appear in the facts you were given.",
+    callUse: "Text them the link to something you already have on file, while you're still talking: an event or find from what you've found for them, one searchEvents found on this call, or something you sent them before. Pass each one's name as it's listed. Only when they want it (they ask, or say yes to your offer). The link goes to their texts as its own message, with its name under it; you never read a link out. Say it's in their texts only once this comes back done.",
   },
   {
     id: "task_start",
@@ -479,6 +484,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "reactions",
     can: "Cue remembers how the things it sent landed (interested, went, loved it, not for them) and leans that way next time.",
+    onCall: true,
     tool: "noteReaction",
     limits: { perTurn: 3 },
     use: "Record how something Cue sent them landed, whenever they react to it: interested, they're going, they went and liked it, they went and didn't, or it's not for them (\"going to the rooftop thing\", \"that talk was great\", \"not my scene\"). Use the name of what Cue sent and quote their words. Only what they say outright counts: a question about it (what to bring, where it is) or a word it shares with something they mention is not a reaction, so ask them instead (\"Did you end up going?\"). Then reply as usual.",
@@ -748,10 +754,10 @@ export function teamOnlyTools(): string[] {
 }
 
 // A tool's description, from its entry.
-export function toolUse(tool: string): string {
+export function toolUse(tool: string, surface: Surface = "text"): string {
   const a = ABILITIES.find((x) => x.tool === tool);
   if (!a?.use) throw new Error(`capabilities: no entry for tool ${tool}`);
-  return a.use;
+  return surface === "call" && a.callUse ? a.callUse : a.use;
 }
 
 export function abilityForTool(tool: string): Ability | undefined {
@@ -769,7 +775,7 @@ export type Surface = "text" | "call";
 type MenuGroup = "Finding things" | "Working on something over days" | "Making things" | "People" | "Being there";
 type MenuLine = { group: MenuGroup; main: string; text: string | null; call?: string | "by text" | null; byTextOnCall?: string };
 const MENU: MenuLine[] = [
-  { group: "Finding things", main: "search_events", text: "find events for the days they ask about, Cue's own first", call: "find events for the days they ask about, Cue's own first" },
+  { group: "Finding things", main: "search_events", text: "find events for the days they ask about, Cue's own first", call: "find events for the days they ask about, Cue's own first, and text them the link to any of them while you talk" },
   { group: "Finding things", main: "web_search", text: "search the web and X for venues, vendors, programs and people" },
   { group: "Finding things", main: "save_ask", text: "keep watch for what they want found and text when something fits; list it, or stop suggesting a kind of thing", byTextOnCall: "keep watch for what they want found and text when something fits, and list it" },
   { group: "Finding things", main: "steer_away", text: null, call: "stop suggesting a kind of thing they don't want" },
@@ -779,10 +785,10 @@ const MENU: MenuLine[] = [
   { group: "Working on something over days", main: "draft_email", text: "write an email for them to send themselves" },
   { group: "Working on something over days", main: "email_plan", text: "plan a day, a night or a trip as a one-page sheet" },
   { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone Cue introduced them to, or remind them to follow up" : "remind them to follow up on something"; } },
-  { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", call: "make a private page (a plan, options side by side) and change it or take it down" },
-  { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", call: "make a slide deck from their taste or a Pinterest board, and change it" },
+  { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", call: "make a private page (a plan, options side by side) and change it or take it down; it arrives in their texts when it's ready, never on the line" },
+  { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", call: "make a slide deck from their taste, and change it; it arrives in their texts when it's ready, never on the line" },
   { group: "Making things", main: "co_artifact_share", text: "share a view-only link to a page or deck, stop it, or keep it for good", call: "share a view-only link to a page or deck, stop it, or keep it for good" },
-  { group: "Making things", main: "write_document", text: "write a document (a plan, a summary, a write-up from a PDF they sent) and send it", call: "write a document (a plan or a summary) and send it" },
+  { group: "Making things", main: "write_document", text: "write a document (a plan, a summary, a write-up from a PDF they sent) and send it", call: "write a document (a plan or a summary); it arrives in their texts when it's ready" },
   { group: "People", main: "co_events", text: "at Noise events, tell them who's worth meeting and why" },
   { group: "People", main: "introductions", text: "introduce them to someone by one email, after both say yes" },
   { group: "People", main: "outside_events", text: "give a heads-up when another member is going to the same outside event" },
@@ -814,9 +820,72 @@ export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; li
   };
 }
 
-// The tools that run on a call, from the entries (services/callTools.ts).
+// ---------- What runs DURING a call and what waits for after it (Royce, 2026-10-29: "on certain things Cue should follow up
+// immediately with the action over the phone"). The allow-list, enforced in code (services/callTools.ts builds a call's tools
+// from it and refuses anything else), never only in the guide:
+//   now    quick and certain: run inside the turn, with a tight timeout of their own (ms). Sending a link, event or find already
+//          on file, saving what they want or think, starting work that runs after the call, keeping their notes and tasks
+//          current. Past its timeout a tool keeps going on its own; a send that hasn't come back is owed right after the call.
+//   after  slow or multi-step (a page, a deck, a document): started from the call, never waited on past a moment, made after
+//          it and texted when ready.
+// Never on a call, whatever the registry says: anything that needs another member's yes (an intro), anything that costs money,
+// and everything not listed here (web research, reading pages, drafting email: slow or multi-step, so a task or a promise
+// picks it up right after the call).
+export type CallRun = { run: "now"; kind: "send" | "save" | "start" | "read"; ms: number } | { run: "after"; waitMs: number };
+const SEND: CallRun = { run: "now", kind: "send", ms: 4000 };
+const SAVE: CallRun = { run: "now", kind: "save", ms: 3000 };
+const START: CallRun = { run: "now", kind: "start", ms: 3000 };
+// 3.5s: long enough for the guard's own answers (their yes is a short model read) to reach the model, as PR 6 measured for decks.
+const AFTER: CallRun = { run: "after", waitMs: 3500 };
+export const CALL_RUN: Readonly<Record<string, CallRun>> = {
+  // Send what's on file: the link goes to their texts during the call.
+  shareLink: SEND,
+  resendLink: SEND,
+  resetLink: SEND,
+  shareArtifact: SEND,
+  calendarConnection: SEND,
+  // A quick look: the event feed (no web search on a call) and what Cue knows about them.
+  searchEvents: { run: "now", kind: "read", ms: 5000 },
+  whatCoKnows: { run: "now", kind: "read", ms: 3000 },
+  // Start work that runs after the call.
+  startTask: START,
+  // Their yes is a short model read first (services/theirYes.ts), so these get a little longer.
+  researchBrief: { run: "now", kind: "start", ms: 5000 },
+  saveAsk: START,
+  // Save what they said: an event they're into, their notes, tasks, preferences, corrections and consent.
+  noteReaction: SAVE,
+  updateTask: SAVE,
+  closeTask: SAVE,
+  updateNotes: SAVE,
+  updateLoop: SAVE,
+  steerAwayFrom: SAVE,
+  noteRoomTaste: SAVE,
+  noteFreeTime: SAVE,
+  answerProposal: SAVE,
+  noteMetAgain: SAVE,
+  findReaction: SAVE,
+  offerDocument: SAVE,
+  keepArtifact: SAVE,
+  takeDownPage: SAVE,
+  stopSharing: SAVE,
+  deleteImages: SAVE,
+  correctWhatCoKnows: { run: "now", kind: "save", ms: 5000 },
+  voiceRead: SAVE,
+  // Made after the call, delivered by text.
+  makePage: AFTER,
+  updatePage: AFTER,
+  makeDeck: AFTER,
+  updateDeck: AFTER,
+  writeDocument: AFTER,
+};
+// What can never run on a call, even if it were listed above.
+const NEVER_ON_CALL: ReadonlySet<NonNullable<Ability["confirm"]>> = new Set(["affects_another_member", "costs_money"]);
+export const callRunFor = (tool: string): CallRun | null => CALL_RUN[tool] ?? null;
+
+// The tools that run on a call: registry entries marked onCall that are on the allow-list above, never one that affects another
+// member or costs money, never a team-only one (services/callTools.ts).
 export function callToolNames(): string[] {
-  return ABILITIES.filter((a) => a.onCall && a.tool && !a.teamOnly).map((a) => a.tool!);
+  return ABILITIES.filter((a) => a.onCall && a.tool && !a.teamOnly && CALL_RUN[a.tool] && !(a.confirm && NEVER_ON_CALL.has(a.confirm))).map((a) => a.tool!);
 }
 
 const grouped = (here: { group: MenuGroup; line: string }[]) => {

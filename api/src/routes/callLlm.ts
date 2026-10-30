@@ -130,11 +130,15 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
         const T = await import("../services/callTools.js");
         const member = await memberOnCall(callKey, userId);
         tools = T.buildCallTools({ userId, callKey, member, ...callWordsOf(body) });
+        // What this call can text them by name, read now so a send later in the call doesn't wait on it.
+        T.warmCallOnFile(callKey, userId);
       } catch (err: any) {
         console.error("co/el/llm: call tools unavailable this turn:", err?.message ?? err);
       }
     }
     let toolRuns = 0, toolOk = 0;
+    // Each of Cue's tools this turn: its name, how long it took, and how it came back (for the latency record; no words).
+    const toolTimes: { name: string; ms: number; outcome: "done" | "not_done" | "still_running" }[] = [];
     // A spoken commitment opens a promise task when the turn ends, and only when no tool acted this turn (the deed is on record).
     const commitments: string[] = [];
     let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
@@ -156,6 +160,7 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
         toolRuns++;
         if (t.timedOut) slow = true;
         if (!t.timedOut && (t.result as any)?.ok !== false) toolOk++;
+        toolTimes.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" });
         console.log(`co/el/llm: tool ${t.name} ${t.timedOut ? "still running at the budget" : (t.result as any)?.ok === false ? "not done" : "done"} in ${t.ms}ms`);
         // What the tool changed (a task, a loop, what Co knows about them) is read fresh for the next turn.
         if (userId) memberOnCall(callKey, userId, true).catch(() => {});
@@ -224,9 +229,23 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
       res.write("data: [DONE]\n\n");
       res.end();
     } finally {
-      if (userId && !toolOk) for (const s of commitments) trackCallCommitment({ userId, sentence: s, theirLine, coBefore }).catch(() => {});
+      // After this turn's owed records are written, so "I'll text it right after" joins the promise opened for a send that didn't go.
+      // A turn whose tool did it: those lines are Cue's word already kept, never re-opened from the transcript after the call.
+      if (userId && commitments.length)
+        Promise.resolve(tools?.pending?.())
+          .catch(() => {})
+          .then(async () => {
+            if (!toolOk) for (const s of commitments) await trackCallCommitment({ userId, sentence: s, theirLine, coBefore }).catch(() => {});
+            else await import("../services/callLedger.js").then((L) => L.recordTurnActed(userId, commitments)).catch(() => {});
+          })
+          .catch(() => {});
       if (userId && (slow || brainError)) recordDecision({ layer: 8, decision: "call.turn_health", userId, outcome: "skip", action: [slow ? "slow" : null, brainError ? "error" : null].filter(Boolean).join(","), proposal: { slow, error: brainError } }).catch(() => {});
       const t = timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null;
+      // Per-turn latency through this endpoint (Royce, 2026-10-29: compare a test call against the direct path): time to the
+      // model's first token and to the first sentence released to the voice, the whole turn, and each of Cue's tools. Numbers and
+      // tool names only, never anyone's words. ElevenLabs' own per-turn numbers for every call, direct or not, are logged after the
+      // call (routes/co.ts call.el_turn_metrics).
+      if (userId) recordDecision({ layer: 8, decision: "call.turn_latency", userId, outcome: "act", action: voiceOnly ? "proxy_voice" : "proxy", proposal: { firstTokenMs: t?.upstreamFirstTokenMs ?? null, firstSentenceMs: t?.firstSentenceMs ?? null, totalMs: Date.now() - t0, toolMs: toolTimes.reduce((a, x) => a + x.ms, 0), tools: toolTimes, spoken, dropped, slow, error: brainError } }).catch(() => {});
       console.log(`co/el/llm: ${userId ? "call" : "anon"} first_token=${t?.upstreamFirstTokenMs ?? "-"}ms first_sentence=${t?.firstSentenceMs ?? "-"}ms total=${Date.now() - t0}ms spoken=${spoken} dropped=${dropped} tools=${(body.tools ?? []).map((x) => x?.function?.name).filter(Boolean).join(",") || "none"}${tools ? `+co(${tools.defs.length})` : ""} co_tool_runs=${toolRuns}${process.env.CALL_LLM_CLEAN === "off" ? " (clean off)" : ""}`);
     }
   };

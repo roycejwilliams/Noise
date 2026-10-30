@@ -22,11 +22,26 @@ import { checkDraft, draftAgain, draftProactive, localHourOk, nextLocalHour, RUL
 import { recordDecision, type GateCheck } from "../harness/core.js";
 import { callKey } from "./callKey.js";
 import { deliveryWords, nextDeliveryTime } from "./memberTime.js";
+import { goalBody, overlap, promiseKeptBy, type Sent } from "./followThrough.js";
+import type { CallLedger } from "./callLedger.js";
+
+// Pure: a promise from this call is already kept by something that went out after it was made, of the kind it promised, and about
+// it (its words, or what they asked): promiseKeptBy alone takes any link for a links promise, which is enough to mark one kept but not
+// to skip doing it.
+export function keptByWhatWent(c: Pick<Commitment, "goal" | "theirWords" | "createdAt">, went: Sent[]): boolean {
+  if (!c.goal || !c.createdAt) return false;
+  const at = new Date(c.createdAt);
+  if (!promiseKeptBy({ goal: c.goal, theirWords: c.theirWords ?? null, at }, went).kept) return false;
+  const body = goalBody(c.goal);
+  return went.some((s) => s.at.getTime() > at.getTime() && s.kind !== "document" && (overlap(body, s.text) > 0 || (!!c.theirWords && overlap(c.theirWords, s.text) > 0))) || went.some((s) => s.at.getTime() > at.getTime() && s.kind === "document" && overlap(body, s.text) > 0);
+}
 
 export const CONFIRM_TYPE = "call_confirm" as const;
 export const confirmKey = (key: string) => `call_confirm:${key}`;
 
-export type Commitment = { taskId: number; sentence: string; wakes: number };
+// goal, theirWords, createdAt: what it promised and when, so one kept on the call (or by what went out right after it) is closed,
+// never done twice (Royce, 2026-10-29).
+export type Commitment = { taskId: number; sentence: string; wakes: number; goal?: string; theirWords?: string | null; createdAt?: string };
 
 // The sentence Co said, back out of a commitment task's goal (callCommitments.ts commitmentGoal).
 export function sentenceOfGoal(goal: string): string {
@@ -82,7 +97,15 @@ export function confirmationTask(): string {
 
 export type FollowThroughDeps = {
   now: () => Date;
-  track: (userId: string, transcript: string) => Promise<unknown>;
+  // skip: Cue's lines from a turn whose tool already did it on the call (services/callLedger.ts).
+  track: (userId: string, transcript: string, o?: { skip?: string[] }) => Promise<unknown>;
+  // What the call did and still owes (services/callLedger.ts), what went out since it started (services/followThrough.ts
+  // sendsSince), the owed send itself (each link as its own text, then its name), and closing a promise already kept. Left out
+  // (older tests), the follow-through runs as before.
+  ledger?: (userId: string, since: Date, until: Date) => Promise<CallLedger>;
+  sends?: (userId: string, since: Date) => Promise<Sent[]>;
+  deliver?: (o: { userId: string; phone: string; item: { name: string; url: string }; key: string }) => Promise<{ sent: boolean; reason?: string }>;
+  close?: (userId: string, taskId: number, outcome: string) => Promise<unknown>;
   commitments: (userId: string, since: Date) => Promise<Commitment[]>;
   person: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null; reachable: boolean } | null>;
   draft: (o: { firstName: string; facts: Record<string, string>; redo?: { draft: string; failed: string } }) => Promise<string | null>;
@@ -100,6 +123,9 @@ export type FollowThroughDeps = {
 
 export type FollowThroughResult = {
   action: "none" | "unreachable" | "sent" | "held" | "send_failed" | "no_text" | "working";
+  // What was owed from the call and went out the moment it ended, and the promises closed because the call (or that) kept them.
+  owedSent?: string[];
+  keptOnCall?: number[];
   text?: string;
   fallback?: boolean;
   heldUntil?: string;
@@ -112,8 +138,14 @@ export type FollowThroughResult = {
 export async function followThroughOnCallEnd(o: { userId: string; transcript: string; startedAt?: Date | null; endedAt?: Date | null }, deps: FollowThroughDeps = realDeps): Promise<FollowThroughResult> {
   const t0 = deps.now();
   try {
-    // A commitment said on the direct path has no task yet: open it (the same words never open twice).
-    await deps.track(o.userId, o.transcript).catch(() => null);
+    const since = new Date((o.startedAt ?? new Date(t0.getTime() - 2 * 3_600_000)).getTime() - 60_000);
+    // What the call itself did and still owes (services/callLedger.ts). A failed read is an empty ledger: nothing is skipped or sent
+    // on its account, and the promises run as before.
+    const empty: CallLedger = { done: [], owed: [], covered: [] };
+    const ledger = deps.ledger ? await deps.ledger(o.userId, since, new Date((o.endedAt ?? t0).getTime() + 2 * 60_000)).catch(() => empty) : empty;
+    // A commitment said on the direct path has no task yet: open it (the same words never open twice), unless a tool already kept
+    // it on the call.
+    await deps.track(o.userId, o.transcript, { skip: ledger.covered }).catch(() => null);
     // Bind or admit: each timed promise Co spoke is on the ledger now, or it's taken back in one text. Before anything else, so a
     // call with no send commitments still has its promises held to.
     if (deps.bind) {
@@ -129,11 +161,48 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
         await deps.record({ layer: 8, decision: "call.promise_admitted", userId: o.userId, outcome: a.sent || a.queued ? "act" : "skip", action: a.sent ? "sent" : a.queued ? "queued" : "not_sent", proposal: { unbound: b.unbound, text: a.text ?? null }, reason: a.reason ?? null }).catch(() => {});
       }
     }
-    const since = new Date((o.startedAt ?? new Date(t0.getTime() - 2 * 3_600_000)).getTime() - 60_000);
-    const commitments = await deps.commitments(o.userId, since);
-    if (!commitments.length) return { action: "none" };
-    const person = await deps.person(o.userId);
-    if (!person || !person.reachable) return { action: "unreachable" };
+    // Owed from the call (a send that didn't reach them on it): the actual link goes now, the moment the call ends, unless the late
+    // send already landed. Each link its own text, then its name (as on file). Opted out or archived: nothing.
+    const owedSent: string[] = [];
+    let person: Awaited<ReturnType<FollowThroughDeps["person"]>> | undefined;
+    if (ledger.owed.length && deps.deliver) {
+      person = await deps.person(o.userId);
+      const went = deps.sends ? await deps.sends(o.userId, since).catch(() => [] as Sent[]) : [];
+      const landed = (url: string) => went.some((s) => s.text.includes(url));
+      const items = [...new Map(ledger.owed.flatMap((x) => x.items).map((x) => [x.url, x])).values()];
+      for (const item of items) {
+        if (landed(item.url)) {
+          await deps.record({ layer: 8, decision: "call.owed_delivery", userId: o.userId, outcome: "skip", action: "already_sent", proposal: { url: item.url }, reason: "the send from the call landed late" }).catch(() => {});
+          continue;
+        }
+        if (!person || !person.reachable) {
+          await deps.record({ layer: 8, decision: "call.owed_delivery", userId: o.userId, outcome: "skip", action: "unreachable", proposal: { url: item.url }, reason: "opted out, archived or no number" }).catch(() => {});
+          continue;
+        }
+        const r = await deps.deliver({ userId: o.userId, phone: person.phone, item, key: `call_owed:${since.toISOString().slice(0, 16)}:${item.url}`.slice(0, 300) }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+        if (r.sent) owedSent.push(item.url);
+        await deps.record({ layer: 8, decision: "call.owed_delivery", userId: o.userId, outcome: r.sent ? "act" : "skip", action: r.sent ? "sent" : "not_sent", proposal: { url: item.url, msSinceEnd: deps.now().getTime() - (o.endedAt ?? t0).getTime() }, reason: r.sent ? null : r.reason ?? null }).catch(() => {});
+      }
+    }
+    const all = await deps.commitments(o.userId, since);
+    // A promise kept on the call, or by what just went out, is closed, never worked again (no second send of the same thing).
+    const keptOnCall: number[] = [];
+    let commitments = all;
+    if (all.length && deps.sends && deps.close) {
+      const went = await deps.sends(o.userId, since).catch(() => [] as Sent[]);
+      commitments = [];
+      for (const c of all) {
+        if (keptByWhatWent(c, went)) {
+          keptOnCall.push(c.taskId);
+          await deps.close(o.userId, c.taskId, "Kept: what was promised went out on the call or the moment it ended.").catch(() => null);
+        } else commitments.push(c);
+      }
+      if (keptOnCall.length) await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: "act", action: "kept_on_call", proposal: { tasks: keptOnCall }, reason: null }).catch(() => {});
+    }
+    const done = { ...(owedSent.length ? { owedSent } : {}), ...(keptOnCall.length ? { keptOnCall } : {}) };
+    if (!commitments.length) return { action: owedSent.length ? "sent" : "none", ...done };
+    person ??= await deps.person(o.userId);
+    if (!person || !person.reachable) return { action: "unreachable", ...done };
 
     const deliver = async (): Promise<FollowThroughResult> => {
       // No "got it, I'll have it this afternoon" text (Royce, 2026-10-08 evening, after his real call: three texts in a minute,
@@ -150,7 +219,7 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
           }),
         ),
       );
-      return { action: "working", confirmMs, work };
+      return { action: "working", confirmMs, work, ...done };
     };
 
     if (!localHourOk(t0, person.zone)) {
@@ -161,7 +230,7 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
       const at = nextDeliveryTime(t0, person.zone);
       await deps.hold(o.userId, commitments.map((c) => c.taskId), at).catch(() => {});
       await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: "skip", action: "confirm_skipped_night", proposal: { until: at.toISOString(), tasks: commitments.map((c) => c.taskId) }, reason: "outside their hours: the morning delivery says what was asked and when" }).catch(() => {});
-      return { action: "held", heldUntil: at.toISOString() };
+      return { action: "held", heldUntil: at.toISOString(), ...done };
     }
     return await deliver();
   } catch (err: any) {
@@ -176,10 +245,21 @@ const realDeps: FollowThroughDeps = {
   commitments: async (userId, since) =>
     (
       await pool.query(
-        `SELECT id, goal, wakes FROM co_tasks WHERE user_id = $1 AND source = 'promise' AND status = 'open' AND goal LIKE $2 AND created_at >= $3 ORDER BY id`,
+        `SELECT id, goal, wakes, their_words, created_at FROM co_tasks WHERE user_id = $1 AND source = 'promise' AND status = 'open' AND goal LIKE $2 AND created_at >= $3 ORDER BY id`,
         [userId, `${COMMIT_PREFIX}%`, since],
       )
-    ).rows.map((r: any) => ({ taskId: Number(r.id), sentence: sentenceOfGoal(String(r.goal)), wakes: Number(r.wakes) })),
+    ).rows.map((r: any) => ({ taskId: Number(r.id), sentence: sentenceOfGoal(String(r.goal)), wakes: Number(r.wakes), goal: String(r.goal), theirWords: r.their_words ?? null, createdAt: new Date(r.created_at).toISOString() })),
+  ledger: async (userId, since, until) => (await import("./callLedger.js")).readCallLedger(userId, since, until),
+  sends: async (userId, since) => (await import("./followThrough.js")).sendsSince(userId, since),
+  // The owed link, as a direct answer to what they asked on the call: it goes now, at any hour (they were just on the phone), never
+  // past an opt-out (sendExempt re-reads it), once per call and link (its target key).
+  deliver: async ({ userId, phone, item, key }) => {
+    const caption = item.name.replace(/\s+/g, " ").trim().slice(0, 200);
+    const r = await sendExempt({ userId, phoneNumber: phone, type: "direct_ask", targetKey: key, messages: caption ? [item.url, caption] : [item.url] });
+    if (r.sent) await import("./coFacts.js").then((F) => F.recordSentItems(userId, [{ name: item.name, url: item.url }], "call.owed")).catch(() => {});
+    return { sent: r.sent, reason: r.reason };
+  },
+  close: async (userId, taskId, outcome) => (await import("./coTasks.js")).closeTask(userId, taskId, "done", outcome),
   person: async (userId) => {
     const { rows } = await pool.query(`SELECT u.first_name, u.phone_number, u.sms_opted_out, u.archived_at, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]);
     const p = rows[0];
