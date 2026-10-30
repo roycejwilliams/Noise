@@ -27,7 +27,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { movedBetween, skeletonOf } from "./goldenSkeleton.mjs";
+import { movedBetween, skeletonOf, wordingBefore } from "./goldenSkeleton.mjs";
 
 export const GOLDEN_NOW = "2026-10-13T21:00:00.000Z"; // the incident day, 2pm in LA (a Tuesday); the guards fixtures read against it
 const MODE = process.env.GOLDEN_MODE === "record" || process.env.GOLDEN_MODE === "live" ? process.env.GOLDEN_MODE : "replay";
@@ -222,7 +222,10 @@ globalThis.fetch = async function goldenFetch(input, init) {
         const m = movedBetween(rec.structure, now);
         if (m.blocked.length) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (a wording literal changed a rule, not just its words: ${m.blocked.join(", ")}; its guard terms (numbers, tool names, never/always/only, call, offer, question, safe, member...) or its output format changed)`)}`);
         if (STRICT) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (GOLDEN_STRICT: the prompt moved: ${m.moved.map((x) => x.id).join(", ") || "nothing named"})`)}`);
-        moved = m.moved;
+        // What each moved literal said when it was recorded, for --ledger to show (evals/golden/ledger.ts).
+        let before = {};
+        try { before = wordingBefore({ path: rec.request.path, grader: rec.request.grader, beta: rec.request.beta ?? null, body: rec.request.body }, k.key, wording.chunks, m.moved.map((x) => x.id)); } catch {}
+        moved = m.moved.map((x) => ({ ...x, before: before[x.id] ?? null }));
       }
       const calls = (ctx.used.get(rec.hash) ?? 0) + 1;
       ctx.used.set(rec.hash, calls);

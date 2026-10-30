@@ -91,15 +91,15 @@
     }
   ],
   "structure": {
-    "v": "d772ee43ea1b",
-    "hash": "9aa672fea7160984",
+    "v": "be0153bcbe53",
+    "hash": "fb233bdd611a767f",
     "wording": {
-      "coVoice.ts:VOICE_STYLE#0": "dcb324a6",
+      "coVoice.ts:VOICE_STYLE#0": "d3c1d29d",
       "coVoice.ts:VOICE_TONE#0": "d0c8198c"
     },
     "guard": {
-      "coVoice.ts:VOICE_STYLE#0": "9a2d1186",
-      "coVoice.ts:VOICE_TONE#0": "c551d9d3"
+      "coVoice.ts:VOICE_STYLE#0": "19f7d56f",
+      "coVoice.ts:VOICE_TONE#0": "4d576ea2"
     },
     "format": []
   }

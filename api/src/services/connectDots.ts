@@ -135,21 +135,27 @@ export function momentInstruction(m: Moment | null): string | null {
 // Only on a sharing turn, so it never reaches a question, logistics or a sign-off. Scoped here, not in the rules every text gets (Royce
 // 2026-10-29): rewriting the global rhythm regressed live check-ins, so a share or feedback turn overrides the general length and
 // question rules on its own, and the per-message length line is left off these turns (agent/conversationReply.ts UNCAPPED_MOMENTS).
-// Assembled from parts (evals/golden/wording.ts, 2026-10-29): SHARE_TONE and SHARE_TONE_2 are wording; the override of the general rules
-// (SHARE_SCOPE) and the never-fill-in rule (SHARE_GROUNDING) are rules in their own literals. The assembled text is unchanged.
+// Assembled from parts (evals/golden/wording.ts, 2026-10-29): SHARE_TONE, SHARE_TONE_OWN and SHARE_TONE_2 are wording; the override of the
+// general rules (SHARE_SCOPE), the never-fill-in rule (SHARE_GROUNDING), and the question, complete-moment, earlier-thread and feeling-first
+// rules (SHARE_NO_QUIZ, SHARE_EARLIER, SHARE_FEELING) are rules in their own literals. The assembled text is unchanged.
 const SHARE_SCOPE = `They're telling you something about their life. On this turn this overrides the general length and question rules: match the depth to what they shared, with no length cap.`;
-const SHARE_TONE = `Respond to what they said and what it means to them, the way someone who was paying attention would. There's no formula: a specific reaction, an observation, a small opinion of your own, light humor when it fits them and the moment, or questions when there's something you genuinely want to understand. Several questions are fine when they are one continuous thought, each building on the last, and a reaction with the thought or question that grows from it stays one message; never a questionnaire, never re-asking what they already answered, never a question forced onto a moment that's complete. When the moment is complete, a short warm line is the whole reply; don't pull another answer out of them. Add something of your own instead of restating what they told you or simply agreeing, and don't fall into mirroring them and then asking something; they know what they said. Use what they've already told you, in this thread or before, rather than asking again, and bring an earlier thread back only when it's relevant, never as a scheduled check-in on how they feel.`;
+const SHARE_TONE = `Respond to what they said and what it means to them, the way someone who was paying attention would. There's no formula: a specific reaction, an observation, a small opinion of your own, light humor when it fits them and the moment, or questions when there's something you genuinely want to understand. Several questions are fine when they are one continuous thought, each building on the last, and a reaction with the thought or question that grows from it stays one message;`;
+const SHARE_NO_QUIZ = `never a questionnaire, never re-asking what they already answered, never a question forced onto a moment that's complete. When the moment is complete, a short warm line is the whole reply; don't pull another answer out of them.`;
+const SHARE_TONE_OWN = `Add something of your own instead of restating what they told you or simply agreeing, and don't fall into mirroring them and then asking something; they know what they said.`;
+const SHARE_EARLIER = `Use what they've already told you, in this thread or before, rather than asking again, and bring an earlier thread back only when it's relevant, never as a scheduled check-in on how they feel.`;
 const SHARE_GROUNDING = `What you know about them shapes your tone, never your facts: don't fill in what they did, where they went, or why they feel the way they do; be curious instead.`;
-const SHARE_TONE_2 = `Get the timing right: something already behind them is said as past. When it's a feeling, meet it first. If they want help, find out what would help or walk them through the way forward, shaped around what they're feeling. If they're telling you how things are or were rather than asking for help, a real response is enough: don't turn it into a question about what would help, a therapy question, or a plan.`;
-export const SHARING_GUIDE = `${SHARE_SCOPE} ${SHARE_TONE} ${SHARE_GROUNDING} ${SHARE_TONE_2}`;
+const SHARE_TONE_2 = `Get the timing right: something already behind them is said as past.`;
+const SHARE_FEELING = `When it's a feeling, meet it first. If they want help, find out what would help or walk them through the way forward, shaped around what they're feeling. If they're telling you how things are or were rather than asking for help, a real response is enough: don't turn it into a question about what would help, a therapy question, or a plan.`;
+export const SHARING_GUIDE = `${SHARE_SCOPE} ${SHARE_TONE} ${SHARE_NO_QUIZ} ${SHARE_TONE_OWN} ${SHARE_EARLIER} ${SHARE_GROUNDING} ${SHARE_TONE_2} ${SHARE_FEELING}`;
 
 // "You're dry" and other feedback on how Cue comes across: show it, don't explain it (Royce, 2026-10-28).
-// Assembled from parts (evals/golden/wording.ts): FEEDBACK_TONE is wording; the override (FEEDBACK_SCOPE) and the honest-account rule
-// (FEEDBACK_HONEST) are rules. The assembled text is unchanged.
+// Assembled from parts (evals/golden/wording.ts): FEEDBACK_TONE is wording; the override (FEEDBACK_SCOPE), what not to do (FEEDBACK_DONTS)
+// and the honest-account rule (FEEDBACK_HONEST) are rules. The assembled text is unchanged.
 const FEEDBACK_SCOPE = `They're telling you how you're coming across. On this turn this overrides the general length and question rules: give it the depth it needs, with no length cap.`;
-const FEEDBACK_TONE = `Own it in a few words at most, then show it: give the reply their earlier message deserved, picking up what they actually shared, with something of your own in it rather than their words handed back, and using what they already told you rather than asking again. Don't explain your tone or how you work, don't say you're listening, don't apologize at length, and don't ask them to say it again.`;
+const FEEDBACK_TONE = `Own it in a few words at most, then show it: give the reply their earlier message deserved, picking up what they actually shared, with something of your own in it rather than their words handed back, and using what they already told you rather than asking again.`;
+const FEEDBACK_DONTS = `Don't explain your tone or how you work, don't say you're listening, don't apologize at length, and don't ask them to say it again.`;
 const FEEDBACK_HONEST = `If they ask what went wrong, say honestly what happened, from what you actually sent.`;
-export const FEEDBACK_GUIDE = `${FEEDBACK_SCOPE} ${FEEDBACK_TONE} ${FEEDBACK_HONEST}`;
+export const FEEDBACK_GUIDE = `${FEEDBACK_SCOPE} ${FEEDBACK_TONE} ${FEEDBACK_DONTS} ${FEEDBACK_HONEST}`;
 
 // Lessons from their pushback, kept for next time (co_lesson memories).
 export async function saveLesson(userId: string, lesson: string): Promise<void> {

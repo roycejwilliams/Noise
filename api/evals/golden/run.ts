@@ -3,7 +3,8 @@
 //   npm run evals:golden:record -- --only running-work     record: real calls, capped, the case's recordings rewritten
 //   npm run evals:golden:record -- --missing               record only the cases whose replay misses (a new or changed case)
 //   npm run evals:golden:record -- --moved                 ...and the cases that replayed on a moved prompt (wording changed)
-//   npm run evals:golden -- --ledger <PR>                   replay that records each tone move it sees in moved-ledger.json
+//   npm run evals:golden -- --ledger <PR>                   replay that lists each tone move it sees (before and after), writing nothing
+//   npm run evals:golden -- --ledger <PR> <chunkId...>      ...and records the named ones in moved-ledger.json
 //   npm run evals:golden:live                              live: real calls, nothing written (the manual drift check)
 //   npm run evals:golden:quality                           quality: each case 3 times, real calls, scored by majority (manual or cron)
 //   npm run evals:golden -- --estimate                     what a quality run would cost, from the recordings (no call)
@@ -21,7 +22,7 @@ import { takeReplies, type NotedReply } from "./replies.js";
 import { wordingRegistry } from "./wording.js";
 import { estimateQuality } from "./estimate.js";
 import { failedCriteria, gradeReply } from "../lib/replyRubric.js";
-import { moveProblem, readLedger, writeLedger, type LedgerEntry, type Move } from "./ledger.js";
+import { addToLedger, ledgerArgs, moveProblem, readLedger, writeLedger, type LedgerEntry, type Move } from "./ledger.js";
 
 type Mode = "replay" | "record" | "live";
 type Moved = { hash: string; model: string | null; moved: Move[] };
@@ -52,8 +53,14 @@ const movedToo = argv.includes("--moved");
 const quality = argv.includes("--quality");
 const estimateOnly = argv.includes("--estimate");
 const RUNS = Math.max(1, Number(flag("--runs") ?? process.env.GOLDEN_RUNS ?? 3) || 3);
-// --ledger <PR>: record each move this replay sees in evals/golden/moved-ledger.json, dated today (the PR commits the file).
-const ledgerPr = flag("--ledger");
+// --ledger <PR> <chunkId...>: record the named moves this replay sees in evals/golden/moved-ledger.json, dated today (the PR commits the
+// file); with no ids, list every move with its before and after text and write nothing (evals/golden/ledger.ts).
+const ledgerCli = ledgerArgs(argv);
+if (ledgerCli && "error" in ledgerCli) { quiet(`golden: ${ledgerCli.error}`); exit(2); }
+const ledgerRun = ledgerCli && !("error" in ledgerCli) ? ledgerCli : null;
+const ledgerRefused = new Set<string>();
+const ledgerAdded: { entry: LedgerEntry; before: string | null }[] = [];
+const seenMoves = new Map<string, Move & { cases: Set<string> }>();
 const ledger: LedgerEntry[] = readLedger();
 const ledgerUsed = new Set<LedgerEntry>();
 const today = new Date(golden?.realNow() ?? 0).toISOString().slice(0, 10);
@@ -70,7 +77,9 @@ const picked = all.filter((x) => !only.length || only.some((o) => x.id.includes(
 if (only.length && !picked.length) { quiet(`golden: no case matches --only ${only.join(",")}`); exit(1); }
 
 // The wording a prompt may change without a re-record (evals/golden/wording.ts), for the skeleton match and the stamps.
-golden.setWording(wordingRegistry());
+const registry = wordingRegistry();
+golden.setWording(registry);
+const textNow = (id: string) => registry.chunks.find((c) => c.id === id)?.text ?? null;
 
 // The cases a quality run covers: the live ones, and the pending ones that make model calls (recorded, or waiting on their first
 // recording: status.until "its first recording"). A pending case whose phase isn't built makes no call and isn't run.
@@ -172,7 +181,13 @@ for (const c of picked) {
   const moved = mode === "replay" ? a.moved : [];
   // A move passes only on its ledger entry (evals/golden/ledger.ts): exact, and under 14 days old.
   const moves = [...new Map(moved.flatMap((m) => m.moved).map((x) => [`${x.id}:${x.from}:${x.to}`, x])).values()];
-  if (ledgerPr) for (const x of moves) if (x.from && !ledger.some((e) => e.chunk === x.id && e.from === x.from && e.to === x.to)) ledger.push({ chunk: x.id, from: x.from, to: x.to, pr: ledgerPr, date: today });
+  for (const x of moves) { const k = `${x.id}:${x.from}:${x.to}`; const seen = seenMoves.get(k) ?? { ...x, cases: new Set<string>() }; seen.before ??= x.before; seen.cases.add(c.id); seenMoves.set(k, seen); }
+  // Only the literals named on the command line are recorded; a second move from the same text is refused (addToLedger).
+  if (ledgerRun?.ids.length) for (const x of moves.filter((m) => ledgerRun.ids.includes(m.id))) {
+    const r = addToLedger(ledger, x, ledgerRun.pr, today);
+    if (r.problem) ledgerRefused.add(r.problem);
+    if (r.added) ledgerAdded.push({ entry: r.added, before: x.before ?? null });
+  }
   for (const x of moves) { const e = ledger.find((l) => l.chunk === x.id && l.from === x.from && l.to === x.to); if (e) ledgerUsed.add(e); }
   const moveMisses = moves.map((x) => moveProblem(x, ledger, golden.realNow())).filter((x): x is string => !!x);
   if (moveMisses.length) { r.ok = false; r.misses = [...r.misses, ...moveMisses.map((m) => `moved: ${m}`)]; }
@@ -204,7 +219,21 @@ const flakes = rows.filter((r) => r.flaky).map((r) => r.id);
 const movedCases = rows.filter((r) => r.moved?.length && r.ok).map((r) => r.id);
 const unrecorded = rows.filter((r) => r.notRecorded).map((r) => r.id);
 const s = golden.stats();
-if (ledgerPr) writeLedger(ledger);
+if (ledgerRun) {
+  const show = (t: string | null | undefined) => (t == null ? "(not found)" : JSON.stringify(t));
+  for (const id of ledgerRun.ids) if (![...seenMoves.values()].some((m) => m.id === id)) ledgerRefused.add(`${id}: no case replayed on a move of it (named ids: ${ledgerRun.ids.join(", ")})`);
+  if (!ledgerRun.ids.length) {
+    quiet(`\nLEDGER (nothing written): ${seenMoves.size} move(s) this replay saw${seenMoves.size ? "; record the ones this PR means with: npm run evals:golden -- --ledger " + ledgerRun.pr + " " + [...new Set([...seenMoves.values()].map((m) => m.id))].join(" ") : ""}`);
+    for (const m of seenMoves.values()) quiet(`  ${m.id}  ${m.from} -> ${m.to}  (${m.cases.size} case(s): ${[...m.cases].join(", ")})\n    before: ${show(m.before)}\n    after:  ${show(textNow(m.id))}`);
+  } else if (ledgerRefused.size) {
+    failed++;
+    quiet(`\nLEDGER REFUSED, nothing written:\n  ${[...ledgerRefused].join("\n  ")}`);
+  } else {
+    writeLedger(ledger);
+    quiet(`\nLEDGER: recorded ${ledgerAdded.length} entr${ledgerAdded.length === 1 ? "y" : "ies"} for PR ${ledgerRun.pr} in evals/golden/moved-ledger.json`);
+    for (const a of ledgerAdded) quiet(`  ${a.entry.chunk}  ${a.entry.from} -> ${a.entry.to}  (${a.entry.date})\n    before: ${show(a.before)}\n    after:  ${show(textNow(a.entry.chunk))}`);
+  }
+}
 const staleEntries = ledger.filter((e) => !ledgerUsed.has(e));
 // merge-gated.sh keeps the first 50 characters of the line that has "golden (replay)": a run with moved cases starts it with MOVED.
 quiet(`\n${movedCases.length ? `MOVED: ${movedCases.length} case(s) on ledgered wording | ` : ""}golden (${golden.mode}${missingOnly ? ", --missing" : ""}${movedToo ? ", --moved" : ""}): ${live.length - liveFailed}/${live.length} live cases passed${flakes.length ? ` (${flakes.length} on a retry: ${flakes.join(", ")})` : ""}, ${rows.length - live.length} pending${unrecorded.length ? ` (${unrecorded.length} not recorded yet: ${unrecorded.join(", ")})` : ""}${noRecording ? `, ${noRecording} case(s) with model calls that have no recording` : ""}${late.length ? `, ${late.length} late miss(es)` : ""} | ${rows.reduce((n, r) => n + (r.replies?.length ?? 0), 0)} replies through the hard rules | ${s.served} model calls replayed, ${s.written} recorded${s.stamped ? `, ${s.stamped} recordings stamped` : ""} | ${((golden.realNow() - t00) / 1000).toFixed(1)}s`);

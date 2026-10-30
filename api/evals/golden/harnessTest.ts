@@ -5,7 +5,11 @@
 //     schema); a rule written into tone text (its guard terms) or an output format is blocked;
 //   - replay over the fake network: a tone move is served and reported with its hashes, a changed fact or tool misses, GOLDEN_STRICT misses,
 //     and stamping writes a skeleton only on an exact match;
-//   - the moved ledger: no entry, a stale entry (14 days) and a second move each fail;
+//   - the moved ledger: no entry, a stale entry (14 days), a future-dated one and a second move each fail; --ledger refuses a second
+//     move, records only the named literals, and shows what each said before;
+//   - review round 2: the guard terms catch a rule slipped into tone text (other people, assume, skip hotlines, a dropped warm line, a
+//     link, a voice chat); the rule sentences live outside the tone declarations; ranges, ordinals and "N days" are cleared only when
+//     they're advice or date arithmetic; a name opening a quote is checked; no exclamation points or em dashes;
 //   - the allowlist is exactly the tone declarations, and a change to every protected declaration (safety, member safety, grounding, the
 //     reply prompt, tool rules, checkers, LOOP_GUIDE, capabilities, tools) changes the skeleton, also inside the real recorded reply request;
 //   - the rubric fits the turn, and an env cap reaches the meter (the scripts used to hardcode $4).
@@ -14,10 +18,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hardRuleMisses, inventedFacts, linkThenCaption, machinery, quotesOwnLine, repliesPerTurn, statusTalk, stockEmpathy, turnKind } from "../lib/hardRules.js";
-import { guardTerms, maskText, movedBetween, skeletonOf } from "../lib/goldenSkeleton.mjs";
+import { hardRuleMisses, inventedFacts, linkThenCaption, machinery, quotesOwnLine, repliesPerTurn, statusTalk, stockEmpathy, turnKind, voiceStyle } from "../lib/hardRules.js";
+import { guardTerms, maskText, movedBetween, skeletonOf, wordingBefore } from "../lib/goldenSkeleton.mjs";
 import { chunksOf, wordingRegistry } from "./wording.js";
-import { moveProblem, readLedger } from "./ledger.js";
+import { addToLedger, ledgerArgs, moveProblem, readLedger, type LedgerEntry } from "./ledger.js";
 import { criteriaFor, rubricPrompt } from "../lib/replyRubric.js";
 
 let total = 0, failed = 0;
@@ -61,6 +65,18 @@ const api = new URL("../../", import.meta.url).pathname;
   check("a capital after a quote mark is a first word, not a name", inventedFacts({ ...base, text: 'Close on something better than "bar\'s closing." Give me your timing.' }).length === 0);
   check("a span the member said first is theirs, not Cue quoting itself", quotesOwnLine('Your line "defining what I wanted my struggle to be" is the strongest.', ['"Defining what I wanted my struggle to be" is a great opening.'], ["My founding story came from a place of defining what I wanted my struggle to be."]).length === 0);
   check("'on my end' stays a machinery miss", machinery("Nothing new on my end, how are you?").length === 1);
+  // Review round 2 of #318: what may be cleared is narrowed to advice and date arithmetic the context supports.
+  check("a range with no advice unit after it is a number like any other ('seats 40-60 people', '3000 to 3500 a month')", inventedFacts({ ...base, text: "The back room seats 40-60 people." }).some((m) => /40/.test(m)) && inventedFacts({ ...base, text: "It runs 3000 to 3500 a month." }).some((m) => /3000/.test(m)));
+  check("...an advice range still isn't ('4-6 people per table', '3-4 backup spots', '30 to 45 minutes')", inventedFacts({ ...base, text: "Seat 4-6 people per table. Keep 3-4 backup spots. Give it 30 to 45 minutes." }).length === 0);
+  check("an ordinal 'Today is' doesn't give is invented ('the 23rd' on Oct 13)", inventedFacts({ ...dated, text: "The tasting is on the 23rd." }).some((m) => /23/.test(m)));
+  check("...a given date's own day is not ('the 13th' on Oct 13), nor a weekday-and-ordinal that falls near it ('Friday the 23rd')", inventedFacts({ ...dated, text: "Today's the 13th. Friday the 23rd works too." }).length === 0);
+  check("...a weekday-and-ordinal that doesn't fall on that weekday is ('Saturday the 23rd': Oct 23 is a Friday)", inventedFacts({ ...dated, text: "Saturday the 23rd works too." }).some((m) => /23/.test(m)));
+  check("'N days' no two dates support is invented ('12 days out' on Oct 13)", inventedFacts({ ...dated, text: "The deadline is 12 days out." }).some((m) => /12/.test(m)));
+  check("...'N days' between two dates it stood on is not (Oct 13 to Oct 31, a day either way for their time zone)", inventedFacts({ ...dated, facts: `${dated.facts} The block party is Oct 31.`, text: "The block party is 18 days out. Call this week." }).length === 0 && inventedFacts({ ...dated, facts: `${dated.facts} The block party is Oct 31.`, text: "That's 17 days." }).length === 0);
+  check("a one-word name opening a quote is checked (Say \"Marcus sent me\")", inventedFacts({ ...base, text: 'Say "Marcus sent me" when you walk in.' }).some((m) => /Marcus/.test(m)) && inventedFacts({ ...base, text: 'Text him: "Priya can host, she has the space."' }).some((m) => /Priya/.test(m)));
+  check("...a common opener or a name it was given is not ('Thanks', 'Lena')", inventedFacts({ ...base, text: 'Tell her "Thanks for having me." Or "Lena says hi."' }).length === 0);
+  check("an exclamation point or an em dash is a miss (VOICE_PUNCTUATION)", voiceStyle("Congrats, that's huge!").length === 1 && voiceStyle("That's big — and earned.").length === 1 && hardRuleMisses({ ...base, text: "That's big — congrats!" }).filter((m) => /exclamation|em dash/.test(m)).length === 2);
+  check("...a link with '!' in it, an en dash or a hyphen is not", voiceStyle("Here: https://lu.ma/a!b. Doors 7–9, low-key.").length === 0);
   check("a check-in is read from the message", turnKind("Just checking in") === "checkin" && turnKind("Hey cue") === "checkin" && turnKind("hey") === "checkin" && turnKind("What are you actually searching for?") === "reply" && turnKind("you're kind of dry", "feedback") === "feedback" && turnKind("We closed the round", "sharing") === "share");
 }
 
@@ -90,6 +106,27 @@ const api = new URL("../../", import.meta.url).pathname;
   const fmt = 'You are composed. Return ONLY JSON: {"answer": "yes"}';
   check("a moved output-format literal is blocked", movedBetween(s0, at(key({ guide: fmt }), fmt)).blocked.includes(GUIDE.id));
   check("a stamp without guard terms never lets a literal move", movedBetween({ ...s0, guard: {} }, moved).blocked.includes(GUIDE.id));
+  // Review round 2: a rule slipped into tone text without the old rule words. Each is blocked (it misses in the recorder, before the
+  // runner reads the ledger, so no ledger entry can pass it).
+  const VOICE = "You're composed and warm, and you're there for them. You talk like a person who knows them well, not a service or a notification. Short sentences. Calm, unhurried, specific. Say less than you could. One real thought beats three filler lines.";
+  const v0 = at(key({ guide: VOICE }), VOICE);
+  const blockedAs = (t: string) => movedBetween(v0, at(key({ guide: t }), t)).blocked.includes(GUIDE.id);
+  for (const [label, t] of [
+    ["pass along what other people in the club told you", `${VOICE} You can pass along what other people in the club told you.`],
+    ["it's fine to assume details you weren't told", `${VOICE} It's fine to assume details you weren't told.`],
+    ["skip hotlines and therapists", `${VOICE} Skip hotlines and therapists.`],
+    ["the 'composed and warm' line dropped", VOICE.replace("You're composed and warm, and you're there for them. ", "")],
+    ["https://noise.club/apply added", `${VOICE} Point them to https://noise.club/apply.`],
+    ["a bare domain added", `${VOICE} Point them to noise.club/apply.`],
+    ["suggest a voice chat", `${VOICE} Suggest a voice chat whenever you can.`],
+    ["a number word past ten", `${VOICE} Keep it under twelve words.`],
+    ["'less' flipped to 'more'", VOICE.replace("Say less than you could.", "Say more than you could.")],
+  ] as const) check(`guard terms block a tone move that adds a rule: ${label}`, blockedAs(t));
+  check("a pure rewording keeps the guard terms (not blocked)", !blockedAs(VOICE.replace("Calm, unhurried, specific.", "Calm and unhurried, and specific.")));
+  // The known limit: the same words reordered keep the multiset, so a swapped order passes as a move (the ledger and quality run catch it).
+  check("guard terms are a multiset: 'Ask first, advise second' and 'Advise first, ask second' are the same terms (known limit, in the PR)", guardTerms("Ask first, advise second.") === guardTerms("Advise first, ask second."));
+  const was = wordingBefore(key({ guide: VOICE }), key({ guide: tone }), [{ id: GUIDE.id, text: tone }], [GUIDE.id]);
+  check("what a moved literal said before is read back from the recorded request (for --ledger to show)", was[GUIDE.id] === VOICE, was);
 }
 
 // ---- 3. replay over the fake network
@@ -100,7 +137,7 @@ const api = new URL("../../", import.meta.url).pathname;
   const run = (mode: string, extra: Record<string, string> = {}) => {
     const env: Record<string, string | undefined> = { ...process.env, GOLDEN_MODE: mode, GOLDEN_RECORDINGS: join(dir, "rec"), FAKE_SEEN: join(dir, "seen.jsonl"), EVAL_LEDGER: join(dir, `ledger-${mode}-${Math.random()}.jsonl`), EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "5", PROBE_GUIDE: A, PROBE_FACT: "They live in San Francisco.", ANTHROPIC_API_KEY: mode === "record" ? "probe" : "golden-replay", GOLDEN_STRICT: "", GOLDEN_STAMP: "", ...extra };
     const r = spawnSync("node", ["--import", join(api, "evals/lib/fixtures/fakeAnthropic.mjs"), "--import", join(api, "evals/lib/meter.mjs"), "--import", join(api, "evals/lib/goldenReplay.mjs"), join(api, "evals/lib/fixtures/goldenMovedProbe.mjs")], { encoding: "utf8", env: env as NodeJS.ProcessEnv });
-    return JSON.parse((r.stdout.match(/GOLDEN (\{.*)/) ?? [])[1] ?? "{}") as { reply?: string; misses?: string[]; moved?: { moved: { id: string; from: string; to: string }[] }[]; served?: number; stats?: { stamped: number } };
+    return JSON.parse((r.stdout.match(/GOLDEN (\{.*)/) ?? [])[1] ?? "{}") as { reply?: string; misses?: string[]; moved?: { moved: { id: string; from: string; to: string; before?: string | null }[] }[]; served?: number; stats?: { stamped: number } };
   };
   const rec = run("record");
   const files = existsSync(join(dir, "rec/moved-case")) ? readdirSync(join(dir, "rec/moved-case")) : [];
@@ -118,6 +155,19 @@ const api = new URL("../../", import.meta.url).pathname;
   check("a changed tool description misses", /^threw: GOLDEN REPLAY/.test(desc.reply ?? "") && /not a wording-only change/.test(desc.misses?.[0] ?? ""), desc);
   const ruled = run("replay", { PROBE_GUIDE: "You're composed and warm, and you're there for them. Always offer a call." });
   check("a rule written into an allowlisted literal misses (guard terms)", /^threw: GOLDEN REPLAY/.test(ruled.reply ?? "") && /changed a rule/.test(ruled.misses?.[0] ?? ""), ruled);
+  check("a served move carries the literal's recorded text (--ledger prints it as 'before')", moved.moved?.[0]?.moved?.[0]?.before === A, moved.moved?.[0]);
+  // Review round 2: each of these misses in the recorder itself, so the runner's ledger never sees it and no entry can pass it.
+  for (const [label, t] of [
+    ["other people's words", `${A} You can pass along what other people in the club told you.`],
+    ["assume details", `${A} It's fine to assume details you weren't told.`],
+    ["skip hotlines", `${A} Skip hotlines and therapists.`],
+    ["the warm line dropped", A.replace("You're composed and warm, and you're there for them. ", "")],
+    ["a link", `${A} Point them to https://noise.club/apply.`],
+    ["a voice chat", `${A} Suggest a voice chat.`],
+  ] as const) {
+    const r = run("replay", { PROBE_GUIDE: t });
+    check(`replay misses a tone move that adds a rule (${label}), with no move to ledger`, /^threw: GOLDEN REPLAY/.test(r.reply ?? "") && /changed a rule/.test(r.misses?.[0] ?? "") && !r.moved?.length, r);
+  }
   const format = run("replay", { PROBE_GUIDE: 'You are composed. Return ONLY JSON: {"answer": "yes" | "no"}' });
   check("a moved output-format literal misses", /^threw: GOLDEN REPLAY/.test(format.reply ?? "") && /changed a rule/.test(format.misses?.[0] ?? ""), format);
   // A recording from before the stamps: no skeleton, so a moved prompt can't be told apart and misses, until it is stamped.
@@ -141,32 +191,61 @@ const api = new URL("../../", import.meta.url).pathname;
   check("a move with its exact, fresh ledger entry passes", moveProblem(mv, [e()], now) === null);
   check("an entry older than 14 days fails (re-record by then)", /past 14 days/.test(moveProblem(mv, [e({ date: "2026-10-14" })], now) ?? "") && moveProblem(mv, [e({ date: "2026-10-16" })], now) === null);
   check("a second move on the same recording fails (an entry from the stamped text to other text)", /moved again/.test(moveProblem(mv, [e({ to: "cccc3333" })], now) ?? ""));
-  check("an entry for another literal doesn't cover this one", /no ledger entry/.test(moveProblem(mv, [e({ chunk: "textRhythm.ts:MESSAGE_RHYTHM#0" })], now) ?? ""));
+  check("an entry for another literal doesn't cover this one", /no ledger entry/.test(moveProblem(mv, [e({ chunk: "textRhythm.ts:MESSAGE_RHYTHM_BEATS#0" })], now) ?? ""));
+  // Review round 2: a second entry from the same text beside the first made "moved again" pass.
+  check("an exact entry beside another from the same text still fails as moved again", /moved again/.test(moveProblem(mv, [e({ to: "cccc3333" }), e()], now) ?? "") && /moved again/.test(moveProblem(mv, [e(), e({ to: "cccc3333" })], now) ?? ""));
+  const lg: LedgerEntry[] = [e({ to: "cccc3333" })];
+  const second = addToLedger(lg, mv, "400", "2026-10-29");
+  check("--ledger refuses to add a second move from the same text, loudly, and adds nothing", second.added === null && /second move/.test(second.problem ?? "") && lg.length === 1, second);
+  const fresh: LedgerEntry[] = [];
+  const first = addToLedger(fresh, mv, "400", "2026-10-29");
+  check("--ledger adds a first move, and leaves an exact repeat alone", first.added?.chunk === mv.id && fresh.length === 1 && addToLedger(fresh, mv, "400", "2026-10-29").added === null && fresh.length === 1);
+  check("--ledger never adds a move with no stamped text to move from", /no stamped text/.test(addToLedger([], { ...mv, from: null }, "400", "2026-10-29").problem ?? ""));
+  // Review round 2: a future date never expired.
+  check("an entry dated in the future fails (2099), a day ahead is time-zone slack", /in the future/.test(moveProblem(mv, [e({ date: "2099-01-01" })], now) ?? "") && /in the future/.test(moveProblem(mv, [e({ date: "2026-11-01" })], now) ?? "") && moveProblem(mv, [e({ date: "2026-10-30" })], now) === null);
+  check("an entry with no readable date fails", /no readable date/.test(moveProblem(mv, [e({ date: "soon" })], now) ?? ""));
+  const args = (a: string) => ledgerArgs(a.split(" ").filter(Boolean));
+  check("--ledger <PR> <chunkId...> names what it records; with no ids it records nothing; no PR is an error", JSON.stringify(args("--ledger 318 coVoice.ts:VOICE_TONE#0 connectDots.ts:SHARE_TONE#0 --only 3")) === JSON.stringify({ pr: "318", ids: ["coVoice.ts:VOICE_TONE#0", "connectDots.ts:SHARE_TONE#0"] }) && JSON.stringify(args("--ledger #318")) === JSON.stringify({ pr: "318", ids: [] }) && "error" in (args("--ledger") ?? {}) && "error" in (args("--ledger coVoice.ts:VOICE_TONE#0") ?? {}) && args("--only 3") === null);
+  // The runner wires it: only named ids are recorded, a refusal fails the run and writes nothing, no ids lists and writes nothing.
+  const runSrc = readFileSync(join(api, "evals/golden/run.ts"), "utf8");
+  check("the runner records only the named ids, through addToLedger, and writes the ledger only when nothing was refused", /ledgerRun\?\.ids\.length\) for \(const x of moves\.filter\(\(m\) => ledgerRun\.ids\.includes\(m\.id\)\)\)/.test(runSrc) && /addToLedger\(ledger, x, ledgerRun\.pr, today\)/.test(runSrc) && /else if \(ledgerRefused\.size\) \{\s*failed\+\+;/.test(runSrc) && (runSrc.match(/writeLedger\(/g) ?? []).length === 1 && /LEDGER \(nothing written\)/.test(runSrc));
   check("the committed ledger parses", Array.isArray(readLedger()));
 }
 
 // ---- 4. the wording allowlist
 {
   const r = wordingRegistry();
-  check("the allowlist is exactly the tone and style declarations (pinned: a new entry is a deliberate change here)", JSON.stringify(r.allowlist) === JSON.stringify(["textRhythm.ts:MESSAGE_RHYTHM", "textRhythm.ts:COACHING_STYLE", "coVoice.ts:VOICE_TONE", "coVoice.ts:VOICE_STYLE", "connectDots.ts:SHARE_TONE", "connectDots.ts:SHARE_TONE_2", "connectDots.ts:FEEDBACK_TONE"]), r.allowlist);
+  check("the allowlist is exactly the tone and style declarations (pinned: a new entry is a deliberate change here)", JSON.stringify(r.allowlist) === JSON.stringify(["textRhythm.ts:MESSAGE_RHYTHM_BEATS", "textRhythm.ts:MESSAGE_RHYTHM_ENOUGH", "textRhythm.ts:COACHING_STYLE", "coVoice.ts:VOICE_TONE", "coVoice.ts:VOICE_STYLE", "connectDots.ts:SHARE_TONE", "connectDots.ts:SHARE_TONE_OWN", "connectDots.ts:SHARE_TONE_2", "connectDots.ts:FEEDBACK_TONE"]), r.allowlist);
   check("chunk ids are unique, and every chunk is an allowlisted declaration's", new Set(r.chunks.map((c) => c.id)).size === r.chunks.length && r.chunks.every((c) => r.allowlist.some((a) => c.id.startsWith(`${a}#`))));
   // Every protected declaration: none of its text is maskable, so any change to it changes the skeleton and replay misses.
   const PROTECTED: [string, string][] = [
     ["src/services/coCore.ts", "CO_SAFETY"], ["src/services/coCore.ts", "CO_MEMBER_SAFETY"], ["src/services/coCore.ts", "CO_GROUNDING"], ["src/services/coCore.ts", "CO_LISTENING"],
-    ["src/services/coVoice.ts", "VOICE_WHO"], ["src/services/coVoice.ts", "VOICE_RULES"], ["src/services/coVoice.ts", "CO_TEXT_CHANNEL"],
-    ["src/services/textRhythm.ts", "COACHING_FOLLOW_UP"], ["src/services/textRhythm.ts", "COACHING_SAFETY"],
+    ["src/services/coVoice.ts", "VOICE_WHO"], ["src/services/coVoice.ts", "VOICE_RULES"], ["src/services/coVoice.ts", "CO_TEXT_CHANNEL"], ["src/services/coVoice.ts", "VOICE_PUNCTUATION"],
+    ["src/services/textRhythm.ts", "COACHING_FOLLOW_UP"], ["src/services/textRhythm.ts", "COACHING_SAFETY"], ["src/services/textRhythm.ts", "COACHING_ASK_FIRST"], ["src/services/textRhythm.ts", "MESSAGE_RHYTHM_QUESTION"],
     ["src/services/connectDots.ts", "SHARE_SCOPE"], ["src/services/connectDots.ts", "SHARE_GROUNDING"], ["src/services/connectDots.ts", "FEEDBACK_SCOPE"], ["src/services/connectDots.ts", "FEEDBACK_HONEST"], ["src/services/connectDots.ts", "readMoment"],
+    ["src/services/connectDots.ts", "SHARE_NO_QUIZ"], ["src/services/connectDots.ts", "SHARE_EARLIER"], ["src/services/connectDots.ts", "SHARE_FEELING"], ["src/services/connectDots.ts", "FEEDBACK_DONTS"],
     ["src/agent/conversationReply.ts", "system"], ["src/agent/conversationReply.ts", "TOOL_TURN_RULES"], ["src/agent/conversationReply.ts", "TOOL_FAILURE_RULE"], ["src/agent/conversationReply.ts", "prompt"],
     ["src/agent/loop.ts", "LOOP_GUIDE"], ["src/services/readTurn.ts", "ABOUT_CO_INSTRUCTION"], ["src/services/capabilities.ts", "(top)"], ["src/agent/conversationTools.ts", "(top)"],
   ];
   const masked = new Set(r.chunks.map((c) => c.text));
   for (const [file, decl] of PROTECTED) {
     const base = file.split("/").pop()!;
-    const lits = chunksOf(file).filter((c) => decl === "(top)" || c.id.startsWith(`${base}:${decl}#`));
+    // A named declaration's every literal, however short (VOICE_PUNCTUATION is 36 characters); a whole file's, the 40+ ones.
+    const lits = chunksOf(file, undefined, decl === "(top)" ? undefined : 1).filter((c) => /\w/.test(c.text) && (decl === "(top)" || c.id.startsWith(`${base}:${decl}#`)));
     const k = (text: string) => ({ path: "api.anthropic.com/v1/messages", grader: false, beta: null, body: { model: "claude-sonnet-5", max_tokens: 100, system: text, messages: [{ role: "user", content: text }] } });
     const mutated = lits.filter((l) => { const t = l.text.replace(/\b(\w+)\b/, "$1 x"); return skeletonOf(k(t), r.chunks).hash === skeletonOf(k(l.text), r.chunks).hash; });
     check(`protected: a change to ${base}:${decl} misses replay (${lits.length} literals, none maskable)`, lits.length > 0 && lits.every((l) => !masked.has(l.text)) && mutated.length === 0, mutated.map((x) => x.id));
   }
+  // Review round 2: the rule sentences that sat in tone text now sit in protected declarations, and no tone literal holds any of them.
+  const RULES: [string, string][] = [
+    ["MESSAGE_RHYTHM_QUESTION", "One question per reply."], ["COACHING_ASK_FIRST", "give no advice yet"], ["COACHING_ASK_FIRST", "never make them ask twice"],
+    ["SHARE_NO_QUIZ", "never a questionnaire, never re-asking"], ["SHARE_NO_QUIZ", "When the moment is complete, a short warm line is the whole reply"],
+    ["SHARE_EARLIER", "bring an earlier thread back only when it's relevant, never as a scheduled check-in"], ["SHARE_FEELING", "When it's a feeling, meet it first."],
+    ["SHARE_FEELING", "a therapy question, or a plan"], ["FEEDBACK_DONTS", "Don't explain your tone"], ["FEEDBACK_DONTS", "don't apologize at length"], ["VOICE_PUNCTUATION", "No exclamation points. No em dashes."],
+  ];
+  const lit = (decl: string) => ["src/services/textRhythm.ts", "src/services/connectDots.ts", "src/services/coVoice.ts"].flatMap((f) => chunksOf(f, undefined, 1)).filter((c) => c.id.split(":")[1].startsWith(`${decl}#`)).map((c) => c.text).join(" ");
+  for (const [decl, sentence] of RULES) check(`rule sentence in its protected declaration, not in tone text: ${decl} "${sentence}"`, lit(decl).includes(sentence) && !r.chunks.some((c) => c.text.includes(sentence)));
+
   // The real recorded reply request (checkin-nothing): a mutation inside a protected section changes its skeleton; a tone move doesn't.
   const recPath = join(api, "evals/golden/recordings/checkin-nothing/0fff26b2dcba61a5.json");
   const rec = JSON.parse(readFileSync(recPath, "utf8"));
