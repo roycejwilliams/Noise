@@ -6,6 +6,7 @@
 // replyRubric.ts), in the scheduled quality run. The matchers are the product's own where one exists:
 //   invented:   services/offerGuard.ts spokenProblem (every name, place, clock time and number has to be in what the turn stood on)
 //   stock:      harness/stockLines.ts stockLine and textStockSentence
+//   voice:      services/coVoice.ts VOICE_PUNCTUATION (no exclamation points, no em dashes)
 import { prepareSource, spokenProblem, SPOKEN_COMMON } from "../../src/services/offerGuard.js";
 import { stockLine, textStockSentence } from "../../src/harness/stockLines.js";
 
@@ -42,26 +43,87 @@ const trimUrl = (u: string) => u.replace(/[.,!?;:]+$/, "");
 // Words that are Cue's own world or everyday trade words, not a claim about theirs.
 const OWN = "Cue Noise iMessage DJ DJs MC PR HR";
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-const MONTH_DAY = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi;
-const dayOfYear = (m: string, d: string) => MONTHS.indexOf(m.toLowerCase().slice(0, 3)) * 31 + Number(d);
+const MONTH_DAY = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4})\b)?/gi;
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DAY = 86_400_000;
+// Advice units: a range followed by one of these is how-to ("20-30 min", "3-4 pairs", "4-6 people per table"), not a claim. Any other
+// range is a number like any other ("seats 40-60 people", "3000 to 3500 a month"): it has to be in what the turn stood on.
+const ADVICE_UNIT = /^(?:\s+[a-z]+)?\s*(?:min|mins|minutes?|hours?|hrs?|seconds?|secs?|pairs?|intros?|introductions?|people (?:per|a|at each|to a) table|(?:per|a) table|tables?|spots?|options?|names?|ideas?|lines?|sentences?|messages?|texts?|questions?|bullets?|points?|slides?|words?|drinks?|conversations?|rounds?|beats?|follow-?ups?|times?)\b/i;
+// The dates the turn stood on, as day numbers (UTC midnight): ISO dates, and month-day dates with the year given or the context's year.
+function datesIn(text: string, year: number | null): number[] {
+  const out = [...text.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)].map((m) => Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  for (const m of text.matchAll(MONTH_DAY)) {
+    const y = m[3] ? Number(m[3]) : year;
+    const mo = MONTHS.indexOf(m[1].toLowerCase().slice(0, 3));
+    if (y) out.push(Date.UTC(y, mo, Number(m[2])));
+    // No year anywhere: the same month-day in the two years around it (a gap is the same unless it crosses a year end).
+    else out.push(Date.UTC(2026, mo, Number(m[2])), Date.UTC(2027, mo, Number(m[2])), Date.UTC(2025, mo, Number(m[2])));
+  }
+  return out;
+}
 // Text that carries no fact of its own, cleared before the check (review of #318: 12 of 40 real replies were flagged for these):
-//   a numbered-list marker at a line's start ("3. The proof point"); an advice range ("20-30 min", "3-4 pairs"); and date arithmetic
-//   from a date the turn stood on: "18 days out", "the 15th", or a month and day within a month of a date it was given ("Oct 16" when
-//   today is Oct 13). A date further out than that is still checked.
+//   a numbered-list marker at a line's start ("3. The proof point"); an advice range ("20-30 min", "3-4 pairs"; review round 2: only
+//   with an advice unit after it); and date arithmetic that can be worked out from a date the turn stood on (review round 2: "Today is"
+//   alone covers no arbitrary ordinal): a month and day within a month of a given date ("Oct 16" when today is Oct 13), "the 15th" when
+//   a given date is the 15th or the weekday before it names a day within a month of one ("Thursday the 15th"), and "N days" (or weeks)
+//   when two dates it stood on or named are N days apart (a day either way, for the member's own time zone). Anything else is checked.
 export function withoutNonFacts(text: string, given: string): string {
-  let t = text.replace(/^\s*\d{1,2}[.)]\s+/gm, "").replace(/\b\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?\b/g, " a range ");
-  const iso = [...given.matchAll(/\b\d{4}-(\d{2})-(\d{2})\b/g)].map((m) => (Number(m[1]) - 1) * 31 + Number(m[2]));
-  const known = [...[...given.matchAll(MONTH_DAY)].map((m) => dayOfYear(m[1], m[2])), ...iso];
+  let t = text.replace(/^\s*\d{1,2}[.)]\s+/gm, "").replace(/\b\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?\b/g, (all, at: number, whole: string) => (ADVICE_UNIT.test(whole.slice(at + all.length)) ? " a range " : all));
+  const year = Number((given.match(/\b(20\d{2})\b/) ?? [])[1]) || null;
+  const known = datesIn(given, year);
   if (!known.length) return t;
-  t = t.replace(/\b\d{1,2}\s*(?=(?:days?|weeks?)\b)/gi, " ").replace(/\b(?:the )?\d{1,2}(?:st|nd|rd|th)\b/gi, " ");
-  return t.replace(MONTH_DAY, (all, m, d) => (known.some((k) => Math.abs(k - dayOfYear(m, d)) <= 31) ? m : all));
+  const near = (d: number) => known.some((k) => Math.abs(k - d) <= 31 * DAY);
+  // Month-day dates in the reply: within a month of a given date, the day number is cleared (the month stays, a name like any other).
+  const named: number[] = [];
+  t = t.replace(MONTH_DAY, (all, m: string, d: string, y?: string) => {
+    const days = datesIn(all, y ? Number(y) : year);
+    if (!days.some(near)) return all;
+    named.push(...days);
+    return m;
+  });
+  // "the 15th": a given date's own day, or a weekday-and-ordinal that falls within a month of a given date.
+  const knownDays = new Set(known.map((k) => new Date(k).getUTCDate()));
+  // Never a month's own ordinal ("March 10th" far from any date stays checked).
+  t = t.replace(/(?<!\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)\b(?:(sun|mon|tue|wed|thu|fri|sat)[a-z]*,?\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b/gi, (all, wd: string | undefined, n: string) => {
+    const day = Number(n);
+    if (!wd) return knownDays.has(day) ? " " : all;
+    const want = WEEKDAYS.indexOf(wd.toLowerCase().slice(0, 3));
+    const hits = known.flatMap((k) => Array.from({ length: 63 }, (_, i) => k + (i - 31) * DAY)).filter((d) => new Date(d).getUTCDate() === day && new Date(d).getUTCDay() === want);
+    if (!hits.length) return all;
+    named.push(...hits);
+    return ` ${wd} `;
+  });
+  // "18 days out": two dates it stood on or named, that many days apart.
+  const all = [...known, ...named];
+  const gaps = all.flatMap((a, i) => all.slice(i + 1).map((b) => Math.round(Math.abs(a - b) / DAY)));
+  return t.replace(/\b(\d{1,3})(\s*|-)(days?|weeks?)\b/gi, (whole, n: string, sep: string, unit: string) => {
+    const days = Number(n) * (/^w/i.test(unit) ? 7 : 1);
+    const slack = /^w/i.test(unit) ? 3 : 1;
+    return gaps.some((g) => Math.abs(g - days) <= slack) ? ` ${unit}` : whole;
+  });
+}
+// A one-word capitalized name opening a quote (Say "Marcus sent me"): the quote's first word is a sentence start to the name check, so a
+// name there is checked on its own (review round 2 of #318). Common openers of a quoted line are not names.
+const QUOTE_OPENERS = new Set(`i i'm i'll i've i'd you you're you'll you've we we're we'll they they're he she it it's its my your our their me us the a an this that these those some any all each every no not nothing something anything everything everyone someone anyone nobody both either neither one another other most many few much more less is are was were am be been do does did don't doesn't didn't can can't could would should will won't shall may might must have has had let let's what what's who where when why how which and but or so if because since as at in on for with without from to of by about after before until while though although just also still even only then now here there there's here's that's today tonight tomorrow yesterday maybe perhaps honestly really actually quick hey hi hello yes yeah yep nope ok okay sure thanks thank sorry congrats congratulations wow oh ah well please cheers welcome great good nice glad happy love loved excited looking totally absolutely definitely fair agreed right exactly give tell say ask send take make keep try come go get got bring call text meet join grab check look think know want need hope feel see remember mind count put stop start wait book pick thought long big first last next real`.split(/\s+/));
+function quoteOpenerNames(sentence: string, src: { all: ReturnType<typeof prepareSource> }): string[] {
+  const out: string[] = [];
+  for (const m of sentence.matchAll(/(?:^|[\s(:])"([A-Z][a-z'’]+)(?=[\s,.!?;:"]|$)(?!\s+[A-Z])/g)) {
+    const w = m[1];
+    if (QUOTE_OPENERS.has(w.toLowerCase().replace(/’/g, "'"))) continue;
+    // The product's own backing (plurals, a name it only shortens), with the word placed mid-sentence.
+    const p = spokenProblem(`so ${w}`, { all: src.all, asked: src.all });
+    if (p && p.kind !== "promise") out.push(w);
+  }
+  return out;
 }
 export function inventedFacts(i: HardRuleInput): string[] {
   const given = [i.facts, ...i.theirLines, ...i.coLines, i.firstName ?? ""].join("\n");
   const src = { all: prepareSource(`${given}\n${SPOKEN_COMMON} ${OWN}`), asked: prepareSource(given) };
   const out: string[] = [];
   // A quote mark opens its own sentence: the capital after it ("Give", "Thanks") is a first word, not a name.
-  const pieces = sentencesOf(withoutNonFacts(i.text.replace(URL_RE, " "), given)).flatMap((s) => s.split(/["“”]/).map((x) => x.trim()).filter(Boolean));
+  const sentences = sentencesOf(withoutNonFacts(i.text.replace(URL_RE, " "), given));
+  for (const s of sentences) for (const w of quoteOpenerNames(s, src)) out.push(`a name nothing gave it (${w}): "${s.slice(0, 120)}"`);
+  const pieces = sentences.flatMap((s) => s.split(/["“”]/).map((x) => x.trim()).filter(Boolean));
   for (const s of pieces) {
     const p = spokenProblem(s, src);
     // A promise of later work is the product's own fact check's call (it reads the task list); here only names, times and numbers.
@@ -140,6 +202,12 @@ export function repliesPerTurn(sends: Send[], tools: string[]): string[] {
   return [`${replies.length} replies in one turn: ${replies.map((r) => `"${r.text.slice(0, 50)}"`).join(" / ")}`];
 }
 
+// ---- 8. Voice style: no exclamation points, no em dashes (coVoice.ts VOICE_PUNCTUATION; review round 2 of #318).
+export function voiceStyle(text: string): string[] {
+  const t = norm(text).replace(URL_RE, " ");
+  return [...(/!/.test(t) ? [`an exclamation point: "${(t.match(/[^.!?\n]*!/) ?? [""])[0].trim().slice(-80)}"`] : []), ...(/—/.test(t) ? [`an em dash: "${(t.match(/.{0,40}—.{0,40}/) ?? [""])[0].trim()}"`] : [])];
+}
+
 // Every hard rule that applies to this turn. An empty reply (a tapback alone) has nothing to check.
 export function hardRuleMisses(i: HardRuleInput): string[] {
   const sends = i.sends ?? (i.text.trim() ? [{ kind: "reply" as const, text: i.text }] : []);
@@ -153,6 +221,7 @@ export function hardRuleMisses(i: HardRuleInput): string[] {
     ...quotesOwnLine(prose, i.coLines, i.theirLines),
     ...linkThenCaption(sends, i.findUrls ?? []),
     ...repliesPerTurn(sends, i.tools ?? []),
+    ...voiceStyle(prose),
   ];
 }
 

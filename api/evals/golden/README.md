@@ -11,7 +11,8 @@ tone-only rewording of an allowlisted literal (with a ledger entry, review of #3
 | Command | What it does | Cost |
 |---|---|---|
 | `npm run evals:golden` | **Replay: the merge gate** (`merge-gated.sh`, the CI `golden` check). Every model call answered from `recordings/` by its exact request; only a ledgered tone-only move of an allowlisted literal may replay on its old answer ("prompt moved"). Every reply through the hard rules. No key, no network. | $0 |
-| `npm run evals:golden -- --ledger <PR>` | Replay that writes a `moved-ledger.json` entry for each tone move it sees (commit it with the PR). | $0 |
+| `npm run evals:golden -- --ledger <PR>` | Replay that lists each tone move it sees, with the literal's text before and after. Writes nothing. | $0 |
+| `npm run evals:golden -- --ledger <PR> <chunkId...>` | ...and writes a `moved-ledger.json` entry for each named literal, printing its before and after (commit it with the PR). Refuses, writing nothing, when a named literal already moved from the same text. | $0 |
 | `npm run evals:golden:quality` | **Quality run.** Each case 3 times with real calls; an attempt passes on the case's own checks, the hard rules and the rubric judge; the case is scored by majority. Reports pass rate per case, flaky cases and cost. Manual, or a local cron (below). Never part of the gate. | ~$8.80 for all 45: run it as `EVAL_COST_CAP_USD=10 npm run evals:golden:quality` |
 | `npm run evals:golden:record -- --only <case>` | **Record.** Real calls through the meter, the case's recordings rewritten and stamped. | ~$0.05-0.20 a case |
 | `npm run evals:golden:record -- --missing` | Record only the cases whose replay misses: a new case, or one whose behavior changed. `--moved` also records the cases that replayed on a moved prompt. | the same, for those cases |
@@ -38,13 +39,15 @@ Replay (`npm run evals:golden`, no key, $0) fails the merge when:
 
 - a live case's own assertions miss: its regexes, its code checks and its judge, run on the recorded answers;
 - **any reply breaks a hard rule** (`evals/lib/hardRules.ts`, code, free): a name, place, time, number or link nothing in the turn gave it
-  (list markers, advice ranges like "20-30 min" and date arithmetic from a date it was given are not claims); a status line on a check-in;
+  (list markers, a range with an advice unit after it like "20-30 min" or "3-4 pairs", and date arithmetic the turn's own dates support
+  are not claims; "seats 40-60 people", "the 23rd" on Oct 13, and a name opening a quote like `Say "Marcus sent me"` are); a status line
+  on a check-in;
   a stock empathy phrase (`harness/stockLines.ts`); machinery narration (systems, tools, errors, retries, "on my end"); quoting Cue's own
   earlier line back (a span the member said first is theirs); a find's link without its caption, or inside prose; more than one reply text
-  a turn (unless a tool brought something new);
+  a turn (unless a tool brought something new); an exclamation point or an em dash;
 - a model call's exact request isn't recorded. Strict by default: a fact, the member's words, a tool (name, description or schema), the
   model, a parameter, or any prompt literal outside the allowlist changed, and the case needs a re-record;
-- an allowlisted tone literal moved without its ledger entry, under an entry older than 14 days, or for the second time on the same
+- an allowlisted tone literal moved without its ledger entry, under an entry older than 14 days or dated in the future, or for the second time on the same
   recording; or its move changed a rule (its guard terms: numbers, tool names, never/always/only, call, offer, question, safe, member,
   share, invent...) or an output format;
 - a miss lands late (a timer or worker), or outside any case.
@@ -59,10 +62,21 @@ is a warning. Its code paths ran on the recorded answers; how the model answers 
 The allowlist is `WORDING_ALLOWLIST` in `evals/golden/wording.ts`, pinned by `harnessTest.ts`; the skeleton is
 `evals/lib/goldenSkeleton.mjs`.
 
-- **Wording** (may move with a ledger entry): the literals of `MESSAGE_RHYTHM`, `COACHING_STYLE` (textRhythm.ts), `VOICE_TONE`,
-  `VOICE_STYLE` (coVoice.ts), `SHARE_TONE`, `SHARE_TONE_2` and `FEEDBACK_TONE` (connectDots.ts). Tone and style only. The mixed prompts were
-  split in the source so their rules sit in their own declarations (`CO_VOICE`, `COACHING`, `SHARING_GUIDE` and `FEEDBACK_GUIDE` assemble to
-  exactly the text they were; the replay proves it, every hash unchanged).
+- **Wording** (may move with a ledger entry): the literals of `MESSAGE_RHYTHM_BEATS`, `MESSAGE_RHYTHM_ENOUGH`, `COACHING_STYLE`
+  (textRhythm.ts), `VOICE_TONE`, `VOICE_STYLE` (coVoice.ts), `SHARE_TONE`, `SHARE_TONE_OWN`, `SHARE_TONE_2` and `FEEDBACK_TONE`
+  (connectDots.ts). Tone and style only. The mixed prompts were split in the source so their rules sit in their own declarations
+  (`CO_VOICE`, `MESSAGE_RHYTHM`, `COACHING`, `SHARING_GUIDE` and `FEEDBACK_GUIDE` assemble to exactly the text they were; the replay proves
+  it, every hash unchanged). The rule sentences that sat in tone text are behavior: one question a reply (`MESSAGE_RHYTHM_QUESTION`), ask
+  first (`COACHING_ASK_FIRST`), no questionnaire and a short line on a complete moment (`SHARE_NO_QUIZ`), earlier threads only when relevant
+  (`SHARE_EARLIER`), a feeling first and no therapy question (`SHARE_FEELING`), what not to do on feedback (`FEEDBACK_DONTS`), and no
+  exclamation points or em dashes (`VOICE_PUNCTUATION`).
+- **Guard terms**: a move inside an allowlisted literal is still blocked when it changes the count of any rule word (never, only, ask,
+  question, member, share...), negation (won't, without, skip, instead...), permission (may, can, fine, assume...), personal data (people,
+  others, name, address, email, birthday...), outreach (voice, chat, text, message, remind, follow, schedule...), sales or link (buy, ticket,
+  price, $, http, www, a bare domain), care (hotline, therapist, doctor, medical, legal...), conduct (flirt, romantic, warm), number or
+  quantity (any digit, one to ninety, dozen, more, less...) or order (first, last, before, after). Known limit: the same words reordered
+  ("Ask first, advise second" to "Advise first, ask second") keep the count, so they pass as a move; the ledger entry, its 14 days and the
+  quality run are what catch that.
 - **Behavior** (strict, a re-record): everything else. Safety (`CO_SAFETY`, `COACHING_SAFETY`), member safety and privacy
   (`CO_MEMBER_SAFETY`), grounding and never-invent (`CO_GROUNDING`, `SHARE_GROUNDING`, `FEEDBACK_HONEST`, `VOICE_RULES`), who Cue is and what
   it owns (`VOICE_WHO`), the scope overrides (`SHARE_SCOPE`, `FEEDBACK_SCOPE`), the reply prompt and its gesture and tool-turn rules, the
@@ -77,9 +91,11 @@ stamps with it.
 
 `evals/golden/moved-ledger.json`, read by `evals/golden/ledger.ts`. One entry per move: `{ chunk, from, to, pr, date }` (the literal's id
 and its text hash before and after). To reword an allowlisted literal without re-recording: make the change, run
-`npm run evals:golden -- --ledger <PR>`, commit the ledger with the PR. Within 14 days, re-record the moved cases
-(`npm run evals:golden:record -- --moved`) and drop the entry (replay lists entries nothing uses any more). A second rewording of the same
-literal before the re-record fails: the recording would be two moves behind.
+`npm run evals:golden -- --ledger <PR>` to see what moved (before and after, nothing written), then
+`npm run evals:golden -- --ledger <PR> <chunkId...>` for the literals the PR means to move, and commit the ledger with the PR. Within 14
+days, re-record the moved cases (`npm run evals:golden:record -- --moved`) and drop the entry (replay lists entries nothing uses any
+more). A second rewording of the same literal before the re-record fails, and `--ledger` refuses to add it: the recording would be two
+moves behind. An entry dated more than a day ahead fails too (it would never expire).
 
 ## The quality run
 
