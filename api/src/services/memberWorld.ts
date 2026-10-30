@@ -329,11 +329,6 @@ export function namesWorldItem(w: MemberWorld | null | undefined, sentence: stri
   return [...w.waiting, ...w.running, ...(w.thread ? [w.thread] : []), ...(w.next ? [w.next] : [])].find((i) => names(i.name, sentence)) ?? null;
 }
 
-// Co's own machinery, said aloud: always cut, whatever the sentence names (services/speakable.ts NARRATION_RULES).
-const MACHINERY = NARRATION_RULES.filter((r) => r.why === "narrates Cue's own machinery" || r.why === "task-tracker words");
-export function machineryTalk(sentence: string): boolean {
-  return MACHINERY.some((r) => r.pattern.test(sentence));
-}
 // The narration rules a line about running work may get past: where it stands ("still on the Sequin planning docs"). Machinery,
 // tracker words and holding their thing behind Co's judgment ("once it's worth sending") never do.
 export const WORLD_STATUS_WHYS = new Set([

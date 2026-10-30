@@ -156,13 +156,6 @@ export function isRealReply(content: string): boolean {
 // After a reaction, the looking text waits this long: a quick search needs none.
 const HOLD_AFTER_ACK_MS = 8_000;
 const HOLD_NO_ACK_MS = 5_000;
-// Co's own hold line, used only when it's a short plain line with no link.
-export function holdLineFrom(line: string | null | undefined): string | null {
-  const t = cleanCoMessage(String(line ?? "")).trim();
-  if (!t || t.length > 140 || /https?:\/\/|www\./i.test(t)) return null;
-  return t;
-}
-
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
     .map((m) => m.content)
