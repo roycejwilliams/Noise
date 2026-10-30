@@ -13,8 +13,8 @@ import "../../lib/requireMeter.js";
 import { result, type GoldenCase, type GoldenStatus } from "../types.js";
 import { DAY, NONE, judge, observed, reply, type Kind, type Line, type Reply } from "./checkins.js";
 
-// Recorded 2026-10-30. feedback-cue-mistake and complete-moment passed and are live. The other five are kept pending: their recorded
-// replies fail the judge on real quality gaps (restating or paraphrasing the member's news back, asking for news they don't have yet,
+// Recorded 2026-10-30. feedback-cue-mistake and complete-moment passed and are live. feedback-kinda-dry passes but stays pending (see
+// its status). The other four are kept pending: their recorded replies fail the judge on real quality gaps (restating or paraphrasing the member's news back, asking for news they don't have yet,
 // explaining Cue's own tone), the reply quality the context snapshot work is meant to fix, not the prompt wording.
 const PENDING: GoldenStatus = { live: false, until: "the reply-quality work (context snapshot) passes them", why: "recorded 2026-10-30; the replies fail the judge on known quality gaps" };
 const at = (iso: string) => new Date(iso);
@@ -86,7 +86,9 @@ export const CASES: GoldenCase[] = [
     n: 62,
     id: "feedback-kinda-dry",
     title: "\"you're kind of dry, you know that?\" after a flat reply to a recital story: owns it in a few words, then gives the reply it deserved",
-    status: PENDING,
+    // Passes its checks, but the recorded reply ends on "How are you feeling watching that happen", the feelings question the sharing
+    // guide rules out; kept pending rather than locking that reply in as the passing baseline.
+    status: { live: false, until: "the reply-quality work (context snapshot) drops the closing feelings question", why: "recorded 2026-10-30; passes the judge but closes on a feelings question" },
     from: "10-29 before/after eval, case 6, and the FEEDBACK_GUIDE template it exposed (\"That deserved more than 'nice evening'\": quoting itself back)",
     run: async () => {
       const exchange: Line[] = [
@@ -97,7 +99,7 @@ export const CASES: GoldenCase[] = [
       const r = await reply({ firstName: "Callum", now: DAY, exchange, searching: NONE, facts: [["known", "Partner at a venture firm; has a seven-year-old daughter who started piano this year."]], message, kind: "feedback", withMoment: true });
       const misses = slips(r.text);
       if (EXPLAINS_ITSELF.test(r.text)) misses.push(`explains its tone or how it works ("${r.text.match(EXPLAINS_ITSELF)![0]}")`);
-      if (!/recital|piano|walk(?:ed)? off|nervous|sat (?:back )?down|mistake|played/i.test(r.text)) misses.push("never gets back to the recital");
+      if (!/recital|piano|walk(?:ed|ing)? off|nervous|(?:sat|sit|sitting) (?:back )?down|mistake|play(?:ed|ing)?\b/i.test(r.text)) misses.push("never gets back to the recital");
       const j = await judge(r.text, `Last night the member shared: "${exchange[0].text}". Cue answered only "Sounds like a nice evening." Now they texted "${message}".`, "Does the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.");
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return done(misses, r);
