@@ -22,7 +22,7 @@ import { hardRuleMisses, inventedFacts, linkThenCaption, machinery, quotesOwnLin
 import { guardTerms, maskText, movedBetween, skeletonOf, wordingBefore } from "../lib/goldenSkeleton.mjs";
 import { chunksOf, wordingRegistry } from "./wording.js";
 import { addToLedger, ledgerArgs, moveProblem, readLedger, type LedgerEntry } from "./ledger.js";
-import { criteriaFor, rubricPrompt } from "../lib/replyRubric.js";
+import { busy, criteriaFor, rubricPrompt } from "../lib/replyRubric.js";
 
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n     ${typeof detail === "string" ? detail : JSON.stringify(detail)}` : ""}`); } };
@@ -289,6 +289,15 @@ const api = new URL("../../", import.meta.url).pathname;
   check("...and $4 when not", /cap \$4\.00\)/.test(est({})));
   const over = spawnSync("npm", ["run", "-s", "evals:golden:quality", "--", "--only", "checkin-nothing"], { cwd: api, encoding: "utf8", env: { ...env, EVAL_COST_CAP_USD: "0.01" } as NodeJS.ProcessEnv });
   check("a quality run whose estimate is over the cap refuses to start (no call made)", over.status === 2 && /over the cap \(\$0\.01\)/.test(over.stdout) && /0 model calls/.test(over.stdout), over.stdout.slice(-400));
+}
+
+// ---- 7. a busy API doesn't cost the rubric judge a try (10-30: 18 of 83 quality-run grades were lost)
+{
+  check("a 429 is busy", busy({ statusCode: 429, message: "Too Many Requests" }));
+  check("a 529 / overloaded is busy", busy({ message: "529 Overloaded" }) && busy(new Error("overloaded_error")));
+  check("a rate-limit message is busy", busy(new Error("rate limit exceeded")));
+  check("a bad request is not busy", !busy({ statusCode: 400, message: "invalid_request_error" }));
+  check("a parse problem is not busy", !busy(new Error("Unexpected token")));
 }
 
 console.log(`golden rework: ${total - failed}/${total} passed`);

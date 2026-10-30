@@ -82,18 +82,28 @@ Return ONLY JSON: {${keys.map((k) => `"${k}": "pass"|"fail"${k === "real_positio
 export const completeGrade = (g: any, kind: TurnKind | null): g is RubricGrade => !!g && criteriaFor(kind).every((k) => ["pass", "fail", "na"].includes(g[k]));
 export const failedCriteria = (g: RubricGrade): RubricKey[] => (Object.keys(RUBRIC) as RubricKey[]).filter((k) => g[k] === "fail");
 
-// The judge call itself (Sonnet, as the grader: GRADER_HEADERS). Two tries; a grade that never parses is a failure, never a pass.
-export async function gradeReply(t: Parameters<typeof rubricPrompt>[0], reply: string): Promise<RubricGrade | null> {
+// The judge call itself (Sonnet, as the grader: GRADER_HEADERS). Two tries at a grade; a grade that never parses is a failure, never a
+// pass. A busy API (429/529, overloaded) doesn't use up a try: it waits and asks again, up to four times, so a parallel quality run's
+// rate limits don't read as replies that failed (10-30: 18 of 83 grades were lost that way, or to a reason nobody could see). Why a
+// grade was lost is printed, so the next one can be told apart.
+export const busy = (e: any) => /\b(429|529)\b|overloaded|rate.?limit/i.test(`${e?.statusCode ?? ""} ${e?.message ?? e}`);
+export async function gradeReply(t: Parameters<typeof rubricPrompt>[0], reply: string, wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<RubricGrade | null> {
   const { generateText } = await import("ai");
   const { anthropic } = await import("@ai-sdk/anthropic");
   const { GRADER_MODEL, GRADER_HEADERS } = await import("../../src/models.js");
   const { parseModelJson } = await import("../../src/services/modelJson.js");
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let lost = "";
+  for (let attempt = 0, waits = 0; attempt < 2; attempt++) {
     try {
       const { text } = await generateText({ model: anthropic(GRADER_MODEL), headers: GRADER_HEADERS, maxOutputTokens: 600, prompt: rubricPrompt(t, reply) });
       const g = parseModelJson<RubricGrade>(text);
       if (completeGrade(g, t.kind)) return g;
-    } catch {}
+      lost = `incomplete grade: ${text.slice(0, 200).replace(/\s+/g, " ")}`;
+    } catch (e: any) {
+      lost = `error: ${String(e?.message ?? e).slice(0, 200)}`;
+      if (busy(e) && waits < 4) { waits++; attempt--; await wait(2000 * 2 ** waits); continue; }
+    }
   }
+  console.warn(`rubric grade lost (${lost})`);
   return null;
 }
