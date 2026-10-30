@@ -157,8 +157,9 @@ export async function relayMessage(opts: { fromUserId: string; fromFirstName: st
   const id = ins[0].id;
   // One person, one message: never a group text. STOP and local hours apply.
   const { sendExemptWhenAllowed } = await import("../harness/proactive.js");
-  const { getTimezoneForCity } = await import("./geocoding.js");
-  const zone = phoneRows[0]?.city ? await getTimezoneForCity(phoneRows[0].city).catch(() => null) : null;
+  const { memberZone } = await import("./memberTime.js");
+  // Their stored zone (memberTime.ts memberZone, the one source of truth): never a fresh lookup of a bare city (2026-10-29 place audit).
+  const zone = await memberZone(to.userId);
   // Its status, sent_at and the recipient's "Co replied:" line are written only once it actually reaches them
   // (relayDelivered, and sendExempt's own text_exchange write): queued for their morning, it reads as queued.
   const r = await sendExemptWhenAllowed({ userId: to.userId, phoneNumber: phone, type: "direct_ask", targetKey: `relay:${id}`, messages: [text], timezone: zone, after: { kind: "relay", payload: { relayId: id } } });
@@ -242,13 +243,13 @@ export async function sendDueReminders(): Promise<number> {
     )
     .catch(() => ({ rows: [] as any[] }));
   const { sendExemptWhenAllowed } = await import("../harness/proactive.js");
-  const { getTimezoneForCity } = await import("./geocoding.js");
+  const { memberZone } = await import("./memberTime.js");
   let n = 0;
   for (const r of rows) {
     if (!r.phone_number) continue;
     const claimed = await pool.query(`UPDATE member_reminders SET queued_at = NOW() WHERE id = $1 AND sent_at IS NULL AND queued_at IS NULL RETURNING id`, [r.id]).catch(() => ({ rows: [] as any[] }));
     if (!claimed.rows[0]) continue;
-    const zone = r.city ? await getTimezoneForCity(r.city).catch(() => null) : null;
+    const zone = await memberZone(r.user_id);
     const s = await sendExemptWhenAllowed({ userId: r.user_id, phoneNumber: r.phone_number, type: "direct_ask", targetKey: `reminder:${r.id}`, messages: [reminderText(r.what)], timezone: zone, after: { kind: "reminder", payload: { reminderId: r.id } } });
     if (s.sent || s.queued) n++;
   }

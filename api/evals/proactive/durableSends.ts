@@ -50,6 +50,9 @@ async function handle(rawSql: string, args: any[] = []): Promise<{ rows: any[] }
   }
   if (/^INSERT INTO co_memories/.test(sql)) { db.memories.push({ user_id: args[0], type: args[1], content: args[2] }); return { rows: [{ id: seq++ }] }; }
   if (/^INSERT INTO co_facts/.test(sql)) { db.facts.push({ owner: args[0], relation: args[2], label: args[3] }); return { rows: [] }; }
+  // Their stored zone (memberTime.ts memberZone, which the reminder and relay sends read since the 2026-10-29 place fix): the zone their
+  // city stands for here, stored with that city.
+  if (/^SELECT city, timezone, timezone_city FROM co_profiles WHERE user_id = \$1/.test(sql)) { const u = db.users.get(args[0]); return { rows: u ? [{ city: u.city, timezone: db.zones.get(u.city) ?? null, timezone_city: u.city }] : [] }; }
   if (/FROM geocode_cache/.test(sql)) { const z = db.zones.get(args[0]); return { rows: z ? [{ lat: 0, lng: 0, timezone: z }] : [] }; }
   // deferred_sends
   if (/^INSERT INTO deferred_sends/.test(sql)) {

@@ -513,6 +513,11 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     const m = W.members.get(p[0]);
     return R(m ? [{ intent: m.intent }] : []);
   }
+  // A member's stored zone (memberTime.ts memberZone; the zone reads for sends use it since the 2026-10-29 place fix).
+  if (has("SELECT city, timezone, timezone_city FROM co_profiles WHERE user_id = $1")) {
+    const m = W.members.get(p[0]);
+    return R(m ? [{ city: m.city ?? null, timezone: (m as any).timezone ?? null, timezone_city: m.city ?? null }] : []);
+  }
   if (has("SELECT city FROM co_profiles WHERE user_id = $1")) {
     const m = W.members.get(p[0]);
     return R(m ? [{ city: m.city }] : []);

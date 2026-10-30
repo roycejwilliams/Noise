@@ -23,7 +23,8 @@ const PARTIFUL = "https://partiful.com/e/q4NrvVRpxwvwuGLJfUcT";
 // The zone: from the city only, a guess when the start doesn't carry it, said as one.
 const f = L.structuredEvent(rooftop)!;
 await L.settleRead(f, rooftop, PARTIFUL, zoneOf);
-check("the zone is looked up from the city alone: never the street or the venue", asked.join("|") === "San Francisco", asked);
+// With the region its record lists (2026-10-29 place audit: a bare city can be another state's).
+check("the zone is looked up from the city and its listed region alone: never the street or the venue", asked.join("|") === "San Francisco, California", asked);
 check("a zone from the city for a UTC start is kept unverified (a guess)", f.timezone?.value === "America/Los_Angeles" && f.timezone?.verified === false && !/Sansome|Werqwise/.test(f.timezone?.quote ?? ""), f.timezone);
 check("a guessed zone keeps the city it's assumed from (never a street)", f.timezone?.quote === "San Francisco", f.timezone);
 const said = L.timeFact(f.start!.value, f.timezone, "Founder & Investor Rooftop Mixer");
