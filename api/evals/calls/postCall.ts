@@ -154,7 +154,7 @@ user: Thanks.`;
   const co = src("routes/co.ts");
   // Commitments open the moment the call ends, with their confirmation (services/callFollowThrough.ts), before the task read; the
   // task read then notes a promise it shares instead of opening a second task, and the audit runs after it.
-  check("after a call, commitments open first (call end), then the task read, then the audit", co.indexOf("m.followThroughOnCallEnd(") > 0 && co.indexOf("m.followThroughOnCallEnd(") < co.indexOf("await import(\"../services/callTasks.js\").then((m) => m.tasksFromCall(user_id, cleanTranscript))") && co.indexOf("m.tasksFromCall(user_id, cleanTranscript)") < co.indexOf("await auditCall(user_id, cleanTranscript, knownBeforeCall)") && /trackCommitmentsFromTranscript/.test(src("services/callFollowThrough.ts")));
+  check("after a call, commitments open first (call end), then the task read, then the audit", co.indexOf("m.followThroughOnCallEnd(") > 0 && co.indexOf("m.followThroughOnCallEnd(") < co.indexOf("await import(\"../services/callTasks.js\").then((m) => m.tasksFromCall(user_id, cleanTranscript))") && co.indexOf("m.tasksFromCall(user_id, cleanTranscript)") < co.indexOf("await auditCall(user_id, cleanTranscript, knownBeforeCall") && /trackCommitmentsFromTranscript/.test(src("services/callFollowThrough.ts")));
 }
 
 // ---------------------------------------------------------------- 3c. asked vs. Co's own idea, from their words

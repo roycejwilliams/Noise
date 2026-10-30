@@ -86,7 +86,21 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   const { confirmationSentFor } = await import("../services/callFollowThrough.js");
   const confirmed = await confirmationSentFor(userId, transcript).catch(() => null);
   const recap = await recapOfferFor(userId, followUpId, { callAt, confirmed: !!confirmed, coCommitted: promised.length > 0 }, k).catch(() => null);
-  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, !!recap?.offer, k, !!recap?.gentle);
+  // What Cue already did on the call with its tools, or sent the moment it ended (services/callLedger.ts): never said again here.
+  const doneOnCall = await doneAroundCall(userId, callAt).catch(() => [] as string[]);
+  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, !!recap?.offer, k, !!recap?.gentle, doneOnCall);
+}
+
+// The call's ledger rows from the few hours before this follow-up was made (the call ended just before it), plus the owed links
+// that went out right after it.
+async function doneAroundCall(userId: string, callAt: Date): Promise<string[]> {
+  const L = await import("../services/callLedger.js");
+  const ledger = await L.readCallLedger(userId, new Date(callAt.getTime() - 3 * 3_600_000), new Date(callAt.getTime() + 10 * 60_000));
+  const { rows } = await pool.query(
+    `SELECT proposal FROM harness_decisions WHERE user_id = $1 AND layer = 8 AND decision = 'call.owed_delivery' AND action = 'sent' AND created_at >= $2 AND created_at <= $3 LIMIT 20`,
+    [userId, new Date(callAt.getTime() - 3 * 3_600_000), new Date(callAt.getTime() + 30 * 60_000)],
+  );
+  return [...L.doneLines(ledger), ...rows.map((r: any) => `sent the link ${String(r.proposal?.url ?? "")} right after the call`)].slice(0, 20);
 }
 
 // The sections the post-call text reads from the layer.
@@ -307,6 +321,8 @@ export async function draftPostCallText(
   knowledge: MemberKnowledge | null = null,
   // The recap goes now though they've been struggling (the mood hold let go): tone guidance for that one line (RECAP_GENTLE).
   recapGentle = false,
+  // What Cue did on the call with its tools, or sent right after it: done, so never mentioned, resent or offered again here.
+  doneOnCall: string[] = [],
 ): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
     functionId: "jobs.postCallFollowUp",
@@ -320,6 +336,7 @@ export async function draftPostCallText(
       // Never in this text (#115): the delivery is its own one message. Kept out of the facts so it can't be restated.
       what_co_said_it_would_look_into: null,
       confirmation_you_already_sent_after_the_call: confirmationSent,
+      done_on_the_call_already_never_mention_resend_or_offer_again: doneOnCall.length ? doneOnCall : null,
       may_offer_a_one_page_recap: recapOffer && !confirmationSent ? RECAP_OFFER_RULE : null,
       recap_offer_tone: recapOffer && recapGentle && !confirmationSent ? RECAP_GENTLE : null,
     },

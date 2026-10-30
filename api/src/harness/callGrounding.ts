@@ -125,7 +125,7 @@ export function knownBeforeFrom(
 // replyGrounding.ts addHint): summaries and read-outs Co's own models wrote
 // going into the call. They help read the call, but they're never proof of a
 // specific time, place, count, or what another person said, wants or did.
-export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string): string {
+export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string, doneOnCall: string[] = []): string {
   const reg = auditRegistry();
   return `Audit what Cue said on a phone call. Cue can only claim things it actually knew and only promise things it can actually do.
 
@@ -140,6 +140,10 @@ ${CALL_CAPABILITIES}
 
 What Cue knew going into the call (facts):
 ${knownBefore || "(nothing)"}
+
+What Cue did DURING the call with its own tools (each came back done, so it's true; services/callLedger.ts):
+${doneOnCall.length ? doneOnCall.map((d) => `- ${d}`).join("\n") : "(nothing)"}
+A line where Cue says it did something on the call (sent, texted, saved, set up, started) is "ok" only when it's in this list; when it isn't, it's "invented_fact" (put what it claimed in "specifics"). What's in this list is done: never a promise to keep.
 ${impressions?.trim() ? `
 Cue's own impressions going in (summaries its models wrote). Use these to understand the call, never as proof: a specific time, place, count, link, or what another person said, wants or did that only an impression backs is "invented_fact". What the person themself said in these recent texts is fine to rely on.
 ${impressions.slice(0, 6000)}
@@ -316,11 +320,31 @@ export function sameSubject(a: string, b: string): boolean {
   return A.filter((w) => B.has(w)).length >= 2;
 }
 
-export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[] }): AuditPlan {
+// Cue saying it did something (sent, texted, saved, set up, started), as done.
+const DID_CLAIM = /\b(?:i(?:'ve| have)?\s+(?:just\s+|already\s+)?(?:sent|texted|shared|saved|added|set\s+(?:it|that|this|you)\s+up|started|dropped|noted|put)\b|(?:just|already)\s+(?:sent|texted|saved)\b|it'?s\s+(?:in your texts|been sent|saved|set up)\b)/i;
+// Pure: a claim of having done something that a tool really did on this call (services/callLedger.ts): kept as said, never a
+// correction. Words shared with what was done; a claim with no match stays the audit's (the "said it did" check).
+export function doneOnCallVerdict(quote: string, doneOnCall: string[]): { done: boolean; why: string } {
+  if (!doneOnCall.length || !DID_CLAIM.test(quote.replace(/[’‘]/g, "'"))) return { done: false, why: "" };
+  const hit = doneOnCall.find((d) => overlap(quote, d) > 0) ?? (doneOnCall.length === 1 && significant(quote).length <= 4 ? doneOnCall[0] : undefined);
+  return hit ? { done: true, why: `done on the call: ${hit.slice(0, 140)}` } : { done: false, why: "" };
+}
+// Pure: a promise that something Cue did on this call already covers (the same subject).
+export function promiseDoneOnCall(p: { what: string; quotes: string[] }, doneOnCall: string[]): string | null {
+  return doneOnCall.find((d) => sameSubject(p.what, d) || overlap(`${p.what} ${p.quotes.join(" ")}`, d) >= 0.5) ?? null;
+}
+
+export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[]; doneOnCall?: string[] }): AuditPlan {
   const reg = auditRegistry();
   const corrections: CallClaim[] = [];
   const refused: AuditPlan["refused"] = [];
+  const done = ctx.doneOnCall ?? [];
   for (const c of claims) {
+    const d = c.type === "invented_fact" || c.type === "capability" || c.type === "promise_unkeepable" ? doneOnCallVerdict(c.quote, done) : { done: false, why: "" };
+    if (d.done) {
+      refused.push({ quote: c.quote, type: c.type, why: d.why });
+      continue;
+    }
     if (c.type === "capability") {
       const v = capabilityCorrectionVerdict(c, reg);
       v.save ? corrections.push(c) : refused.push({ quote: c.quote, type: c.type, why: v.why });
@@ -331,6 +355,12 @@ export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { kn
   }
   const groups: { what: string; quotes: string[]; asked: string | null }[] = [];
   for (const c of claims.filter((x) => x.type === "promise_keepable" && x.what)) {
+    // Already done with a tool on the call: nothing to keep, nothing opens.
+    const doneBy = promiseDoneOnCall({ what: c.what, quotes: [c.quote] }, done);
+    if (doneBy) {
+      refused.push({ quote: c.quote, type: c.type, why: `done on the call: ${doneBy.slice(0, 140)}` });
+      continue;
+    }
     const asked = askedQuoteFor(c, transcript);
     // One call, so the looser same-call bar (followThrough.ts sameCallCommitment): one plan said three ways is one promise
     // (2026-10-08, #113: the caterer/photographer commitment came back as a task, an ask and a second thread).
@@ -418,7 +448,7 @@ export async function auditCall(
   userId: string,
   transcript: string,
   knownBefore: string | { facts: string; impressions: string },
-  opts: { dryRun?: boolean; claims?: CallClaim[]; tasks?: OpenCallTask[] } = {},
+  opts: { dryRun?: boolean; claims?: CallClaim[]; tasks?: OpenCallTask[]; doneOnCall?: string[] } = {},
 ): Promise<AuditPlan | null> {
   const facts = typeof knownBefore === "string" ? knownBefore : knownBefore.facts;
   const impressions = typeof knownBefore === "string" ? undefined : knownBefore.impressions;
@@ -432,7 +462,7 @@ export async function auditCall(
         // A long call's claims ran past the default and the JSON came back cut off, so the whole audit, every promise with it, was
         // lost (2026-10-08, #113). "ok" statements are no longer listed, and there is room for the rest.
         maxOutputTokens: 8000,
-        prompt: callAuditPrompt(transcript, facts, impressions),
+        prompt: callAuditPrompt(transcript, facts, impressions, opts.doneOnCall ?? []),
       });
       claims = parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? [];
     }
@@ -442,7 +472,7 @@ export async function auditCall(
       memberRecordText(userId).catch(() => ""),
       opts.tasks ? Promise.resolve(opts.tasks) : recentOpenTasks(userId).catch(() => [] as OpenCallTask[]),
     ]);
-    const plan = planCallAudit(claims, transcript, { knownBefore: `${facts}\n${impressions ?? ""}`, records, tasks });
+    const plan = planCallAudit(claims, transcript, { knownBefore: `${facts}\n${impressions ?? ""}`, records, tasks, doneOnCall: opts.doneOnCall ?? [] });
     if (opts.dryRun) return plan;
 
     // Keep the promises Co can keep, once per commitment. Carried by a task already open from this call: that task is the

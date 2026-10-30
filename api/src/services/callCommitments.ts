@@ -136,12 +136,21 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
 }
 
 // The post-call fallback (the direct-Haiku path says these with nothing watching): the same, from the transcript, once each.
-export async function trackCommitmentsFromTranscript(userId: string, transcript: string): Promise<number> {
+// skip: Cue's lines from a turn whose tool already did it on the call (services/callLedger.ts call.turn_acted): never a promise to
+// keep again after the call.
+export async function trackCommitmentsFromTranscript(userId: string, transcript: string, o: { skip?: string[] } = {}): Promise<number> {
   const co = transcript.split("\n").filter((l) => /^assistant:/i.test(l.trim())).map((l) => l.replace(/^assistant:\s*/i, ""));
   const theirs = transcript.split("\n").filter((l) => /^user:/i.test(l.trim())).map((l) => l.replace(/^user:\s*/i, ""));
   let n = 0;
-  for (const s of commitmentsIn(co)) if ((await trackCallCommitment({ userId, sentence: s, theirLine: theirs[theirs.length - 1] })).ok) n++;
+  for (const s of commitmentsNotCovered(commitmentsIn(co), o.skip ?? [])) if ((await trackCallCommitment({ userId, sentence: s, theirLine: theirs[theirs.length - 1] })).ok) n++;
   return n;
+}
+
+// Pure: the commitments not already kept by a tool on the call (the same sentence, compared as plain words).
+const plainWords = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+export function commitmentsNotCovered(found: string[], covered: string[]): string[] {
+  const done = covered.map(plainWords).filter(Boolean);
+  return found.filter((s) => { const w = plainWords(s); return !done.some((d) => d === w || (d.length >= 20 && (d.includes(w) || w.includes(d)))); });
 }
 
 export type CheckDeps = {

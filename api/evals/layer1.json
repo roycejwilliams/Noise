@@ -155,6 +155,7 @@
     "evals/tasks/windows.ts",
     "evals/tasks/looseEnds.ts",
     "evals/calls/llmProxy.ts",
+    "evals/calls/actOnCalls.ts",
     "evals/calls/provenance.ts",
     "evals/calls/spokenGrounding.ts",
     "evals/docs/document.ts",

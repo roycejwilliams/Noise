@@ -274,7 +274,8 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     check("call tools: ElevenLabs never sees Cue's tool call (only text and its own tools)", !r.calls.some((c: any) => c.function?.name === "startTask") && r.finish === "stop", r.calls);
     const second = up.reqs[1];
     check("call tools: the result is fed back as a tool_result after the model's own tool_use", !!second && second.messages.at(-2).content.some((b: any) => b.type === "tool_use" && b.id === "tu1") && second.messages.at(-1).content.some((b: any) => b.type === "tool_result" && b.tool_use_id === "tu1" && /"taskId":41/.test(b.content)), second?.messages.slice(-2));
-    check("call tools: the line before the tool streams first, then the answer after it (its \"Done,\" taken off: nothing is sent on a call)", /^On it, I'll take that on now\. It's on my list/.test(r.content), r.content);
+    // 2026-10-29 (Cue acts during calls): the tool came back done before the second line, so its "Done," is true and stays.
+    check("call tools: the line before the tool streams first, then the answer after it (its \"Done,\" kept: the tool came back done)", /^On it, I'll take that on now\. Done, it's on my list/.test(r.content), r.content);
     check("call tools: Cue's tools are offered beside ElevenLabs' end_call and voicemail_detection, with the call note in the prompt", ["end_call", "voicemail_detection", "startTask"].every((n) => up.reqs[0].tools.some((t: any) => t.name === n)) && /# Doing things on this call/.test(up.reqs[0].system[0].text));
   }
   // 2. end_call passes through, with Co's tools on, once they've said goodbye (#113: Co never hangs up first; the hold is tested in
@@ -377,7 +378,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const C = await import("../../src/services/capabilities.js");
     // The voice read's answers only where the read can run (services/voiceRead.ts voiceReadPrereqs), as by text.
     const runsHere = (await import("../../src/services/voiceRead.js")).voiceReadPrereqs();
-    check("the real call toolset is the texting tools: every one, described by its registry entry", CT.CALL_TOOL_NAMES.every((n) => real.names.has(n) || (n === "voiceRead" && !runsHere)) && real.defs.every((d) => d.description === C.toolUse(d.name)), [...real.names]);
+    check("the real call toolset is the texting tools: every one, described by its registry entry", CT.CALL_TOOL_NAMES.every((n) => real.names.has(n) || (n === "voiceRead" && !runsHere)) && real.defs.every((d) => d.description === C.toolUse(d.name, "call")), [...real.names]);
     check("each schema is a JSON object schema with the guard's fields", real.defs.every((d: any) => d.input_schema.type === "object" && d.input_schema.properties?.why) && JSON.stringify(real.defs.find((d) => d.name === "researchBrief")?.input_schema).includes("theirYes"));
   }
 }

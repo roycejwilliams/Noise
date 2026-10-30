@@ -16,7 +16,7 @@ import type { CallToolset as BaseToolset } from "./callLlmProxy.js";
 import { specificsTheyGave } from "../brain/index.js";
 // What a call turn is told (the stop list, a fact to write down) is the brain's (brain/index.ts judgeCallTurn); kept here for callers.
 export { avoidNote, specificsTheyGave, taskFactNote } from "../brain/index.js";
-import { callToolNames } from "./capabilities.js";
+import { callRunFor, callToolNames, toolUse, type CallRun } from "./capabilities.js";
 
 // The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step, so on a
 // call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
@@ -28,13 +28,21 @@ import { callToolNames } from "./capabilities.js";
 // (services/deckCompose.ts) while the call carries on, so the caller isn't kept in silence while a whole deck is written.
 // openArtifact isn't on a call: updateDeck with the change reads the deck itself, and opening first used up the turn's time
 // (live run: the change was never made, and Co promised it anyway).
-// Tools that may outlast a call turn's wait, and how long to wait before carrying them on in the background.
-const LONG_ON_CALL = new Set(["makeDeck", "updateDeck", "makePage", "updatePage"]);
-const LONG_ON_CALL_WAIT_MS = 3500;
+// What runs during the call and what waits for after it is the registry's allow-list (services/capabilities.ts CALL_RUN): "now" tools
+// run inside the turn with a tight timeout of their own; "after" tools (a page, a deck, a document) are started and carried on in
+// the background past a short wait, the link texted when ready, and if one doesn't come together they get one honest text, never
+// silence. Past its timeout a "now" tool keeps going on its own (its write lands); a send that didn't come back is owed right after
+// the call (services/callLedger.ts, services/callFollowThrough.ts).
 const STILL_GOING = Symbol("still going");
+// The work's result, or STILL_GOING once ms have passed (the work keeps going either way).
+function within<T>(work: Promise<T>, ms: number): Promise<T | typeof STILL_GOING> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<typeof STILL_GOING>((r) => { timer = setTimeout(() => r(STILL_GOING), ms); });
+  return Promise.race([work, late]).finally(() => { if (timer) clearTimeout(timer); });
+}
 const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
-// The call subset is the registry's onCall entries (services/capabilities.ts), the same entries the call briefing's list is
-// written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
+// The call subset is the registry's onCall entries on the allow-list (services/capabilities.ts), the same entries the call
+// briefing's list is written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
 import { VOICE_READ_OFF_ON_CALL_NOTE } from "./voiceReadConsent.js";
 export const CALL_TOOL_NAMES: readonly string[] = callToolNames();
 
@@ -47,16 +55,20 @@ export type CallToolset = BaseToolset & {
 };
 
 export const CALL_TOOLS_GUIDE = `# Doing things on this call
-You can act during the call with your tools, and the result is real. Whenever you'd say you'll do something for them after the call (look for something, put a doc together, follow up, research venues), set it in motion now with the tool, in this same turn: startTask is what makes "I'll look after we hang up" true, writeDocument sends the doc, researchBrief starts the venue research. A promise with no tool behind it is forgotten when the call ends. This outranks any line above about waiting until after the call: the work still happens after the call, but you start it now.
-- The order: one short line so they aren't waiting in silence ("On it."), then the tool, then one line on what happened, from what the result says and nothing more. If it comes back not done with something to fix, fix it and call it once more without talking them through it; if it still isn't done, say in one plain line that it didn't go through and what you'll do instead. Any question you have for them comes last, after the result, never before the tool: they can't answer while you're still talking.
+You can act during the call with your tools, and the result is real. Some things happen right now, while you talk: texting them a link to something you already have on file (shareLink), saving what they want found or what they think of something, starting a task or a search that runs after the call, and keeping their notes, tasks and preferences current. A page, a deck or a document is started from the call but made after it, and arrives in their texts. Introductions, anything that needs another member's yes, and anything that costs money never happen on a call: say you'll pick it up by text.
+Whenever you'd say you'll do something for them after the call (look for something, put a doc together, follow up, research venues), set it in motion now with the tool, in this same turn: startTask is what makes looking after you hang up true, writeDocument starts the doc, researchBrief starts the venue research. A promise with no tool behind it is forgotten when the call ends. This outranks any line above about waiting until after the call: the work still happens after the call, but you start it now.
+- While a tool runs, say a few natural words of your own so they aren't left in silence: about what you're doing, never that it's done, sent or on its way.
+- Say you did something only after the tool comes back done, and only what the result says. Before that, nothing is sent or saved yet, so never say it is.
+- If it comes back not done, or not back yet, don't say it worked. A link or anything else you were texting them: tell them plainly you'll text it right after the call; it goes the moment they hang up. Something to fix: fix it and call it once more without talking them through it; if it still isn't done, say in one plain line that it didn't go through and what you'll do instead.
+- Any question you have for them comes last, after the result, never before the tool: they can't answer while you're still talking.
 - Doing it now replaces the promise: don't also say you'll do it after the call. The call carries on after a tool; say goodbye only when they do.
 - Anything that needs real looking (web research, comparing options, finding venues) goes to startTask or researchBrief: they work after the call and text them what comes of it. Don't search the web on the call.
 - Documents and briefs arrive by text, not on the call: say they'll be in their texts.
-- A page or deck you make or change on the call goes to their texts as its link: say it's in their texts and don't read it out. For a deck on a call, pass makeDeck a brief (what they want, in their words) and never write the slides yourself; for a change, pass updateDeck the change and never the slides. If a deck needs their taste first, ask the one question out loud (the look they like, a Pinterest board, or one of your looks by name). A change keeps the same link.
-- When they tell you something that belongs to one of your open tasks (a name, a date, a place, a number, a constraint, a change of plan), write it on that task with updateTask in this same turn, in their words. Saying it back ("got it") writes nothing down, and only what's written is there when the work happens after the call. Something about them rather than a task goes in updateNotes.
+- A page or deck you make or change on the call goes to their texts as its link: say it'll be in their texts and don't read it out. For a deck on a call, pass makeDeck a brief (what they want, in their words) and never write the slides yourself; for a change, pass updateDeck the change and never the slides. If a deck needs their taste first, ask the one question out loud (the look they like, or one of your looks by name). A change keeps the same link.
+- When they tell you something that belongs to one of your open tasks (a name, a date, a place, a number, a constraint, a change of plan), write it on that task with updateTask in this same turn, in their words. Saying it back writes nothing down, and only what's written is there when the work happens after the call. Something about them rather than a task goes in updateNotes.
 - If you don't know a name, a place or a number, say you're not sure. Never guess one, and never promise work they didn't ask for.
 - A tool that needs their yes needs their own words from what they just said. If they haven't said yes, ask.
-- After your goodbye, when they answer it ("you too", "bye"), call end_call and say nothing more: never a second goodbye.`;
+- After your goodbye, when they answer it, call end_call and say nothing more: never a second goodbye.`;
 
 // Per call: what the tools did earlier on this call, so a later turn knows (ElevenLabs' history carries only what was said).
 // Keyed by the call's token; an hour is longer than any call.
@@ -64,7 +76,11 @@ const CALL_MEMORY_MS = 60 * 60_000;
 
 // okAt: when a page or a deck (by kind) last went through on this call; failTextSent: the one honest text already went.
 // voiceReadOff: they said stop (or no) to the voice read on this call: every later turn drops its lines and carries the note.
-type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean };
+// onFile: what this call can text them by name (their finds, what searchEvents found on the call, what Cue sent before), read once.
+// found: events a search on this call returned, by name. owed: links a send on this call didn't get to them yet (sent the moment
+// the call ends). inflight: what a send that's still running was for, by its tool call, so a timeout knows what's owed.
+type OnFile = { name: string; url: string; caption: string };
+type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
 const callMemory = new Map<string, CallMem>();
 function memoryFor(key: string): CallMem {
   const now = Date.now();
@@ -75,6 +91,15 @@ function memoryFor(key: string): CallMem {
   return m;
 }
 export function _resetCallMemoryForTest(): void { callMemory.clear(); }
+// The call's on-file list, read once at the call's first turn so a send later on doesn't wait on it (routes/callLlm.ts).
+export function warmCallOnFile(callKey: string, userId: string): void {
+  const mem = memoryFor(callKey);
+  if (!mem.onFile) { mem.onFile = loadOnFile(userId); mem.onFile.catch(() => { mem.onFile = undefined; }); }
+}
+// What a send on this call still owes them, for tests and the call's own later turns.
+export function owedOnCall(callKey: string): { name: string; url: string }[] {
+  return (callMemory.get(callKey)?.owed ?? []).map((o) => ({ name: o.name, url: o.url }));
+}
 // Whether they turned the voice read off earlier on this call (routes/callLlm.ts strips its lines from the call's messages).
 export function callVoiceReadOff(callKey: string): boolean {
   return !!callMemory.get(callKey)?.voiceReadOff;
@@ -82,7 +107,8 @@ export function callVoiceReadOff(callKey: string): boolean {
 
 // avoid: the kinds they've asked Co to stop suggesting, read fresh after a tool acts, so a "no more X" said mid-call (or by text during
 // it) holds for the rest of the call without touching the cached prompt (callTools turnNote, past the cache breakpoint).
-export type MemberOnCall = { phone: string; firstName: string | null; city: string | null; tasks: { id: number; goal: string }[]; loops: string | null; avoid?: string[] };
+// noTexts: they opted out of texts (or the account is archived): nothing is texted to them from the call, now or after it.
+export type MemberOnCall = { phone: string; firstName: string | null; city: string | null; tasks: { id: number; goal: string }[]; loops: string | null; avoid?: string[]; noTexts?: boolean };
 
 // Pure: the open tasks (with their ids, for updateTask and closeTask) from the layer's one carrying builder: each open co_task is
 // there once, with its "task #N" ref.
@@ -98,7 +124,7 @@ export function tasksFromCarrying(carrying: { ref: string | null; what: string }
 // "not confirmed lately" read the layer doesn't keep, and the [loop N] ids updateLoop takes) are read here.
 export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
   const [u, k, l, lim] = await Promise.all([
-    pool.query(`SELECT phone_number, first_name FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0] ?? null),
+    pool.query(`SELECT phone_number, first_name, sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0] ?? null),
     // Fails closed: a layer that can't be read (it throws when the names to strip can't be read) gives no tasks, never unstripped ones.
     import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { include: ["carrying"] })).catch(() => null),
     pool
@@ -124,7 +150,7 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
   const tasks = t.map((x: any) => ({ id: x.id, goal: safe ? safe(String(x.goal ?? "")) : null })).filter((x: any): x is { id: number; goal: string } => !!x.goal);
   const loops = l && safe ? l.split("\n").map((line: string) => safe(line)).filter((x: string | null): x is string => !!x).join("\n") || null : null;
   // A failed read leaves avoid undefined, so the caller keeps the last good list (routes/callLlm.ts memberOnCall), never an empty one.
-  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops, avoid: lim ? lim.avoid : undefined };
+  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops, avoid: lim ? lim.avoid : undefined, noTexts: !!u.sms_opted_out || !!u.archived_at };
 }
 
 export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[], o: { voiceReadOff?: boolean } = {}): string {
@@ -170,6 +196,117 @@ export function taskFactBackstop(t: { turnWords: string; spoken: string[]; ran: 
   return { taskId: task.id, note: `On the call they said: "${t.turnWords.trim().slice(0, 260)}"`, specifics: echoed };
 }
 
+// What the model is told when a send isn't confirmed on the call (services/callLlmProxy.ts holds back any "sent" until a send
+// comes back done).
+const SEND_NOT_BACK = "Not back yet, so it isn't confirmed sent: don't say it went. Tell them you'll text it right after the call; if it hasn't reached them by then, it goes the moment they hang up.";
+const SEND_NOT_DONE = "It didn't send on the call. Don't try again now and don't say it went: tell them you'll text it right after the call. It goes the moment they hang up.";
+const NOT_BACK = "Not back yet: it keeps going on its own and lands when it's done, but it isn't confirmed. Don't say it's done; carry on, and if it matters to them say you'll confirm by text.";
+
+const normName = (x: string) => ` ${x.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+// Pure: the one thing on file a name means: the same name, or one name inside the other (6+ letters), or most of its words. Two
+// equally good matches is no match: never a guess at which one they meant.
+export function onFileByName(name: string, onFile: OnFile[]): OnFile | null {
+  const want = normName(name);
+  if (want.trim().length < 3) return null;
+  const exact = onFile.filter((f) => normName(f.name) === want);
+  if (exact.length) return exact[0];
+  const inside = onFile.filter((f) => { const n = normName(f.name); return (want.trim().length >= 6 && n.includes(want)) || (n.trim().length >= 6 && want.includes(n)); });
+  if (inside.length === 1) return inside[0];
+  const words = want.trim().split(" ").filter((w) => w.length >= 3 && !TOPIC_PLAIN.has(w));
+  if (!words.length) return null;
+  const scored = onFile.map((f) => { const n = new Set(normName(f.name).trim().split(" ")); return { f, s: words.filter((w) => n.has(w)).length / words.length }; }).filter((x) => x.s >= 0.6).sort((a, b) => b.s - a.s);
+  return scored.length && (scored.length === 1 || scored[0].s > scored[1].s) ? scored[0].f : null;
+}
+
+// Pure: the links a send's result says went (or, for a send that resolved its items first, the ones it was for).
+function urlsOf(r: any, meant: OnFile[]): string[] {
+  const fromResult = [...(Array.isArray(r?.recordAs?.urls) ? r.recordAs.urls : []), ...(typeof r?.url === "string" ? [r.url] : [])].filter((u: unknown): u is string => typeof u === "string" && /^https?:\/\//.test(u));
+  return fromResult.length ? fromResult : meant.map((m) => m.url);
+}
+// Pure: what a failed send still owes them: what it was for, or the link the tool says was made but didn't go.
+function owedItems(r: any, meant: OnFile[]): OnFile[] {
+  if (meant.length) return meant;
+  return typeof r?.url === "string" && /^https?:\/\//.test(r.url) ? [{ name: String(r?.made ?? "the link").slice(0, 160), url: r.url, caption: String(r?.made ?? "").slice(0, 160) }] : [];
+}
+// What a search on this call returned: its events and earlier openings, by name, for shareLink.
+function rememberFound(mem: CallMem, r: any): void {
+  const rows = [...(Array.isArray(r?.events) ? r.events : []), ...(Array.isArray(r?.openingsFoundEarlier) ? r.openingsFoundEarlier : [])];
+  const found = rows.filter((e: any) => typeof e?.link === "string" && /^https?:\/\//.test(e.link) && e?.name).map((e: any) => ({ name: String(e.name), url: String(e.link), caption: String(e.name) }));
+  mem.found = [...(mem.found ?? []).filter((f) => !found.some((x: OnFile) => x.url === f.url)), ...found].slice(-30);
+}
+
+// What a call may text them by name: their finds (services/voiceFinds.ts, what the call's prompt lists), what Cue sent them before
+// (services/turnContext.ts loadSentItems), and what a search on this call found. Read once per call; a failed read is nothing on file.
+async function loadOnFile(userId: string): Promise<OnFile[]> {
+  const [finds, sent] = await Promise.all([
+    import("./voiceFinds.js").then((m) => m.voiceFinds(userId, new Date())).catch(() => null),
+    import("./reactionCatchup.js").then((m) => m.sentItems(userId)).catch(() => []),
+  ]);
+  const out: OnFile[] = [];
+  if (finds?.available) for (const f of finds.items) if (f.link && /^https?:\/\//.test(f.link)) out.push({ name: f.name, url: f.link, caption: f.starts ? `${f.name}, ${f.starts}` : f.name });
+  for (const x of sent.slice(0, 30)) if (x.url && /^https?:\/\//.test(x.url) && !out.some((o) => o.url === x.url)) out.push({ name: x.name, url: x.url, caption: x.name });
+  return out;
+}
+
+// shareLink on a call: what they want, by name, resolved against what's on file and texted as its link, then its name (finds go
+// out link then caption: Royce, 2026-10-17). Nothing off file is ever sent, and nothing is read out on the line.
+function callShareLink(i: CallToolsInput, mem: CallMem, did: string[], textThem: (text: string) => Promise<boolean>) {
+  return {
+    description: toolUse("shareLink", "call"),
+    inputSchema: z.object({ what: z.array(z.string()).min(1).max(3).describe("The name of each thing to text them, as it's listed in what you have on file.") }),
+    execute: async ({ what }: { what: string[] }, o?: { toolCallId?: string }) => {
+      mem.onFile ??= i.onFile ? Promise.resolve(i.onFile) : loadOnFile(i.userId);
+      const onFile = [...(mem.found ?? []), ...(await mem.onFile.catch(() => [] as OnFile[]))];
+      const items: OnFile[] = [];
+      for (const w of what) { const hit = onFileByName(w, onFile); if (hit && !items.some((x) => x.url === hit.url)) items.push(hit); }
+      const missing = what.filter((w) => !onFileByName(w, onFile));
+      if (!items.length) return { ok: false, error: `${what.join(", ")} isn't on file, so there's no link to send. Don't promise one: say you don't have a link for it.` };
+      // Opted out of texts: nothing goes, now or after the call, and it isn't owed.
+      if (i.member.noTexts) return { ok: false, error: "They've turned texts off, so nothing can be texted to them. Don't promise a text: tell them what it is out loud instead, without reading a link." };
+      // What this send is for, so a timeout knows what's owed (services/callTools.ts run).
+      if (o?.toolCallId) (mem.inflight ??= new Map()).set(o.toolCallId, items);
+      if (i.dryRun && !i.sendText) return { ok: true, recordAs: { urls: items.map((x) => x.url) }, note: "Test run: nothing was sent." };
+      const went: OnFile[] = [];
+      for (const it of items) {
+        // Its link alone first, so it previews, then its name as on file.
+        if (!(await textThem(it.url))) continue;
+        await textThem(it.caption).catch(() => false);
+        went.push(it);
+      }
+      for (const it of went) {
+        const line = `Texted them the link to ${it.name} (${it.url}) during this call.`;
+        did.push(line);
+        mem.did.push(line);
+      }
+      // By name too, beside the guard's record of the links (services/coFacts.ts): what they have, as every later reader names it.
+      if (went.length && !i.dryRun) await import("./coFacts.js").then((F) => F.recordSentItems(i.userId, went.map((x) => ({ name: x.name, url: x.url })), "call.shareLink")).catch(() => {});
+      const notSent = items.filter((x) => !went.includes(x));
+      if (!went.length) return { ok: false, error: "The text didn't send." };
+      return { ok: true, recordAs: { urls: went.map((x) => x.url) }, ...(notSent.length || missing.length ? { note: `Sent: ${went.map((x) => x.name).join(", ")}.${notSent.length ? ` Didn't send: ${notSent.map((x) => x.name).join(", ")}.` : ""}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}` } : {}) };
+    },
+  };
+}
+
+// The durable side of something owed after the call: its ledger row (what the after-call step sends) and a promise task Co owns, so
+// a spoken "I'll text it right after" joins it rather than opening a second (services/callCommitments.ts), and if the after-call
+// step can't send it, the task's own turn does.
+async function oweAfterCall(i: CallToolsInput, items: OnFile[], why: "failed" | "timeout", tool: string): Promise<void> {
+  await (await import("./callLedger.js")).recordOwedAfterCall(i.userId, { tool, items: items.map((x) => ({ name: x.caption || x.name, url: x.url })), why });
+  const { COMMIT_PREFIX, DUE_AFTER_MINUTES } = await import("./callCommitments.js");
+  const { startTask } = await import("./coTasks.js");
+  const names = items.map((x) => x.name).join(", ");
+  const r = await startTask({
+    userId: i.userId,
+    goal: `${COMMIT_PREFIX}text them the link to ${names}`.slice(0, 200),
+    theirWords: (i.turnWords || "(said on a call)").replace(/\s+/g, " ").trim().slice(0, 300),
+    steps: items.map((x) => ({ text: `Send the link to ${x.name.slice(0, 100)} as its own text: ${x.url}` })),
+    firstPlan: "On the call the text with these links didn't go through, and you told them you'd text it right after. Send each link as its own text, then its name, and nothing else about it.",
+    inHours: 1,
+    source: "promise",
+  });
+  if (r.ok) await pool.query(`UPDATE co_tasks SET next_check_at = $3 WHERE user_id = $1 AND id = $2`, [i.userId, r.task.id, new Date(Date.now() + DUE_AFTER_MINUTES * 60_000)]).catch(() => {});
+}
+
 export type CallToolsInput = {
   userId: string;
   // Identifies this call (its token): what the tools did is remembered across the call's turns.
@@ -186,6 +323,14 @@ export type CallToolsInput = {
   stubSearch?: boolean;
   // Tests: raw tools in place of the real ones, wrapped by the same guard.
   tools?: Record<string, any>;
+  // Tests: a tool's own timeout on a call in place of the registry's (services/capabilities.ts CALL_RUN), and what's on file.
+  msFor?: (name: string) => number | undefined;
+  onFile?: OnFile[];
+  // Tests: where the owed-after-call record and the open promise task go (default: the decision log and co_tasks).
+  owe?: (items: OnFile[], why: "failed" | "timeout", tool: string) => Promise<void>;
+  done?: (tool: string, kind: string, input: unknown, urls: string[]) => Promise<void>;
+  // Tests: the text to them during the call, in place of the real send.
+  sendText?: (text: string) => Promise<boolean>;
 };
 
 // Pure enough to test: the call's toolset for one turn, from the texting tools, guarded the same way.
@@ -193,9 +338,10 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   const mem = memoryFor(i.callKey);
   // A text to them during the call, from Co's number (a page's or deck's link, or a background tool's honest "it didn't come
   // together"), logged like any text. A test member's texts are logged, never sent (services/sendblue.ts).
-  const textThem = async (text: string): Promise<boolean> => {
+  const textThem = i.sendText ?? (async (text: string): Promise<boolean> => {
     const from = process.env.SENDBLUE_PHONE_NUMBER;
-    if (!from || !i.member.phone) return false;
+    // Opted out of texts (or archived): nothing is texted from the call.
+    if (!from || !i.member.phone || i.member.noTexts) return false;
     const sendblue = (await import("./sendblue.js")).default;
     const ok = await sendblue.messages
       .send({ number: i.member.phone, content: text, from_number: from } as any)
@@ -204,7 +350,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     // A page's or deck's own texts (its link, its "Updated the …:" line) are logged by the tool that sent them (agent/loopTools.ts).
     if (ok && !/\/d\//.test(text) && !/^Updated the (deck|page): /.test(text)) await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`, [i.userId, `Co replied: ${text}`]).catch(() => {});
     return ok;
-  };
+  });
   const did: string[] = [];
   const all: Record<string, any> = i.tools ? guardTools(i.tools, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {}, recentExchange: i.recentExchange ?? (i.lastCoLine ? `Cue: ${i.lastCoLine}` : null) }) : createConversationTools({
     turnStartedAt: Date.now(),
@@ -233,6 +379,9 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
       text: () => did.join("\n"),
     },
   }).tools;
+  // On a call, shareLink texts them something on file by its name (the call's prompt carries no links: services/callBriefing.ts),
+  // wrapped by the same guard as every tool (limits, receipts, decision log, Co's action record of the links that went).
+  if (!i.tools?.shareLink) all.shareLink = guardTools({ shareLink: callShareLink(i, mem, did, textThem) }, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {}, recentExchange: i.recentExchange ?? null }).shareLink;
   const picked: Record<string, any> = {};
   for (const n of CALL_TOOL_NAMES) if (all[n]) picked[n] = all[n];
   // On a call a deck is never written into the tool's input (PR 6: told to pass a brief, the model still wrote every slide, and the
@@ -260,22 +409,43 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     delete schema.$schema;
     return { name, description: String(t.description ?? ""), input_schema: schema };
   });
+  // The durable record (services/callLedger.ts): what came back done on the call, and what's owed the moment it ends. Tests pass
+  // their own; a dry run writes nothing.
+  const recordDone = i.done ?? (async (tool: string, kind: string, input: unknown, urls: string[]) => { if (!i.dryRun) await (await import("./callLedger.js")).recordDoneOnCall(i.userId, { tool, kind, input, urls }); });
+  const recordOwed = i.owe ?? (async (items: OnFile[], why: "failed" | "timeout", tool: string) => { if (!i.dryRun) await oweAfterCall(i, items, why, tool); });
+  // A send that didn't reach them on the call: owed right after it, once per link, and said so to every later turn of the call.
+  const writes: Promise<unknown>[] = [];
+  const owe = (items: OnFile[], why: "failed" | "timeout", tool: string) => {
+    const fresh = items.filter((x) => !(mem.owed ?? []).some((o) => o.url === x.url));
+    if (!fresh.length) return;
+    mem.owed = [...(mem.owed ?? []), ...fresh];
+    mem.did.push(`Owed right after the call: ${fresh.map((x) => x.name).join(", ")} (the text didn't reach them on the call). Don't send it again on the call; it goes the moment they hang up.`);
+    writes.push(recordOwed(fresh, why, tool).catch((err: any) => console.error("call: recording what's owed after the call failed (non-fatal):", err?.message ?? err)));
+  };
+  // A send that came back done (on time or late): no longer owed.
+  const settleSent = (urls: string[]) => {
+    if (!urls.length || !mem.owed?.length) return;
+    mem.owed = mem.owed.filter((o) => !urls.includes(o.url));
+  };
   const run: CallToolset["run"] = async (name, input, toolUseId) => {
     const t = picked[name];
-    if (!t) return { ok: false, error: `No tool named ${name} on a call.` };
+    // The allow-list holds here too: nothing off it runs on a call, whatever the model asks for.
+    const plan: CallRun | null = callRunFor(name);
+    if (!t || !plan) return { ok: false, error: `No tool named ${name} on a call.` };
     const parsed = t.inputSchema && typeof t.inputSchema.safeParse === "function" ? t.inputSchema.safeParse(input ?? {}) : { success: true, data: input ?? {} };
     if (!parsed.success) return { ok: false, error: `The input didn't fit: ${parsed.error.issues.slice(0, 3).map((x: any) => `${x.path.join(".")}: ${x.message}`).join("; ")}. Fix it and try once more, or say plainly it wasn't done.` };
     const t0 = Date.now();
     let result: any;
-    // Making or changing a page or deck on a call (PR 6) can take longer than a call turn may wait (the claim check, saving, texting
-    // the link). Past a few seconds it carries on in the background: Co says it'll be in their texts, the link arrives when it's
-    // ready, and if it doesn't come together they get one honest text saying so, never silence.
     const work = (async () => t.execute(parsed.data, { toolCallId: toolUseId, messages: [] }))().catch((err: any) => ({ ok: false, error: `It failed: ${String(err?.message ?? err).slice(0, 160)}. Say plainly it wasn't done.` }));
-    if (LONG_ON_CALL.has(name) && !i.dryRun) {
-      const quick = await Promise.race([work, new Promise((r) => setTimeout(() => r(STILL_GOING), LONG_ON_CALL_WAIT_MS))]);
+    if (plan.run === "after" && !i.dryRun) {
+      // Making or changing a page, deck or document on a call (PR 6) takes longer than a call turn may wait (writing it, the claim
+      // check, saving, texting the link). Past a moment it carries on in the background: Co says it'll be in their texts, the link
+      // arrives when it's ready, and if it doesn't come together they get one honest text saying so, never silence. The short wait
+      // is for the guard's quick answers (no yes yet, an input to fix), which the model must hear.
+      const quick = await within(work, plan.waitMs);
+      const what = name.endsWith("Deck") ? "deck" : name === "writeDocument" ? "document" : "page";
       if (quick === STILL_GOING) {
         const startedAt = Date.now();
-        const what = name.endsWith("Deck") ? "deck" : "page";
         // The next turn must know it's on its way (review of PR 6: unseen, "and add our pricing" made a second deck).
         const making = `A ${what} they asked for is being made right now and will arrive in their texts in a minute or two. Don't make it again; a change to it waits until it has arrived.`;
         mem.did.push(making);
@@ -290,6 +460,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
             if (r?.ok !== false) {
               mem.okAt = { ...(mem.okAt ?? {}), [what]: Date.now() };
               settled(`The ${what} they asked for on this call is done and in their texts.`);
+              await recordDone(name, "after", parsed.data, []).catch(() => {});
               return;
             }
             // Not made (a line it couldn't back, say): the next turn of this call learns why and makes it again, as a text turn
@@ -303,14 +474,62 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
             }, BACKGROUND_FAIL_TEXT_MS).unref?.();
           })
           .catch(() => {});
-        result = { ok: true, pending: true, note: `Still being made: the link goes to their texts in a moment. Say it'll be in their texts; don't say it's done or describe it.` };
+        result = { ok: true, pending: true, note: `Still being made: it goes to their texts when it's ready. Say it'll be in their texts; don't say it's done or describe it.` };
       } else {
         result = quick;
-        if ((quick as any)?.ok !== false) mem.okAt = { ...(mem.okAt ?? {}), [name.endsWith("Deck") ? "deck" : "page"]: Date.now() };
+        if ((quick as any)?.ok !== false) {
+          mem.okAt = { ...(mem.okAt ?? {}), [what]: Date.now() };
+          result = { ...(quick as any), delivered: true };
+          writes.push(recordDone(name, "after", parsed.data, []).catch(() => {}));
+        }
       }
+    } else if (plan.run === "now") {
+      // Quick and certain, inside its own timeout. Past it the tool keeps going on its own (its write lands, the guard logs it); a
+      // send that hasn't come back is owed right after the call, and the model is told not to say it went.
+      const ms = i.msFor?.(name) ?? plan.ms;
+      const quick = await within(work, ms);
+      if (quick === STILL_GOING) {
+        const meant = mem.inflight?.get(toolUseId) ?? [];
+        if (plan.kind === "send" && meant.length) owe(meant, "timeout", name);
+        // However it ends, the record says so: done (and no longer owed), or owed if it failed with something to send.
+        work
+          .then(async (r: any) => {
+            if (r?.ok !== false) {
+              const urls = urlsOf(r, meant);
+              settleSent(urls);
+              if (plan.kind !== "read" || name === "searchEvents") await recordDone(name, plan.kind, parsed.data, urls).catch(() => {});
+            } else if (plan.kind === "send") {
+              const items = owedItems(r, meant);
+              if (items.length) owe(items, "failed", name);
+            }
+          })
+          .catch(() => {});
+        result = plan.kind === "send"
+          ? { ok: false, stillRunning: true, owedAfterCall: meant.length > 0, note: SEND_NOT_BACK }
+          : { ok: false, stillRunning: true, note: NOT_BACK };
+      } else {
+        result = quick;
+        const r: any = quick;
+        if (r?.ok !== false) {
+          const urls = plan.kind === "send" ? urlsOf(r, mem.inflight?.get(toolUseId) ?? []) : [];
+          if (plan.kind === "send") { settleSent(urls); result = { ...r, delivered: true }; }
+          // What a search on this call found can be texted to them by name, in this turn or a later one.
+          if (name === "searchEvents") rememberFound(mem, r);
+          // On the record without holding the turn (a plain read, like what Cue knows, isn't an action).
+          if (plan.kind !== "read" || name === "searchEvents") writes.push(recordDone(name, plan.kind, parsed.data, urls).catch(() => {}));
+        } else if (plan.kind === "send") {
+          const items = owedItems(r, mem.inflight?.get(toolUseId) ?? []);
+          if (items.length) {
+            owe(items, "failed", name);
+            result = { ok: false, owedAfterCall: true, note: SEND_NOT_DONE };
+          }
+        }
+      }
+      mem.inflight?.delete(toolUseId);
     } else result = await work;
-    // A stop or a no to the voice read on this call: from now on the call drops its lines and every turn's note says so.
-    if (name === "voiceRead" && result?.ok !== false && ((parsed.data as any)?.answer === "stop" || (parsed.data as any)?.answer === "no")) mem.voiceReadOff = true;
+    // A stop or a no to the voice read on this call: from now on the call drops its lines and every turn's note says so. One still
+    // running at its timeout counts too: their stop is never held up by a slow write.
+    if (name === "voiceRead" && (result?.ok !== false || result?.stillRunning) && ((parsed.data as any)?.answer === "stop" || (parsed.data as any)?.answer === "no")) mem.voiceReadOff = true;
     if (!i.dryRun) recordDecision({ layer: 8, decision: "call.tool", userId: i.userId, outcome: result?.ok === false ? "skip" : "act", action: name, proposal: { ms: Date.now() - t0, turn: i.turnWords.slice(0, 200) }, reason: String(result?.error ?? "").slice(0, 200) }).catch(() => {});
     return result;
   };
@@ -323,6 +542,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     turnFacts: { turnWords: i.turnWords, tasks: i.member.tasks, avoid: i.member.avoid, canWriteTasks: !!picked.updateTask },
     did,
     run,
+    pending: async () => { await Promise.allSettled(writes); },
     // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the
     // same guarded updateTask (limits, receipt, decision log, Co's action record).
     afterTurn: async ({ spoken, ran }) => {

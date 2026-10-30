@@ -43,6 +43,7 @@ import { MODELS } from "../models.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { AUDIT_SECTIONS, auditCall, knownBeforeFrom } from "../harness/callGrounding.js";
+import { elTurnMetrics } from "../services/callLatency.js";
 import { memberKnowledge } from "../services/memberKnowledge.js";
 import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frustrationScores, recordEmotionSignals, type EmotionSignal, type ScoredLine } from "../harness/emotion.js";
 import { callKeyOf, takeVoiceMoments } from "../services/mediaStreamBridge.js";
@@ -573,6 +574,12 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       queueUnstored();
       throw err;
     }
+    // ElevenLabs' own per-turn numbers (its LLM's time to first token and first sentence, its voice's time to first audio), for
+    // every call: the direct path's baseline beside the call brain's own call.turn_latency. Numbers only. Not awaited.
+    {
+      const m = elTurnMetrics(turns);
+      if (m.turns) recordDecision({ layer: 8, decision: "call.el_turn_metrics", userId, outcome: "act", action: m.keys.length ? "measured" : "no_metrics", proposal: { conversationId, ...m } }).catch(() => {});
+    }
     // The after-call health check (services/callHealth.ts): facts only, codes stored, never anyone's words. A flagged call is held at
     // ElevenLabs until reviewed and shows in the morning review. Not awaited and never throws.
     if (u[0])
@@ -913,9 +920,14 @@ async function processEndedCallInScope(o: {
       // (services/callFollowThrough.ts, above); said live it already was one, and the same commitment never opens twice.
       // One after another, then the audit (2026-10-08): run side by side, each missed what the other opened, so one commitment
       // became two tasks and three searches. Now a promise a task from this call already carries is that task's.
+      // What Cue already did on the call with its tools (services/callLedger.ts): the audit holds "I just sent it" to it, and never
+      // reopens what's done as a promise.
       (async () => {
         await import("../services/callTasks.js").then((m) => m.tasksFromCall(user_id, cleanTranscript)).catch(() => {});
-        await auditCall(user_id, cleanTranscript, knownBeforeCall);
+        const L = await import("../services/callLedger.js");
+        const start = o.startedAt ?? new Date(Date.now() - 2 * 3_600_000);
+        const doneOnCall = await L.readCallLedger(user_id, new Date(start.getTime() - 60_000), new Date((o.endedAt ?? new Date()).getTime() + 2 * 60_000)).then(L.doneLines).catch(() => [] as string[]);
+        await auditCall(user_id, cleanTranscript, knownBeforeCall, { doneOnCall });
       })().catch(() => {});
       // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
       {

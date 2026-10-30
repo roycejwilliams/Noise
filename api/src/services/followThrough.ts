@@ -37,7 +37,7 @@ export function overlap(a: string, b: string): number {
 
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 const PLACEHOLDER = /^\(?(?:said on a call|their message)\)?$/i;
-const goalBody = (g: string) => String(g ?? "").replace(/^(?:Keep your word from the call|Keep your promise|Keep an eye out, as promised on a call):\s*/i, "").replace(/^"|"$/g, "");
+export const goalBody = (g: string) => String(g ?? "").replace(/^(?:Keep your word from the call|Keep your promise|Keep an eye out, as promised on a call):\s*/i, "").replace(/^"|"$/g, "");
 
 // Two commitments are the same one when they answer the same words of theirs, or their goals say the same thing.
 export function sameCommitment(a: { goal?: string | null; theirWords?: string | null }, b: { goal?: string | null; theirWords?: string | null }): boolean {
