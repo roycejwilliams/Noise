@@ -91,5 +91,12 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "6939a43893743d89",
+    "wording": {},
+    "format": [],
+    "tools": null
+  }
 }

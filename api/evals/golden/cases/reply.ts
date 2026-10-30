@@ -9,6 +9,8 @@ import "../../lib/requireMeter.js";
 import { DateTime } from "luxon";
 import type { GoldenCase, GoldenResult } from "../types.js";
 import { result } from "../types.js";
+import { captureSends, linesOf, noteReply } from "../replies.js";
+import { turnKind } from "../../lib/hardRules.js";
 
 const ZONE = "America/Los_Angeles";
 const MEMBER = { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan" };
@@ -33,10 +35,12 @@ async function reply(t: Turn): Promise<Reply> {
   if (read?.router?.wantsRecommendation) G.addInstruction(facts, LOOP_GUIDE);
   const note = R.feedbackInstruction(read?.feedback ?? []);
   if (note) G.addInstruction(facts, note);
-  const r: any = await runConversationReplyAgent(
+  const { value: r, sends } = await captureSends<any>(() => runConversationReplyAgent(
     { ackSent: null, ...MEMBER, resolvedContent: t.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: t.recent, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true },
     { dryRun: true, record: false, stubSearch: true },
-  ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] }));
+  ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] })));
+  const thread = linesOf(t.recent);
+  noteReply({ text: String(r.replyText ?? ""), sends, tools: r.toolsCalled ?? [], kind: turnKind(t.message), facts: G.renderReplyFacts(facts), theirLines: [t.message, ...thread.theirs], coLines: thread.cue, firstName: MEMBER.firstName, message: t.message, recent: t.recent });
   // What the fact check did to each message (cut, redrafted, stripped), so a miss shows whether the draft or the check said it.
   const checked = (r.grounding ?? []).filter((g: any) => g.outcome && g.outcome !== "as_drafted" && g.outcome !== "unchecked").map((g: any) => `${g.outcome}: ${(g.checks ?? []).filter((x: any) => !x.pass).map((x: any) => x.reason ?? x.name).join(" | ").slice(0, 200)}`);
   return { text: String(r.replyText ?? ""), tools: r.toolsCalled ?? [], checked };

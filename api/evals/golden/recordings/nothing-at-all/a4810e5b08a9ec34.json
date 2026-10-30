@@ -147,5 +147,12 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "a4810e5b08a9ec34",
+    "wording": {},
+    "format": [],
+    "tools": null
+  }
 }

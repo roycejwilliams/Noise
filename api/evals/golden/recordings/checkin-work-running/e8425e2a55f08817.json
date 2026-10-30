@@ -89,5 +89,15 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "b87c6d5f26d3a491",
+    "wording": {
+      "coVoice.ts:CO_TEXT_CHANNEL#0": "47169f7c",
+      "coVoice.ts:CO_VOICE#0": "f0075134"
+    },
+    "format": [],
+    "tools": null
+  }
 }

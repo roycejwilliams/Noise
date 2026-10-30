@@ -275,5 +275,15 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "c2afacb84ec288d0",
+    "wording": {
+      "coCore.ts:CO_GROUNDING#0": "2c685587",
+      "coCore.ts:CO_MEMBER_SAFETY#0": "dc007148"
+    },
+    "format": [],
+    "tools": null
+  }
 }
