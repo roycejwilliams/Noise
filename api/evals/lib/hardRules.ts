@@ -73,13 +73,14 @@ export function withoutNonFacts(text: string, given: string): string {
   const known = datesIn(given, year);
   if (!known.length) return t;
   const near = (d: number) => known.some((k) => Math.abs(k - d) <= 31 * DAY);
-  // Month-day dates in the reply: within a month of a given date, the day number is cleared (the month stays, a name like any other).
+  // Month-day dates in the reply: within a month of a given date, the day number is cleared (the month stays, a name like any other: the
+  // word as written, "October" not "Oct", or the name check reads a cut word as a new name).
   const named: number[] = [];
   t = t.replace(MONTH_DAY, (all, m: string, d: string, y?: string) => {
     const days = datesIn(all, y ? Number(y) : year);
     if (!days.some(near)) return all;
     named.push(...days);
-    return m;
+    return all.match(/^[a-z]+/i)?.[0] ?? m;
   });
   // "the 15th": a given date's own day, or a weekday-and-ordinal that falls within a month of a given date.
   const knownDays = new Set(known.map((k) => new Date(k).getUTCDate()));
@@ -91,7 +92,8 @@ export function withoutNonFacts(text: string, given: string): string {
     const hits = known.flatMap((k) => Array.from({ length: 63 }, (_, i) => k + (i - 31) * DAY)).filter((d) => new Date(d).getUTCDate() === day && new Date(d).getUTCDay() === want);
     if (!hits.length) return all;
     named.push(...hits);
-    return ` ${wd} `;
+    // The weekday as written ("Thursday", not the "Thu" the pattern captured).
+    return ` ${all.match(/^[a-z]+/i)?.[0] ?? wd} `;
   });
   // "18 days out": two dates it stood on or named, that many days apart.
   const all = [...known, ...named];
