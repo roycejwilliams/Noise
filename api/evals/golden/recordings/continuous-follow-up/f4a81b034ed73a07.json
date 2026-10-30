@@ -1,0 +1,102 @@
+{
+  "hash": "f4a81b034ed73a07",
+  "case": "continuous-follow-up",
+  "recorded_at": "2026-10-30T17:37:43.562Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other c...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other companies efficient and I want it to matter for people like him.\"\n\nCue's text:\n\"\"\"That's not a pitch line, that's the real reason. Watching someone grow the thing and see the smallest share of its value tends to stick with you in a way a case study never does.\n\nTen years of making other companies efficient is a real asset here too, most people trying to fix supply chains don't actually know how the machinery works underneath. What part of that inefficiency are you most drawn to fixing, the money farmers get, or how much gets wasted between the farm and the plate?\"\"\"\n\nDoes the text build on his answer with something of Cue's own (a real observation, a position, or a question that follows from what he just said and moves it forward), WITHOUT paraphrasing his answer back to him, and without filling in what he didn't say (his childhood, what his grandfather felt, which part of the chain)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Watching someone grow the thing and see the smallest share of its value tends to stick with you\\\" just paraphrases his own story back to him.\"}",
+      "usage": {
+        "input_tokens": 424,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 329,
+        "output_tokens_details": {
+          "thinking_tokens": 268
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgYpzaioKCjeJbtdTidYz",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqEKCsQCCBMYAipAGmKI472f3cR5WzlEZdI3Y2hVDd92QJy/GnihX/qS15iLBzQ16j94Wrhs7HbAm7I3JQTaSQ+qA5cQtg7bOZWYVDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB56uT1wbCAToIBBAAGgwC2ooDTzcFEDMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBaHjgY79/5BLTmPdChF8/2DX1kFo6gAt+aXpBJDw5M7yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgw64bFkP9Dj716+YREaDJApDEOGB7jpamQSHyIwv09980aGfLGHMIsvEpI1LPrHftuqTpjAVnq8yzPbnBcacXcX1bx/nSsNF+l0y/NMKokHaI2HxxCNB4PoT+1S+/jspthe8BlzD/Ufya4fO5w7G37TfwfKCMdNNg9j5MuLZUoarRWZG8qpoJqowm+00/s3Z8AWNuvYk2OEywLI8g9FxZtik10Cn0a1mftVaRk4+gHao93zAtnEoXVWH8BH8vT2eSNheDtlfZPHFNn+wQy2eKE9CwTmx53qstfH/mK+BZqfFBgJwuHmft+lTsYoHEG0nLTZqIpqA+BsJYUlEIuTfnuJHrsbK3qI6Vl6cZYYqRWmeNx4D9wmnRaJRa2bSH+EPtBSP3robR3T/VUtBGo2BL9hA6yVIfMfdEYlK4RirCvTpahAoHvviHHpzmnJzxXBsDotzoKfp6Kj7twphCU30DHS7Xlzm6RFVlBO6xbY9sO43kr+mpIpuMXoAV6pzjaZvh8yQNy42MVqe/aE5fw94aHr+EGHLp44isY7w+Xv+1yg9t+6RICvR/iEkuFsnF8Vhik1TKwyfXf3Z72fqzgC0pCQ5E8OH1DIwHMNFZRut+On8UnonzpI7IerjDrj17AhXsYP3ILqPMiHaSlTTqR/0ofal3KPfODSd6Lv9fR+8l+U3XzprvP1aUbFcP6dp7eXqzPRfqEP4RvKX/dtmraY/lveBjrPYrb1sc0UZj7C5zSx1qFHYYzSvymvE1c4DIIGxyJBOcBmyx1TB1BiE+bQMQ5Za7BafFWVA79n+VsY7vUAHywjBLX9TZvIxvp4Bd+SrkQ6P5+NNLuILWCDCzClKB8UfZCYJpkeKfmqptzQs7MBV9ULCcfnOmYe3Id4giEGmW6dXLfj7KgVCQnxSFPIwSWya7wC3SsCmGH35Zdq93YqawHS7oNrpeJZ5/5ewUIUCbO4E/EHr44OveluxHioInicxgjZXuRoDuMLOLGgVcGM+hXQNuzaYocwV8QZ6DSGlUjQd3EY3FUGdfGBHEBH1zQc9jJW6FXd5xwvUI1ZmH6rLuADlY5SW+DNxHyx1HIPqokamlSstPY25hQ6Y7gL5KFnc5O08qh+kLBR88Ken+Mm6AZ2l1Wo0nC+51ZlZpROv1nwA3rBzbdNGWXv0ReVwLHN/P9iNWhvSjETeAVoKxXjK0U3YcO84imseSnUqm0zDC4JHU0juj3/QLSqfTfso/z3RTqklGnsUie/qLeG9YXHLa5K5Y++7bNyQmi3acBCKeFoOKns7AK1pJLBm5zinxynvqzdiyrUN+AYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Watching someone grow the thing and see the smallest share of its value tends to stick with you\\\" just paraphrases his own story back to him.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 424,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 329,
+          "output_tokens_details": {
+            "thinking_tokens": 268
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "f4a81b034ed73a07",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

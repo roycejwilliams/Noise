@@ -1,0 +1,102 @@
+{
+  "hash": "6cde02331b198f30",
+  "case": "feedback-cue-mistake",
+  "recorded_at": "2026-10-30T17:36:42.200Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2088,
+    "system": "",
+    "messages": 1,
+    "last": "user: Earlier, Cue, a texting companion, actually sent this: \"Ember Clay Studio in the Mission. Their intro wheel class runs Saturday mornings, four weeks.\" Now Cue is about to send this line: \"That link's broken on my end\" Does the line only own a mistake in that thing Cue sent, without asserting any oth...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2088,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Earlier, Cue, a texting companion, actually sent this:\n\"Ember Clay Studio in the Mission. Their intro wheel class runs Saturday mornings, four weeks.\"\n\nNow Cue is about to send this line:\n\"That link's broken on my end\"\n\nDoes the line only own a mistake in that thing Cue sent, without asserting any other action Cue took (booking, sending, saving, arranging, or anything else) or any other fact?\n\nReturn ONLY JSON: {\"onlyOwns\": true} or {\"onlyOwns\": false}.",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"onlyOwns\": false}",
+      "usage": {
+        "input_tokens": 185,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 244,
+        "output_tokens_details": {
+          "thinking_tokens": 231
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgYpvD9AiYTSGtnattoT3",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSigoKEAgTGAI4AUIIdGhpbmtpbmcSDKjF6yuLgV3NnNvJkxoMc0EcwKN/84lSnoG7IjAppM3UFgHTjSQ+Hp6sqOnW/8rayEXRYcnVYjn6WdDxq1208ubtxgu7mMFYem/U+L0qpwkvl+ohxbc8gaY7kNOCaoZIvb1PirV6ntULYgbZdlqRaCjgAQ6i19qjMyaXDfh58shAM0SrsUjsz4ESp0nolAbT322Y1h/R3c8+k2jRQ/ndMvr2cypGVy/nwZ7rP4v5M16fwLmd14Z+tYl3mNaVkGzznclCUjyGOYIsxtLSAoNSC/9bEh/Zl2TaImsMWFcllJq/Pw0MKMWktRHYEQunPIkkJBgkad2jXwhBeQ68noBJLtqrdxbkDktkm1G8OKaLPQsaN/LJr77jJgM0Yf/24KL1C74jmmodqqQ6RMN9QRZRn/kGIhRylvTC4Bj6LkQX9AQ6nTaWpMm9FI4+heTflVymgPBkr/rnvjYNrDLki8AT9P6p1VWM/jfEdGSdxYhf63m5+BBx7ecw77EdeATk134HYP8XogsTWhuW8+Tyuxzd4fjfPyo0BHNdq8C79cVmiMzMYv8JU//Z35R7XE9Mlox7B4xDzjGLeOBarxZgfPQS425SB4ZCPAT6x1OnP7+7TQmFYrqcACjDr94N8PhepX5jS4JEfbEjAN/mElCItxAtTjBVLYWjV1jlr3TErq7KESCpZ10zSEfwThH8ln5Er2mG5XDxqNS6j2synsfBTiOYKCSXPLOThF3upeWGEESEfY3TnC8CcylAbwetTAFIf5LYmp6xBtCA/MPBTyo7tZpvoVB7JDq+G3OA90+Bs4/eW9tc3Jn2coC7Rfiybijnp9Zo3wT4VGIsWKvg0jXM/BBvv5ekyHCTKUZIBlFIVbY9L+5CGHXv9DjhqRp2JMivoDmJhGaVMX+XQLqLoHiZmyWssfBer9uXcY4+BNfZgB484jFGoFwxhbw/0XAj8EzFuZ0vVd73lHoRtpNukfIp5FtZaG6DA7iA9OovEyHYAe53zbNUEVXwWcSEeOYFIeY3WSV6/PFhTqknJwbleTGdwvGebL/wwuyJhBO5hKskzwbIEfjrnavfv/lzNnflGvR+exiZynxPK4ki8ZRbvDoAIgR4luMHrbC6U2bWhRTQW8y1vq5M8Q0ZCfjtAPHzctKuvohMqJMihCXCAeZJw8AkWCUq4QrOF900fBGCO8pxbDxkcYubjchpZYv6pOFhcLd86eUqsRMYn1KWN3c8ysyj/kKZjw9icwL8haIZeP9+ja9c+fV6cwhco1IXZZ6CmHNt3ytkzHeiHT9qefVllRP4uev43A7ypUTTmcJAA7vDxvsa32lYl5aYudU0gtIYmNvvtPhjIppcJ4sCVr1CAdeDROveNkznxBItxNS0xqgb0h7RtUWgrvcihbl6VjByuyqqyTIKAtQbmcku/U3jlDyW4sor+9F46Tfzp8v7QWehvh6oOz+mGdXvgI2hdl/X536cvfOfcCTIysffZsjsQ2Hs+cUUx3Bf78wczEb2OgJOg2b2WRrAM7Y16liXWy+OsAya2vOBox+4nJemQHeaXZdOaXynyinRLSKuIeuSfNz75YOngHK4dAJ9WZHzgU9jtb9vwcl7Zu/k2SMn5b5b6jBdFBjRTxRiZ5OuVsEJIEKhQrJoYTBpSc/HPOKPK0o1y1grHBUImtvBsE1goOC7pU1aGadtyV9Fqtbv48EYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"onlyOwns\": false}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 185,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 244,
+          "output_tokens_details": {
+            "thinking_tokens": 231
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "6cde02331b198f30",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "hash": "d1f4a054b8ae1a4e",
+  "case": "feedback-cue-mistake",
+  "recorded_at": "2026-10-30T17:36:50.996Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it. Cue's text: \"\"...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it.\n\nCue's text:\n\"\"\"Good catch, I've passed that along to get it fixed. I don't have a working link to hand you right now, but the details still stand: Ember Clay Studio in the Mission, intro wheel class, Saturday mornings, four weeks.\"\"\"\n\nDoes the text own the bad link plainly in a few words AND say what Cue can do now (it may offer to find the right page), WITHOUT inventing a new link or details, blaming their browser, or explaining how Cue works? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Good catch, I've passed that along to get it fixed' owns the error and states action, with no invented link or blame.\"}",
+      "usage": {
+        "input_tokens": 315,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 234,
+        "output_tokens_details": {
+          "thinking_tokens": 181
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgYpvmiUnM3TLNKhQpLeZ",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Es4HCsQCCBMYAipAWuXDbU2prgemDGQnBWaRo8ajSEvZg9SuUWvPHTGwTrVeYj0fY5Qo4ZMwJAvwnsL+UOAPoMzWTrzl/nRggf+46TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBsquT1wbCAToIBBAAGgwC2ooDTzcFI8sEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCwWww7dXUwt5m7p73I+u9WPJRBya3TlLVcWMVMVE68DiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyJuWIWiJPaT2iSF2MaDPNTbMbl+dYSGm8K/CIwq879A5jbe7e5vPGS9dFaeeVx6VDnU7bdEv2xprmqzcwEA9XNjc/RQytLcATLSHLPKrYE1hFNTNmsrXGs+FhUVRdHA+u+nAaOg93KttGX70Ca9mA/3LFnlKwDvCo+jTFeLZdY794Km5iDtalfrcR2dUpMp2HGgg9eYqHccT7hiZgQ6s45LIjGgcRQqmyhp7GAMdZ1LhhilXVueT/Aq+YTKR6MRWN5ethcjPilC/KdwxryqPHQ7W8m0ZoKRmSO+Wh6yPduq1y0gTfu12W4gkgds9IrIahTWMqb5jOKq5Xcbl1/6EjLeivgFxd+utqCjud0ULT8X4EA/379OKHmxtLL/HcGEJpJDvdck7XRPITgVbpZHh+U+jrEGk4ZXFXfxQTsOZ5bvX32iMFEXJbB/p5GJmmQCPYkssFHADuMTnVTO6g/vY4A7iADEwHcJnZY8f+fRKqRhxcibUPHtRQwmlQYQBoEVgpRnq/p3tgdmZvqjzVIFhUdNzy6NUwi8R3LB11yEUh4tqc+5mfStFPl1yR9o54jRoKVdciaKAOP+RCYatokXxocDX6/a4bRwRm8zIyMRAQy3NDcXuzOEzDSruRQY4eS9Q5MZ7mZrSjSoSmyGj/yHCzGCUj/ygLIz8yu7421B2rRJdxh+6mVuyCwgeYALCk5JEd/HnsrnFxrSEjKlIcLYQd4lvgdAysIW/XwsinksnrvbCT3oaaxM+NYInQng0Wbm6YrsZ32igBxuKw6XlnFFXLUEb+iFPYZFS0VvlKx9Okbpf7jsOYx2dGcbGDxVDr/I4ZG+hBtrsOc0xdAkqFdUUOMD2ow/LUYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Good catch, I've passed that along to get it fixed' owns the error and states action, with no invented link or blame.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 315,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 234,
+          "output_tokens_details": {
+            "thinking_tokens": 181
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "d1f4a054b8ae1a4e",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

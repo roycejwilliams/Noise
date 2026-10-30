@@ -1,0 +1,102 @@
+{
+  "hash": "fcf322d2df917881",
+  "case": "share-good-news",
+  "recorded_at": "2026-10-30T17:35:58.659Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"This is it. Two years of no, and now it's done.\n\nSay that number to yourself for a second before anything else moves.\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their news: 'Two years of no, and now it's done.'\"}",
+      "usage": {
+        "input_tokens": 319,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 88,
+        "output_tokens_details": {
+          "thinking_tokens": 47
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgYps2oy46De5FqE4zT7i",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErQECsQCCBMYAipA6qAJhPfBwBtwZi+i/9QlxZOODirR9VseqEwRiobutTtm8h+wgegTUdZyaOdcYH8yg1kdwL0NOCcEv3+RkEpb8zIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB/qqT1wbCAToIBBAAGgwC2ooDTzcFd0kEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCQTTGvczyYJMHm7x5XOYC/wUS5kXLP1DDoz/lU8pXRniIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgynGXhQyuIfcK02tKoaDH4uh/sYrC/EDXm1WyIwFCUkIlrsMiUXBnuuFEHQFq845XtGtLleywczW2nDy2no7ndnYVA5mb4jUxUZhv+PKpwBgunnqPD9UDU9ec8s7hSE0UCee6yc39+6cwzJ9N5VUOHgYeMOtP4/V0baoGzR9xCbOlz5u4EeR8TGOlrAuoCwXfv98NqeFTzDeDFzUtfdu2IRvVJ0K8lSo/aGbiiq3BGPDCatUCHu1Mv6L59iHlPs0MuvDmPRFXY6JG39b1nZ0RV3nw8BKOB0z1eSPsRAqLwGszxu2zKAQ71gk1aOGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their news: 'Two years of no, and now it's done.'\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 319,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 88,
+          "output_tokens_details": {
+            "thinking_tokens": 47
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "fcf322d2df917881",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

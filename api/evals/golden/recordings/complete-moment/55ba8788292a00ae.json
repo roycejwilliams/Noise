@@ -1,0 +1,102 @@
+{
+  "hash": "55ba8788292a00ae",
+  "case": "complete-moment",
+  "recorded_at": "2026-10-30T17:37:52.756Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\" Cue's text: \"\"\"Full approval, then twelve hours of s...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\"\n\nCue's text:\n\"\"\"Full approval, then twelve hours of sleep. That's the correct order of operations.\n\nGo rest. You earned the whole night.\"\"\"\n\nIs the text a short, warm close that fits this exact moment (the budget, the pricing slide or the sleep), with no question and nothing asked of him? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Full approval, then twelve hours of sleep... Go rest' matches the moment with no question or ask\"}",
+      "usage": {
+        "input_tokens": 237,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 99,
+        "output_tokens_details": {
+          "thinking_tokens": 47
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgYq1S8PnKF6GP5zxR1re",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErgECsQCCBMYAipAKEzx+HpcXTMebK/iSNyDjmMyNmIeVbtd2v9g9BrTNzENLtg8MqfyD/KzrDtZ0nBa6bjKSOEsewcRusGiIfWE3TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB8KuT1wbCAToIBBAAGgwC2ooDTzcFjjMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiByyUPyLw4U/Ko8eruc3Dh7zNpB67rBYdv8rDXnDTnaYCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyE3jJxxLvS2m5T0s8aDDueDK3neHvD/jZs1iIwNBY4slt+36ERv2ER/lPG1Ito6b1A5v1O7cubMBx+tmE5deC3+/CJJZgzYXgzTw0pKqABF58ZkJ2s1OPP44puzNh9/Zik7DbCNFikCrBq4OIM7kamnB7BaZYJLuZ4cahAtcJzwtY0zghSrFq0OmBeAs+cUfu6e8oewa/gLirRr5py7vY6BCFGBzAF7ix6CmJlSBTsx/aP0zgHfDSDBY+6rC/6qx267BSo40zHn+JPtclLQ7d5Xfuhs4CmPooTAmHdyK3DCUMPs7AB/TezWpezCSYcjRgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Full approval, then twelve hours of sleep... Go rest' matches the moment with no question or ask\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 237,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 99,
+          "output_tokens_details": {
+            "thinking_tokens": 47
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "55ba8788292a00ae",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
