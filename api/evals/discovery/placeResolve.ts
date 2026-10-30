@@ -85,14 +85,19 @@ check("'Portland, CA' (no Portland in California) is rejected, not moved to anot
 const wrongCountry = pick("Dublin, US", "london");
 check("'Dublin, US' from London never resolves to Ireland (it's California or Ohio: ambiguous)", wrongCountry.status === "ambiguous" && !wrongCountry.options.some((o) => /Leinster|IE/.test(o)), wrongCountry);
 check("hits that aren't the name asked for are rejected (the geocoder answered something else)", R.pickPlace("Bay Area", [om("Bay Area Park", "Texas", "US", 29.6, -95.1, null)], home(HOME.sacramento)).status === "rejected");
-check("the label is always qualified (a state itself too), so geocoding it again downstream can't land elsewhere", R.placeLabel(OPEN.portland[1]) === "Portland, Maine" && R.placeLabel(OPEN.cambridge[0]) === "Cambridge, England, GB" && R.placeLabel(R.REGIONS[0]) === "San Francisco Bay Area, California" && R.placeLabel(om("Washington", "Washington", "US", 47.5, -120.5, 7_700_000)) === "Washington, US");
+check("the label is qualified, and a state or province says so ('New York State, US' never reads like the city)", R.placeLabel(OPEN.portland[1]) === "Portland, Maine" && R.placeLabel(OPEN.cambridge[0]) === "Cambridge, England, GB" && R.placeLabel(R.REGIONS[0]) === "San Francisco Bay Area, California" && R.placeLabel({ ...om("New York", "New York", "US", 42.9, -75.5, 19_000_000), level: "admin1" }) === "New York State, US" && R.placeLabel(om("New York", "New York", "US", 40.71, -74.0, 8_800_000)) === "New York, US" && R.placeLabel({ ...om("Ontario", "Ontario", "CA", 50, -85, 14_000_000), level: "admin1" }) === "Ontario Province, CA");
 // Canada's provinces, and any region code the geocoder returns.
 const VANCOUVER: C[] = [{ name: "Vancouver", admin1: "British Columbia", admin1Code: "BC", country: "CA", lat: 49.2827, lng: -123.1207, population: null, source: "google" }, om("Vancouver", "Washington", "US", 45.6387, -122.6615, 190915)];
 check("'Vancouver, BC' resolves in British Columbia (a confirmed place with a province code isn't rejected)", (() => { const r = R.pickPlace("Vancouver, BC", VANCOUVER, home(HOME.sacramento)); return r.status === "resolved" && r.place.country === "CA"; })());
 check("'Vancouver BC' (no comma) too, and plain 'Vancouver' from Sacramento is Vancouver, Washington (nearer, same country)", (() => { const a = R.pickPlace("Vancouver BC", VANCOUVER, home(HOME.sacramento)); const b = R.pickPlace("Vancouver", VANCOUVER, home(HOME.sacramento)); return a.status === "resolved" && a.place.country === "CA" && b.status === "resolved" && b.place.admin1 === "Washington"; })());
 check("'London, ON' resolves in Ontario, not England", (() => { const r = R.pickPlace("London, ON", [om("London", "England", "GB", 51.5072, -0.1276, 8_961_989), om("London", "Ontario", "CA", 42.9849, -81.2453, 383822)], home(HOME.sacramento)); return r.status === "resolved" && r.place.admin1 === "Ontario"; })());
 check("a region code only the geocoder knows ('Sydney, NSW') matches its admin1 code", (() => { const r = R.pickPlace("Sydney, NSW", [{ name: "Sydney", admin1: "New South Wales", admin1Code: "NSW", country: "AU", lat: -33.8688, lng: 151.2093, population: null, source: "google" }, om("Sydney", "Nova Scotia", "CA", 46.1368, -60.1942, 31597)], home(HOME.sacramento)); return r.status === "resolved" && r.place.country === "AU"; })());
-check("an unsized Google hit near home never beats a known bigger place by that name (the 5k floor holds for Google too)", at(R.pickPlace("Austin", [{ name: "Austin", admin1: "Nevada", country: "US", lat: 39.49326, lng: -117.06953, population: null, source: "google" }, OPEN.austin[0]], home(HOME.sacramento))) === "Austin|Texas");
+const g = (name: string, admin1: string, lat: number, lng: number): C => ({ name, admin1, country: "US", lat, lng, population: null, source: "google" });
+check("an unsized Google hit far from home never beats a known bigger place by that name (the floor's bigger-exists clause)", at(R.pickPlace("Austin", [g("Austin", "Minnesota", 43.66663, -92.97464), OPEN.austin[0]], home(HOME.sacramento))) === "Austin|Texas" && at(R.pickPlace("Austin", [g("Austin", "Minnesota", 43.66663, -92.97464), OPEN.austin[0]], home({ lat: 44.98, lng: -93.27, country: "US" }))) === "Austin|Minnesota");
+check("... and a known-small open-geocoder hit near home never wins (Austin, Nevada from Sacramento)", at(R.pickPlace("Austin", OPEN.austin, home(HOME.sacramento))) === "Austin|Texas");
+check("an unsized Google hit near home is kept: Georgetown for a DC member (not Georgetown, TX)", at(R.pickPlace("Georgetown", [g("Georgetown", "District of Columbia", 38.9097, -77.0654), om("Georgetown", "Texas", "US", 30.63269, -97.67723, 67176), om("Georgetown", "Kentucky", "US", 38.2098, -84.5588, 33558)], home({ lat: 38.9072, lng: -77.0369, country: "US" }))) === "Georgetown|District of Columbia");
+check("... Hollywood for an LA member (not Hollywood, FL)", at(R.pickPlace("Hollywood", [g("Hollywood", "California", 34.0928, -118.3287), om("Hollywood", "Florida", "US", 26.0112, -80.14949, 152511)], home({ lat: 34.0522, lng: -118.2437, country: "US" }))) === "Hollywood|California");
+check("... Fremont for a Seattle member (not Fremont, CA)", at(R.pickPlace("Fremont", [g("Fremont", "Washington", 47.6505, -122.3493), om("Fremont", "California", "US", 37.54827, -121.98857, 230504), om("Fremont", "Nebraska", "US", 41.43333, -96.49808, 26397)], home(HOME.seattle))) === "Fremont|Washington");
 check("their country comes from the geocoder, not a box on the map: a Toronto member's 'Cambridge' is Cambridge, Ontario", R.countryAt(HOME.toronto, [om("Toronto", "Ontario", "CA", 43.70011, -79.4163, 2_600_000)]) === "CA" && at(pick("Cambridge", "toronto")) === "Cambridge|Ontario");
 
 // ---------------------------------------------------------------- 3. the far-from-home check: confirmed vs inferred, and windows
@@ -106,27 +111,30 @@ check("near home is never held", R.farCheck({ miles: 80, how: "inferred", window
 function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<string, C[]>; homeCity?: Record<string, { lat: number; lng: number; country: string }> } = {}) {
   const logs: any[] = [];
   const stores: any[] = [];
-  const seeds: any[] = [];
   const lookups: string[] = [];
+  const countries: string[] = [];
   const d: import("../../src/services/placeResolve.js").ResolveDeps = {
     home: async (city) => {
       const h = (o.homeCity ?? { Sacramento: HOME.sacramento, Houston: HOME.houston, Seattle: HOME.seattle })[city];
-      return h ? home(h as any) : null;
+      return h ? { lat: h.lat, lng: h.lng } : null;
+    },
+    homeCountry: async (city) => {
+      countries.push(city);
+      return ((o.homeCity ?? { Sacramento: HOME.sacramento, Houston: HOME.houston, Seattle: HOME.seattle }) as any)[city]?.country ?? null;
     },
     lookup: async (place) => (lookups.push(place), { google: o.google?.[R.normName(place)] ?? [], openMeteo: OPEN[R.normName(R.parseQualified(place).name)] ?? [] }),
     row: async () => ({ windowEnd: o.windowEnd ?? null, resolution: o.stored ?? null }),
     store: async (_u, _k, r) => void stores.push(r),
-    seed: async (label, p) => void seeds.push({ label, p }),
     log: async (x) => void logs.push(x),
     today: async () => "2026-10-29",
   };
-  return { d, logs, stores, seeds, lookups };
+  return { d, logs, stores, lookups, countries };
 }
 {
   const t = deps();
   const r = await R.resolveWantPlace({ userId: "u1", key: "ask:a1", place: "Bay Area", source: "their_words", homeCity: "Sacramento" }, t.d);
   check("a Sacramento member's Bay Area ask searches 'San Francisco Bay Area, California'", r.city === "San Francisco Bay Area, California" && !r.skip && r.place?.verdict === "near" && (r.place?.miles ?? 999) < 100, r);
-  check("... the resolution is kept on the want (for this place and this home), and its label seeded for downstream lookups", t.stores[0]?.forPlace === "Bay Area" && t.stores[0]?.forHome === "Sacramento" && t.seeds[0]?.label === "San Francisco Bay Area, California");
+  check("... the resolution is kept on the want (for this place and this home, with the home's country), and its stored point is what the search uses", t.stores[0]?.forPlace === "Bay Area" && t.stores[0]?.forHome === "Sacramento" && t.stores[0]?.homeCountry === "US" && r.point?.lat === t.stores[0]?.lat && r.point?.lng === t.stores[0]?.lng);
   const tx = deps();
   const h = await R.resolveWantPlace({ userId: "u2", key: "ask:a2", place: "Bay Area", source: "their_words", homeCity: "Houston" }, tx.d);
   check("a Houston member's Bay Area ask searches by Houston", h.city === "Bay Area Houston, Texas" && !h.skip, h);
@@ -197,7 +205,7 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
     const r = await R.resolveWantPlace({ userId: "u6", key: "ask:old", place: "Bay Area", source: "their_words", homeCity: "Sacramento" }, { ...R.realResolveDeps, today: async () => "2026-10-29" });
     check("with the stale 'Bay Area' row still cached, the real resolution searches the SF Bay Area", r.city === "San Francisco Bay Area, California", r);
     check("... and never reads the bare 'Bay Area' cache row", !asked.some((a) => /geocode_cache/.test(a.sql) && /SELECT/.test(a.sql) && a.args[0] === "Bay Area"), asked.map((a) => a.args[0]));
-    check("... and seeds the qualified label (never the bare name) for the code downstream", asked.some((a) => /INSERT INTO geocode_cache/.test(a.sql) && a.args[0] === "San Francisco Bay Area, California") && !asked.some((a) => /INSERT INTO geocode_cache/.test(a.sql) && a.args[0] === "Bay Area"));
+    check("... and writes no geocode_cache row at all (a member's resolution never becomes a shared row)", !asked.some((a) => /(INSERT|UPDATE|DELETE)[\s\S]*geocode_cache/.test(a.sql)), asked.filter((a) => /geocode_cache/.test(a.sql)).map((a) => a.sql.slice(0, 60)));
     check("... and stores the resolution only while the place is still the one resolved", asked.some((a) => /UPDATE want_places SET resolved_for/.test(a.sql) && /AND place = \$3/.test(a.sql)));
   } finally {
     (pool as any).query = realQuery;
@@ -314,26 +322,53 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
   check("wiring: a retry returns before anything is searched; the 9am item is incomplete (retried on a later hour)", /if \(where\.retry\) \{[\s\S]{0,600}placeRetry: where\.retry[\s\S]{0,60}return \{ queued: false \};/.test(ess) && /if \(r\?\.placeRetry\) \{ items\.push\(\{ \.\.\.b, status: "incomplete"/.test(src("services/dailySweep.ts")));
   const homeNamed = await E.placeToSearch({ askId: "a", userId: "u10", askText: "x", city: "Portland, ME", want: { key: "ask:h", text: "runs in Portland", createdAt: null } }, { place: pd("Portland"), resolve: deps().d });
   check("a place that is their home by name searches their home as on file ('Portland, ME'), never the bare word", homeNamed.city === "Portland, ME" && !homeNamed.place);
+  const elsewhere = async (place: string, homeCity: string, lookupName: string, cands: C[]) => {
+    const d = deps({ homeCity: { [homeCity]: { lat: 0, lng: 0, country: "US" } } });
+    d.d.home = async () => ({ lat: HOME_AT[homeCity][0], lng: HOME_AT[homeCity][1] });
+    d.d.lookup = async () => ({ google: [], openMeteo: cands });
+    return E.placeToSearch({ askId: "a", userId: "u10", askText: "x", city: homeCity, want: { key: "ask:q", text: `things in ${place}`, createdAt: null } }, { place: pd(place), resolve: d.d });
+  };
+  const HOME_AT: Record<string, [number, number]> = { "Cambridge, MA": [42.3751, -71.10561], "Portland, ME": [43.65737, -70.2589], "Springfield, IL": [39.80172, -89.64371] };
+  const ce = await elsewhere("Cambridge, England", "Cambridge, MA", "Cambridge", OPEN.cambridge);
+  check("'Cambridge, England' from a Cambridge, MA home is resolved to England, not searched at home", ce.city === "Cambridge, England, GB" && !!ce.place, ce);
+  const po = await elsewhere("Portland, OR", "Portland, ME", "Portland", OPEN.portland);
+  check("'Portland, OR' from a Portland, ME home is Oregon", po.city === "Portland, Oregon" && !!po.place, po);
+  const sm = await elsewhere("Springfield, MA", "Springfield, IL", "Springfield", OPEN.springfield);
+  check("'Springfield, MA' from a Springfield, IL home is Massachusetts", sm.city === "Springfield, Massachusetts" && !!sm.place, sm);
+  check("the same qualifiers as home, or none, are home", R.sameQualifiers("Portland, ME", "Portland, ME") && R.sameQualifiers("Portland", "Portland, ME") && R.sameQualifiers("Portland, Maine", "Portland, ME") && !R.sameQualifiers("Portland, OR", "Portland, ME"));
+  // The catch path: a resolution that throws is a retry, never the bare word.
+  const thrown = await E.placeToSearch({ askId: "a", userId: "u10", askText: "x", city: "Sacramento", want: { key: "ask:t", text: "Portland", createdAt: null } }, { place: pd("Portland"), resolve: {} as any });
+  check("a resolution that throws waits for the next run (placeToSearch's catch), never the bare word", thrown.city === null && !!thrown.retry && !thrown.skip, thrown);
 }
 {
-  // A Seattle member's "Washington": the state, under a qualified label; the shared bare row is never written.
+  // A Seattle member's "Washington": the state, labeled as one, searched at its stored point; no cache row is written.
   const t = deps();
-  t.d.lookup = async () => ({ google: [], openMeteo: [om("Washington", "Washington", "US", 47.50012, -120.50147, 7_705_281), om("Washington", "District of Columbia", "US", 38.89511, -77.03637, 689545)] });
+  t.d.lookup = async () => ({ google: [], openMeteo: [{ ...om("Washington", "Washington", "US", 47.50012, -120.50147, 7_705_281), level: "admin1" as const }, om("Washington", "District of Columbia", "US", 38.89511, -77.03637, 689545)] });
   const r = await R.resolveWantPlace({ userId: "u11", key: "ask:wa", place: "Washington", source: "their_words", homeCity: "Seattle" }, t.d);
-  check("a Seattle member's 'Washington' is the state, seeded as 'Washington, US' (never the bare name)", r.city === "Washington, US" && t.seeds.length === 1 && t.seeds[0].label === "Washington, US", { r, seeds: t.seeds });
-  const { default: pool } = await import("../../src/db/db.js");
-  const realQuery = (pool as any).query;
-  const sql: { sql: string; args: unknown[] }[] = [];
-  (pool as any).query = async (q: string, args: unknown[] = []) => (sql.push({ sql: q, args }), { rows: [], rowCount: 0 });
-  try {
-    await R.realResolveDeps.seed("Washington", { lat: 47.5, lng: -120.5 });
-    await R.realResolveDeps.seed("Washington, US", { lat: 47.5, lng: -120.5 });
-  } finally {
-    (pool as any).query = realQuery;
-  }
-  check("the bare 'Washington' row is untouched: a bare label is never seeded", !sql.some((x) => x.args[0] === "Washington") && R.seedable("Washington") === false);
-  check("a qualified label is seeded only where no row exists (DO NOTHING: one member's resolution never moves a shared row)", sql.length === 1 && /ON CONFLICT \(query\) DO NOTHING/.test(sql[0].sql) && !/DO UPDATE/.test(sql[0].sql));
+  check("a Seattle member's 'Washington' is the state ('Washington State, US'), at its own point", r.city === "Washington State, US" && r.point?.lat === 47.50012, r);
+  check("want resolution has no way to write the shared cache (no seed at all)", !("seed" in R.realResolveDeps) && !/geocode_cache/.test(src("services/placeResolve.ts").slice(src("services/placeResolve.ts").indexOf("export const realResolveDeps"), src("services/placeResolve.ts").indexOf("// ---------------------------------------------------------------- the one-time audit"))));
+
+  // Two members, one whose "New York" is the state (a Buffalo home) and one whose is the city (a Newark home): each searches its own.
+  const NY: C[] = [{ ...om("New York", "New York", "US", 42.91, -75.53, 19_300_000), level: "admin1" as const }, om("New York", "New York", "US", 40.71427, -74.00597, 8_804_190)];
+  const homes = { Buffalo: { lat: 42.8864, lng: -78.8784, country: "US" }, Newark: { lat: 40.7357, lng: -74.1724, country: "US" } };
+  const b = deps({ homeCity: homes }); b.d.lookup = async () => ({ google: [], openMeteo: NY });
+  const n = deps({ homeCity: homes }); n.d.lookup = async () => ({ google: [], openMeteo: NY });
+  const [rb, rn] = await Promise.all([R.resolveWantPlace({ userId: "ub", key: "ask:ny", place: "New York", source: "their_words", homeCity: "Buffalo" }, b.d), R.resolveWantPlace({ userId: "un", key: "ask:ny", place: "New York", source: "their_words", homeCity: "Newark" }, n.d)]);
+  check("'New York' from Buffalo is the state, from Newark the city, with labels that differ", rb.city === "New York State, US" && rn.city === "New York, US" && rb.point?.lat === 42.91 && rn.point?.lat === 40.71427, { rb, rn });
   const G = await import("../../src/services/geocoding.js");
+  const [pb, pn] = await Promise.all([G.withPinnedPlace(rb.city!, rb.point!, async () => { await new Promise((x) => setTimeout(x, 5)); return G.geocodeCity(rb.city!); }), G.withPinnedPlace(rn.city!, rn.point!, async () => G.geocodeCity(rn.city!))]);
+  check("each search geocodes its place to its own stored point (pinned for that search only, never a cache row)", pb?.lat === 42.91 && pn?.lat === 40.71427 && G.pinnedPoint(rb.city!) === null, { pb, pn });
+  const same = await Promise.all([G.withPinnedPlace("Springfield, Illinois", { lat: 1, lng: 1 }, async () => { await new Promise((x) => setTimeout(x, 5)); return G.geocodeCity("Springfield, Illinois"); }), G.withPinnedPlace("Springfield, Illinois", { lat: 2, lng: 2 }, async () => G.geocodeCity("Springfield, Illinois"))]);
+  check("even the same label in two searches at once keeps each search's own point", same[0]?.lat === 1 && same[1]?.lat === 2, same);
+  const ess2 = src("services/eventSurfacingSweep.ts");
+  check("wiring: the search runs inside its want's pinned point", /withPinnedPlace\(where\.city, where\.point, \(\) => findFreshPending\(candidate, zone, where\)\)/.test(ess2));
+
+  // The home's country is looked up only for a fresh resolution (a paid call), never when a stored one is reused.
+  const fresh = deps();
+  await R.resolveWantPlace({ userId: "u13", key: "ask:p", place: "Portland", source: "their_words", homeCity: "Sacramento" }, fresh.d);
+  const reuse = deps({ stored: { forPlace: "Portland", forHome: "Sacramento", status: "resolved", label: "Portland, Oregon", lat: 45.52, lng: -122.68, options: [], homeCountry: "US" } });
+  await R.resolveWantPlace({ userId: "u13", key: "ask:p", place: "Portland", source: "their_words", homeCity: "Sacramento" }, reuse.d);
+  check("the home's country is looked up only when resolving fresh, and kept with the resolution", fresh.countries.length === 1 && fresh.stores[0]?.homeCountry === "US" && reuse.countries.length === 0 && reuse.lookups.length === 0);
   check("the open geocoder fallback takes populated places only: a bare 'Bay Area' can't re-cache Bay Area Park", G.openMeteoHit([{ name: "Bay Area Park", admin1: "Texas", country_code: "US", feature_code: "PRK" }, { name: "Bay Area Hospital Heliport", country_code: "US", feature_code: "AIRH" }], "") === undefined && G.openMeteoHit([{ name: "Bay Area Park", country_code: "US", feature_code: "PRK" }, { name: "Portland", admin1: "Oregon", country_code: "US", feature_code: "PPLA2" }], "")?.name === "Portland");
 }
 {
@@ -366,6 +401,13 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
   check("... another ask's find, a goal's find, a profile find and a non-find are untouched", !a.ups.some((u) => [3, 4, 5, 6, 7].includes(Number(u.id))));
   const g = await run("place:goal:G1", "Portland", "Portland, ME");
   check("Portland -> Portland, ME on a goal cancels only that goal's queued find (by its searchedIn key, never the shared profile askId)", JSON.stringify(g.ups.map((u) => u.id)) === "[4]", g.ups);
+  const multi = [
+    cand(11, "event_offer", { askId: "B1", match: { name: "Founder dinner", searchedIn: { key: "ask:B1", place: "San Francisco Bay Area" } } }),
+    { ...cand(12, "event_offer", { askId: "B2", match: { name: "San Francisco Bay Area founders night", searchedIn: { key: "ask:B2", place: "San Francisco Bay Area" } } }), summary: "San Francisco Bay Area founders night" },
+  ];
+  queued.push(...(multi as any));
+  const mw = await run("place:ask:B1", "San Francisco Bay Area", "Oakland");
+  check("a multi-word place correction ('San Francisco Bay Area' -> 'Oakland') cancels that ask's find, never another find that names the old place", JSON.stringify(mw.ups.map((u) => u.id)) === "[11]", mw.ups);
   check("a 'place corrected' skip is no decision: the same event can queue again when found for the right place", WS.isFailedAttempt("place corrected: corrected at their request: x") && !WS.isFailedAttempt("not for them"));
   const live = await K.livePlaces([{ want_key: "ask:s", want_text: "meetups in Springfield", place: "Springfield", source: "their_words", resolved_for: "Springfield", resolved_status: "ambiguous", resolved_label: null }], { goals: [], intent: [] });
   check("an ambiguous (skipped) place never says it's being searched", !live[0].searching);
