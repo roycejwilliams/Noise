@@ -60,7 +60,7 @@ const answer = async (sql: string, params: any[] = []) => {
     const needle = String(params[1]).replace(/^%|%$/g, "");
     return { rows: corrections(params[0]).filter((m) => m.content.includes(needle)) };
   }
-  if (/memory_type = 'call_correction' AND created_at > NOW\(\) - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 3/i.test(q)) return { rows: [...corrections(params[0])].reverse().slice(0, 3) };
+  if (/memory_type = 'call_correction' AND created_at > NOW\(\) - INTERVAL '7 days' AND content NOT LIKE '%"retired_at":%' ORDER BY created_at DESC LIMIT 3/i.test(q)) return { rows: [...corrections(params[0])].filter((m) => !m.content.includes('"retired_at":')).reverse().slice(0, 3) };
   if (/FROM harness_decisions WHERE user_id = \$1 AND layer = 8 AND decision IN \('call\.done_on_call'/i.test(q)) {
     if (store.ledger === "fail") throw new Error("ledger read failed");
     return { rows: store.ledger };
@@ -241,7 +241,7 @@ try {
     { decision: "call.done_on_call", action: "shareLink", proposal: { kind: "send", labels: ["the link to Rooftop Jazz Night (https://lu.ma/rooftop-jazz)"], urls: ["https://lu.ma/rooftop-jazz"], names: ["Rooftop Jazz Night"] }, created_at: at },
   ];
   const L = await import("../../src/services/callLedger.js");
-  check("the ledger keeps a search's finds with its done row", JSON.stringify(L.foundOnCall(L.ledgerFromRows(store.ledger as any))) === JSON.stringify([{ name: "Tartine Manufactory Founders Supper", url: "https://lu.ma/tartine" }]));
+  check("the ledger keeps a search's finds with its done row", JSON.stringify(L.foundOnCall(L.ledgerFromRows(store.ledger as any))) === JSON.stringify([{ name: "Tartine Manufactory Founders Supper", url: "https://lu.ma/tartine", when: null, venue: null }]));
   prompts = [];
   reply = () => "Eight is a good number. Who's the anchor guest?";
   const f1 = await quiet(() => registry.post_call.draft(candidate, { userId: USER, firstName: "Jordan", phoneNumber: "+15550000000", city: null, timezone: null }));
@@ -275,7 +275,7 @@ try {
   const reg = src("harness/proactiveRegistry.ts");
   check("onSent marks only what the sent draft carried (its meta)", /async onSent\(c, _p, messages, meta\)/.test(reg) && /markCarriedCorrections\(c\.userId, meta\)/.test(reg));
   check("the dispatch hands the sent draft's meta to onSent (never a composed bundle's)", /onSent\?\.\(c, person, result\.delivered, composed \? undefined : draft\.meta\)/.test(src("harness/proactive.ts")));
-  check("the webhook hands the offer source flags, the done list and the finds to the audit", /offerFlags: await import\("\.\.\/services\/offerGuard\.js"\)\.then\(\(m\) => m\.unsourcedInCall\(turns/.test(src("routes/co.ts")) && /auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall, foundOnCall, offerFlags \}\)/.test(src("routes/co.ts")) && /const foundOnCall = ledger \? L\.foundOnCall\(ledger\) : \[\]/.test(src("routes/co.ts")));
+  check("the webhook hands the call's turns to the source check, run with the finds once the ledger is read; the audit gets the done list, the finds and the flags", /offerSource: \{ turns, given: /.test(src("routes/co.ts")) && /m\.unsourcedInCall\(o\.offerSource!\.turns, \{ \.\.\.o\.offerSource!\.given, foundOnCall: L\.foundLines\(foundOnCall\)\.join\("\\n"\) \}\)/.test(src("routes/co.ts")) && /auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall, foundOnCall, offerFlags, correctionsHeld \}\)/.test(src("routes/co.ts")) && /const correctionsHeld = ledger \? undefined : /.test(src("routes/co.ts")));
   check("the SKIP retry carries doneOnCall (only the correction drops)", /if \(!text && correcting\) return draftPostCallText\(firstName, transcript, contextSummary, promiseResults, claims, confirmationSent, recapOffer, knowledge, recapGentle, doneOnCall\);/.test(pc));
   const ct = src("services/callTools.ts");
   check("a search on the call keeps what it found with its done row (both record sites)", (ct.match(/recordDone\(name, plan\.kind, [^)]*, urls, foundFor\(name, r\)\)/g) ?? []).length === 2 && /recordDoneOnCall\(i\.userId, \{ tool, kind, input, urls, found \}\)/.test(ct));

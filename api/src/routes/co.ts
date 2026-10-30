@@ -546,8 +546,9 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       userId,
       callKey: `el:${conversationId}`,
       offered: typeof vars.finds_now === "string" ? vars.finds_now : undefined,
-      // The same source check as above, handed to the audit: a sentence it flags can become a correction the follow-up text carries.
-      offerFlags: await import("../services/offerGuard.js").then((m) => m.unsourcedInCall(turns, { firstName: String(vars.first_name ?? ""), contextSummary: String(vars.context_summary ?? ""), findsNow: String(vars.finds_now ?? ""), rightNow: String(vars.right_now ?? "") })).catch(() => []),
+      // The same source check as above, run again for the audit once the call's ledger is read (what its searches found mid-call is a
+      // source too): a sentence it flags can become a correction the follow-up text carries.
+      offerSource: { turns, given: { firstName: String(vars.first_name ?? ""), contextSummary: String(vars.context_summary ?? ""), findsNow: String(vars.finds_now ?? ""), rightNow: String(vars.right_now ?? "") } },
       startedAt: Number(data.metadata?.start_time_unix_secs) ? new Date(Number(data.metadata.start_time_unix_secs) * 1000) : null,
       endedAt: Number(data.metadata?.start_time_unix_secs) && Number(data.metadata?.call_duration_secs) ? new Date((Number(data.metadata.start_time_unix_secs) + Number(data.metadata.call_duration_secs)) * 1000) : null,
       twilioMetadata: callSid ? { call_sid: callSid } : null,
@@ -751,8 +752,9 @@ async function processEndedCallInScope(o: {
   // When the call started and ended (the webhook's metadata): which commitments were this call's, and the confirmation's latency.
   startedAt?: Date | null;
   endedAt?: Date | null;
-  // The offer source check's flags (services/offerGuard.ts unsourcedInCall), for the audit (harness/callGrounding.ts offerSourceCorrections).
-  offerFlags?: OfferFlag[];
+  // What the offer source check reads (services/offerGuard.ts unsourcedInCall): the call's turns and what it was given. Run for the
+  // audit with the finds from the call's ledger added (harness/callGrounding.ts offerSourceCorrections).
+  offerSource?: { turns: { role?: string; message?: string | null }[]; given: { firstName?: string; contextSummary?: string; findsNow?: string; rightNow?: string } };
 }): Promise<{ status: number; body: unknown; stored?: { transcriptSha256: string }; unstored?: true }> {
   const user_id = o.userId;
   const chat_id = o.callKey;
@@ -935,8 +937,11 @@ async function processEndedCallInScope(o: {
         // What its searches found on the call: a correction never takes back a real find (and the offer source check's flags, which
         // can't see what a search found mid-call, are held to it too).
         const foundOnCall = ledger ? L.foundOnCall(ledger) : [];
-        const offerFlags = o.offerFlags ?? [];
-        await auditCall(user_id, cleanTranscript, knownBeforeCall, { doneOnCall, foundOnCall, offerFlags });
+        const offerFlags: OfferFlag[] = o.offerSource ? await import("../services/offerGuard.js").then((m) => m.unsourcedInCall(o.offerSource!.turns, { ...o.offerSource!.given, foundOnCall: L.foundLines(foundOnCall).join("\n") })).catch(() => []) : [];
+        // The ledger unread: nothing to check a correction against, so none is written (a real send or find could be "taken back"); the
+        // promises are still kept.
+        const correctionsHeld = ledger ? undefined : "the call's done list couldn't be read";
+        await auditCall(user_id, cleanTranscript, knownBeforeCall, { doneOnCall, foundOnCall, offerFlags, correctionsHeld });
       })().catch(() => {});
       // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
       {
