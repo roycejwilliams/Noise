@@ -78,30 +78,77 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
 
 // ---------------------------------------------------------------- 2. honest speech
 {
-  const fake = (result: unknown | (() => Promise<unknown>)) => ({ defs: [{ name: "shareLink", description: "s", input_schema: { type: "object", properties: {} } }], names: new Set(["shareLink"]), note: CT.CALL_TOOLS_GUIDE, run: async () => (typeof result === "function" ? (result as any)() : result) });
-  // Done: the claim after the result is said.
-  const ok = scripted([[...text("One sec, pulling it up."), ...tool("s1", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Just sent it, it's in your texts.")]);
-  const a = await go({ stream: ok.stream, tools: fake({ ok: true, delivered: true }) });
-  check("2. \"just sent it\" is said after the send came back done", /One sec, pulling it up\. Just sent it, it's in your texts\./.test(a.content), a);
-  // "Sending it now" before the result: never, even when the send then works.
-  const now = scripted([[...text("Sending it now."), ...tool("s2", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("It's in your texts.")]);
-  const b = await go({ stream: now.stream, tools: fake({ ok: true, delivered: true }) });
-  check("2. \"sending it now\" before the result is never said", !/Sending it now/.test(b.content) && /It's in your texts\./.test(b.content) && b.dropped.some((d) => /Sending it now/.test(d)), b);
-  // The claim before the tool, in the same breath: dropped (the result isn't known yet).
-  const early = scripted([[...text("Just sent it."), ...tool("s3", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("There, it's in your texts.")]);
-  const c = await go({ stream: early.stream, tools: fake({ ok: true, delivered: true }) });
-  check("2. a \"sent\" said before the tool returns is dropped; the one after it stays", !/^Just sent it/.test(c.content) && /it's in your texts/.test(c.content), c);
-  // Failed: "just sent it" is dropped, and the turn answers again (never dead air): the after-call promise is said.
-  const bad = scripted([[...text("One sec."), ...tool("s4", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Just sent it."), text("That didn't go through, so I'll text it to you right after we hang up.")]);
-  const d = await go({ stream: bad.stream, tools: fake({ ok: false, owedAfterCall: true, note: "It didn't send on the call." }) });
-  check("2. a failed send: \"just sent it\" is dropped and Cue says it'll text it right after the call", !/Just sent it/.test(d.content) && /I'll text it to you right after we hang up/.test(d.content) && bad.reqs.length === 3, { d, reqs: bad.reqs.length });
+  // A fake send toolset: shareLink texts them (texts), calendarConnection texts only on connect, updateNotes never.
+  const fake = (result: unknown | ((name: string, input: any) => Promise<unknown>), names = ["shareLink", "calendarConnection", "updateNotes"]) => ({
+    defs: names.map((n) => ({ name: n, description: n, input_schema: { type: "object", properties: {} } })),
+    names: new Set(names),
+    note: CT.CALL_TOOLS_GUIDE,
+    texts: CT.textsThem,
+    run: async (name: string, input: any) => (typeof result === "function" ? (result as any)(name, input) : result),
+  });
+  const JAZZ_OK = { ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }] };
+  const JAZZ_FAIL = { ok: false, owedAfterCall: true, note: "It didn't send on the call.", items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: false }] };
+  const JAZZ_SLOW = { ok: false, stillRunning: true, owedAfterCall: true, note: "Not back yet.", items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: false }] };
+  const send = '{"what":["Rooftop Jazz Night"]}';
+  // F2: every phrasing, held after a failed and a timed-out send, said after a successful one.
+  const phrasings = ["Texted it.", "Sent it over.", "Sent it to you.", "Link's in your texts.", "I put it in your texts.", "I popped it in your texts.", "You should have it now.", "Check your texts.", "Okay, that's sent.", "That's on its way to you.", "Just shot it over.", "You've got it.", "Just sent it, it's in your texts.", "I just texted you the link."];
+  const leaks: string[] = [], lost: string[] = [];
+  for (const line of phrasings) {
+    for (const [label, result] of [["failed", JAZZ_FAIL], ["timed out", JAZZ_SLOW]] as const) {
+      const up = scripted([[...text("One sec."), ...tool("f", "shareLink", send)], text(line), text("I'll text it to you right after we hang up.")]);
+      const r = await go({ stream: up.stream, tools: fake(result) });
+      if (r.content.includes(line)) leaks.push(`${label}: ${line}`);
+    }
+    const ok = scripted([[...text("One sec."), ...tool("s", "shareLink", send)], text(line)]);
+    const r = await go({ stream: ok.stream, tools: fake(JAZZ_OK) });
+    if (!r.content.includes(line)) lost.push(line);
+  }
+  check(`2. F2: every send-claim phrasing is held after a failed or timed-out send (${leaks.join(" | ") || "none leaked"})`, !leaks.length, leaks);
+  check(`2. F2: and said after a send that came back done (${lost.join(" | ") || "none lost"})`, !lost.length, lost);
+  check("2. F2: honest lines stay: future, conditional, earlier sends, someone else's send, questions, ordinary 'got it'", ["I'll text it to you right after we hang up.", "It'll be in your texts in a few minutes.", "I texted you the link yesterday.", "The deck you sent me looks great.", "Did it come through?", "Got it.", "Check your texts later for the link.", "It's on its way to being a great weekend.", "I haven't sent it yet."].every((l) => P.stripSendClaim(l) === l), ["I'll text it to you right after we hang up.", "It'll be in your texts in a few minutes.", "I texted you the link yesterday.", "The deck you sent me looks great.", "Did it come through?", "Got it.", "Check your texts later for the link.", "It's on its way to being a great weekend.", "I haven't sent it yet."].filter((l) => P.stripSendClaim(l) !== l));
+  check("2. F2: a claim clause after an honest one is still a claim", P.stripSendClaim("Sent it, let me know if it doesn't come through.") === null);
+  // F3: only a tool that really texted counts, item by item.
+  const status = scripted([[...text("Let me check."), ...tool("c", "calendarConnection", '{"action":"status"}')], text("Sent it.")]);
+  const st = await go({ stream: status.stream, tools: fake({ ok: true, connected: true }) });
+  check("2. F3: a calendar status check texts nothing, so \"Sent it\" stays held", !/Sent it/.test(st.content), st);
+  const notes = scripted([[...text("Noting that."), ...tool("n", "updateNotes", '{"what":"jazz"}')], text("Sent it over.")]);
+  const nt = await go({ stream: notes.stream, tools: fake({ ok: true }) });
+  check("2. F3: a note that came back done doesn't make a send true", !/Sent it over/.test(nt.content), nt);
+  const two = scripted([[...text("One sec."), ...tool("t", "shareLink", '{"what":["Rooftop Jazz Night","Founders Breakfast"]}')], text("I've texted you both."), text("The jazz one is in your texts; I'll send the breakfast one right after we hang up.")]);
+  const tw = await go({ stream: two.stream, tools: fake({ ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }, { name: "Founders Breakfast", url: "https://lu.ma/fb", delivered: false }] }) });
+  check("2. F3: \"I've texted you both\" after one of two went is held; the true line is said", !/both/.test(tw.content) && /jazz one is in your texts/.test(tw.content), tw);
+  const wrong = scripted([[...text("One sec."), ...tool("w", "shareLink", '{"what":["Rooftop Jazz Night","Founders Breakfast"]}')], text("Just sent you Founders Breakfast."), text("The jazz one went; the breakfast one comes right after we hang up.")]);
+  const wr = await go({ stream: wrong.stream, tools: fake({ ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }, { name: "Founders Breakfast", url: "https://lu.ma/fb", delivered: false }] }) });
+  check("2. F3: a claim naming the item that didn't go is held", !/Just sent you Founders Breakfast/.test(wr.content), wr);
+  check("2. F3: the call's send rule: shareLink texts; calendar only on connect; notes never", CT.textsThem("shareLink", {}) && CT.textsThem("calendarConnection", { action: "connect" }) && !CT.textsThem("calendarConnection", { action: "status" }) && !CT.textsThem("calendarConnection", { action: "disconnect" }) && !CT.textsThem("updateNotes", {}) && !CT.textsThem("makeDeck", {}));
+  // F4: "texting it to you now" goes out the moment the send starts (true then), not after it, and never without a send.
+  const slowOk = () => new Promise((res) => setTimeout(() => res(JAZZ_OK), 250));
+  const inflight = scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", send)], text("There, it's in your texts.")]);
+  let firstAudioMs = -1;
+  const t0 = Date.now();
+  const out: string[] = [];
+  for await (const c of P.runCallLlm(body() as any, { stream: inflight.stream, tools: fake(() => slowOk()) as any })) { const t = c.choices[0].delta.content as string | undefined; if (t && firstAudioMs < 0) firstAudioMs = Date.now() - t0; if (t) out.push(t); }
+  const all = out.join("");
+  console.log(`probe: first audio ${firstAudioMs}ms with the in-flight line (the send itself takes 250ms)`);
+  check(`2. F4: an in-flight "texting it to you now" is said while the send runs (first words at ${firstAudioMs}ms, send takes 250ms)`, /Texting it to you now/.test(all) && firstAudioMs >= 0 && firstAudioMs < 150 && /it's in your texts/.test(all), { firstAudioMs, all });
+  const noSend = scripted([text("Texting it to you now.")]);
+  const ns = await go({ stream: noSend.stream, tools: fake(JAZZ_OK) });
+  check("2. F4: with no send called, \"texting it now\" is never said", !/Texting it/.test(ns.content), ns);
+  const failAfterNow = scripted([[...text("Texting it to you now."), ...tool("x", "shareLink", send)], text("Anything else on your mind?"), text("That didn't go through, so I'll text it to you right after we hang up.")]);
+  const fa = await go({ stream: failAfterNow.stream, tools: fake(JAZZ_FAIL) });
+  check("2. F4: the send they heard was going fails: the next words say it comes right after the call, never \"sent\"", /Texting it to you now/.test(fa.content) && /right after we hang up/.test(fa.content) && !/\bsent\b/i.test(fa.content), fa);
+  const slowFail = scripted([[...text("Texting it to you now."), ...tool("y", "shareLink", send)], text("I'll text it to you right after the call.")]);
+  const sf = await go({ stream: slowFail.stream, tools: fake(JAZZ_SLOW) });
+  check("2. F4: timed out after the in-flight line: it says right after the call, with no retry needed", /right after the call/.test(sf.content) && slowFail.reqs.length === 2, { sf, reqs: slowFail.reqs.length });
   // A save that came back done may be called done; one that didn't may not.
-  const saved = scripted([[...text("Got it."), ...tool("s5", "shareLink", "{}")], text("Saved it.")]);
+  const saved = scripted([[...text("Got it."), ...tool("s5", "updateNotes", "{}")], text("Saved it.")]);
   const e = await go({ stream: saved.stream, tools: fake({ ok: true }) });
-  const unsaved = scripted([[...text("Got it."), ...tool("s6", "shareLink", "{}")], text("I've saved it.")]);
+  const unsaved = scripted([[...text("Got it."), ...tool("s6", "updateNotes", "{}")], text("I've saved it.")]);
   const f = await go({ stream: unsaved.stream, tools: fake({ ok: false, stillRunning: true }) });
   check("2. \"saved\" only after a tool came back done", /Saved it\./.test(e.content) && !/saved it/i.test(f.content), { e: e.content, f: f.content });
-  check("2. the guard's words: sent needs a send, now-claims never, past sends stay", P.stripSendClaim("I just texted you the link.") === null && P.stripSendClaim("I just texted you the link.", { sent: true }) !== null && P.stripSendClaim("I'm sending it over now.", { sent: true }) === null && P.stripSendClaim("I texted you the link yesterday.") !== null && P.stripSendClaim("I'll text it to you right after we hang up.") !== null && P.stripSendClaim("Sent.", { acted: true }) === null);
+  // F10: a held claim has its own decision reason, never an unsourced offer.
+  const fl = await go({ stream: scripted([[...text("One sec."), ...tool("z", "shareLink", send)], text("Sent it over."), text("I'll text it right after we hang up.")]).stream, tools: fake(JAZZ_FAIL) });
+  check("2. F10: a held claim is reported as a claim (call.claim_held), not an unsourced offer", fl.dropped.some((d) => /Sent it over\. \| claim held: /.test(d)) && /decision: claim \? "call\.claim_held" : "call\.offer_unsourced"/.test(src("routes/callLlm.ts")), fl.dropped);
 }
 
 // ---------------------------------------------------------------- 2b. the real call shareLink: link then caption, owed when it doesn't go
@@ -215,17 +262,44 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   const pc = src("jobs/postCallFollowUp.ts");
   check("4. the reflection gets what was done on (and right after) the call, as never to mention, resend or offer again", /done_on_the_call_already_never_mention_resend_or_offer_again: doneOnCall\.length \? doneOnCall : null/.test(pc) && /readCallLedger\(userId/.test(pc) && /decision = 'call\.owed_delivery' AND action = 'sent'/.test(pc));
   check("4. the ledger's done lines are Cue's own labels", L.doneLines(ledger)[0] === "the link https://lu.ma/fb" && L.doneLabels("saveAsk", { what: "jazz nights" })[0] === "saved an ask to keep looking for: jazz nights");
-  // The audit: a mid-call action is done; a claim with nothing behind it is still caught.
+  // F5: the done list names the actual item (the call shareLink's names beside its links).
+  const BF = { name: "Founders Breakfast", url: "https://lu.ma/fb" };
+  const labels = L.doneLabels("shareLink", { urls: [BF.url], names: [BF.name] });
+  check("4. F5: a call send's done label names the item and its link", labels[0] === `the link to ${BF.name} (${BF.url})`, labels);
+  const named = L.ledgerFromRows([{ decision: "call.done_on_call", action: "shareLink", proposal: { kind: "send", labels, urls: [BF.url], names: [BF.name] }, created_at: new Date() }]);
+  const doneSend = L.doneItems(named);
+  check("4. F5: done items carry the send's kind, names and links (for the audit and the reflection)", doneSend[0]?.kind === "send" && doneSend[0].names[0] === BF.name && doneSend[0].urls[0] === BF.url && L.doneLines(named)[0].includes(BF.name));
+  // F6: the audit excuses only a claim that names what was done, and a send claim only by a send.
   const claim = { quote: "I just texted you the Founders Breakfast link.", type: "invented_fact" as const, what: "", specifics: ["Founders Breakfast"] };
-  const withDone = G.planCallAudit([claim], "assistant: I just texted you the Founders Breakfast link.", { knownBefore: "", records: "", tasks: [], doneOnCall: ["sent the link https://lu.ma/fb", "Founders Breakfast"] });
-  const without = G.planCallAudit([claim], "assistant: I just texted you the Founders Breakfast link.", { knownBefore: "", records: "", tasks: [], doneOnCall: [] });
+  const plan = (c: any, done: any[]) => G.planCallAudit([c], `assistant: ${c.quote}`, { knownBefore: "", records: "", tasks: [], doneOnCall: done });
+  const withDone = plan(claim, doneSend);
   check("4. the audit: \"I just texted you\" a tool really did is done, not a correction", withDone.corrections.length === 0 && withDone.refused.some((r) => /done on the call/.test(r.why)), withDone);
-  check("4. the audit keeps the honest check: the same claim with nothing done on the call is a correction", without.corrections.length === 1, without);
-  const promised = G.planCallAudit([{ quote: "I'll text you the Founders Breakfast link.", type: "promise_keepable", what: "text them the Founders Breakfast link" }], "user: send me the breakfast\nassistant: I'll text you the Founders Breakfast link.", { knownBefore: "", records: "", tasks: [], doneOnCall: ["Founders Breakfast"] });
+  check("4. the audit keeps the honest check: the same claim with nothing done on the call is a correction", plan(claim, []).corrections.length === 1);
+  // The jazz-brunch probe: only a saveAsk was done; "I texted you the jazz brunch link" shares its words but nothing texted them.
+  const saveOnly = [{ kind: "start", label: "saved an ask to keep looking for: jazz brunch", names: [], urls: [] }];
+  const brunch = { quote: "I just texted you the jazz brunch link.", type: "invented_fact" as const, what: "", specifics: ["jazz brunch"] };
+  check("4. F6: a send claim isn't excused by a save on the same subject (the jazz-brunch probe)", plan(brunch, saveOnly).corrections.length === 1);
+  const oneWord = { quote: "I just texted you the Founders Dinner link.", type: "invented_fact" as const, what: "", specifics: ["Founders Dinner"] };
+  check("4. F6: one shared word with a real send doesn't excuse a claim about something else", plan(oneWord, doneSend).corrections.length === 1);
+  check("4. F6: a claim of saving that matches a save is excused", plan({ quote: "I've saved the jazz brunch ask.", type: "invented_fact" as const, what: "", specifics: [] }, saveOnly).corrections.length === 0);
+  check("4. F6: a bare \"just sent it\" is excused only by exactly one send", plan({ quote: "Just sent it.", type: "invented_fact" as const, what: "", specifics: [] }, doneSend).corrections.length === 0 && plan({ quote: "Just sent it.", type: "invented_fact" as const, what: "", specifics: [] }, saveOnly).corrections.length === 1);
+  const promised = G.planCallAudit([{ quote: "I'll text you the Founders Breakfast link.", type: "promise_keepable", what: "text them the Founders Breakfast link" }], "user: send me the breakfast\nassistant: I'll text you the Founders Breakfast link.", { knownBefore: "", records: "", tasks: [], doneOnCall: doneSend });
   check("4. a promise the call already kept opens nothing", promised.promises.length === 0 && promised.refused.length === 1, promised);
-  check("4. the audit prompt lists what was done on the call", /What Cue did DURING the call with its own tools[\s\S]*- Founders Breakfast/.test(G.callAuditPrompt("assistant: hi", "", undefined, ["Founders Breakfast"])));
+  const notKept = G.planCallAudit([{ quote: "I'll text you the jazz brunch link.", type: "promise_keepable", what: "text them the jazz brunch link" }], "user: send me the jazz brunch\nassistant: I'll text you the jazz brunch link.", { knownBefore: "", records: "", tasks: [], doneOnCall: saveOnly });
+  check("4. F6: a promise to text something isn't covered by a save on it", notKept.promises.length === 1, notKept);
+  check("4. the audit prompt lists what was done on the call", /What Cue did DURING the call with its own tools[\s\S]*- the link to Founders Breakfast/.test(G.callAuditPrompt("assistant: hi", "", undefined, doneSend)));
+  // F7: a look-out promise isn't closed by one find.
+  check("4. F7: \"keep looking for more\" isn't kept by one later find", !FT.keptByWhatWent({ goal: `${CC.COMMIT_PREFIX}"I'll keep looking for more jazz nights and text you."`, theirWords: "send me more jazz stuff", createdAt: "2026-10-29T18:02:00Z" }, [{ at: new Date("2026-10-29T18:03:00Z"), text: "https://lu.ma/jazz2", kind: "link" }, { at: new Date("2026-10-29T18:03:01Z"), text: "Late Jazz at the Chapel", kind: "text" }]));
+  // F8: a commitment is covered only by a tool done that turn for the same thing.
+  const jazzSent = { name: "shareLink", input: { what: ["Rooftop Jazz Night"] }, result: { ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }] } };
+  const noteDone = { name: "updateNotes", input: { what: "jazz" }, result: { ok: true } };
+  check("4. F8: \"I'll text you the jazz link\" is covered by the jazz send this turn", CC.commitmentKeptBy("I'll text you the jazz link.", "", [jazzSent]));
+  check("4. F8: ...not by a note that came back done", !CC.commitmentKeptBy("I'll text you the jazz link.", "", [noteDone]));
+  check("4. F8: ...and not by a send of something else", !CC.commitmentKeptBy("I'll text you the breakfast link.", "", [jazzSent]));
+  check("4. F8: a write-up is covered only by the thing made for it", !CC.commitmentKeptBy("I'll put together the partner plan.", "", [noteDone, jazzSent]) && CC.commitmentKeptBy("I'll put together the partner plan.", "", [{ name: "writeDocument", input: { title: "Partner plan" }, result: { ok: true, pending: true } }]));
+  check("4. F8: the route covers each commitment on its own (uncovered ones still open)", /commitmentKeptBy\(s, coBefore, doneThisTurn\)/.test(src("routes/callLlm.ts")) && /commitments\.filter\(\(x\) => !covered\.includes\(x\)\)\) await trackCallCommitment/.test(src("routes/callLlm.ts")));
   const co = src("routes/co.ts");
-  check("4. the post-call audit reads the call's ledger", /readCallLedger\(user_id[\s\S]{0,200}doneLines[\s\S]{0,120}await auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall \}\)/.test(co));
+  check("4. the post-call audit reads the call's ledger", /readCallLedger\(user_id[\s\S]{0,200}doneItems[\s\S]{0,160}await auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall \}\)/.test(co));
 }
 
 // ---------------------------------------------------------------- 5. latency: one decision per proxy turn, numbers only

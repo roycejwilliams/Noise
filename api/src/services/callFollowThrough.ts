@@ -28,8 +28,12 @@ import type { CallLedger } from "./callLedger.js";
 // Pure: a promise from this call is already kept by something that went out after it was made, of the kind it promised, and about
 // it (its words, or what they asked): promiseKeptBy alone takes any link for a links promise, which is enough to mark one kept but not
 // to skip doing it.
+// A promise to keep looking ("keep looking for more", "whenever something comes up"): one find never fulfils it; it closes only by
+// the look-out's own rules, never here.
+const LOOKOUT = /\b(?:keep (?:looking|an eye|an ear|watching|searching|digging|checking)|keep (?:you )?posted|look(?:ing)? out for|watch(?:ing)? for|more (?:like|of|options|ideas|events)|any (?:more|others|new)|anything (?:else|new|more)|whenever|as (?:they|things|more) come|ongoing|every (?:week|day|time)|from now on)\b/i;
 export function keptByWhatWent(c: Pick<Commitment, "goal" | "theirWords" | "createdAt">, went: Sent[]): boolean {
   if (!c.goal || !c.createdAt) return false;
+  if (LOOKOUT.test(goalBody(c.goal))) return false;
   const at = new Date(c.createdAt);
   if (!promiseKeptBy({ goal: c.goal, theirWords: c.theirWords ?? null, at }, went).kept) return false;
   const body = goalBody(c.goal);

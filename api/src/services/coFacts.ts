@@ -69,8 +69,12 @@ export async function recordFact(f: CoFact): Promise<void> {
 export function toolAction(tool: string, input: any): { relation: string; label: string; url?: string }[] | null {
   const s = (v: unknown) => String(v ?? "").trim();
   switch (tool) {
+    // On a call, each link with what it is (services/callTools.ts: names beside urls, in order).
     case "shareLink":
-      return (Array.isArray(input?.urls) ? input.urls : []).map((u: string) => ({ relation: "sent", label: `the link ${s(u)}`, url: s(u) }));
+      return (Array.isArray(input?.urls) ? input.urls : []).map((u: string, i: number) => {
+        const name = Array.isArray(input?.names) ? s(input.names[i]) : "";
+        return { relation: "sent", label: name ? `the link to ${name} (${s(u)})` : `the link ${s(u)}`, url: s(u) };
+      });
     case "sendContactCard":
       return [{ relation: "sent", label: "Cue's contact card" }];
     case "sendInvite":
