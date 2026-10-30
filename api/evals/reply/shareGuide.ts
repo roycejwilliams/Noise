@@ -14,7 +14,11 @@ const moment = (mode: any, pushback: string | null = null) => D.momentInstructio
 // ---- The guidance, only where it belongs ----
 check("a sharing turn gets the sharing guidance", moment("sharing").includes(D.SHARING_GUIDE));
 check("a feedback turn gets the feedback guidance", moment("feedback", "replies feel dry").includes(D.FEEDBACK_GUIDE));
-check("feedback keeps the pushback line beside it", /They're pushing back on what you said: replies feel dry/.test(moment("feedback", "replies feel dry")));
+check("feedback keeps the pushback line beside it", /They're pushing back on what you said: replies feel dry\./.test(moment("feedback", "replies feel dry")));
+// Independent review of #316: the generic pushback directive ("Own it plainly in a few words, fix it…") beside FEEDBACK_GUIDE brought
+// the template back. On a feedback turn the pushback is stated only; every other mode keeps the directive.
+check("a feedback turn with pushback carries no 'Own it' directive", !/Own it/i.test(moment("feedback", "x")) && !/Own it/i.test(moment("feedback", "replies feel dry")));
+check("other modes with pushback keep the directive, unchanged", /They're pushing back on what you said: x\. Own it plainly in a few words, fix it, and don't repeat it or defend it\./.test(moment("reacting", "x")));
 for (const m of ["asking", "logistics", "planning", "small_talk", "reacting"]) check(`a ${m} turn gets neither`, !moment(m).includes(D.SHARING_GUIDE) && !moment(m).includes(D.FEEDBACK_GUIDE));
 check("no moment read, no guidance", D.momentInstruction(null) === null);
 

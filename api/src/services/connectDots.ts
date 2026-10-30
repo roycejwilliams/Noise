@@ -124,7 +124,9 @@ export function momentInstruction(m: Moment | null): string | null {
   if (!m) return null;
   const parts: string[] = [];
   if (m.topic) parts.push(`Right now the conversation is about: ${m.topic} (they're ${m.mode === "small_talk" ? "just closing out" : m.mode}). Stay on that; don't bring in their other plans or asks unless they do.`);
-  if (m.pushback) parts.push(`They're pushing back on what you said: ${m.pushback}. Own it plainly in a few words, fix it, and don't repeat it or defend it.`);
+  // On a feedback turn the pushback is stated plainly and FEEDBACK_GUIDE says what to do with it: an "own it" directive beside it
+  // brought back the self-explaining opener (independent review of #316, 2026-10-29).
+  if (m.pushback) parts.push(m.mode === "feedback" ? `They're pushing back on what you said: ${m.pushback}.` : `They're pushing back on what you said: ${m.pushback}. Own it plainly in a few words, fix it, and don't repeat it or defend it.`);
   if (m.mode === "sharing") parts.push(SHARING_GUIDE);
   if (m.mode === "feedback") parts.push(FEEDBACK_GUIDE);
   return parts.length ? parts.join(" ") : null;
