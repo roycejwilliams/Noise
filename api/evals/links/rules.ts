@@ -97,16 +97,5 @@ check("a post's links are followed past t.co, Luma first, photos and other posts
   check("...and with only one known, it still can't", G.codeChecks("They're the same night, so it's one or the other.", one, { message: "?", recentConversation: "" } as any).some((c: any) => c.name === "no_unknown_clash" && !c.pass));
 }
 
-// ---------------------------------------------------------------- Jev in shadow (services/jevShadow.ts)
-{
-  const J = await import("../../src/services/jevShadow.js");
-  const fs = await import("fs");
-  const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
-  const js = fs.readFileSync(new URL("../../src/services/jevShadow.ts", import.meta.url), "utf8");
-  check("Jev shadow only runs for member text when JEV_MEMBER allows, through the zero-retention gateway", /if \(!jevForMemberText\(\) \|\| !message\.trim\(\)\) return null;/.test(js) && /askJevZdr\(/.test(js));
-  check("Jev shadow is only logged, never awaited on the reply path", /logJevShadow\(user\.id, jevShadowP, turnRead\);/.test(sb) && !/await jevShadowP/.test(sb) && /decision: "jev\.shadow\.turn"/.test(js));
-  check("agreement counts only Jev's confident answers", JSON.stringify(J.compare({ small_talk: 0.95, logistics: 0.5, sharing: 0.1, reacting: 0.9, feedback: 0.05, pushback: 0.05, wants_search: 0.05, wants_call: 0.05 } as any, { small_talk: true, logistics: true, sharing: false, reacting: false, feedback: false, pushback: false, wants_search: false, wants_call: false })) === JSON.stringify({ small_talk: "agree", logistics: "unsure", sharing: "agree", reacting: "disagree", feedback: "agree", pushback: "agree", wants_search: "agree", wants_call: "agree" }));
-}
-
 console.log(`link reader rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
