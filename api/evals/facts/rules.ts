@@ -164,7 +164,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   check("only their own asks, threads, sends and lessons are read, here and in the turn's one picture", ownerOnly(cd) && ownerOnly(src("services/turnContext.ts")));
   check("a thanks or sign-off leads nowhere: connections only when they share or react", /"small_talk" \(thanks, ok, a sign-off\)/.test(cd) && /DOTS_MODES: Mode\[\] = \["sharing", "reacting"\]/.test(cd) && /dots: forReply && !DOTS_MODES\.includes\(mode\) \? \[\] : dots/.test(cd));
   const sb = src("routes/sendblue.ts");
-  check("replies: found alongside the router from the turn's picture, handed to Cue before it drafts", /dotsP = turnP\.then\(\(t\) =>\s*readMoment\(/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
+  check("replies: found alongside the router from the turn's picture, handed to Cue before it drafts", /dotsP = Promise\.resolve\(turnRead\.moment\)/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
   const ev = src("agent/eventDiscoverySurfacing.ts");
   check("event offers: the connection can be the reason it fits, and isn't stripped as an identity claim", /how_this_connects_to_the_rest_of_their_life/.test(ev) && /grounding: `\$\{askText\}\\n\$\{match\.name\}\\n\$\{dots\.join\("\\n"\)\}\\n\$\{why\}`/.test(ev) && /stripUngroundedIdentity\(text, item\.grounding\)/.test(ev) && /stripUngroundedIdentity\(c, b\.item\.grounding\)/.test(src("harness/bundleComposer.ts")));
 }

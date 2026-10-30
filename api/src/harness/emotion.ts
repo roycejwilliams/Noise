@@ -126,8 +126,8 @@ Return ONLY JSON: {"emotion": "one or two words" or null, "intensity": "low" | "
 // Capture: calls (read from what they said)
 //
 // Calls used to bring Hume's voice scores. ElevenLabs sends none, so a call's
-// feelings are read from the member's own lines with the same read the text
-// path uses (readTextEmotion: same labels, same intensity, same target), each
+// feelings are read from the member's own lines with readTextEmotion (the
+// labels, intensity and target the text turn's read uses), each
 // with the lines before it for context. Words only: tone isn't heard (the
 // voice-layer pilot is looking at that). Only longer lines are read (a short
 // "yeah" has no feeling to name, and each read is a model call), the strongest
