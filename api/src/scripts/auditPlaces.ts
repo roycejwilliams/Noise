@@ -14,8 +14,8 @@ import type { PlaceSource } from "../services/wantPlace.js";
 // every cache row that disagrees with where its uses resolve now (a member's place by that name, a member's home city by that name in
 // their home region, or for a qualified row its own resolution). Each says how it was set: confirmed (their words or their
 // correction), inferred (Cue's read), or cached. A confirmed place is never written, with or without --apply.
-// Reads only: the cache is read by its rows and the geocoders are asked directly (placeResolve.ts lookupPlace writes nothing); the
-// one write path is applyAudit, and only with --apply.
+// Reads only: the cache is read by its rows and places are looked up directly (placeResolve.ts lookupPlace: Google plus the local
+// GeoNames table, writes nothing); the one write path is applyAudit, and only with --apply.
 const apply = process.argv.includes("--apply");
 
 async function main() {
@@ -28,8 +28,8 @@ async function main() {
   const lookups = new Map<string, R.PlaceCandidate[]>();
   const candidatesFor = async (place: string) => {
     if (!lookups.has(place)) {
-      const hits = await R.lookupPlace(place).catch(() => ({ google: [], openMeteo: [] }));
-      lookups.set(place, R.mergeCandidates(hits.google, hits.openMeteo, place));
+      const hits = await R.lookupPlace(place).catch(() => ({ google: [], local: [] }));
+      lookups.set(place, R.mergeCandidates(hits.google, hits.local, place));
     }
     return lookups.get(place)!;
   };
