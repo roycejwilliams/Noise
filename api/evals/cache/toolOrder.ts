@@ -41,6 +41,6 @@ check("ordering adds and removes nothing, and leaves every tool as it was except
 check("ordering: always-present first in their own order, the come-and-go ones after", JSON.stringify(Object.keys(ordered)) === JSON.stringify(["zeta", "alpha", "leaveItAtReaction", "saveKitFact"].filter((n) => !comeAndGoTools().has(n)).concat(["leaveItAtReaction", "saveKitFact"].filter((n) => comeAndGoTools().has(n)).sort())), Object.keys(ordered));
 check("the reaction tool's description no longer names their last reaction", !String((sets.acked as any).reactInsteadOfReplying.description).includes("👍"));
 const reply = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
-check("their last reaction is in the reply prompt's member part instead (both prompts)", (reply.match(/Your last reaction to them was \$\{input\.lastReaction\}/g) ?? []).length === 2);
+check("their last reaction is in the reply prompt's member part instead (one reply prompt since the sweep)", (reply.match(/Your last reaction to them was \$\{input\.lastReaction\}/g) ?? []).length === 1);
 console.log(`tools in cache order: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

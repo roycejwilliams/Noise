@@ -29,6 +29,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import type { GateCheck } from "./core.js";
 import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "../services/jevGateway.js";
 import { recentVoiceFlags, renderVoiceFlags, type ShownVoiceFlags } from "../services/voiceFlags.js";
+import { LAST_CALL_MOMENTS_HEADER } from "../services/callMomentsLine.js";
 
 export type Valence = "negative" | "positive" | "mixed";
 export type Intensity = "low" | "medium" | "high";
@@ -437,11 +438,11 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
   // A low-intensity read ("low clarifying") is noise in a prompt; only show
   // feelings strong enough to change how Co should respond.
   if (ctx.current?.source === "text" && ctx.current.intensity !== "low") {
-    lines.push(`Right now (their texts, ${ago(ctx.current.at, now)}): ${ctx.current.intensity} ${ctx.current.emotion}${ctx.current.about ? ` about ${ctx.current.about}` : ""}.`);
+    lines.push(`Right now (read from their texts, ${ago(ctx.current.at, now)}): ${ctx.current.intensity} ${ctx.current.emotion}${ctx.current.about ? ` about ${ctx.current.about}` : ""}.`);
   }
   if (ctx.lastCall?.moments.some((m) => m.intensity !== "low")) {
     lines.push(
-      `On your call ${ago(ctx.lastCall.at, now)}, their voice showed: ${ctx.lastCall.moments
+      `On your call ${ago(ctx.lastCall.at, now)}, ${LAST_CALL_MOMENTS_HEADER} ${ctx.lastCall.moments
         .filter((m) => m.intensity !== "low")
         .map((m) => `${m.emotion} (${m.intensity})${m.quote ? ` when they said "${m.quote}"` : ""}`)
         .join("; ")}.`,
@@ -450,10 +451,10 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
   const voiceLine = ctx.voice ? renderVoiceFlags(ctx.voice, ago(ctx.voice.at, now)) : null;
   if (voiceLine) lines.push(voiceLine);
   for (const r of ctx.recurring) lines.push(`Keeps coming up: ${r.emotions.join(", ")} about ${r.about} (${r.count} times in two weeks).`);
-  if (ctx.needsCare) lines.push("They've been struggling in the last day.");
+  if (ctx.needsCare) lines.push("The last day's reads point to a hard time.");
   if (ctx.withCo?.frustrated) {
     lines.push(
-      `They're frustrated with what Cue has turned up lately${ctx.withCo.about ? ` (${ctx.withCo.about})` : ""}. That's about Cue, not a hard day in their life: look wider and try harder rather than going quiet or getting smaller.`,
+      `Reads suggest they're frustrated with what Cue has turned up lately${ctx.withCo.about ? ` (${ctx.withCo.about})` : ""}. If so, that's about Cue, not a hard day in their life: look wider and try harder rather than going quiet or getting smaller.`,
     );
   }
   return lines.join("\n");

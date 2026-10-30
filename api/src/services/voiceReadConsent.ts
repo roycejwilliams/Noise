@@ -20,6 +20,7 @@
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { voiceReadAllowed, voiceReadState, voiceReadTextDue, type VoiceReadConsent, type VoiceReadState } from "./voiceRead.js";
+import { LAST_CALL_MOMENTS_LINE } from "./callMomentsLine.js";
 
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 // Tests only (evals/review/voiceReadConsent.ts): the database and the queue the reply tool's calls use, so a turn runs against fakes.
@@ -56,7 +57,7 @@ export const VOICE_READ_OFF_ON_CALL_NOTE = "For the rest of this call, don't use
 export const VOICE_READ_CALL_RULE = "The read of how they sound is on for this call. If they ask you to stop listening to how they sound, only your voiceRead tool stops it. If you don't have that tool, don't say it's stopped or that you'll stop: tell them to text you, in a sentence, that they want the voice read off (like \"turn off the voice read\"). Never tell them to text the single word stop: that unsubscribes them from all texts and calls and leaves the voice read on file.";
 // The call's starting context line that carries the last call's moments (harness/emotion.ts renderEmotionalContext), voice-read
 // moments among them. After a stop or a no on a call it is taken out of every later turn's messages (stripVoiceReadLines).
-const LAST_CALL_MOMENTS_LINE = /^[ \t]*On your call [^\n]*?, their voice showed: [^\n]*(\r?\n|$)/gm;
+// One header shared with the renderer (services/callMomentsLine.ts), so the strip always matches what was written.
 // Pure: the call's messages with the last call's moments and the voice-read rule taken out (strings and text parts alike).
 export function stripVoiceReadLines<M extends { role: string; content?: unknown }>(messages: M[]): M[] {
   const clean = (t: string) => t.replace(LAST_CALL_MOMENTS_LINE, "").split(VOICE_READ_CALL_RULE).join("");

@@ -283,14 +283,39 @@ export function memberWorldFact(w: MemberWorld): string {
     w.waiting.length ? `Waiting on them${leadMark}: ${w.waiting.slice(0, 2).map((x) => x.fact).join("; ")}.` : w.withheld ? null : "Nothing waits on them (not a thing to say).",
     w.running.length ? `Running${w.waiting.length ? " (background while something waits)" : leadMark}: ${w.running.slice(0, 3).map((x) => x.fact).join("; ")}${w.running.length > 3 ? `; ${w.running.length - 3} more` : ""}.` : w.withheld ? null : "Nothing is running (not a thing to say).",
     w.next ? `Next from Cue: ${w.next.fact}.` : null,
-    w.thread ? `Their thread (theirs to tell: ask, never report): ${w.thread.fact}.` : null,
+    // Live re-record of #310: Cue kept saying where it stands ("nothing yet on the venue"), so the rule spells out asking, not reporting.
+    w.thread ? `Their thread (theirs to tell: ask, never report; ask them about it as a question, and never say where it stands, not even that nothing has come yet): ${w.thread.fact}.` : null,
   ].filter(Boolean);
   return `Their world right now: ${parts.join(" ")} ${time}${held}`.replace(/\s+/g, " ").trim();
 }
 
 // What the reply is told every text turn (Co decides whether their message is a check-in; the facts are always there).
+// Quotes restored (live re-record 2026-10-29, Royce approved reverting prompt-sweep item 4): without them Sonnet filled bare check-ins with
+// status talk about itself, and a stronger described clause didn't help. Repetition of the quoted lines is for the golden test rework,
+// not for removing the examples.
 export const CHECKIN_RULE =
   "A check-in or casual opener with no ask (you judge that from the thread) gets presence plus at most one item from \"Their world right now\", in their register, ending on something they can pull: what waits on them first, else what's running; a warm thread is asked about (\"any word from that venue?\"), never reported; with nothing running or waiting, presence and an open question only (\"good to hear from you, what's on your mind?\"), never a line saying nothing is waiting or running. That one item only, as something there for them (\"the Harbor Light fellowship is there if funding's on your mind\"), never as an answer they owe. One breath: no list, no status report, never your own machinery (\"nothing new on my end\"). Late at night their time (about 11pm to 5am) open soft (\"you're up late, everything ok?\"); the world line is optional then. Recent feelings shape the tone, never whether they hear their world. \"Tell me more\" expands that same item, with no new greeting.";
+
+// CHECKIN_RULE as a late-night reply reads it (re-review of #310): the same rule without the parts that contradict LATE_NIGHT_CARE (the
+// quoted presence line, the quoted fellowship line, "the world line is optional then"). The daytime rule and its examples are untouched
+// (they're for the separate sweep). Built from the rule, so the two can't drift; evals/checkins/rules.ts holds each cut to the text.
+export const CHECKIN_NIGHT_CUTS: [string, string][] = [
+  [' ("good to hear from you, what\'s on your mind?")', ""],
+  [' ("the Harbor Light fellowship is there if funding\'s on your mind")', ""],
+  ['Late at night their time (about 11pm to 5am) open soft ("you\'re up late, everything ok?"); the world line is optional then.', "It's late at night for them: the late-night line governs, care only."],
+];
+export const CHECKIN_RULE_AT_NIGHT = CHECKIN_NIGHT_CUTS.reduce((r, [from, to]) => r.replace(from, to), CHECKIN_RULE);
+
+// Late at night their time (about 11pm to 5am, the window CHECKIN_RULE names): a check-in is care only (review of #310: at 12:04am Cue
+// wrote "Good to hear from you. You're up late, all good? The Harbor Light fellowship is still sitting there if funding timing's on your
+// mind.", the rule's own examples stitched together, a business nudge on late-night care). Added only at that hour, so no daytime
+// reply reads it. Described, never quoted: Cue copies quoted lines.
+export const LATE_NIGHT_CARE =
+  "It's late at night for them. If their message is a check-in or a casual opener, this reply is care only: let the hour shape it, open on them, gently, and leave out everything from their world unless they raised it themselves, any opportunity, nudge or thing to act on; that can wait for the morning. Don't open by saying it's good to hear from them, and don't guess what's on their mind.";
+// Only with their zone known: LATE_NIGHT_CARE says it's late for them as a fact, so a fallback zone's midnight never counts.
+export function lateNight(clock: Pick<WorldClock, "hour" | "zoneKnown">): boolean {
+  return clock.zoneKnown && (clock.hour >= 23 || clock.hour < 5);
+}
 
 // Pure: the running item a sentence names (two or more shared meaning words), or null. Only running work: never a thread, never what
 // waits on them. Word overlap misses a paraphrase ("still looking for a rooftop" against "a rooftop venue for the Sequin AI launch
@@ -399,7 +424,8 @@ Return ONLY JSON: {"reports": [the numbers of the sentences that state where it 
 export const PRESENCE_MAX_WORDS = 8;
 export const STATUS_CUTS = new Set(["no_internal_narration", "claim_work_status"]);
 export function deadAir(o: { draft: string; cut: string; world: MemberWorld | null | undefined; failed: { name: string; pass: boolean }[]; sentThisTurn?: string[] }): boolean {
-  // A live thread counts too: a check-in can ask about it, though code never adds a line about it (deadAirLine).
+  // A live thread counts too: a check-in can ask about it. Code never reports it; with only their thread in their world, deadAirLine adds
+  // THREAD_LINE, a statement that names nothing and asks nothing.
   if (!o.world?.lead && !o.world?.thread) return false;
   if ((o.sentThisTurn ?? []).some((m) => m.trim())) return false;
   if (!o.failed.some((c) => !c.pass && STATUS_CUTS.has(c.name))) return false;
@@ -414,8 +440,9 @@ export function deadAir(o: { draft: string; cut: string; world: MemberWorld | nu
 // code can check at send time, so it's backed by construction. Always a plain statement in Co's voice, never a question and never
 // asking them to do or decide anything (Royce, 2026-10-14: "A line that only fires after two failures shouldn't ask the member for
 // anything"). Because it names their world, the reply it ends is never dead air again.
-// No line: a thread (their news), the hidden search (unreadable or withheld), an ask (their own sentence, no label on file), a find
-// whose date has passed or can't be read, anything with no name.
+// No line: a thread (their news: deadAirLine says THREAD_LINE instead, only when their thread is all their world has), the hidden search
+// (unreadable or withheld), an ask (their own sentence, no label on file), a find whose date has passed or can't be read, anything with
+// no name.
 export function worldLine(w: MemberWorld | null | undefined): string | null {
   const l = w?.lead;
   return l ? worldStatement(l, w!.clock) : null;
@@ -452,9 +479,23 @@ export function worldStatement(l: WorldItem, clock: WorldClock): string | null {
 // and act only on that). checkin is the redraft's own answer: true, their world's lead line; anything else (false, or the read
 // failed or didn't parse), at most a statement about the running item the cut sentence itself named, when it can be said true. A
 // goodnight or a hard moment never gets their world's lead from code.
+// What dead air gets when their thread is all their world has and the check-in redraft couldn't be kept (Copy, approved 2026-10-29 under
+// Royce's delegation): a statement that names nothing and asks nothing, per Royce's 2026-10-14 ruling above (a line that only fires
+// after two failures never asks the member for anything).
+export const THREAD_LINE = "I'm around if there's news on your end.";
+// Pure: their thread is all their world has: nothing waits on them, nothing runs, nothing is scheduled.
+export function onlyTheirThread(w: MemberWorld): boolean {
+  return !!w.thread && !w.waiting.length && !w.running.length && !w.next;
+}
 export function deadAirLine(o: { checkin: boolean | null; world: MemberWorld | null | undefined; draft: string; cut: string }): string | null {
-  if (!o.world) return null;
-  if (o.checkin === true) return worldLine(o.world);
+  // Late at night their time, never a line from their world (re-review of #310: at 00:04 a cut status line was dead air, and this put the
+  // fellowship back). Dead air itself still holds at night, so presence alone never goes out (the 2026-10-14 incident was at 12:04am):
+  // the redraft is told care only (WORLD_REDRAFT_NOTE_AT_NIGHT).
+  if (!o.world || lateNight(o.world.clock)) return null;
+  // A check-in whose world has only their thread (nothing waiting, running or scheduled, so no line code can prove): THREAD_LINE, never where
+  // it stands and never a question (live re-record of #310: "Good to hear from you." went out alone by day after both drafts reported the
+  // thread as status).
+  if (o.checkin === true) return worldLine(o.world) ?? (onlyTheirThread(o.world) ? THREAD_LINE : null);
   const kept = sentenceKey(o.cut);
   const removed = o.draft.replace(/[’‘]/g, "'").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => x && !kept.includes(sentenceKey(x)));
   for (const r of removed) {

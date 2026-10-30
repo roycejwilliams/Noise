@@ -67,6 +67,23 @@ export function removalReceipt(name: string, input: any): { removal: true; chang
   return { removal: true, changes: { remove: changes.filter((c) => c?.action === "remove").length, correct: changes.filter((c) => c?.action === "correct").length }, kinds: [...new Set(refs.map((r: unknown) => logKind(String(r))))].slice(0, 10) };
 }
 
+// The guard's own refusals (switched off, a limit, no yes yet), remembered by identity so what the model reads is unchanged: a refused
+// call did nothing, so it opens a second text only when its own words tell Cue to tell them (agent/conversationTools.ts
+// wrapSendsForOneReply; review of #310: "This is switched off right now. Tell them plainly..." arriving after the reply was blocked).
+const GUARD_REFUSALS = new WeakMap<object, { tellsThem: boolean }>();
+// "give it in your reply": something was made but its text didn't send, so the reply owes it (re-review of #310).
+const TELLS_THEM = /\b(?:tell them plainly|say plainly|give it in your reply)\b/i;
+export function markGuardRefusal<T extends { error?: string }>(result: T): T {
+  GUARD_REFUSALS.set(result, { tellsThem: TELLS_THEM.test(String(result.error ?? "")) });
+  return result;
+}
+export function isGuardRefusal(result: unknown): boolean {
+  return !!result && typeof result === "object" && GUARD_REFUSALS.has(result as object);
+}
+export function guardRefusalTellsThem(result: unknown): boolean {
+  return isGuardRefusal(result) && GUARD_REFUSALS.get(result as object)!.tellsThem;
+}
+
 // Pure: the receipt for a voiceRead call (services/voiceReadConsent.ts): which answer the model read, never their words or message, so
 // a yes taken back leaves no copy of what they said in the decision log. Null for any other tool.
 export function voiceReadReceipt(name: string, input: any): { answer: string } | null {
@@ -118,7 +135,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       const refuse = async (receipt: Receipt, receiptText: string, tell: string, detail: Record<string, unknown> = {}) => {
         ctx.notDone(receiptText);
         await log(receipt, detail);
-        return { ok: false, error: tell };
+        return markGuardRefusal({ ok: false, error: tell });
       };
 
       if (await isSwitchedOff(ability.id)) {

@@ -3,7 +3,7 @@ import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
 import { situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
-import { guardTools } from "./toolGuard.js";
+import { guardRefusalTellsThem, guardTools, isGuardRefusal } from "./toolGuard.js";
 import { doorOpen } from "../services/theDoor.js";
 import { proactivePaused } from "../services/proactivePause.js";
 import { sendLimiter } from "../services/sendLimiter.js";
@@ -238,6 +238,79 @@ export function orderForCache<T extends Record<string, any>>(tools: T): T {
   return out as T;
 }
 
+// What may open a second text after the reply went (wrapSendsForOneReply). Declared per tool, default no (review of #310: with only
+// sendReply and markTopicAsked exempt, a silent noteReaction or saveAsk reopened a second text). NEW_FOR_THEM: the tool's result can
+// carry something new for the member (a find, a link, a draft, an answer, a started task, a receipt they'd want to hear). Every other
+// tool is bookkeeping they'd never hear about; SILENT_TOOLS names today's, so a new tool is a conscious choice (evals/reply/oneReply.ts).
+export const NEW_FOR_THEM = new Set([
+  "sendContactCard", "whatCoKnows", "correctWhatCoKnows", "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "moveLane",
+  "answerShareAsks", "shareAskInIntros", "answerBriefName", "shareLocationYes", "flagSafetyConcern", "checkInvitesLeft", "markArrived",
+  "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "shareLink", "requestEventIntro", "followUp",
+  "firstRead", "makePage", "updatePage", "takeDownPage", "readInspo", "readReference", "makeDeck", "updateDeck", "openArtifact",
+  "shareArtifact", "deleteImages", "resetLink", "resendLink", "stopSharing", "searchEvents", "webSearch", "searchPosts", "readPage",
+  "shareFinds", "draftEmail", "emailPlan", "researchBrief", "writeDocument", "readDocument", "writeFromFile", "deleteMyFiles",
+  "offerDocument", "calendarConnection", "docsConnection", "googleConnection",
+  // Re-review of #310: each of these can return something to say (a link that moved, the next step on a yes, a playback of their time).
+  "keepArtifact", "findReaction", "noteFreeTime",
+  // #304: a change to their voice-read consent is worth a line (its question itself rides as a lane note, owed once).
+  "voiceRead",
+]);
+export const SILENT_TOOLS = new Set([
+  "sendReply", "markTopicAsked", "saveAsk", "closeAsk", "saveKitFact", "saveFeedbackForTeam", "noteRoomTaste", "noteReaction",
+  "noteMetAgain", "noteRoomMeeting", "steerAwayFrom", "updateGoing", "markGoal", "updateNotes", "updateLoop",
+  "leaveItAtReaction", "reactInsteadOfReplying",
+]);
+export const ONE_REPLY_NOTE = "Your reply already went out this turn and nothing new has come in since, so this one didn't send. That reply stands; stop here.";
+// newsCount: every result that may open a second text counts up; a send that goes marks what came before it as said, never what arrived
+// while it was going out (a guard refusal landing during the send stays owed, review of #310).
+type SendState = { sent: boolean; sentMessages: string[]; partialUnsent: string | null; laneNotes: string[]; workSinceSend: boolean; sendsInFlight: number; extraSendsRefused: number; newsCount?: number };
+// Pure on its inputs: whether another sendReply may go this turn.
+export function anotherSendAllowed(state: SendState, answerOwed: boolean): boolean {
+  const replied = state.sent || state.sendsInFlight > 0;
+  if (!replied) return true;
+  return state.workSinceSend || !!state.partialUnsent || state.laneNotes.length > 0 || answerOwed;
+}
+// Pure: whether a tool's result opens a second text. A guard refusal does only when it tells Cue to tell them (switched off, nothing was
+// made, their yes couldn't be checked); otherwise only a declared tool's own result does.
+export function resultIsNewForThem(name: string, out: unknown): boolean {
+  if (isGuardRefusal(out)) return guardRefusalTellsThem(out);
+  return NEW_FOR_THEM.has(name);
+}
+export function wrapSendsForOneReply(tools: Record<string, any>, state: SendState, answerOwed: () => boolean, dryRun?: boolean): void {
+  const news = () => {
+    state.newsCount = (state.newsCount ?? 0) + 1;
+    state.workSinceSend = true;
+  };
+  for (const [name, t] of Object.entries(tools)) {
+    if (name === "sendReply" || typeof t?.execute !== "function") continue;
+    const run = t.execute;
+    t.execute = async (...args: any[]) => {
+      const out = await run(...args);
+      if (resultIsNewForThem(name, out)) news();
+      return out;
+    };
+  }
+  const send = tools.sendReply?.execute;
+  if (typeof send !== "function") return;
+  tools.sendReply.execute = async (...args: any[]) => {
+    // Checked and claimed before any await, so a second call in the same step sees the first.
+    if (!anotherSendAllowed(state, answerOwed())) {
+      state.extraSendsRefused += 1;
+      if (dryRun) console.log(`[conversationReply dryRun] held a second text with nothing new since the reply: "${String(args[0]?.message ?? "").slice(0, 160)}"`);
+      return { ok: true, note: ONE_REPLY_NOTE };
+    }
+    const before = state.sentMessages.length;
+    const newsBefore = state.newsCount ?? 0;
+    state.sendsInFlight += 1;
+    try {
+      return await send(...args);
+    } finally {
+      state.sendsInFlight -= 1;
+      if (state.sentMessages.length > before) state.workSinceSend = (state.newsCount ?? 0) > newsBefore;
+    }
+  };
+}
+
 export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
@@ -245,7 +318,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, findsReads: 0 };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
@@ -1984,5 +2057,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
   guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });
+  // One reply, unless something new came in (2026-10-28 before/after run: a job-offer reply sent "That's huge, Priya. Congratulations."
+  // then a second text, "Congratulations. That it's the first one in years...", and golden nothing-at-all records the same shape: a
+  // sendReply, its ok, then another step and a second text). The loop doesn't stop after a send, and the send's own "ok" read as a
+  // tool result the one-reply rule allowed a second text after. So a second sendReply goes only when another tool ran since the last
+  // send (its result can be new to say), or the last one left something owed: the rest of a partly sent reply, a lane move's line, an
+  // answer meant to ride with a link. Parallel calls in one step count: the first claims the turn's reply before it awaits anything.
+  // Outermost, after the guard, so a held second text never reaches the guard's log as a send.
+  wrapSendsForOneReply(tools as Record<string, any>, state, () => !!ctx.answerOwed, ctx.dryRun);
   return { tools: orderForCache(tools), state, flushLinks, loop: () => turnLoop };
 }

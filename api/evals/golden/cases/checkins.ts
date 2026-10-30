@@ -203,7 +203,10 @@ export const CASES: GoldenCase[] = [
       const r = await reply({ firstName: "Noor", now: LATE, exchange, sent: [{ name: FELLOWSHIP, sentAt: new Date(SENT_AT.getTime() + 86_400_000), endsOn: "2026-12-15" }], searching: SEQUIN, facts: FELLOWSHIP_FACTS.map(([k, t]) => [k, t.replace("Mon Oct 12", "Tue Oct 13")] as [Kind, string]), message: "Just checking in" });
       const misses = voiceMisses(r.text);
       if (!r.text.trim() || /^good to hear from you\.?$/i.test(r.text.trim())) misses.push("dead air: presence alone with their world waiting");
-      const j = await judge(r.text, `It's 12:04am for the member. They texted "Hey cue", Cue said "Hey Noor. What's up?", and now they texted "Just checking in". At 5:30pm Cue had sent them the ${FELLOWSHIP} with a question they never answered.`, "Does the text open soft and open for the hour: noticing it's late or asking gently if everything's ok or what's keeping them up, before anything else, with any mention of the fellowship or other business kept light and secondary (or left out), and no status report? Answer yes only if the soft, open line comes first.");
+      // Review of #310: late-night care is care only. The line this case was written against never opens it, and no business follows.
+      if (/^\W*good to hear from you/i.test(r.text.trim())) misses.push("opens on the line the case was written against");
+      if (/fellowship|harbor light|funding|deadline|appl(y|ication)/i.test(r.text)) misses.push("a business nudge on a late-night check-in");
+      const j = await judge(r.text, `It's 12:04am for the member. They texted "Hey cue", Cue said "Hey Noor. What's up?", and now they texted "Just checking in". At 5:30pm Cue had sent them the ${FELLOWSHIP} with a question they never answered.`, "Is the text care only, shaped by the hour: it opens soft (noticing it's late, or asking gently if everything's ok or what's keeping them up), and nothing after that care brings up the fellowship, an opportunity, a deadline, a status or anything for them to act on? Answer no if any business or nudge follows the care.");
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return done(misses, r);
     },

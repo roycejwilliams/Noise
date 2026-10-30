@@ -1,7 +1,7 @@
 {
   "hash": "898a7233aa15255e",
   "case": "double-offer",
-  "recorded_at": "2026-10-28T01:26:55.456Z",
+  "recorded_at": "2026-10-30T00:08:10.732Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -54,7 +54,7 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgTmMG9Cu5Js2ZfecF4QT",
+        "id": "msg_011CgXSxpKVajz4vRAdomrak",
         "type": "message",
         "role": "assistant",
         "content": [

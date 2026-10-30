@@ -61,10 +61,10 @@ check("writes are batched and never hold a script open", /timer\.unref\?\.\(\)/.
 
 // ---------------------------------------------------------------- reply cache layout
 const c = src("agent/conversationReply.ts");
-check("reply prompt: the slow-changing part comes first, with its own breakpoint", /content: sharedSystem, providerOptions: \{ anthropic: \{ cacheControl: \{ type: "ephemeral" \} \} \}/.test(c) && /content: process\.env\.REPLY_PROMPT === "flow" \? systemFlow : system \}/.test(c));
+check("reply prompt: the slow-changing part comes first, with its own breakpoint", /content: sharedSystem, providerOptions: \{ anthropic: \{ cacheControl: \{ type: "ephemeral" \} \} \}/.test(c) && /content: system \}/.test(c));
 check("reply prompt: the loop caches up to the latest message", /anthropic: \{\n\s+cacheControl: \{ type: "ephemeral" \},/.test(c));
 {
-  const shared = c.slice(c.indexOf("const sharedSystem = `"), Math.min(...["const systemFlow = `", "const system = `You are replying"].map((m) => c.indexOf(m)).filter((i) => i > 0)));
+  const shared = c.slice(c.indexOf("const sharedSystem = `"), c.indexOf("const system = `You are replying"));
   check("nothing that changes per text sits in the cached part", !/recentConversation|resolvedContent|facts|toneContext|seekingMode|styleHint|recentMemories|Date|now\(/.test(shared));
 }
 
