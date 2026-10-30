@@ -40,9 +40,12 @@ Options: `--only router,intro`, `--sample 3`. Caps by env: `EVAL_TOKEN_CAP`, `EV
 
 ## Golden cases: `npm run evals:golden`
 
-The required `golden` check on a PR into co-test replays committed recordings of the model's answers (`evals/golden/recordings`):
-no key, no network, $0. Recording (`npm run evals:golden:record -- --only <case>`) and the live drift check (`evals:golden:live`, or
-the `golden-live` job on a manual dispatch) are the only golden runs that call a model. See `evals/golden/README.md`.
+The required `golden` check on a PR into co-test (and `merge-gated.sh`) replays committed recordings of the model's answers
+(`evals/golden/recordings`): no key, no network, $0. Every reply also passes the hard rules in code (`evals/lib/hardRules.ts`), and a
+wording-only prompt change replays as "prompt moved" (a warning) instead of needing a re-record. Recording (`npm run evals:golden:record
+-- --only <case>`), the live drift check (`evals:golden:live`, or the `golden-live` job on a manual dispatch) and the quality run
+(`evals:golden:quality`: three samples a case, scored by majority with the rubric judge, manual or a local cron) are the only golden runs
+that call a model; each is capped at `EVAL_COST_CAP_USD` (default $4). See `evals/golden/README.md`.
 
 ## The rule that keeps it this way
 

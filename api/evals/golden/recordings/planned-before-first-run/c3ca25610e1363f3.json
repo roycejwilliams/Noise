@@ -89,5 +89,16 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "198f347c0c0a5b0c",
+    "wording": {
+      "coVoice.ts:CO_TEXT_CHANNEL#0": "47169f7c",
+      "coVoice.ts:CO_VOICE#0": "f0075134",
+      "readTurn.ts:ABOUT_CO_INSTRUCTION#0": "26e20e6b"
+    },
+    "format": [],
+    "tools": null
+  }
 }

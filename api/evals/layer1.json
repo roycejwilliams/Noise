@@ -50,6 +50,7 @@
     "evals/presence/rules.ts",
     "evals/outsideEvents/rules.ts",
     "evals/texting/rules.ts",
+    "evals/golden/harnessTest.ts",
     "evals/shutdown/rules.ts",
     "evals/email/rules.ts",
     "evals/capabilities/rules.ts",

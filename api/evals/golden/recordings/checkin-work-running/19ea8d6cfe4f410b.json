@@ -89,5 +89,20 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "0b4e3f266f0ee4e5",
+    "wording": {
+      "readTurn.ts:turnReadAddendum#0": "9fa1cbaa",
+      "readTurn.ts:turnReadAddendum#1": "5fb309a0",
+      "readTurn.ts:turnReadAddendum#2": "22eecf2e",
+      "readTurn.ts:turnReadAddendum#4": "8b26d96a"
+    },
+    "format": [
+      "readTurn.ts:turnReadAddendum#0",
+      "readTurn.ts:turnReadAddendum#4"
+    ],
+    "tools": null
+  }
 }

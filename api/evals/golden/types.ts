@@ -8,6 +8,9 @@
 // live: runs now and fails the run on a miss. pending: its phase hasn't landed; the case still runs when it can (reported, never
 // fails the run), so a pending case's first green run is visible. Each pending case names the phase that makes it live.
 export type GoldenStatus = { live: true } | { live: false; until: string; why: string };
+// The `until` of a case that is built and waits only on its first recording (a new case): replay reports it "not recorded" until then,
+// and the quality run covers it (evals/golden/run.ts).
+export const AWAITING_RECORDING = "its first recording";
 
 export type GoldenResult = {
   ok: boolean;
@@ -25,6 +28,8 @@ export type GoldenCase = {
   // Where it came from: the live incident or the amendment that asked for it.
   from: string;
   run: () => Promise<GoldenResult>;
+  // How many reply turns the case runs (default 1): only the cost estimate of a case not recorded yet reads it (evals/golden/estimate.ts).
+  turns?: number;
 };
 
 export const pass = (observed: string): GoldenResult => ({ ok: true, misses: [], observed });

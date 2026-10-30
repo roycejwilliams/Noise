@@ -14,16 +14,30 @@
 // JSON body (model, system, messages, tools, max_tokens, temperature, thinking, effort, stream...) with keys sorted, the grader
 // marker and any anthropic-beta header. Only body.metadata is left out (not an input to the answer).
 //
+// When the exact hash misses, replay tries the request's SKELETON (evals/lib/goldenSkeleton.mjs): the same request with its instruction
+// wording masked out (the prompt files in evals/golden/wording.ts, and tool descriptions). A recording whose stamped skeleton matches
+// answers the call, and the case reports "prompt moved" with what moved: a warning, never a silent pass. Facts, the member's words,
+// tool schemas, the model and every parameter stay in the skeleton, so a change to any of them still misses. GOLDEN_STRICT=1 turns a
+// moved prompt into a miss. Each recording carries its skeleton stamp (`structure`), written when it is recorded, or by
+// `npm run evals:golden:stamp` (replay with GOLDEN_STAMP=1: stamps every recording whose exact hash matched, never one that missed).
+//
 // The clock is pinned for every mode (GOLDEN_NOW below): "today", "two days out" and every createdAt in a prompt are the same on
 // every run, so the hashes are. The runner reads real time from __GOLDEN__.realNow for its own timings.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { movedBetween, skeletonOf } from "./goldenSkeleton.mjs";
 
 export const GOLDEN_NOW = "2026-10-13T21:00:00.000Z"; // the incident day, 2pm in LA (a Tuesday); the guards fixtures read against it
 const MODE = process.env.GOLDEN_MODE === "record" || process.env.GOLDEN_MODE === "live" ? process.env.GOLDEN_MODE : "replay";
 const DIR = process.env.GOLDEN_RECORDINGS ?? new URL("../golden/recordings/", import.meta.url).pathname;
+const STRICT = process.env.GOLDEN_STRICT === "1";
+const STAMP = process.env.GOLDEN_STAMP === "1" && MODE === "replay";
+// The wording registry ({ signature, chunks }), handed over by the runner (evals/golden/run.ts) before any case runs. Without it there
+// is no skeleton: every miss is a miss.
+let wording = null;
+const stampOf = (key) => (wording ? { v: wording.signature, ...skeletonOf(key, wording.chunks) } : null);
 
 // ---- the clock, and the zone a bare toLocaleString or getHours reads (a laptop in LA and a CI runner in UTC must build the same prompt)
 process.env.TZ = "UTC";
@@ -119,6 +133,20 @@ function loadCase(id) {
   }
   return out;
 }
+// The case's recordings by skeleton, for the stamps made under the current registry only.
+function skeletonIndex(recs) {
+  const out = new Map();
+  if (!wording) return out;
+  for (const r of recs.values()) if (r.structure?.v === wording.signature) out.set(r.structure.hash, [...(out.get(r.structure.hash) ?? []), r]);
+  return out;
+}
+// Stamps one recording file with its skeleton (GOLDEN_STAMP=1, on an exact match only: the recording is this code's own request).
+function stampFile(id, rec, stamp) {
+  if (!stamp || JSON.stringify(rec.structure ?? null) === JSON.stringify(stamp)) return false;
+  rec.structure = stamp;
+  writeFileSync(join(caseDir(id), `${rec.hash}.json`), JSON.stringify(rec, null, 2) + "\n");
+  return true;
+}
 // The recording closest to a missed request (longest shared start plus end of the key text), and where they first differ.
 function nearestDiff(text, recs) {
   let best = null;
@@ -148,6 +176,8 @@ let inflight = 0;
 let seq = 0;
 let served = 0;
 let written = 0;
+let movedServed = 0;
+let stamped = 0;
 
 function noteMiss(ctx, k, kind, why) {
   const s = requestSummary(k.key);
@@ -177,14 +207,30 @@ globalThis.fetch = async function goldenFetch(input, init) {
 
     if (mode === "replay") {
       if (!ctx) throw new Error(`GOLDEN REPLAY: ${noteMiss(null, k, "outside", "outside any golden case: no recording can answer")}`);
-      const rec = ctx.recs.get(k.hash);
-      if (!rec) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", "no recording")}`);
-      const calls = (ctx.used.get(k.hash) ?? 0) + 1;
-      ctx.used.set(k.hash, calls);
+      let rec = ctx.recs.get(k.hash);
+      let moved = null;
+      if (rec && STAMP && stampFile(ctx.id, rec, stampOf(k.key))) stamped++;
+      if (!rec) {
+        // The exact request isn't recorded: try its skeleton (only the instruction wording masked).
+        const now = stampOf(k.key);
+        const found = now ? ctx.skel.get(now.hash) ?? [] : [];
+        if (found.length !== 1) {
+          const why = !now ? "no recording" : found.length > 1 ? `no recording (its skeleton matches ${found.length} recordings, so none is used)` : [...ctx.recs.values()].some((r) => r.structure?.v === wording.signature) ? "no recording (not a wording-only change: the facts, the member's words, the tools, the model or a parameter differ, or an instruction was added, dropped or swapped)" : "no recording (this case's recordings carry no skeleton stamp under the current wording registry, so a wording-only change can't be told apart: run npm run evals:golden:stamp on the code they were recorded with)";
+          throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", why)}`);
+        }
+        rec = found[0];
+        const m = movedBetween(rec.structure, now);
+        if (m.blocked.length) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (an output-format instruction moved: ${m.blocked.join(", ")}; the recorded answer was written for the old format)`)}`);
+        if (STRICT) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (GOLDEN_STRICT: the prompt moved: ${m.moved.join(", ") || "nothing named"})`)}`);
+        moved = m.moved;
+      }
+      const calls = (ctx.used.get(rec.hash) ?? 0) + 1;
+      ctx.used.set(rec.hash, calls);
       // A repeat past what was recorded is a miss, never the last answer served again: the code now asks more often than it did.
       if (calls > rec.responses.length) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "over", `called ${calls} times, recorded ${rec.responses.length}`)}`);
       ctx.served++;
       served++;
+      if (moved) { movedServed++; ctx.moved.push({ hash: rec.hash, model: rec.request?.model ?? null, moved }); }
       return responseOf(rec.responses[calls - 1]);
     }
 
@@ -197,7 +243,7 @@ globalThis.fetch = async function goldenFetch(input, init) {
     if (res.ok && current.get(ctx.id) === ctx.attempt) {
       const prior = ctx.recorded.get(k.hash);
       const resp = responseRecord(res.status, ct, txt);
-      const rec = prior ?? { hash: k.hash, case: ctx.id, recorded_at: new RealDate(realNow()).toISOString(), golden_now: GOLDEN_NOW, model: resp.model, request: { ...requestSummary(k.key), beta: k.key.beta, body: k.key.body }, responses: [] };
+      const rec = prior ?? { hash: k.hash, case: ctx.id, recorded_at: new RealDate(realNow()).toISOString(), golden_now: GOLDEN_NOW, model: resp.model, request: { ...requestSummary(k.key), beta: k.key.beta, body: k.key.body }, responses: [], ...(wording ? { structure: stampOf(k.key) } : {}) };
       rec.responses.push(resp);
       ctx.recorded.set(k.hash, rec);
       mkdirSync(caseDir(ctx.id), { recursive: true });
@@ -223,7 +269,8 @@ globalThis.__GOLDEN__ = {
   dir: DIR,
   hasRecordings: (id) => existsSync(caseDir(id)) && readdirSync(caseDir(id)).some((f) => f.endsWith(".json")),
   async attempt(id, mode, fn) {
-    const ctx = { id, mode, attempt: ++seq, ended: false, superseded: false, recs: mode === "replay" ? loadCase(id) : new Map(), used: new Map(), misses: [], missed: new Set(), served: 0, recorded: new Map() };
+    const recs = mode === "replay" ? loadCase(id) : new Map();
+    const ctx = { id, mode, attempt: ++seq, ended: false, superseded: false, recs, skel: skeletonIndex(recs), used: new Map(), misses: [], missed: new Set(), served: 0, recorded: new Map(), moved: [] };
     // A record attempt replaces what came before for its case: the replay that found it missing (--missing) no longer counts.
     if (mode === "record") { current.set(id, ctx.attempt); rmSync(caseDir(id), { recursive: true, force: true }); for (const c of contexts) if (c.id === id) c.superseded = true; }
     contexts.push(ctx);
@@ -231,7 +278,7 @@ globalThis.__GOLDEN__ = {
     let value;
     try { value = await als.run(ctx, fn); } finally { ctx.ended = true; if (active === ctx) active = null; }
     const unused = mode === "replay" ? [...ctx.recs.keys()].filter((h) => !ctx.used.has(h)) : [];
-    return { value, attempt: ctx.attempt, misses: [...ctx.misses], served: ctx.served, recorded: [...ctx.recorded.values()].reduce((a, r) => a + r.responses.length, 0), unused };
+    return { value, attempt: ctx.attempt, misses: [...ctx.misses], served: ctx.served, recorded: [...ctx.recorded.values()].reduce((a, r) => a + r.responses.length, 0), unused, moved: [...ctx.moved] };
   },
   // Lets late work finish before the run is judged: timers and microtasks get a turn, then in-flight model calls drain (capped).
   async settle(ms = 250, cap = 5_000) {
@@ -246,5 +293,9 @@ globalThis.__GOLDEN__ = {
     ...contexts.filter((c) => !c.superseded).flatMap((c) => c.misses.map((miss) => ({ case: c.id, attempt: c.attempt, miss }))),
     ...outside.map((miss) => ({ case: null, attempt: null, miss })),
   ],
-  stats: () => ({ served, written, inflight }),
+  stats: () => ({ served, written, inflight, moved: movedServed, stamped }),
+  // The wording registry (evals/golden/wording.ts): set once, before any case runs.
+  setWording: (w) => { wording = w && Array.isArray(w.chunks) ? { signature: String(w.signature), chunks: w.chunks } : null; },
+  strict: STRICT,
+  stamping: STAMP,
 };
