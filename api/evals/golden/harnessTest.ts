@@ -298,6 +298,7 @@ const api = new URL("../../", import.meta.url).pathname;
   check("a rate-limit message is busy", busy(new Error("rate limit exceeded")));
   check("a bad request is not busy", !busy({ statusCode: 400, message: "invalid_request_error" }));
   check("a parse problem is not busy", !busy(new Error("Unexpected token")));
+  check("the meter's cap refusal is not busy (its token counts can read 529)", !busy(new Error("EVAL CAP: this call could pass the token cap 500,000 (499,529 used)")));
 }
 
 console.log(`golden rework: ${total - failed}/${total} passed`);
