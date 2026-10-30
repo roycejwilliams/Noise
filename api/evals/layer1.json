@@ -173,6 +173,7 @@
     "evals/inroom/flow.ts",
     "evals/discovery/placeOnTheWant.ts",
     "evals/discovery/placeResolve.ts",
+    "evals/discovery/barePlaces.ts",
     "evals/discovery/sweepGaps1028.ts",
     "evals/discovery/eventTier.ts",
     "evals/review/eventPageRead.ts",

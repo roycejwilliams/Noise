@@ -49,14 +49,22 @@ export function haversineMiles(a: GeoPoint, b: GeoPoint): number {
 // is geocoded as "city, region" when the caller knows the member's region (their state, from their phone's area code:
 // services/areaCodes.ts), and the cache row is keyed by what was actually geocoded, never by the bare name for a biased lookup.
 // A name that already carries its region ("Cambridge, MA", "Cambridge MA") is used as is.
-export type GeoBias = { region?: string | null };
+//
+// A bare name is never written to the cache (2026-10-29 place audit: bare rows held Auburn in Alabama, Davis as Davis County, Utah,
+// Emerald Hills in Georgia and Bay Area as a park in Houston, for California members, and each one answered every later caller). A
+// qualified name caches as before; rows already in the cache are still read first. near: a point to read a bare name near (the other
+// side of a distance check), passed to Google as a viewport bias and used to pick among its answers.
+export type GeoBias = { region?: string | null; near?: GeoPoint | null };
+
+// Pure: whether a query names its region ("Davis, CA", "Davis CA", "Davis, California").
+export const isQualified = (q: string): boolean => q.includes(",") || /\s[A-Z]{2}$/.test(q);
 
 // Pure: what to geocode (and cache under) for a city and a bias.
 export function geoQuery(city: string, bias?: GeoBias | null): string {
   const c = String(city ?? "").trim().replace(/\s+/g, " ");
   if (!c) return "";
   const region = String(bias?.region ?? "").trim();
-  if (!region || c.includes(",") || /\s[A-Z]{2}$/.test(c)) return c;
+  if (!region || isQualified(c)) return c;
   return `${c}, ${region}`;
 }
 
@@ -86,24 +94,55 @@ export async function geocodeCity(city: string, bias?: GeoBias | null): Promise<
     return { lat: Number(cached.rows[0].lat), lng: Number(cached.rows[0].lng) };
   }
 
+  // A bare name is never cached (GeoBias above). Its answer is kept in memory for a few minutes only, so a run that checks it for
+  // every candidate doesn't pay Google for each one; the same question gets the same answer either way.
+  const cache = isQualified(trimmed);
+  const near = bias?.near ?? null;
+  const memoKey = cache ? null : `${trimmed}|${near ? `${near.lat.toFixed(1)},${near.lng.toFixed(1)}` : ""}`;
+  const memo = memoKey ? bareMemo.get(memoKey) : undefined;
+  if (memo && Date.now() - memo.at < BARE_MEMO_MS) return memo.point;
+  const point = await lookupCity(city, trimmed, cache, near);
+  if (memoKey && point) {
+    if (bareMemo.size > 500) bareMemo.clear();
+    bareMemo.set(memoKey, { at: Date.now(), point });
+  }
+  return point;
+}
+const BARE_MEMO_MS = 10 * 60_000;
+const bareMemo = new Map<string, { at: number; point: GeoPoint }>();
+export const clearBareMemo = () => bareMemo.clear();
+
+// Google's geocoder, behind a seam so a zero-token test answers it (no outside call).
+export const geoDeps = {
+  google: (address: string, near: GeoPoint | null = null) => client.geocode({
+    // region: a US bias for a name with nothing else to go on (the club is in the US). bounds: a bias toward the point it's read near.
+    params: { address, region: "us", key: googleKey(), ...(near ? { bounds: { southwest: { lat: near.lat - 0.75, lng: near.lng - 0.75 }, northeast: { lat: near.lat + 0.75, lng: near.lng + 0.75 } } } : {}) },
+  }),
+};
+
+// Pure: of a geocoder's answers, the one nearest a point (when there is one), else its first.
+export function nearestOf<T>(items: T[], at: (x: T) => GeoPoint | null, near: GeoPoint | null): T | undefined {
+  if (!near) return items[0];
+  return items.filter((x) => at(x)).sort((a, b) => haversineMiles(at(a)!, near) - haversineMiles(at(b)!, near))[0];
+}
+
+// Google's answer (the open geocoder's when Google fails or finds nothing), written to the cache only for a qualified name.
+async function lookupCity(city: string, trimmed: string, cache: boolean, near: GeoPoint | null): Promise<GeoPoint | null> {
   try {
     // Geocoding API (Royce enabled it live, 2026-09-02, after it first came
     // back "This API is not activated on your API project" — Places API
     // being enabled on the same key/project doesn't imply Geocoding is too,
     // they're separately toggled). Confirmed working against this key
     // immediately after enabling.
-    const ask = (address: string) => client.geocode({
-      // region: a US bias for a name with nothing else to go on (the club is in the US).
-      params: { address, region: "us", key: googleKey() },
-    });
+    const ask = (address: string) => geoDeps.google(address, near);
     let response = await ask(trimmed);
     // No such place in that state ("Newark, MA" came back as a nearby town): the name as given, never a guess near the bias.
     const given = String(city ?? "").trim();
     if (response.data.results?.[0]?.partial_match && given && given !== trimmed) response = await ask(given);
-    const location = response.data.results?.[0]?.geometry?.location;
-    if (!location) return openMeteoGeocode(trimmed);
+    const location = nearestOf(response.data.results ?? [], (r: any) => r?.geometry?.location ?? null, near)?.geometry?.location;
+    if (!location) return openMeteoGeocode(trimmed, cache, near);
 
-    await pool
+    if (cache) await pool
       .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [
         trimmed,
         location.lat,
@@ -118,7 +157,7 @@ export async function geocodeCity(city: string, bias?: GeoBias | null): Promise<
     // the distance checks, time zones, and event search for any city not
     // already in the cache). The free fallback keeps those working.
     console.error(`geocodeCity: Google failed for "${trimmed}", trying the open geocoder (non-fatal):`, err?.message ?? err);
-    return openMeteoGeocode(trimmed);
+    return openMeteoGeocode(trimmed, cache, near);
   }
 }
 
@@ -150,26 +189,37 @@ export async function geocodeVenue(address: string): Promise<GeoPoint | null> {
   }
 }
 
-// Open-Meteo's geocoding API: free, no key, no billing.
-// It searches names only, so "Medford, MA" is searched as "Medford" and the hit in that region (else in the US) is taken.
-async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
+// Open-Meteo's geocoding API: free, no key, no billing. Only a fallback for when Google fails (its free tier is non-commercial).
+// It searches names only, so "Medford, MA" is searched as "Medford" and the hit in that region (else in the US) is taken; a bare name
+// read near a point takes the populated place nearest it. Bounded: a 3s timeout, and after a failure it isn't asked again for a minute.
+export const OPEN_METEO = { timeoutMs: 3000, downForMs: 60_000 } as const;
+let openMeteoDownUntil = 0;
+export const resetOpenMeteoDown = () => { openMeteoDownUntil = 0; };
+async function openMeteoGeocode(city: string, cache = true, near: GeoPoint | null = null): Promise<GeoPoint | null> {
+  if (Date.now() < openMeteoDownUntil) return null;
   try {
     const [name, ...rest] = city.split(",").map((x) => x.trim());
     const tail = rest.join(" ") || (city.match(/\s([A-Z]{2})$/)?.[1] ?? "");
     const bare = rest.length ? name : city.replace(/\s[A-Z]{2}$/, "");
     const { STATE_NAMES } = await import("./areaCodes.js");
     const region = (STATE_NAMES[tail.toUpperCase()] ?? tail).toLowerCase();
-    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(bare)}&count=10&language=en&format=json`);
-    if (!res.ok) return null;
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(bare)}&count=10&language=en&format=json`, { signal: AbortSignal.timeout(OPEN_METEO.timeoutMs) });
+    if (!res.ok) {
+      openMeteoDownUntil = Date.now() + OPEN_METEO.downForMs;
+      return null;
+    }
     const data: any = await res.json();
-    const hit = openMeteoHit(Array.isArray(data?.results) ? data.results : [], region);
+    const results = Array.isArray(data?.results) ? data.results : [];
+    const places = results.filter((r: any) => /^(PPL|ADM)/.test(String(r?.feature_code ?? "")) && typeof r?.latitude === "number");
+    const hit = !region && near ? nearestOf(places, (r: any) => ({ lat: r.latitude, lng: r.longitude }), near) : openMeteoHit(results, region);
     if (typeof hit?.latitude !== "number" || typeof hit?.longitude !== "number") return null;
-    await pool
+    if (cache) await pool
       .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [city, hit.latitude, hit.longitude])
       .catch((err: any) => console.error("openMeteoGeocode: cache write failed (non-fatal):", err?.message ?? err));
     return { lat: hit.latitude, lng: hit.longitude };
   } catch (err: any) {
     console.error(`openMeteoGeocode: failed for "${city}" (non-fatal):`, err?.message ?? err);
+    openMeteoDownUntil = Date.now() + OPEN_METEO.downForMs;
     return null;
   }
 }
@@ -211,7 +261,8 @@ export async function getTimezoneForCity(city: string, bias?: GeoBias | null): P
     return zone;
   }
 
-  const point = await geocodeCity(trimmed);
+  // The city as given, with its bias: geocodeCity's partial-match retry needs the name as given.
+  const point = await geocodeCity(city, bias);
   if (!point) return null;
   const zone = findTimezone(point.lat, point.lng)[0] ?? null;
   if (zone) {
@@ -242,7 +293,9 @@ export async function withinRadius(
   maxMiles: number = SAME_METRO_MAX_MILES,
 ): Promise<boolean> {
   if (!cityA || !cityB) return true;
-  const [a, b] = await Promise.all([geocodeCity(cityA), geocodeCity(cityB)]);
+  // B read near A: a bare name on B's side ("Davis") is the one near A, never cached (GeoBias above).
+  const a = await geocodeCity(cityA);
+  const b = await geocodeCity(cityB, a ? { near: a } : null);
   if (!a || !b) return true;
   return haversineMiles(a, b) <= maxMiles;
 }

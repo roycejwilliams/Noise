@@ -18,7 +18,9 @@ import type { TierMatch } from "./tieredRecommendation.js";
 
 // The page's event record, with its own name. zoneGuessed: its zone came from its city, not the page, and its start doesn't carry
 // that zone's own offset: its time is said in that zone with the assumption naming the city (zoneWords.ts ZONE_ASSUMED).
-export type PageEvent = EventDetails & { name: string; zoneGuessed?: boolean };
+// region: the state or region its own record lists with the city (schema.org addressRegion), so the city's zone is looked up as
+// "Davis, CA" and never as a bare "Davis" (2026-10-29 place audit: bare names cached in the wrong state). Never said to the member.
+export type PageEvent = EventDetails & { name: string; zoneGuessed?: boolean; region?: string | null };
 
 // A page whose own record withholds the street from anyone who isn't a confirmed guest (Partiful: "Sign in for full location") while its
 // script data carries it: its script data is never read as text, kept in an excerpt, or sent anywhere (#298, rebuilt on these helpers).
@@ -95,6 +97,7 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
   const loc = placeOf(ev);
   const addr = loc?.address;
   const locality = typeof addr === "object" && addr ? str(addr.addressLocality) : null;
+  const region = locality && typeof addr === "object" && addr ? str(addr.addressRegion) : null;
   const street = typeof addr === "string" ? str(addr) : typeof addr === "object" && addr ? [addr.streetAddress, addr.addressLocality, addr.addressRegion].map(str).filter(Boolean).join(", ") || null : null;
   const offer = Array.isArray(ev.offers) ? ev.offers[0] : ev.offers;
   const org = Array.isArray(ev.organizer) ? ev.organizer : ev.organizer ? [ev.organizer] : [];
@@ -108,6 +111,7 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
     venue: str(loc?.name),
     address: street,
     city: locality,
+    ...(region ? { region } : {}),
     hosts: org.map((o: any) => str(o?.name)).filter((x: string | null): x is string => !!x).slice(0, 4),
     price: offer?.price !== undefined && offer?.price !== null ? (String(offer.price) === "0" ? "free" : `${offer.price} ${offer.priceCurrency ?? ""}`.trim()) : null,
     spotsRemaining: null,
@@ -131,9 +135,10 @@ export function pageEventData(html: string, url: string, parseLuma: (html: strin
 // The zone its time is said in: its own, else its city's (geocoding.ts getTimezoneForCity, a cached lookup). None: not an event find.
 // Looked up from its city (the record's locality) only: never a street or a venue, which would send an address out and into the lookup
 // cache (batched review of #299), and never for an online event (no place to take a zone from).
+// The city goes with the region its record lists ("Davis, CA"), never bare when a region is there.
 export async function settleZone(ev: PageEvent, zoneOf: (place: string) => Promise<string | null>): Promise<PageEvent | null> {
   if (ev.timezone) return ev;
-  const place = ev.online ? null : ev.city;
+  const place = ev.online || !ev.city ? null : [ev.city, ev.region].filter(Boolean).join(", ");
   if (!place) return null;
   const zone = await zoneOf(place).catch(() => null);
   return zone ? { ...ev, timezone: zone, ...(zoneIsGuess(ev.startAt, zone) ? { zoneGuessed: true } : {}) } : null;
@@ -170,7 +175,8 @@ export async function zoneForPage(html: string, url: string, startAt: string | n
   if (/OnlineEventAttendanceMode/.test(String(ev?.eventAttendanceMode ?? ""))) return { zone: null, guessed: false };
   const city = str(placeOf(ev)?.address?.addressLocality);
   if (!city) return { zone: null, guessed: false };
-  const zone = await zoneOf(city).catch(() => null);
+  // Looked up with its listed region ("Davis, CA"), never bare when there is one; the city alone stays the quote.
+  const zone = await zoneOf(pageLocality(html) ?? city).catch(() => null);
   return zone ? { zone, guessed: zoneIsGuess(startAt, zone), city } : { zone: null, guessed: false };
 }
 

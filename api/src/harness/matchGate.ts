@@ -271,8 +271,11 @@ export function evaluateMatch(match: TierMatch, facts: MatchFacts): { ok: boolea
 
 // ---------- gather (DB / geocoding)
 
+// The event's city is read near the search city (2026-10-29 place audit): a bare name that several places share ("Davis") is the one
+// nearest where they're searching, for this check only and never cached (geocoding.ts GeoBias).
 export async function distanceBetween(cityA: string, cityB: string): Promise<number | null> {
-  const [a, b] = await Promise.all([geocodeCity(cityA).catch(() => null), geocodeCity(cityB).catch(() => null)]);
+  const a = await geocodeCity(cityA).catch(() => null);
+  const b = a ? await geocodeCity(cityB, { near: a }).catch(() => null) : null;
   return a && b ? haversineMiles(a, b) : null;
 }
 

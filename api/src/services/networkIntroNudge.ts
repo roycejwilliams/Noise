@@ -13,7 +13,6 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { gateNetworkCandidate } from "../harness/matchGate.js";
 import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from "../harness/introConsent.js";
 import { shareableAsks } from "./matching.js";
-import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
 import { galleryEmail } from "./emailDesign.js";
@@ -36,9 +35,8 @@ async function statedAsksFor(userId: string): Promise<string[]> {
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see harness/proactive.ts's sendExemptWhenAllowed).
 async function timezoneFor(userId: string): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-  const city = rows[0]?.city;
-  return city ? await getTimezoneForCity(city).catch(() => null) : null;
+  // Their stored zone (memberTime.ts memberZone, the one source of truth): never a fresh lookup of a bare city (2026-10-29 place audit).
+  return (await import("./memberTime.js")).memberZone(userId);
 }
 
 // Redesigned 2026-09-07 (Royce: "how would you implement the networking

@@ -9,7 +9,6 @@ import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { checkBothYes, draftWithConsent, eventOptedIn, eventPromptLine, gateIntroAction } from "../harness/introConsent.js";
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
-import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
 import { galleryEmail } from "./emailDesign.js";
@@ -19,9 +18,8 @@ import { foldName, guestName } from "./guestName.js";
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
 async function timezoneFor(userId: string): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]);
-  const city = rows[0]?.city;
-  return city ? await getTimezoneForCity(city).catch(() => null) : null;
+  // Their stored zone (memberTime.ts memberZone, the one source of truth): never a fresh lookup of a bare city (2026-10-29 place audit).
+  return (await import("./memberTime.js")).memberZone(userId);
 }
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow yes/no reads (code

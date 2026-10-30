@@ -5,7 +5,7 @@ import { sendDueCoEventAnnouncements } from "../services/coEventAnnouncement.js"
 import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
+import { memberZone } from "../services/memberTime.js";
 import { hoursZone, isReasonableLocalHour } from "../services/localHours.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
 import { attemptEventSurfacing, PROFILE_ASK_ID } from "../services/eventSurfacingSweep.js";
@@ -138,7 +138,8 @@ export async function runAutoIntakeCalls(io: Server): Promise<void> {
     let placed = 0;
     for (const user of uncalled.rows) {
       if (placed >= 5) break;
-      const timezone = user.city ? await getTimezoneForCity(user.city) : null;
+      // Their stored zone (memberTime.ts memberZone, the one source of truth): never a fresh lookup of a bare city (2026-10-29 place audit).
+      const timezone = await memberZone(user.id);
       if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — no state touched, retried next hourly tick
       placed++;
       try {
@@ -395,7 +396,7 @@ export function registerJobs(io: Server) {
       );
 
       for (const row of due.rows) {
-        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
+        const timezone = await memberZone(row.user_id);
         if (!isReasonableLocalHour(timezone)) continue;
 
         // No retry is scheduled after a miss, so the text invites rather than promises (harness/callGate.ts missedCallText).
@@ -444,7 +445,7 @@ export function registerJobs(io: Server) {
       );
 
       for (const row of due.rows) {
-        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
+        const timezone = await memberZone(row.user_id);
         if (!isReasonableLocalHour(timezone)) continue;
 
         const claim = await pool.query(
@@ -650,10 +651,9 @@ export function registerJobs(io: Server) {
         }
         try {
 
-        // Resolved once per user (all their rows share the same profile
-        // city), not once per ask — cheap either way since getTimezoneForCity
-        // is cache-backed, but no reason to repeat it per row.
-        const timezone = userRows[0].city ? await getTimezoneForCity(userRows[0].city) : null;
+        // Resolved once per user, not once per ask: their stored zone (memberTime.ts memberZone), never a fresh lookup of a bare
+        // city (2026-10-29 place audit).
+        const timezone = await memberZone(userRows[0].user_id);
         if (!isReasonableLocalHour(timezone)) return; // wrong hour for this user — nothing touched, retried next hourly tick
 
         // Search cadence follows their engagement here too (Royce, 2026-10-14: "Slow quiet members' ask searches too, under the same
@@ -978,7 +978,7 @@ export function registerJobs(io: Server) {
         // slot, not literally "a text was sent" — see proactiveRegistry.ts).
         for (const row of eventRows) {
           try {
-            const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+            const timezone = await memberZone(row.user_id);
             const result = await enqueueDebrief({
               userId: row.user_id,
               eventApiId: eventApiId,
