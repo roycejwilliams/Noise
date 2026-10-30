@@ -1,20 +1,23 @@
-// The golden rework, tested (layer 1, zero tokens; Royce 2026-10-29). Pins:
-//   - the hard rules (evals/lib/hardRules.ts) catch what they're for, on the 10-29 replies that showed each one, and pass clean replies;
-//   - the skeleton (evals/lib/goldenSkeleton.mjs) masks wording only: a moved instruction or tool description keeps the skeleton, a
-//     changed fact, schema, model or parameter, or a swapped instruction does not;
-//   - replay over the fake network: a moved prompt is served and reported, a changed fact misses, GOLDEN_STRICT misses, a moved
-//     output-format instruction misses, and stamping writes a skeleton only on an exact match;
-//   - the wording registry reads the reply prompt's sections and no file that builds facts;
-//   - the rubric fits the turn (no length cap or one-question rule on a share or feedback turn);
-//   - an env cap reaches the meter in the record, live and quality scripts (they used to hardcode $4).
+// The golden rework, tested (layer 1, zero tokens; Royce 2026-10-29, and the independent review of #318). Pins:
+//   - the hard rules (evals/lib/hardRules.ts) catch what they're for, on the 10-29 replies that showed each one, pass clean replies, and
+//     don't flag list markers, advice ranges, date arithmetic, a capital after a quote, or the member's own words quoted back;
+//   - the skeleton (evals/lib/goldenSkeleton.mjs): only allowlisted tone literals are masked; tools are behavior whole (description and
+//     schema); a rule written into tone text (its guard terms) or an output format is blocked;
+//   - replay over the fake network: a tone move is served and reported with its hashes, a changed fact or tool misses, GOLDEN_STRICT misses,
+//     and stamping writes a skeleton only on an exact match;
+//   - the moved ledger: no entry, a stale entry (14 days) and a second move each fail;
+//   - the allowlist is exactly the tone declarations, and a change to every protected declaration (safety, member safety, grounding, the
+//     reply prompt, tool rules, checkers, LOOP_GUIDE, capabilities, tools) changes the skeleton, also inside the real recorded reply request;
+//   - the rubric fits the turn, and an env cap reaches the meter (the scripts used to hardcode $4).
 //   npx tsx evals/golden/harnessTest.ts
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hardRuleMisses, inventedFacts, linkThenCaption, machinery, quotesOwnLine, repliesPerTurn, statusTalk, stockEmpathy, turnKind } from "../lib/hardRules.js";
-import { maskText, movedBetween, skeletonOf } from "../lib/goldenSkeleton.mjs";
-import { WORDING_FILES, chunksOf, wordingRegistry } from "./wording.js";
+import { guardTerms, maskText, movedBetween, skeletonOf } from "../lib/goldenSkeleton.mjs";
+import { chunksOf, wordingRegistry } from "./wording.js";
+import { moveProblem, readLedger } from "./ledger.js";
 import { criteriaFor, rubricPrompt } from "../lib/replyRubric.js";
 
 let total = 0, failed = 0;
@@ -49,56 +52,74 @@ const api = new URL("../../", import.meta.url).pathname;
   check("a second text after a tool brought something new is allowed (TOOL_TURN_RULES)", repliesPerTurn([{ kind: "reply", text: "Looking." }, { kind: "reply", text: "Found two." }], ["searchEvents"]).length === 0);
   check("a tapback alone (no text) has nothing to check", hardRuleMisses({ ...base, text: "", sends: [] }).length === 0);
   check("the 10-29 BEFORE replies that crossed no line pass every hard rule", ["Happy birthday, Lena.\n\nA morning like that, no phone, just the water, sounds like exactly what you needed after the stretch you've been in. Glad you got it.", "Fair call, that landed flat."].every((text) => hardRuleMisses({ ...base, kind: "share", text }).length === 0));
+  // Review of #318: 12 of 40 real texting-eval replies were flagged by these; none of them is a claim.
+  const dated = { ...base, facts: "Today is Tuesday, October 13, 2026." };
+  check("a numbered-list marker is not an invented number", inventedFacts({ ...base, text: "Here's how I'd frame it:\n\n1. The hook comes first.\n2. Then the tone.\n3. Then the proof." }).length === 0);
+  check("an advice range is not an invented number ('20-30 min', '3-4 pairs')", inventedFacts({ ...base, text: "The first 20-30 min is arrival. Then push intros to 3-4 pairs you know should meet." }).length === 0);
+  check("date arithmetic from a date it was given is not invented ('Oct 16 is 3 days out', 'the 15th')", inventedFacts({ ...dated, text: "Oct 16 is 3 days out. Thursday the 15th works too." }).length === 0);
+  check("...but a date far from any date it was given still is", inventedFacts({ ...dated, text: "The deadline is March 4." }).some((m) => /4/.test(m)));
+  check("a capital after a quote mark is a first word, not a name", inventedFacts({ ...base, text: 'Close on something better than "bar\'s closing." Give me your timing.' }).length === 0);
+  check("a span the member said first is theirs, not Cue quoting itself", quotesOwnLine('Your line "defining what I wanted my struggle to be" is the strongest.', ['"Defining what I wanted my struggle to be" is a great opening.'], ["My founding story came from a place of defining what I wanted my struggle to be."]).length === 0);
+  check("'on my end' stays a machinery miss", machinery("Nothing new on my end, how are you?").length === 1);
   check("a check-in is read from the message", turnKind("Just checking in") === "checkin" && turnKind("Hey cue") === "checkin" && turnKind("hey") === "checkin" && turnKind("What are you actually searching for?") === "reply" && turnKind("you're kind of dry", "feedback") === "feedback" && turnKind("We closed the round", "sharing") === "share");
 }
 
 // ---- 2. the skeleton
 {
-  const GUIDE = { id: "probe.ts:GUIDE#0", text: "Match the weight of your reply to theirs, and say each thing once." };
-  const key = (o: { guide?: string; fact?: string; model?: string; desc?: string; schema?: string; max?: number; extra?: string } = {}) => ({
+  const GUIDE = { id: "probe.ts:GUIDE#0", text: "You're composed and warm, and you're there for them. Calm, unhurried, specific." };
+  const key = (o: { guide?: string; fact?: string; model?: string; desc?: string; schema?: string; propDesc?: string; max?: number; extra?: string } = {}) => ({
     path: "api.anthropic.com/v1/messages", grader: false, beta: null,
-    body: { model: o.model ?? "claude-sonnet-5", max_tokens: o.max ?? 100, system: [{ type: "text", text: `${o.guide ?? GUIDE.text}${o.extra ?? ""}\n\nWhat's true right now.\n[F1] ${o.fact ?? "They live in San Francisco."}\nUser said: hello` }], messages: [{ role: "user", content: "Respond." }], tools: [{ name: "sendReply", description: o.desc ?? "Send it.", input_schema: { type: "object", properties: { message: { type: o.schema ?? "string", description: "the text" } } } }] },
+    body: { model: o.model ?? "claude-sonnet-5", max_tokens: o.max ?? 100, system: [{ type: "text", text: `${o.guide ?? GUIDE.text}${o.extra ?? ""}\n\nWhat's true right now.\n[F1] ${o.fact ?? "They live in San Francisco."}\nUser said: hello` }], messages: [{ role: "user", content: "Respond." }], tools: [{ name: "sendReply", description: o.desc ?? "Send it.", input_schema: { type: "object", properties: { message: { type: o.schema ?? "string", description: o.propDesc ?? "the text" }, description: { type: "string" } } } }] },
   });
   const at = (k: ReturnType<typeof key>, guide = GUIDE.text) => skeletonOf(k, [{ id: GUIDE.id, text: guide }]);
   const s0 = at(key());
-  const moved = at(key({ guide: "Match your reply's weight to theirs; say each thing only once." }), "Match your reply's weight to theirs; say each thing only once.");
-  check("a moved instruction keeps the skeleton, and says which one moved", moved.hash === s0.hash && JSON.stringify(movedBetween(s0, moved)) === JSON.stringify({ moved: [GUIDE.id], blocked: [] }));
-  check("a moved tool description keeps the skeleton, reported as 'tool descriptions'", at(key({ desc: "Send the reply text." })).hash === s0.hash && movedBetween(s0, at(key({ desc: "Send the reply text." }))).moved.includes("tool descriptions"));
+  const tone = "You're composed and warm and there for them. Calm and unhurried, and specific.";
+  const moved = at(key({ guide: tone }), tone);
+  const m = movedBetween(s0, moved);
+  check("a tone-only move of an allowlisted literal keeps the skeleton and says what moved (from, to)", moved.hash === s0.hash && m.moved.length === 1 && m.moved[0].id === GUIDE.id && m.moved[0].from === s0.wording[GUIDE.id] && m.blocked.length === 0, m);
+  const rule = "You're composed and warm, and you're there for them. Never ask more than three questions.";
+  check("a rule written into an allowlisted literal is blocked (its guard terms changed: never, three, questions)", movedBetween(s0, at(key({ guide: rule }), rule)).blocked.includes(GUIDE.id));
+  check("guard terms count rule words, numbers and tool names, case for case", guardTerms("Never call startTask three times.") === "call never startTask three" && guardTerms("Calm, unhurried, specific.") === "");
+  check("a tool's description is behavior: changing it changes the skeleton (review: 'never call this tool' passed as moved)", at(key({ desc: "Never call this tool." })).hash !== s0.hash);
+  check("a schema property's description (.describe()) is behavior", at(key({ propDesc: "as long as you like" })).hash !== s0.hash);
+  check("a schema property named 'description' is never dropped: its type change shows", JSON.stringify(key().body.tools).includes('"description":{"type":"string"}') && skeletonOf({ ...key(), body: { ...key().body, tools: [{ ...key().body.tools[0], input_schema: { type: "object", properties: { message: { type: "string", description: "the text" }, description: { type: "number" } } } }] } }, [GUIDE]).hash !== s0.hash);
   check("a changed fact line changes the skeleton", at(key({ fact: "They live in Oakland." })).hash !== s0.hash);
   check("a changed tool schema, model or max_tokens changes the skeleton", at(key({ schema: "number" })).hash !== s0.hash && at(key({ model: "claude-haiku-5-5" })).hash !== s0.hash && at(key({ max: 200 })).hash !== s0.hash);
-  check("text added outside a registered literal changes the skeleton (an instruction added by code)", at(key({ extra: "\nBe brief." })).hash !== s0.hash);
-  check("a fact line is never masked, even when its words are a registered literal", maskText(`[F3] ${GUIDE.text}`, [GUIDE], new Set()) === `[F3] ${GUIDE.text}` && maskText(`Co replied: ${GUIDE.text}`, [GUIDE], new Set()) === `Co replied: ${GUIDE.text}`);
-  check("swapping one instruction for another changes the skeleton (each literal is its own placeholder)", skeletonOf(key({ guide: "Other words entirely, a different instruction here." }), [GUIDE, { id: "probe.ts:OTHER#0", text: "Other words entirely, a different instruction here." }]).hash !== s0.hash);
-  const fmt = at(key({ guide: 'Return ONLY JSON: {"answer": "yes"}' }), 'Return ONLY JSON: {"answer": "yes"}');
-  check("a moved output-format instruction is blocked (the recorded answer was written for the old format)", fmt.hash === s0.hash && movedBetween(s0, fmt).blocked.includes(GUIDE.id));
+  check("text added outside an allowlisted literal changes the skeleton (an instruction added by code)", at(key({ extra: "\nBe brief." })).hash !== s0.hash);
+  check("a fact line is never masked, even when its words are an allowlisted literal", maskText(`[F3] ${GUIDE.text}`, [GUIDE], new Set()) === `[F3] ${GUIDE.text}` && maskText(`Co replied: ${GUIDE.text}`, [GUIDE], new Set()) === `Co replied: ${GUIDE.text}`);
+  const fmt = 'You are composed. Return ONLY JSON: {"answer": "yes"}';
+  check("a moved output-format literal is blocked", movedBetween(s0, at(key({ guide: fmt }), fmt)).blocked.includes(GUIDE.id));
+  check("a stamp without guard terms never lets a literal move", movedBetween({ ...s0, guard: {} }, moved).blocked.includes(GUIDE.id));
 }
 
 // ---- 3. replay over the fake network
 {
   const dir = mkdtempSync(join(tmpdir(), "golden-moved-"));
-  const A = "Match the weight of your reply to theirs, and say each thing once.";
-  const B = "Match your reply's weight to theirs; say each thing only once, never twice.";
+  const A = "You're composed and warm, and you're there for them. Calm, unhurried, specific.";
+  const B = "You're composed and warm and there for them. Calm and unhurried, and specific.";
   const run = (mode: string, extra: Record<string, string> = {}) => {
     const env: Record<string, string | undefined> = { ...process.env, GOLDEN_MODE: mode, GOLDEN_RECORDINGS: join(dir, "rec"), FAKE_SEEN: join(dir, "seen.jsonl"), EVAL_LEDGER: join(dir, `ledger-${mode}-${Math.random()}.jsonl`), EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "5", PROBE_GUIDE: A, PROBE_FACT: "They live in San Francisco.", ANTHROPIC_API_KEY: mode === "record" ? "probe" : "golden-replay", GOLDEN_STRICT: "", GOLDEN_STAMP: "", ...extra };
     const r = spawnSync("node", ["--import", join(api, "evals/lib/fixtures/fakeAnthropic.mjs"), "--import", join(api, "evals/lib/meter.mjs"), "--import", join(api, "evals/lib/goldenReplay.mjs"), join(api, "evals/lib/fixtures/goldenMovedProbe.mjs")], { encoding: "utf8", env: env as NodeJS.ProcessEnv });
-    return JSON.parse((r.stdout.match(/GOLDEN (\{.*)/) ?? [])[1] ?? "{}") as { reply?: string; misses?: string[]; moved?: { moved: string[] }[]; served?: number; stats?: { stamped: number } };
+    return JSON.parse((r.stdout.match(/GOLDEN (\{.*)/) ?? [])[1] ?? "{}") as { reply?: string; misses?: string[]; moved?: { moved: { id: string; from: string; to: string }[] }[]; served?: number; stats?: { stamped: number } };
   };
   const rec = run("record");
   const files = existsSync(join(dir, "rec/moved-case")) ? readdirSync(join(dir, "rec/moved-case")) : [];
   const recorded = files.length === 1 ? JSON.parse(readFileSync(join(dir, "rec/moved-case", files[0]), "utf8")) : null;
-  check("a recording is stamped with its skeleton when it is recorded", rec.reply === "ok" && recorded?.structure?.v === "probe-signature" && !!recorded?.structure?.hash && recorded.structure.wording?.["probe.ts:GUIDE#0"], recorded?.structure);
+  check("a recording is stamped with its skeleton and guard terms when it is recorded", rec.reply === "ok" && recorded?.structure?.v === "probe-signature" && !!recorded?.structure?.hash && !!recorded.structure.wording?.["probe.ts:GUIDE#0"] && !!recorded.structure.guard?.["probe.ts:GUIDE#0"], recorded?.structure);
   const same = run("replay");
   check("an unchanged request replays exactly, nothing moved", same.reply === "ok" && same.served === 1 && same.moved?.length === 0 && same.misses?.length === 0, same);
   const moved = run("replay", { PROBE_GUIDE: B });
-  check("a moved instruction is served from its recording and reported as moved, naming what moved", moved.reply === "ok" && moved.misses?.length === 0 && moved.moved?.[0]?.moved?.includes("probe.ts:GUIDE#0") === true, moved);
+  check("a tone-only move is served from its recording and reported with its from/to hashes (the runner then wants a ledger entry)", moved.reply === "ok" && moved.misses?.length === 0 && moved.moved?.[0]?.moved?.[0]?.id === "probe.ts:GUIDE#0" && moved.moved[0].moved[0].from === recorded?.structure?.wording?.["probe.ts:GUIDE#0"], moved);
   const fact = run("replay", { PROBE_GUIDE: B, PROBE_FACT: "They live in Oakland." });
   check("a changed fact misses (and says it isn't a wording-only change)", /^threw: GOLDEN REPLAY/.test(fact.reply ?? "") && /not a wording-only change/.test(fact.misses?.[0] ?? ""), fact);
   const strict = run("replay", { PROBE_GUIDE: B, GOLDEN_STRICT: "1" });
-  check("GOLDEN_STRICT=1 turns a moved prompt into a miss", /^threw: GOLDEN REPLAY/.test(strict.reply ?? "") && /GOLDEN_STRICT/.test(strict.misses?.[0] ?? ""), strict);
+  check("GOLDEN_STRICT=1 turns any move into a miss", /^threw: GOLDEN REPLAY/.test(strict.reply ?? "") && /GOLDEN_STRICT/.test(strict.misses?.[0] ?? ""), strict);
   const desc = run("replay", { PROBE_TOOL_DESC: "Send the reply text to them." });
-  check("a moved tool description is served and reported", desc.reply === "ok" && desc.moved?.[0]?.moved?.includes("tool descriptions") === true, desc);
-  const format = run("replay", { PROBE_GUIDE: 'Return ONLY JSON: {"answer": "yes" | "no"}' });
-  check("a moved output-format instruction misses", /^threw: GOLDEN REPLAY/.test(format.reply ?? "") && /output-format/.test(format.misses?.[0] ?? ""), format);
+  check("a changed tool description misses", /^threw: GOLDEN REPLAY/.test(desc.reply ?? "") && /not a wording-only change/.test(desc.misses?.[0] ?? ""), desc);
+  const ruled = run("replay", { PROBE_GUIDE: "You're composed and warm, and you're there for them. Always offer a call." });
+  check("a rule written into an allowlisted literal misses (guard terms)", /^threw: GOLDEN REPLAY/.test(ruled.reply ?? "") && /changed a rule/.test(ruled.misses?.[0] ?? ""), ruled);
+  const format = run("replay", { PROBE_GUIDE: 'You are composed. Return ONLY JSON: {"answer": "yes" | "no"}' });
+  check("a moved output-format literal misses", /^threw: GOLDEN REPLAY/.test(format.reply ?? "") && /changed a rule/.test(format.misses?.[0] ?? ""), format);
   // A recording from before the stamps: no skeleton, so a moved prompt can't be told apart and misses, until it is stamped.
   const path = join(dir, "rec/moved-case", files[0] ?? "x.json");
   if (recorded) { const { structure: _drop, ...bare } = recorded; writeFileSync(path, JSON.stringify(bare, null, 2) + "\n"); }
@@ -108,16 +129,66 @@ const api = new URL("../../", import.meta.url).pathname;
   check("stamping never stamps from a request that missed", !JSON.parse(readFileSync(path, "utf8")).structure && missStamp.stats?.stamped === 0);
   const stamp = run("replay", { GOLDEN_STAMP: "1" });
   check("stamping writes the skeleton on an exact match", stamp.stats?.stamped === 1 && JSON.parse(readFileSync(path, "utf8")).structure?.hash === recorded?.structure?.hash);
-  check("...after which the moved prompt is served", run("replay", { PROBE_GUIDE: B }).reply === "ok");
+  check("...after which the tone move is served", run("replay", { PROBE_GUIDE: B }).reply === "ok");
 }
 
-// ---- 4. the wording registry
+// ---- 3b. the moved ledger
+{
+  const mv = { id: "coVoice.ts:VOICE_TONE#0", from: "aaaa1111", to: "bbbb2222" };
+  const now = Date.parse("2026-10-29T12:00:00Z");
+  const e = (o: Partial<{ chunk: string; from: string; to: string; pr: string; date: string }> = {}) => ({ chunk: mv.id, from: mv.from, to: mv.to, pr: "318", date: "2026-10-29", ...o });
+  check("a move with no ledger entry fails", /no ledger entry/.test(moveProblem(mv, [], now) ?? ""));
+  check("a move with its exact, fresh ledger entry passes", moveProblem(mv, [e()], now) === null);
+  check("an entry older than 14 days fails (re-record by then)", /past 14 days/.test(moveProblem(mv, [e({ date: "2026-10-14" })], now) ?? "") && moveProblem(mv, [e({ date: "2026-10-16" })], now) === null);
+  check("a second move on the same recording fails (an entry from the stamped text to other text)", /moved again/.test(moveProblem(mv, [e({ to: "cccc3333" })], now) ?? ""));
+  check("an entry for another literal doesn't cover this one", /no ledger entry/.test(moveProblem(mv, [e({ chunk: "textRhythm.ts:MESSAGE_RHYTHM#0" })], now) ?? ""));
+  check("the committed ledger parses", Array.isArray(readLedger()));
+}
+
+// ---- 4. the wording allowlist
 {
   const r = wordingRegistry();
-  check("every wording file exists and has prompt text", WORDING_FILES.every((f) => existsSync(join(api, f)) && chunksOf(f).length > 0));
-  check("chunk ids are unique", new Set(r.chunks.map((c) => c.id)).size === r.chunks.length);
-  check("the reply prompt's rules are wording (How to reply, the phone rules, the sharing and feedback guides, the iMessage line)", ["How to reply:", "How it looks on a phone:", "They're telling you something about their life.", "They're telling you how you're coming across.", "You're writing an iMessage."].every((t) => r.chunks.some((c) => c.text.includes(t))));
-  check("no file that builds facts, tool schemas or member-facing lines is wording (facts are behavior)", !WORDING_FILES.some((f) => /replyGrounding|capabilities|conversationTools|memberWorld|whatsAhead|coTasks|statusCheck/.test(f)));
+  check("the allowlist is exactly the tone and style declarations (pinned: a new entry is a deliberate change here)", JSON.stringify(r.allowlist) === JSON.stringify(["textRhythm.ts:MESSAGE_RHYTHM", "textRhythm.ts:COACHING_STYLE", "coVoice.ts:VOICE_TONE", "coVoice.ts:VOICE_STYLE", "connectDots.ts:SHARE_TONE", "connectDots.ts:SHARE_TONE_2", "connectDots.ts:FEEDBACK_TONE"]), r.allowlist);
+  check("chunk ids are unique, and every chunk is an allowlisted declaration's", new Set(r.chunks.map((c) => c.id)).size === r.chunks.length && r.chunks.every((c) => r.allowlist.some((a) => c.id.startsWith(`${a}#`))));
+  // Every protected declaration: none of its text is maskable, so any change to it changes the skeleton and replay misses.
+  const PROTECTED: [string, string][] = [
+    ["src/services/coCore.ts", "CO_SAFETY"], ["src/services/coCore.ts", "CO_MEMBER_SAFETY"], ["src/services/coCore.ts", "CO_GROUNDING"], ["src/services/coCore.ts", "CO_LISTENING"],
+    ["src/services/coVoice.ts", "VOICE_WHO"], ["src/services/coVoice.ts", "VOICE_RULES"], ["src/services/coVoice.ts", "CO_TEXT_CHANNEL"],
+    ["src/services/textRhythm.ts", "COACHING_FOLLOW_UP"], ["src/services/textRhythm.ts", "COACHING_SAFETY"],
+    ["src/services/connectDots.ts", "SHARE_SCOPE"], ["src/services/connectDots.ts", "SHARE_GROUNDING"], ["src/services/connectDots.ts", "FEEDBACK_SCOPE"], ["src/services/connectDots.ts", "FEEDBACK_HONEST"], ["src/services/connectDots.ts", "readMoment"],
+    ["src/agent/conversationReply.ts", "system"], ["src/agent/conversationReply.ts", "TOOL_TURN_RULES"], ["src/agent/conversationReply.ts", "TOOL_FAILURE_RULE"], ["src/agent/conversationReply.ts", "prompt"],
+    ["src/agent/loop.ts", "LOOP_GUIDE"], ["src/services/readTurn.ts", "ABOUT_CO_INSTRUCTION"], ["src/services/capabilities.ts", "(top)"], ["src/agent/conversationTools.ts", "(top)"],
+  ];
+  const masked = new Set(r.chunks.map((c) => c.text));
+  for (const [file, decl] of PROTECTED) {
+    const base = file.split("/").pop()!;
+    const lits = chunksOf(file).filter((c) => decl === "(top)" || c.id.startsWith(`${base}:${decl}#`));
+    const k = (text: string) => ({ path: "api.anthropic.com/v1/messages", grader: false, beta: null, body: { model: "claude-sonnet-5", max_tokens: 100, system: text, messages: [{ role: "user", content: text }] } });
+    const mutated = lits.filter((l) => { const t = l.text.replace(/\b(\w+)\b/, "$1 x"); return skeletonOf(k(t), r.chunks).hash === skeletonOf(k(l.text), r.chunks).hash; });
+    check(`protected: a change to ${base}:${decl} misses replay (${lits.length} literals, none maskable)`, lits.length > 0 && lits.every((l) => !masked.has(l.text)) && mutated.length === 0, mutated.map((x) => x.id));
+  }
+  // The real recorded reply request (checkin-nothing): a mutation inside a protected section changes its skeleton; a tone move doesn't.
+  const recPath = join(api, "evals/golden/recordings/checkin-nothing/0fff26b2dcba61a5.json");
+  const rec = JSON.parse(readFileSync(recPath, "utf8"));
+  // As replay sees a source edit: the request carries the new text, and the registry (read from the edited source) does too.
+  const real = (edit: (s: string) => string) => { const body = JSON.parse(edit(JSON.stringify(rec.request.body))); return skeletonOf({ path: "api.anthropic.com/v1/messages", grader: false, beta: rec.request.beta ?? null, body }, r.chunks.map((c) => ({ ...c, text: edit(JSON.stringify(c.text)).slice(1, -1).replace(/\\n/g, "\n").replace(/\\"/g, '"') }))); };
+  const base = real((s) => s);
+  check("the recorded reply request's stamp is today's skeleton", base.hash === rec.structure.hash);
+  for (const [label, from, to] of [
+    ["the 988 line", "in the US they can call or text 988, any time, free.", "in the US they can call a hotline."],
+    ["member safety", "never reach another member's conversation", "may reach another member's conversation"],
+    ["grounding", "Never state a fact you weren't given", "Fill in something plausible rather than state a fact you weren't given"],
+    ["How to reply", "ask one specific follow-up that sharpens it", "ask three or four questions that sharpen it"],
+    ["the call-offer gesture line", "A call offer is NOT available this turn", "Always offer a call. A call offer is NOT available this turn"],
+    ["one sendReply", "One sendReply per turn.", "Call sendReply as many times as you like."],
+    ["a tool description", "Flag it when what they say may mean", "Never call this tool. Flag it when what they say may mean"],
+    ["a capability fact", "can send a second text when there's a genuinely separate thought", "can send a second text when there is a genuinely separate thought"],
+  ] as const) {
+    const after = real((s) => s.split(JSON.stringify(from).slice(1, -1)).join(JSON.stringify(to).slice(1, -1)));
+    check(`mutating ${label} in the recorded reply request changes its skeleton`, JSON.stringify(rec.request.body).includes(JSON.stringify(from).slice(1, -1)) && after.hash !== base.hash);
+  }
+  const toned = real((s) => s.split("Calm, unhurried, specific.").join("Calm and unhurried, and specific."));
+  check("a tone-only move of VOICE_TONE in the recorded reply request keeps its skeleton, and is not blocked", toned.hash === base.hash && movedBetween(rec.structure, toned).blocked.length === 0 && movedBetween(rec.structure, toned).moved.some((m) => m.id === "coVoice.ts:VOICE_TONE#0"));
   check("the ids are stable under an edit inside a literal", JSON.stringify(chunksOf("x.ts", "const A = `one two three four five six seven eight nine ten eleven`;").map((c) => c.id)) === JSON.stringify(chunksOf("x.ts", "const A = `one two three four five six seven eight nine ten twelve!!`;").map((c) => c.id)));
 }
 

@@ -277,13 +277,10 @@
     }
   ],
   "structure": {
-    "v": "9b886018627f",
-    "hash": "b5caa3def633bd69",
-    "wording": {
-      "coCore.ts:CO_GROUNDING#0": "2c685587",
-      "coCore.ts:CO_MEMBER_SAFETY#0": "dc007148"
-    },
-    "format": [],
-    "tools": null
+    "v": "d772ee43ea1b",
+    "hash": "d8805852aee5c0c8",
+    "wording": {},
+    "guard": {},
+    "format": []
   }
 }

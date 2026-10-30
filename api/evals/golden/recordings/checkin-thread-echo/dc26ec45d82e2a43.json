@@ -93,10 +93,10 @@
     }
   ],
   "structure": {
-    "v": "9b886018627f",
+    "v": "d772ee43ea1b",
     "hash": "dc26ec45d82e2a43",
     "wording": {},
-    "format": [],
-    "tools": null
+    "guard": {},
+    "format": []
   }
 }

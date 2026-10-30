@@ -88,12 +88,10 @@
     }
   ],
   "structure": {
-    "v": "9b886018627f",
-    "hash": "27ef5b69cc066d1a",
-    "wording": {
-      "conversationReply.ts:prompt#0": "ed7c4b9c"
-    },
-    "format": [],
-    "tools": null
+    "v": "d772ee43ea1b",
+    "hash": "c94716068976dc33",
+    "wording": {},
+    "guard": {},
+    "format": []
   }
 }

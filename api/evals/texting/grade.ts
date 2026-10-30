@@ -30,7 +30,7 @@ export type Grade = Partial<Record<Criterion, Verdict>> & { notes: string };
 
 // mode: the turn's moment read when the case carries one (generate.ts cases: "sharing", "feedback"...), so the rubric fits the turn.
 export type TextCase = { person: string; at: string; message: string; recentConversation: string; contextSummary: string; reply: string; mode?: string };
-type GradeInput = Pick<TextCase, "message" | "recentConversation"> & { contextSummary?: string; person?: string; mode?: string };
+type GradeInput = Pick<TextCase, "message" | "recentConversation"> & { contextSummary?: string; person?: string; mode?: string; at?: string };
 export const kindOf = (c: GradeInput) => turnKind(c.message, c.mode);
 
 export function gradePrompt(c: GradeInput, reply: string): string {
@@ -52,7 +52,9 @@ export async function grade(c: GradeInput, reply: string): Promise<Grade> {
 export function hardMisses(c: GradeInput, reply: string): string[] {
   const theirs = c.recentConversation.split("\n").filter((l) => l.startsWith("User said:")).map((l) => l.slice(10).trim());
   const cue = c.recentConversation.split("\n").filter((l) => /^(Co|Cue) replied:/.test(l)).map((l) => l.replace(/^\w+ replied: ?/, ""));
-  return hardRuleMisses({ text: reply, kind: kindOf(c), facts: c.contextSummary ?? "", theirLines: [c.message, ...theirs], coLines: cue, firstName: c.person });
+  // The case's own clock is part of what the reply stood on (date arithmetic: "Oct 10 is 18 days out").
+  const today = c.at ? `Today is ${new Date(c.at).toISOString().slice(0, 10)}.` : "";
+  return hardRuleMisses({ text: reply, kind: kindOf(c), facts: `${c.contextSummary ?? ""}\n${today}`, theirLines: [c.message, ...theirs], coLines: cue, firstName: c.person });
 }
 
 // Pass rate per criterion (n/a left out of that criterion's count).
