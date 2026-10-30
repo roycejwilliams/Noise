@@ -12,7 +12,7 @@
 // decideActions and its gates get exactly what they got before; the rest is
 // added alongside, read from the same turn context (services/turnContext.ts).
 // The privacy alert (Jev, zero-retention) and the crisis phrase backstop stay
-// separate on purpose. READ_TURN=off runs the old separate reads.
+// separate on purpose.
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../models.js";
@@ -46,10 +46,6 @@ export function parseAck(v: unknown): string | null {
   // Exactly one emoji (with skin tone or joined parts), not words or several.
   if (!/^\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?(\u200D\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?)*$/u.test(s)) return null;
   return ACK_NOT_CLUB.some((e) => bare(e) === s) ? null : (v as string).trim();
-}
-
-export function readTurnEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.READ_TURN !== "off";
 }
 
 export type TurnRead = {

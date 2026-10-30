@@ -33,11 +33,12 @@ check("never without the gateway key (no direct TypeSafe route for member text)"
 check("never in production unless explicitly turned on", !jevForMemberText({ AI_GATEWAY_API_KEY: "k", RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "Noise" } as any));
 check("JEV_MEMBER=off turns it off anywhere", !jevForMemberText({ ...coTest, JEV_MEMBER: "off" }));
 {
-  const direct = src("services/emotionalTone.ts") + src("services/issueReports.ts") + src("harness/emotion.ts");
-  check("Cue's checks only reach Jev through the zero-retention gateway", !/typesafe-ai\/sdk|TYPESAFE_API_KEY|jev_co|askJevZdr/.test(direct) && (direct.match(/readTextSignals\(message, recentConversation\)/g) ?? []).length === 3);
-  check("each check races Jev against Haiku (never waits on one then the other)", (direct.match(/await raceWithJev</g) ?? []).length === 3);
-  check("every Haiku call can be cancelled when Jev wins", (direct.match(/abortSignal,\n/g) ?? []).length === 3);
-  check("the three questions go in ONE Jev request per text", /askJevZdr\(\{ latest_message: message, recent_conversation: convo \}, TEXT_SIGNAL_QUESTIONS\)/.test(g) && /memo\.set\(key/.test(g));
+  // The text turn reads feeling and seeking in its one read (services/readTurn.ts); the call path's feeling read is the one raced check.
+  const direct = src("harness/emotion.ts");
+  check("Cue's checks only reach Jev through the zero-retention gateway", !/typesafe-ai\/sdk|TYPESAFE_API_KEY|jev_co|askJevZdr/.test(direct) && (direct.match(/readTextSignals\(message, recentConversation\)/g) ?? []).length === 1);
+  check("the check races Jev against Haiku (never waits on one then the other)", (direct.match(/await raceWithJev</g) ?? []).length === 1);
+  check("its Haiku call can be cancelled when Jev wins", (direct.match(/abortSignal,\n/g) ?? []).length === 1);
+  check("the questions go in ONE Jev request per text", /askJevZdr\(\{ latest_message: message, recent_conversation: convo \}, TEXT_SIGNAL_QUESTIONS\)/.test(g) && /memo\.set\(key/.test(g));
   check("readTextSignals only runs when member text is allowed", /if \(!jevForMemberText\(\)\) return Promise\.resolve\(null\);/.test(g));
 }
 
@@ -60,17 +61,11 @@ check("JEV_MEMBER=off turns it off anywhere", !jevForMemberText({ ...coTest, JEV
 }
 
 // ---------------------------------------------------------------- Jev decides only when sure; Haiku otherwise
-const { detectSeekingMode } = await import("../../src/services/emotionalTone.js");
-const { classifyIssue } = await import("../../src/services/issueReports.js");
 const { readTextEmotion } = await import("../../src/harness/emotion.js");
 const saved = { ...process.env };
 Object.assign(process.env, coTest);
 {
-  setJevGatewayForTests(async () => ({ solving: 0.95, issue: 0.5, feeling: 0.5 }));
-  check("seeking: a sure yes from Jev decides", (await detectSeekingMode("raise now or wait? a", "", "t")) === "solving");
   setJevGatewayForTests(async () => ({ solving: 0.05, issue: 0.05, feeling: 0.05 }));
-  check("seeking: a sure no from Jev decides", (await detectSeekingMode("thanks! b", "", "t")) === null);
-  check("issue: a sure no from Jev decides without Haiku", (await classifyIssue("thanks! c", "")) === null);
   check("feeling: a sure 'no feeling' decides without Haiku", (await readTextEmotion("what time does it start? d", "", "t")) === null);
 }
 setJevGatewayForTests(null);
@@ -92,8 +87,7 @@ check("'sure' means below 0.2 or above 0.8", JEV_SURE.no === 0.2 && JEV_SURE.yes
   check("log row: never carries the message text", !JSON.stringify(row).includes("latest_message") && !/message|convo/.test(Object.keys(row.proposal).join(",")));
   const g2 = src("services/jevGateway.ts");
   check("one row per text, written after the checks report (not three rows)", /setTimeout\(\(\) => void flush\(key\), 5000\)/.test(g2) && /pending\.delete\(key\)/.test(g2));
-  const all = src("services/emotionalTone.ts") + src("services/issueReports.ts") + src("harness/emotion.ts");
-  check("every check reports its outcome", (all.match(/noteRaceOutcome\(message, recentConversation, "(solving|issue|feeling)", from,/g) ?? []).length === 3);
+  check("the check reports its outcome", (src("harness/emotion.ts").match(/noteRaceOutcome\(message, recentConversation, "feeling", from,/g) ?? []).length === 1);
 }
 
 console.log(`jev gateway rules: ${total - failed}/${total} passed`);

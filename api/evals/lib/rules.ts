@@ -243,8 +243,7 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
 
 // ---- graders are Sonnet and say so
 check("no grader or judge names Opus (the price table in the router eval is the only mention)", !evalFiles.some((f) => /claude-opus/.test(read(f).replace(/\/\/.*$/gm, "")) && !/PRICING/.test(read(f))) && !/claude-opus/.test(read("src/models.ts")));
-check("generating test data is not grading: the Jev honest generator call has no grader marker", !/model: JUDGE, headers: GRADER_HEADERS,\s*\n\s*prompt: `For a test, write 45/.test(read("evals/jev/honest.ts")));
-check("every grader call carries the grader marker", ["evals/matching/run.ts", "evals/intro/run.ts", "evals/texting/grade.ts", "evals/texting/pairwise.ts", "evals/lib/replyRubric.ts", "evals/texting/tagShort.ts", "evals/grounding/falseFlags.ts", "evals/jev/honest.ts"].every((f) => /headers: GRADER_HEADERS/.test(read(f))));
+check("every grader call carries the grader marker", ["evals/matching/run.ts", "evals/intro/run.ts", "evals/texting/grade.ts", "evals/texting/pairwise.ts", "evals/lib/replyRubric.ts", "evals/texting/tagShort.ts", "evals/grounding/falseFlags.ts"].every((f) => /headers: GRADER_HEADERS/.test(read(f))));
 
 // ---- the morning email is gone
 const jobs = read("src/jobs/index.ts");
