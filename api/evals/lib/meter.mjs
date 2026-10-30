@@ -52,6 +52,8 @@ function readLedger() {
   return { tokens, cost, calls, by };
 }
 const write = (row) => { try { appendFileSync(LEDGER, JSON.stringify(row) + "\n"); } catch {} };
+// What this run has spent so far, and its caps (the golden quality run reports cost per case from it).
+globalThis.__EVAL_METER_SPEND__ = () => ({ ...readLedger(), capUsd: CAP_USD, capTokens: CAP_TOKENS });
 
 let capHit = null;
 let seq = 0;

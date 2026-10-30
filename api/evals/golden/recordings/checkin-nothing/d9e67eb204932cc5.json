@@ -86,5 +86,12 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "d9e67eb204932cc5",
+    "wording": {},
+    "format": [],
+    "tools": null
+  }
 }

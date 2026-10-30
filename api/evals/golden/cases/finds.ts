@@ -8,6 +8,8 @@ import "../../lib/requireMeter.js";
 import { readFileSync } from "node:fs";
 import type { GoldenCase, GoldenResult } from "../types.js";
 import { result } from "../types.js";
+import { noteReply } from "../replies.js";
+import type { Send } from "../../lib/hardRules.js";
 
 const ZONE = "America/Los_Angeles";
 const MEMBER = { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan" };
@@ -40,7 +42,11 @@ async function reply(message: string, opts: { cutFirstReply?: boolean } = {}): P
       { ackSent: null, ...MEMBER, resolvedContent: message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: "", recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true },
       { dryRun: true, record: false, stubSearch: true, stubEvents: SF.events, cutFirstReply: opts.cutFirstReply },
     );
-    return { sends, reply: String(r.replyText ?? ""), tools: r.toolsCalled ?? [], grounding: (r.grounding ?? []).map((g: any) => g.outcome) };
+    // The hard rules read every send: a bare find link is a find, the fallback is the fallback, the rest is Cue's reply.
+    const typed: Send[] = sends.map((text) => ({ kind: URLS.has(text.trim()) ? "find" : /got tangled up|taking me longer|couldn't get that one|didn't come through/i.test(text) ? "fallback" : "reply", text }));
+    const tools: string[] = r.toolsCalled ?? [];
+    noteReply({ text: String(r.replyText ?? ""), sends: typed, tools, kind: "find", facts: `${G.renderReplyFacts(facts)}\n${SF.events.map((e) => `${e.name} ${e.url} ${e.lines.join(" ")}`).join("\n")}`, theirLines: [message], coLines: [], firstName: MEMBER.firstName, findUrls: [...URLS], message, recent: "" });
+    return { sends, reply: String(r.replyText ?? ""), tools, grounding: (r.grounding ?? []).map((g: any) => g.outcome) };
   } catch (e: any) {
     return { sends: [...sends, `ERROR ${String(e?.stack ?? e?.message).slice(0, 400)}`], reply: `ERROR ${e?.message}`, tools: [], grounding: [] };
   } finally {

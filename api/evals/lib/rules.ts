@@ -134,7 +134,11 @@ const pkgJson = read("package.json");
 const ISOLATED = "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci DOTENV_CONFIG_PATH=/dev/null";
 const PRELOAD = "tsx --import ./evals/lib/meter.mjs --import ./evals/lib/goldenReplay.mjs evals/golden/run.ts";
 check("the golden replay holds no key, a zero cap, and reads no .env, so a bug in it cannot spend", pkgJson.includes(`"evals:golden": "${ISOLATED} ANTHROPIC_API_KEY=golden-replay OPENAI_API_KEY=golden-replay GOLDEN_MODE=replay EVAL_TOKEN_CAP=0 EVAL_COST_CAP_USD=0 ${PRELOAD}"`));
-check("recording and the live golden run are metered, capped at $4, read no .env and are isolated from the database and sends", pkgJson.includes(`"evals:golden:record": "${ISOLATED} GOLDEN_MODE=record EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 ${PRELOAD}"`) && pkgJson.includes(`"evals:golden:live": "${ISOLATED} GOLDEN_MODE=live EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 ${PRELOAD}"`) && /^\s*import\s+["']\.\.\/lib\/requireMeter\.js["']/m.test(read("evals/golden/run.ts")) && /__GOLDEN__/.test(read("evals/golden/run.ts")));
+// The cap is the caller's when set (EVAL_COST_CAP_USD=9 npm run evals:golden:quality), $4 when not (Royce 2026-10-29: the scripts
+// hardcoded $4, so an env cap never reached the meter). evals/golden/harnessTest.ts checks an env cap actually arrives.
+const CAPS = "EVAL_TOKEN_CAP=${EVAL_TOKEN_CAP:-1500000} EVAL_COST_CAP_USD=${EVAL_COST_CAP_USD:-4}";
+check("recording, the live golden run and the quality run are metered, capped ($4 unless the env says otherwise), read no .env and are isolated from the database and sends", pkgJson.includes(`"evals:golden:record": "${ISOLATED} GOLDEN_MODE=record EVAL_REAL_MODELS=1 ${CAPS} ${PRELOAD}"`) && pkgJson.includes(`"evals:golden:live": "${ISOLATED} GOLDEN_MODE=live EVAL_REAL_MODELS=1 ${CAPS} ${PRELOAD}"`) && pkgJson.includes(`"evals:golden:quality": "${ISOLATED} GOLDEN_MODE=live EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=\${EVAL_TOKEN_CAP:-20000000} EVAL_COST_CAP_USD=\${EVAL_COST_CAP_USD:-4} ${PRELOAD} --quality"`) && /^\s*import\s+["']\.\.\/lib\/requireMeter\.js["']/m.test(read("evals/golden/run.ts")) && /__GOLDEN__/.test(read("evals/golden/run.ts")));
+check("stamping recordings is a replay: no key, a zero cap, no .env", pkgJson.includes(`"evals:golden:stamp": "${ISOLATED} ANTHROPIC_API_KEY=golden-replay OPENAI_API_KEY=golden-replay GOLDEN_MODE=replay GOLDEN_STAMP=1 EVAL_TOKEN_CAP=0 EVAL_COST_CAP_USD=0 ${PRELOAD}"`));
 check("the golden runner settles and fails on a miss anywhere in the run (late, or outside any case) before it exits", /await golden\.settle\(\)/.test(read("evals/golden/run.ts")) && /golden\.allMisses\(\)/.test(read("evals/golden/run.ts")));
 check("the live job runs only on the nightly schedule or a manual dispatch, and runs the capped nightly set", /github\.event_name == 'schedule'/.test(wf) && /workflow_dispatch/.test(wf) && /npm run -s evals:nightly/.test(wf));
 
@@ -240,7 +244,7 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
 // ---- graders are Sonnet and say so
 check("no grader or judge names Opus (the price table in the router eval is the only mention)", !evalFiles.some((f) => /claude-opus/.test(read(f).replace(/\/\/.*$/gm, "")) && !/PRICING/.test(read(f))) && !/claude-opus/.test(read("src/models.ts")));
 check("generating test data is not grading: the Jev honest generator call has no grader marker", !/model: JUDGE, headers: GRADER_HEADERS,\s*\n\s*prompt: `For a test, write 45/.test(read("evals/jev/honest.ts")));
-check("every grader call carries the grader marker", ["evals/matching/run.ts", "evals/intro/run.ts", "evals/texting/grade.ts", "evals/texting/pairwise.ts", "evals/texting/tagShort.ts", "evals/grounding/falseFlags.ts", "evals/jev/honest.ts"].every((f) => /headers: GRADER_HEADERS/.test(read(f))));
+check("every grader call carries the grader marker", ["evals/matching/run.ts", "evals/intro/run.ts", "evals/texting/grade.ts", "evals/texting/pairwise.ts", "evals/lib/replyRubric.ts", "evals/texting/tagShort.ts", "evals/grounding/falseFlags.ts", "evals/jev/honest.ts"].every((f) => /headers: GRADER_HEADERS/.test(read(f))));
 
 // ---- the morning email is gone
 const jobs = read("src/jobs/index.ts");

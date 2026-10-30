@@ -4384,5 +4384,41 @@
         "diagnostics": null
       }
     }
-  ]
+  ],
+  "structure": {
+    "v": "9b886018627f",
+    "hash": "00c42eeceb987919",
+    "wording": {
+      "coCore.ts:CO_GROUNDING#0": "2c685587",
+      "coCore.ts:CO_LISTENING#0": "582ccc95",
+      "coCore.ts:CO_MEMBER_SAFETY#0": "dc007148",
+      "coCore.ts:CO_SAFETY#0": "eba1a874",
+      "coVoice.ts:CO_TEXT_CHANNEL#0": "47169f7c",
+      "coVoice.ts:CO_VOICE#0": "f0075134",
+      "conversationReply.ts:TOOL_FAILURE_RULE#0": "28a726df",
+      "conversationReply.ts:TOOL_TURN_RULES#0": "fc505b7a",
+      "conversationReply.ts:TOOL_TURN_RULES#1": "95775da8",
+      "conversationReply.ts:TOOL_TURN_RULES#3": "01703e8b",
+      "conversationReply.ts:replyLengthLine#0": "073daa65",
+      "conversationReply.ts:system#0": "9f3e952c",
+      "conversationReply.ts:system#1": "2b35b7e8",
+      "conversationReply.ts:system#11": "ad5c663f",
+      "conversationReply.ts:system#12": "0da96ed3",
+      "conversationReply.ts:system#13": "2c41d6b5",
+      "conversationReply.ts:system#16": "4e3f53a5",
+      "conversationReply.ts:system#18": "914870d1",
+      "conversationReply.ts:system#2": "ef29ce7f",
+      "conversationReply.ts:system#21": "0fb5e459",
+      "conversationReply.ts:system#24": "c6dc8594",
+      "conversationReply.ts:system#3": "cef0ffb2",
+      "conversationReply.ts:system#4": "3f58b40c",
+      "conversationReply.ts:system#5": "ecf8b418",
+      "loop.ts:LOOP_GUIDE#0": "df81017b",
+      "moves.ts:MOVES_GUIDE#0": "bd54f692",
+      "textRhythm.ts:COACHING#0": "a9d0510d",
+      "textRhythm.ts:MESSAGE_RHYTHM#0": "8102ef4e"
+    },
+    "format": [],
+    "tools": "f3109d7a"
+  }
 }

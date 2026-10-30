@@ -9,6 +9,8 @@ import "../../lib/requireMeter.js";
 import { DateTime } from "luxon";
 import type { GoldenCase, GoldenResult } from "../types.js";
 import { result } from "../types.js";
+import { captureSends, linesOf, noteReply } from "../replies.js";
+import { turnKind, type TurnKind } from "../../lib/hardRules.js";
 
 const ZONE = "America/Los_Angeles";
 export const DAY = new Date("2026-10-13T21:00:00Z"); // Tue Oct 13, 2:00pm Pacific (the replay harness's pinned clock)
@@ -26,6 +28,11 @@ export type Scene = {
   threads?: { text: string; line: string }[];
   facts?: [Kind, string][];
   message: string;
+  // What kind of turn this is for the hard rules (evals/lib/hardRules.ts); read from the message when not given.
+  kind?: TurnKind;
+  // The moment read wired the way the text route wires it (routes/sendblue.ts: replyFacts.moment and momentInstruction). Off for the
+  // cases recorded before it (their recorded requests carry no moment line).
+  withMoment?: boolean;
 };
 // reacted: Co answered with a reaction move (a tapback, or leaving it at one) instead of a text: Co's choice (tapbacks are quiet).
 export type Reply = { text: string; tools: string[]; checked: string[]; world: string; reacted: boolean };
@@ -77,10 +84,18 @@ export async function reply(s: Scene): Promise<Reply> {
   if (read?.aboutCo) G.addInstruction(facts, R.ABOUT_CO_INSTRUCTION);
   const note = R.feedbackInstruction(read?.feedback ?? []);
   if (note) G.addInstruction(facts, note);
-  const r: any = await runConversationReplyAgent(
+  if (s.withMoment && read?.moment) {
+    const D = await import("../../../src/services/connectDots.js");
+    facts.moment = read.moment.mode ?? null;
+    const m = D.momentInstruction(read.moment);
+    if (m) G.addInstruction(facts, m);
+  }
+  const { value: r, sends } = await captureSends<any>(() => runConversationReplyAgent(
     { ackSent: null, ...member(s.firstName), resolvedContent: s.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: recent, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true },
     { dryRun: true, record: false, stubSearch: true },
-  ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] }));
+  ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] })));
+  const thread = linesOf(recent);
+  noteReply({ text: String(r.replyText ?? ""), sends, tools: r.toolsCalled ?? [], kind: s.kind ?? turnKind(s.message, s.withMoment ? read?.moment?.mode : null), facts: G.renderReplyFacts(facts), theirLines: [s.message, ...thread.theirs], coLines: thread.cue, firstName: s.firstName, message: s.message, recent });
   const checked = (r.grounding ?? []).filter((g: any) => g.outcome && g.outcome !== "as_drafted" && g.outcome !== "unchecked").map((g: any) => `${g.outcome}: ${(g.checks ?? []).filter((x: any) => !x.pass || x.name === "world_line").map((x: any) => x.reason ?? x.name).join(" | ").slice(0, 200)}`);
   const tools: string[] = r.toolsCalled ?? [];
   return { text: String(r.replyText ?? ""), tools, checked, world: M.memberWorldFact(world), reacted: tools.some((t) => REACTION_TOOLS.includes(t)) };

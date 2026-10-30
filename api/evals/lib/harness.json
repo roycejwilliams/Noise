@@ -19,5 +19,8 @@
   "evals/sweepSelect/grading.ts",
   "evals/sweepSelect/score.ts",
   "evals/testEnv.ts",
-  "evals/golden/types.ts"
+  "evals/golden/types.ts",
+  "evals/golden/replies.ts",
+  "evals/golden/wording.ts",
+  "evals/golden/estimate.ts"
 ]

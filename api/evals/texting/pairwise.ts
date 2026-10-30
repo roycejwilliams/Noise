@@ -10,7 +10,8 @@ import { readFileSync } from "fs";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { parseModelJson } from "../../src/services/modelJson.js";
-import { CRITERIA, GRADER_MODEL, type TextCase } from "./grade.js";
+import { CRITERIA, GRADER_MODEL, hardMisses, kindOf, type TextCase } from "./grade.js";
+import { criteriaFor } from "../lib/replyRubric.js";
 import { GRADER_HEADERS } from "../../src/models.js";
 
 const here = new URL(".", import.meta.url).pathname;
@@ -24,8 +25,8 @@ async function judge(c: TextCase, first: string, second: string): Promise<"1" | 
     model: anthropic(GRADER_MODEL),
     headers: GRADER_HEADERS,
     prompt: `Two possible replies from Cue, an AI companion that texts members of a private club over iMessage. Pick the one that reads more like a thoughtful real person texting on a phone, judged on:
-${Object.values(CRITERIA).map((v) => `- ${v}`).join("\n")}
-
+${criteriaFor(kindOf(c)).map((k) => `- ${CRITERIA[k]}`).join("\n")}
+${c.person ? `\nTheir first name is ${c.person}.\n` : ""}
 What Cue knew about them: ${c.contextSummary.slice(0, 2000) || "(nothing)"}
 
 The conversation so far:
@@ -44,6 +45,8 @@ Return ONLY JSON: {"better": "1" | "2" | "tie"}`,
 }
 
 let aWins = 0, bWins = 0, ties = 0;
+// The hard rules first, in code (free): a side that crosses one is listed whatever the judge prefers.
+for (const [label, side] of [["A", a], ["B", b]] as const) for (const [id, reply] of side) { const m = cases[id] ? hardMisses(cases[id], reply) : []; if (m.length) console.log(`hard rule ${label} #${id}: ${m.join("; ")}`); }
 const ids = [...a.keys()].filter((id) => b.has(id));
 let next = 0;
 await Promise.all(
