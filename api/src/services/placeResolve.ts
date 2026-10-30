@@ -14,9 +14,10 @@
 //     ambiguous place is not searched (never quietly searched at home instead, Royce 2026-10-29).
 // A member with no home city keeps the behavior from before this (the place word passed through as it was).
 //
-// The answer is kept on the want's own row (want_places.resolved_*), relative to the home it was resolved against, so the shared
-// geocode cache's bare-name rows (the stale "Bay Area" row among them) are never read for a want's place. A correction clears it
-// (wantPlace.ts setPlace). The far-from-home check (farCheck) and its log rows are here too.
+// The answer is kept on the want's own row (want_places.resolved_*), relative to the home it was resolved against, and the search uses
+// those stored coordinates directly (geocoding.ts withPinnedPlace): the shared geocode cache is never read for a want's place (the
+// stale "Bay Area" row among its rows) and never written from one (review of #314: one member's resolution must never become another
+// member's answer). A correction clears it (wantPlace.ts setPlace). The far-from-home check (farCheck) and its log rows are here too.
 import { haversineMiles, googleKey, type GeoPoint } from "./geocoding.js";
 import { STATE_NAMES } from "./areaCodes.js";
 import type { PlaceSource } from "./wantPlace.js";
@@ -43,6 +44,8 @@ export type PlaceCandidate = {
   admin1: string | null;
   // The region's short code when the geocoder gives one (Google's administrative_area_level_1 short_name: "BC", "ON", "CA").
   admin1Code?: string | null;
+  // The hit is itself a state, province or region (Google's administrative_area_level_1, the open geocoder's ADM1), not a place in one.
+  level?: "admin1" | null;
   country: string | null;
   population: number | null;
   source: "google" | "open_meteo" | "region";
@@ -102,6 +105,14 @@ export function parseQualified(place: string): Qualified {
   return out;
 }
 
+// Pure: whether a want's place says no region or country beyond its home's: none at all, or the same ones ("Portland" or "Portland,
+// ME" for a "Portland, ME" home; not "Portland, OR").
+export function sameQualifiers(place: string, home: string | null): boolean {
+  const w = parseQualified(place);
+  const h = parseQualified(String(home ?? ""));
+  return (!w.region || w.region === h.region) && (!w.country || w.country === h.country);
+}
+
 // Pure: every way a candidate's region can be said: its name, its code, and the full name behind a known code.
 const regionNames = (c: PlaceCandidate): string[] => {
   const name = String(c.admin1 ?? "").trim();
@@ -114,12 +125,13 @@ export const matchesQualifier = (c: PlaceCandidate, q: Qualified): boolean =>
 const namesOf = (c: PlaceCandidate) => [c.name, ...(c.keys ?? [])].map(normName);
 export const sameName = (c: PlaceCandidate, name: string) => namesOf(c).includes(normName(name));
 
-// Pure: how a place is shown and searched: "Portland, Maine", "San Francisco Bay Area, California", "Cambridge, England, GB",
-// "Washington, US" (the state itself). Always qualified (it always has a comma), so the code downstream that geocodes it by name
-// (geocoding.ts geocodeCity) can't mistake it for another one, and it's never a bare shared cache key.
+// Pure: how a place is shown and named in a search's text: "Portland, Maine", "San Francisco Bay Area, California", "Cambridge,
+// England, GB". A hit that is itself a state or province says so ("New York State, US", "Ontario Province, CA"), so it never reads
+// like the city of that name ("New York, US"). Its coordinates never come from this label: they're the stored ones.
 export function placeLabel(c: PlaceCandidate): string {
-  const admin = c.admin1 && normName(c.admin1) !== normName(c.name) ? c.admin1 : null;
   const country = String(c.country ?? "").toUpperCase();
+  if (c.level === "admin1") return `${c.name} ${country === "US" ? "State" : country === "CA" ? "Province" : "Region"}${country ? `, ${country}` : ""}`;
+  const admin = c.admin1 && normName(c.admin1) !== normName(c.name) ? c.admin1 : null;
   if (country === "US" && admin) return `${c.name}, ${admin}`;
   return [c.name, admin, country || null].filter(Boolean).join(", ");
 }
@@ -149,10 +161,13 @@ export function pickPlace(asked: string, cands: PlaceCandidate[], home: Home | n
   }
   const miles = (c: PlaceCandidate) => (home ? haversineMiles(home.point, point(c)) : null);
   const resolved = (c: PlaceCandidate, why: PickWhy): Pick => ({ status: "resolved", place: c, label: placeLabel(c), miles: miles(c), why });
-  // A real place: at least minPopulation, or of unknown size when nothing by that name is known to be bigger (a Google hit with no
-  // twin, a region). Austin, Nevada (192 people) never wins on nearness while Austin, Texas is a candidate; nor does an unsized hit.
+  // A real place: at least minPopulation; or of unknown size and either a Google hit near home (Georgetown for a DC member, Hollywood
+  // for an LA member, Fremont for a Seattle member: Google gives no population, and a neighborhood is real), or with nothing by that
+  // name known to be bigger. Austin, Nevada (192 people, known small) never wins on nearness; an unsized hit far away never beats a
+  // known bigger place.
   const bigger = named.some((c) => (c.population ?? 0) >= PLACE_RESOLVE.minPopulation);
-  const real = named.filter((c) => (c.population ?? 0) >= PLACE_RESOLVE.minPopulation || (c.population == null && !bigger));
+  const nearGoogle = (c: PlaceCandidate) => c.source === "google" && (miles(c) ?? Infinity) <= PLACE_RESOLVE.nearHomeMiles;
+  const real = named.filter((c) => (c.population ?? 0) >= PLACE_RESOLVE.minPopulation || (c.population == null && (nearGoogle(c) || !bigger)));
   if (home) {
     const near = real.filter((c) => (miles(c) ?? Infinity) <= PLACE_RESOLVE.nearHomeMiles).sort((a, b) => miles(a)! - miles(b)!);
     if (near.length) return resolved(near[0], "near_home");
@@ -208,17 +223,17 @@ export function farCheck(o: { miles: number | null; how: PlaceHow; windowEnd: st
 
 // ---------------------------------------------------------------- resolving one want's place, with its record
 
-export type StoredResolution = { forPlace: string; forHome: string; status: "resolved" | "ambiguous" | "rejected"; label: string | null; lat: number | null; lng: number | null; options: string[] };
+// homeCountry: their home's country as the geocoder gave it when this was resolved (kept with it; looked up only for a fresh resolution).
+export type StoredResolution = { forPlace: string; forHome: string; status: "resolved" | "ambiguous" | "rejected"; label: string | null; lat: number | null; lng: number | null; options: string[]; homeCountry?: string | null };
 export type WantRow = { windowEnd: string | null; resolution: StoredResolution | null };
 export type ResolveDeps = {
-  // Their home on the map, and its country as the geocoder gives it (null when it doesn't say).
-  home: (city: string) => Promise<Home | null>;
+  // Their home on the map (its cached point), and, only when a resolution is made fresh, its country as the geocoders give it.
+  home: (city: string) => Promise<GeoPoint | null>;
+  homeCountry: (city: string, p: GeoPoint) => Promise<string | null>;
   // The place as they said it ("Portland, ME"): Google reads it whole, the open geocoder by its name. partial: one of them failed.
   lookup: (place: string) => Promise<{ google: PlaceCandidate[]; openMeteo: PlaceCandidate[]; partial?: boolean }>;
   row: (userId: string, key: string) => Promise<WantRow | null>;
   store: (userId: string, key: string, r: StoredResolution) => Promise<void>;
-  // The label's point into the shared geocode cache, so what geocodes the label by name downstream gets this exact place.
-  seed: (label: string, p: GeoPoint) => Promise<void>;
   log: (d: { decision: string; userId: string; outcome: "act" | "skip"; action: string; proposal: Record<string, unknown> }) => Promise<void>;
   today: (userId: string) => Promise<string>;
 };
@@ -226,7 +241,8 @@ export type ResolveDeps = {
 export type PlaceOnMap = { label: string; miles: number | null; how: PlaceHow; verdict: FarVerdict | "ambiguous" | "rejected" | "unresolved"; from: "stored" | "fresh" };
 // retry: this run couldn't place it on the map (a geocoder or their home's lookup down, or no hit at all): nothing is searched this
 // run, and the next run tries again (never a guessed place, never the bare word).
-export type ResolvedSearch = { city: string | null; skip: string | null; place: PlaceOnMap | null; retry?: string | null };
+// point: the stored coordinates the search uses for city (never re-geocoded from the label).
+export type ResolvedSearch = { city: string | null; skip: string | null; place: PlaceOnMap | null; retry?: string | null; point?: GeoPoint | null };
 
 // One want's place, resolved against their home: the city to search (a qualified label), or why its search is skipped or waits for
 // the next run. Nothing here ever falls back to their home for a want that has a place. Never throws.
@@ -239,24 +255,24 @@ export async function resolveWantPlace(i: { userId: string; key: string | null; 
     await deps.log({ decision: "place.unresolved", userId: i.userId, outcome: "skip", action, proposal: base }).catch(() => {});
     return { city: null, skip: null, place: null, retry: why };
   };
-  const home = await deps.home(i.homeCity).catch(() => null);
-  if (!home) return retry("home_unplaced", "their home city couldn't be placed on the map this run; tried again next run");
-  const homePt = home.point;
+  const homePt = await deps.home(i.homeCity).catch(() => null);
+  if (!homePt) return retry("home_unplaced", "their home city couldn't be placed on the map this run; tried again next run");
   const row = await deps.row(i.userId, i.key).catch(() => null);
   let stored = row?.resolution && row.resolution.forPlace === i.place && row.resolution.forHome === i.homeCity ? row.resolution : null;
   const from: PlaceOnMap["from"] = stored ? "stored" : "fresh";
   if (!stored) {
     const hits = await deps.lookup(i.place).catch(() => null);
-    const pick = pickPlace(i.place, mergeCandidates(hits?.google ?? [], hits?.openMeteo ?? [], i.place), home);
+    // Their home's country, looked up only now (a fresh resolution), and kept with it.
+    const homeCountry = hits ? await deps.homeCountry(i.homeCity, homePt).catch(() => null) : null;
+    const pick = pickPlace(i.place, mergeCandidates(hits?.google ?? [], hits?.openMeteo ?? [], i.place), { point: homePt, country: homeCountry });
     if (pick.status === "unresolved") return retry(hits ? "no_hits" : "lookup_failed", hits ? "no place by that name came back this run; tried again next run" : "the geocoders were down this run; tried again next run");
     stored =
       pick.status === "resolved"
-        ? { forPlace: i.place, forHome: i.homeCity, status: "resolved", label: pick.label, lat: pick.place.lat, lng: pick.place.lng, options: [] }
-        : { forPlace: i.place, forHome: i.homeCity, status: pick.status, label: null, lat: null, lng: null, options: pick.options };
+        ? { forPlace: i.place, forHome: i.homeCity, status: "resolved", label: pick.label, lat: pick.place.lat, lng: pick.place.lng, options: [], homeCountry }
+        : { forPlace: i.place, forHome: i.homeCity, status: pick.status, label: null, lat: null, lng: null, options: pick.options, homeCountry };
     // An answer from both geocoders is kept; one that came back while either was down is used this once and asked again next time
     // (an outage must not leave a want marked ambiguous for good). A resolved one is kept either way.
     if (stored.status === "resolved" || (hits && !hits.partial)) await deps.store(i.userId, i.key, stored).catch((err: any) => console.error("placeResolve: storing the resolution failed (non-fatal):", err?.message ?? err));
-    if (stored.label && stored.lat != null && stored.lng != null) await deps.seed(stored.label, { lat: stored.lat, lng: stored.lng }).catch(() => {});
   }
   if (stored.status !== "resolved" || !stored.label || stored.lat == null || stored.lng == null) {
     const verdict = stored.status === "ambiguous" ? "ambiguous" : "rejected";
@@ -268,14 +284,12 @@ export async function resolveWantPlace(i: { userId: string; key: string | null; 
   const today = await deps.today(i.userId).catch(() => "9999-12-31");
   const verdict = farCheck({ miles, how, windowEnd: row?.windowEnd ?? null, today });
   const place: PlaceOnMap = { label: stored.label, miles, how, verdict, from };
-  if (verdict === "near") return { city: stored.label, skip: null, place };
+  const at = { lat: stored.lat, lng: stored.lng };
+  if (verdict === "near") return { city: stored.label, skip: null, place, point: at };
   await deps.log({ decision: "place.far_from_home", userId: i.userId, outcome: verdict === "far_not_searched" ? "skip" : "act", action: verdict, proposal: { ...base, place: stored.label, miles, from } }).catch(() => {});
   if (verdict === "far_not_searched") return { city: null, skip: `its place (${stored.label}) is ${miles} mi from home and Cue inferred it; not searched unless they name it or a trip window covers it`, place };
-  return { city: stored.label, skip: null, place };
+  return { city: stored.label, skip: null, place, point: at };
 }
-
-// Pure: whether a label may go into the shared geocode cache: qualified only.
-export const seedable = (label: string): boolean => label.includes(",");
 
 // ---------------------------------------------------------------- the real lookups and record
 
@@ -289,7 +303,7 @@ export async function googleLookup(name: string): Promise<PlaceCandidate[]> {
     .filter((x: any) => !x.partial_match && (x.types ?? []).some((t: string) => GOOGLE_PLACE_TYPES.has(t)))
     .map((x: any) => {
       const comp = (t: string) => (x.address_components ?? []).find((c: any) => (c.types ?? []).includes(t));
-      return { name: String(x.address_components?.[0]?.long_name ?? name), lat: x.geometry.location.lat, lng: x.geometry.location.lng, admin1: comp("administrative_area_level_1")?.long_name ?? null, admin1Code: comp("administrative_area_level_1")?.short_name ?? null, country: comp("country")?.short_name ?? null, population: null, source: "google" as const };
+      return { name: String(x.address_components?.[0]?.long_name ?? name), lat: x.geometry.location.lat, lng: x.geometry.location.lng, admin1: comp("administrative_area_level_1")?.long_name ?? null, admin1Code: comp("administrative_area_level_1")?.short_name ?? null, level: (x.types ?? []).includes("administrative_area_level_1") ? ("admin1" as const) : null, country: comp("country")?.short_name ?? null, population: null, source: "google" as const };
     });
 }
 async function openMeteoLookup(name: string): Promise<PlaceCandidate[]> {
@@ -299,7 +313,7 @@ async function openMeteoLookup(name: string): Promise<PlaceCandidate[]> {
   return (Array.isArray(data?.results) ? data.results : [])
     // Populated places and administrative areas only: never "Bay Area Park" or an airport.
     .filter((r: any) => /^(PPL|ADM)/.test(String(r.feature_code ?? "")) && typeof r.latitude === "number" && typeof r.longitude === "number")
-    .map((r: any) => ({ name: String(r.name), lat: r.latitude, lng: r.longitude, admin1: r.admin1 ?? null, country: r.country_code ?? null, population: typeof r.population === "number" ? r.population : null, source: "open_meteo" as const }));
+    .map((r: any) => ({ name: String(r.name), lat: r.latitude, lng: r.longitude, admin1: r.admin1 ?? null, level: r.feature_code === "ADM1" ? ("admin1" as const) : null, country: r.country_code ?? null, population: typeof r.population === "number" ? r.population : null, source: "open_meteo" as const }));
 }
 
 export async function lookupPlace(place: string): Promise<{ google: PlaceCandidate[]; openMeteo: PlaceCandidate[]; partial: boolean }> {
@@ -315,22 +329,22 @@ export function countryAt(p: GeoPoint, cands: PlaceCandidate[]): string | null {
 }
 
 export const realResolveDeps: ResolveDeps = {
-  home: async (city) => {
-    const p = await (await import("./geocoding.js")).geocodeCity(city);
-    if (!p) return null;
-    // Its country from the geocoders (never guessed from a box on the map); unknown leaves no country preference.
+  home: async (city) => (await import("./geocoding.js")).geocodeCity(city),
+  // Its country from the geocoders (never guessed from a box on the map); unknown leaves no country preference. Called only when a
+  // resolution is made fresh (a stored one is reused without it).
+  homeCountry: async (city, p) => {
     const hits = await lookupPlace(city).catch(() => null);
-    return { point: p, country: hits ? countryAt(p, [...hits.google, ...hits.openMeteo]) : null };
+    return hits ? countryAt(p, [...hits.google, ...hits.openMeteo]) : null;
   },
   lookup: lookupPlace,
   row: async (userId, key) => {
     const { default: pool } = await import("../db/db.js");
-    const { rows } = await pool.query(`SELECT window_end, resolved_for, resolved_home, resolved_status, resolved_label, resolved_lat, resolved_lng, resolved_options FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
+    const { rows } = await pool.query(`SELECT window_end, resolved_for, resolved_home, resolved_status, resolved_label, resolved_lat, resolved_lng, resolved_options, resolved_home_country FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
     const r = rows[0];
     if (!r) return null;
     const end = r.window_end ? (r.window_end instanceof Date ? r.window_end.toISOString().slice(0, 10) : String(r.window_end).slice(0, 10)) : null;
     const resolution: StoredResolution | null = r.resolved_status && r.resolved_for && r.resolved_home
-      ? { forPlace: r.resolved_for, forHome: r.resolved_home, status: r.resolved_status, label: r.resolved_label ?? null, lat: r.resolved_lat == null ? null : Number(r.resolved_lat), lng: r.resolved_lng == null ? null : Number(r.resolved_lng), options: Array.isArray(r.resolved_options) ? r.resolved_options.map(String) : [] }
+      ? { forPlace: r.resolved_for, forHome: r.resolved_home, status: r.resolved_status, label: r.resolved_label ?? null, lat: r.resolved_lat == null ? null : Number(r.resolved_lat), lng: r.resolved_lng == null ? null : Number(r.resolved_lng), options: Array.isArray(r.resolved_options) ? r.resolved_options.map(String) : [], homeCountry: r.resolved_home_country ?? null }
       : null;
     return { windowEnd: end, resolution };
   },
@@ -338,17 +352,10 @@ export const realResolveDeps: ResolveDeps = {
     const { default: pool } = await import("../db/db.js");
     // Only while the place is still the one resolved (a correction made meanwhile wins).
     await pool.query(
-      `UPDATE want_places SET resolved_for = $3, resolved_home = $4, resolved_status = $5, resolved_label = $6, resolved_lat = $7, resolved_lng = $8, resolved_options = $9::jsonb, resolved_at = NOW()
+      `UPDATE want_places SET resolved_for = $3, resolved_home = $4, resolved_status = $5, resolved_label = $6, resolved_lat = $7, resolved_lng = $8, resolved_options = $9::jsonb, resolved_home_country = $10, resolved_at = NOW()
         WHERE user_id = $1 AND want_key = $2 AND place = $3`,
-      [userId, key, s.forPlace, s.forHome, s.status, s.label, s.lat, s.lng, JSON.stringify(s.options)],
+      [userId, key, s.forPlace, s.forHome, s.status, s.label, s.lat, s.lng, JSON.stringify(s.options), s.homeCountry ?? null],
     );
-  },
-  // Only a qualified label (it has a comma), and never over a row already there: one member's resolution must not change a shared row
-  // other members and other code read (review of #314: a Seattle member's "Washington" would have moved the bare row to the state).
-  seed: async (label, p) => {
-    if (!seedable(label)) return;
-    const { default: pool } = await import("../db/db.js");
-    await pool.query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [label, p.lat, p.lng]);
   },
   log: async (d) => {
     const { recordDecision } = await import("../harness/core.js");
@@ -406,7 +413,7 @@ export async function applyAudit(findings: AuditFinding[], db: { query: (sql: st
       const at = f.ref.indexOf(":");
       const [userId, key] = [f.ref.slice(0, at), f.ref.slice(at + 1)];
       out.push(`clear resolution ${f.ref}`);
-      if (apply) await db.query(`UPDATE want_places SET resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_at = NULL WHERE user_id = $1 AND want_key = $2 AND source NOT IN ('their_words', 'corrected')`, [userId, key]);
+      if (apply) await db.query(`UPDATE want_places SET resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_home_country = NULL, resolved_at = NULL WHERE user_id = $1 AND want_key = $2 AND source NOT IN ('their_words', 'corrected')`, [userId, key]);
     } else if (f.action === "delete_cache_row" && f.kind === "cache") {
       out.push(`delete cache row "${f.ref}"`);
       if (apply) await db.query(`DELETE FROM geocode_cache WHERE query = $1`, [f.ref]);
