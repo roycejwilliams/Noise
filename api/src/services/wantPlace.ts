@@ -152,7 +152,7 @@ export async function markNoted(userId: string, key: string): Promise<void> {
 export async function setPlace(db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> }, userId: string, key: string, place: string | null, theirWords: string) {
   const r = await db.query(
     `UPDATE want_places SET place = $3, source = $4, quote = $5, noted_at = COALESCE(noted_at, NOW()), updated_at = NOW(),
-       resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_at = NULL
+       resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_home_country = NULL, resolved_at = NULL
      WHERE user_id = $1 AND want_key = $2`,
     [userId, key, place, place ? "corrected" : "removed", theirWords.slice(0, 300)],
   );

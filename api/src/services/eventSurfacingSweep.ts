@@ -69,17 +69,19 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
 // searched at all (an ambiguous or rejected place, or one Cue inferred far from home), and then nothing searches it, not even their
 // home. retry: it couldn't be placed on the map this run (a geocoder down, no hit): nothing is searched, the next run tries again
 // (never the bare word, never a guess). A want with no place, or no home city on file, is as before.
-export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null; retry?: string | null };
+// point: the want's stored coordinates for city (placeResolve.ts): the search geocodes city to exactly this (geocoding.ts withPinnedPlace).
+export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null; retry?: string | null; point?: import("./geocoding.js").GeoPoint | null };
 export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps: { place?: import("./wantPlace.js").PlaceDeps; resolve?: import("./placeResolve.js").ResolveDeps } = {}): Promise<SearchWhere> {
   const where = await searchPlace(candidate, deps.place).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } as SearchedIn }));
   if (!where.searchedIn.key || where.searchedIn.source === "home" || !where.city) return { ...where, skip: null, place: null };
   // Their home city by another spelling ("Portland" for a "Portland, ME" member) is home, searched as their home is on file (the
-  // qualified one, never the bare word).
-  if ((await import("./wantPlace.js")).samePlace(where.city, candidate.city)) return { ...where, city: candidate.city, skip: null, place: null };
+  // qualified one, never the bare word). Only when the want says no region or country, or the same ones as home: "Portland, OR" from
+  // a Portland, ME home, "Cambridge, England" from Cambridge, MA, "Springfield, MA" from Springfield, IL are resolved, not home.
   const R = await import("./placeResolve.js");
+  if ((await import("./wantPlace.js")).samePlace(where.city, candidate.city) && R.sameQualifiers(where.city, candidate.city)) return { ...where, city: candidate.city, skip: null, place: null };
   const r = await R.resolveWantPlace({ userId: candidate.userId, key: where.searchedIn.key, place: where.city, source: where.searchedIn.source, homeCity: candidate.city }, deps.resolve ?? R.realResolveDeps).catch(() => null);
   if (!r) return { ...where, city: null, skip: null, place: null, retry: "its place couldn't be resolved this run; tried again next run" };
-  return { city: r.skip || r.retry ? null : r.city, searchedIn: where.searchedIn, skip: r.skip, place: r.place, retry: r.retry ?? null };
+  return { city: r.skip || r.retry ? null : r.city, searchedIn: where.searchedIn, skip: r.skip, place: r.place, retry: r.retry ?? null, point: r.skip || r.retry ? null : (r.point ?? null) };
 }
 // Where a find was searched, kept on the find (its match) so the send can say so once (wantPlace.ts noteDue).
 export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" };
@@ -774,7 +776,9 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   }
   const readAtStart = await getBacklog(candidate.userId, candidate.askId);
   const queued = await dropStaleFront(candidate.userId, readAtStart, zone);
-  const { items: rawFound, trace } = await findFreshPending(candidate, zone, where);
+  // The want's stored coordinates, pinned for this search: everything it geocodes by that label gets them (never a cache row).
+  const { withPinnedPlace } = await import("./geocoding.js");
+  const { items: rawFound, trace } = where.city && where.point ? await withPinnedPlace(where.city, where.point, () => findFreshPending(candidate, zone, where)) : await findFreshPending(candidate, zone, where);
   // What each new find IS, read at capture (services/findForm.ts): a dated event or an opening. An event whose date its page doesn't
   // state, or one already past, exits with its fact; an exited find found again stays out (services/workingSet.ts).
   const found = await settleNewFinds(candidate.userId, rawFound, localDay(new Date(), zone), candidate.askText, zone);

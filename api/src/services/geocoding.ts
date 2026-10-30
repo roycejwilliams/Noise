@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Client } from "@googlemaps/google-maps-services-js";
 import { find as findTimezone } from "geo-tz";
 import pool from "../db/db.js";
@@ -59,7 +60,20 @@ export function geoQuery(city: string, bias?: GeoBias | null): string {
   return `${c}, ${region}`;
 }
 
+// A want's own place, pinned for one search (services/placeResolve.ts, review of #314): inside withPinnedPlace, geocoding that label
+// returns the coordinates stored on the want (want_places.resolved_lat/lng) and nothing else: no cache read, no cache write, no
+// lookup. Scoped to that search's async work only, so two members whose places read alike never share a point.
+const pinned = new AsyncLocalStorage<Map<string, GeoPoint>>();
+export function withPinnedPlace<T>(label: string, p: GeoPoint, fn: () => Promise<T>): Promise<T> {
+  const m = new Map(pinned.getStore() ?? []);
+  m.set(label.trim(), p);
+  return pinned.run(m, fn);
+}
+export const pinnedPoint = (city: string | null | undefined): GeoPoint | null => pinned.getStore()?.get(String(city ?? "").trim()) ?? null;
+
 export async function geocodeCity(city: string, bias?: GeoBias | null): Promise<GeoPoint | null> {
+  const pin = pinnedPoint(city);
+  if (pin) return pin;
   const trimmed = geoQuery(city, bias);
   if (!trimmed) return null;
 
