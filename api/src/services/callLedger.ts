@@ -18,12 +18,16 @@ export type DoneOnCall = { tool: string; kind: string; labels: string[]; urls: s
 // One thing done on the call, as the audit matches a claim to it: its kind (a send texted them), its labels, and the names and links
 // of what it was about.
 export type DoneItem = { kind: string; label: string; names: string[]; urls: string[] };
-export type OwedAfterCall = { tool: string; items: { name: string; url: string }[]; why: "failed" | "timeout"; at: Date };
+export type OwedAfterCall = { tool: string; items: { name: string; url: string }[]; why: "failed" | "timeout"; at: Date; taskId: number | null };
 export type CallLedger = { done: DoneOnCall[]; owed: OwedAfterCall[]; covered: string[] };
 
 // Pure: what a done tool is called in the ledger: its action labels (the same words co_facts keeps), else its name.
 export function doneLabels(tool: string, input: unknown): string[] {
-  const labels = (toolAction(tool, input) ?? []).map((a) => a.label).filter(Boolean);
+  // A send on a call (any of them: shareLink, resendLink, resetLink, shareArtifact) is labelled by what it texted: each link with
+  // its name, the way shareLink's own record reads.
+  const i = input as { urls?: unknown; names?: unknown } | null;
+  const asSend = Array.isArray(i?.urls) && (i!.urls as unknown[]).length && Array.isArray(i?.names);
+  const labels = (toolAction(asSend ? "shareLink" : tool, input) ?? []).map((a) => a.label).filter(Boolean);
   return labels.length ? labels : [`used ${tool}`];
 }
 
@@ -32,8 +36,8 @@ export function recordDoneOnCall(userId: string, d: { tool: string; kind: string
   return recordDecision({ layer: 8, decision: "call.done_on_call", userId, outcome: "act", action: d.tool, proposal: { kind: d.kind, labels: doneLabels(d.tool, d.input).map((l) => l.slice(0, 200)), urls: (d.urls ?? []).slice(0, 6), names: names.map((n) => n.slice(0, 160)) } });
 }
 
-export function recordOwedAfterCall(userId: string, o: { tool: string; items: { name: string; url: string }[]; why: "failed" | "timeout" }): Promise<void> {
-  return recordDecision({ layer: 8, decision: "call.owed_after_call", userId, outcome: "skip", action: o.tool, proposal: { items: o.items.slice(0, 6).map((i) => ({ name: i.name.slice(0, 160), url: i.url })), why: o.why } });
+export function recordOwedAfterCall(userId: string, o: { tool: string; items: { name: string; url: string }[]; why: "failed" | "timeout"; taskId?: number | null }): Promise<void> {
+  return recordDecision({ layer: 8, decision: "call.owed_after_call", userId, outcome: "skip", action: o.tool, proposal: { items: o.items.slice(0, 6).map((i) => ({ name: i.name.slice(0, 160), url: i.url })), why: o.why, taskId: o.taskId ?? null } });
 }
 
 export function recordTurnActed(userId: string, sentences: string[]): Promise<void> {
@@ -41,8 +45,7 @@ export function recordTurnActed(userId: string, sentences: string[]): Promise<vo
   return recordDecision({ layer: 8, decision: "call.turn_acted", userId, outcome: "act", action: "covered", proposal: { said: sentences.slice(0, 6).map((s) => s.slice(0, 220)) } });
 }
 
-// Pure: the ledger from its decision rows (any order). A send owed on the call and then sent late ON the call (the same link in
-// a later done row) is settled, not owed.
+// Pure: the ledger from its decision rows (any order).
 export function ledgerFromRows(rows: { decision: string; action: string | null; proposal: any; created_at: Date | string }[]): CallLedger {
   const done: DoneOnCall[] = [];
   const owed: OwedAfterCall[] = [];
@@ -51,12 +54,12 @@ export function ledgerFromRows(rows: { decision: string; action: string | null; 
     const p = r.proposal ?? {};
     const at = new Date(r.created_at);
     if (r.decision === "call.done_on_call") done.push({ tool: String(r.action ?? ""), kind: String(p.kind ?? ""), labels: Array.isArray(p.labels) ? p.labels.map(String) : [], urls: Array.isArray(p.urls) ? p.urls.map(String) : [], names: Array.isArray(p.names) ? p.names.map(String) : [], at });
-    else if (r.decision === "call.owed_after_call") owed.push({ tool: String(r.action ?? ""), items: Array.isArray(p.items) ? p.items.filter((i: any) => i && typeof i.url === "string").map((i: any) => ({ name: String(i.name ?? ""), url: String(i.url) })) : [], why: p.why === "timeout" ? "timeout" : "failed", at });
+    else if (r.decision === "call.owed_after_call") owed.push({ tool: String(r.action ?? ""), items: Array.isArray(p.items) ? p.items.filter((i: any) => i && typeof i.url === "string").map((i: any) => ({ name: String(i.name ?? ""), url: String(i.url) })) : [], why: p.why === "timeout" ? "timeout" : "failed", at, taskId: typeof p.taskId === "number" ? p.taskId : null });
     else if (r.decision === "call.turn_acted" && Array.isArray(p.said)) covered.push(...p.said.map(String));
   }
-  const sentOnCall = new Set(done.flatMap((d) => d.urls));
-  const stillOwed = owed.map((o) => ({ ...o, items: o.items.filter((i) => !sentOnCall.has(i.url)) })).filter((o) => o.items.length);
-  return { done, owed: stillOwed, covered };
+  // Owed rows are kept whole, whatever the order: the after-call step settles each on whether its link landed since the call started
+  // (a send done on the call, before or after the owed row was written, counts: services/callFollowThrough.ts).
+  return { done, owed, covered };
 }
 
 // Pure: the done list as plain lines, for the audit and the reflection.

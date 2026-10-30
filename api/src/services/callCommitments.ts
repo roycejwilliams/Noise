@@ -11,7 +11,7 @@ import { recordDecision } from "../harness/core.js";
 import { OFFERS_WHAT_CO_CANT } from "./taskWeb.js";
 import { MAX_OPEN_PROMISES, promiseGoal, theirWordsFor } from "./promises.js";
 import { noteOnTask, openTasks, startTask, type CoTask } from "./coTasks.js";
-import { promiseKeptBy, sameCommitment, sendsSince, wantsDocument, type Sent } from "./followThrough.js";
+import { promiseKeptBy, sameCommitment, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { commitmentWindow, deliveryWords, localStamp, memberZone } from "./memberTime.js";
 
 const VERB = String.raw`(?:text|send|put together|pull together|write up|draft|share|drop|shoot|forward)`;
@@ -218,19 +218,21 @@ export async function checkCallCommitments(now: Date = new Date(), deps: CheckDe
 const WRITES_UP = /\b(?:put together|pull together|write up|draft)\b/i;
 const MAKES = new Set(["makePage", "updatePage", "makeDeck", "updateDeck", "writeDocument", "researchBrief", "startTask"]);
 const SENDS = new Set(["shareLink", "resendLink", "resetLink", "shareArtifact", "calendarConnection"]);
-const distinct = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9][a-z0-9'-]{3,}/g) ?? []).filter((w) => !["text", "send", "sent", "share", "link", "links", "that", "this", "those", "them", "with", "your", "after", "right", "over", "call", "hang", "just", "will", "together", "draft", "write", "pull"].includes(w)));
+const COMMIT_COMMON = new Set(significant("text send sent share link links that this those them with your after right over call hang just will together draft write pull also then soon later tonight away both thing things stuff option options one ones going gonna make sure real quick okay alright too have want need know here there good great nice look check before about more from into some been well kind got get"));
+const distinct = (s: string) => new Set(significant(s).filter((w) => !COMMIT_COMMON.has(w)));
+// Pure: what a done tool was about, as words: its input and what it delivered.
+const aboutTool = (d: { input: unknown; result: unknown }) => {
+  const items = Array.isArray((d.result as any)?.items) ? (d.result as any).items.filter((i: any) => i?.delivered === true).map((i: any) => `${i?.name ?? ""} ${i?.url ?? ""}`) : [];
+  return distinct(`${JSON.stringify(d.input ?? {}).replace(/[{}"\[\]:,]/g, " ")} ${items.join(" ")}`);
+};
+// A sentence is vague ("I'll send it right after") only when it names nothing of its own: then the line before it says what. A
+// sentence that names something is kept only by a tool about that thing: at least half its own words are the tool's.
 export function commitmentKeptBy(sentence: string, coBefore: string | undefined, done: { name: string; input: unknown; result: unknown }[]): boolean {
-  const vague = VAGUE_SEND.test(sentence) || /\b(?:it|that|this|those|them)\b/i.test(sentence);
-  const about = `${sentence} ${vague ? coBefore ?? "" : ""}`;
-  if (WRITES_UP.test(sentence)) {
-    const made = done.filter((d) => MAKES.has(d.name));
-    if (!made.length) return false;
-    const want = distinct(about);
-    return made.some((d) => [...distinct(JSON.stringify(d.input ?? {}))].some((w) => want.has(w))) || (vague && made.length === 1);
-  }
+  const own = distinct(sentence);
+  const want = own.size ? own : distinct(coBefore ?? "");
+  const about = (d: { input: unknown; result: unknown }) => { const t = aboutTool(d); const hit = [...want].filter((w) => t.has(w)).length; return hit > 0 && hit * 2 >= want.size; };
+  const pick = (tools: { input: unknown; result: unknown }[]) => (want.size ? tools.some(about) : tools.length === 1);
+  if (WRITES_UP.test(sentence)) return pick(done.filter((d) => MAKES.has(d.name)));
   const went = done.filter((d) => SENDS.has(d.name) && (d.result as { delivered?: unknown } | null)?.delivered === true);
-  const items = went.flatMap((d) => (Array.isArray((d.result as any)?.items) ? (d.result as any).items : []).filter((i: any) => i?.delivered === true));
-  if (!went.length) return false;
-  const named = items.some((i: any) => [i?.name, i?.url].some((x) => typeof x === "string" && x && (about.toLowerCase().includes(x.toLowerCase()) || [...distinct(x)].some((w) => distinct(about).has(w)))));
-  return named || (vague && (items.length || went.length) === 1);
+  return went.length > 0 && pick(went);
 }

@@ -136,7 +136,7 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   check("2. F4: with no send called, \"texting it now\" is never said", !/Texting it/.test(ns.content), ns);
   const failAfterNow = scripted([[...text("Texting it to you now."), ...tool("x", "shareLink", send)], text("Anything else on your mind?"), text("That didn't go through, so I'll text it to you right after we hang up.")]);
   const fa = await go({ stream: failAfterNow.stream, tools: fake(JAZZ_FAIL) });
-  check("2. F4: the send they heard was going fails: the next words say it comes right after the call, never \"sent\"", /Texting it to you now/.test(fa.content) && /right after we hang up/.test(fa.content) && !/\bsent\b/i.test(fa.content), fa);
+  check("2. F4: the send they heard was going fails: the next words say it comes right after the call, never \"sent\"", /Texting it to you now/.test(fa.content) && fa.content.includes(P.FAILED_SEND_LINE) && !/\bsent\b/i.test(fa.content), fa);
   const slowFail = scripted([[...text("Texting it to you now."), ...tool("y", "shareLink", send)], text("I'll text it to you right after the call.")]);
   const sf = await go({ stream: slowFail.stream, tools: fake(JAZZ_SLOW) });
   check("2. F4: timed out after the in-flight line: it says right after the call, with no retry needed", /right after the call/.test(sf.content) && slowFail.reqs.length === 2, { sf, reqs: slowFail.reqs.length });
@@ -209,22 +209,22 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
 {
   const start = new Date("2026-10-29T18:00:00Z");
   const end = new Date("2026-10-29T18:12:00Z");
-  const owedRow = { decision: "call.owed_after_call", action: "shareLink", proposal: { items: [{ name: JAZZ.caption, url: JAZZ.url }], why: "failed" }, created_at: new Date("2026-10-29T18:05:00Z") };
+  const owedRow = { decision: "call.owed_after_call", action: "shareLink", proposal: { items: [{ name: JAZZ.caption, url: JAZZ.url }], why: "failed", taskId: 7 }, created_at: new Date("2026-10-29T18:05:00Z") };
   const doneRow = { decision: "call.done_on_call", action: "shareLink", proposal: { kind: "send", labels: [`the link ${"https://lu.ma/fb"}`], urls: ["https://lu.ma/fb"] }, created_at: new Date("2026-10-29T18:03:00Z") };
   const coveredRow = { decision: "call.turn_acted", action: "covered", proposal: { said: ["I'll text you the breakfast link."] }, created_at: new Date("2026-10-29T18:03:00Z") };
   const ledger = L.ledgerFromRows([owedRow, doneRow, coveredRow]);
   check("4. the ledger: what was done, what's owed, and the lines a tool already kept", ledger.done.length === 1 && ledger.owed[0]?.items[0]?.url === JAZZ.url && ledger.covered[0] === "I'll text you the breakfast link.");
   const lateRow = { decision: "call.done_on_call", action: "shareLink", proposal: { kind: "send", labels: ["x"], urls: [JAZZ.url] }, created_at: new Date("2026-10-29T18:06:00Z") };
-  check("4. a send owed and then landed late on the call isn't owed any more", L.ledgerFromRows([owedRow, lateRow]).owed.length === 0);
+  check("4. the ledger keeps the owed row (with its task) whatever the order; the after-call step settles it on whether the link landed", L.ledgerFromRows([owedRow, lateRow]).owed[0]?.taskId === 7 && L.ledgerFromRows([lateRow, owedRow]).done[0]?.urls[0] === JAZZ.url);
 
   type Sent = { at: Date; text: string; kind: "text" | "link" | "document" };
-  const run = async (o: { sends?: Sent[]; reachable?: boolean; commitments?: any[] } = {}) => {
+  const run = async (o: { sends?: Sent[]; reachable?: boolean; commitments?: any[]; ledger?: any } = {}) => {
     const delivered: any[] = [], closed: number[] = [], ran: number[] = [], tracked: any[] = [], recs: any[] = [];
     const went: Sent[] = [...(o.sends ?? [])];
     const r = await FT.followThroughOnCallEnd({ userId: "u-ft", transcript: "assistant: hi\nuser: text me the jazz thing", startedAt: start, endedAt: end }, {
       now: () => new Date(end.getTime() + 5_000),
       track: async (_u, _t, x) => { tracked.push(x); },
-      ledger: async () => ledger,
+      ledger: async () => o.ledger ?? ledger,
       sends: async () => went,
       deliver: async ({ item, key }) => { delivered.push({ item, key }); went.push({ at: new Date(end.getTime() + 4_000), text: item.url, kind: "link" }, { at: new Date(end.getTime() + 4_500), text: item.name, kind: "text" }); return { sent: true }; },
       close: async (_u, id) => { closed.push(id); },
@@ -251,12 +251,21 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   const other = { taskId: 8, sentence: "y", wakes: 0, goal: `${CC.COMMIT_PREFIX}"I'll put together the venue shortlist tonight."`, theirWords: "can you find venues", createdAt: "2026-10-29T18:09:00Z" };
   const d = await run({ commitments: [owedTask, other] });
   check("4. the promise for the owed link is closed as kept (not run again); the other promise still runs", d.closed.includes(7) && !d.ran.includes(7) && d.ran.includes(8) && d.r.keptOnCall?.includes(7), d);
-  // A promise made earlier on the call and then kept by a send on the call.
-  const earlier = { goal: `${CC.COMMIT_PREFIX}"I'll text you the Founders Breakfast link."`, theirWords: "send me the breakfast", createdAt: "2026-10-29T18:02:00Z" };
-  check("4. a promise kept by a send later on the call is kept; an unrelated link or one sent before the promise doesn't keep it",
-    FT.keptByWhatWent(earlier, [{ at: new Date("2026-10-29T18:03:00Z"), text: "https://lu.ma/fb", kind: "link" }, { at: new Date("2026-10-29T18:03:01Z"), text: "Founders Breakfast", kind: "text" }]) &&
-    !FT.keptByWhatWent(earlier, [{ at: new Date("2026-10-29T18:03:00Z"), text: "https://lu.ma/other", kind: "link" }, { at: new Date("2026-10-29T18:03:01Z"), text: "Pottery Social", kind: "text" }]) &&
-    !FT.keptByWhatWent(earlier, [{ at: new Date("2026-10-29T18:01:00Z"), text: "Founders Breakfast https://lu.ma/fb", kind: "link" }]));
+  // Item 2: nothing but an owed link's own task is ever closed here: the reviewer's phrasings stay open and run, even with a jazz send.
+  const jazzWent: Sent[] = [{ at: new Date("2026-10-29T18:04:00Z"), text: "the link to Rooftop Jazz Night (https://lu.ma/rooftop-jazz)", kind: "link" }];
+  const openGoals = ["find them jazz nights in December", "send them a couple of jazz options this week", "keep looking for jazz nights", "let them know if other jazz shows pop up", "find more jazz things like this"];
+  const stays = await run({ sends: jazzWent, ledger: { done: [], owed: [], covered: [] }, commitments: openGoals.map((g, n) => ({ taskId: 20 + n, sentence: g, wakes: 0, goal: `${CC.COMMIT_PREFIX}${g}`, theirWords: "any jazz stuff", createdAt: "2026-10-29T18:00:30Z" })) });
+  check("4. item 2: no call promise is closed by a send that shares its words; every one still runs", stays.closed.length === 0 && openGoals.every((_g, n) => stays.ran.includes(20 + n)), stays);
+  check("4. item 2: the old closing is gone", !("keptByWhatWent" in FT));
+  // Item 6: the send landed before the owed row was even written (a slow send that finished on the call): no second send, task closed.
+  const raceLedger = L.ledgerFromRows([{ decision: "call.done_on_call", action: "shareLink", proposal: { kind: "send", labels: ["x"], urls: [JAZZ.url], names: ["Rooftop Jazz Night"] }, created_at: new Date("2026-10-29T18:04:59Z") }, owedRow]);
+  const race = await run({ ledger: raceLedger, commitments: [owedTask] });
+  check("4. item 6: a send that landed before its owed row is never sent again, and its task closes", race.delivered.length === 0 && race.closed.includes(7) && !race.ran.includes(7), race);
+  const raceText = await run({ ledger: L.ledgerFromRows([owedRow]), sends: [{ at: new Date("2026-10-29T18:04:30Z"), text: JAZZ.url, kind: "link" }], commitments: [owedTask] });
+  check("4. item 6: landed any time since the call started counts (a text that went before the owed row)", raceText.delivered.length === 0 && raceText.closed.includes(7), raceText);
+  const noTask = await run({ ledger: L.ledgerFromRows([{ ...owedRow, proposal: { ...owedRow.proposal, taskId: null } }]), commitments: [owedTask] });
+  check("4. item 2: a promise not tied to an owed row is never closed here", !noTask.closed.length && noTask.ran.includes(7), noTask);
+  check("4. settledOwedTasks: only tasks whose every link landed", FT.settledOwedTasks([{ taskId: 1, items: [{ url: "a" }, { url: "b" }] }, { taskId: 2, items: [{ url: "a" }] }, { taskId: null, items: [{ url: "a" }] }], (u) => u === "a").join() === "2");
   check("4. commitments a tool kept aren't reopened from the transcript", CC.commitmentsNotCovered(["I'll text you the breakfast link.", "I'll send you the venue list tonight."], ["I'll text you the breakfast link."]).join("|") === "I'll send you the venue list tonight.");
   // The reflection text: what was done on the call is in its facts as never-again, and the draft reads the ledger.
   const pc = src("jobs/postCallFollowUp.ts");
@@ -288,8 +297,6 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   const notKept = G.planCallAudit([{ quote: "I'll text you the jazz brunch link.", type: "promise_keepable", what: "text them the jazz brunch link" }], "user: send me the jazz brunch\nassistant: I'll text you the jazz brunch link.", { knownBefore: "", records: "", tasks: [], doneOnCall: saveOnly });
   check("4. F6: a promise to text something isn't covered by a save on it", notKept.promises.length === 1, notKept);
   check("4. the audit prompt lists what was done on the call", /What Cue did DURING the call with its own tools[\s\S]*- the link to Founders Breakfast/.test(G.callAuditPrompt("assistant: hi", "", undefined, doneSend)));
-  // F7: a look-out promise isn't closed by one find.
-  check("4. F7: \"keep looking for more\" isn't kept by one later find", !FT.keptByWhatWent({ goal: `${CC.COMMIT_PREFIX}"I'll keep looking for more jazz nights and text you."`, theirWords: "send me more jazz stuff", createdAt: "2026-10-29T18:02:00Z" }, [{ at: new Date("2026-10-29T18:03:00Z"), text: "https://lu.ma/jazz2", kind: "link" }, { at: new Date("2026-10-29T18:03:01Z"), text: "Late Jazz at the Chapel", kind: "text" }]));
   // F8: a commitment is covered only by a tool done that turn for the same thing.
   const jazzSent = { name: "shareLink", input: { what: ["Rooftop Jazz Night"] }, result: { ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }] } };
   const noteDone = { name: "updateNotes", input: { what: "jazz" }, result: { ok: true } };
@@ -361,6 +368,62 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   const stripped = JSON.stringify(VR.stripVoiceReadLines([{ role: "system", content: `Notes. ${VR.VOICE_READ_CALL_RULE} More.` }]));
   check("6. the strip takes the rule out and keeps the rest", !stripped.includes(VR.VOICE_READ_CALL_RULE) && /Notes\./.test(stripped) && /More\./.test(stripped));
   check("6. safety and crisis lines are untouched by the claim guard", P.stripSendClaim("If you're not safe right now, call 988.") === "If you're not safe right now, call 988.");
+}
+
+// ---------------------------------------------------------------- 7. round-2 review cases (the reviewer's probes, as layer 1)
+{
+  const C = await import("../../src/services/callClaims.js");
+  // The reviewer's whole claim list: held after a failed send, and the honest lines never held.
+  const failedState = { ...C.emptyClaimState(), undelivered: ["Rooftop Jazz Night"], sendContext: true };
+  const mustHold = ["Texted it.", "Sent it over.", "Link's in your texts.", "You should have it now.", "Check your texts.", "That's on its way to you.", "Just shot it over.", "You've got it.", "Okay, sent.", "Done, it's in your texts.", "I sent you the link.", "Texted you the jazz link.", "It's on your phone now.", "Should be in your messages.", "I just texted that over.", "Got it over to you.", "I've sent both.", "It's done.", "All set.", "There you go.", "Sent you the Rooftop Jazz Night link.", "Popped it into your texts.", "Just dropped it in your texts.", "It went through.", "That should be there now.", "You'll see it in your texts now.", "Look for it in your texts.", "It's waiting in your texts.", "Your link's there.", "I've sent that link your way.", "I shared it with you.", "Messaged it to you.", "Sending that now, done.", "Okay — it's sent!", "that's gone through to you", "Hit send on it.", "Link sent.", "It's in your inbox.", "You should be getting it any second.", "It should be there.", "Should've landed.", "Check your phone.", "Text's out.", "Sent!", "Just sent.", "It's over to you now.", "Check your messages, it's there.", "I fired that off to you.", "Sent. Let me know if it doesn't come through.", "you've got the link now", "It's on its way.", "Shot you the link."];
+  const mustPass = ["Did you get the text I sent?", "I haven't sent it yet.", "I'll text it to you right after the call.", "I'll send it once we hang up.", "You sent me the deck yesterday.", "The deck you sent was great.", "I texted you that yesterday.", "Want me to text it to you?", "I can send it over if you like.", "I'm going to text it after we hang up.", "Did that come through?", "What they sent you looks great.", "You texted me about the jazz night.", "Not sent yet, I'll send it after the call.", "Your friend sent you that?", "If you want, I'll shoot it over after.", "It's a rooftop thing on Saturday.", "Check the weather before you go.", "I'll get it over to you after the call.", "Someone sent me that last week."];
+  const leak = mustHold.filter((x) => !C.claimHeld(x, failedState) || P.stripSendClaim(x, { state: failedState }) !== null);
+  const falseHold = mustPass.filter((x) => !!C.claimHeld(x, failedState) || P.stripSendClaim(x, { state: failedState }) !== x);
+  check(`7. item 1: the reviewer's ${mustHold.length} claims are all held after a failed send (${leak.join(" | ") || "none leak"})`, !leak.length, leak);
+  check(`7. item 1: the ${mustPass.length} honest lines are never held (${falseHold.join(" | ") || "none held"})`, !falseHold.length, falseHold);
+  // Item 1: a bare yes to Cue's offer, and no send at all: arrival lines are held (send context from Cue's own line).
+  const offerBody = (last: string) => ({ model: "x", stream: true, messages: [{ role: "system", content: "You are Cue, on a call with Jordan." }, { role: "assistant", content: "Want me to text you the link to Rooftop Jazz Night?" }, { role: "user", content: last }] });
+  const sendFake = (result: any) => ({ defs: ["shareLink", "updateNotes"].map((n) => ({ name: n, description: n, input_schema: { type: "object", properties: {} } })), names: new Set(["shareLink", "updateNotes"]), note: CT.CALL_TOOLS_GUIDE, texts: CT.textsThem, run: async (n: string, i: any) => (typeof result === "function" ? result(n, i) : result) });
+  const run1 = async (b: any, up: any, tools: any) => { const out: any[] = []; for await (const c of P.runCallLlm(b, { stream: up.stream, tools })) out.push(c); return out.map((c) => c.choices[0].delta.content ?? "").join(""); };
+  const arrivals = ["You should have it now.", "Check your texts.", "You've got it.", "It's on its way.", "There you go.", "It went through.", "It should be there.", "That should be there now.", "Should've landed.", "Your link's there.", "I shared it with you.", "Text's out.", "Hit send on it."];
+  const spokenNoSend: string[] = [];
+  for (const yes of ["Yes please.", "Sure.", "Yeah, do it."]) for (const line of arrivals) { const out = await run1(offerBody(yes), scripted([text(line), text("Got it.")]), sendFake({ ok: true })); if (out.includes(line)) spokenNoSend.push(`${yes} -> ${line}`); }
+  check(`7. item 1: after a bare "Yes please" / "Sure" / "Yeah, do it" with no send, no arrival line is spoken (${spokenNoSend.join(" | ") || "none"})`, !spokenNoSend.length, spokenNoSend);
+  const spokenFailed: string[] = [];
+  for (const line of arrivals) { const out = await run1(offerBody("Yes please."), scripted([[...text("One sec."), ...tool("f", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text(line), text("I'll text it to you right after we hang up.")]), sendFake({ ok: false, owedAfterCall: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: false }] })); if (out.includes(line)) spokenFailed.push(line); }
+  check(`7. item 1: the new phrasings are held after a failed send (${spokenFailed.join(" | ") || "none"})`, !spokenFailed.length, spokenFailed);
+  // Item 3: one of two went (jazz); a claim naming the other in part is held; one naming only jazz is said.
+  const HALF = { ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }, { name: "Gallery Opening", url: "https://lu.ma/gallery", delivered: false }] };
+  const half: string[] = [];
+  for (const line of ["Sent you the gallery one.", "Just texted you the gallery link.", "The gallery link's in your texts."]) { const out = await run1(offerBody("Text me both."), scripted([[...text("One sec."), ...tool("t", "shareLink", '{"what":["Rooftop Jazz Night","Gallery Opening"]}')], text(line), text("Okay.")]), sendFake(HALF)); if (out.includes(line)) half.push(line); }
+  const jazzOut = await run1(offerBody("Text me both."), scripted([[...text("One sec."), ...tool("t", "shareLink", '{"what":["Rooftop Jazz Night","Gallery Opening"]}')], text("Sent you the jazz one.")]), sendFake(HALF));
+  check(`7. item 3: a claim naming the item that didn't go, in part, is held (${half.join(" | ") || "none said"}); the one that went is said`, !half.length && /Sent you the jazz one/.test(jazzOut), { half, jazzOut });
+  const doneJazz = [{ kind: "send", label: "the link to Rooftop Jazz Night (https://lu.ma/rooftop-jazz)", names: ["Rooftop Jazz Night"], urls: ["https://lu.ma/rooftop-jazz"] }];
+  check("7. item 3: the audit excuses \"I just sent you the jazz link\" (its word is one sent item's), not \"the rooftop bar list\" or \"the Night Market link\"", G.doneOnCallVerdict("I just sent you the jazz link.", doneJazz).done && !G.doneOnCallVerdict("I texted you the rooftop bar list.", doneJazz).done && !G.doneOnCallVerdict("I just sent you the Night Market link.", doneJazz).done);
+  // Item 4: after the in-flight line and a failed send, the approved line comes first, before the model's own question.
+  const FAIL = { ok: false, owedAfterCall: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: false }] };
+  const q = scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("So what else is on this week?")]);
+  const qo = await run1(offerBody("Yes please."), q, sendFake(FAIL));
+  check("7. item 4: the fixed after-call line is spoken, before the trailing question, in the approved words", qo.indexOf(P.FAILED_SEND_LINE) > 0 && qo.indexOf(P.FAILED_SEND_LINE) < qo.indexOf("So what else") && P.FAILED_SEND_LINE === "That didn't go through, so I'll text it to you right after the call." && !/—/.test(P.FAILED_SEND_LINE), qo);
+  const sentAfter = await run1(offerBody("Yes please."), scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Sent!")]), sendFake(FAIL));
+  check("7. item 4: when the model's next words claim it went, they're held and the fixed line still stands", sentAfter.includes(P.FAILED_SEND_LINE) && !/Sent!/.test(sentAfter), sentAfter);
+  const throws = await run1(offerBody("Yes please."), scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Okay.")]), sendFake(async () => { throw new Error("boom"); }));
+  check("7. item 4: a send that throws gets the line too", throws.includes(P.FAILED_SEND_LINE), throws);
+  let n = 0;
+  const dies = { reqs: [] as any[], stream: (_r: any) => { n++; return (async function* () { if (n === 1) { for (const e of [...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')]) yield e as any; } else { yield* (text("Part") as any[]); throw new Error("upstream 529"); } })(); } };
+  const got: string[] = [];
+  try { for await (const c of P.runCallLlm(offerBody("Yes please.") as any, { stream: dies.stream, tools: sendFake(FAIL) as any })) got.push(c.choices[0].delta.content as string ?? ""); } catch { /* the endpoint closes the stream with what was said */ }
+  check("7. item 4: the model failing after the send still leaves the line said (it goes before the next request)", got.join("").includes(P.FAILED_SEND_LINE), got.join(""));
+  check("7. item 4: once said, the model is told so (no repeat)", q.reqs[1]?.messages.at(-1).content.some((b: any) => b.type === "text" && b.text.includes(P.FAILED_SEND_LINE)));
+  // Item 5: a commitment that names something no tool ran for stays open.
+  const jazzSend = [{ name: "shareLink", input: { what: ["Rooftop Jazz Night"] }, result: { ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }] } }];
+  const covered: [string, string | undefined, boolean][] = [["I'll text you the jazz link.", undefined, true], ["I'll send you the gallery opening right after the call, that one's Friday.", "Want the gallery opening too?", false], ["I'll send that brunch one too.", undefined, false], ["I'll text you the brunch spot after, it's a good one.", undefined, false], ["I'll send it right after.", "Want the gallery opening too?", false], ["I'll send it right after.", "Want the jazz one?", true], ["I'll send you the gallery opening and the jazz one.", undefined, false]];
+  const wrong5 = covered.filter(([x, before, want]) => CC.commitmentKeptBy(x, before, jazzSend) !== want).map(([x]) => x);
+  check(`7. item 5: a commitment is covered only by a send of the thing it names (${wrong5.join(" | ") || "all right"})`, !wrong5.length, wrong5);
+  // Item 7: resendLink, resetLink and shareArtifact rows name what they texted, like shareLink.
+  const lbl = L.doneLabels("resendLink", { urls: ["https://cue.page/d/abc"], names: ["their deck \"Northlight pitch\""] });
+  check("7. item 7: other call sends' done rows name the item and its link", lbl[0] === 'the link to their deck "Northlight pitch" (https://cue.page/d/abc)', lbl);
+  check("7. item 7: a leading \"Done,\" trimmed is reported as a held claim", /claim held: a \\"Done\\" before anything was done/.test(src("services/callLlmProxy.ts")));
 }
 
 console.log(`act on calls: ${total - failed}/${total} passed`);

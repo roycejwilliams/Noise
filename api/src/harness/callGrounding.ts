@@ -30,7 +30,7 @@ import { wordsAreTheirs } from "../services/coTasks.js";
 import type { MemberKnowledge } from "../services/memberKnowledge.js";
 import { plainCorrected } from "../services/memberKnowledge.js";
 import { DateTime } from "luxon";
-import { claimKind, namesItem } from "../services/callClaims.js";
+import { claimKind, itemWords, namesItem } from "../services/callClaims.js";
 import type { DoneItem } from "../services/callLedger.js";
 
 export type CallClaim = {
@@ -330,7 +330,7 @@ const DID_CLAIM = /\b(?:i(?:'ve| have)?\s+(?:just\s+|already\s+)?(?:sent|texted|
 // when exactly one such thing was done. No match stays the audit's (the "said it did" check).
 const toItem = (d: string | DoneItem): DoneItem => (typeof d === "string" ? { kind: "", label: d, names: [], urls: [] } : d);
 // The words every claim of doing shares: never what makes it about one item.
-const CLAIM_WORDS = new Set(significant("just already sent texted text texts shot dropped popped put shared saved added set started noted link links your you it that this them those over the a to in on up for now check got done way all both".replace(/\s+/g, " ")));
+const CLAIM_WORDS = new Set(significant("just already sent texted text texts shot dropped popped put shared saved added set started noted link links your you it that this them those over the a to in on up for now check got done way all both thing things stuff place spot one ones".replace(/\s+/g, " ")));
 function distinctive(x: string): string[] {
   return significant(x).filter((w) => !CLAIM_WORDS.has(w) && !GENERIC.has(w));
 }
@@ -342,6 +342,16 @@ function claimNames(quote: string, d: DoneItem): boolean {
   const shared = label.filter((w) => said.has(w)).length;
   return shared >= 2 || (label.length > 0 && label.length <= 2 && shared === label.length);
 }
+// Pure: the one done item a claim's own word belongs to ("the jazz link" when only Rooftop Jazz Night has "jazz"): every distinctive
+// word the claim shares with the done items points at that same single item, and at least one does.
+// A word the claim has that no done item has ("the rooftop bar list") means it's about something else: no match.
+function uniqueWordMatch(quote: string, pool: DoneItem[]): DoneItem | undefined {
+  const said = itemWords(quote);
+  const owners = said.map((w) => pool.filter((d) => itemWords(`${d.label} ${d.names.join(" ")}`).includes(w)));
+  if (!owners.length || owners.some((o) => o.length !== 1)) return undefined;
+  const first = owners[0][0];
+  return owners.every((o) => o[0] === first) ? first : undefined;
+}
 export function doneOnCallVerdict(quote: string, doneOnCall: (string | DoneItem)[]): { done: boolean; why: string } {
   const q = quote.replace(/[’‘]/g, "'");
   if (!doneOnCall.length || !DID_CLAIM.test(q)) return { done: false, why: "" };
@@ -349,7 +359,7 @@ export function doneOnCallVerdict(quote: string, doneOnCall: (string | DoneItem)
   const kind = claimKind(q, true);
   const sendClaim = kind === "sent" || kind === "location" || kind === "arrival" || /\b(?:sent|texted|shot|messaged)\b/i.test(q);
   const pool = sendClaim ? items.filter((d) => d.kind === "send") : items;
-  const hit = pool.find((d) => claimNames(q, d)) ?? (pool.length === 1 && !distinctive(q).length ? pool[0] : undefined);
+  const hit = pool.find((d) => claimNames(q, d)) ?? uniqueWordMatch(q, pool) ?? (pool.length === 1 && !distinctive(q).length ? pool[0] : undefined);
   return hit ? { done: true, why: `done on the call: ${hit.label.slice(0, 140)}` } : { done: false, why: "" };
 }
 // Pure: a promise that something Cue did on this call already covers: about the same thing by its name or words, and a promise to
@@ -358,7 +368,7 @@ export function promiseDoneOnCall(p: { what: string; quotes: string[] }, doneOnC
   const text = `${p.what} ${p.quotes.join(" ")}`;
   const sendPromise = /\b(?:text|send|link|share|shoot|forward)\w*\b/i.test(text);
   const pool = doneOnCall.map(toItem).filter((d) => !sendPromise || d.kind === "send");
-  return pool.find((d) => claimNames(text, d) || sameSubject(p.what, d.label))?.label ?? null;
+  return (pool.find((d) => claimNames(text, d) || sameSubject(p.what, d.label)) ?? (sendPromise ? uniqueWordMatch(p.what, pool) : undefined))?.label ?? null;
 }
 
 export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[]; doneOnCall?: (string | DoneItem)[] }): AuditPlan {

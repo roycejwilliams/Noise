@@ -306,7 +306,6 @@ function callShareLink(i: CallToolsInput, mem: CallMem, did: string[], textThem:
 // a spoken "I'll text it right after" joins it rather than opening a second (services/callCommitments.ts), and if the after-call
 // step can't send it, the task's own turn does.
 async function oweAfterCall(i: CallToolsInput, items: OnFile[], why: "failed" | "timeout", tool: string): Promise<void> {
-  await (await import("./callLedger.js")).recordOwedAfterCall(i.userId, { tool, items: items.map((x) => ({ name: x.caption || x.name, url: x.url })), why });
   const { COMMIT_PREFIX, DUE_AFTER_MINUTES } = await import("./callCommitments.js");
   const { startTask } = await import("./coTasks.js");
   const names = items.map((x) => x.name).join(", ");
@@ -318,8 +317,10 @@ async function oweAfterCall(i: CallToolsInput, items: OnFile[], why: "failed" | 
     firstPlan: "On the call the text with these links didn't go through, and you told them you'd text it right after. Send each link as its own text, then its name, and nothing else about it.",
     inHours: 1,
     source: "promise",
-  });
-  if (r.ok) await pool.query(`UPDATE co_tasks SET next_check_at = $3 WHERE user_id = $1 AND id = $2`, [i.userId, r.task.id, new Date(Date.now() + DUE_AFTER_MINUTES * 60_000)]).catch(() => {});
+  }).catch(() => null);
+  if (r?.ok) await pool.query(`UPDATE co_tasks SET next_check_at = $3 WHERE user_id = $1 AND id = $2`, [i.userId, r.task.id, new Date(Date.now() + DUE_AFTER_MINUTES * 60_000)]).catch(() => {});
+  // The ledger row names its task, so the after-call step closes exactly that task once the link has landed.
+  await (await import("./callLedger.js")).recordOwedAfterCall(i.userId, { tool, items: items.map((x) => ({ name: x.caption || x.name, url: x.url })), why, taskId: r?.ok ? r.task.id : null });
 }
 
 export type CallToolsInput = {
@@ -533,7 +534,9 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
           // What a search on this call found can be texted to them by name, in this turn or a later one.
           if (name === "searchEvents") rememberFound(mem, r);
           // On the record without holding the turn (a plain read, like what Cue knows, isn't an action).
-          if (plan.kind !== "read" || name === "searchEvents") writes.push(recordDone(name, plan.kind, r?.recordAs ?? parsed.data, urls).catch(() => {}));
+          // A send's record names what it texted (its items' names and links), whichever send it was.
+          const label = texts ? (r?.recordAs ?? { urls, names: sendItems(r, parsed.data, name, true).filter((x) => x.url).map((x) => x.name) }) : parsed.data;
+          if (plan.kind !== "read" || name === "searchEvents") writes.push(recordDone(name, plan.kind, label, urls).catch(() => {}));
         } else if (plan.kind === "send") {
           const items = owedItems(r, mem.inflight?.get(toolUseId) ?? []);
           if (items.length) {
