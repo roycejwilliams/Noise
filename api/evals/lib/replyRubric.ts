@@ -83,10 +83,11 @@ export const completeGrade = (g: any, kind: TurnKind | null): g is RubricGrade =
 export const failedCriteria = (g: RubricGrade): RubricKey[] => (Object.keys(RUBRIC) as RubricKey[]).filter((k) => g[k] === "fail");
 
 // The judge call itself (Sonnet, as the grader: GRADER_HEADERS). Two tries at a grade; a grade that never parses is a failure, never a
-// pass. A busy API (429/529, overloaded) doesn't use up a try: it waits and asks again, up to four times, so a parallel quality run's
-// rate limits don't read as replies that failed (10-30: 18 of 83 grades were lost that way, or to a reason nobody could see). Why a
+// pass. A busy API (429/529, overloaded) doesn't use up a try: it waits and asks again, up to four times, so a quality run's rate
+// limits don't read as replies that failed (10-30: 18 of 83 grades were lost that way, or to a reason nobody could see). Why a
 // grade was lost is printed, so the next one can be told apart.
-export const busy = (e: any) => /\b(429|529)\b|overloaded|rate.?limit/i.test(`${e?.statusCode ?? ""} ${e?.message ?? e}`);
+// The meter's own cap refusal prints token counts ("499,529 used") and is never busy: waiting can't lift a cap.
+export const busy = (e: any) => { const m = `${e?.statusCode ?? ""} ${e?.message ?? e}`; return !/EVAL CAP/.test(m) && /\b(429|529)\b|overloaded|rate.?limit/i.test(m); };
 export async function gradeReply(t: Parameters<typeof rubricPrompt>[0], reply: string, wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<RubricGrade | null> {
   const { generateText } = await import("ai");
   const { anthropic } = await import("@ai-sdk/anthropic");
