@@ -1,7 +1,6 @@
 import { notToTeammate } from "../services/teamLines.js";
 import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
-import { captureIssueReport } from "../services/issueReports.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import { noteTraceUser, traceTurn, withTraceUser } from "../services/llmTraceText.js";
@@ -15,8 +14,7 @@ import { LockWaitTimeout, withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
-import { detectSeekingMode } from "../services/emotionalTone.js";
-import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
+import { getEmotionalContext, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
@@ -30,9 +28,9 @@ import { gapDescription } from "../services/understanding.js";
 import { relayFacts, reminderFacts } from "../services/relay.js";
 import { CO_WHY } from "../services/coVoice.js";
 import { assembleContext, type TurnContext } from "../services/turnContext.js";
-import { readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
+import { readTurn, type TurnRead } from "../services/readTurn.js";
 import { planTextReply } from "../brain/index.js";
-import { dotsInstruction, momentInstruction, readMoment, whyContext, type Moment } from "../services/connectDots.js";
+import { dotsInstruction, momentInstruction, whyContext, type Moment } from "../services/connectDots.js";
 import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage, readableImage } from "../services/imageRead.js";
@@ -1521,25 +1519,6 @@ export function sendblueRouter(io: Server): Router {
         }
         const styleHint = deriveStyleHint(chronologicalRows);
 
-        // Emotion loop (harness/emotion.ts): read how this message feels in
-        // the context of the conversation, record it, then load the shared
-        // picture (this text, recent calls, what keeps coming up) that the
-        // reply reasons from. Alongside: whether they want to be heard or
-        // helped toward an answer.
-        // Latency (2026-09-26): nothing before the router needs these reads,
-        // so they run alongside it (and the context reads below) instead of
-        // ahead of it; they're awaited once the router is done.
-        // One read of the moment replaces these, the router's read, the
-        // coverage check, the moment read and the feedback filter
-        // (services/readTurn.ts); READ_TURN=off runs them separately as before.
-        const oneRead = hasText && readTurnEnabled();
-        const seekingAndEmotion = hasText && !oneRead
-          ? Promise.all([
-              detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode"),
-              readTextEmotion(resolvedContent, recentConversation, "sendblue.readTextEmotion"),
-            ])
-          : Promise.resolve([null, null] as const);
-
         // These reads don't depend on each other, so they run together.
         const [pendingOfferResult, pendingWalkinCheckinResult, [profileResult, activityCountResult], declinedTopicsResult, openItems] = await Promise.all([
           pool.query(
@@ -1651,8 +1630,10 @@ export function sendblueRouter(io: Server): Router {
         // Co's recent reactions, read once: shown to the read so it decides
         // whether and which, then checked against the backstop (services/tapbacks.ts).
         const tapbacksP = hasText ? tapbackHistory(user.id).catch(() => null) : Promise.resolve(null);
+        // One read of a text (services/readTurn.ts): the router's read, how it feels, whether they want an answer, the moment,
+        // coverage and feedback. A voice memo or photo alone has no text read; the router reads it (below).
         const readP: Promise<TurnRead> | null =
-          oneRead && turnP
+          hasText && turnP
             ? propagateAttributes({ userId: user.id, traceName: "sendblue.readTurn" }, () =>
                 Promise.all([turnP!.catch(() => null), tapbacksP]).then(([t, h]) => readTurn(routeInput, t, coveragePriorContext(profile), { reactions: h ? describeTapbacks(h) : null })),
               )
@@ -1700,18 +1681,6 @@ export function sendblueRouter(io: Server): Router {
             routerLatencyMs = turnRead.latencyMs;
             dotsP = Promise.resolve(turnRead.moment);
           } else {
-            // Connecting the dots, alongside the router (services/connectDots.ts).
-            if (hasText && !dotsP && turnP) {
-              dotsP = turnP.then((t) =>
-                readMoment({
-                  asks: t.asks.map((a) => a.text),
-                  threads: t.threads,
-                  offersThisWeek: t.offersThisWeek,
-                  now: `They just texted Cue: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`,
-                  recent: recentConversation.split("\n").slice(-8).join("\n"),
-                }),
-              );
-            }
             const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () => routeMessage(routeInput));
             routerOutput = routed.output;
             routerLatencyMs = routed.latencyMs;
@@ -1722,7 +1691,11 @@ export function sendblueRouter(io: Server): Router {
           console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
         }
         const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation });
-        const [seekingMode, textEmotion] = oneRead ? [turnRead?.seeking ?? null, turnRead?.emotion ?? null] : await seekingAndEmotion;
+        // Emotion loop (harness/emotion.ts): how this message feels, from the read, is recorded, then the shared picture (this
+        // text, recent calls, what keeps coming up) that the reply reasons from is loaded. Alongside: whether they want to be
+        // heard or helped toward an answer.
+        const seekingMode = turnRead?.seeking ?? null;
+        const textEmotion = turnRead?.emotion ?? null;
         if (textEmotion) {
           await recordEmotionSignals(user.id, [{ source: "text", ...textEmotion, quote: resolvedContent.slice(0, 140), memoryId: inboundMemory.rows[0].id }]);
         }
@@ -2001,15 +1974,11 @@ export function sendblueRouter(io: Server): Router {
           const record = IF.fileRecordFact([...recentIn, { at: new Date(), content: inboundContent }], resolvedContent, readableAt);
           if (record) addFact(replyFacts, "known", record);
         }
-        // A problem they're reporting about Co itself is saved for the team
-        // (test only, services/issueReports.ts), and the reply can say so.
-        // With the one read, feedback is flagged there and Co saves it with its
-        // tool (no word filter deciding for it); READ_TURN=off keeps the old capture.
-        const reportedIssue = hasText && !oneRead ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
         // What has really reached the team, so "is it noted to the team?" gets
         // a true answer (2026-09-18: Co said feedback "goes straight to the
-        // team" when nothing had been saved).
-        if (!reportedIssue) {
+        // team" when nothing had been saved). Feedback is flagged by the read
+        // and Co saves it with its tool (services/issueReports.ts saveFeedback).
+        {
           const recentReports = await pool
             .query(`SELECT summary FROM user_reported_issues WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 day' ORDER BY created_at DESC LIMIT 3`, [user.id])
             .then((r) => r.rows.map((row: { summary: string }) => row.summary))
@@ -2020,14 +1989,6 @@ export function sendblueRouter(io: Server): Router {
             recentReports.length
               ? `Saved for the team in the last day: ${recentReports.map((s) => `"${s}"`).join("; ")}. Nothing new was saved this turn.`
               : "Nothing they've said has been saved for the team in the last day, including this message. If this message is feedback for the team, save it with saveFeedbackForTeam; otherwise don't say anything was noted for, passed to, or sent to the team.",
-          );
-        }
-        if (reportedIssue) {
-          turnDidWork = true;
-          addFact(replyFacts, "did_this_turn", `Saved what they reported about how Cue works, for the team to look at: "${reportedIssue.summary}"`);
-          addInstruction(
-            replyFacts,
-            "They pointed out a problem with how you work. It's already saved for the team, so don't save it again. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. If they gave other, separate feedback in the same message, save that with saveFeedbackForTeam. Then respond to anything else they said.",
           );
         }
         // Co's judgment of this text (brain/index.ts): feedback to save, the list or where their work stands when they ask about

@@ -37,8 +37,7 @@ const CC = await import("../../src/services/conversationClose.js");
 check("\"thanks cue\" and \"thanks co\" close like \"thanks\"", ["thanks cue", "Thanks Co.", "thanks"].every((t) => CC.closingReaction(t) !== null), ["thanks cue", "Thanks Co.", "thanks"].map((t) => CC.closingReaction(t)));
 const SR = await import("../../src/services/searchRules.js");
 check("\"any updates on cue?\" and \"any updates on co?\" are the bare updates ask", SR.isOnlyUpdatesAsk("any updates on cue?") && SR.isOnlyUpdatesAsk("any updates on co?"));
-const IR = await import("../../src/services/issueReports.js");
-check("issue capture reads feedback about Cue the way it read feedback about Co", typeof IR === "object" && /\|co\|co's\|cue\|cue's\|/.test(src("services/issueReports.ts")));
+// (The issue-capture word gate this checked went with the READ_TURN=off path, 2026-10-29: feedback is flagged by the turn's read.)
 const PE = await import("../../src/services/profileExtraction.js");
 // "cue" is a common word (the ASR check, 2026-10-14): only the name counts as being about the agent.
 check("\"my cue to leave\", \"a pool cue\" and \"cue up\" are about them; \"updates from Cue\" and \"co\" are about the agent", !PE.isAboutCo("that was my cue to leave") && !PE.isAboutCo("the pool cue broke") && !PE.isAboutCo("Cue up the next one") && PE.isAboutCo("not enough updates from Cue") && PE.isAboutCo("lack of information from co"));
