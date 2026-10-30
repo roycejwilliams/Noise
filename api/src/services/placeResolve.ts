@@ -5,7 +5,8 @@
 // hit", cached under the bare name), so every search for their Bay Area ask ran in Houston and found only Houston events.
 //
 // How a place resolves, deterministic and with no reading of intent:
-//   - candidates: the geocoders' hits for the name (Google, then the open geocoder's populated places, never a park or an airport),
+//   - candidates: Google's hit for the name, then every populated place by that name in the local GeoNames table (never a park or an
+//     airport; Open-Meteo's free API was used here before, and is non-commercial only),
 //     plus a short table of well-known regional names (REGIONS) that geocoders don't hold as places;
 //   - only hits whose name is the name they used count ("Bay Area Park" is not "Bay Area");
 //   - a qualified place ("Portland, ME", "San Francisco Bay Area, CA, US") must land in that state and country, or it's rejected;
@@ -18,6 +19,10 @@
 // those stored coordinates directly (geocoding.ts withPinnedPlace): the shared geocode cache is never read for a want's place (the
 // stale "Bay Area" row among its rows) and never written from one (review of #314: one member's resolution must never become another
 // member's answer). A correction clears it (wantPlace.ts setPlace). The far-from-home check (farCheck) and its log rows are here too.
+import { existsSync, readFileSync } from "fs";
+import { resolve } from "path";
+import { fileURLToPath } from "url";
+import { gunzipSync } from "zlib";
 import { haversineMiles, googleKey, type GeoPoint } from "./geocoding.js";
 import { STATE_NAMES } from "./areaCodes.js";
 import type { PlaceSource } from "./wantPlace.js";
@@ -44,16 +49,17 @@ export type PlaceCandidate = {
   admin1: string | null;
   // The region's short code when the geocoder gives one (Google's administrative_area_level_1 short_name: "BC", "ON", "CA").
   admin1Code?: string | null;
-  // The hit is itself a state, province or region (Google's administrative_area_level_1, the open geocoder's ADM1), not a place in one.
+  // The hit is itself a state, province or region (Google's administrative_area_level_1, an ADM1 row), not a place in one.
   level?: "admin1" | null;
   country: string | null;
   population: number | null;
-  source: "google" | "open_meteo" | "region";
+  source: "google" | "geonames" | "region";
 };
 
-// Regional names geocoders don't hold as places (the open geocoder has only parks and a heliport for "Bay Area"). Kept tiny on
-// purpose: each is a name members really use for a region, with every region it can mean, so near-home picks among them. The
-// populations are rough metro sizes, used only to say which is the better-known one for a member who lives near none of them.
+// Regional names geocoders don't hold as places (GeoNames' cities have no "Bay Area"; Open-Meteo, built on GeoNames, had only parks
+// and a heliport). Kept tiny on purpose: each is a name members really use for a region, with every region it can mean, so near-home
+// picks among them. The populations are rough metro sizes, used only to say which is the better-known one for a member who lives near
+// none of them.
 export const REGIONS: PlaceCandidate[] = [
   { name: "San Francisco Bay Area", keys: ["bay area", "the bay area", "the bay", "sf bay area", "sf bay"], lat: 37.8271784, lng: -122.2913078, admin1: "California", country: "US", population: 7_700_000, source: "region" },
   { name: "Bay Area Houston", keys: ["bay area", "the bay area"], lat: 29.55, lng: -95.11, admin1: "Texas", country: "US", population: 500_000, source: "region" },
@@ -186,13 +192,13 @@ export function pickPlace(asked: string, cands: PlaceCandidate[], home: Home | n
   return { status: "ambiguous", options: sized.slice(0, 4).map(placeLabel) };
 }
 
-// Pure: one list from the geocoders' answers and the regions: a Google hit and an open-geocoder hit of the same name close together
-// are one place (Google's, with the other's population), Google's first.
-export function mergeCandidates(google: PlaceCandidate[], openMeteo: PlaceCandidate[], name: string): PlaceCandidate[] {
+// Pure: one list from Google's answer, the local table's and the regions: a Google hit and a table row of the same name close together
+// are one place (Google's, with the row's population), Google's first.
+export function mergeCandidates(google: PlaceCandidate[], local: PlaceCandidate[], name: string): PlaceCandidate[] {
   const used = new Set<PlaceCandidate>();
   const regions = REGIONS.filter((r) => sameName(r, parseQualified(name).name));
   const out = google.map((g) => {
-    const twin = openMeteo.find((o) => !used.has(o) && normName(o.name) === normName(g.name) && haversineMiles(point(o), point(g)) <= PLACE_RESOLVE.mergeMiles);
+    const twin = local.find((o) => !used.has(o) && normName(o.name) === normName(g.name) && haversineMiles(point(o), point(g)) <= PLACE_RESOLVE.mergeMiles);
     if (twin) used.add(twin);
     // A region a geocoder also answered (Google's "San Francisco Bay Area" for "Bay Area") is one place: Google's, going by the
     // region's names too, so it still counts as the name they used.
@@ -201,7 +207,7 @@ export function mergeCandidates(google: PlaceCandidate[], openMeteo: PlaceCandid
     const population = g.population ?? twin?.population ?? region?.population ?? null;
     return { ...g, population, ...(region ? { keys: [...(g.keys ?? []), region.name, ...(region.keys ?? [])] } : {}) };
   });
-  return [...out, ...openMeteo.filter((o) => !used.has(o)), ...regions.filter((r) => !used.has(r))];
+  return [...out, ...local.filter((o) => !used.has(o)), ...regions.filter((r) => !used.has(r))];
 }
 
 // ---------------------------------------------------------------- the far-from-home check
@@ -230,8 +236,8 @@ export type ResolveDeps = {
   // Their home on the map (its cached point), and, only when a resolution is made fresh, its country as the geocoders give it.
   home: (city: string) => Promise<GeoPoint | null>;
   homeCountry: (city: string, p: GeoPoint) => Promise<string | null>;
-  // The place as they said it ("Portland, ME"): Google reads it whole, the open geocoder by its name. partial: one of them failed.
-  lookup: (place: string) => Promise<{ google: PlaceCandidate[]; openMeteo: PlaceCandidate[]; partial?: boolean }>;
+  // The place as they said it ("Portland, ME"): Google reads it whole, the local table by its name. partial: one of them failed.
+  lookup: (place: string) => Promise<{ google: PlaceCandidate[]; local: PlaceCandidate[]; partial?: boolean }>;
   row: (userId: string, key: string) => Promise<WantRow | null>;
   store: (userId: string, key: string, r: StoredResolution) => Promise<void>;
   log: (d: { decision: string; userId: string; outcome: "act" | "skip"; action: string; proposal: Record<string, unknown> }) => Promise<void>;
@@ -264,7 +270,7 @@ export async function resolveWantPlace(i: { userId: string; key: string | null; 
     const hits = await deps.lookup(i.place).catch(() => null);
     // Their home's country, looked up only now (a fresh resolution), and kept with it.
     const homeCountry = hits ? await deps.homeCountry(i.homeCity, homePt).catch(() => null) : null;
-    const pick = pickPlace(i.place, mergeCandidates(hits?.google ?? [], hits?.openMeteo ?? [], i.place), { point: homePt, country: homeCountry });
+    const pick = pickPlace(i.place, mergeCandidates(hits?.google ?? [], hits?.local ?? [], i.place), { point: homePt, country: homeCountry });
     if (pick.status === "unresolved") return retry(hits ? "no_hits" : "lookup_failed", hits ? "no place by that name came back this run; tried again next run" : "the geocoders were down this run; tried again next run");
     stored =
       pick.status === "resolved"
@@ -306,20 +312,54 @@ export async function googleLookup(name: string): Promise<PlaceCandidate[]> {
       return { name: String(x.address_components?.[0]?.long_name ?? name), lat: x.geometry.location.lat, lng: x.geometry.location.lng, admin1: comp("administrative_area_level_1")?.long_name ?? null, admin1Code: comp("administrative_area_level_1")?.short_name ?? null, level: (x.types ?? []).includes("administrative_area_level_1") ? ("admin1" as const) : null, country: comp("country")?.short_name ?? null, population: null, source: "google" as const };
     });
 }
-async function openMeteoLookup(name: string): Promise<PlaceCandidate[]> {
-  const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=10&language=en&format=json`);
-  if (!res.ok) throw new Error(`open geocoder ${res.status}`);
-  const data: any = await res.json();
-  return (Array.isArray(data?.results) ? data.results : [])
-    // Populated places and administrative areas only: never "Bay Area Park" or an airport.
-    .filter((r: any) => /^(PPL|ADM)/.test(String(r.feature_code ?? "")) && typeof r.latitude === "number" && typeof r.longitude === "number")
-    .map((r: any) => ({ name: String(r.name), lat: r.latitude, lng: r.longitude, admin1: r.admin1 ?? null, level: r.feature_code === "ADM1" ? ("admin1" as const) : null, country: r.country_code ?? null, population: typeof r.population === "number" ? r.population : null, source: "open_meteo" as const }));
+// ---------------------------------------------------------------- the local place table (GeoNames)
+
+// The populated places every lookup reads, in place of Open-Meteo's free geocoding API (non-commercial use only; Noise is commercial,
+// 2026-10-29). Data: GeoNames (https://www.geonames.org), licensed CC BY 4.0, commercial use allowed with attribution; see
+// api/src/data/geonames/NOTICE. Built by scripts/buildPlaceTable.ts from GeoNames' cities dump: name, ASCII name, country, admin1,
+// point, population, feature code. Loaded once, on first use, and indexed by normalized name; no outside call ever.
+type TableRow = { name: string; ascii: string | null; country: string; admin1: string | null; lat: number; lng: number; population: number | null; feature: string };
+let table: Map<string, TableRow[]> | null = null;
+const tableDirs = (): string[] => {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  // From src (tsx), api's dist, co-test's dist (co-test's image copies api/src), or the process's own directory.
+  return [resolve(here, "../data/geonames"), resolve(here, "../../src/data/geonames"), resolve(here, "../../../../../api/src/data/geonames"), resolve(process.cwd(), "src/data/geonames"), resolve(process.cwd(), "api/src/data/geonames"), resolve(process.cwd(), "../api/src/data/geonames")];
+};
+const lines = (text: string) => text.split("\n").filter((l) => l && !l.startsWith("#"));
+export function placeTable(): Map<string, TableRow[]> {
+  if (table) return table;
+  const dir = tableDirs().find((d) => existsSync(resolve(d, "cities.tsv.gz")));
+  if (!dir) throw new Error("place table missing (api/src/data/geonames/cities.tsv.gz)");
+  const admin1 = new Map(lines(readFileSync(resolve(dir, "admin1.tsv"), "utf8")).map((l) => l.split("\t") as [string, string]));
+  const index = new Map<string, TableRow[]>();
+  for (const l of lines(gunzipSync(readFileSync(resolve(dir, "cities.tsv.gz"))).toString("utf8"))) {
+    const [name, ascii, country, a1, lat, lng, pop, feature] = l.split("\t");
+    // GeoNames' 0 is "not known": unsized, as Open-Meteo gave it.
+    const row: TableRow = { name, ascii: ascii || null, country, admin1: admin1.get(`${country}.${a1}`) ?? null, lat: Number(lat), lng: Number(lng), population: Number(pop) > 0 ? Number(pop) : null, feature };
+    for (const k of new Set([normName(name), ...(ascii ? [normName(ascii)] : [])])) {
+      const at = index.get(k);
+      if (at) at.push(row);
+      else index.set(k, [row]);
+    }
+  }
+  for (const rows of index.values()) rows.sort((a, b) => (b.population ?? 0) - (a.population ?? 0));
+  return (table = index);
 }
 
-export async function lookupPlace(place: string): Promise<{ google: PlaceCandidate[]; openMeteo: PlaceCandidate[]; partial: boolean }> {
-  const [g, o] = await Promise.allSettled([googleLookup(place), openMeteoLookup(parseQualified(place).name)]);
-  if (g.status === "rejected" && o.status === "rejected") throw new Error("both geocoders failed");
-  return { google: g.status === "fulfilled" ? g.value : [], openMeteo: o.status === "fulfilled" ? o.value : [], partial: g.status === "rejected" || o.status === "rejected" };
+// The table's places by that name (a qualified place by its name only: "Portland, ME" is looked up as "Portland"), biggest first.
+export function localLookup(name: string): PlaceCandidate[] {
+  return (placeTable().get(normName(name)) ?? [])
+    // Populated places and administrative areas only: never "Bay Area Park" or an airport.
+    .filter((r) => /^(PPL|ADM)/.test(r.feature))
+    .map((r) => ({ name: r.name, ...(r.ascii ? { keys: [r.ascii] } : {}), lat: r.lat, lng: r.lng, admin1: r.admin1, level: r.feature === "ADM1" ? ("admin1" as const) : null, country: r.country, population: r.population, source: "geonames" as const }));
+}
+
+// Google reads the place whole; the local table adds every same-named place with its size, which near-home and most-prominent need
+// (Google gives one unsized hit). partial: Google failed, or the table couldn't load (it never calls out). google: injectable for tests.
+export async function lookupPlace(place: string, google: (place: string) => Promise<PlaceCandidate[]> = googleLookup): Promise<{ google: PlaceCandidate[]; local: PlaceCandidate[]; partial: boolean }> {
+  const [g, l] = await Promise.allSettled([google(place), Promise.resolve().then(() => localLookup(parseQualified(place).name))]);
+  if (g.status === "rejected" && l.status === "rejected") throw new Error("both place lookups failed");
+  return { google: g.status === "fulfilled" ? g.value : [], local: l.status === "fulfilled" ? l.value : [], partial: g.status === "rejected" || l.status === "rejected" };
 }
 
 // Pure: the country of a home point, from the geocoder's hits for its city (the same-named hit at that point), or null.
@@ -334,7 +374,7 @@ export const realResolveDeps: ResolveDeps = {
   // resolution is made fresh (a stored one is reused without it).
   homeCountry: async (city, p) => {
     const hits = await lookupPlace(city).catch(() => null);
-    return hits ? countryAt(p, [...hits.google, ...hits.openMeteo]) : null;
+    return hits ? countryAt(p, [...hits.google, ...hits.local]) : null;
   },
   lookup: lookupPlace,
   row: async (userId, key) => {

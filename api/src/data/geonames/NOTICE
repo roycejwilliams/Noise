@@ -1,0 +1,14 @@
+Place table (cities.tsv.gz, admin1.tsv)
+
+Data from GeoNames (https://www.geonames.org), licensed under the Creative Commons Attribution 4.0
+License (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/). Commercial use is allowed with
+attribution. The data is provided "as is" without warranty or any representation of accuracy,
+timeliness or completeness.
+
+Source files: https://download.geonames.org/export/dump/cities15000.zip and admin1CodesASCII.txt,
+downloaded 2026-10-29. Changes: trimmed to name, ASCII name, country, admin1 code, latitude,
+longitude, population and feature code; historical, abandoned and destroyed places removed; admin1
+names limited to the codes used. Rebuilt by api/src/scripts/buildPlaceTable.ts.
+
+GeoNames credits further sources for some of its data, including: Contains Ordnance Survey data
+Crown copyright and database right 2010.
