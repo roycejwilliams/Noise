@@ -20,6 +20,7 @@
     "evals/proactive/moodNeverCancels.ts",
     "evals/proactive/moodHeavyOffers.ts",
     "evals/calls/recapMoodHold.ts",
+    "evals/calls/correctionInFollowUp.ts",
     "evals/proactive/moodDraftSkips.ts",
     "evals/proactive/moodFrustration.ts",
     "evals/proactive/moodFollowUps.ts",

@@ -194,7 +194,7 @@ user: I'm heading to the Grok night either way.`;
   const ap = callAuditPrompt("assistant: hi", "Cue sent them X.", "Who they are: a builder.");
   check("the audit: facts and impressions are separate, and an impression is never proof", /What Cue knew going into the call \(facts\):\nCue sent them X\./.test(ap) && /never as proof/.test(ap) && /Who they are: a builder\./.test(ap));
   check("the audit still reads a plain summary the old way", !/impressions going in/.test(callAuditPrompt("assistant: hi", "known")));
-  check("the audit gets facts and impressions from the call picture", /auditCall\(user_id, cleanTranscript, knownBeforeCall(?:, \{ doneOnCall \})?\)/.test(co) && /buildCallKnowledge\(user_id\)/.test(co));
+  check("the audit gets facts and impressions from the call picture", /auditCall\(user_id, cleanTranscript, knownBeforeCall(?:, \{ doneOnCall[^}]*\})?\)/.test(co) && /buildCallKnowledge\(user_id\)/.test(co));
   const prompt2 = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
   // Since 2026-10-08 these are Co's shared grounding rules (services/coCore.ts), on texts and calls alike.
   const { CO_GROUNDING } = await import("../../src/services/coCore.js");

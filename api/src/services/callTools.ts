@@ -243,9 +243,13 @@ function owedItems(r: any, meant: OnFile[]): OnFile[] {
   return typeof r?.url === "string" && /^https?:\/\//.test(r.url) ? [{ name: String(r?.made ?? "the link").slice(0, 160), url: r.url, caption: String(r?.made ?? "").slice(0, 160) }] : [];
 }
 // What a search on this call returned: its events and earlier openings, by name, for shareLink.
-function rememberFound(mem: CallMem, r: any): void {
+// Pure: what a search's result found, each with its link (searchEvents' events and the openings found earlier).
+export function foundIn(r: any): OnFile[] {
   const rows = [...(Array.isArray(r?.events) ? r.events : []), ...(Array.isArray(r?.openingsFoundEarlier) ? r.openingsFoundEarlier : [])];
-  const found = rows.filter((e: any) => typeof e?.link === "string" && /^https?:\/\//.test(e.link) && e?.name).map((e: any) => ({ name: String(e.name), url: String(e.link), caption: String(e.name) }));
+  return rows.filter((e: any) => typeof e?.link === "string" && /^https?:\/\//.test(e.link) && e?.name).map((e: any) => ({ name: String(e.name), url: String(e.link), caption: String(e.name) }));
+}
+function rememberFound(mem: CallMem, r: any): void {
+  const found = foundIn(r);
   mem.found = [...(mem.found ?? []).filter((f) => !found.some((x: OnFile) => x.url === f.url)), ...found].slice(-30);
 }
 
@@ -344,7 +348,8 @@ export type CallToolsInput = {
   onFile?: OnFile[];
   // Tests: where the owed-after-call record and the open promise task go (default: the decision log and co_tasks).
   owe?: (items: OnFile[], why: "failed" | "timeout", tool: string) => Promise<void>;
-  done?: (tool: string, kind: string, input: unknown, urls: string[]) => Promise<void>;
+  // found: what a search found on the call (searchEvents), kept with its done row so a later correction never takes back a real find.
+  done?: (tool: string, kind: string, input: unknown, urls: string[], found?: { name: string; url: string }[]) => Promise<void>;
   // Tests: the text to them during the call, in place of the real send.
   sendText?: (text: string) => Promise<boolean>;
 };
@@ -427,7 +432,8 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   });
   // The durable record (services/callLedger.ts): what came back done on the call, and what's owed the moment it ends. Tests pass
   // their own; a dry run writes nothing.
-  const recordDone = i.done ?? (async (tool: string, kind: string, input: unknown, urls: string[]) => { if (!i.dryRun) await (await import("./callLedger.js")).recordDoneOnCall(i.userId, { tool, kind, input, urls }); });
+  const recordDone = i.done ?? (async (tool: string, kind: string, input: unknown, urls: string[], found?: { name: string; url: string }[]) => { if (!i.dryRun) await (await import("./callLedger.js")).recordDoneOnCall(i.userId, { tool, kind, input, urls, found }); });
+  const foundFor = (name: string, r: any) => (name === "searchEvents" ? foundIn(r).map((f) => ({ name: f.name, url: f.url })) : undefined);
   const recordOwed = i.owe ?? (async (items: OnFile[], why: "failed" | "timeout", tool: string) => { if (!i.dryRun) await oweAfterCall(i, items, why, tool); });
   // A send that didn't reach them on the call: owed right after it, once per link, and said so to every later turn of the call.
   const writes: Promise<unknown>[] = [];
@@ -513,7 +519,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
             if (r?.ok !== false) {
               const urls = urlsOf(r, meant);
               settleSent(urls);
-              if (plan.kind !== "read" || name === "searchEvents") await recordDone(name, plan.kind, r?.recordAs ?? parsed.data, urls).catch(() => {});
+              if (plan.kind !== "read" || name === "searchEvents") await recordDone(name, plan.kind, r?.recordAs ?? parsed.data, urls, foundFor(name, r)).catch(() => {});
             } else if (plan.kind === "send") {
               const items = owedItems(r, meant);
               if (items.length) owe(items, "failed", name);
@@ -536,7 +542,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
           // On the record without holding the turn (a plain read, like what Cue knows, isn't an action).
           // A send's record names what it texted (its items' names and links), whichever send it was.
           const label = texts ? (r?.recordAs ?? { urls, names: sendItems(r, parsed.data, name, true).filter((x) => x.url).map((x) => x.name) }) : parsed.data;
-          if (plan.kind !== "read" || name === "searchEvents") writes.push(recordDone(name, plan.kind, label, urls).catch(() => {}));
+          if (plan.kind !== "read" || name === "searchEvents") writes.push(recordDone(name, plan.kind, label, urls, foundFor(name, r)).catch(() => {}));
         } else if (plan.kind === "send") {
           const items = owedItems(r, mem.inflight?.get(toolUseId) ?? []);
           if (items.length) {
