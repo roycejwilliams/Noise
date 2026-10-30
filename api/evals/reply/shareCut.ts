@@ -348,6 +348,10 @@ check("…not on a sharing turn (still a recommendation there)", !G.shareRewrite
 check("…and never an unrelated offer", !G.shareRewriteAddsNothing({ ...inezBase, rewrite: "That's on me, that link was dead. Want me to set up a call this week?", feedback: true }).ok);
 check("…and only one fix offer", !G.shareRewriteAddsNothing({ ...inezBase, rewrite: "Want me to find another one worth going to instead? Should I resend the right one?", feedback: true }).ok);
 check("the claim read: owning a mistake is backed by Cue's own sent line, never their report", /Owning a mistake in something Cue sent \("that link shouldn't have gone out dead"\) is supported by Cue's own sent line in the conversation: quote that line\. Their report of what Cue did never supports a claim that Cue did it\./.test(fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
+{
+  const fb = G.shareRewritePrompt({ facts: "", tail: "", theirWords: "", message: INEZ, draft: "x", removed: [], cut: "", offerKeep: false, feedback: true });
+  check("the share rewrite on a feedback turn never talks about the earlier reply or its tone (review of #316)", !/own it/i.test(fb) && /Don't otherwise talk about your earlier reply: don't quote it or repeat its words, don't compare this reply with it, and don't describe your own tone or how you came across\./.test(fb));
+}
 check("the share rewrite on a feedback turn says it may offer the one fix", /you may offer to fix that one thing/.test(G.shareRewritePrompt({ facts: "", tail: "", theirWords: "", message: INEZ, draft: "x", removed: [], cut: "", offerKeep: false, feedback: true })) && !/you may offer to fix/.test(G.shareRewritePrompt({ facts: "", tail: "", theirWords: "", message: INEZ, draft: "x", removed: [], cut: "", offerKeep: false })));
 
 // ---- 3d. Their thread is theirs to tell: the world line never backs a report of it (re-record of checkin-live-thread) ----
