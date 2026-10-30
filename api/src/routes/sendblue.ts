@@ -27,7 +27,6 @@ import { handlePhoneChange } from "../services/phoneChange.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
-import { logJevShadow, startJevShadow } from "../services/jevShadow.js";
 import { relayFacts, reminderFacts } from "../services/relay.js";
 import { CO_WHY } from "../services/coVoice.js";
 import { assembleContext, type TurnContext } from "../services/turnContext.js";
@@ -1662,8 +1661,6 @@ export function sendblueRouter(io: Server): Router {
         // The privacy early warning (services/privacyAlert.ts) starts with the read, so the turn waits on the slower of the two,
         // never both in a row; it is awaited where it joins the reply's facts, below.
         const privacyP = hasText ? privacyAlert(resolvedContent).catch(() => null) : null;
-        // Jev labels the same text in shadow, logged next to the read; never used for the reply (services/jevShadow.ts).
-        const jevShadowP = hasText && readP ? startJevShadow(resolvedContent, lastCoLine(recentConversation), !!inlineTarget?.fromCo) : null;
         const coverageP = readP
           ? readP.then((r) => coverageNudgeFrom(user.id, profile, r.coverage)).catch(() => ({ missingTopic: null, refresh: null }))
           : getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null, refresh: null }));
@@ -1678,7 +1675,6 @@ export function sendblueRouter(io: Server): Router {
         try {
           if (readP) {
             turnRead = await readP;
-            logJevShadow(user.id, jevShadowP, turnRead);
             // A reaction right away, before any drafting, so they see Co is on it
             // (Royce, 2026-09-29: Instinct reacts with what it's doing). Not awaited.
             const ackHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
