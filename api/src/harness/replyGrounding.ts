@@ -1302,9 +1302,6 @@ export function receiptsForCheck(rf: ReplyFacts): string {
 // draft) never makes it negative (2026-10-12 review).
 export const NEGATIVE_RECEIPT = /^\s*No\b|^\s*Trying\b.*\bfailed\b|\bdidn'?t send\b/i;
 
-// Co saying something it tried did NOT happen ("You're right, it never sent, and that's on me", "that didn't go through"). Never
-// something arriving to Co ("nothing's come through on my end"): that's the file record's to back (arrivalDenial).
-export const ADMITS_NOT_DONE = /\b(never|nothing|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|not)\b[^.?!]{0,30}\b(sen[dt]|go(ne)? through|went( out| through)?|sav(e|ed)|happen(ed)?|made|ma[dk]e it|work(ed)?|deliver(ed)?|pass(ed)?|reach(ed)?|call(ed)?|book(ed)?)\b/i;
 // Something on record (not a receipt that it failed) says Co sent or did a thing; then an admission is left to the model's read.
 function doneOnRecord(facts: Fact[]): boolean {
   return facts.some((f) => f.kind !== "not_done" && f.kind !== "hint" && /\b(sent|delivered|texted|emailed|went out|saved|made them)\b/i.test(f.text) && !NEGATIVE_RECEIPT.test(f.text));
@@ -1776,8 +1773,6 @@ export function recheckModel(changed: string, opts: { force?: boolean; model?: s
 }
 // force: the claim read runs on what changed even when nothing in it looks claim-shaped; claim-free changes on the given model.
 async function recheck(draft: string, rewrite: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources, opts: { force?: boolean; model?: string } = {}): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
-  // GROUNDING_FULL_RECHECK only exists so evals/grounding can compare the old full re-read.
-  if (process.env.GROUNDING_FULL_RECHECK) return onlyCuts(draft, rewrite) ? { checks: [...codeChecks(rewrite, rf, src), { name: "claim_read", pass: true, reason: "only cuts" }], modelOk: true, ms: 0 } : check(rewrite, rf, src);
   // The thread read of the whole rewrite and the claim read of what changed start together; the code checks run once both settle.
   const changed = sentencesToRecheck(draft, rewrite, failed);
   const [, r] = await Promise.all([judgeThreadReports(rewrite, rf, src), changed.length ? check(changed.join(" "), rf, src, recheckModel(changed.join(" "), opts), opts.force) : Promise.resolve(null)]);
