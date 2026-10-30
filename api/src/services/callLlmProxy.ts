@@ -16,6 +16,11 @@ import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.j
 import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
 import { classifyModelFailure, failureLabel, noteModelFailure } from "./modelKeyAlert.js";
 import { plainPunctuation } from "./safetyText.js";
+import { claimHeld, claimKind, emptyClaimState, SEND_TALK, type ClaimState } from "./callClaims.js";
+// Said as coming right after the call.
+const AFTER_CALL = /\b(?:right after|after (?:we|the call|this call|you hang up)|once we (?:hang up|'re done|are done)|when we hang up|as soon as we hang up)\b/i;
+// What a send tool call is for: its names (shareLink on a call), else which page or deck.
+const itemsOf = (input: unknown): string[] => { const i = (input ?? {}) as { what?: unknown; which?: unknown }; return Array.isArray(i.what) ? i.what.map(String).filter(Boolean) : typeof i.which === "string" && i.which ? [i.which] : []; };
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
 // database and the tools' imports). One turn's bounds: at most CALL_TOOL_STEPS rounds of Co's tools, inside CALL_TOOL_BUDGET_MS from
@@ -45,6 +50,9 @@ export type CallToolset = {
   // Resolves once this turn's records of what's owed after the call are written (services/callTools.ts), so a spoken "I'll text it
   // right after" joins the promise opened for it instead of opening a second (routes/callLlm.ts).
   pending?: () => Promise<void>;
+  // Whether a tool with this input texts them (a send): its "texting it now" line may be said while it runs, and only what it
+  // delivered may be called sent (services/callClaims.ts).
+  texts?: (name: string, input: unknown) => boolean;
 };
 
 // Hume's brain (2026-10-08, Royce chose it over Haiku 5.5 for depth: ~1.4s to first words vs ~0.7s): Sonnet 4.6, temperature from the
@@ -101,28 +109,17 @@ export function asksCo(said: string): boolean {
   return /\?|\b(?:did you|have you|can you|could you|tell me|any (?:news|luck|update)|when'?s|when is|where'?s|where is|what'?s the|what time|who'?s|how (?:much|many|long)|is it|are we|do we)\b/i.test(rest);
 }
 // A line that says it's done or sent is true only once a send came back done (Royce's call, 2026-10-08: "Done, I'll send that over
-// now", and nothing went out; 2026-10-29: Cue acts during calls, and says it did only after the tool returns). Until a send on this
-// turn comes back done, a sentence that claims the send is dropped and a leading "Done," is taken off. "Sending it now" is never
-// said, before the result or after it: before, it isn't true yet; after, it went. "I'll text it to you right after we hang up" is
-// the truth when a send didn't go, and stays.
+// now", and nothing went out; 2026-10-29: Cue acts during calls, and says it did only after the tool returns). The families of claim
+// and when each may be said are services/callClaims.ts. A leading "Done," or "Sent," with nothing behind it is taken off.
 const DONE_LEAD = /^(\[[a-z ]+\]\s*)?(?:done|all done|sent|there you go|there we go)[,.!]\s+(?=\S)/i;
-const SENT_CLAIM = /\b(?:i(?:'ve| have)? (?:just |already )?(?:sent|texted|shared|dropped|forwarded) (?:it|that|them|those|you|the)\b|(?:just|already) (?:sent|texted) (?:it|that|them|you)\b|it'?s (?:in your (?:texts|inbox|messages)|been sent)\b|it'?s on its way(?=\s*[.!,]|\s*$)|(?:i'?m )?sending (?:it|that|them) (?:over )?(?:now|as we speak)|should be in your (?:texts|inbox|messages)|check your (?:texts|phone|messages) now)/i;
-// A send in progress, said as it happens: never true in the turn's words (the voice says it before the tool's result is known).
-const NOW_CLAIM = /\b(?:(?:i'?m|i am) )?(?:sending|texting|shooting|dropping|firing)\b[^.!?]{0,30}\b(?:now|right now|as we speak)\b|\bi'?ll (?:send|text|shoot|drop|fire)\b[^.!?]{0,30}\b(?:now|right now|right away|this second)\b/i;
-// Saved or set up, said as done: true only once a tool came back done this turn.
-const SAVED_CLAIM = /\b(?:i(?:'ve| have)? (?:just |already )?(?:saved|set (?:it|that|this) up|added (?:it|that|this)|started (?:a task|on (?:it|that|this)))\b|(?:it'?s|that'?s) (?:saved|set up)\b)/i;
-// A send that happened before the call ("I texted you the link yesterday"), or a question about one, is true or harmless.
-const PAST_SEND = /\b(?:yesterday|earlier|last (?:night|week|time)|this morning|before|the other day|on (?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
-// sent: a send came back done this turn (services/callTools.ts marks it delivered). acted: any of Cue's tools came back done.
-export function stripSendClaim(sentence: string, o: { sent?: boolean; acted?: boolean } = {}): string | null {
-  const question = /\?\s*$/.test(sentence);
-  if (!question && NOW_CLAIM.test(sentence) && !/\bafter\b/i.test(sentence)) return null;
-  if (!o.sent && SENT_CLAIM.test(sentence) && !PAST_SEND.test(sentence) && !question) return null;
-  if (!o.acted && !o.sent && SAVED_CLAIM.test(sentence) && !PAST_SEND.test(sentence) && !question) return null;
-  if (o.sent) return sentence;
+// sent / acted: the short form (a send came back done this turn; any tool did). state: the whole picture (services/callClaims.ts).
+export function stripSendClaim(sentence: string, o: { sent?: boolean; acted?: boolean; state?: ClaimState } = {}): string | null {
+  const st: ClaimState = o.state ?? { ...emptyClaimState(), deliveredCount: o.sent ? 1 : 0, acted: !!o.acted, sendContext: true };
+  if (claimHeld(sentence, st)) return null;
+  if (st.deliveredCount) return sentence;
   // A bare or leading "Sent" needs a send; a bare or leading "Done" needs a tool that came back done.
-  const bare = o.acted ? /^(\[[a-z ]+\]\s*)?sent[.!]?\s*$/i : /^(\[[a-z ]+\]\s*)?(?:done|all done|sent)[.!]?\s*$/i;
-  const lead = o.acted ? /^(\[[a-z ]+\]\s*)?sent[,.!]\s+(?=\S)/i : DONE_LEAD;
+  const bare = st.acted ? /^(\[[a-z ]+\]\s*)?sent[.!]?\s*$/i : /^(\[[a-z ]+\]\s*)?(?:done|all done|sent)[.!]?\s*$/i;
+  const lead = st.acted ? /^(\[[a-z ]+\]\s*)?sent[,.!]\s+(?=\S)/i : DONE_LEAD;
   const t = sentence.replace(bare, "");
   if (!t.trim()) return null;
   if (!lead.test(t)) return t;
@@ -376,7 +373,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let repeatGoodbye = false;
   const heldWhy: string[] = [];
   // A send came back done this turn (a link is in their texts), or any of Cue's tools came back done: only then may a line say so.
-  let sentThisTurn = false, actedThisTurn = false;
+  // What may be claimed this turn (services/callClaims.ts): what a send that texted them delivered, what it tried and didn't, whether
+  // one is in flight, whether any tool came back done, and whether the turn is about sending at all.
+  const claims: ClaimState = { ...emptyClaimState(), sendContext: SEND_TALK.test(theirLast) };
+  // The retries below are the model's last word: a held "texting it now" there has no send coming.
+  let inRetry = false;
+  // A "texting it to you now" line said before its send is called: held until the send is in flight in this same reply, else dropped.
+  let pendingNow: string[] = [];
+  let nowSaid = false;
+  // Lines said since the last round of tools came back (a failed send's next words must say it comes right after the call).
+  let linesSinceTools: string[] = [];
   // Said anything since the last round of Cue's tools came back: a turn whose only words after a tool were held back (a "sent" that
   // wasn't) answers again, never ends on the line before the tool.
   let spokeSinceTools = true;
@@ -432,9 +438,15 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       return null;
     }
     if (clean) {
-      const kept = stripSendClaim(sentence, { sent: sentThisTurn, acted: actedThisTurn });
+      const held = claimHeld(sentence, claims);
+      // "Texting it to you now", said just before the send is called: it waits for the send to start (a moment), then is said.
+      if (held && /send is happening/.test(held) && !inRetry && co?.texts) {
+        pendingNow.push(s);
+        return null;
+      }
+      const kept = held ? null : stripSendClaim(sentence, { state: claims });
       if (kept === null) {
-        const why = "claims it sent or did something before a tool came back done";
+        const why = `claim held: ${held ?? "says it did something before a tool came back done"}`;
         deps.onDropped?.(sentence, why);
         // Never dead air for it: if nothing else is said this turn, Cue answers again without the claim (below). Voice-only mode
         // regenerates nothing, as before.
@@ -489,6 +501,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (isQuestion && countsAsQuestion(sentence)) asked = true;
     spokeAny = true;
     spokeSinceTools = true;
+    linesSinceTools.push(line);
+    if (claimKind(line, true) === "now") nowSaid = true;
     spokenLines.push(line);
     deps.onSpoken?.(line);
     return out;
@@ -500,6 +514,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const maxSteps = deps.maxToolSteps ?? CALL_TOOL_STEPS;
   const budgetMs = deps.toolBudgetMs ?? CALL_TOOL_BUDGET_MS;
   let req = toAnthropic(b, undefined, decision.systemNote);
+  // The sends started this turn, by tool call, with what each was for.
+  const sendIds = new Map<string, string[]>();
   if (co) {
     // Co's own tools can take a longer input than a spoken line (a page; PR 6: at 500 a deck's input was cut off mid-write,
     // stop_reason max_tokens). Decks pass a brief on a call, so a little room is enough; spoken lines stay short by the call's rules.
@@ -542,6 +558,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           try { input = cur.json.trim() ? JSON.parse(cur.json) : {}; } catch { input = {}; }
           blocks.push({ type: "tool_use", id: cur.id, name: cur.name, input });
           ran.push(cur.name);
+          // A send that texts them starts now: the turn is about sending, what it's for is tried, and a "texting it now" line held
+          // for it is true and goes out.
+          if (co!.texts?.(cur.name, input)) {
+            claims.sendContext = true;
+            claims.inFlight = true;
+            sendIds.set(cur.id, itemsOf(input));
+            const release = pendingNow;
+            pendingNow = [];
+            for (const p of release) { const out = say(p); if (out) yield chunk({ content: out }); }
+          }
           runs.push(runTool(co!,cur.id, cur.name, input, Math.max(0, budgetMs - (now() - t0)), deps.onTool));
         } else if (cur?.kind === "el" && !cur.args) {
           // A call tool with no input still sends valid JSON: ElevenLabs parses the arguments string.
@@ -582,16 +608,34 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
     if (stream && clean) for (const s of stream.end()) { const out = say(s); if (out) yield chunk({ content: out }); }
     stream = null;
+    // A "texting it now" with no send behind it in this reply: never said.
+    for (const p of pendingNow) {
+      const why = "claim held: says a send is happening when none is in flight";
+      deps.onDropped?.(p.trim(), why);
+      if (!voiceOnly) { heldWhy.push(why); blanked = true; }
+    }
+    pendingNow = [];
     if (!runs.length) break;
     const settled = await Promise.all(runs);
     const results = settled.map((x) => x.block);
     for (const r of results) if (r.type === "tool_result") toolCorpus += `\n${r.content}`;
     // What came back done: only now may the turn's words say it went (services/callTools.ts marks a send that reached them delivered).
+    claims.inFlight = false;
     for (const x of settled) {
-      const raw = x.raw as { ok?: unknown; delivered?: unknown; pending?: unknown } | null;
+      const raw = x.raw as { ok?: unknown; delivered?: unknown; pending?: unknown; items?: { name?: unknown; url?: unknown; delivered?: unknown }[] } | null;
+      const id = (x.block as { tool_use_id?: string }).tool_use_id ?? "";
+      const tried = sendIds.get(id);
+      if (tried) {
+        // Per item: what went, and what was tried and didn't (failed, not back in time).
+        const items = Array.isArray(raw?.items) ? raw!.items : [];
+        const went = !x.timedOut && raw && raw.ok !== false && raw.delivered === true ? items.filter((i) => i?.delivered === true) : [];
+        for (const i of went) claims.delivered.push(...[i.name, i.url].filter((v): v is string => typeof v === "string" && !!v));
+        claims.deliveredCount += went.length || (!x.timedOut && raw?.ok !== false && raw?.delivered === true && !items.length ? 1 : 0);
+        const missed = items.length ? items.filter((i) => !went.includes(i)).map((i) => String(i?.name ?? "")).filter(Boolean) : went.length || raw?.delivered === true ? [] : tried;
+        claims.undelivered.push(...(x.timedOut || !raw || raw.ok === false ? (missed.length ? missed : tried.length ? tried : ["it"]) : missed));
+      }
       if (x.timedOut || !raw || raw.ok === false) continue;
-      if (raw.delivered === true) sentThisTurn = true;
-      if (raw.pending !== true) actedThisTurn = true;
+      if (raw.pending !== true) claims.acted = true;
     }
     // What the tools returned backs what Co says next (an event searchEvents found can be named, a task it started can be promised).
     if (clean) sources = callSources(b, co?.records ?? "", toolCorpus);
@@ -608,6 +652,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     };
     deps.onToolRound?.({ step: step + 1, last, overBudget });
     spokeSinceTools = false;
+    linesSinceTools = [];
   }
   // Everything this turn was going to say was kept back: say the one safe thing, never silence.
   // An event offer held back gets the safe line (as before); anything else held back, a plain acknowledgement, never a new promise.
@@ -620,10 +665,17 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // Held back and the turn is left without an answer (nothing said, or they asked for a name or number and that was what was held):
   // Co answers again, once, in its own words, without what it couldn't back. Never a line written for it.
   const heldAnswer = askedForSpecific && heldWhy.some((w) => /^names what nothing backs/.test(w));
+  // They heard it was being texted, and it didn't go: the next words must say it comes right after the call.
+  if (clean && !voiceOnly && nowSaid && claims.undelivered.length && !claims.deliveredCount && finish !== "tool_calls" && !linesSinceTools.some((l) => AFTER_CALL.test(l))) {
+    heldWhy.push("the text you said was going didn't go through: say plainly you'll text it right after the call, and don't say it went");
+    blanked = true;
+    spokeSinceTools = false;
+  }
   if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools)) {
     const already = spokenLines.length ? ` You already said: "${spokenLines.join(" ")}". Carry on from it; don't repeat it.` : "";
     const note = `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${already}`;
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
+    inRetry = true;
     let rs: SpeakableStream | null = null;
     try {
       for await (const ev of deps.stream(retry)) {
@@ -646,6 +698,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   if (heldEnd && !spokeAny && finish !== "tool_calls") {
     const note = "You were about to end the call, but they haven't said goodbye. Don't end it and don't say goodbye: answer what they last said.";
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
+    inRetry = true;
     let rs: SpeakableStream | null = null;
     try {
       for await (const ev of deps.stream(retry)) {

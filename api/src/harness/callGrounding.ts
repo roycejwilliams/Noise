@@ -30,6 +30,8 @@ import { wordsAreTheirs } from "../services/coTasks.js";
 import type { MemberKnowledge } from "../services/memberKnowledge.js";
 import { plainCorrected } from "../services/memberKnowledge.js";
 import { DateTime } from "luxon";
+import { claimKind, namesItem } from "../services/callClaims.js";
+import type { DoneItem } from "../services/callLedger.js";
 
 export type CallClaim = {
   quote: string;
@@ -125,7 +127,7 @@ export function knownBeforeFrom(
 // replyGrounding.ts addHint): summaries and read-outs Co's own models wrote
 // going into the call. They help read the call, but they're never proof of a
 // specific time, place, count, or what another person said, wants or did.
-export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string, doneOnCall: string[] = []): string {
+export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string, doneOnCall: (string | DoneItem)[] = []): string {
   const reg = auditRegistry();
   return `Audit what Cue said on a phone call. Cue can only claim things it actually knew and only promise things it can actually do.
 
@@ -142,7 +144,7 @@ What Cue knew going into the call (facts):
 ${knownBefore || "(nothing)"}
 
 What Cue did DURING the call with its own tools (each came back done, so it's true; services/callLedger.ts):
-${doneOnCall.length ? doneOnCall.map((d) => `- ${d}`).join("\n") : "(nothing)"}
+${doneOnCall.length ? doneOnCall.map((d) => `- ${typeof d === "string" ? d : d.label}`).join("\n") : "(nothing)"}
 A line where Cue says it did something on the call (sent, texted, saved, set up, started) is "ok" only when it's in this list; when it isn't, it's "invented_fact" (put what it claimed in "specifics"). What's in this list is done: never a promise to keep.
 ${impressions?.trim() ? `
 Cue's own impressions going in (summaries its models wrote). Use these to understand the call, never as proof: a specific time, place, count, link, or what another person said, wants or did that only an impression backs is "invented_fact". What the person themself said in these recent texts is fine to rely on.
@@ -323,18 +325,43 @@ export function sameSubject(a: string, b: string): boolean {
 // Cue saying it did something (sent, texted, saved, set up, started), as done.
 const DID_CLAIM = /\b(?:i(?:'ve| have)?\s+(?:just\s+|already\s+)?(?:sent|texted|shared|saved|added|set\s+(?:it|that|this|you)\s+up|started|dropped|noted|put)\b|(?:just|already)\s+(?:sent|texted|saved)\b|it'?s\s+(?:in your texts|been sent|saved|set up)\b)/i;
 // Pure: a claim of having done something that a tool really did on this call (services/callLedger.ts): kept as said, never a
-// correction. Words shared with what was done; a claim with no match stays the audit's (the "said it did" check).
-export function doneOnCallVerdict(quote: string, doneOnCall: string[]): { done: boolean; why: string } {
-  if (!doneOnCall.length || !DID_CLAIM.test(quote.replace(/[’‘]/g, "'"))) return { done: false, why: "" };
-  const hit = doneOnCall.find((d) => overlap(quote, d) > 0) ?? (doneOnCall.length === 1 && significant(quote).length <= 4 ? doneOnCall[0] : undefined);
-  return hit ? { done: true, why: `done on the call: ${hit.slice(0, 140)}` } : { done: false, why: "" };
+// correction. The claim has to name what was done (its link, its name, or most of its own words; one shared word is not enough),
+// and a "texted / sent / in your texts" claim has to match something that really texted them. A bare "just sent it" matches only
+// when exactly one such thing was done. No match stays the audit's (the "said it did" check).
+const toItem = (d: string | DoneItem): DoneItem => (typeof d === "string" ? { kind: "", label: d, names: [], urls: [] } : d);
+// The words every claim of doing shares: never what makes it about one item.
+const CLAIM_WORDS = new Set(significant("just already sent texted text texts shot dropped popped put shared saved added set started noted link links your you it that this them those over the a to in on up for now check got done way all both".replace(/\s+/g, " ")));
+function distinctive(x: string): string[] {
+  return significant(x).filter((w) => !CLAIM_WORDS.has(w) && !GENERIC.has(w));
 }
-// Pure: a promise that something Cue did on this call already covers (the same subject).
-export function promiseDoneOnCall(p: { what: string; quotes: string[] }, doneOnCall: string[]): string | null {
-  return doneOnCall.find((d) => sameSubject(p.what, d) || overlap(`${p.what} ${p.quotes.join(" ")}`, d) >= 0.5) ?? null;
+function claimNames(quote: string, d: DoneItem): boolean {
+  if (d.urls.some((u) => quote.includes(u))) return true;
+  if (d.names.some((n) => namesItem(quote, n))) return true;
+  const label = distinctive(d.label);
+  const said = new Set(distinctive(quote));
+  const shared = label.filter((w) => said.has(w)).length;
+  return shared >= 2 || (label.length > 0 && label.length <= 2 && shared === label.length);
+}
+export function doneOnCallVerdict(quote: string, doneOnCall: (string | DoneItem)[]): { done: boolean; why: string } {
+  const q = quote.replace(/[’‘]/g, "'");
+  if (!doneOnCall.length || !DID_CLAIM.test(q)) return { done: false, why: "" };
+  const items = doneOnCall.map(toItem);
+  const kind = claimKind(q, true);
+  const sendClaim = kind === "sent" || kind === "location" || kind === "arrival" || /\b(?:sent|texted|shot|messaged)\b/i.test(q);
+  const pool = sendClaim ? items.filter((d) => d.kind === "send") : items;
+  const hit = pool.find((d) => claimNames(q, d)) ?? (pool.length === 1 && !distinctive(q).length ? pool[0] : undefined);
+  return hit ? { done: true, why: `done on the call: ${hit.label.slice(0, 140)}` } : { done: false, why: "" };
+}
+// Pure: a promise that something Cue did on this call already covers: about the same thing by its name or words, and a promise to
+// text something is covered only by something that texted them.
+export function promiseDoneOnCall(p: { what: string; quotes: string[] }, doneOnCall: (string | DoneItem)[]): string | null {
+  const text = `${p.what} ${p.quotes.join(" ")}`;
+  const sendPromise = /\b(?:text|send|link|share|shoot|forward)\w*\b/i.test(text);
+  const pool = doneOnCall.map(toItem).filter((d) => !sendPromise || d.kind === "send");
+  return pool.find((d) => claimNames(text, d) || sameSubject(p.what, d.label))?.label ?? null;
 }
 
-export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[]; doneOnCall?: string[] }): AuditPlan {
+export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[]; doneOnCall?: (string | DoneItem)[] }): AuditPlan {
   const reg = auditRegistry();
   const corrections: CallClaim[] = [];
   const refused: AuditPlan["refused"] = [];
@@ -448,7 +475,7 @@ export async function auditCall(
   userId: string,
   transcript: string,
   knownBefore: string | { facts: string; impressions: string },
-  opts: { dryRun?: boolean; claims?: CallClaim[]; tasks?: OpenCallTask[]; doneOnCall?: string[] } = {},
+  opts: { dryRun?: boolean; claims?: CallClaim[]; tasks?: OpenCallTask[]; doneOnCall?: DoneItem[] } = {},
 ): Promise<AuditPlan | null> {
   const facts = typeof knownBefore === "string" ? knownBefore : knownBefore.facts;
   const impressions = typeof knownBefore === "string" ? undefined : knownBefore.impressions;

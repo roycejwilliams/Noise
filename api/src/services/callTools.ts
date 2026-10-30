@@ -196,6 +196,20 @@ export function taskFactBackstop(t: { turnWords: string; spoken: string[]; ran: 
   return { taskId: task.id, note: `On the call they said: "${t.turnWords.trim().slice(0, 260)}"`, specifics: echoed };
 }
 
+// Pure: a tool call that texts them (a send): the registry's send kind, except a calendar status or disconnect, which texts nothing.
+export function textsThem(name: string, input: unknown): boolean {
+  const plan = callRunFor(name);
+  if (!plan || plan.run !== "now" || plan.kind !== "send") return false;
+  if (name === "calendarConnection") return (input as { action?: unknown } | null)?.action === "connect";
+  return true;
+}
+// Pure: a send's items from its result: shareLink's own list, else the one link it made (or which page or deck it was for).
+function sendItems(r: any, input: any, name: string, delivered: boolean): { name: string; url?: string; delivered: boolean }[] {
+  if (Array.isArray(r?.items)) return r.items;
+  const label = String(r?.made ?? input?.which ?? name).slice(0, 160);
+  return [{ name: label, ...(typeof r?.url === "string" ? { url: r.url } : {}), delivered }];
+}
+
 // What the model is told when a send isn't confirmed on the call (services/callLlmProxy.ts holds back any "sent" until a send
 // comes back done).
 const SEND_NOT_BACK = "Not back yet, so it isn't confirmed sent: don't say it went. Tell them you'll text it right after the call; if it hasn't reached them by then, it goes the moment they hang up.";
@@ -265,7 +279,7 @@ function callShareLink(i: CallToolsInput, mem: CallMem, did: string[], textThem:
       if (i.member.noTexts) return { ok: false, error: "They've turned texts off, so nothing can be texted to them. Don't promise a text: tell them what it is out loud instead, without reading a link." };
       // What this send is for, so a timeout knows what's owed (services/callTools.ts run).
       if (o?.toolCallId) (mem.inflight ??= new Map()).set(o.toolCallId, items);
-      if (i.dryRun && !i.sendText) return { ok: true, recordAs: { urls: items.map((x) => x.url) }, note: "Test run: nothing was sent." };
+      if (i.dryRun && !i.sendText) return { ok: true, recordAs: { urls: items.map((x) => x.url), names: items.map((x) => x.name) }, items: items.map((x) => ({ name: x.name, url: x.url, delivered: true })), note: "Test run: nothing was sent." };
       const went: OnFile[] = [];
       for (const it of items) {
         // Its link alone first, so it previews, then its name as on file.
@@ -278,11 +292,12 @@ function callShareLink(i: CallToolsInput, mem: CallMem, did: string[], textThem:
         did.push(line);
         mem.did.push(line);
       }
-      // By name too, beside the guard's record of the links (services/coFacts.ts): what they have, as every later reader names it.
-      if (went.length && !i.dryRun) await import("./coFacts.js").then((F) => F.recordSentItems(i.userId, went.map((x) => ({ name: x.name, url: x.url })), "call.shareLink")).catch(() => {});
       const notSent = items.filter((x) => !went.includes(x));
-      if (!went.length) return { ok: false, error: "The text didn't send." };
-      return { ok: true, recordAs: { urls: went.map((x) => x.url) }, ...(notSent.length || missing.length ? { note: `Sent: ${went.map((x) => x.name).join(", ")}.${notSent.length ? ` Didn't send: ${notSent.map((x) => x.name).join(", ")}.` : ""}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}` } : {}) };
+      // Each item and whether it went: only what went may be called sent (services/callClaims.ts).
+      const each = [...went.map((x) => ({ name: x.name, url: x.url, delivered: true })), ...notSent.map((x) => ({ name: x.name, url: x.url, delivered: false }))];
+      if (!went.length) return { ok: false, error: "The text didn't send.", items: each };
+      // The guard's record names each link with what it is (services/coFacts.ts toolAction), so every later reader names it.
+      return { ok: true, recordAs: { urls: went.map((x) => x.url), names: went.map((x) => x.name) }, items: each, ...(notSent.length || missing.length ? { note: `Sent: ${went.map((x) => x.name).join(", ")}.${notSent.length ? ` Didn't send: ${notSent.map((x) => x.name).join(", ")}.` : ""}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}` } : {}) };
     },
   };
 }
@@ -497,7 +512,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
             if (r?.ok !== false) {
               const urls = urlsOf(r, meant);
               settleSent(urls);
-              if (plan.kind !== "read" || name === "searchEvents") await recordDone(name, plan.kind, parsed.data, urls).catch(() => {});
+              if (plan.kind !== "read" || name === "searchEvents") await recordDone(name, plan.kind, r?.recordAs ?? parsed.data, urls).catch(() => {});
             } else if (plan.kind === "send") {
               const items = owedItems(r, meant);
               if (items.length) owe(items, "failed", name);
@@ -505,23 +520,25 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
           })
           .catch(() => {});
         result = plan.kind === "send"
-          ? { ok: false, stillRunning: true, owedAfterCall: meant.length > 0, note: SEND_NOT_BACK }
+          ? { ok: false, stillRunning: true, owedAfterCall: meant.length > 0, note: SEND_NOT_BACK, items: meant.map((x) => ({ name: x.name, url: x.url, delivered: false })) }
           : { ok: false, stillRunning: true, note: NOT_BACK };
       } else {
         result = quick;
         const r: any = quick;
         if (r?.ok !== false) {
-          const urls = plan.kind === "send" ? urlsOf(r, mem.inflight?.get(toolUseId) ?? []) : [];
-          if (plan.kind === "send") { settleSent(urls); result = { ...r, delivered: true }; }
+          const texts = textsThem(name, parsed.data);
+          const urls = texts ? urlsOf(r, mem.inflight?.get(toolUseId) ?? []) : [];
+          // Delivered only when it really texted them (a calendar status check texts nothing), item by item.
+          if (texts) { settleSent(urls); result = { ...r, delivered: true, items: sendItems(r, parsed.data, name, true) }; }
           // What a search on this call found can be texted to them by name, in this turn or a later one.
           if (name === "searchEvents") rememberFound(mem, r);
           // On the record without holding the turn (a plain read, like what Cue knows, isn't an action).
-          if (plan.kind !== "read" || name === "searchEvents") writes.push(recordDone(name, plan.kind, parsed.data, urls).catch(() => {}));
+          if (plan.kind !== "read" || name === "searchEvents") writes.push(recordDone(name, plan.kind, r?.recordAs ?? parsed.data, urls).catch(() => {}));
         } else if (plan.kind === "send") {
           const items = owedItems(r, mem.inflight?.get(toolUseId) ?? []);
           if (items.length) {
             owe(items, "failed", name);
-            result = { ok: false, owedAfterCall: true, note: SEND_NOT_DONE };
+            result = { ok: false, owedAfterCall: true, note: SEND_NOT_DONE, items: items.map((x) => ({ name: x.name, url: x.url, delivered: false })) };
           }
         }
       }
@@ -543,6 +560,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     did,
     run,
     pending: async () => { await Promise.allSettled(writes); },
+    texts: textsThem,
     // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the
     // same guarded updateTask (limits, receipt, decision log, Co's action record).
     afterTurn: async ({ spoken, ran }) => {

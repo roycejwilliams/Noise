@@ -14,7 +14,10 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { toolAction } from "./coFacts.js";
 
-export type DoneOnCall = { tool: string; kind: string; labels: string[]; urls: string[]; at: Date };
+export type DoneOnCall = { tool: string; kind: string; labels: string[]; urls: string[]; names: string[]; at: Date };
+// One thing done on the call, as the audit matches a claim to it: its kind (a send texted them), its labels, and the names and links
+// of what it was about.
+export type DoneItem = { kind: string; label: string; names: string[]; urls: string[] };
 export type OwedAfterCall = { tool: string; items: { name: string; url: string }[]; why: "failed" | "timeout"; at: Date };
 export type CallLedger = { done: DoneOnCall[]; owed: OwedAfterCall[]; covered: string[] };
 
@@ -25,7 +28,8 @@ export function doneLabels(tool: string, input: unknown): string[] {
 }
 
 export function recordDoneOnCall(userId: string, d: { tool: string; kind: string; input: unknown; urls?: string[] }): Promise<void> {
-  return recordDecision({ layer: 8, decision: "call.done_on_call", userId, outcome: "act", action: d.tool, proposal: { kind: d.kind, labels: doneLabels(d.tool, d.input).map((l) => l.slice(0, 200)), urls: (d.urls ?? []).slice(0, 6) } });
+  const names = Array.isArray((d.input as { names?: unknown } | null)?.names) ? ((d.input as { names: unknown[] }).names.map(String).slice(0, 6)) : [];
+  return recordDecision({ layer: 8, decision: "call.done_on_call", userId, outcome: "act", action: d.tool, proposal: { kind: d.kind, labels: doneLabels(d.tool, d.input).map((l) => l.slice(0, 200)), urls: (d.urls ?? []).slice(0, 6), names: names.map((n) => n.slice(0, 160)) } });
 }
 
 export function recordOwedAfterCall(userId: string, o: { tool: string; items: { name: string; url: string }[]; why: "failed" | "timeout" }): Promise<void> {
@@ -46,7 +50,7 @@ export function ledgerFromRows(rows: { decision: string; action: string | null; 
   for (const r of [...rows].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())) {
     const p = r.proposal ?? {};
     const at = new Date(r.created_at);
-    if (r.decision === "call.done_on_call") done.push({ tool: String(r.action ?? ""), kind: String(p.kind ?? ""), labels: Array.isArray(p.labels) ? p.labels.map(String) : [], urls: Array.isArray(p.urls) ? p.urls.map(String) : [], at });
+    if (r.decision === "call.done_on_call") done.push({ tool: String(r.action ?? ""), kind: String(p.kind ?? ""), labels: Array.isArray(p.labels) ? p.labels.map(String) : [], urls: Array.isArray(p.urls) ? p.urls.map(String) : [], names: Array.isArray(p.names) ? p.names.map(String) : [], at });
     else if (r.decision === "call.owed_after_call") owed.push({ tool: String(r.action ?? ""), items: Array.isArray(p.items) ? p.items.filter((i: any) => i && typeof i.url === "string").map((i: any) => ({ name: String(i.name ?? ""), url: String(i.url) })) : [], why: p.why === "timeout" ? "timeout" : "failed", at });
     else if (r.decision === "call.turn_acted" && Array.isArray(p.said)) covered.push(...p.said.map(String));
   }
@@ -58,6 +62,11 @@ export function ledgerFromRows(rows: { decision: string; action: string | null; 
 // Pure: the done list as plain lines, for the audit and the reflection.
 export function doneLines(l: Pick<CallLedger, "done">): string[] {
   return [...new Set(l.done.flatMap((d) => d.labels))].slice(0, 20);
+}
+
+// Pure: the done list as the audit matches claims to it (one entry per label).
+export function doneItems(l: Pick<CallLedger, "done">): DoneItem[] {
+  return l.done.flatMap((d) => (d.labels.length ? d.labels : [`used ${d.tool}`]).map((label) => ({ kind: d.kind, label, names: d.names, urls: d.urls }))).slice(0, 30);
 }
 
 // The ledger for one call: its rows between the call's start and a little after its end.

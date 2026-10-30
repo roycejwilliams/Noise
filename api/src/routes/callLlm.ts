@@ -139,6 +139,8 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
     let toolRuns = 0, toolOk = 0;
     // Each of Cue's tools this turn: its name, how long it took, and how it came back (for the latency record; no words).
     const toolTimes: { name: string; ms: number; outcome: "done" | "not_done" | "still_running" }[] = [];
+    // What came back done this turn, with what each was about: a spoken "I'll text you X" is kept by a tool only when that tool did X.
+    const doneThisTurn: { name: string; input: unknown; result: unknown }[] = [];
     // A spoken commitment opens a promise task when the turn ends, and only when no tool acted this turn (the deed is on record).
     const commitments: string[] = [];
     let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
@@ -161,6 +163,7 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
         if (t.timedOut) slow = true;
         if (!t.timedOut && (t.result as any)?.ok !== false) toolOk++;
         toolTimes.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" });
+        if (!t.timedOut && (t.result as any)?.ok !== false) doneThisTurn.push({ name: t.name, input: t.input, result: t.result });
         console.log(`co/el/llm: tool ${t.name} ${t.timedOut ? "still running at the budget" : (t.result as any)?.ok === false ? "not done" : "done"} in ${t.ms}ms`);
         // What the tool changed (a task, a loop, what Co knows about them) is read fresh for the next turn.
         if (userId) memberOnCall(callKey, userId, true).catch(() => {});
@@ -168,7 +171,9 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
       },
       onDropped: (s, why) => {
         dropped++;
-        if (userId) recordDecision({ layer: 8, decision: "call.offer_unsourced", userId, outcome: "skip", action: "dropped_sentence", proposal: { sentence: s.slice(0, 240) }, reason: why }).catch(() => {});
+        // A held claim of doing something isn't an unsourced offer: it has its own decision (services/callClaims.ts).
+        const claim = /^claim held: /.test(why);
+        if (userId) recordDecision({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { sentence: s.slice(0, 240) }, reason: why }).catch(() => {});
       },
       onToolRound: (r) => { if (r.overBudget) slow = true; },
       onFirstText: (t) => { timing = t; },
@@ -235,8 +240,11 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
         Promise.resolve(tools?.pending?.())
           .catch(() => {})
           .then(async () => {
-            if (!toolOk) for (const s of commitments) await trackCallCommitment({ userId, sentence: s, theirLine, coBefore }).catch(() => {});
-            else await import("../services/callLedger.js").then((L) => L.recordTurnActed(userId, commitments)).catch(() => {});
+            // Each one on its own: kept only by a tool done this turn for that same thing; the rest open as promises as before.
+            const { commitmentKeptBy } = await import("../services/callCommitments.js");
+            const covered = commitments.filter((s) => commitmentKeptBy(s, coBefore, doneThisTurn));
+            for (const s of commitments.filter((x) => !covered.includes(x))) await trackCallCommitment({ userId, sentence: s, theirLine, coBefore }).catch(() => {});
+            if (covered.length) await import("../services/callLedger.js").then((L) => L.recordTurnActed(userId, covered)).catch(() => {});
           })
           .catch(() => {});
       if (userId && (slow || brainError)) recordDecision({ layer: 8, decision: "call.turn_health", userId, outcome: "skip", action: [slow ? "slow" : null, brainError ? "error" : null].filter(Boolean).join(","), proposal: { slow, error: brainError } }).catch(() => {});

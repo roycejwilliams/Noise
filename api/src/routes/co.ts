@@ -926,7 +926,7 @@ async function processEndedCallInScope(o: {
         await import("../services/callTasks.js").then((m) => m.tasksFromCall(user_id, cleanTranscript)).catch(() => {});
         const L = await import("../services/callLedger.js");
         const start = o.startedAt ?? new Date(Date.now() - 2 * 3_600_000);
-        const doneOnCall = await L.readCallLedger(user_id, new Date(start.getTime() - 60_000), new Date((o.endedAt ?? new Date()).getTime() + 2 * 60_000)).then(L.doneLines).catch(() => [] as string[]);
+        const doneOnCall = await L.readCallLedger(user_id, new Date(start.getTime() - 60_000), new Date((o.endedAt ?? new Date()).getTime() + 2 * 60_000)).then(L.doneItems).catch(() => [] as import("../services/callLedger.js").DoneItem[]);
         await auditCall(user_id, cleanTranscript, knownBeforeCall, { doneOnCall });
       })().catch(() => {});
       // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
