@@ -16,7 +16,9 @@ import { toolAction } from "./coFacts.js";
 
 // found: what a search on the call found (searchEvents' events with their links), so a later check never "corrects" a real find.
 export type DoneOnCall = { tool: string; kind: string; labels: string[]; urls: string[]; names: string[]; at: Date; found?: FoundOnCall[] };
-export type FoundOnCall = { name: string; url: string };
+// when and venue: the find's own listing lines (its start and end, where it is), so a day, time or place Cue said about it on the call
+// has a source (the offer source check, the audit) and is never "taken back".
+export type FoundOnCall = { name: string; url: string; when?: string | null; venue?: string | null };
 // One thing done on the call, as the audit matches a claim to it: its kind (a send texted them), its labels, and the names and links
 // of what it was about.
 export type DoneItem = { kind: string; label: string; names: string[]; urls: string[] };
@@ -35,7 +37,7 @@ export function doneLabels(tool: string, input: unknown): string[] {
 
 export function recordDoneOnCall(userId: string, d: { tool: string; kind: string; input: unknown; urls?: string[]; found?: FoundOnCall[] }): Promise<void> {
   const names = Array.isArray((d.input as { names?: unknown } | null)?.names) ? ((d.input as { names: unknown[] }).names.map(String).slice(0, 6)) : [];
-  return recordDecision({ layer: 8, decision: "call.done_on_call", userId, outcome: "act", action: d.tool, proposal: { kind: d.kind, labels: doneLabels(d.tool, d.input).map((l) => l.slice(0, 200)), urls: (d.urls ?? []).slice(0, 6), names: names.map((n) => n.slice(0, 160)), ...(d.found?.length ? { found: d.found.slice(0, 20).map((f) => ({ name: f.name.slice(0, 160), url: f.url })) } : {}) } });
+  return recordDecision({ layer: 8, decision: "call.done_on_call", userId, outcome: "act", action: d.tool, proposal: { kind: d.kind, labels: doneLabels(d.tool, d.input).map((l) => l.slice(0, 200)), urls: (d.urls ?? []).slice(0, 6), names: names.map((n) => n.slice(0, 160)), ...(d.found?.length ? { found: d.found.slice(0, 20).map((f) => ({ name: f.name.slice(0, 160), url: f.url, ...(f.when ? { when: f.when.slice(0, 200) } : {}), ...(f.venue ? { venue: f.venue.slice(0, 200) } : {}) })) } : {}) } });
 }
 
 export function recordOwedAfterCall(userId: string, o: { tool: string; items: { name: string; url: string }[]; why: "failed" | "timeout"; taskId?: number | null }): Promise<void> {
@@ -55,7 +57,7 @@ export function ledgerFromRows(rows: { decision: string; action: string | null; 
   for (const r of [...rows].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())) {
     const p = r.proposal ?? {};
     const at = new Date(r.created_at);
-    if (r.decision === "call.done_on_call") done.push({ tool: String(r.action ?? ""), kind: String(p.kind ?? ""), labels: Array.isArray(p.labels) ? p.labels.map(String) : [], urls: Array.isArray(p.urls) ? p.urls.map(String) : [], names: Array.isArray(p.names) ? p.names.map(String) : [], at, ...(Array.isArray(p.found) ? { found: p.found.filter((f: any) => f && typeof f.url === "string" && f.name).map((f: any) => ({ name: String(f.name), url: String(f.url) })) } : {}) });
+    if (r.decision === "call.done_on_call") done.push({ tool: String(r.action ?? ""), kind: String(p.kind ?? ""), labels: Array.isArray(p.labels) ? p.labels.map(String) : [], urls: Array.isArray(p.urls) ? p.urls.map(String) : [], names: Array.isArray(p.names) ? p.names.map(String) : [], at, ...(Array.isArray(p.found) ? { found: p.found.filter((f: any) => f && typeof f.url === "string" && f.name).map((f: any) => ({ name: String(f.name), url: String(f.url), when: typeof f.when === "string" ? f.when : null, venue: typeof f.venue === "string" ? f.venue : null })) } : {}) });
     else if (r.decision === "call.owed_after_call") owed.push({ tool: String(r.action ?? ""), items: Array.isArray(p.items) ? p.items.filter((i: any) => i && typeof i.url === "string").map((i: any) => ({ name: String(i.name ?? ""), url: String(i.url) })) : [], why: p.why === "timeout" ? "timeout" : "failed", at, taskId: typeof p.taskId === "number" ? p.taskId : null });
     else if (r.decision === "call.turn_acted" && Array.isArray(p.said)) covered.push(...p.said.map(String));
   }
@@ -79,6 +81,20 @@ export function foundOnCall(l: Pick<CallLedger, "done">): FoundOnCall[] {
   const out: FoundOnCall[] = [];
   for (const f of l.done.flatMap((d) => d.found ?? [])) if (!out.some((x) => x.url === f.url)) out.push(f);
   return out.slice(0, 40);
+}
+
+// Pure: the finds as lines, for the audit prompt and the offer source check: name, link, when and where. A listed clock time ("8:00 PM")
+// also reads as said aloud ("8pm", "8 pm"), the way the source check matches a spoken time.
+export function foundLines(found: FoundOnCall[]): string[] {
+  const spoken = (s: string) => [...s.matchAll(/\b(\d{1,2}):(\d{2})\s*([AP])\.?M\.?/gi)].flatMap((m) => {
+    const ap = `${m[3].toLowerCase()}m`;
+    return m[2] === "00" ? [`${m[1]}${ap}`, `${m[1]} ${ap}`] : [`${m[1]}:${m[2]}${ap}`];
+  });
+  return found.slice(0, 20).map((f) => {
+    const details = [f.when, f.venue].filter((x): x is string => !!x && !!x.trim());
+    const said = spoken(details.join(" "));
+    return `"${f.name}" (${f.url})${details.length ? `: ${details.join(" ")}` : ""}${said.length ? ` [${said.join(", ")}]` : ""}`;
+  });
 }
 
 // The ledger for one call: its rows between the call's start and a little after its end.

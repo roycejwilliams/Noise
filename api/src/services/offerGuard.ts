@@ -173,9 +173,11 @@ export const SAFE_LINE = "I'll look into that after the call and text it over.";
 
 // Pure: the sentences of a finished call that name something nothing backs. The call's own dynamic variables (context, finds, clock)
 // and the member's lines are the source; Co's lines never are. ElevenLabs' own grader can't see the finds list, so this is the grade.
-export function unsourcedInCall(turns: { role?: string; message?: string | null }[], given: { firstName?: string; contextSummary?: string; findsNow?: string; rightNow?: string }): { sentence: string; names: string[] }[] {
+// foundOnCall: what Cue's searches found DURING the call (services/callLedger.ts foundLines: name, link, when and where); without it a
+// find's day, time or venue said in Cue's own words reads as made up (review of #319).
+export function unsourcedInCall(turns: { role?: string; message?: string | null }[], given: { firstName?: string; contextSummary?: string; findsNow?: string; rightNow?: string; foundOnCall?: string }): { sentence: string; names: string[] }[] {
   const theirs = turns.filter((t) => t.role === "user" && t.message).map((t) => String(t.message));
-  const source = sourceCorpus({ system: [given.firstName, given.contextSummary, given.findsNow, given.rightNow].filter(Boolean).join("\n"), theirLines: theirs });
+  const source = sourceCorpus({ system: [given.firstName, given.contextSummary, given.findsNow, given.rightNow, given.foundOnCall].filter(Boolean).join("\n"), theirLines: theirs });
   const out: { sentence: string; names: string[] }[] = [];
   for (const t of turns.filter((x) => x.role === "agent" && x.message)) {
     for (const s of String(t.message).replace(/\[[a-z][a-z ]*\]\s*/gi, "").split(/(?<=[.!?])\s+/)) {

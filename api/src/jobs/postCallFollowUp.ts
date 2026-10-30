@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 import { KINDS } from "../services/factLabels.js";
 import { memberKnowledge, memberRules, type MemberKnowledge } from "../services/memberKnowledge.js";
 import { localStamp } from "../services/memberTime.js";
-import { callCorrectionsFor, correctionFact, correctionsToCarry, saidDay, uncorrectedClaims, type CallCorrection } from "../harness/callGrounding.js";
+import { callCorrectionsFor, correctionFact, planCarry, retireCallCorrections, saidDay, uncorrectedClaims, type CallCorrection } from "../harness/callGrounding.js";
 import type { DoneItem, FoundOnCall } from "../services/callLedger.js";
 import { HELD_RECAP_APPROVED, MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 
@@ -92,19 +92,22 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   // A failed read is no done list: nothing to hold the reflection to, as before, and no correction rides (it can't be checked).
   const done = await doneAroundCall(userId, callAt).catch(() => null);
   const doneOnCall = done?.lines ?? [];
-  const owed = await owedCorrections(userId, transcript, k, done).catch(() => [] as CallCorrection[]);
+  const owed = await owedCorrections(userId, transcript, k, done, callAt).catch(() => [] as CallCorrection[]);
   return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, !!recap?.offer, k, !!recap?.gentle, doneOnCall, owed);
 }
 
-// The call's ledger rows from the few hours before this follow-up was made (the call ended just before it), plus the owed links
-// that went out right after it. lines: what the reflection is told never to repeat; items and found: what a correction is checked
+// The call's ledger rows, plus the owed links that went out right after it. The window is this call's own (review of #319, round 2):
+// from after the previous call's follow-up row (that call's ledger rows came before it), at most three hours back, to just after this
+// row was made (the call ended just before it), so an earlier call that day never excuses this one. lines: what the reflection is told never to repeat; items and found: what a correction is checked
 // against (a send with its names and links, an owed link that went, an event a search found on the call).
 async function doneAroundCall(userId: string, callAt: Date): Promise<{ lines: string[]; items: DoneItem[]; found: FoundOnCall[] }> {
   const L = await import("../services/callLedger.js");
-  const ledger = await L.readCallLedger(userId, new Date(callAt.getTime() - 3 * 3_600_000), new Date(callAt.getTime() + 10 * 60_000));
+  const { rows: prev } = await pool.query(`SELECT MAX(created_at) AS at FROM post_call_follow_ups WHERE user_id = $1 AND created_at < $2`, [userId, callAt]);
+  const since = callWindowStart(callAt, prev[0]?.at ? new Date(prev[0].at) : null);
+  const ledger = await L.readCallLedger(userId, since, new Date(callAt.getTime() + 10 * 60_000));
   const { rows } = await pool.query(
     `SELECT proposal FROM harness_decisions WHERE user_id = $1 AND layer = 8 AND decision = 'call.owed_delivery' AND action = 'sent' AND created_at >= $2 AND created_at <= $3 LIMIT 20`,
-    [userId, new Date(callAt.getTime() - 3 * 3_600_000), new Date(callAt.getTime() + 30 * 60_000)],
+    [userId, since, new Date(callAt.getTime() + 30 * 60_000)],
   );
   const lines = [...L.doneLines(ledger), ...rows.map((r: any) => `sent the link ${String(r.proposal?.url ?? "")} right after the call`)].slice(0, 20);
   const sentAfter = new Set(rows.map((r: any) => String(r.proposal?.url ?? "")).filter(Boolean));
@@ -113,19 +116,38 @@ async function doneAroundCall(userId: string, callAt: Date): Promise<{ lines: st
   return { lines, items: [...L.doneItems(ledger), ...owedSent], found: L.foundOnCall(ledger) };
 }
 
+// Pure: where this call's done list starts: three hours back, or just after the previous call's follow-up row if that's later.
+export function callWindowStart(callAt: Date, previousFollowUpAt: Date | null): Date {
+  const floor = callAt.getTime() - 3 * 3_600_000;
+  return new Date(previousFollowUpAt && previousFollowUpAt.getTime() < callAt.getTime() ? Math.max(floor, previousFollowUpAt.getTime() + 1) : floor);
+}
+
+// Pure: Cue already answered them by text since the call ended (they texted, Cue replied): that reply had the correction as "if it
+// comes up", so the follow-up never carries it too (review of #319, round 2: no double correction). Proactive texts alone (the
+// confirmation sent at hang-up) are not a reply.
+export function repliedSinceCall(exchanges: { from: "member" | "co"; call: boolean; verifiedAt: string }[], callEndedAt: Date): boolean {
+  const after = exchanges.filter((x) => !x.call && Date.parse(x.verifiedAt) > callEndedAt.getTime()).sort((a, b) => Date.parse(a.verifiedAt) - Date.parse(b.verifiedAt));
+  const firstTheirs = after.findIndex((x) => x.from === "member");
+  return firstTheirs >= 0 && after.slice(firstTheirs + 1).some((x) => x.from === "co");
+}
+
 // What this call's audit found Cue got wrong on it (harness/callGrounding.ts), that this text may carry (Royce, 2026-10-29: "Once Cue
 // gets the transcript it needs to analyze what it said previously and correct itself"). From the audit's rows only: this call's, not
 // yet delivered, a promise only if it hasn't been kept since (what they have and what's done, from the layer; the layer unread, no
 // promise rides), never one about something Cue did or found on the call (the done list: what its tools sent, with names and links,
 // and the events its searches found; the list unread, none ride), and only lines the member fence leaves whole. A failed read carries
-// none: they wait for the next text, as before.
-async function owedCorrections(userId: string, transcript: string, k: MemberKnowledge | null, done: { items: DoneItem[]; found: FoundOnCall[] } | null): Promise<CallCorrection[]> {
+// none: they wait for the next text, as before. A row found to be about something Cue really did or found is retired, so no text
+// ever "corrects" it. Cue already replied to them since the call (or that can't be read): none ride; the reply had them.
+async function owedCorrections(userId: string, transcript: string, k: MemberKnowledge | null, done: { items: DoneItem[]; found: FoundOnCall[] } | null, callAt: Date): Promise<CallCorrection[]> {
   const rows = await callCorrectionsFor(userId, transcript);
   if (!rows.length) return [];
   const { memberFence } = await import("../services/sourceFence.js");
   const fence = await memberFence(userId).catch(() => null);
   const kept = k ? [...k.delivered.map((d) => d.what), ...k.carrying.filter((c) => c.state === "done" || c.theyHaveIt).map((c) => c.what)] : null;
-  return correctionsToCarry(rows, callKey(transcript), kept, fence && !fence.failed ? fence.strip : null, done);
+  const plan = planCarry(rows, callKey(transcript), kept, fence && !fence.failed ? fence.strip : null, done);
+  if (plan.retire.length) await retireCallCorrections(userId, plan.retire).catch((err: any) => console.error("postCallFollowUp: retiring call corrections failed (non-fatal):", err?.message ?? err));
+  if (!k || repliedSinceCall(k.exchanges, new Date(callAt.getTime() - 2 * 60_000))) return [];
+  return plan.carry;
 }
 
 // Model-facing (never a line the member reads as is): how the follow-up carries a correction. A principle, no examples.

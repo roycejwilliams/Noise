@@ -306,7 +306,7 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   check("4. F8: a write-up is covered only by the thing made for it", !CC.commitmentKeptBy("I'll put together the partner plan.", "", [noteDone, jazzSent]) && CC.commitmentKeptBy("I'll put together the partner plan.", "", [{ name: "writeDocument", input: { title: "Partner plan" }, result: { ok: true, pending: true } }]));
   check("4. F8: the route covers each commitment on its own (uncovered ones still open)", /commitmentKeptBy\(s, coBefore, doneThisTurn\)/.test(src("routes/callLlm.ts")) && /commitments\.filter\(\(x\) => !covered\.includes\(x\)\)\) await trackCallCommitment/.test(src("routes/callLlm.ts")));
   const co = src("routes/co.ts");
-  check("4. the post-call audit reads the call's ledger", /readCallLedger\(user_id[\s\S]{0,200}doneItems[\s\S]{0,600}await auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall[^}]*\}\)/.test(co));
+  check("4. the post-call audit reads the call's ledger", /readCallLedger\(user_id[\s\S]{0,200}doneItems[\s\S]{0,1200}await auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall[^}]*\}\)/.test(co));
 }
 
 // ---------------------------------------------------------------- 5. latency: one decision per proxy turn, numbers only

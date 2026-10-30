@@ -244,9 +244,17 @@ function owedItems(r: any, meant: OnFile[]): OnFile[] {
 }
 // What a search on this call returned: its events and earlier openings, by name, for shareLink.
 // Pure: what a search's result found, each with its link (searchEvents' events and the openings found earlier).
-export function foundIn(r: any): OnFile[] {
+export function foundIn(r: any): (OnFile & { when: string | null; venue: string | null })[] {
   const rows = [...(Array.isArray(r?.events) ? r.events : []), ...(Array.isArray(r?.openingsFoundEarlier) ? r.openingsFoundEarlier : [])];
-  return rows.filter((e: any) => typeof e?.link === "string" && /^https?:\/\//.test(e.link) && e?.name).map((e: any) => ({ name: String(e.name), url: String(e.link), caption: String(e.name) }));
+  return rows.filter((e: any) => typeof e?.link === "string" && /^https?:\/\//.test(e.link) && e?.name).map((e: any) => ({ name: String(e.name), url: String(e.link), caption: String(e.name), ...whenAndVenue(e.details) }));
+}
+// Pure: a find's listing lines (services/eventDetails.ts renderEventDetails: '"X" starts Friday, October 31 at 8:00 PM and ends 11:00
+// PM (America/Los_Angeles).', '"X" is at The Chapel, 777 Valencia St.'), as when and where.
+export function whenAndVenue(details: unknown): { when: string | null; venue: string | null } {
+  const lines = (Array.isArray(details) ? details : typeof details === "string" ? [details] : []).map(String).filter(Boolean);
+  const when = lines.find((l) => /\bstarts\b|\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\b\d{1,2}(?::\d{2})?\s*[ap]\.?m\b/i.test(l)) ?? null;
+  const venue = lines.find((l) => /\bis at\b|\bis online\b/i.test(l)) ?? null;
+  return { when: when ? when.slice(0, 200) : null, venue: venue ? venue.slice(0, 200) : null };
 }
 function rememberFound(mem: CallMem, r: any): void {
   const found = foundIn(r);
@@ -349,7 +357,7 @@ export type CallToolsInput = {
   // Tests: where the owed-after-call record and the open promise task go (default: the decision log and co_tasks).
   owe?: (items: OnFile[], why: "failed" | "timeout", tool: string) => Promise<void>;
   // found: what a search found on the call (searchEvents), kept with its done row so a later correction never takes back a real find.
-  done?: (tool: string, kind: string, input: unknown, urls: string[], found?: { name: string; url: string }[]) => Promise<void>;
+  done?: (tool: string, kind: string, input: unknown, urls: string[], found?: { name: string; url: string; when?: string | null; venue?: string | null }[]) => Promise<void>;
   // Tests: the text to them during the call, in place of the real send.
   sendText?: (text: string) => Promise<boolean>;
 };
@@ -432,8 +440,8 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   });
   // The durable record (services/callLedger.ts): what came back done on the call, and what's owed the moment it ends. Tests pass
   // their own; a dry run writes nothing.
-  const recordDone = i.done ?? (async (tool: string, kind: string, input: unknown, urls: string[], found?: { name: string; url: string }[]) => { if (!i.dryRun) await (await import("./callLedger.js")).recordDoneOnCall(i.userId, { tool, kind, input, urls, found }); });
-  const foundFor = (name: string, r: any) => (name === "searchEvents" ? foundIn(r).map((f) => ({ name: f.name, url: f.url })) : undefined);
+  const recordDone = i.done ?? (async (tool: string, kind: string, input: unknown, urls: string[], found?: { name: string; url: string; when?: string | null; venue?: string | null }[]) => { if (!i.dryRun) await (await import("./callLedger.js")).recordDoneOnCall(i.userId, { tool, kind, input, urls, found }); });
+  const foundFor = (name: string, r: any) => (name === "searchEvents" ? foundIn(r).map((f) => ({ name: f.name, url: f.url, when: f.when, venue: f.venue })) : undefined);
   const recordOwed = i.owe ?? (async (items: OnFile[], why: "failed" | "timeout", tool: string) => { if (!i.dryRun) await oweAfterCall(i, items, why, tool); });
   // A send that didn't reach them on the call: owed right after it, once per link, and said so to every later turn of the call.
   const writes: Promise<unknown>[] = [];
