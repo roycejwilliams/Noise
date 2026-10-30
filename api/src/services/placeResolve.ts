@@ -36,7 +36,7 @@ export const PLACE_RESOLVE = {
   minPopulation: 5000,
   // The biggest hit is "the" place only when it's at least this many times the next one (Portland, OR over Portland, ME: ~10x).
   dominance: 2,
-  // A Google hit and an open-geocoder hit this close together with the same name are one place.
+  // A Google hit and a local table row this close together with the same name are one place.
   mergeMiles: 30,
 } as const;
 
@@ -49,7 +49,10 @@ export type PlaceCandidate = {
   admin1: string | null;
   // The region's short code when the geocoder gives one (Google's administrative_area_level_1 short_name: "BC", "ON", "CA").
   admin1Code?: string | null;
-  // The hit is itself a state, province or region (Google's administrative_area_level_1, an ADM1 row), not a place in one.
+  // The region's ASCII spelling when it differs (the local table: "Lodz Voivodeship" for "Łódź Voivodeship"). Matched like admin1,
+  // never shown.
+  admin1Ascii?: string | null;
+  // The hit is itself a state, province or region (Google's administrative_area_level_1), not a place in one.
   level?: "admin1" | null;
   country: string | null;
   population: number | null;
@@ -68,8 +71,11 @@ export const REGIONS: PlaceCandidate[] = [
 
 // Same spellings as wantPlace.ts samePlace ("SF" is San Francisco), plus a few more.
 const NAME_ALIASES: Record<string, string> = { sf: "san francisco", "san fran": "san francisco", nyc: "new york", "new york city": "new york", ny: "new york", la: "los angeles", dc: "washington", "washington dc": "washington", philly: "philadelphia", atl: "atlanta", chi: "chicago", sac: "sacramento", kc: "kansas city" };
+// Pure: lowercase with accents folded ("Montréal" and "Montreal", "São Paulo" and "Sao Paulo" are one spelling). Every name and region
+// comparison folds both sides; labels keep the real spelling.
+export const fold = (s: string | null | undefined): string => String(s ?? "").normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
 export const normName = (s: string | null | undefined): string => {
-  const c = String(s ?? "").toLowerCase().replace(/[’'.]/g, "").replace(/\s+/g, " ").trim();
+  const c = fold(s).replace(/[’'.]/g, "").replace(/\s+/g, " ").trim();
   return NAME_ALIASES[c] ?? c;
 };
 
@@ -123,10 +129,10 @@ export function sameQualifiers(place: string, home: string | null): boolean {
 const regionNames = (c: PlaceCandidate): string[] => {
   const name = String(c.admin1 ?? "").trim();
   const code = String(c.admin1Code ?? "").trim().toUpperCase();
-  return [name, code, STATE_NAMES[name.toUpperCase()] ?? "", STATE_NAMES[code] ?? "", CA_PROVINCES[name.toUpperCase()] ?? "", CA_PROVINCES[code] ?? ""].filter(Boolean).map((x) => x.toLowerCase());
+  return [name, code, String(c.admin1Ascii ?? "").trim(), STATE_NAMES[name.toUpperCase()] ?? "", STATE_NAMES[code] ?? "", CA_PROVINCES[name.toUpperCase()] ?? "", CA_PROVINCES[code] ?? ""].filter(Boolean).map(fold);
 };
 export const matchesQualifier = (c: PlaceCandidate, q: Qualified): boolean =>
-  (!q.region || regionNames(c).includes(q.region)) && (!q.country || String(c.country ?? "").toUpperCase() === q.country);
+  (!q.region || regionNames(c).includes(fold(q.region))) && (!q.country || String(c.country ?? "").toUpperCase() === q.country);
 
 const namesOf = (c: PlaceCandidate) => [c.name, ...(c.keys ?? [])].map(normName);
 export const sameName = (c: PlaceCandidate, name: string) => namesOf(c).includes(normName(name));
@@ -237,7 +243,8 @@ export type ResolveDeps = {
   home: (city: string) => Promise<GeoPoint | null>;
   homeCountry: (city: string, p: GeoPoint) => Promise<string | null>;
   // The place as they said it ("Portland, ME"): Google reads it whole, the local table by its name. partial: one of them failed.
-  lookup: (place: string) => Promise<{ google: PlaceCandidate[]; local: PlaceCandidate[]; partial?: boolean }>;
+  // tableDown: the local table couldn't be read this run (partial too).
+  lookup: (place: string) => Promise<{ google: PlaceCandidate[]; local: PlaceCandidate[]; partial?: boolean; tableDown?: boolean }>;
   row: (userId: string, key: string) => Promise<WantRow | null>;
   store: (userId: string, key: string, r: StoredResolution) => Promise<void>;
   log: (d: { decision: string; userId: string; outcome: "act" | "skip"; action: string; proposal: Record<string, unknown> }) => Promise<void>;
@@ -276,9 +283,12 @@ export async function resolveWantPlace(i: { userId: string; key: string | null; 
       pick.status === "resolved"
         ? { forPlace: i.place, forHome: i.homeCity, status: "resolved", label: pick.label, lat: pick.place.lat, lng: pick.place.lng, options: [], homeCountry }
         : { forPlace: i.place, forHome: i.homeCity, status: pick.status, label: null, lat: null, lng: null, options: pick.options, homeCountry };
-    // An answer from both geocoders is kept; one that came back while either was down is used this once and asked again next time
-    // (an outage must not leave a want marked ambiguous for good). A resolved one is kept either way.
-    if (stored.status === "resolved" || (hits && !hits.partial)) await deps.store(i.userId, i.key, stored).catch((err: any) => console.error("placeResolve: storing the resolution failed (non-fatal):", err?.message ?? err));
+    // The local table down (missing, short or unreadable): on record, so the team sees it (placeTable also logs it to the console).
+    if (hits?.tableDown) await deps.log({ decision: "place.table_unavailable", userId: i.userId, outcome: "skip", action: "not_stored", proposal: { ...base, status: stored.status } }).catch(() => {});
+    // An answer with Google and the table both in hand is kept. One made while either was down or timed out is used this once and
+    // asked again next time, resolved or not: with half the candidates, Portland for a Bangor member can come back as Oregon, and an
+    // outage must never leave a want's place wrong (or ambiguous) for good (review of #321).
+    if (hits && !hits.partial) await deps.store(i.userId, i.key, stored).catch((err: any) => console.error("placeResolve: storing the resolution failed (non-fatal):", err?.message ?? err));
   }
   if (stored.status !== "resolved" || !stored.label || stored.lat == null || stored.lng == null) {
     const verdict = stored.status === "ambiguous" ? "ambiguous" : "rejected";
@@ -304,7 +314,8 @@ const GOOGLE_PLACE_TYPES = new Set(["locality", "colloquial_area", "administrati
 export async function googleLookup(name: string): Promise<PlaceCandidate[]> {
   if (!googleKey()) return [];
   const { Client } = await import("@googlemaps/google-maps-services-js");
-  const r = await new Client({}).geocode({ params: { address: name, region: "us", key: googleKey() } });
+  // A timeout is an outage like any other (lookupPlace: partial, so nothing resolved this run is kept).
+  const r = await new Client({}).geocode({ params: { address: name, region: "us", key: googleKey() }, timeout: PLACE_TABLE.googleTimeoutMs });
   return (r.data.results ?? [])
     .filter((x: any) => !x.partial_match && (x.types ?? []).some((t: string) => GOOGLE_PLACE_TYPES.has(t)))
     .map((x: any) => {
@@ -318,48 +329,84 @@ export async function googleLookup(name: string): Promise<PlaceCandidate[]> {
 // 2026-10-29). Data: GeoNames (https://www.geonames.org), licensed CC BY 4.0, commercial use allowed with attribution; see
 // api/src/data/geonames/NOTICE. Built by scripts/buildPlaceTable.ts from GeoNames' cities dump: name, ASCII name, country, admin1,
 // point, population, feature code. Loaded once, on first use, and indexed by normalized name; no outside call ever.
-type TableRow = { name: string; ascii: string | null; country: string; admin1: string | null; lat: number; lng: number; population: number | null; feature: string };
+type TableRow = { name: string; ascii: string | null; country: string; admin1: string | null; admin1Ascii: string | null; lat: number; lng: number; population: number | null; feature: string };
+export const PLACE_TABLE = {
+  // cities15000 holds ~34,000 places: fewer than this is a truncated or wrong file, never used (an empty table would quietly send
+  // Portland for a Bangor member to Oregon on Google's one hit).
+  minRows: 30_000,
+  // After a failed load, try the file again this long after (never kept failed for the life of the process).
+  retryMs: 60_000,
+  googleTimeoutMs: 3000,
+};
 let table: Map<string, TableRow[]> | null = null;
+let tableFailedAt = 0;
+let tableDirsOverride: string[] | null = null;
 const tableDirs = (): string[] => {
+  if (tableDirsOverride) return tableDirsOverride;
   const here = fileURLToPath(new URL(".", import.meta.url));
   // From src (tsx), api's dist, co-test's dist (co-test's image copies api/src), or the process's own directory.
   return [resolve(here, "../data/geonames"), resolve(here, "../../src/data/geonames"), resolve(here, "../../../../../api/src/data/geonames"), resolve(process.cwd(), "src/data/geonames"), resolve(process.cwd(), "api/src/data/geonames"), resolve(process.cwd(), "../api/src/data/geonames")];
 };
+// Tests only: read the table from these directories (null: the real ones), and forget any loaded table or failure.
+export function resetPlaceTable(dirs: string[] | null = null): void {
+  tableDirsOverride = dirs;
+  table = null;
+  tableFailedAt = 0;
+}
 const lines = (text: string) => text.split("\n").filter((l) => l && !l.startsWith("#"));
-export function placeTable(): Map<string, TableRow[]> {
-  if (table) return table;
+function loadTable(): Map<string, TableRow[]> {
   const dir = tableDirs().find((d) => existsSync(resolve(d, "cities.tsv.gz")));
   if (!dir) throw new Error("place table missing (api/src/data/geonames/cities.tsv.gz)");
-  const admin1 = new Map(lines(readFileSync(resolve(dir, "admin1.tsv"), "utf8")).map((l) => l.split("\t") as [string, string]));
+  // code, name (as written: "Auvergne-Rhône-Alpes"), ASCII name when it differs.
+  const admin1 = new Map(lines(readFileSync(resolve(dir, "admin1.tsv"), "utf8")).map((l) => { const [code, name, ascii] = l.split("\t"); return [code, { name, ascii: ascii || null }] as const; }));
   const index = new Map<string, TableRow[]>();
+  let rows = 0;
   for (const l of lines(gunzipSync(readFileSync(resolve(dir, "cities.tsv.gz"))).toString("utf8"))) {
     const [name, ascii, country, a1, lat, lng, pop, feature] = l.split("\t");
+    if (!name || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) continue;
+    const region = admin1.get(`${country}.${a1}`);
     // GeoNames' 0 is "not known": unsized, as Open-Meteo gave it.
-    const row: TableRow = { name, ascii: ascii || null, country, admin1: admin1.get(`${country}.${a1}`) ?? null, lat: Number(lat), lng: Number(lng), population: Number(pop) > 0 ? Number(pop) : null, feature };
+    const row: TableRow = { name, ascii: ascii || null, country, admin1: region?.name ?? null, admin1Ascii: region?.ascii ?? null, lat: Number(lat), lng: Number(lng), population: Number(pop) > 0 ? Number(pop) : null, feature };
+    rows++;
     for (const k of new Set([normName(name), ...(ascii ? [normName(ascii)] : [])])) {
       const at = index.get(k);
       if (at) at.push(row);
       else index.set(k, [row]);
     }
   }
-  for (const rows of index.values()) rows.sort((a, b) => (b.population ?? 0) - (a.population ?? 0));
-  return (table = index);
+  if (rows < PLACE_TABLE.minRows) throw new Error(`place table too short (${rows} rows, at least ${PLACE_TABLE.minRows} expected) in ${dir}`);
+  for (const list of index.values()) list.sort((a, b) => (b.population ?? 0) - (a.population ?? 0));
+  return index;
+}
+// The table, loaded once on first use. A failed load (missing, unreadable, too short) throws, is logged, and is tried again after
+// retryMs; the caller treats it as an outage (lookupPlace: tableDown).
+export function placeTable(now = Date.now()): Map<string, TableRow[]> {
+  if (table) return table;
+  if (tableFailedAt && now - tableFailedAt < PLACE_TABLE.retryMs) throw new Error("place table unavailable (failed to load; tried again shortly)");
+  try {
+    table = loadTable();
+    tableFailedAt = 0;
+    return table;
+  } catch (err: any) {
+    tableFailedAt = now;
+    console.error("placeResolve: the local place table failed to load (places resolved meanwhile are not stored):", err?.message ?? err);
+    throw err;
+  }
 }
 
-// The table's places by that name (a qualified place by its name only: "Portland, ME" is looked up as "Portland"), biggest first.
+// The table's places by that name (a qualified place by its name only: "Portland, ME" is looked up as "Portland"), biggest first. The
+// table holds populated places only (GeoNames feature class P), never "Bay Area Park" or an airport.
 export function localLookup(name: string): PlaceCandidate[] {
-  return (placeTable().get(normName(name)) ?? [])
-    // Populated places and administrative areas only: never "Bay Area Park" or an airport.
-    .filter((r) => /^(PPL|ADM)/.test(r.feature))
-    .map((r) => ({ name: r.name, ...(r.ascii ? { keys: [r.ascii] } : {}), lat: r.lat, lng: r.lng, admin1: r.admin1, level: r.feature === "ADM1" ? ("admin1" as const) : null, country: r.country, population: r.population, source: "geonames" as const }));
+  return (placeTable().get(normName(name)) ?? []).map((r) => ({ name: r.name, ...(r.ascii ? { keys: [r.ascii] } : {}), lat: r.lat, lng: r.lng, admin1: r.admin1, ...(r.admin1Ascii ? { admin1Ascii: r.admin1Ascii } : {}), country: r.country, population: r.population, source: "geonames" as const }));
 }
 
 // Google reads the place whole; the local table adds every same-named place with its size, which near-home and most-prominent need
-// (Google gives one unsized hit). partial: Google failed, or the table couldn't load (it never calls out). google: injectable for tests.
-export async function lookupPlace(place: string, google: (place: string) => Promise<PlaceCandidate[]> = googleLookup): Promise<{ google: PlaceCandidate[]; local: PlaceCandidate[]; partial: boolean }> {
+// (Google gives one unsized hit). partial: Google failed or timed out, or the table couldn't load (tableDown; it never calls out).
+// google: injectable for tests.
+export async function lookupPlace(place: string, google: (place: string) => Promise<PlaceCandidate[]> = googleLookup): Promise<{ google: PlaceCandidate[]; local: PlaceCandidate[]; partial: boolean; tableDown: boolean }> {
   const [g, l] = await Promise.allSettled([google(place), Promise.resolve().then(() => localLookup(parseQualified(place).name))]);
   if (g.status === "rejected" && l.status === "rejected") throw new Error("both place lookups failed");
-  return { google: g.status === "fulfilled" ? g.value : [], local: l.status === "fulfilled" ? l.value : [], partial: g.status === "rejected" || l.status === "rejected" };
+  return { google: g.status === "fulfilled" ? g.value : [], local: l.status === "fulfilled" ? l.value : [], partial: g.status === "rejected" || l.status === "rejected", tableDown: l.status === "rejected" };
 }
 
 // Pure: the country of a home point, from the geocoder's hits for its city (the same-named hit at that point), or null.
@@ -431,7 +478,8 @@ export function auditPlan(
     const ref = `${w.userId}:${w.key}`;
     if (fresh?.status === "ambiguous") out.push({ kind: "want", ref, how, finding: `ambiguous: ${fresh.options.join(" / ")}`, action: act });
     else if (fresh?.status === "rejected") out.push({ kind: "want", ref, how, finding: `rejected (${fresh.why}): ${fresh.options.join(" / ")}`, action: act });
-    else if (fresh?.status === "resolved" && w.resolution?.label && w.resolution.label !== fresh.label) out.push({ kind: "want", ref, how, finding: `stored ${w.resolution.label}, resolves now to ${fresh.label}`, action: act });
+    // A spelling-only change ("Montreal, Quebec, CA" stored, "Montréal, Quebec, CA" now) is the same place: not a finding.
+    else if (fresh?.status === "resolved" && w.resolution?.label && fold(w.resolution.label) !== fold(fresh.label)) out.push({ kind: "want", ref, how, finding: `stored ${w.resolution.label}, resolves now to ${fresh.label}`, action: act });
     else if (homeMiles != null && homeMiles > PLACE_RESOLVE.farFromHomeMiles && how === "inferred") out.push({ kind: "want", ref, how, finding: `inferred place ${homeMiles} mi from home`, action: act });
   }
   for (const { row, conflictMiles, conflictWith } of cache) {

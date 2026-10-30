@@ -64,7 +64,8 @@ const at = (p: ReturnType<typeof pick>) => (p.status === "resolved" ? `${p.place
 check("'Bay Area' for a Sacramento member is the SF Bay Area", at(pick("Bay Area", "sacramento")) === "San Francisco Bay Area|California", pick("Bay Area", "sacramento"));
 check("... and with Google answering the SF Bay Area, still that (one place, going by 'Bay Area')", at(pick("Bay Area", "sacramento", [GOOGLE_SF_BAY])) === "San Francisco Bay Area|California");
 check("'Bay Area' for a Houston member is the Bay Area by Houston", at(pick("Bay Area", "houston")) === "Bay Area Houston|Texas" && at(pick("Bay Area", "houston", [GOOGLE_SF_BAY])) === "Bay Area Houston|Texas");
-check("Bay Area Park (a park, not a place) is never a candidate", !R.mergeCandidates([], [], "Bay Area").some((c) => /park/i.test(c.name)) && /\^\(PPL\|ADM\)/.test(src("services/placeResolve.ts")));
+// The local table holds populated places only (GeoNames feature class P): no park, airport or heliport can be a candidate.
+check("Bay Area Park (a park, not a place) is never a candidate: the real table has no 'Bay Area' and only populated places", !R.mergeCandidates([], R.localLookup("Bay Area"), "Bay Area").some((c) => /park/i.test(c.name)) && R.localLookup("Bay Area").length === 0 && [...R.placeTable().values()].every((rows) => rows.every((r) => /^PPL/.test(r.feature))));
 check("Portland: Maine for a Maine member, Oregon for an Oregon member", at(pick("Portland", "bangor")) === "Portland|Maine" && at(pick("Portland", "eugene")) === "Portland|Oregon");
 check("Portland from Sacramento (none near): the much bigger one, Oregon", at(pick("Portland", "sacramento")) === "Portland|Oregon");
 check("Cambridge: Massachusetts for a Boston member, England for a London member", at(pick("Cambridge", "boston")) === "Cambridge|Massachusetts" && at(pick("Cambridge", "london")) === "Cambridge|England");
@@ -343,18 +344,21 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
 {
   // A Seattle member's "Washington": the state, labeled as one, searched at its stored point; no cache row is written.
   const t = deps();
-  t.d.lookup = async () => ({ google: [], local: [{ ...om("Washington", "Washington", "US", 47.50012, -120.50147, 7_705_281), level: "admin1" as const }, om("Washington", "District of Columbia", "US", 38.89511, -77.03637, 689545)] });
+  // Google answers the state (administrative_area_level_1, unsized); the table holds only the city (it has no states).
+  const gState = (name: string, code: string, lat: number, lng: number): C => ({ name, admin1: name, admin1Code: code, level: "admin1", country: "US", lat, lng, population: null, source: "google" });
+  t.d.lookup = async () => ({ google: [gState("Washington", "WA", 47.50012, -120.50147)], local: [om("Washington", "District of Columbia", "US", 38.89511, -77.03637, 689545)] });
   const r = await R.resolveWantPlace({ userId: "u11", key: "ask:wa", place: "Washington", source: "their_words", homeCity: "Seattle" }, t.d);
-  check("a Seattle member's 'Washington' is the state ('Washington State, US'), at its own point", r.city === "Washington State, US" && r.point?.lat === 47.50012, r);
+  check("a Seattle member's 'Washington', Google answering the state, is the state ('Washington State, US'), at its own point", r.city === "Washington State, US" && r.point?.lat === 47.50012, r);
   check("want resolution has no way to write the shared cache (no seed at all)", !("seed" in R.realResolveDeps) && !/geocode_cache/.test(src("services/placeResolve.ts").slice(src("services/placeResolve.ts").indexOf("export const realResolveDeps"), src("services/placeResolve.ts").indexOf("// ---------------------------------------------------------------- the one-time audit"))));
 
   // Two members, one whose "New York" is the state (a Buffalo home) and one whose is the city (a Newark home): each searches its own.
-  const NY: C[] = [{ ...om("New York", "New York", "US", 42.91, -75.53, 19_300_000), level: "admin1" as const }, om("New York", "New York", "US", 40.71427, -74.00597, 8_804_190)];
+  const NY_GOOGLE: C[] = [gState("New York", "NY", 42.91, -75.53)];
+  const NY_TABLE: C[] = [om("New York", "New York", "US", 40.71427, -74.00597, 8_804_190)];
   const homes = { Buffalo: { lat: 42.8864, lng: -78.8784, country: "US" }, Newark: { lat: 40.7357, lng: -74.1724, country: "US" } };
-  const b = deps({ homeCity: homes }); b.d.lookup = async () => ({ google: [], local: NY });
-  const n = deps({ homeCity: homes }); n.d.lookup = async () => ({ google: [], local: NY });
+  const b = deps({ homeCity: homes }); b.d.lookup = async () => ({ google: NY_GOOGLE, local: NY_TABLE });
+  const n = deps({ homeCity: homes }); n.d.lookup = async () => ({ google: NY_GOOGLE, local: NY_TABLE });
   const [rb, rn] = await Promise.all([R.resolveWantPlace({ userId: "ub", key: "ask:ny", place: "New York", source: "their_words", homeCity: "Buffalo" }, b.d), R.resolveWantPlace({ userId: "un", key: "ask:ny", place: "New York", source: "their_words", homeCity: "Newark" }, n.d)]);
-  check("'New York' from Buffalo is the state, from Newark the city, with labels that differ", rb.city === "New York State, US" && rn.city === "New York, US" && rb.point?.lat === 42.91 && rn.point?.lat === 40.71427, { rb, rn });
+  check("'New York' with Google answering the state and the table the city: from Buffalo the state, from Newark the city, labels differ", rb.city === "New York State, US" && rn.city === "New York, US" && rb.point?.lat === 42.91 && rn.point?.lat === 40.71427, { rb, rn });
   const G = await import("../../src/services/geocoding.js");
   const [pb, pn] = await Promise.all([G.withPinnedPlace(rb.city!, rb.point!, async () => { await new Promise((x) => setTimeout(x, 5)); return G.geocodeCity(rb.city!); }), G.withPinnedPlace(rn.city!, rn.point!, async () => G.geocodeCity(rn.city!))]);
   check("each search geocodes its place to its own stored point (pinned for that search only, never a cache row)", pb?.lat === 42.91 && pn?.lat === 40.71427 && G.pinnedPoint(rb.city!) === null, { pb, pn });
@@ -535,6 +539,99 @@ function deps(o: { stored?: any; windowEnd?: string | null; google?: Record<stri
   const pr = src("services/placeResolve.ts");
   check("placeResolve.ts and auditPlaces.ts never call Open-Meteo", !/open-meteo\.com/.test(pr) && !/open-meteo\.com/.test(src("scripts/auditPlaces.ts")));
   check("the table carries its GeoNames attribution (NOTICE beside the data, and by the loader)", /CC BY 4\.0/.test(readFileSync(new URL("../../src/data/geonames/NOTICE", import.meta.url), "utf8")) && /GeoNames[\s\S]{0,200}CC BY 4\.0/.test(pr));
+  globalThis.fetch = realFetch;
+}
+
+// ---------------------------------------------------------------- 11. review of #321: an outage is never stored; the table's own failure; accents
+{
+  const fs = await import("fs");
+  const os = await import("os");
+  const path = await import("path");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error("refused: no outside call"); }) as typeof fetch;
+  const realError = console.error;
+  const errors: string[] = [];
+  console.error = (...a: unknown[]) => void errors.push(a.map(String).join(" "));
+  const HOMES2: Record<string, { lat: number; lng: number }> = { Bangor: HOME.bangor, "New York": { lat: 40.7128, lng: -74.006 }, Burlington: { lat: 44.4759, lng: -73.2121 } };
+  const gh = (name: string, admin1: string, lat: number, lng: number): C => ({ name, admin1, country: "US", lat, lng, population: null, source: "google" });
+  const run = async (place: string, homeCity: string, google: (p: string) => Promise<C[]>) => {
+    const logs: any[] = [];
+    const stores: any[] = [];
+    const d: import("../../src/services/placeResolve.js").ResolveDeps = {
+      home: async (c) => HOMES2[c] ?? null,
+      homeCountry: async () => "US",
+      lookup: (p) => R.lookupPlace(p, google),
+      row: async () => null,
+      store: async (_u, _k, r) => void stores.push(r),
+      log: async (x) => void logs.push(x),
+      today: async () => "2026-10-29",
+    };
+    const r = await R.resolveWantPlace({ userId: "u21", key: "ask:x", place, source: "their_words", homeCity }, d);
+    return { r, logs, stores };
+  };
+  const down = async (): Promise<C[]> => { throw new Error("google down"); };
+  const timedOut = async (): Promise<C[]> => { throw Object.assign(new Error("timeout of 3000ms exceeded"), { code: "ECONNABORTED" }); };
+
+  // 2. Google down or timed out: the answer is used this run and never stored (it's made from half the candidates).
+  const hudUp = await run("Hudson", "New York", async () => [gh("Hudson", "New York", 42.2529, -73.791)]);
+  check("Hudson for a New York City member, Google up: Hudson, New York, stored", hudUp.r.city === "Hudson, New York" && hudUp.stores.length === 1, hudUp.r);
+  const hudDown = await run("Hudson", "New York", down);
+  check("... Google down: whatever the table alone says is used this run only, never stored", hudDown.stores.length === 0 && hudDown.r.city !== "Hudson, New York", { r: hudDown.r, stores: hudDown.stores });
+  const hanUp = await run("Hanover", "Burlington", async () => [gh("Hanover", "New Hampshire", 43.7022, -72.2896)]);
+  check("Hanover for a Burlington member, Google up: Hanover, New Hampshire, stored", hanUp.r.city === "Hanover, New Hampshire" && hanUp.stores.length === 1, hanUp.r);
+  const hanSlow = await run("Hanover", "Burlington", timedOut);
+  check("... Google timed out: used this run only, never stored", hanSlow.stores.length === 0, { r: hanSlow.r, stores: hanSlow.stores });
+  check("Google's lookup has a timeout (a hung call is an outage, not a wait)", /geocode\(\{ params: \{ address: name, region: "us", key: googleKey\(\) \}, timeout: PLACE_TABLE\.googleTimeoutMs \}\)/.test(src("services/placeResolve.ts")) && R.PLACE_TABLE.googleTimeoutMs <= 5000);
+
+  // 1. The table missing, short or unreadable: logged (console and a decision row), the answer used this run only, never stored.
+  const realDir = new URL("../../src/data/geonames/", import.meta.url).pathname;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "place-table-"));
+  const mk = (name: string) => { const d = path.join(tmp, name); fs.mkdirSync(d); return d; };
+  const missing = mk("missing");
+  const short = mk("short");
+  fs.copyFileSync(path.join(realDir, "admin1.tsv"), path.join(short, "admin1.tsv"));
+  const zlib = await import("zlib");
+  fs.writeFileSync(path.join(short, "cities.tsv.gz"), zlib.gzipSync("Portland\t\tUS\tOR\t45.52345\t-122.67621\t652503\tPPLA2\nPortland\t\tUS\tME\t43.65737\t-70.2589\t66881\tPPLA2\n"));
+  const broken = mk("broken");
+  fs.copyFileSync(path.join(realDir, "admin1.tsv"), path.join(broken, "admin1.tsv"));
+  fs.writeFileSync(path.join(broken, "cities.tsv.gz"), fs.readFileSync(path.join(realDir, "cities.tsv.gz")).subarray(0, 4000));
+  const google = async () => [gh("Portland", "Oregon", 45.515232, -122.678385)];
+  for (const [what, dir] of [["missing", missing], ["short (2 rows)", short], ["truncated", broken]] as const) {
+    R.resetPlaceTable([dir]);
+    errors.length = 0;
+    const t = await run("Portland", "Bangor", google);
+    check(`table ${what}: Portland for a Bangor member is used this run only (Google's one hit), never stored`, t.r.city === "Portland, Oregon" && t.stores.length === 0, { r: t.r, stores: t.stores });
+    check(`table ${what}: logged to the console and as a place.table_unavailable decision`, errors.some((e) => /local place table failed to load/.test(e)) && t.logs.some((l) => l.decision === "place.table_unavailable" && l.action === "not_stored"), { errors, logs: t.logs });
+  }
+  check("a short table is refused at load (at least PLACE_TABLE.minRows rows)", R.PLACE_TABLE.minRows >= 30_000 && (() => { R.resetPlaceTable([short]); try { R.placeTable(); return false; } catch (e: any) { return /too short \(2 rows/.test(e.message); } })());
+  // A failed load is not kept for the life of the process: the file back, the next try after retryMs loads it.
+  R.resetPlaceTable([missing]);
+  const threw = (() => { try { R.placeTable(); return false; } catch { return true; } })();
+  fs.copyFileSync(path.join(realDir, "admin1.tsv"), path.join(missing, "admin1.tsv"));
+  fs.copyFileSync(path.join(realDir, "cities.tsv.gz"), path.join(missing, "cities.tsv.gz"));
+  const stillWaiting = (() => { try { R.placeTable(); return false; } catch { return true; } })();
+  const later = R.placeTable(Date.now() + R.PLACE_TABLE.retryMs + 1);
+  check("a failed load is tried again later (not cached for good), and the table then loads", threw && stillWaiting && later.size > 30_000 && R.localLookup("Portland").some((c) => c.admin1 === "Maine"));
+  R.resetPlaceTable(null);
+  fs.rmSync(tmp, { recursive: true, force: true });
+  const ok = await run("Portland", "Bangor", google);
+  check("the real table back: Portland for a Bangor member is Maine, stored", ok.r.city === "Portland, Maine" && ok.stores.length === 1 && !ok.logs.some((l) => l.decision === "place.table_unavailable"), ok.r);
+
+  // 5. Accents: labels keep the real spelling; every comparison folds both sides.
+  const sp = R.localLookup("Sao Paulo");
+  check("'Sao Paulo' finds São Paulo, labeled as written", sp.some((c) => c.name === "São Paulo" && c.country === "BR") && R.placeLabel(sp.find((c) => c.country === "BR")!) === "São Paulo, BR", sp.slice(0, 2).map(R.placeLabel));
+  const lyon = (q: string) => R.pickPlace(q, R.mergeCandidates([], R.localLookup(R.parseQualified(q).name), q), home(HOME.sacramento));
+  const l1 = lyon("Lyon, Auvergne-Rhône-Alpes");
+  const l2 = lyon("Lyon, Auvergne-Rhone-Alpes");
+  check("'Lyon, Auvergne-Rhône-Alpes' and 'Lyon, Auvergne-Rhone-Alpes' both resolve to Lyon, labeled with the region as written", l1.status === "resolved" && l2.status === "resolved" && l1.label === "Lyon, Auvergne-Rhône-Alpes, FR" && l2.label === l1.label, { l1, l2 });
+  const lodz = R.pickPlace("Lodz, Lodz Voivodeship", R.mergeCandidates([], R.localLookup("Lodz"), "Lodz"), home(HOME.london));
+  check("a region whose ASCII spelling doesn't fold from its name ('Lodz Voivodeship' for 'Łódź Voivodeship') still matches", lodz.status === "resolved" && lodz.place.country === "PL", lodz);
+  const mtl = R.pickPlace("Montreal", R.mergeCandidates([], R.localLookup("Montreal"), "Montreal"), home(HOME.toronto));
+  check("'Montreal' is Montréal, labeled as written", mtl.status === "resolved" && mtl.label === "Montréal, Quebec, CA" && R.normName("Montréal") === R.normName("Montreal"), mtl);
+  const audit = R.auditPlan([{ w: { userId: "u22", key: "ask:m", place: "Montreal", source: "told", homeCity: "Toronto", resolution: { forPlace: "Montreal", forHome: "Toronto", status: "resolved", label: "Montreal, Quebec, CA", lat: 45.5, lng: -73.57, options: [] } }, fresh: mtl, homeMiles: null }], []);
+  check("the audit never flags a spelling-only change (stored 'Montreal, Quebec, CA', now 'Montréal, Quebec, CA')", audit.length === 0, audit);
+
+  console.error = realError;
   globalThis.fetch = realFetch;
 }
 

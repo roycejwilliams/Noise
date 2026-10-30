@@ -7,9 +7,10 @@
 //   curl -fsSLO https://download.geonames.org/export/dump/admin1CodesASCII.txt
 //   npx tsx src/scripts/buildPlaceTable.ts <that dir> [cities15000]
 //
-// Keeps only what placeResolve.ts pickPlace reads: name, ASCII name (when it differs), country, admin1 code, lat, lng, population,
-// feature code; and the names of the admin1 codes those rows use. No alternate names (Google covers other spellings). Populated places
-// only, never a historical, abandoned or destroyed one. Sorted, so a rebuild from the same dump is the same file.
+// Keeps only what placeResolve.ts pickPlace reads: name as written (UTF-8, shown in labels: "Montréal", "São Paulo"), ASCII name
+// (when it differs; matched, never shown), country, admin1 code, lat, lng, population, feature code; and the names of the admin1 codes
+// those rows use, as written ("Auvergne-Rhône-Alpes") with their ASCII spelling when it differs. No alternate names (Google covers
+// other spellings). Populated places only, never a historical, abandoned or destroyed one. Sorted, so a rebuild from the same dump is the same file.
 // cities15000 (places over 15,000 people, and capitals): the smallest dump that keeps every #314 trap. cities5000 adds places like
 // Springfield, Michigan (5,192), which then wins "Springfield" for a Chicago member on nearness over Springfield, Illinois; cities1000
 // is over 3 MB gzipped.
@@ -46,13 +47,15 @@ rows.sort((a, b) => cmp(a[0], b[0]) || cmp(a[2], b[2]) || Number(b[6]) - Number(
 const admin1: string[] = [];
 for (const line of readFileSync(join(dir, "admin1CodesASCII.txt"), "utf8").split("\n")) {
   // code ("US.CA"), name, name ascii, geonameid
-  const [code, , asciiName] = line.split("\t");
-  if (code && admin1Used.has(code) && asciiName) admin1.push(`${code}\t${clean(asciiName)}`);
+  const [code, rawName, rawAscii] = line.split("\t");
+  const name = clean(rawName ?? "");
+  const ascii = clean(rawAscii ?? "");
+  if (code && admin1Used.has(code) && (name || ascii)) admin1.push(`${code}\t${name || ascii}\t${ascii && ascii !== name ? ascii : ""}`);
 }
 admin1.sort();
 
 mkdirSync(out, { recursive: true });
 const header = "# GeoNames (https://www.geonames.org), CC BY 4.0. Built by api/src/scripts/buildPlaceTable.ts";
 writeFileSync(join(out, "cities.tsv.gz"), gzipSync(`${header} from ${dump}\n# name\tascii\tcountry\tadmin1\tlat\tlng\tpopulation\tfeature\n${rows.map((r) => r.join("\t")).join("\n")}\n`, { level: 9 }));
-writeFileSync(join(out, "admin1.tsv"), `${header} from admin1CodesASCII.txt\n# code\tname\n${admin1.join("\n")}\n`);
+writeFileSync(join(out, "admin1.tsv"), `${header} from admin1CodesASCII.txt\n# code\tname\tascii\n${admin1.join("\n")}\n`);
 console.log(`${dump}: ${rows.length} places, ${admin1.length} admin1 names -> ${out}`);
