@@ -149,10 +149,10 @@
     }
   ],
   "structure": {
-    "v": "9b886018627f",
+    "v": "d772ee43ea1b",
     "hash": "eb172035dc688da8",
     "wording": {},
-    "format": [],
-    "tools": null
+    "guard": {},
+    "format": []
   }
 }

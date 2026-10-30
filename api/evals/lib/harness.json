@@ -22,5 +22,6 @@
   "evals/golden/types.ts",
   "evals/golden/replies.ts",
   "evals/golden/wording.ts",
-  "evals/golden/estimate.ts"
+  "evals/golden/estimate.ts",
+  "evals/golden/ledger.ts"
 ]

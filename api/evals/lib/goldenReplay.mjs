@@ -15,10 +15,10 @@
 // marker and any anthropic-beta header. Only body.metadata is left out (not an input to the answer).
 //
 // When the exact hash misses, replay tries the request's SKELETON (evals/lib/goldenSkeleton.mjs): the same request with its instruction
-// wording masked out (the prompt files in evals/golden/wording.ts, and tool descriptions). A recording whose stamped skeleton matches
-// answers the call, and the case reports "prompt moved" with what moved: a warning, never a silent pass. Facts, the member's words,
-// tool schemas, the model and every parameter stay in the skeleton, so a change to any of them still misses. GOLDEN_STRICT=1 turns a
-// moved prompt into a miss. Each recording carries its skeleton stamp (`structure`), written when it is recorded, or by
+// allowlisted tone wording masked out (evals/golden/wording.ts). A recording whose stamped skeleton matches answers the call, and the
+// case reports what moved; the runner fails it unless evals/golden/moved-ledger.json carries that exact move (run.ts). Facts, the
+// member's words, every tool, the model, every parameter and every literal off the allowlist stay in the skeleton, so a change to any
+// of them still misses. GOLDEN_STRICT=1 turns any move into a miss. Each recording carries its skeleton stamp (`structure`), written when it is recorded, or by
 // `npm run evals:golden:stamp` (replay with GOLDEN_STAMP=1: stamps every recording whose exact hash matched, never one that missed).
 //
 // The clock is pinned for every mode (GOLDEN_NOW below): "today", "two days out" and every createdAt in a prompt are the same on
@@ -215,13 +215,13 @@ globalThis.fetch = async function goldenFetch(input, init) {
         const now = stampOf(k.key);
         const found = now ? ctx.skel.get(now.hash) ?? [] : [];
         if (found.length !== 1) {
-          const why = !now ? "no recording" : found.length > 1 ? `no recording (its skeleton matches ${found.length} recordings, so none is used)` : [...ctx.recs.values()].some((r) => r.structure?.v === wording.signature) ? "no recording (not a wording-only change: the facts, the member's words, the tools, the model or a parameter differ, or an instruction was added, dropped or swapped)" : "no recording (this case's recordings carry no skeleton stamp under the current wording registry, so a wording-only change can't be told apart: run npm run evals:golden:stamp on the code they were recorded with)";
+          const why = !now ? "no recording" : found.length > 1 ? `no recording (its skeleton matches ${found.length} recordings, so none is used)` : [...ctx.recs.values()].some((r) => r.structure?.v === wording.signature) ? "no recording (not a wording-only change: the facts, the member's words, a tool, the model, a parameter or a prompt literal off the tone allowlist differ, or an instruction was added, dropped or swapped)" : "no recording (this case's recordings carry no skeleton stamp under the current wording registry, so a wording-only change can't be told apart: run npm run evals:golden:stamp on the code they were recorded with)";
           throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", why)}`);
         }
         rec = found[0];
         const m = movedBetween(rec.structure, now);
-        if (m.blocked.length) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (an output-format instruction moved: ${m.blocked.join(", ")}; the recorded answer was written for the old format)`)}`);
-        if (STRICT) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (GOLDEN_STRICT: the prompt moved: ${m.moved.join(", ") || "nothing named"})`)}`);
+        if (m.blocked.length) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (a wording literal changed a rule, not just its words: ${m.blocked.join(", ")}; its guard terms (numbers, tool names, never/always/only, call, offer, question, safe, member...) or its output format changed)`)}`);
+        if (STRICT) throw new Error(`GOLDEN REPLAY: ${noteMiss(ctx, k, "none", `no recording (GOLDEN_STRICT: the prompt moved: ${m.moved.map((x) => x.id).join(", ") || "nothing named"})`)}`);
         moved = m.moved;
       }
       const calls = (ctx.used.get(rec.hash) ?? 0) + 1;

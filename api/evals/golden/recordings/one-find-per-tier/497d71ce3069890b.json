@@ -86,10 +86,10 @@
     }
   ],
   "structure": {
-    "v": "9b886018627f",
+    "v": "d772ee43ea1b",
     "hash": "497d71ce3069890b",
     "wording": {},
-    "format": [],
-    "tools": null
+    "guard": {},
+    "format": []
   }
 }

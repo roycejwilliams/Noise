@@ -5,6 +5,10 @@
 // that feeds them (gatherReplyFacts reading turn.searching and turn.ahead, the searchCoverage and whatsAhead reads); those need a
 // database and come with the discovery store's status contract (phase 3). Invented member only (Jordan).
 // Mechanical facts are regexes; where meaning matters, one short judge (GRADER_HEADERS: the meter runs it as the grader).
+// No moment read here (review of #318 asked): every turn in this file is a question about Cue's own work ("What are you actually
+// searching for?", "Anything I should look forward to this week?"), not a share, so the rubric grades it as an ordinary turn, which is
+// right. Wiring the moment read in would also add its line to every recorded request, a re-record of all six. The share-shaped turns
+// are cases/moments.ts (moment read wired) and checkins.ts case 32 (graded as a share by kind; its recording predates the wiring).
 import "../../lib/requireMeter.js";
 import { DateTime } from "luxon";
 import type { GoldenCase, GoldenResult } from "../types.js";

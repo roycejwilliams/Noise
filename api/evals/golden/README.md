@@ -6,12 +6,13 @@ once and committed under `recordings/`, so the merge gate checks Cue's code agai
 Royce, 2026-10-14: "golden cases must not hit the live API on every CI run. Record real API responses once as committed fixtures
 and have CI run the harness against the recordings. Live API runs only on a deliberate manual trigger."
 Royce, 2026-10-29 (the rework): code checks the hard rules on every run; the merge gate no longer needs a re-record for a
-wording-only prompt change; the model judge moves to a scheduled quality run, three samples a case, scored by majority.
+tone-only rewording of an allowlisted literal (with a ledger entry, review of #318); the model judge moves to a scheduled quality run, three samples a case, scored by majority.
 
 | Command | What it does | Cost |
 |---|---|---|
-| `npm run evals:golden` | **Replay: the merge gate** (`merge-gated.sh`, the CI `golden` check). Every model call answered from `recordings/`, by exact request or, for a wording-only change, by skeleton ("prompt moved", a warning). Every reply through the hard rules. No key, no network. | $0 |
-| `npm run evals:golden:quality` | **Quality run.** Each case 3 times with real calls; an attempt passes on the case's own checks, the hard rules and the rubric judge; the case is scored by majority. Reports pass rate per case, flaky cases and cost. Manual, or a local cron (below). Never part of the gate. | ~$8.80 for all 45 (`-- --estimate`) |
+| `npm run evals:golden` | **Replay: the merge gate** (`merge-gated.sh`, the CI `golden` check). Every model call answered from `recordings/` by its exact request; only a ledgered tone-only move of an allowlisted literal may replay on its old answer ("prompt moved"). Every reply through the hard rules. No key, no network. | $0 |
+| `npm run evals:golden -- --ledger <PR>` | Replay that writes a `moved-ledger.json` entry for each tone move it sees (commit it with the PR). | $0 |
+| `npm run evals:golden:quality` | **Quality run.** Each case 3 times with real calls; an attempt passes on the case's own checks, the hard rules and the rubric judge; the case is scored by majority. Reports pass rate per case, flaky cases and cost. Manual, or a local cron (below). Never part of the gate. | ~$8.80 for all 45: run it as `EVAL_COST_CAP_USD=10 npm run evals:golden:quality` |
 | `npm run evals:golden:record -- --only <case>` | **Record.** Real calls through the meter, the case's recordings rewritten and stamped. | ~$0.05-0.20 a case |
 | `npm run evals:golden:record -- --missing` | Record only the cases whose replay misses: a new case, or one whose behavior changed. `--moved` also records the cases that replayed on a moved prompt. | the same, for those cases |
 | `npm run evals:golden:live` | **Live**: real calls, nothing written, one sample (a quick drift check; also the `golden-live` job on a manual dispatch). | ~$1.95 for all |
@@ -36,37 +37,49 @@ railway run -s co-test -e 5cac359e-1dc3-411f-b4b1-9949610041d2 -- sh -c 'exec en
 Replay (`npm run evals:golden`, no key, $0) fails the merge when:
 
 - a live case's own assertions miss: its regexes, its code checks and its judge, run on the recorded answers;
-- **any reply breaks a hard rule** (`evals/lib/hardRules.ts`, code, free): a name, place, time, number or link nothing in the turn gave it;
-  a status line on a check-in; a stock empathy phrase (`harness/stockLines.ts`); machinery narration (systems, tools, errors, retries,
-  "on my end"); quoting Cue's own earlier line back; a find's link without its caption, or inside prose; more than one reply text a turn
-  (unless a tool brought something new);
-- a model call has no recording that fits: anything other than wording changed (a fact, the member's words, a tool's name or schema,
-  the model, a parameter, an instruction added, dropped or swapped), an output-format instruction moved, or the code asks more often than
-  it was recorded;
+- **any reply breaks a hard rule** (`evals/lib/hardRules.ts`, code, free): a name, place, time, number or link nothing in the turn gave it
+  (list markers, advice ranges like "20-30 min" and date arithmetic from a date it was given are not claims); a status line on a check-in;
+  a stock empathy phrase (`harness/stockLines.ts`); machinery narration (systems, tools, errors, retries, "on my end"); quoting Cue's own
+  earlier line back (a span the member said first is theirs); a find's link without its caption, or inside prose; more than one reply text
+  a turn (unless a tool brought something new);
+- a model call's exact request isn't recorded. Strict by default: a fact, the member's words, a tool (name, description or schema), the
+  model, a parameter, or any prompt literal outside the allowlist changed, and the case needs a re-record;
+- an allowlisted tone literal moved without its ledger entry, under an entry older than 14 days, or for the second time on the same
+  recording; or its move changed a rule (its guard terms: numbers, tool names, never/always/only, call, offer, question, safe, member,
+  share, invent...) or an output format;
 - a miss lands late (a timer or worker), or outside any case.
 
-What it **does not** guarantee, by design: how the model answers new wording. A case that passed on a moved prompt is tagged
-`ok(moved)` and the run ends with a `PROMPT MOVED` line naming the cases (a warning on GitHub): its code paths ran on the recorded
-answers, the model's answer to the new words did not. The quality run (or a re-record) is where that is measured. `GOLDEN_STRICT=1`
-turns a moved prompt into a miss, for when you want the old behavior.
+The one thing a merge may skip: a **ledgered, tone-only** rewording of an allowlisted literal. The case is tagged `ok(moved)`, the summary
+line starts with `MOVED:` (so `merge-gated.sh`'s 50-character summary shows it), a `PROMPT MOVED` line names the cases, and on GitHub each
+is a warning. Its code paths ran on the recorded answers; how the model answers the new words is the quality run's (or a re-record's).
+`GOLDEN_STRICT=1` turns off even that.
 
 ## Wording vs behavior
 
-`evals/golden/wording.ts` lists the prompt files whose literal text is **wording**; `evals/lib/goldenSkeleton.mjs` builds the skeleton.
+The allowlist is `WORDING_ALLOWLIST` in `evals/golden/wording.ts`, pinned by `harnessTest.ts`; the skeleton is
+`evals/lib/goldenSkeleton.mjs`.
 
-- **Wording** (may move without a re-record): the text of each string and template literal of 40+ characters in
-  `agent/conversationReply.ts`, `services/coCore.ts`, `coVoice.ts`, `textRhythm.ts`, `moves.ts`, `connectDots.ts`, `readTurn.ts` and
-  `agent/loop.ts`; each literal is its own placeholder (file, declaration, place: `conversationReply.ts:system#16`). Also every tool's
-  description and the descriptions in its input schema.
-- **Behavior** (a change misses and needs a re-record): the model and every request parameter; tool names and schemas; message roles and
-  order; the model's earlier turns and every tool result; every fact line (`[F12] ...`) and conversation line (`User said: ...`), whatever
-  file built it; every interpolated value (names, their words, the case's facts, dates); which literals are included and in what order
-  (a literal added, dropped or swapped is a different placeholder); any literal that asks for an output format (JSON); short literals; and
-  all prompt text outside the listed files (the cases' own judge prompts, the fact check's prompts, builders like `capabilities.ts`).
+- **Wording** (may move with a ledger entry): the literals of `MESSAGE_RHYTHM`, `COACHING_STYLE` (textRhythm.ts), `VOICE_TONE`,
+  `VOICE_STYLE` (coVoice.ts), `SHARE_TONE`, `SHARE_TONE_2` and `FEEDBACK_TONE` (connectDots.ts). Tone and style only. The mixed prompts were
+  split in the source so their rules sit in their own declarations (`CO_VOICE`, `COACHING`, `SHARING_GUIDE` and `FEEDBACK_GUIDE` assemble to
+  exactly the text they were; the replay proves it, every hash unchanged).
+- **Behavior** (strict, a re-record): everything else. Safety (`CO_SAFETY`, `COACHING_SAFETY`), member safety and privacy
+  (`CO_MEMBER_SAFETY`), grounding and never-invent (`CO_GROUNDING`, `SHARE_GROUNDING`, `FEEDBACK_HONEST`, `VOICE_RULES`), who Cue is and what
+  it owns (`VOICE_WHO`), the scope overrides (`SHARE_SCOPE`, `FEEDBACK_SCOPE`), the reply prompt and its gesture and tool-turn rules, the
+  call-offer and other checker prompts whose answers code reads, `LOOP_GUIDE` (its lines are tool use), every fact and conversation line,
+  every tool whole (description and schema), the model and every parameter.
 
-Changing the file list changes the registry's signature, and a stamp made under another signature is never compared. So: run
-`npm run evals:golden:stamp` on the code the recordings were made with (exact matches only) BEFORE making the wording change, and commit
-the stamps with it. A recording is stamped automatically when it is recorded.
+Adding to the allowlist is a deliberate change to `wording.ts` and `harnessTest.ts`; split a mixed literal first so no rule rides along.
+Changing the list changes the registry's signature: run `npm run evals:golden:stamp` on the code BEFORE the wording change and commit the
+stamps with it.
+
+## The moved ledger
+
+`evals/golden/moved-ledger.json`, read by `evals/golden/ledger.ts`. One entry per move: `{ chunk, from, to, pr, date }` (the literal's id
+and its text hash before and after). To reword an allowlisted literal without re-recording: make the change, run
+`npm run evals:golden -- --ledger <PR>`, commit the ledger with the PR. Within 14 days, re-record the moved cases
+(`npm run evals:golden:record -- --moved`) and drop the entry (replay lists entries nothing uses any more). A second rewording of the same
+literal before the re-record fails: the recording would be two moves behind.
 
 ## The quality run
 
@@ -81,7 +94,9 @@ disagree, the attempts passing each layer (own checks, hard rules, rubric) and t
 detail in `evals/golden/quality.local.json`. Exit 1 when a live case fails by majority (for a cron to alert on), 3 when the cap stopped it.
 
 Cost: `npm run evals:golden -- --estimate` prices the recordings the way the meter would (about $2.94 a pass over all 45 cases, $8.82 for
-three, with the 7 unrecorded cases counted at the median reply case). Cache reads on the 2nd and 3rd passes usually bring it lower.
+three, with the 7 unrecorded cases counted at the median reply case). Cache reads on the 2nd and 3rd passes usually bring it lower. The
+default $4 cap is under that on purpose: run it as `EVAL_COST_CAP_USD=10 npm run evals:golden:quality`. The run refuses to start when
+its estimate is over the cap, and the meter stops it at the cap whatever happens.
 
 A suggested schedule, local and not wired to CI (no paid CI, Royce 2026-10-14), weekly on Monday at 7am, capped:
 
@@ -111,9 +126,9 @@ railway run -s co-test -e 5cac359e-1dc3-411f-b4b1-9949610041d2 -- sh -c 'exec en
 ## When to re-record
 
 Re-record a case when its replay says `FAIL(no recording)`: its behavior changed (a fact, a tool, a model, a parameter, an instruction
-added or dropped, the case itself). The failure names the call, says why the skeleton didn't fit either, shows where it first differs from
-the nearest recording, and gives the command. A case that replays `ok(moved)` does not need one to merge; re-record it
-(`-- --moved`) when the quality run says its behavior changed, or to bring its recordings up to the new wording.
+added or dropped, any prompt literal off the allowlist, the case itself). The failure names the call, says why the skeleton didn't fit
+either, shows where it first differs from the nearest recording, and gives the command. A case that replays `ok(moved)` on a ledger
+entry has 14 days to be re-recorded (`-- --moved`).
 
 Recording a case that misses writes the miss: replay then fails the same way until the case is green and re-recorded.
 
@@ -124,8 +139,9 @@ the Anthropic and OpenAI clients).
 
 - **Key.** A hash of the request as Cue's code made it: host and path, the whole JSON body with keys sorted (model, system, messages,
   tools, max_tokens, temperature, thinking, effort...), the grader marker and any `anthropic-beta` header. `body.metadata` is left out.
-- **Skeleton.** When the key misses, the request's skeleton (wording masked, above) is matched against each recording's stamp
-  (`structure`): exactly one match answers the call, reported as moved with the wording ids that changed.
+- **Skeleton.** When the key misses, the request's skeleton (allowlisted wording masked, above) is matched against each recording's
+  stamp (`structure`: the skeleton hash, each allowlisted literal's text hash and guard-term hash): exactly one match answers the call,
+  reported as moved with each literal's from/to hashes, and the runner checks the ledger.
 - **Recording.** `recordings/<case-id>/<hash>.json`: the request (a readable summary plus the full body, for the miss diff), each answer
   in order (text, usage, model, the raw body or stream events), `recorded_at`, and the skeleton stamp.
 - **Replay.** A call with a recording gets its answer. A call without one, or asked more times than it was recorded, throws and fails
