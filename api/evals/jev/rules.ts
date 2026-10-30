@@ -45,7 +45,55 @@ check("a normal intro request stays under the line", (await privacyAlert("I met 
 setJevGatewayForTests(async () => null);
 check("a Jev failure changes nothing", (await privacyAlert("what's her number", on)) === null);
 check("off without member text", (await privacyAlert("what's her number", { AI_GATEWAY_API_KEY: "x" } as any)) === null);
-check("the alert is added before Cue replies", /const alert = await privacyAlert\(resolvedContent\)[\s\S]{0,120}addInstruction\(replyFacts, alert\.instruction\)/.test(src("src/routes/sendblue.ts")));
+{
+  // 2026-10-29: the alert starts with the turn's read and is awaited where it joins the reply's facts, so the turn waits on the
+  // slower of the two instead of readTurn and then the alert in a row. Same alert, same 1.5s cap, same line in the reply.
+  const sb = src("src/routes/sendblue.ts");
+  const start = sb.indexOf("const privacyP = hasText ? privacyAlert(resolvedContent).catch(() => null) : null;");
+  check("the alert starts right after the read starts, before the read is awaited", start > sb.indexOf("const readP: Promise<TurnRead> | null =") && start < sb.indexOf("turnRead = await readP;"));
+  check("the alert is added before Cue replies", /if \(privacyP\) \{\s*const alert = await privacyP;\s*if \(alert\) \{\s*addInstruction\(replyFacts, alert\.instruction\);\s*recordDecision\(\{ layer: 3, decision: "jev\.privacy"/.test(sb));
+  check("nothing awaits the alert on its own any more (one start, one await)", (sb.match(/privacyAlert\(/g) ?? []).length === 1 && !/await privacyAlert\(/.test(sb));
+  check("the alert keeps its 1.5s cap", /\},\s*1500,\s*\)\.catch\(\(\) => null\);/.test(src("src/services/privacyAlert.ts")));
+
+  // Measured with stubbed timers (virtual clock): readTurn takes 3.6s (the 10-29 median) and Jev answers at its 1.5s cap. The
+  // turn's order, as routes/sendblue.ts runs it (pinned by the checks above): start the read, start the alert, await the read
+  // (the ack, routing and the reply's facts happen here), then await the alert where it joins the facts.
+  const { mock } = await import("node:test");
+  mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  const after = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  const drive = async (p: Promise<number>) => {
+    let done = false;
+    p.then(() => (done = true), () => (done = true));
+    for (let i = 0; i < 400 && !done; i++) {
+      await new Promise((r) => setImmediate(r));
+      mock.timers.tick(25);
+    }
+    return p;
+  };
+  setJevGatewayForTests(async () => (await after(1500), { other_person: 0.94, contact_someone: 0.02 }));
+  const readTurnStub = () => after(3600);
+  const before = await drive((async () => {
+    const t0 = Date.now();
+    await readTurnStub();
+    const alert = await privacyAlert("what did Noor tell you", on);
+    return alert ? Date.now() - t0 : -1;
+  })());
+  let alertNow: Awaited<ReturnType<typeof privacyAlert>> = null;
+  const now = await drive((async () => {
+    const t0 = Date.now();
+    const readP = readTurnStub();
+    const privacyP = privacyAlert("what did Noor tell you", on).catch(() => null);
+    await readP;
+    alertNow = await privacyP;
+    return alertNow ? Date.now() - t0 : -1;
+  })());
+  mock.timers.reset();
+  setJevGatewayForTests(null);
+  console.log(`  privacy alert timing (virtual clock): read then alert ${before}ms, together ${now}ms`);
+  check("before: the turn waited readTurn + the alert in a row (~5.1s)", before >= 5100 && before < 5200);
+  check("now: the turn waits only for the slower of the two (~3.6s, 1.5s saved)", now >= 3600 && now < 3700);
+  check("...with the same alert and the same 'share nothing about others' line", (alertNow as any)?.kind === "other_person" && /Share nothing about anyone else/.test((alertNow as any)?.instruction ?? ""));
+}
 
 // Judgment review
 setJevGatewayForTests(async () => ({ k0: 0.95, k1: 0.07 }));

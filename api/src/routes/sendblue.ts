@@ -1659,6 +1659,9 @@ export function sendblueRouter(io: Server): Router {
               )
             : null;
         readP?.catch(() => {});
+        // The privacy early warning (services/privacyAlert.ts) starts with the read, so the turn waits on the slower of the two,
+        // never both in a row; it is awaited where it joins the reply's facts, below.
+        const privacyP = hasText ? privacyAlert(resolvedContent).catch(() => null) : null;
         // Jev labels the same text in shadow, logged next to the read; never used for the reply (services/jevShadow.ts).
         const jevShadowP = hasText && readP ? startJevShadow(resolvedContent, lastCoLine(recentConversation), !!inlineTarget?.fromCo) : null;
         const coverageP = readP
@@ -1923,8 +1926,9 @@ export function sendblueRouter(io: Server): Router {
         // contact someone for them. It only puts Co on alert; the privacy
         // lines themselves are hard rules either way. Member text goes to Jev
         // only through the zero-retention gateway where JEV_MEMBER=on.
-        if (hasText) {
-          const alert = await privacyAlert(resolvedContent).catch(() => null);
+        // Started alongside the read above (2026-10-29).
+        if (privacyP) {
+          const alert = await privacyP;
           if (alert) {
             addInstruction(replyFacts, alert.instruction);
             recordDecision({ layer: 3, decision: "jev.privacy", userId: user.id, outcome: "act", action: alert.kind, proposal: { p: alert.p } }).catch(() => {});
