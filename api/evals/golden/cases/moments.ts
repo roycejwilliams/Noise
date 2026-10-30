@@ -3,18 +3,20 @@
 // One real reply turn each through cases/checkins.ts reply(), with the moment read wired the way the text route wires it (routes/
 // sendblue.ts: replyFacts.moment and momentInstruction from the turn read), so the sharing and feedback guides are what's tested.
 //
-// Pending until recorded (the first recording is budgeted separately): replay reports them "not recorded", the quality run covers
-// them. Record: npm run evals:golden:record -- --only <id> (or --missing for all seven).
+// Recorded 2026-10-30 ($0.87); see PENDING below for which are live.
 //
 // The situations come from the 10-29 before/after texting eval (~/cue-worktrees/notes/texting-before-after-1029.md), moved to San
 // Francisco (the reply helper's member lives there). Invented members only. Code checks what code can (the hard rules run on every
 // reply anyway: evals/lib/hardRules.ts); one short judge question asks what only a reader can tell. The quality run grades each reply
 // on the full rubric (evals/lib/replyRubric.ts) three times and scores by majority.
 import "../../lib/requireMeter.js";
-import { AWAITING_RECORDING, result, type GoldenCase, type GoldenStatus } from "../types.js";
+import { result, type GoldenCase, type GoldenStatus } from "../types.js";
 import { DAY, NONE, judge, observed, reply, type Kind, type Line, type Reply } from "./checkins.js";
 
-const PENDING: GoldenStatus = { live: false, until: `${AWAITING_RECORDING} (npm run evals:golden:record -- --only <id>)`, why: "new 2026-10-29: the share, feedback and dry-thread cases; recording is budgeted separately" };
+// Recorded 2026-10-30. feedback-cue-mistake and complete-moment passed and are live. The other five are kept pending: their recorded
+// replies fail the judge on real quality gaps (restating or paraphrasing the member's news back, asking for news they don't have yet,
+// explaining Cue's own tone), the reply quality the context snapshot work is meant to fix, not the prompt wording.
+const PENDING: GoldenStatus = { live: false, until: "the reply-quality work (context snapshot) passes them", why: "recorded 2026-10-30; the replies fail the judge on known quality gaps" };
 const at = (iso: string) => new Date(iso);
 const said = (lines: Line[]) => lines.map((l) => `${l.from === "member" ? "Member" : "Cue"}: "${l.text}"`).join(" / ");
 
@@ -105,7 +107,7 @@ export const CASES: GoldenCase[] = [
     n: 63,
     id: "feedback-cue-mistake",
     title: "\"that link you sent is dead\" (Cue's mistake): owns it plainly, never invents a replacement link or blames them",
-    status: PENDING,
+    status: { live: true },
     from: "10-29 before/after eval, case 7: a bare \"I don't have a working one\" with no acknowledgment",
     run: async () => {
       const LINK = "https://emberclaystudio.example/workshops/wheel-intro";
@@ -171,7 +173,7 @@ export const CASES: GoldenCase[] = [
     n: 66,
     id: "complete-moment",
     title: "\"They approved the full budget. I'm going to sleep for twelve hours.\": a short warm close, one text, no question pulled out of him",
-    status: PENDING,
+    status: { live: true },
     from: "10-29 before/after eval, case 12 (co-test sent two texts for it; #310 sent one): the SHARING_GUIDE's complete moment",
     run: async () => {
       const exchange: Line[] = [

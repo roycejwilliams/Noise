@@ -1,0 +1,102 @@
+{
+  "hash": "fa80e2f8a724c04e",
+  "case": "dry-thread",
+  "recorded_at": "2026-10-30T17:37:28.016Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. You told me something real, a birthday with no phone, feeling hopeful for the first time in months after what sounds like a rough stretch, and finally putting a real boundary down with your team. That deserved more than a nice line back.\n\nThe walk with no phone sounds like exactly what was missing. Running on empty for this long and then choosing to actually disappear for two weeks, no half measures, that's the harder call to make, not the easier one.\n\nHappy birthday, Lena. I hope the two weeks give you back more than you're expecting.\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"'That deserved more than a nice line back' explains its own tone, and it recaps her words ('a birthday with no phone, feeling hopeful... after what sounds like a rough stretch') instead of giving something of its own.\"}",
+      "usage": {
+        "input_tokens": 528,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 377,
+        "output_tokens_details": {
+          "thinking_tokens": 291
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgYpyRMU5X65heCtg9hDB",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EuUKCsQCCBMYAipAow2jucSEhxhj9u+MDBZqxtvcws3dJOk89r8VFDLvKY6V9ktTnkbmQriKRwN5TjKvIG8g+95omiZfnSd6U2hetDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB16uT1wbCAToIBBAAGgwC2ooDTzcFNdsEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAWfv143mQx2f0PE+mKhhOOYrRqCbeFiavxif6gJ7aI0yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxPIMjxHonbGcL834QaDIeQOnK5oNy2/BtqsSIwDe4knkzbpZgAsz3Pg0vWfX6BwA6rRh9Qu8fia4gs19ps1qFnZQK1IcohoC1dP5DdKs0Hhul/Bovmnl+VGtJ3FZj+LLMDzYFMCzVqvutn1RLbsjEWJplB7NRjOMTNwib3Wxi7Sb8rDHemc2SRpve2j6yIdExxkD/0nyJIFF+BN6zHWS3ikn4Rg6v2CUkHa6Rym264AkwbTKXE7Ow/XoMSQDVBSXl7hg4P8xe+WilpZavdFyNGoyjv2M2DyGFmwhnEjzqR60ISjTKol2RJqUkOiQuCUaurdoNxfv+++tGRDb9gUr/1OI04O8VM+au0epdf1G9Xb7iRI4qPvuL+/FIKi33GsmL6bkVZ/8vK/nDJBOjxPiKqV1GXNkUgkVmJnyJN2V+jNfFIQZIPy+8HCWlb/D4rFO5OUEnPIbxZMU6huHlL5MbkkDqvarsA+OeySOJxJ7ELT8NFkraLJVDdrzv5lWdhyMA5FrSYI0dl5nPeID662+vXm5T1DlOwgRq0GdGWMtblX212dlowpD9vIY6mqMD+1x8R19anydG+62UtH/bOpYjyYc8/KOwNL7yTWPqoD5MR0aSPxshvpd8JmTIENLTr+iJJD0IafjaOnQOFUenwIyWFuHTD2P7fLa7DfPxBrpNFWn0tdNEpeodc5OpeAx8DCH1dkmeRru8hyI12ZZlq/5CauuNchHH/nRzQQwYgNnVfHkT3UOKFqYeEgSW2Lx+9O+2KqUoWUhpKgBE7hZ/8EYGdCT4O/qK0ROjr64qbpzIwUCXM+IPxP5UU9tYl3/xHPJr1gsoATv56AFXP9+iYxaF18/stpRH6Ob/veZ3nwBIyyhqprJOJJsXmDzsp3WympDOGyqVapk2ERwnLp1hPRuFjVm3pSybwSLEgwrrw2J+l8WhmQSDICMbX0BhO9BHg0BD4R4h0Krgp1TCpdqR9sApW8FTD6sAdjEXsbMsWbhu8LkbJs2RtPoU+Bixi4gc1tzCNO2e1owx6mhpdzNtorIRXqmLHXWa3FdDObrDrEs5LPB8fIm2V9ow1lVBgn7cjrQS+7NPBnS+Kf8+VEz8eg632eXPYyiFlPeGXVfufH1YlyynnT7H9W84yvLKuJ7l48sVpSKvIqDeLTBPt7sEclkLyfh1zYjIWnPqimuTHl8Ya+IDXARW5v5Te3qB7WQJTyIF+JlTqZMVGpayFsA/DvPj5vFnN0y9Ll/pgf2yp30Yisbcvs+xyz96THATjwBpHRmdDs92BcuDFEK0G2g8fUPo9i8uJc3fyeDm+NNYE2XCxTLjQAotRZw0T/wnbiIYfB+OFAiNET5nF3weq9QyVYmYfwyw5o/e/MI9B6VVqsl95dbtcxvoqWpyg8d+1AxgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"'That deserved more than a nice line back' explains its own tone, and it recaps her words ('a birthday with no phone, feeling hopeful... after what sounds like a rough stretch') instead of giving something of its own.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 528,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 377,
+          "output_tokens_details": {
+            "thinking_tokens": 291
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "fa80e2f8a724c04e",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

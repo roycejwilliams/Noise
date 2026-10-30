@@ -1,0 +1,102 @@
+{
+  "hash": "8c4e27e85bca9ec1",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-10-30T17:36:27.084Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That moment deserves more than that, you're right.\n\nThe part that gets me is her almost walking off and then sitting back down anyway. That's not a small thing for a seven year old, that's real nerve. And then to play the whole thing clean after that.\n\nHow are you feeling watching that happen, proud doesn't quite cover it probably.\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Owns it in one line ('Fair... you're right') then adds its own take ('that's real nerve') without explaining tone or quoting itself.\"}",
+      "usage": {
+        "input_tokens": 377,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 281,
+        "output_tokens_details": {
+          "thinking_tokens": 218
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgYptz16vC26mJZKtSGyr",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Eo8ICsQCCBMYAipAq/pXptvxI4OfbZC+m3otxI84qs/URMF7jN+EUhC2IB1vweS7Ly0PD7Qx6CYM9b6kqdd9t5eT3Ms7crhFIBaI5jIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBmquT1wbCAToIBBAAGgwC2ooDTzcFXTkEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCOteBHww2IY7MSAOQJqryVtA5XT8x7xdM+NWRR9peqYyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwS4+QoExSCb2ARn+waDO0s1PCpZAn4Q0jAqCIwpN2H32JFN4+BR3MGtVfcDyGUWSGFvkKCa+08IVVbm2hZak/FuFWTtODHy7jrLynBKvcETzbHWFg1T0CZRqJcw0/MaXASLHwf9NutJLtkTaYdMkYciYEvay4N6C+uj6RFZWBR2u2oZ2Ml5kHB0BGccv6jUFQCzdBsgHa3X9Zd1BKQFGvm51LbgQ32Cxw5F26JfdA6dsuQmUr3fq9Sj4WFgUjgbGF424htIhKyUDDbPqG9LqTo27SxZ7VJT/KPypAjjR+fyKFIElIObHyFi7osNqtTMrUTArHRGGve6BJtEL8xe3EBNRJNkJOu58bDcHrXG8KJaQ7fiTrB+MwC7yiuk+n6KU1kKfE1bGi/KSje8ge21sdiR7FtwJODz8wSvhueLs5kH0rcbPJtI2TnFj+DPB+vs9d+KSk9wfIU6jZ4sfJ3SXKwWDQakgvjL8n979Z75nfW1/fkzM2n3q/BJ697+GdKdS8IyOzDYiN8du9c7gdrRCTXZT0Ocey75Jz2T9/t3Z1lhkuN9A13Gp6XnWoMys9f3yGiHIiyMphJt0alluQ6AVF/SY4xVlY/2lFysjThARjssrxEcQ5JCY8ADdITZB8Zp4lxQc64V5ZhaiB1mt56DywwhmjplUxuiKhIWgQuq0VBoGGseyzQv6JW6Y37vOJkpwDJPzrbuQZUOR09bl4iTs6loaxrRePuSE+tRL+gYT1MA5L0gdGynjeNfJtWsXGt15sP6bDJ4tfxGtIBMAU7MJjV6B92Z2uggXMEuVQhAvKm5lk4h1ve4NZYqE05jvbd7UTNaOYEzdBfEDnnUYT0AhcdIMSDVESEPm0pIXkS2MftGHHIDlBAT6cjUnLGmziZsww8ieFRSFtoq39faQ8nO6hJ9cIt/fxixdzEbzEQ9joz95eFbZrrjxgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Owns it in one line ('Fair... you're right') then adds its own take ('that's real nerve') without explaining tone or quoting itself.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 377,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 281,
+          "output_tokens_details": {
+            "thinking_tokens": 218
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "8c4e27e85bca9ec1",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
