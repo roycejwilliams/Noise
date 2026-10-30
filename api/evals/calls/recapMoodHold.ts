@@ -249,7 +249,7 @@ const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW 
   const pc = src("jobs/postCallFollowUp.ts");
   check("the held draft offers only the recap of that call, gently, and may SKIP only when nothing was settled", /may_offer_a_one_page_recap: RECAP_OFFER_RULE,\s*recap_offer_tone: RECAP_GENTLE,/.test(pc) && /If they settled nothing on that call, return SKIP\./.test(PC.HELD_RECAP_TASK) && /Never write the recap itself/.test(PC.HELD_RECAP_TASK));
   check("the gentle line is model-facing guidance, not a line the member gets as is", /if you offer the recap/.test(PC.RECAP_GENTLE) && !/"/.test(PC.RECAP_GENTLE));
-  check("released in the post-call text itself: the same gentle guidance rides with the permission", /recap_offer_tone: recapOffer && recapGentle && !confirmationSent \? RECAP_GENTLE : null,/.test(pc) && /!!recap\?\.offer, k, !!recap\?\.gentle(?:, doneOnCall)?\)/.test(pc));
+  check("released in the post-call text itself: the same gentle guidance rides with the permission", /recap_offer_tone: recapOffer && recapGentle && !confirmationSent \? RECAP_GENTLE : null,/.test(pc) && /!!recap\?\.offer, k, !!recap\?\.gentle(?:, doneOnCall)?(?:, owed)?\)/.test(pc));
 }
 
 // ================================================================ 5b. approved by Royce (2026-10-19, with his SKIP addition): wired

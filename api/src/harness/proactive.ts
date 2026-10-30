@@ -1396,11 +1396,13 @@ export type Person = { userId: string; firstName: string; phoneNumber: string; c
 // model wrote, which is what checkDraft validates.
 // defer: not yet, but still worth sending later (a follow-up about an event
 // that hasn't happened); the candidate moves to that time instead of dropping.
-export type DraftResult = { messages: string[]; text: string; rules: OutputRules } | { skip: string } | { defer: Date; reason: string };
+// meta: what the draft that went out was written with, handed to its onSent (never to the model or the member): e.g. the call
+// corrections a post-call text carried, so only those are marked delivered (jobs/postCallFollowUp.ts).
+export type DraftResult = { messages: string[]; text: string; rules: OutputRules; meta?: Record<string, unknown> } | { skip: string } | { defer: Date; reason: string };
 
 export type TypeSpec = {
   draft(c: Candidate, person: Person): Promise<DraftResult>;
-  onSent?(c: Candidate, person: Person, messages: string[]): Promise<void>;
+  onSent?(c: Candidate, person: Person, messages: string[], meta?: Record<string, unknown>): Promise<void>;
   onDropped?(c: Candidate, status: "skipped" | "expired", reason?: string): Promise<void>;
 };
 
@@ -2894,7 +2896,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     const A = await import("../services/askRetire.js");
     if (A.noteCarried(result.delivered.join("\n"), rideNote)) await A.markNotesTold(userId, [rideNote], "text").catch((err: any) => console.error("proactive: marking the stopped-looking line told failed (non-fatal):", err?.message ?? err));
   }
-  await registry[c.type].onSent?.(c, person, result.delivered).catch((err: any) =>
+  await registry[c.type].onSent?.(c, person, result.delivered, composed ? undefined : draft.meta).catch((err: any) =>
     console.error(`proactive: onSent(${c.type}) failed (non-fatal):`, err?.message ?? err),
   );
   for (const e of extras) {

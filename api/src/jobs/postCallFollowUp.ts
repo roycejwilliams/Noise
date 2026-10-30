@@ -7,7 +7,8 @@ import { DateTime } from "luxon";
 import { KINDS } from "../services/factLabels.js";
 import { memberKnowledge, memberRules, type MemberKnowledge } from "../services/memberKnowledge.js";
 import { localStamp } from "../services/memberTime.js";
-import { saidDay, uncorrectedClaims } from "../harness/callGrounding.js";
+import { callCorrectionsFor, correctionFact, correctionsToCarry, saidDay, uncorrectedClaims, type CallCorrection } from "../harness/callGrounding.js";
+import type { DoneItem, FoundOnCall } from "../services/callLedger.js";
 import { HELD_RECAP_APPROVED, MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 
 // Relationship text after a call: one real thought from what they said.
@@ -57,7 +58,7 @@ export async function enqueueDuePostCallFollowUps(): Promise<void> {
   }
 }
 
-export async function draftPostCall(userId: string, firstName: string, followUpId: string): Promise<{ text: string; rules: OutputRules } | null> {
+export async function draftPostCall(userId: string, firstName: string, followUpId: string): Promise<{ text: string; rules: OutputRules; corrections: CallCorrection[] } | null> {
   const { rows } = await pool.query(`SELECT transcript, created_at FROM post_call_follow_ups WHERE id = $1 AND user_id = $2`, [followUpId, userId]);
   const transcript: string | undefined = rows[0]?.transcript;
   if (!transcript) return null;
@@ -86,22 +87,49 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   const { confirmationSentFor } = await import("../services/callFollowThrough.js");
   const confirmed = await confirmationSentFor(userId, transcript).catch(() => null);
   const recap = await recapOfferFor(userId, followUpId, { callAt, confirmed: !!confirmed, coCommitted: promised.length > 0 }, k).catch(() => null);
-  // What Cue already did on the call with its tools, or sent the moment it ended (services/callLedger.ts): never said again here.
-  const doneOnCall = await doneAroundCall(userId, callAt).catch(() => [] as string[]);
-  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, !!recap?.offer, k, !!recap?.gentle, doneOnCall);
+  // What Cue already did on the call with its tools, or sent the moment it ended, and what its searches found on it
+  // (services/callLedger.ts): never said again here, and never "corrected".
+  // A failed read is no done list: nothing to hold the reflection to, as before, and no correction rides (it can't be checked).
+  const done = await doneAroundCall(userId, callAt).catch(() => null);
+  const doneOnCall = done?.lines ?? [];
+  const owed = await owedCorrections(userId, transcript, k, done).catch(() => [] as CallCorrection[]);
+  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, !!recap?.offer, k, !!recap?.gentle, doneOnCall, owed);
 }
 
 // The call's ledger rows from the few hours before this follow-up was made (the call ended just before it), plus the owed links
-// that went out right after it.
-async function doneAroundCall(userId: string, callAt: Date): Promise<string[]> {
+// that went out right after it. lines: what the reflection is told never to repeat; items and found: what a correction is checked
+// against (a send with its names and links, an owed link that went, an event a search found on the call).
+async function doneAroundCall(userId: string, callAt: Date): Promise<{ lines: string[]; items: DoneItem[]; found: FoundOnCall[] }> {
   const L = await import("../services/callLedger.js");
   const ledger = await L.readCallLedger(userId, new Date(callAt.getTime() - 3 * 3_600_000), new Date(callAt.getTime() + 10 * 60_000));
   const { rows } = await pool.query(
     `SELECT proposal FROM harness_decisions WHERE user_id = $1 AND layer = 8 AND decision = 'call.owed_delivery' AND action = 'sent' AND created_at >= $2 AND created_at <= $3 LIMIT 20`,
     [userId, new Date(callAt.getTime() - 3 * 3_600_000), new Date(callAt.getTime() + 30 * 60_000)],
   );
-  return [...L.doneLines(ledger), ...rows.map((r: any) => `sent the link ${String(r.proposal?.url ?? "")} right after the call`)].slice(0, 20);
+  const lines = [...L.doneLines(ledger), ...rows.map((r: any) => `sent the link ${String(r.proposal?.url ?? "")} right after the call`)].slice(0, 20);
+  const sentAfter = new Set(rows.map((r: any) => String(r.proposal?.url ?? "")).filter(Boolean));
+  // An owed link that went right after the call is a send like any other, with the name it was owed under.
+  const owedSent: DoneItem[] = ledger.owed.flatMap((o) => o.items.filter((x) => sentAfter.has(x.url)).map((x) => ({ kind: "send", label: `the link to ${x.name} (${x.url})`, names: x.name ? [x.name] : [], urls: [x.url] })));
+  return { lines, items: [...L.doneItems(ledger), ...owedSent], found: L.foundOnCall(ledger) };
 }
+
+// What this call's audit found Cue got wrong on it (harness/callGrounding.ts), that this text may carry (Royce, 2026-10-29: "Once Cue
+// gets the transcript it needs to analyze what it said previously and correct itself"). From the audit's rows only: this call's, not
+// yet delivered, a promise only if it hasn't been kept since (what they have and what's done, from the layer; the layer unread, no
+// promise rides), never one about something Cue did or found on the call (the done list: what its tools sent, with names and links,
+// and the events its searches found; the list unread, none ride), and only lines the member fence leaves whole. A failed read carries
+// none: they wait for the next text, as before.
+async function owedCorrections(userId: string, transcript: string, k: MemberKnowledge | null, done: { items: DoneItem[]; found: FoundOnCall[] } | null): Promise<CallCorrection[]> {
+  const rows = await callCorrectionsFor(userId, transcript);
+  if (!rows.length) return [];
+  const { memberFence } = await import("../services/sourceFence.js");
+  const fence = await memberFence(userId).catch(() => null);
+  const kept = k ? [...k.delivered.map((d) => d.what), ...k.carrying.filter((c) => c.state === "done" || c.theyHaveIt).map((c) => c.what)] : null;
+  return correctionsToCarry(rows, callKey(transcript), kept, fence && !fence.failed ? fence.strip : null, done);
+}
+
+// Model-facing (never a line the member reads as is): how the follow-up carries a correction. A principle, no examples.
+export const CALL_CORRECTION_TASK = `This text also carries a correction, once. On the call you said something that doesn't hold (what_you_said_on_the_call_that_was_wrong, with why). Take it back in your own voice, plainly and briefly: make clear which thing it was so they recognize it, say it doesn't hold, and if it changes what they might do, say that much. Put it first or weave it into the follow-up, whichever reads more naturally; the follow-up itself still goes as above. Own it lightly as yours: no apology spiral, never how you found out, and never mention checks, records, notes, reviews or anything behind the scenes. Refer to it by what it was about; never repeat its made-up specifics (names, days, times, numbers) as if they could still hold, and never put anything in its place that CONFIRMED_FACTS doesn't have. This is the one place you may bring up your own words from the call. If you would SKIP the follow-up, SKIP.`;
 
 // The sections the post-call text reads from the layer.
 export const POST_CALL_SECTIONS = ["delivered", "carrying", "lessons", "corrections", "claims", "restraint", "exchanges"] as const;
@@ -323,7 +351,10 @@ export async function draftPostCallText(
   recapGentle = false,
   // What Cue did on the call with its tools, or sent right after it: done, so never mentioned, resent or offered again here.
   doneOnCall: string[] = [],
-): Promise<{ text: string; rules: OutputRules } | null> {
+  // What this call's audit found Cue got wrong on it, to take back once in this text (owedCorrections). None: the request is today's.
+  corrections: CallCorrection[] = [],
+): Promise<{ text: string; rules: OutputRules; corrections: CallCorrection[] } | null> {
+  const correcting = corrections.length > 0;
   const text = await draftProactive({
     functionId: "jobs.postCallFollowUp",
     firstName,
@@ -339,14 +370,28 @@ export async function draftPostCallText(
       done_on_the_call_already_never_mention_resend_or_offer_again: doneOnCall.length ? doneOnCall : null,
       may_offer_a_one_page_recap: recapOffer && !confirmationSent ? RECAP_OFFER_RULE : null,
       recap_offer_tone: recapOffer && recapGentle && !confirmationSent ? RECAP_GENTLE : null,
+      // Spoken-kind key (it holds what Cue said): it can name what the correction is about, never back a day or a time.
+      what_you_said_on_the_call_that_was_wrong: correcting ? corrections.map(correctionFact) : null,
     },
-    maxSentences: 3,
+    maxSentences: correcting ? 4 : 3,
     // The call that just ended is fresh: what THEY said in it can back a day. The background is only who they are.
     freshKeys: ["call_transcript"],
-    task: `You just got off a call with them. Text the follow-up a thoughtful friend who was really listening would send, and trust your gut on which kind fits this call best. It can be a follow-up question that picks up a thread they left open (or where they said they'd carry on by text), a piece of kind, concrete advice if they were stuck, weighing a decision, or venting, or a short reflection of what stood out to them with one question that shows you got it. Whatever you choose, start with a few of your own words that show you heard them, then the question or the advice; never send a bare question. Don't offer to keep an eye out, watch for, or look for anything. Send the one a friend would most likely send; a real follow-up every time, not a summary. Use only what THEY said on the call (never Cue's own lines, never background they didn't say on the call), and never credit them with a question that was Cue's. When they were stuck or weighing a decision, lean toward giving one concrete, kind thought that helps them see a way forward, and let a question be optional. Advice is a thought, not an order: plain words, no lists, no lecturing. Never announce that you were thinking about it ("Been thinking about", "Still turning over", "Kept thinking"); just say it. Call the product Cue, never "Compatible" or "Noise", even if they did. Anything Cue said on the call it would send, find or look into arrives in its own message when it's real (Royce, 2026-10-08: silence until there's something real, then one message): never mention it here, not that it's coming, not that you're on it, not that nothing turned up. Write about something else they said. Never narrate your own state or process ("starting", "working on", "on it", "looking into", "in progress"), and never make sending their own thing depend on your judgment ("once it's worth sending", "nothing good enough"). Write straight to them as "you", never their name in the third person. Reread it before you answer: it has to make complete sense to someone reading it cold. Never recap the whole call, never mention scheduling or logistics. If the transcript has nothing real from them (for example Cue did all the talking), return SKIP.${knowledge ? `\n\n${postCallKnowledgeSection(knowledge)}` : ""}`,
+    task: `You just got off a call with them. Text the follow-up a thoughtful friend who was really listening would send, and trust your gut on which kind fits this call best. It can be a follow-up question that picks up a thread they left open (or where they said they'd carry on by text), a piece of kind, concrete advice if they were stuck, weighing a decision, or venting, or a short reflection of what stood out to them with one question that shows you got it. Whatever you choose, start with a few of your own words that show you heard them, then the question or the advice; never send a bare question. Don't offer to keep an eye out, watch for, or look for anything. Send the one a friend would most likely send; a real follow-up every time, not a summary. Use only what THEY said on the call (never Cue's own lines, never background they didn't say on the call), and never credit them with a question that was Cue's. When they were stuck or weighing a decision, lean toward giving one concrete, kind thought that helps them see a way forward, and let a question be optional. Advice is a thought, not an order: plain words, no lists, no lecturing. Never announce that you were thinking about it ("Been thinking about", "Still turning over", "Kept thinking"); just say it. Call the product Cue, never "Compatible" or "Noise", even if they did. Anything Cue said on the call it would send, find or look into arrives in its own message when it's real (Royce, 2026-10-08: silence until there's something real, then one message): never mention it here, not that it's coming, not that you're on it, not that nothing turned up. Write about something else they said. Never narrate your own state or process ("starting", "working on", "on it", "looking into", "in progress"), and never make sending their own thing depend on your judgment ("once it's worth sending", "nothing good enough"). Write straight to them as "you", never their name in the third person. Reread it before you answer: it has to make complete sense to someone reading it cold. Never recap the whole call, never mention scheduling or logistics. If the transcript has nothing real from them (for example Cue did all the talking), return SKIP.${correcting ? `\n\n${CALL_CORRECTION_TASK}` : ""}${knowledge ? `\n\n${postCallKnowledgeSection(knowledge)}` : ""}`,
   });
+  // A correction never costs them their follow-up: a draft with one that came back empty (SKIP, or a specific it couldn't back) is
+  // written once more exactly as today's, and the correction waits for the next text.
+  if (!text && correcting) return draftPostCallText(firstName, transcript, contextSummary, promiseResults, claims, confirmationSent, recapOffer, knowledge, recapGentle, doneOnCall);
   if (!text) return null;
-  return { text, rules: { maxSentences: 3, maxChars: 360 } };
+  return { text, rules: correcting ? { maxSentences: 4, maxChars: 460 } : { maxSentences: 3, maxChars: 360 }, corrections };
+}
+
+// The call corrections a post-call text that went out was drafted with (its draft's meta), marked delivered. Nothing else is touched:
+// a correction this text didn't carry stays for the next text.
+export async function markCarriedCorrections(userId: string, meta: Record<string, unknown> | undefined): Promise<number> {
+  const ids = Array.isArray(meta?.callCorrectionIds) ? (meta!.callCorrectionIds as unknown[]).filter((x): x is string => typeof x === "string" && !!x) : [];
+  if (!ids.length) return 0;
+  const { markCallCorrectionsDelivered } = await import("../harness/callGrounding.js");
+  return markCallCorrectionsDelivered(userId, ids);
 }
 
 export async function markPostCallSent(followUpId: string): Promise<void> {

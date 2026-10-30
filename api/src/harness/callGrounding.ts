@@ -11,8 +11,13 @@
 //   act      — a promise Co can keep ("I'll look for designers after we hang
 //              up") is kept: it becomes a saved ask so the search really
 //              runs. A claim or promise Co can't back is recorded as a
-//              correction, and the next text reply gets it as a fact so Co
-//              corrects it plainly if it comes up
+//              correction, tied to the call (services/callKey.ts). The call's
+//              own follow-up text carries it once (jobs/postCallFollowUp.ts,
+//              Royce 2026-10-29: "Once Cue gets the transcript it needs to
+//              analyze what it said previously and correct itself"), and it is
+//              marked delivered; one that didn't ride (the follow-up skipped,
+//              held past its life or cancelled) stays a fact for the next text
+//              reply so Co corrects it plainly if it comes up
 //   record   — call.grounding in the decision log; monitoring alerts on
 //              spikes (harness/monitor.ts)
 import { anthropic } from "@ai-sdk/anthropic";
@@ -31,7 +36,7 @@ import type { MemberKnowledge } from "../services/memberKnowledge.js";
 import { plainCorrected } from "../services/memberKnowledge.js";
 import { DateTime } from "luxon";
 import { claimKind, itemWords, namesItem } from "../services/callClaims.js";
-import type { DoneItem } from "../services/callLedger.js";
+import type { DoneItem, FoundOnCall } from "../services/callLedger.js";
 
 export type CallClaim = {
   quote: string;
@@ -44,6 +49,8 @@ export type CallClaim = {
   asked_quote?: string | null;
   // invented_fact: the exact names, places, times or numbers that had no source
   specifics?: string[] | null;
+  // Set by code, never by the audit: a sentence the call's offer source check flagged (services/offerGuard.ts unsourcedInCall).
+  source?: "offer_source";
 };
 
 // What Co can truthfully promise or claim on a call, beyond the registry: a call is spoken, so these are the call's own limits.
@@ -371,7 +378,73 @@ export function promiseDoneOnCall(p: { what: string; quotes: string[] }, doneOnC
   return (pool.find((d) => claimNames(text, d) || sameSubject(p.what, d.label)) ?? (sendPromise ? uniqueWordMatch(p.what, pool) : undefined))?.label ?? null;
 }
 
-export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[]; doneOnCall?: (string | DoneItem)[] }): AuditPlan {
+// A sentence the call's offer source check flagged (services/offerGuard.ts unsourcedInCall): an event, place or time it named that
+// nothing the call was given backs.
+export type OfferFlag = { sentence: string; names: string[] };
+
+// Pure: the offer source check's flags, as corrections. A sentence the audit already listed is the audit's (once, whatever it
+// judged); the rest are held to the same record check an invented fact is (their texts and Cue's records can back a name the call's
+// own context didn't carry), so a real find is never "taken back".
+const plainWords = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+const sameSentence = (quote: string, f: OfferFlag) => {
+  const Q = plainWords(quote), S = plainWords(f.sentence);
+  if (!Q || !S) return false;
+  if (Q.includes(S) || S.includes(Q)) return true;
+  // The audit quoted it its own way: the same sentence when it carries every name the check flagged.
+  const names = (f.names ?? []).map((n) => plainWords(String(n))).filter(Boolean);
+  return names.length > 0 && names.every((n) => Q.includes(n));
+};
+export function offerSourceCorrections(flags: OfferFlag[], audited: Pick<CallClaim, "quote">[], transcript: string, knownBefore: string, records: string, done: (string | DoneItem)[] = [], found: FoundOnCall[] = []): { corrections: CallClaim[]; refused: AuditPlan["refused"] } {
+  const corrections: CallClaim[] = [];
+  const refused: AuditPlan["refused"] = [];
+  for (const f of flags) {
+    if (!f || typeof f.sentence !== "string" || !f.sentence.trim()) continue;
+    if ([...audited, ...corrections].some((c) => sameSentence(c.quote, f))) continue;
+    const names = (Array.isArray(f.names) ? f.names : []).filter((x): x is string => typeof x === "string" && !!x.trim());
+    const c: CallClaim = { quote: f.sentence.trim().slice(0, 240), type: "invented_fact", what: `named ${names.join(", ") || "something"} with nothing behind it`, specifics: names, source: "offer_source" };
+    // The check can't see what Cue's tools did or found mid-call: a name that's in the done list was real.
+    const covered = correctionDoneOnCall(c, done, found);
+    if (covered) {
+      refused.push({ quote: c.quote, type: c.type, why: `offer source check: ${covered}` });
+      continue;
+    }
+    const v = inventedFactVerdict(c, transcript, knownBefore, records);
+    v.save ? corrections.push(c) : refused.push({ quote: c.quote, type: c.type, why: `offer source check: ${v.why}` });
+  }
+  return { corrections, refused };
+}
+
+// Pure: a done line as the check reads it. #320's send labels name the item and its link ("the link to <name> (<url>)", also for a
+// deck: the link to their deck "<title>" (<url>)), and an owed link that went right after the call is "sent the link <url> right
+// after the call". Any other line is matched by its words only.
+export function doneItemFromLine(line: string): DoneItem {
+  const send = line.match(/\bthe link to\s+(?:their\s+\w+\s+)?["“]?(.+?)["”]?\s*\((https?:\/\/[^\s)]+)\)/i);
+  if (send) return { kind: "send", label: line, names: [send[1].trim()], urls: [send[2]] };
+  const after = line.match(/\bsent the link\s+(https?:\/\/\S+)/i);
+  if (after) return { kind: "send", label: line, names: [], urls: [after[1]] };
+  return { kind: "", label: line, names: [], urls: [] };
+}
+
+// Pure: why a correction is about something Cue really did or found on the call, or null. A claim of having done it that the done
+// list backs (doneOnCallVerdict); a correction that names a sent item or a find from a search on the call, by its link or its name.
+// Never "correct" something Cue actually did or found (joint review F1, 2026-10-29).
+export function correctionDoneOnCall(c: { quote: string; what?: string | null; note?: string | null; specifics?: string[] | null }, done: (string | DoneItem)[], found: FoundOnCall[] = []): string | null {
+  if (!done.length && !found.length) return null;
+  const v = doneOnCallVerdict(c.quote, done);
+  if (v.done) return v.why;
+  const text = `${c.quote} ${c.what ?? ""} ${c.note ?? ""}`;
+  const specifics = (Array.isArray(c.specifics) ? c.specifics : []).filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.toLowerCase());
+  const names = (name: string) => !!name.trim() && (namesItem(text, name) || specifics.some((x) => x === name.toLowerCase() || (x.length > 3 && name.toLowerCase().includes(x))));
+  const links = (url: string) => !!url && (text.includes(url) || specifics.includes(url.toLowerCase()));
+  for (const d of done.map((x) => (typeof x === "string" ? doneItemFromLine(x) : x))) {
+    const parsed = d.names.length || d.urls.length ? d : doneItemFromLine(d.label);
+    if (parsed.urls.some(links) || parsed.names.some(names)) return `done on the call: ${d.label.slice(0, 140)}`;
+  }
+  const f = found.find((x) => links(x.url) || names(x.name));
+  return f ? `found on the call: ${f.name.slice(0, 140)}` : null;
+}
+
+export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[]; doneOnCall?: (string | DoneItem)[]; foundOnCall?: FoundOnCall[]; offerFlags?: OfferFlag[] }): AuditPlan {
   const reg = auditRegistry();
   const corrections: CallClaim[] = [];
   const refused: AuditPlan["refused"] = [];
@@ -382,6 +455,12 @@ export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { kn
       refused.push({ quote: c.quote, type: c.type, why: d.why });
       continue;
     }
+    // Never a correction about something Cue's tools sent or its searches found on the call (by its name or link).
+    const covered = c.type === "invented_fact" || c.type === "capability" || c.type === "promise_unkeepable" ? correctionDoneOnCall(c, done, ctx.foundOnCall ?? []) : null;
+    if (covered) {
+      refused.push({ quote: c.quote, type: c.type, why: covered });
+      continue;
+    }
     if (c.type === "capability") {
       const v = capabilityCorrectionVerdict(c, reg);
       v.save ? corrections.push(c) : refused.push({ quote: c.quote, type: c.type, why: v.why });
@@ -389,6 +468,11 @@ export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { kn
       const v = inventedFactVerdict(c, transcript, ctx.knownBefore, ctx.records);
       v.save ? corrections.push(c) : refused.push({ quote: c.quote, type: c.type, why: v.why });
     } else if (c.type === "promise_unkeepable") corrections.push(c);
+  }
+  if (ctx.offerFlags?.length) {
+    const o = offerSourceCorrections(ctx.offerFlags, claims, transcript, ctx.knownBefore, ctx.records, done, ctx.foundOnCall ?? []);
+    corrections.push(...o.corrections);
+    refused.push(...o.refused);
   }
   const groups: { what: string; quotes: string[]; asked: string | null }[] = [];
   for (const c of claims.filter((x) => x.type === "promise_keepable" && x.what)) {
@@ -485,7 +569,9 @@ export async function auditCall(
   userId: string,
   transcript: string,
   knownBefore: string | { facts: string; impressions: string },
-  opts: { dryRun?: boolean; claims?: CallClaim[]; tasks?: OpenCallTask[]; doneOnCall?: DoneItem[] } = {},
+  // doneOnCall: what Cue's tools did on the call (services/callLedger.ts); foundOnCall: what its searches found on it; offerFlags: the
+  // call's offer source check (services/offerGuard.ts unsourcedInCall), held to the record and done checks before any is saved.
+  opts: { dryRun?: boolean; claims?: CallClaim[]; tasks?: OpenCallTask[]; doneOnCall?: DoneItem[]; foundOnCall?: FoundOnCall[]; offerFlags?: OfferFlag[] } = {},
 ): Promise<AuditPlan | null> {
   const facts = typeof knownBefore === "string" ? knownBefore : knownBefore.facts;
   const impressions = typeof knownBefore === "string" ? undefined : knownBefore.impressions;
@@ -503,13 +589,14 @@ export async function auditCall(
       });
       claims = parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? [];
     }
-    claims = claims.filter((c) => c && typeof c.quote === "string");
+    // source is code's mark (the offer source check's), never the audit's.
+    claims = claims.filter((c) => c && typeof c.quote === "string").map(({ source: _code, ...c }) => c);
     const checks = callAuditChecks(claims);
     const [records, tasks] = await Promise.all([
       memberRecordText(userId).catch(() => ""),
       opts.tasks ? Promise.resolve(opts.tasks) : recentOpenTasks(userId).catch(() => [] as OpenCallTask[]),
     ]);
-    const plan = planCallAudit(claims, transcript, { knownBefore: `${facts}\n${impressions ?? ""}`, records, tasks, doneOnCall: opts.doneOnCall ?? [] });
+    const plan = planCallAudit(claims, transcript, { knownBefore: `${facts}\n${impressions ?? ""}`, records, tasks, doneOnCall: opts.doneOnCall ?? [], foundOnCall: opts.foundOnCall ?? [], offerFlags: opts.offerFlags });
     if (opts.dryRun) return plan;
 
     // Keep the promises Co can keep, once per commitment. Carried by a task already open from this call: that task is the
@@ -542,10 +629,11 @@ export async function auditCall(
         }
       }
     }
-    // Remember what needs correcting, for the next text reply: only what survived the registry and record checks.
+    // Remember what needs correcting: only what survived the registry and record checks. Tied to this call (call_key), so this
+    // call's follow-up text is the one that carries it (jobs/postCallFollowUp.ts); else the next text reply, if it comes up.
     const corrections = plan.corrections;
     for (const c of corrections) {
-      await writeMemory(userId, "call_correction", JSON.stringify({ quote: c.quote.slice(0, 200), type: c.type, note: c.what?.slice(0, 200) ?? null }));
+      await writeMemory(userId, "call_correction", JSON.stringify({ quote: c.quote.slice(0, 200), type: c.type, note: c.what?.slice(0, 200) ?? null, call_key: callKey(transcript), ...(c.source ? { source: c.source } : {}) }));
     }
 
     await recordDecision({
@@ -555,7 +643,11 @@ export async function auditCall(
       outcome: corrections.length ? "skip" : "act",
       action: corrections.length ? "corrections_recorded" : "grounded",
       proposal: { claims, refused: plan.refused, promises: plan.promises },
-      checks: [...checks, ...plan.refused.map((r) => ({ name: `call_${r.type}_refused`, pass: true, reason: `"${r.quote.slice(0, 140)}" not saved: ${r.why.slice(0, 160)}` }))],
+      checks: [
+        ...checks,
+        ...corrections.filter((c) => c.source === "offer_source").map((c) => ({ name: "call_offer_unsourced", pass: false, reason: `"${c.quote.slice(0, 140)}" (${(c.what ?? "").slice(0, 100)})` })),
+        ...plan.refused.map((r) => ({ name: `call_${r.type}_refused`, pass: true, reason: `"${r.quote.slice(0, 140)}" not saved: ${r.why.slice(0, 160)}` })),
+      ],
       reason: corrections.length ? `${corrections.length} unsupported statement(s) on the call` : null,
     });
     return plan;
@@ -565,7 +657,9 @@ export async function auditCall(
   }
 }
 
-// Corrections from calls in the last week that a text reply hasn't used yet.
+// Corrections from calls in the last week, for the next text reply. One the call's follow-up text was drafted with (delivered_at)
+// is still there: nothing confirms the text's words took it back (joint review F9, 2026-10-29), so it says the text was meant to, and
+// Cue never stands by it and corrects it plainly if it comes up.
 export async function recentCallCorrections(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(
@@ -577,10 +671,97 @@ export async function recentCallCorrections(userId: string): Promise<string[]> {
     .map((r: any) => {
       try {
         const c = JSON.parse(r.content);
+        if (c.delivered_at) return `On a recent call Cue said "${c.quote}", which ${correctionWhy(c.type)}. Cue's text after that call was meant to take it back: never stand by it, and if it comes up, correct it plainly.`;
         return `On a recent call Cue said "${c.quote}", which ${c.type === "invented_fact" ? "wasn't based on anything Cue actually knew" : c.type === "capability" ? "isn't true about what Cue can do" : "is a promise Cue can't keep"}${c.note ? ` (${c.note})` : ""}. If it comes up, correct it plainly.`;
       } catch {
         return null;
       }
     })
     .filter((x): x is string => !!x);
+}
+
+// ---------------------------------------------------------------- the call's follow-up text corrects it (Royce, 2026-10-29)
+
+const correctionWhy = (type: string) => (type === "invented_fact" ? "wasn't based on anything Cue actually knew" : type === "capability" ? "isn't true about what Cue can do" : "is a promise Cue can't keep");
+
+export type CallCorrection = { id: string; quote: string; type: "invented_fact" | "capability" | "promise_unkeepable"; note: string | null; callKey: string | null; source: "audit" | "offer_source"; deliveredAt: string | null };
+
+// Pure: one call_correction row, as written by auditCall. Anything else (an older row without its call, a broken one) is null.
+export function parseCallCorrection(row: { id: unknown; content: unknown }): CallCorrection | null {
+  try {
+    const c = JSON.parse(String(row.content));
+    if (!c || typeof c.quote !== "string" || !c.quote.trim()) return null;
+    if (!["invented_fact", "capability", "promise_unkeepable"].includes(c.type)) return null;
+    return { id: String(row.id), quote: c.quote, type: c.type, note: typeof c.note === "string" && c.note.trim() ? c.note : null, callKey: typeof c.call_key === "string" ? c.call_key : null, source: c.source === "offer_source" ? "offer_source" : "audit", deliveredAt: typeof c.delivered_at === "string" ? c.delivered_at : null };
+  } catch {
+    return null;
+  }
+}
+
+// Pure: a promise Cue couldn't keep that has since been kept (a done task, something they now have) is no longer a mistake to take
+// back. Only promises: an invented fact or a capability claim stays wrong whatever was done since.
+export function keptSince(c: Pick<CallCorrection, "type" | "quote" | "note">, kept: string[]): boolean {
+  if (c.type !== "promise_unkeepable") return false;
+  const about = `${c.note ?? ""} ${c.quote}`;
+  return kept.some((k) => !!k && (sameSubject(about, k) || overlap(about, k) >= 0.5));
+}
+
+// Pure: what the follow-up may carry. Only this call's corrections (its key), not yet delivered, not kept since; a promise only when
+// what was kept could be read (kept null: unknown, so it waits for the next text); never one about something Cue did or found on the
+// call (correctionDoneOnCall; the done list unread, none); and only when the member fence leaves the line
+// whole (a line naming someone else never rides). Oldest first, at most two: a correction is a line, never a list.
+export const FOLLOW_UP_CORRECTIONS_MAX = 2;
+export function correctionsToCarry(rows: CallCorrection[], key: string, kept: string[] | null, strip: ((s: string) => string | null) | null, done: { items: (string | DoneItem)[]; found: FoundOnCall[] } | null): CallCorrection[] {
+  // The done list unread: nothing can be checked against it, so nothing rides (it waits for the next text).
+  if (!strip || !done) return [];
+  const whole = (s: string | null) => s === null || strip(s) === s;
+  return rows
+    .filter((c) => c.callKey === key && !c.deliveredAt)
+    .filter((c) => (c.type === "promise_unkeepable" ? kept !== null && !keptSince(c, kept) : true))
+    .filter((c) => !correctionDoneOnCall(c, done.items, done.found))
+    .filter((c) => whole(c.quote) && whole(c.note))
+    .slice(0, FOLLOW_UP_CORRECTIONS_MAX);
+}
+
+// Pure: a correction as the follow-up's draft reads it: Cue's own words from the call and why they don't hold, from the audit row
+// only (never anything the draft could take as true).
+export function correctionFact(c: Pick<CallCorrection, "quote" | "type" | "note">): string {
+  const why = c.type === "invented_fact" ? "you had nothing behind it" : c.type === "capability" ? "it isn't true about what you can do" : "it's a promise you can't keep";
+  return `On the call you said "${c.quote}", but ${why}${c.note ? ` (${c.note})` : ""}`;
+}
+
+// This call's corrections, from the audit's rows (the last week, as the reply path reads them).
+export async function callCorrectionsFor(userId: string, transcript: string): Promise<CallCorrection[]> {
+  const key = callKey(transcript);
+  const { rows } = await pool.query(
+    `SELECT id, content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_correction' AND created_at > NOW() - INTERVAL '7 days' AND content LIKE $2 ORDER BY created_at`,
+    [userId, `%"call_key":"${key}"%`],
+  );
+  return rows.map(parseCallCorrection).filter((c: CallCorrection | null): c is CallCorrection => !!c && c.callKey === key);
+}
+
+// Pure: the row's content with when its follow-up carried it.
+export function deliveredContent(content: string, at: Date): string | null {
+  try {
+    const c = JSON.parse(content);
+    if (!c || typeof c !== "object") return null;
+    return JSON.stringify({ ...c, delivered_at: c.delivered_at ?? at.toISOString() });
+  } catch {
+    return null;
+  }
+}
+
+// After the follow-up drafted with them went: marked delivered, so the next text knows that text was meant to take them back (and
+// never brings them up on its own). Their own rows only.
+export async function markCallCorrectionsDelivered(userId: string, ids: string[], at = new Date()): Promise<number> {
+  if (!ids.length) return 0;
+  const { rows } = await pool.query(`SELECT id, content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_correction' AND id::text = ANY($2::text[])`, [userId, ids]);
+  let n = 0;
+  for (const r of rows) {
+    const next = deliveredContent(String(r.content), at);
+    if (!next || next === r.content) continue;
+    await pool.query(`UPDATE co_memories SET content = $3 WHERE id = $1 AND user_id = $2 AND memory_type = 'call_correction'`, [r.id, userId, next]);
+    n++;
+  }
+  return n;
 }

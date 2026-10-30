@@ -14,7 +14,7 @@ import { solicitationGoals } from "../agent/eventAskSolicitation.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
-import { draftHeldRecap, draftPostCall, holdRecapForMood, isHeldRecap, markPostCallDropped, markPostCallSent, recordRecapOffer } from "../jobs/postCallFollowUp.js";
+import { draftHeldRecap, draftPostCall, holdRecapForMood, isHeldRecap, markCarriedCorrections, markPostCallDropped, markPostCallSent, recordRecapOffer } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
@@ -931,14 +931,17 @@ export const proactiveRegistry: ProactiveRegistry = {
     async draft(c, person) {
       if (isHeldRecap(c)) return draftHeldRecap(c.userId, person.firstName, c.payload.followUpId);
       const r = await draftPostCall(c.userId, person.firstName, c.payload.followUpId);
-      return r ? { messages: [r.text], ...r } : skip("model chose SKIP");
+      // The call corrections this draft was written with ride to onSent, so only those are marked delivered.
+      return r ? { messages: [r.text], text: r.text, rules: r.rules, ...(r.corrections.length ? { meta: { callCorrectionIds: r.corrections.map((x) => x.id) } } : {}) } : skip("model chose SKIP");
     },
-    async onSent(c, _p, messages) {
+    async onSent(c, _p, messages, meta) {
       if (isHeldRecap(c)) {
         await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => false);
         return;
       }
       await markPostCallSent(c.payload.followUpId);
+      // The corrections it was drafted with went with it: delivered, so the next text knows it was meant to take them back (harness/callGrounding.ts).
+      await markCarriedCorrections(c.userId, meta).catch((err: any) => console.error("postCallFollowUp: marking call corrections delivered failed (non-fatal):", err?.message ?? err));
       const offered = await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => null);
       // Went without the recap (known: a failed record is not "without"): if a hard time was the only thing in the way, it's held for
       // this call, never dropped for it.
