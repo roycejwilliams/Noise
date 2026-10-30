@@ -48,8 +48,13 @@ check("timing (belated)", /something already behind them is said as past/.test(G
 check("no therapy or plan turn unless asked", /don't turn it into a question about what would help, a therapy question, or a plan/.test(G));
 check("feedback: their words never handed back, what they told used rather than asked again", /with something of your own in it rather than their words handed back, and using what they already told you rather than asking again/.test(F0));
 const F = D.FEEDBACK_GUIDE;
-check("feedback: brief ownership, then the better reply to what they shared", /Own it in a few words at most, then show it/.test(F) && /their earlier message deserved/.test(F));
-check("feedback: no tone explanation, no long apology, no asking to repeat, honest if asked", /Don't explain your tone or how you work/.test(F) && /don't apologize at length/.test(F) && /don't ask them to say it again/.test(F) && /If they ask what went wrong, say honestly/.test(F));
+check("feedback: the better reply now, to what they shared", /^They're telling you how you're coming across\./.test(F) && /Give the better reply now: the reply their earlier message deserved/.test(F));
+// Royce 2026-10-29 (texting before/after): Cue explained its own tone and quoted its own earlier line, as a template. The guide forbids
+// talking about the earlier reply at all; a brief plain acknowledgment only if natural, never an explanation.
+check("feedback: never quotes, repeats or compares with its earlier reply", /Don't talk about your earlier reply: don't quote it or repeat its words, don't compare this reply with it/.test(F));
+check("feedback: never describes its own tone or how it came across", /don't describe your own tone or how you came across/.test(F) && !/Own it in a few words/.test(F));
+check("feedback: a brief plain acknowledgment only if natural, never an explanation", /A brief, plain acknowledgment is fine only when it comes naturally, never an explanation\./.test(F));
+check("feedback: no explaining how it works, no long apology, no asking to repeat, honest if asked", /Don't explain how you work/.test(F) && /don't apologize at length/.test(F) && /don't ask them to say it again/.test(F) && /If they ask what went wrong, say honestly/.test(F));
 
 // ---- Stock sentences on texts ----
 check("'Makes sense.' alone is a stock sentence on a text", L.textStockSentence("Makes sense.") && L.textStockSentence("That makes sense.") && L.textStockSentence("Yeah, totally makes sense!"));
