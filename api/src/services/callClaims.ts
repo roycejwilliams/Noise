@@ -17,10 +17,12 @@ const EARLIER = /\b(?:yesterday|earlier|last (?:night|week|time|month)|this morn
 // Someone else did the sending ("the deck you sent", "what they texted").
 const OTHER_SUBJECT = /\b(?:you|they|he|she|we|someone|somebody|who|people|your \w+)\s+(?:just\s+|already\s+|had\s+|have\s+|has\s+)?(?:sent|texted|shot|popped|dropped|put|fired|messaged|forwarded|shared)\b/i;
 const PLACE = String.raw`(?:texts?|text messages|messages|imessages?|inbox|phone|dms?|messages app)`;
-const SENT_STRONG = /\b(?:sent|texted|messaged|forwarded|fired (?:it |that |them |those |this )?off|shot (?:it|that|them|those|this|both|you|the \w+|over|across)|pinged (?:it|that|them|you))\b/i;
+const SENT_STRONG = /\b(?:sent|texted|messaged|forwarded|fired (?:it |that |them |those |this )?off|shot (?:it|that|them|those|this|both|you|the \w+|over|across)|pinged (?:it|that|them|you)|shared (?:it|that|them|those|this|the \w+) with you|hit send)\b/i;
 const SENT_WEAK = new RegExp(String.raw`\b(?:put|popped|dropped|stuck|slid|shared|got|pushed)\b[^.!?]{0,30}\b(?:in|into|to|on|over to|onto)\s+your\s+${PLACE}\b|\b(?:put|popped|dropped|shared|got)\b\s+(?:it|that|them|those|this|both)\s+(?:over|across|through|your way|to you)\b`, "i");
 const LOCATION = new RegExp(String.raw`\b(?:in|into|on|to)\s+your\s+${PLACE}\b|\byour\s+${PLACE}\s+(?:now|should)\b`, "i");
-const ARRIVAL = /\byou should (?:have|see|get|be (?:seeing|getting)) (?:it|that|them|those|the \w+)\b|\b(?:check|look at|open) your (?:texts?|phone|messages|inbox)\b|\b(?:it'?s|that'?s|they'?re|this is|it is|that is|they are) (?:on (?:its|their|the) way(?=\s*(?:to you|over|now)?\s*[.!]?\s*$)|coming through|gone (?:out|over|through)|out to you|through|done|sent|over to you)(?![a-z])|\byou'?ve (?:got|received) (?:it|them|that|those|the \w+)\b|\byou(?:'ve| have) (?:it|them) now\b|\b(?:there you go|there it is|all set)\b/i;
+const ARRIVAL = /\byou should (?:have|see|get|be (?:seeing|getting)) (?:it|that|them|those|the \w+)\b|\b(?:check|look at|open) your (?:texts?|phone|messages|inbox)\b|\b(?:it'?s|that'?s|they'?re|this is|it is|that is|they are) (?:on (?:its|their|the) way(?=\s*(?:to you|over|now)?\s*[.!]?\s*$)|coming through|gone (?:out|over|through)|out to you|through|done|sent|over to you)(?![a-z])|\byou'?ve (?:got|received) (?:it|them|that|those|the \w+)\b|\byou(?:'ve| have) (?:it|them) now\b|\b(?:there you go|there it is|all set)\b|\b(?:it|that|they|the (?:link|text|message))\s+(?:went|has gone|have gone|got) through\b|\b(?:should(?:'ve| have)?|ought to)\s+(?:be\s+)?(?:there|landed|arrived|come through|gotten there)\b|\b(?:it|that|they)'?s? (?:is |are )?(?:there|landed|arrived) now\b|\b(?:your |the )?(?:link|text|message)(?:'s| is) (?:there|out|in|through)\b/i;
+// Said as already there, with a "will" that's really a "now" ("You'll see it in your texts now"): a claim whatever the tense.
+const THERE_NOW = /\byou'?ll (?:see|find|have) (?:it|that|them|the \w+)\b[^.!?]*\bnow\b/i;
 // Said as happening: "I'm texting it to you now", "sending it over", "I'll text it right now".
 const NOW = /\b(?:sending|texting|shooting|dropping|firing|popping|messaging|forwarding|pushing)\b(?:[^.!?]{0,30}\b(?:now|right now|as we speak|over|across|through|your way)\b|\s+(?:it|that|them|this|those)\s+(?:to you|your way)\b)|\bi'?ll (?:send|text|shoot|drop|fire|pop)\b[^.!?]{0,30}\b(?:now|right now|right away|this second)\b/i;
 const SAVED = /\b(?:i(?:'ve| have)? (?:just |already )?(?:saved|set (?:it|that|this) up|added (?:it|that|this)|started (?:a task|on (?:it|that|this))|noted (?:it|that|this) down)\b|(?:it'?s|that'?s) (?:saved|set up|noted)\b)/i;
@@ -50,7 +52,7 @@ export type ClaimKind = "sent" | "location" | "arrival" | "now" | "saved";
 // Pure: which family a sentence claims, if any. Read clause by clause ("Sent it, let me know if it doesn't come through" still claims
 // the send): a clause that's a question, negated, in the future or conditional, or about an earlier send isn't a claim, and someone
 // else's sending isn't Cue's.
-const CLAUSES = /\s*(?:[,;:]|\s[-–—]\s|\b(?:and|but|so|because)\b)\s*/i;
+const CLAUSES = /\s*(?:[,;:.!]|\s[-–—]\s|\b(?:and|but|so|because)\b)\s*/i;
 export function claimKind(sentence: string, sendContext: boolean): ClaimKind | null {
   const s = sentence.replace(/[’‘]/g, "'");
   if (QUESTION.test(s)) return null;
@@ -58,6 +60,7 @@ export function claimKind(sentence: string, sendContext: boolean): ClaimKind | n
   for (const c of s.split(CLAUSES).map((x) => x.trim()).filter(Boolean)) {
     if (NEGATED.test(c)) continue;
     if (NOW.test(c) && !FUTURE.test(c.replace(/\bi'?ll\b/i, ""))) return "now";
+    if (THERE_NOW.test(c)) return "location";
     if (FUTURE.test(c)) continue;
     if (!OTHER_SUBJECT.test(c) && (SENT_STRONG.test(c) || SENT_WEAK.test(c))) return "sent";
     if (LOCATION.test(c)) return "location";
@@ -68,6 +71,10 @@ export function claimKind(sentence: string, sendContext: boolean): ClaimKind | n
 }
 
 const words = (x: string) => (x.toLowerCase().match(/[a-z0-9][a-z0-9'-]{2,}/g) ?? []).filter((w) => !["the", "and", "for", "with", "link", "links", "your", "you", "this", "that", "event", "night"].includes(w));
+// An item's distinctive words (and a claim's): never the words every claim or item shares.
+const COMMON = new Set(["the", "and", "for", "with", "link", "links", "your", "you", "this", "that", "event", "night", "one", "ones", "just", "sent", "texted", "text", "texts", "send", "over", "into", "it's", "its", "there", "now", "too", "also", "both", "them", "those", "the", "okay", "alright", "messages", "message", "phone", "inbox", "shot", "popped", "dropped", "put", "got", "thing", "things", "stuff", "place", "spot", "texted", "saved", "added", "started", "noted", "i've", "i'll", "already", "https", "lu.ma", "com", "www"]);
+export const itemWords = (x: string): string[] => [...new Set((x.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9][a-z0-9'-]{2,}/g) ?? []).map((w) => w.replace(/'s$/, "")).filter((w) => w.length > 2 && !COMMON.has(w)))];
+
 // Pure: the sentence names this item (its link, or most of its own words).
 export function namesItem(sentence: string, item: string): boolean {
   const s = sentence.toLowerCase();
@@ -85,8 +92,11 @@ export function claimHeld(sentence: string, st: ClaimState): string | null {
   if (k === "saved") return st.acted || st.deliveredCount > 0 ? null : "says it saved something before a tool came back done";
   if (k === "now") return st.inFlight ? null : "says a send is happening when none is in flight";
   if (!st.deliveredCount) return "says it sent something before a send came back done";
-  const namesUndelivered = st.undelivered.some((u) => namesItem(sentence, u)) && !st.delivered.some((d) => namesItem(sentence, d));
-  if (namesUndelivered) return "says an item went that didn't";
+  // Any distinctive word of an item that didn't go, shared by no item that did ("the gallery one" when only jazz went), holds it.
+  const deliveredWords = new Set(st.delivered.filter((d) => !/^https?:\/\//.test(d)).flatMap(itemWords));
+  const missedWords = new Set(st.undelivered.filter((u) => !/^https?:\/\//.test(u)).flatMap(itemWords).filter((w) => !deliveredWords.has(w)));
+  const said = new Set(itemWords(sentence));
+  if ([...missedWords].some((w) => said.has(w)) || st.undelivered.some((u) => /^https?:\/\//.test(u) && sentence.includes(u))) return "says an item went that didn't";
   if (PLURAL.test(sentence) && st.deliveredCount < 2) return "says more went than did";
   if (PRONOUN_PLURAL.test(sentence) && st.deliveredCount < 2 && st.undelivered.length) return "says more went than did";
   return null;

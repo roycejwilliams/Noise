@@ -22,22 +22,14 @@ import { checkDraft, draftAgain, draftProactive, localHourOk, nextLocalHour, RUL
 import { recordDecision, type GateCheck } from "../harness/core.js";
 import { callKey } from "./callKey.js";
 import { deliveryWords, nextDeliveryTime } from "./memberTime.js";
-import { goalBody, overlap, promiseKeptBy, type Sent } from "./followThrough.js";
+import type { Sent } from "./followThrough.js";
 import type { CallLedger } from "./callLedger.js";
 
-// Pure: a promise from this call is already kept by something that went out after it was made, of the kind it promised, and about
-// it (its words, or what they asked): promiseKeptBy alone takes any link for a links promise, which is enough to mark one kept but not
-// to skip doing it.
-// A promise to keep looking ("keep looking for more", "whenever something comes up"): one find never fulfils it; it closes only by
-// the look-out's own rules, never here.
-const LOOKOUT = /\b(?:keep (?:looking|an eye|an ear|watching|searching|digging|checking)|keep (?:you )?posted|look(?:ing)? out for|watch(?:ing)? for|more (?:like|of|options|ideas|events)|any (?:more|others|new)|anything (?:else|new|more)|whenever|as (?:they|things|more) come|ongoing|every (?:week|day|time)|from now on)\b/i;
-export function keptByWhatWent(c: Pick<Commitment, "goal" | "theirWords" | "createdAt">, went: Sent[]): boolean {
-  if (!c.goal || !c.createdAt) return false;
-  if (LOOKOUT.test(goalBody(c.goal))) return false;
-  const at = new Date(c.createdAt);
-  if (!promiseKeptBy({ goal: c.goal, theirWords: c.theirWords ?? null, at }, went).kept) return false;
-  const body = goalBody(c.goal);
-  return went.some((s) => s.at.getTime() > at.getTime() && s.kind !== "document" && (overlap(body, s.text) > 0 || (!!c.theirWords && overlap(c.theirWords, s.text) > 0))) || went.some((s) => s.at.getTime() > at.getTime() && s.kind === "document" && overlap(body, s.text) > 0);
+// Pure: the owed promise tasks from this call (services/callLedger.ts) that are settled: every link one was for landed for this member
+// at any point since the call started (on the call, late, or just now). Nothing else is ever closed here: every other promise from
+// the call stays open for its own follow-through (review of #320: closing by shared words closed promises nothing had kept).
+export function settledOwedTasks(owed: { taskId?: number | null; items: { url: string }[] }[], landed: (url: string) => boolean): number[] {
+  return [...new Set(owed.filter((o) => typeof o.taskId === "number" && o.items.length && o.items.every((i) => landed(i.url))).map((o) => o.taskId as number))];
 }
 
 export const CONFIRM_TYPE = "call_confirm" as const;
@@ -169,10 +161,12 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
     // send already landed. Each link its own text, then its name (as on file). Opted out or archived: nothing.
     const owedSent: string[] = [];
     let person: Awaited<ReturnType<FollowThroughDeps["person"]>> | undefined;
+    // Landed for this member since the call started: what's gone out (texts and Cue's own record), or a send done on the call.
+    const wentSince = ledger.owed.length && deps.sends ? await deps.sends(o.userId, since).catch(() => [] as Sent[]) : [];
+    const doneOnCall = new Set(ledger.done.flatMap((d) => d.urls));
+    const landed = (url: string) => doneOnCall.has(url) || owedSent.includes(url) || wentSince.some((s) => s.text.includes(url));
     if (ledger.owed.length && deps.deliver) {
       person = await deps.person(o.userId);
-      const went = deps.sends ? await deps.sends(o.userId, since).catch(() => [] as Sent[]) : [];
-      const landed = (url: string) => went.some((s) => s.text.includes(url));
       const items = [...new Map(ledger.owed.flatMap((x) => x.items).map((x) => [x.url, x])).values()];
       for (const item of items) {
         if (landed(item.url)) {
@@ -189,20 +183,12 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
       }
     }
     const all = await deps.commitments(o.userId, since);
-    // A promise kept on the call, or by what just went out, is closed, never worked again (no second send of the same thing).
-    const keptOnCall: number[] = [];
-    let commitments = all;
-    if (all.length && deps.sends && deps.close) {
-      const went = await deps.sends(o.userId, since).catch(() => [] as Sent[]);
-      commitments = [];
-      for (const c of all) {
-        if (keptByWhatWent(c, went)) {
-          keptOnCall.push(c.taskId);
-          await deps.close(o.userId, c.taskId, "Kept: what was promised went out on the call or the moment it ended.").catch(() => null);
-        } else commitments.push(c);
-      }
-      if (keptOnCall.length) await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: "act", action: "kept_on_call", proposal: { tasks: keptOnCall }, reason: null }).catch(() => {});
-    }
+    // Only an owed link's own promise closes, and only when that exact link landed for them since the call started (so the late
+    // landing of a send that timed out on the call is never sent twice). Every other promise runs as before.
+    const keptOnCall = deps.close ? settledOwedTasks(ledger.owed, landed) : [];
+    for (const id of keptOnCall) await deps.close!(o.userId, id, "Kept: the link it was for reached them on the call or the moment it ended.").catch(() => null);
+    if (keptOnCall.length) await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: "act", action: "kept_on_call", proposal: { tasks: keptOnCall }, reason: null }).catch(() => {});
+    const commitments = all.filter((c) => !keptOnCall.includes(c.taskId));
     const done = { ...(owedSent.length ? { owedSent } : {}), ...(keptOnCall.length ? { keptOnCall } : {}) };
     if (!commitments.length) return { action: owedSent.length ? "sent" : "none", ...done };
     person ??= await deps.person(o.userId);
