@@ -96,18 +96,10 @@
     }
   ],
   "structure": {
-    "v": "9b886018627f",
-    "hash": "3ea20415fc097f3b",
-    "wording": {
-      "readTurn.ts:turnReadAddendum#0": "9fa1cbaa",
-      "readTurn.ts:turnReadAddendum#1": "5fb309a0",
-      "readTurn.ts:turnReadAddendum#2": "22eecf2e",
-      "readTurn.ts:turnReadAddendum#4": "8b26d96a"
-    },
-    "format": [
-      "readTurn.ts:turnReadAddendum#0",
-      "readTurn.ts:turnReadAddendum#4"
-    ],
-    "tools": null
+    "v": "d772ee43ea1b",
+    "hash": "83a600ee90e3eadc",
+    "wording": {},
+    "guard": {},
+    "format": []
   }
 }

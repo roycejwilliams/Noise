@@ -302,7 +302,8 @@ export const CASES: GoldenCase[] = [
       else if (read.reports === null) misses.push("the thread read failed");
       if (G.codeChecks(echo, rf, { message, recentConversation: "" }).some((c) => c.name === "no_thread_report")) misses.push(`"${echo}" was cut as a status report`);
       // And the reply turn: whatever Co writes back to their news, no line of it is cut as a thread report.
-      const r = await reply({ firstName: "Ellis", now: DAY, exchange: exchange.slice(0, 2), searching: NONE, threads, message });
+      // Their news is a share for the hard rules and the rubric (kind only: the recorded request has no moment read, see reply.ts).
+      const r = await reply({ firstName: "Ellis", now: DAY, exchange: exchange.slice(0, 2), searching: NONE, threads, message, kind: "share" });
       // A reaction alone is a real answer (Co's quiet move); neither a text nor a reaction is a miss (voiceMisses: "no reply").
       if (!(r.reacted && !r.text.trim())) misses.push(...voiceMisses(r.text));
       if (r.checked.some((c) => /thread_report/.test(c))) misses.push("the reply had a line cut as a thread report");

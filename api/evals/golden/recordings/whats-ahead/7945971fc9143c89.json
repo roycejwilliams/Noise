@@ -93,12 +93,10 @@
     }
   ],
   "structure": {
-    "v": "9b886018627f",
-    "hash": "20d311b557208874",
-    "wording": {
-      "conversationReply.ts:prompt#0": "ed7c4b9c"
-    },
-    "format": [],
-    "tools": null
+    "v": "d772ee43ea1b",
+    "hash": "7945971fc9143c89",
+    "wording": {},
+    "guard": {},
+    "format": []
   }
 }

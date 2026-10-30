@@ -39,13 +39,30 @@ const bareUrl = (s: string) => /^\s*https?:\/\/\S+\s*$/.test(s);
 const trimUrl = (u: string) => u.replace(/[.,!?;:]+$/, "");
 
 // ---- 1. No invented facts: every name, place, clock time, number and link is in the facts, the thread or their words.
-// Words that are Cue's own world, not a claim about theirs.
-const OWN = "Cue Noise iMessage";
+// Words that are Cue's own world or everyday trade words, not a claim about theirs.
+const OWN = "Cue Noise iMessage DJ DJs MC PR HR";
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const MONTH_DAY = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi;
+const dayOfYear = (m: string, d: string) => MONTHS.indexOf(m.toLowerCase().slice(0, 3)) * 31 + Number(d);
+// Text that carries no fact of its own, cleared before the check (review of #318: 12 of 40 real replies were flagged for these):
+//   a numbered-list marker at a line's start ("3. The proof point"); an advice range ("20-30 min", "3-4 pairs"); and date arithmetic
+//   from a date the turn stood on: "18 days out", "the 15th", or a month and day within a month of a date it was given ("Oct 16" when
+//   today is Oct 13). A date further out than that is still checked.
+export function withoutNonFacts(text: string, given: string): string {
+  let t = text.replace(/^\s*\d{1,2}[.)]\s+/gm, "").replace(/\b\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?\b/g, " a range ");
+  const iso = [...given.matchAll(/\b\d{4}-(\d{2})-(\d{2})\b/g)].map((m) => (Number(m[1]) - 1) * 31 + Number(m[2]));
+  const known = [...[...given.matchAll(MONTH_DAY)].map((m) => dayOfYear(m[1], m[2])), ...iso];
+  if (!known.length) return t;
+  t = t.replace(/\b\d{1,2}\s*(?=(?:days?|weeks?)\b)/gi, " ").replace(/\b(?:the )?\d{1,2}(?:st|nd|rd|th)\b/gi, " ");
+  return t.replace(MONTH_DAY, (all, m, d) => (known.some((k) => Math.abs(k - dayOfYear(m, d)) <= 31) ? m : all));
+}
 export function inventedFacts(i: HardRuleInput): string[] {
   const given = [i.facts, ...i.theirLines, ...i.coLines, i.firstName ?? ""].join("\n");
   const src = { all: prepareSource(`${given}\n${SPOKEN_COMMON} ${OWN}`), asked: prepareSource(given) };
   const out: string[] = [];
-  for (const s of sentencesOf(i.text.replace(URL_RE, " "))) {
+  // A quote mark opens its own sentence: the capital after it ("Give", "Thanks") is a first word, not a name.
+  const pieces = sentencesOf(withoutNonFacts(i.text.replace(URL_RE, " "), given)).flatMap((s) => s.split(/["“”]/).map((x) => x.trim()).filter(Boolean));
+  for (const s of pieces) {
     const p = spokenProblem(s, src);
     // A promise of later work is the product's own fact check's call (it reads the task list); here only names, times and numbers.
     if (p && p.kind !== "promise") out.push(`${p.kind === "number" ? "a number" : p.kind === "event" ? "an event detail" : "a name"} nothing gave it (${p.missing.join(", ")}): "${s.slice(0, 120)}"`);
@@ -93,11 +110,12 @@ export function machinery(text: string): string[] {
 }
 
 // ---- 5. No quoting its own earlier line back ("That deserved more than 'nice evening'"): a quoted span of 2+ words from what Cue sent.
-export function quotesOwnLine(text: string, coLines: string[]): string[] {
+// A span the member said first is theirs, even when Cue's earlier line quoted it too (review of #318: their founding-story line).
+export function quotesOwnLine(text: string, coLines: string[], theirLines: string[] = []): string[] {
   const t = norm(text);
   const spans = [...t.matchAll(/"([^"\n]{3,160})"/g), ...t.matchAll(/(?:^|[\s(])'([^'\n]{3,160})'(?=[\s.,!?;:)]|$)/g)].map((m) => m[1]);
-  const theirs = coLines.map(words);
-  return spans.filter((q) => words(q).split(" ").length >= 2 && theirs.some((l) => ` ${l} `.includes(` ${words(q)} `))).map((q) => `quotes its own earlier line back: "${q}"`);
+  const has = (lines: string[], q: string) => lines.map(words).some((l) => ` ${l} `.includes(` ${words(q)} `));
+  return spans.filter((q) => words(q).split(" ").length >= 2 && has(coLines, q) && !has(theirLines, q)).map((q) => `quotes its own earlier line back: "${q}"`);
 }
 
 // ---- 6. Link then caption: a find goes out as its link alone, then a caption that isn't a link; never inside prose.
@@ -132,7 +150,7 @@ export function hardRuleMisses(i: HardRuleInput): string[] {
     ...(i.kind === "checkin" ? statusTalk(prose) : []),
     ...stockEmpathy(prose),
     ...machinery(prose),
-    ...quotesOwnLine(prose, i.coLines),
+    ...quotesOwnLine(prose, i.coLines, i.theirLines),
     ...linkThenCaption(sends, i.findUrls ?? []),
     ...repliesPerTurn(sends, i.tools ?? []),
   ];

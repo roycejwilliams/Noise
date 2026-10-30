@@ -3,6 +3,7 @@
 //   npm run evals:golden:record -- --only running-work     record: real calls, capped, the case's recordings rewritten
 //   npm run evals:golden:record -- --missing               record only the cases whose replay misses (a new or changed case)
 //   npm run evals:golden:record -- --moved                 ...and the cases that replayed on a moved prompt (wording changed)
+//   npm run evals:golden -- --ledger <PR>                   replay that records each tone move it sees in moved-ledger.json
 //   npm run evals:golden:live                              live: real calls, nothing written (the manual drift check)
 //   npm run evals:golden:quality                           quality: each case 3 times, real calls, scored by majority (manual or cron)
 //   npm run evals:golden -- --estimate                     what a quality run would cost, from the recordings (no call)
@@ -20,9 +21,10 @@ import { takeReplies, type NotedReply } from "./replies.js";
 import { wordingRegistry } from "./wording.js";
 import { estimateQuality } from "./estimate.js";
 import { failedCriteria, gradeReply } from "../lib/replyRubric.js";
+import { moveProblem, readLedger, writeLedger, type LedgerEntry, type Move } from "./ledger.js";
 
 type Mode = "replay" | "record" | "live";
-type Moved = { hash: string; model: string | null; moved: string[] };
+type Moved = { hash: string; model: string | null; moved: Move[] };
 type Attempt = { value: GoldenResult; attempt: number; misses: string[]; served: number; recorded: number; unused: string[]; moved: Moved[] };
 type Miss = { case: string | null; attempt: number | null; miss: string };
 type Hooks = {
@@ -50,6 +52,11 @@ const movedToo = argv.includes("--moved");
 const quality = argv.includes("--quality");
 const estimateOnly = argv.includes("--estimate");
 const RUNS = Math.max(1, Number(flag("--runs") ?? process.env.GOLDEN_RUNS ?? 3) || 3);
+// --ledger <PR>: record each move this replay sees in evals/golden/moved-ledger.json, dated today (the PR commits the file).
+const ledgerPr = flag("--ledger");
+const ledger: LedgerEntry[] = readLedger();
+const ledgerUsed = new Set<LedgerEntry>();
+const today = new Date(golden?.realNow() ?? 0).toISOString().slice(0, 10);
 if ((missingOnly || movedToo) && golden.mode !== "record") { quiet("golden: --missing and --moved are record options (npm run evals:golden:record -- --missing)"); exit(2); }
 if (quality && golden.mode !== "live") { quiet("golden: --quality makes real calls: npm run evals:golden:quality"); exit(2); }
 
@@ -163,12 +170,18 @@ for (const c of picked) {
   if (a.misses.length && !notRecorded) noRecording++;
   const infra = !r.ok && r.misses.some((m) => INFRA.test(m));
   const moved = mode === "replay" ? a.moved : [];
-  const tag = notRecorded ? "pend(not recorded)" : a.misses.length ? "FAIL(no recording)" : c.status.live ? (r.ok ? (flaky ? "ok~ " : moved.length ? "ok(moved)" : "ok  ") : infra ? "FAIL(infra)" : "FAIL") : r.ok ? "pend(ok)" : "pend";
+  // A move passes only on its ledger entry (evals/golden/ledger.ts): exact, and under 14 days old.
+  const moves = [...new Map(moved.flatMap((m) => m.moved).map((x) => [`${x.id}:${x.from}:${x.to}`, x])).values()];
+  if (ledgerPr) for (const x of moves) if (x.from && !ledger.some((e) => e.chunk === x.id && e.from === x.from && e.to === x.to)) ledger.push({ chunk: x.id, from: x.from, to: x.to, pr: ledgerPr, date: today });
+  for (const x of moves) { const e = ledger.find((l) => l.chunk === x.id && l.from === x.from && l.to === x.to); if (e) ledgerUsed.add(e); }
+  const moveMisses = moves.map((x) => moveProblem(x, ledger, golden.realNow())).filter((x): x is string => !!x);
+  if (moveMisses.length) { r.ok = false; r.misses = [...r.misses, ...moveMisses.map((m) => `moved: ${m}`)]; }
+  const tag = notRecorded ? "pend(not recorded)" : a.misses.length ? "FAIL(no recording)" : c.status.live ? (r.ok ? (flaky ? "ok~ " : moved.length ? "ok(moved)" : "ok  ") : infra ? "FAIL(infra)" : moveMisses.length ? "FAIL(moved)" : "FAIL") : r.ok ? "pend(ok)" : "pend";
   // On GitHub, a pass on the retry or on a moved prompt shows as a warning on the run, not only in the log.
   if (flaky && process.env.GITHUB_ACTIONS) quiet(`::warning title=golden case ${c.n} passed on a retry::${c.id}: first run missed: ${flaky.join("; ").replace(/\n/g, " ").slice(0, 300)}`);
-  if (moved.length && process.env.GITHUB_ACTIONS) quiet(`::warning title=golden case ${c.n} replayed on a moved prompt::${c.id}: ${[...new Set(moved.flatMap((m) => m.moved))].join(", ").slice(0, 300)}. Its model answers predate the change: re-record it or run the quality run.`);
+  if (moved.length && process.env.GITHUB_ACTIONS) quiet(`::warning title=golden case ${c.n} replayed on a moved prompt::${c.id}: ${[...new Set(moves.map((m) => m.id))].join(", ").slice(0, 300)}. Its model answers predate the change: re-record it or run the quality run.`);
   if ((c.status.live && !r.ok) || (a.misses.length && !notRecorded)) failed++;
-  const movedNames = [...new Set(moved.flatMap((m) => m.moved))];
+  const movedNames = [...new Set(moves.map((m) => m.id))];
   const calls = mode === "replay" ? `${a.served} replayed${moved.length ? `, ${moved.length} on a moved prompt (${movedNames.join(", ")})` : ""}${a.unused.length ? `, ${a.unused.length} recording(s) unused` : ""}` : mode === "record" ? `${a.recorded} recorded` : "live";
   rows.push({ n: c.n, id: c.id, attempt: a.attempt, live: c.status.live, ok: r.ok, mode, flaky, moved: movedNames, notRecorded, misses: r.misses, observed: r.observed, replies: run.replies.map((x) => ({ kind: x.kind, text: x.text, sends: x.sends?.length ?? 0, hard: x.hard })), calls: { served: a.served, recorded: a.recorded, unused: a.unused }, ms: golden.realNow() - t0 });
   quiet(`${tag} ${String(c.n).padStart(2)} ${c.id}  [${calls}]${r.misses.length ? `  (${r.misses.join(a.misses.length ? "\n      " : "; ")})` : ""}${flaky ? `  [flaky: first run missed: ${flaky.join("; ")}]` : ""}${c.status.live ? "" : `  [until ${c.status.until}]`}\n      ${r.observed.replace(/\n+/g, " / ").slice(0, 260)}`);
@@ -188,10 +201,14 @@ writeFileSync(new URL("./last.local.json", import.meta.url), JSON.stringify(rows
 const live = rows.filter((r) => r.live);
 const liveFailed = live.filter((r) => !r.ok).length;
 const flakes = rows.filter((r) => r.flaky).map((r) => r.id);
-const movedCases = rows.filter((r) => r.moved?.length).map((r) => r.id);
+const movedCases = rows.filter((r) => r.moved?.length && r.ok).map((r) => r.id);
 const unrecorded = rows.filter((r) => r.notRecorded).map((r) => r.id);
 const s = golden.stats();
-quiet(`\ngolden (${golden.mode}${missingOnly ? ", --missing" : ""}${movedToo ? ", --moved" : ""}): ${live.length - liveFailed}/${live.length} live cases passed${flakes.length ? ` (${flakes.length} on a retry: ${flakes.join(", ")})` : ""}, ${rows.length - live.length} pending${unrecorded.length ? ` (${unrecorded.length} not recorded yet: ${unrecorded.join(", ")})` : ""}${noRecording ? `, ${noRecording} case(s) with model calls that have no recording` : ""}${late.length ? `, ${late.length} late miss(es)` : ""} | ${rows.reduce((n, r) => n + (r.replies?.length ?? 0), 0)} replies through the hard rules | ${s.served} model calls replayed, ${s.written} recorded${s.stamped ? `, ${s.stamped} recordings stamped` : ""} | ${((golden.realNow() - t00) / 1000).toFixed(1)}s`);
+if (ledgerPr) writeLedger(ledger);
+const staleEntries = ledger.filter((e) => !ledgerUsed.has(e));
+// merge-gated.sh keeps the first 50 characters of the line that has "golden (replay)": a run with moved cases starts it with MOVED.
+quiet(`\n${movedCases.length ? `MOVED: ${movedCases.length} case(s) on ledgered wording | ` : ""}golden (${golden.mode}${missingOnly ? ", --missing" : ""}${movedToo ? ", --moved" : ""}): ${live.length - liveFailed}/${live.length} live cases passed${flakes.length ? ` (${flakes.length} on a retry: ${flakes.join(", ")})` : ""}, ${rows.length - live.length} pending${unrecorded.length ? ` (${unrecorded.length} not recorded yet: ${unrecorded.join(", ")})` : ""}${noRecording ? `, ${noRecording} case(s) with model calls that have no recording` : ""}${late.length ? `, ${late.length} late miss(es)` : ""} | ${rows.reduce((n, r) => n + (r.replies?.length ?? 0), 0)} replies through the hard rules | ${s.served} model calls replayed, ${s.written} recorded${s.stamped ? `, ${s.stamped} recordings stamped` : ""} | ${((golden.realNow() - t00) / 1000).toFixed(1)}s`);
+if (golden.mode === "replay" && !only.length && staleEntries.length) quiet(`LEDGER: ${staleEntries.length} entr${staleEntries.length === 1 ? "y" : "ies"} no case uses any more (re-recorded): remove ${staleEntries.map((e) => `${e.chunk} (${e.pr})`).join(", ")} from evals/golden/moved-ledger.json`);
 if (movedCases.length) quiet(`PROMPT MOVED: ${movedCases.length} case(s) passed on recorded answers to an older wording of their prompt (${movedCases.join(", ")}). The code paths ran; how the model answers the new wording is untested until a quality run (npm run evals:golden:quality) or a re-record (npm run evals:golden:record -- --moved).`);
 // The meter prints the run's cost on exit through console.log: give it back first, so the cost line always shows.
 console.log = quiet;

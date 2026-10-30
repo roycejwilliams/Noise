@@ -3,32 +3,33 @@
 // same request with its instruction wording masked out, so a call whose only change is how an instruction is worded still finds its
 // recording, and is reported as "prompt moved" (a warning, never a silent pass).
 //
-// What is WORDING (masked, may move without a re-record):
-//   - the text of string and template literals (40+ characters) in the prompt files listed in evals/golden/wording.ts, each masked as
-//     its own placeholder: the file, the declaration it sits in, and its place there ("conversationReply.ts:system#3");
-//   - a tool's description and the descriptions inside its input schema.
-// What is BEHAVIOR (kept, any change is a miss and needs a re-record):
-//   - the model, max_tokens, effort, thinking, temperature, tool_choice, stream and every other request parameter;
-//   - the tool names and input schemas (types, required fields, enums);
-//   - the message roles and order, the model's own earlier turns (assistant text, tool calls) and every tool result;
-//   - every fact line ("[F12] ...") and conversation line ("User said: ...", "Co replied: ..."), even when its words come from a prompt file;
-//   - every interpolated value (names, the member's words, the case's facts, the member's world, dates), and which instructions are
-//     included at all: a literal added, dropped or swapped for another is a different placeholder, so the skeleton differs;
-//   - a literal that asks for an output format (it mentions JSON or shows a "key": shape): a moved one is a miss, since the recorded
-//     answer was written for the old format;
-//   - literals under 40 characters, and any prompt text outside the listed files (the case's own judge prompts included).
+// What is WORDING (masked, may move, and only with a moved-ledger entry: evals/golden/run.ts): the text of the literals in the
+// declarations allowlisted in evals/golden/wording.ts (tone and style only), each masked as its own placeholder.
+// What is BEHAVIOR (kept, any change is a miss and needs a re-record): everything else. The model and every request parameter; every
+// tool, whole (name, description, schema: a tool's description tells the model when to call it); the message roles and order, the
+// model's own earlier turns and every tool result; every fact line ("[F12] ...") and conversation line ("User said: ..."); every
+// interpolated value and every literal outside the allowlist (safety, grounding, consent, facts, gates, checker prompts); which
+// allowlisted literals are included at all. And within an allowlisted literal, a move is blocked when it changes the literal's
+// GUARD TERMS (numbers, tool-like names, and the words that carry rules: never, always, only, must, call, offer, question, safe,
+// member, share, private, invent, JSON...), or when it asks for an output format: the words may move, the rules they carry may not.
 import { createHash } from "node:crypto";
 
-export const SKELETON_VERSION = 1;
+export const SKELETON_VERSION = 2;
 export const MIN_CHUNK = 40;
 const sha = (s, n = 16) => createHash("sha256").update(s).digest("hex").slice(0, n);
 const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 
+// The terms a tone rewrite must keep (as a multiset): a changed count of any is a changed rule, not a rewording.
+const GUARD_WORDS = /\b(?:never|always|only|once|twice|must|every|each|no|not|don'?t|do not|call(?:s|ed|ing)?|phone|offer(?:s|ed)?|questions?|ask(?:s|ed)?|safe(?:ty)?|unsafe|hurt|harm|kill|emergency|crisis|members?|share[sd]?|sharing|private|privacy|invent(?:ed)?|plausible|guess|facts?|promise[sd]?|tasks?|tools?|links?|introduce[sd]?|consent|yes|json|one|two|three|four|five|six|seven|eight|nine|ten|several|few|couple|many|most|least)\b|\d+/gi;
+// Tool-like names (startTask, sendReply): case-sensitive, or every word would match.
+const TOOL_NAMES = /\b[a-z]+[A-Z]\w*\b/g;
+export const guardTerms = (text) => [...(String(text ?? "").match(GUARD_WORDS) ?? []).map((w) => w.toLowerCase()), ...(String(text ?? "").match(TOOL_NAMES) ?? [])].sort().join(" ");
+
 // A literal that tells the model what shape to answer in.
 export const looksLikeFormat = (text) => /\bJSON\b|"\w+"\s*:\s*["{[\d<]/.test(String(text ?? ""));
 
-// The registry's signature: a stamp made under another set of files, or another algorithm, is never compared.
-export const registrySignature = (files) => sha(JSON.stringify({ v: SKELETON_VERSION, min: MIN_CHUNK, files: [...files].sort() }), 12);
+// The registry's signature: a stamp made under another allowlist, or another algorithm, is never compared.
+export const registrySignature = (allowlist) => sha(JSON.stringify({ v: SKELETON_VERSION, min: MIN_CHUNK, allowlist: [...allowlist].sort() }), 12);
 
 // Lines that are data however they were built: the reply's facts, and the conversation as it happened.
 const PROTECTED = /^(?:\[F\d+\] |(?:User said|Co replied|Cue replied|Member said|They said|Cue said|Co said):)/;
@@ -46,19 +47,6 @@ export function maskText(s, chunks, found) {
   return t.replace(/\u0000(\d+)\u0000/g, (_, i) => kept[Number(i)]);
 }
 
-const withoutDescriptions = (v) => {
-  if (Array.isArray(v)) return v.map(withoutDescriptions);
-  if (!v || typeof v !== "object") return v;
-  const out = {};
-  for (const [k, x] of Object.entries(v)) if (k !== "description") out[k] = withoutDescriptions(x);
-  return out;
-};
-const descriptionsOf = (v, out = []) => {
-  if (Array.isArray(v)) v.forEach((x) => descriptionsOf(x, out));
-  else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { if (k === "description" && typeof x === "string") out.push(x); else descriptionsOf(x, out); }
-  return out;
-};
-
 const maskContent = (content, role, chunks, found) => {
   // The model's own earlier turns are what it said: never masked.
   if (role !== "user" && role !== "system") return content;
@@ -74,10 +62,9 @@ const maskContent = (content, role, chunks, found) => {
 export function skeletonOf(key, chunks) {
   const found = new Set();
   const body = key.body && typeof key.body === "object" ? { ...key.body } : key.body;
-  let tools = null;
   if (body && typeof body === "object") {
     delete body.metadata;
-    if (Array.isArray(body.tools)) { tools = sha(JSON.stringify(descriptionsOf(body.tools)), 8); body.tools = withoutDescriptions(body.tools); }
+    // Tools are kept whole: their descriptions and schemas are behavior.
     if (typeof body.system === "string") body.system = maskText(body.system, chunks, found);
     else if (Array.isArray(body.system)) body.system = body.system.map((b) => (b && b.type === "text" ? { ...b, text: maskText(b.text, chunks, found) } : b));
     if (Array.isArray(body.messages)) body.messages = body.messages.map((m) => (m && typeof m === "object" ? { ...m, content: maskContent(m.content, m.role, chunks, found) } : m));
@@ -86,15 +73,16 @@ export function skeletonOf(key, chunks) {
   const text = JSON.stringify(canon({ path: key.path, grader: key.grader, beta: key.beta ?? null, body }));
   const byId = new Map(chunks.map((c) => [c.id, c.text]));
   const wording = Object.fromEntries([...found].sort().map((id) => [id, sha(byId.get(id), 8)]));
+  const guard = Object.fromEntries([...found].sort().map((id) => [id, sha(guardTerms(byId.get(id)), 8)]));
   const format = [...found].filter((id) => looksLikeFormat(byId.get(id))).sort();
-  return { hash: sha(text), wording, format, tools };
+  return { hash: sha(text), wording, guard, format };
 }
 
-// What moved between a stamp and the request now, both with the same skeleton: the wording ids whose text changed, and the tool
-// descriptions. `blocked` holds the moved ids that ask for an output format (old or new): those never count as wording.
+// What moved between a stamp and the request now, both with the same skeleton: each allowlisted literal whose text changed, from its
+// stamped hash to its hash now. `blocked` holds the moved ones that may not move: an output-format literal (old or new), or one whose
+// guard terms changed (a rule added, dropped or changed inside tone text), or one stamped without guard terms.
 export function movedBetween(stamp, now) {
-  const moved = Object.keys(now.wording).filter((id) => stamp.wording?.[id] !== now.wording[id]);
-  const blocked = moved.filter((id) => (stamp.format ?? []).includes(id) || now.format.includes(id));
-  if ((stamp.tools ?? null) !== (now.tools ?? null)) moved.push("tool descriptions");
+  const moved = Object.keys(now.wording).filter((id) => stamp.wording?.[id] !== now.wording[id]).map((id) => ({ id, from: stamp.wording?.[id] ?? null, to: now.wording[id] }));
+  const blocked = moved.filter((m) => (stamp.format ?? []).includes(m.id) || now.format.includes(m.id) || !stamp.guard?.[m.id] || stamp.guard[m.id] !== now.guard[m.id]).map((m) => m.id);
   return { moved, blocked };
 }
