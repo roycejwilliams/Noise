@@ -67,7 +67,7 @@ const replyInput = (decision: any, o: Record<string, unknown> = {}) => ({
   missingTopic: null, missingTopicDescription: null, facts: factsWithMoments(), toneContext: "", seekingModeContext: "", styleHint: "",
   recentConversation: "", recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true, isTeam: false, decision, ...o,
 }) as any;
-const CALL_OFFERED = /Then offer a call as a warm gesture/;
+const CALL_OFFERED = /Offer a call as a warm gesture/;
 const CALL_WITHHELD = /A call offer is NOT available this turn/;
 
 console.log = () => {};

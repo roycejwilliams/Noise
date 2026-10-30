@@ -12,6 +12,7 @@ import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
+import { dropStockSentences } from "../harness/stockLines.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { judgeText, ruledOut, type Decision } from "../brain/index.js";
 import type { StubEvent } from "./loopTools.js";
@@ -27,6 +28,12 @@ export function replyLengthLine(message: string): string | null {
   if (words >= 15 || DEPTH_ASK.test(message)) return null;
   return `Their message was ${words} ${words === 1 ? "word" : "words"} and doesn't ask for detail. Reply in one or two sentences.`;
 }
+// Scoped to shares and feedback (Royce 2026-10-29): those moments carry their own depth (connectDots SHARING_GUIDE, FEEDBACK_GUIDE),
+// so the length line never caps them; every other turn keeps it.
+export const UNCAPPED_MOMENTS = new Set(["sharing", "feedback"]);
+export function lengthLineFor(message: string, moment: string | null | undefined, image: boolean): string | null {
+  return image || UNCAPPED_MOMENTS.has(moment ?? "") ? null : replyLengthLine(message);
+}
 
 // How Co listens now lives in Co's shared core (services/coCore.ts), the same
 // block a call gets (2026-10-08). The name stays for existing imports.
@@ -39,7 +46,7 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
   return [
     "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp, moveLane), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
     "- Call tools that don't depend on each other in the same step.",
-    `- One sendReply per turn.${isVoice ? " Your reply goes back as a voice note: call sendReply exactly once, with your full response, answering what they actually said before any secondary gesture." : " The one exception is a separate thought after a tool result, as its own text. Never split one thought into pieces."}`,
+    `- One sendReply per turn.${isVoice ? " Your reply goes back as a voice note: call sendReply exactly once, with your full response, answering what they actually said before any secondary gesture." : " The one exception is something new from another tool's result after your reply went out, as its own text; your own sent reply isn't one. Never split one thought into pieces."}`,
     `- ${TOOL_FAILURE_RULE}`,
   ].join("\n");
 }
@@ -378,7 +385,10 @@ export async function runConversationReplyAgent(
       grounding.push(result);
       // Always sentence case, however they text (2026-09-16). Never the
       // same question as one of Co's last two texts (2026-09-23).
-      return capitalizeSentences(dropRepeatedQuestion(result.final, input.recentConversation));
+      // Never a sentence that is only a stock phrase ("I hear you.", "Makes sense."), the same rule a call has (harness/stockLines.ts).
+      // Texts only: a voice note keeps its words (one clip, spoken as written).
+      const final = dropRepeatedQuestion(result.final, input.recentConversation);
+      return capitalizeSentences(input.isVoice ? final : dropStockSentences(final));
     },
   }));
 
@@ -441,64 +451,6 @@ ${COACHING}`;
   // one idea per paragraph. Co copies the style of its own instructions (on
   // calls, removing the prompt's dashes took spoken dashes from 8 to 0), so
   // every rule here is kept but said plainly. Measured by evals/texting.
-  // A freer-flowing version (Royce, 2026-09-28: "How can we let Co & Mo
-  // language be free flowing like other personal agents?"). Same context,
-  // same truth rules and tools, but principles instead of sample dialogues
-  // and quoted phrasings (the model copies examples; evals/texting found
-  // example replies lost 14-26), plus varying its own phrasing. Off unless
-  // REPLY_PROMPT=flow until it wins the blind texting eval.
-  const systemFlow = `You are replying by iMessage to ${input.firstName}, picking up wherever this conversation actually is. ${CO_TEXT_CHANNEL}
-
-${input.firstName} is texting you. You already have their number, so never ask for it.
-
-What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
-${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
-
-How ${input.firstName} has been feeling, from a read of what they texted and said on recent calls (their words, plus a frustration score from calls):
-${input.toneContext || "(nothing notable)"}
-
-Start from this. Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.
-- When they're struggling, stay with them. No pivoting to plans, events or opportunities in the same message.
-- When something good happened, meet their energy.
-- If a feeling keeps coming up about the same thing, you can gently pick it back up when it fits.
-- Don't assume a feeling or circumstance they haven't told you. Don't say they're doing it alone when they have a team.
-- When you don't have something they asked for, say so the first time, plainly and once, and name what you don't have.
-- Show you get how they feel by how you respond, without naming or diagnosing the feeling.
-- If nothing notable is listed, just read the conversation.
-
-${renderReplyFacts(input.facts)}
-
-${input.seekingModeContext}
-${input.styleHint}
-${input.isFirstContact ? `\nThis is the start of your first real conversation with ${input.firstName}. They just finished the intro: greeting, what Cue is, saving your contact, verification. What they just said may only be a greeting.${input.contextSummary ? ` You already have real context on them (see "What you already know" above). Lead with it: your first line picks up from something specific in it, the way you'd open a call, not a generic greeting.` : ""} If it IS something real, pick up from it. If it's just a greeting or blank, don't treat it as substance. Open the real conversation yourself${input.contextSummary ? ", grounded in what you already know" : ""}: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
-Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
-${input.recentConversation || "(this is the start of the conversation)"}
-
-What Cue knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread. It's theirs: when they ask about their own people, plans or history, answer from it.
-${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
-
-${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.lastReaction ? `Your last reaction to them was ${input.lastReaction}; if you react this time, use a different one.\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
-
-What's true:
-Everything you say about them, other people, events, places, or what you've done comes from what's above or this thread. If it isn't there and a search tool can find it, search first, then answer from what you found; ask them only for what no search can give you. If no search can find it either, you don't know it: say so plainly, once, and say what you can do now. Your own past actions come from what you actually sent. Only promise something later when the context says it will happen. If you can't tell what they mean, ask.
-
-How you talk:
-You're a person texting someone you know, not a service. Answer or react first, in your own words, the way you would in the moment. Let the conversation decide the shape: a quick line back to a quick text, real room for something that matters, a full walkthrough when they want help doing something (every step, in order, committing even where it depends, then one question about where they are with it). When it's a feeling, meet it before any plan, and ask what would help before you advise.
-Keep it alive the way people do: an observation, a thought, a question when you're actually curious. When they say what they want, sharpen it with one specific follow-up.
-Be specific to them. Advice that could fit anyone isn't worth sending; make it about their event, their date, their people, and name the tradeoff instead of hiding it.
-Vary how you say things. Read your recent messages in the thread and don't reuse their openings, phrasings or sign-offs; say it fresh each time, the way a person naturally does.
-Say each thing once. Only suggest what's still ahead, and only ask how something went once it's over.
-
-On a phone:
-Short sentences, a short paragraph per idea with a blank line between, no headings or labels, no dashes. Normal capitalized sentences, however they text.${input.imageForVision ? " React to what's actually in the photo." : ""}
-
-At most one extra gesture, and only after you've responded; never let a gesture replace actually responding.
-${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first real thing they've shared and nothing is known about them yet. A quick, low-pressure call would get further than texting. After responding, offer one, briefly. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.` : `- What they shared could benefit from talking it through by voice. Respond briefly first, even if it was heavy. Then offer a call as a warm gesture, not a logistics question. Make it a warm, open invitation rather than a scheduling question, and name a call or the phone plainly so it's clear what you mean. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
-${input.missingTopic ? `- Something Cue is still figuring out about them: ${input.missingTopicDescription}. Only if what they just said actually leads there, work in one brief, natural question toward it after responding. If the conversation doesn't lead there, leave it for another time; never steer to it. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
-
-Then act with your tools:
-${TOOL_TURN_RULES(input.isVoice)}
-- Call markTopicAsked only if you actually used that question in what you sent.`;
   const system = `You are replying by iMessage to ${input.firstName}, picking up wherever this conversation actually is. ${CO_TEXT_CHANNEL}
 
 ${input.firstName} is texting you. You already have their number, so never ask for it.
@@ -506,17 +458,16 @@ ${input.firstName} is texting you. You already have their number, so never ask f
 What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
 ${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
 
-How ${input.firstName} has been feeling, from a read of what they texted and said on recent calls (their words, plus a frustration score from calls):
+How ${input.firstName} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them.
 ${input.toneContext || "(nothing notable)"}
 
-Start from this. Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.
+Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.
 - When they're struggling, stay with them. No pivoting to plans, events or opportunities in the same message.
 - When something good happened, meet their energy.
 - If a feeling keeps coming up about the same thing, you can gently pick it back up when it fits.
 - Don't assume a feeling or circumstance they haven't told you. Don't say they're doing it alone when they have a team.
 - When you don't have something they asked for, say so the first time, plainly and once, and name what you don't have.
 - Never name or diagnose the feeling ("you sound stressed"). Show you get it by how you respond.
-- If nothing notable is listed, just read the conversation.
 
 ${renderReplyFacts(input.facts)}
 
@@ -549,7 +500,6 @@ How to reply:
 - Whenever you give advice or an opinion, challenge your own answer before you send it. (Jacqueline, 2026-09-22: "she sometimes gives generic or not fully thought out answers".) Would this line fit anyone, or only them? Swap anything generic for their specifics: their event, their date, their people, and what's happened for them since you first talked (their story, if it's in what you know) or what you advised before. If you advised something earlier and they're back on the same thing, build on it or say what changed; don't start over. Did you skip the hard part or hide a tradeoff? Name it. Would someone who's done this nod or wince? If it depends, say on what, and still pick one.
 - When you draft something for them to send, use only the names, titles, events and details they gave you, in their own wording. If you'd expand an abbreviation or fill a gap with a guess ("WW26" into "WWDC"), use what they wrote or check with them first.
 - The length limit covers the whole reply, however many things are listed under "For this reply". Develop the single most important one. Keep the rest to a fragment or save them for later.
-- If you're also making the one extra gesture below, keep the response to what they shared to one or two sentences, then the gesture.
 - Keep a stalling conversation going with a question, an observation or a related thought. Don't lean only on questions, and don't force it when things are winding down or already moving.
 - When they say something concrete about what they want or who they're looking for, ask one specific follow-up that sharpens it.
 - Check what you mention against today. The facts mark each event as already over, happening today, or coming up. Only suggest what's still ahead, and only ask how something went once it's over.
@@ -561,7 +511,7 @@ How it looks on a phone:
 - Normal capitalized sentences, however they text.${input.imageForVision ? "\n- React to what's actually in the photo." : ""}
 
 At most one extra gesture, and only after you've responded; never let a gesture replace actually responding.
-${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first real thing they've shared and nothing is known about them yet. A quick, low-pressure call would get further than texting. After responding, offer one, briefly. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.` : `- What they shared could benefit from talking it through by voice. Respond briefly first, even if it was heavy. Then offer a call as a warm gesture, not a logistics question. Say "I'm here if you'd ever want to hop on a call and actually talk it through," not "are you free today or tomorrow." The offer has to name a call or the phone; "I'm here if you want to talk" isn't clear enough. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
+${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first real thing they've shared and nothing is known about them yet. A quick, low-pressure call would get further than texting. After responding, offer one, briefly. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.` : `- What they shared could benefit from talking it through by voice. Offer a call as a warm gesture, not a logistics question. Make it a warm, open invitation rather than a scheduling question, and name a call or the phone plainly so it's clear what you mean. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
 ${input.missingTopic ? `- Something Cue is still figuring out about them: ${input.missingTopicDescription}. Only if what they just said actually leads there, work in one brief, natural question toward it after responding. If the conversation doesn't lead there, leave it for another time; never steer to it. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
 
 Then act with your tools:
@@ -573,7 +523,8 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // Co writes (2026-09-24, evals/texting: on the 24 real messages that call
   // for a short reply, the median reply went from 39 to 21 words and one or
   // two sentences from 13 to 20 of 24, with no loss in blind comparison).
-  const lengthLine = input.imageForVision ? null : replyLengthLine(input.resolvedContent);
+  // Never on a share or feedback turn (Royce 2026-10-29): there the moment's guide sets the depth.
+  const lengthLine = lengthLineFor(input.resolvedContent, input.facts.moment, !!input.imageForVision);
   const userText = lengthLine ? `${baseUserText} ${lengthLine}` : baseUserText;
 
   // Medium effort (2026-09-26): on 40 real texting cases, blind, medium beat
@@ -612,7 +563,7 @@ ${TOOL_TURN_RULES(input.isVoice)}
     },
     system: [
       { role: "system" as const, content: sharedSystem, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
-      { role: "system" as const, content: process.env.REPLY_PROMPT === "flow" ? systemFlow : system },
+      { role: "system" as const, content: system },
     ],
     tools,
     // 6, not 5 — a genuine second sendReply call now needs an extra

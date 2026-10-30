@@ -16,6 +16,7 @@ const starts: string[] = [];
 const holds: Record<string, Promise<void>> = {};
 const settled: Record<string, boolean> = {};
 let redraftText: string | null = null;
+const THROWS = "__redraft_throws__";
 // The scripted read's idea of a status report: news, a reply, nothing back, still waiting, confirmed.
 const STATUS_WORDS = /\b(no (real )?(word|news|reply)|nothing (back|yet)|heard back|still waiting|confirmed|replied|booked)\b/i;
 // The last redraft prompt, for the thread-redraft checks.
@@ -48,7 +49,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   } else if (/You check a text message Cue is about to send/.test(body)) {
     calls.push("claims");
     const about = body.split("Message Cue is about to send:").pop() ?? "";
-    text = JSON.stringify({ claims: /Nothing new on my end/.test(about) ? [{ text: "Nothing new on my end since this morning.", type: "work_status", supported: false, factId: null, quote: null }] : /booked Nopa/.test(about) ? [{ text: "Yes, I booked Nopa for you.", type: "past_action", supported: false, factId: null, quote: null }] : /Hayes Valley myself/.test(about) ? [{ text: "Still waiting to hear from Hayes Valley myself.", type: "work_status", supported: false, factId: null, quote: null }] : /searching for jazz bars/.test(about) ? [{ text: "Still searching for jazz bars for you.", type: "work_status", supported: false, factId: null, quote: null }] : [] });
+    text = JSON.stringify({ claims: /Nothing new on my end/.test(about) ? [{ text: "Nothing new on my end since this morning.", type: "work_status", supported: false, factId: null, quote: null }] : /booked Nopa/.test(about) ? [{ text: "Yes, I booked Nopa for you.", type: "past_action", supported: false, factId: null, quote: null }] : /Hayes Valley myself/.test(about) ? [{ text: "Still waiting to hear from Hayes Valley myself.", type: "work_status", supported: false, factId: null, quote: null }] : /searching for jazz bars/.test(about) ? [{ text: "Still searching for jazz bars for you.", type: "work_status", supported: false, factId: null, quote: null }] : /Nothing yet on the venue/.test(about) ? [{ text: "Nothing yet on the venue", type: "work_status", supported: false, factId: null, quote: null }] : /Still waiting to hear back from the Hayes Valley place/.test(about) ? [{ text: "Still waiting to hear back from the Hayes Valley place on the 14th.", type: "detail", supported: false, factId: null, quote: null }] : [] });
   } else if (/Only the member knows where it stands/.test(body)) {
     calls.push("thread_read");
     const listed = [...body.replace(/\\"/g, '"').matchAll(/(\d+)\. "([^"]+)"/g)];
@@ -60,6 +61,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
   } else if (/Your draft reply:/.test(body)) {
     calls.push("redraft");
     lastRedraft = body;
+    // A redraft call that fails outright (a 400 isn't retried): the model threw.
+    if (redraftText === THROWS) return new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "scripted failure" } }), { status: 400, headers: { "content-type": "application/json" } });
     text = redraftText ?? "";
   } else calls.push("other");
   return new Response(JSON.stringify({ id: "msg", type: "message", role: "assistant", model: "scripted", content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -170,7 +173,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const nf = M.memberWorldFact(nothing);
   check("genuinely nothing (all read): no lead, and the fact says so", nothing.lead === null && nothing.withheld === 0 && /Nothing waits on them \(not a thing to say\)\. Nothing is running \(not a thing to say\)\./.test(nf), nf);
   const thread = base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] });
-  check("a live thread shows, marked theirs to tell, and is never the lead", thread.thread?.kind === "thread" && thread.lead === null && /Their thread \(theirs to tell: ask, never report\): Waiting to hear back from the Hayes Valley venue/.test(M.memberWorldFact(thread)));
+  check("a live thread shows, marked theirs to tell, and is never the lead", thread.thread?.kind === "thread" && thread.lead === null && /Their thread \(theirs to tell: ask, never report; ask them about it as a question, and never say where it stands, not even that nothing has come yet\): Waiting to hear back from the Hayes Valley venue/.test(M.memberWorldFact(thread)));
   const next = base({ exchange: QUIET, searching: NOTHING, ahead: { tasks: [{ id: 41, goal: "Weekly branding check-in", kind: "followup", nextCheckAt: "2026-10-16T16:00:00Z", deadline: null }], queuedFinds: 0 } });
   check("the soonest scheduled check-in is what's next", next.next?.kind === "scheduled" && /a check-in with them, "Weekly branding check-in", Fri Oct 16, 9am PDT/.test(next.next.fact), next.next);
   check("running work is listed by the same items the running-work line uses", G.runningWorkLine([], [], COVERAGE).includes(`Cue's daily search for their goal: "a rooftop for the Sequin AI launch party"`) && M.runningItems([], [], COVERAGE)[0].label === `Cue's daily search for their goal: "a rooftop for the Sequin AI launch party"`);
@@ -243,9 +246,30 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
 {
   const rf = G.createReplyFacts();
   G.addMemberWorld(rf, base());
-  check("the world goes on the reply's facts as a known fact, with the check-in rule and the world for the check", rf.facts.some((f) => f.kind === "known" && M.WORLD_FACT.test(f.text)) && rf.instructions.includes(M.CHECKIN_RULE) && rf.world?.lead?.kind === "question");
+  check("the world goes on the reply's facts as a known fact, with the check-in rule and the world for the check", rf.facts.some((f) => f.kind === "known" && M.WORLD_FACT.test(f.text)) && rf.instructions.includes(M.CHECKIN_RULE_AT_NIGHT) /* base() is 12:04am */ && rf.world?.lead?.kind === "question");
   const rgSrc = fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
   check("every text turn with a world gets it (gatherReplyFacts)", /if \(opts\.turn\?\.world\) addMemberWorld\(rf, opts\.turn\.world\);/.test(rgSrc));
+  // Review of #310: at 12:04am a check-in got the rule's examples stitched together, a fellowship nudge on late-night care. Late at night
+  // their time the reply is told it's care only; no daytime reply reads that.
+  const late = G.createReplyFacts();
+  G.addMemberWorld(late, base({ now: new Date("2026-10-14T07:04:00Z") }));
+  const day = G.createReplyFacts();
+  G.addMemberWorld(day, base({ now: new Date("2026-10-14T21:00:00Z") }));
+  check("late at night their time, the reply is told it's care only", late.instructions.includes(M.LATE_NIGHT_CARE) && !day.instructions.includes(M.LATE_NIGHT_CARE), { late: late.world?.clock, day: day.world?.clock });
+  check("…care only: nothing from their world, no nudge, no 'good to hear from you' opener, no guessed feeling", /this reply is care only/.test(M.LATE_NIGHT_CARE) && /leave out everything from their world unless they raised it themselves, any opportunity, nudge or thing to act on/.test(M.LATE_NIGHT_CARE) && /Don't open by saying it's good to hear from them, and don't guess what's on their mind/.test(M.LATE_NIGHT_CARE));
+  check("…described, never quoted (Cue copies quoted lines)", !/["“”]/.test(M.LATE_NIGHT_CARE));
+  const k = (hour: number, zoneKnown = true) => M.lateNight({ hour, zoneKnown });
+  check("the late window is 11pm to 5am their time", k(23) && k(0) && k(4) && !k(5) && !k(22));
+  check("…only with their zone known (it's said to them as a fact)", !k(0, false) && !k(23, false));
+  const unknownZone = G.createReplyFacts();
+  G.addMemberWorld(unknownZone, base({ zone: null }));
+  check("…so a reply with no zone on file never gets the late-night line", !unknownZone.instructions.includes(M.LATE_NIGHT_CARE));
+  // The night rule: the daytime rule without the parts that contradict care only; the daytime rule itself is unchanged.
+  check("at night the check-in rule drops its quoted presence and fellowship lines and 'the world line is optional'", M.CHECKIN_NIGHT_CUTS.every(([from]) => M.CHECKIN_RULE.includes(from) && !M.CHECKIN_RULE_AT_NIGHT.includes(from)) && /the late-night line governs, care only/.test(M.CHECKIN_RULE_AT_NIGHT) && !/good to hear from you|Harbor Light|world line is optional/.test(M.CHECKIN_RULE_AT_NIGHT));
+  check("…and the daytime rule keeps them (the sweep's)", /good to hear from you, what's on your mind\?/.test(M.CHECKIN_RULE) && /the world line is optional then/.test(M.CHECKIN_RULE));
+  check("…a daytime reply gets the daytime rule, a late one the night rule", day.instructions.includes(M.CHECKIN_RULE) && !day.instructions.includes(M.CHECKIN_RULE_AT_NIGHT) && late.instructions.includes(M.CHECKIN_RULE_AT_NIGHT) && !late.instructions.includes(M.CHECKIN_RULE));
+  const caseSrc = fs.readFileSync(new URL("../golden/cases/checkins.ts", import.meta.url), "utf8");
+  check("the late-night golden case fails a business nudge or the old opener in code, and its judge asks for care only", /a business nudge on a late-night check-in/.test(caseSrc) && /opens on the line the case was written against/.test(caseSrc) && /Answer no if any business or nudge follows the care/.test(caseSrc));
   const r = M.CHECKIN_RULE;
   check("the rule: Cue judges whether it's a check-in; presence plus at most one item", /you judge that from the thread/.test(r) && /presence plus at most one item from "Their world right now"/.test(r));
   check("the rule: waiting first, else running; a warm thread asked about, never reported; presence and an open question when nothing", /what waits on them first, else what's running/.test(r) && /a warm thread is asked about \("any word from that venue\?"\), never reported/.test(r) && /with nothing running or waiting, presence and an open question/.test(r));
@@ -368,7 +392,10 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
 {
   const draft = "Good to hear from you. Nothing new on my end since this morning.";
   const cut = "Good to hear from you.";
-  const w = base();
+  // The world line after dead air is a daytime behavior (re-review of #310): late at night it's care only (section 7b below).
+  // The same world with only its hour moved out of the late window, so nothing else about it changes.
+  const daytime = (x: ReturnType<typeof base>): ReturnType<typeof base> => ({ ...x, clock: { ...x.clock, hour: 14, part: "afternoon" } });
+  const w = daytime(base());
   const status = [{ name: "no_internal_narration", pass: false }, { name: "claim_work_status", pass: false }];
   check("dead air: a status sentence was cut, a few words of presence are left, and their world has a true line", M.deadAir({ draft, cut, world: w, failed: status }));
   check("not dead air without evidence: only a time claim was cut (\"ok thanks, night\")", !M.deadAir({ draft: "Night Jordan, sleep well. Talk at 9am.", cut: "Night Jordan, sleep well.", world: w, failed: [{ name: "time_on_file", pass: false }] }));
@@ -434,8 +461,9 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("this morning's search before 9, tomorrow's after", /on this morning's search/.test(M.worldLine(base({ exchange: QUIET }))!) && /on tomorrow morning's search/.test(M.worldLine(base({ exchange: QUIET, now: at("2026-10-14T21:00:00Z") }))!));
 
   // The turn itself, through groundReply with the model scripted.
-  const turn = async (world: ReturnType<typeof base> | null, rewrite: string | null, d = draft, message = "Just checking in") => {
+  const turn = async (world: ReturnType<typeof base> | null, rewrite: string | null, d = draft, message = "Just checking in", moment: string | null = null) => {
     const rf = G.createReplyFacts();
+    rf.moment = moment;
     G.addFact(rf, "known", G.runningWorkLine([], [], COVERAGE));
     if (world) G.addMemberWorld(rf, world);
     redraftText = rewrite;
@@ -452,7 +480,8 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("after: the machinery line is still gone", !/on my end/.test(after.r.final));
   const fallback = await turn(w, asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday."));
   check("00:04 \"Just checking in\": Cue said check-in, its reply failed the checks, so the lead's true line is said from their world", fallback.r.outcome === "stripped" && fallback.r.final === `${cut} Harbor Light Fellowship is there whenever you want it.` && fallback.r.checks.some((c) => c.name === "world_line"), fallback.r);
-  const noTemplate = await turn(base({ sent: [{ ...FELLOWSHIP }], searching: { asks: ["I'm looking for a jazz bar with a good piano"], goals: [], held: [] }, exchange: QUIET }), asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday."));
+  // Daytime (late at night a failed redraft gets the care line instead, section 7b).
+  const noTemplate = await turn(daytime(base({ sent: [{ ...FELLOWSHIP }], searching: { asks: ["I'm looking for a jazz bar with a good piano"], goals: [], held: [] }, exchange: QUIET })), asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday."));
   check("with no line code can prove, the cut goes out alone", noTemplate.r.final === cut && !noTemplate.r.checks.some((c) => c.name === "world_line"), noTemplate.r);
   const appended = fallback.r.final;
   check("the reply with the statement isn't dead air (no re-trigger)", !M.deadAir({ draft, cut: appended, world: w, failed: status }) && !M.deadAir({ draft: appended, cut: appended, world: w, failed: status }));
@@ -466,7 +495,8 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   // Case 30 (2026-10-14): a cut work claim about THEIR thread never gets the #190 "want me to start on it?" line; the turn goes on to
   // dead air, where a check-in redraft may ask about it. #190 is unchanged for Co's own work.
   {
-    const threadOnly = base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] });
+    // Daytime (late at night a failed redraft gets the care line instead, section 7b).
+    const threadOnly = daytime(base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] }));
     const ownDraft = "All good here. Still waiting to hear from Hayes Valley myself.";
     const ask = "All good here. Any word back from the Hayes Valley venue?";
     const tf = G.createReplyFacts();
@@ -569,12 +599,89 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const notCheckinKept = await turn(w, asJson(false, "Night Jordan, sleep well."), nightStatus, "ok thanks, night");
   check("when Cue says it isn't a check-in and its reply is true, that reply goes out, with nothing from their world", notCheckinKept.r.outcome === "redrafted" && notCheckinKept.r.final === "Night Jordan, sleep well.", notCheckinKept.r);
   // Not a check-in, or unread: at most a statement about the running item the cut sentence itself named.
-  const withTask = base({ exchange: QUIET, searching: NOTHING, tasks: ['Cue is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] });
+  const withTask = daytime(base({ exchange: QUIET, searching: NOTHING, tasks: ['Cue is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] }));
   const named = M.deadAirLine({ checkin: false, world: withTask, draft: "Night Jordan. Nothing new on the Sequin AI planning docs on my end.", cut: "Night Jordan." });
   check("not a check-in: only the running item the cut sentence named, said as a statement", named === `I'm still on "Draft the Sequin AI planning docs".`, named);
   check("unread: never the lead, at most the named item", M.deadAirLine({ checkin: null, world: w, draft, cut }) === null && M.deadAirLine({ checkin: true, world: w, draft, cut }) === "Harbor Light Fellowship is there whenever you want it.");
+  // 7b. Late at night their time (re-review of #310): dead air still goes to the redraft (presence alone never goes out), the redraft is
+  // told care only, and code never adds a line from their world after it.
+  const nightW = base();
+  check("night: presence alone after a cut status line is still dead air (the 12:04am incident)", M.deadAir({ draft, cut, world: nightW, failed: status }));
+  check("night: code adds nothing from their world after dead air", M.deadAirLine({ checkin: true, world: nightW, draft, cut }) === null);
+  const nightNudge = await turn(nightW, asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday."));
+  check("night: the redraft is told care only, never the daytime world note", !!lastRedraft && lastRedraft.includes("it's late at night for them") && lastRedraft.includes("bring in nothing from their world") && !lastRedraft.includes("the smallest true reply is that presence plus the one item their world leads with"), lastRedraft.slice(-700));
+  // Third review of #310: when the care redraft isn't kept, the fixed care line goes, never "Good to hear from you." alone (the 2026-10-14
+  // incident line) and never the fellowship.
+  // "Just checking in" at 00:04 (the turn's moment read says small talk): the care redraft said check-in and failed its checks, or its
+  // read never came back (threw, out of shape): the care line.
+  for (const [label, rewrite] of [["fails its checks", asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday.")], ["throws", THROWS], ["comes back out of shape", "Good to hear from you."]] as const) {
+    const r = await turn(nightW, rewrite, draft, "Just checking in", "small_talk");
+    check(`night: the care redraft ${label}, so the fixed care line goes, never the presence-only cut or their world`, r.r.final === G.NIGHT_CARE_LINE && r.r.final !== cut && !/Harbor Light|whenever you want it/.test(r.r.final) && r.r.checks.some((c) => c.name === "night_care") && !r.r.notSure, r.r);
+  }
+  // Focused review of #310: only a check-in or casual opener gets it. "my dad's in the hospital" and "ok thanks, night" at night keep their
+  // cut, as they do by day.
+  const nightDad = "I'm so sorry about your dad. Nothing new on my end since this morning.";
+  for (const [label, rewrite] of [["says not a check-in, its reply fails", asJson(false, "I'm so sorry about your dad. Your Zephyr Capital meeting is set for Friday.")], ["comes back empty", ""], ["throws", THROWS]] as const) {
+    const r = await turn(nightW, rewrite, nightDad, "my dad's in the hospital", "sharing");
+    check(`night: "my dad's in the hospital" keeps its cut when the redraft ${label} (never the care line)`, r.r.final === "I'm so sorry about your dad." && !r.r.checks.some((c) => c.name === "night_care"), r.r);
+  }
+  const nightBye = "Night Jordan, sleep well. Nothing new on my end since this morning.";
+  for (const [label, rewrite, moment] of [["says not a check-in, its reply fails", asJson(false, "Night Jordan, sleep well. Your Zephyr Capital meeting is set for Friday."), "small_talk"], ["says not a check-in", asJson(false, "Night Jordan, sleep well. Your Zephyr Capital meeting is set for Friday."), null], ["comes back empty, no moment read", "", null], ["throws, no moment read", THROWS, null]] as const) {
+    const r = await turn(nightW, rewrite, nightBye, "ok thanks, night", moment);
+    check(`night: "ok thanks, night" keeps its cut when the redraft ${label} (never the care line)`, r.r.final === "Night Jordan, sleep well." && !r.r.checks.some((c) => c.name === "night_care"), r.r);
+  }
+  const nightShare = await turn(nightW, THROWS, draft, "Just checking in", "sharing");
+  check("night: a failed read on a sharing moment never gets the care line", nightShare.r.final !== G.NIGHT_CARE_LINE, nightShare.r);
+  const dayFail = await turn(w, asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday."));
+  check("daytime unchanged: a failed redraft still gets the world line, never the night care line", dayFail.r.final === `${cut} Harbor Light Fellowship is there whenever you want it.` && dayFail.r.final !== G.NIGHT_CARE_LINE, dayFail.r);
+  check("the care line is the approved copy", G.NIGHT_CARE_LINE === "You're up late. Everything ok?");
+  const nightCare = await turn(nightW, asJson(true, "You're up late. Everything ok?"));
+  check("night: a care-only redraft goes out", nightCare.r.outcome === "redrafted" && nightCare.r.final === "You're up late. Everything ok?", nightCare.r);
+  check("the night note is its own constant; the daytime note is unchanged", /it's late at night for them/.test(G.WORLD_REDRAFT_NOTE_AT_NIGHT) && /late at night, soft and open first/.test(G.WORLD_REDRAFT_NOTE));
   check("the redraft's answer is read strictly", M.parseWorldRedraft('{"checkin": true, "reply": "Hi."}')?.checkin === true && M.parseWorldRedraft("Hi.") === null && M.parseWorldRedraft('{"checkin": "yes", "reply": "Hi."}') === null);
   check("the dead-air redraft is asked to say whether it was a check-in, and to bring nothing in when it wasn't", /First decide whether their message was a check-in or a casual opener with no ask/.test(G.WORLD_REDRAFT_NOTE) && /bring in nothing from their world/.test(G.WORLD_REDRAFT_NOTE) && /\{\\?"checkin\\?": true or false/.test(G.WORLD_REDRAFT_NOTE.replace(/\\/g, "")));
+  // Live re-record of #310, checkin-live-thread (daytime, "hey", a thread-only world): the draft reported their thread ("Nothing yet on
+  // the venue"), the check-in redraft reported it again, and "Good to hear from you." went out alone by day. Now the world fact and the
+  // redraft say to ask; when the redraft can't be kept and their thread is all their world has, code adds THREAD_LINE, a statement that
+  // names nothing and asks nothing (Royce's 2026-10-14 ruling: a line that only fires after two failures never asks the member anything).
+  {
+    const liveW = daytime(base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] }));
+    const DRAFT_LT = "Good to hear from you. Nothing yet on the venue, I'll be curious the second they write back.";
+    const r = await turn(liveW, asJson(true, "Good to hear from you. Still waiting to hear back from the Hayes Valley place on the 14th."), DRAFT_LT, "hey");
+    check("recorded checkin-live-thread: both drafts report the thread, so the cut ends on the thread statement, never presence alone and no question from code", r.r.final === `${cut} ${M.THREAD_LINE}` && !r.r.final.includes("?") && r.r.final !== cut && !/Nothing yet|Still waiting/i.test(r.r.final) && r.r.checks.some((c) => c.name === "world_line"), r.r);
+    check("…the redraft is told a thread-only world means a question asking about it, never where it stands", lastRedraft.includes("when their world has only their thread, that item is a question asking them about it, never where it stands"));
+    check("…and the world fact itself says to ask, never to say where it stands, not even that nothing has come", lastRedraft.includes("ask them about it as a question, and never say where it stands, not even that nothing has come yet"));
+    const asked = await turn(liveW, asJson(true, "Good to hear from you. Any word yet from the Hayes Valley venue?"), DRAFT_LT, "hey");
+    check("…a redraft that asks goes out as written", asked.r.outcome === "redrafted" && asked.r.final === "Good to hear from you. Any word yet from the Hayes Valley venue?", asked.r);
+    check("the thread line is the approved statement: names nothing, asks nothing", M.THREAD_LINE === "I'm around if there's news on your end." && !M.THREAD_LINE.includes("?") && !/[A-Z][a-z]+ [A-Z]|\d/.test(M.THREAD_LINE.slice(1)) && M.deadAirLine({ checkin: true, world: liveW, draft: DRAFT_LT, cut }) === M.THREAD_LINE && M.deadAirLine({ checkin: false, world: liveW, draft: DRAFT_LT, cut }) === null && M.deadAirLine({ checkin: null, world: liveW, draft: DRAFT_LT, cut }) === null);
+  }
+  {
+    // Only when their thread is all their world has (re-review of #310): with something waiting, the lead's own line; with something
+    // scheduled and no line code can prove, nothing from code.
+    const withWaiting = daytime(base({ threads: [THREAD] }));
+    check("thread line only when their thread is all their world has: with something waiting, the lead's line instead", M.deadAirLine({ checkin: true, world: withWaiting, draft, cut }) === M.worldLine(withWaiting) && M.worldLine(withWaiting) !== M.THREAD_LINE && !M.onlyTheirThread(withWaiting));
+    const threadOnly2 = daytime(base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] }));
+    const withNext = { ...threadOnly2, next: { kind: "scheduled", name: "Weekly branding check-in", at: "2026-10-16T16:00:00Z", fact: "" } } as any;
+    check("…and with something scheduled (no provable line), nothing from code", M.onlyTheirThread(threadOnly2) && !M.onlyTheirThread(withNext) && M.deadAirLine({ checkin: true, world: withNext, draft, cut }) === null);
+  }
+  // Live re-record of #310, checkin-nothing ("hey", nothing waiting or running): the reply opened with what was or wasn't waiting and
+  // running. Royce 2026-10-29: #310's rewrite of the rules every text gets was the cause, so the text rhythm is co-test's again and
+  // the new rules ride only on share and feedback turns. A check-in reads none of them.
+  {
+    const R2 = (await import("../../src/services/textRhythm.js")).MESSAGE_RHYTHM;
+    const D2 = await import("../../src/services/connectDots.js");
+    const CR = await import("../../src/agent/conversationReply.js");
+    check("recorded checkin-nothing: the rhythm every text reads is co-test's (one beat a message, one question per reply), none of the share rules", /One paragraph is one beat/.test(R2) && /One question per reply/.test(R2) && !/Depth follows what they asked|Questions are how you understand them|Don't settle into one shape|A greeting or a check-in gets presence/.test(R2));
+    const checkinNote = D2.momentInstruction({ mode: "small_talk", topic: "casual check-in", pushback: null, lesson: null, dots: [] } as any) ?? "";
+    check("…a check-in's moment carries neither the sharing nor the feedback guide, and its reply keeps the length line", !checkinNote.includes(D2.SHARING_GUIDE) && !checkinNote.includes(D2.FEEDBACK_GUIDE) && !/overrides the general length/.test(checkinNote) && CR.lengthLineFor("Hey cue, just checking in", "small_talk", false) === "Their message was 5 words and doesn't ask for detail. Reply in one or two sentences.");
+    check("…consistent with the check-in rule (presence plus at most one item from their world)", /presence plus at most one item from "Their world right now"/.test(M.CHECKIN_RULE));
+    const nothingW = daytime(base({ searching: NOTHING, exchange: QUIET }));
+    const recorded = "Hey. Nothing waiting on you, nothing running right now. What's on your mind?";
+    const r = await turn(nothingW, null, recorded, "hey");
+    // Scope, said plainly: the reply check lets this draft through as drafted (it states no false claim and trips no narration rule),
+    // so the guard here is the instructions (the check-in rule's quoted lines, the global rhythm), not code.
+    check("…scope: the reply check alone passes the recorded draft as drafted; the guard is the instruction, not code", r.r.outcome === "as_drafted" && r.r.final === recorded, r.r);
+  }
   const nothingWorld = await turn(base({ searching: NOTHING, exchange: QUIET }), null);
   check("with genuinely nothing in their world, presence alone stands (no retry, no line added)", nothingWorld.r.final === cut && !nothingWorld.calls.includes("redraft"), nothingWorld);
 }

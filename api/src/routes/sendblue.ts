@@ -2714,6 +2714,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           (await relayFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
           // Reminders waiting for their morning read as queued, never as sent (services/deferredSends.ts).
           (await reminderFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
+          // The reply check reads the moment too: a cut that leaves a reply to something they shared flat gets one rewrite
+          // (harness/replyGrounding.ts repairShareCut, Royce 2026-10-28).
+          replyFacts.moment = moment?.mode ?? null;
           const momentNote = momentInstruction(moment);
           if (momentNote) addInstruction(replyFacts, momentNote);
           const lessons = turn?.lessons ?? [];

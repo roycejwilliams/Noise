@@ -32,6 +32,9 @@
 import { readFileSync } from "node:fs";
 const V = await import("../../src/services/voiceRead.js");
 const C = await import("../../src/services/voiceReadConsent.js");
+// The call line's header, shared by the renderer and the strip (services/callMomentsLine.ts).
+const { LAST_CALL_MOMENTS_HEADER: HDR } = await import("../../src/services/callMomentsLine.js");
+const { ONE_REPLY_NOTE } = await import("../../src/agent/conversationTools.js");
 const B = await import("../../src/services/mediaStreamBridge.js");
 const EL = await import("../../src/services/elevenLabsCalls.js");
 const L = await import("../../src/services/voiceStreamLink.js");
@@ -296,8 +299,15 @@ check("5. the reply tool is removed wherever the read can't run, with or without
     const r = await tools.voiceRead.execute({ answer: "explain", theirWords: ASKED }, {});
     await tools.sendReply.execute({ message: "One more thing." }, {});
     check("6. after a reply already went, the next one carries it word for word", /already went/.test(r.note) && state.sentMessages.length === 2 && state.sentMessages[1].endsWith(C.VOICE_READ_ASK) && !state.sentMessages[0].includes("Hume"));
+    // Never twice in a turn. Under #310's one reply per turn, a third text with nothing new since is held whole; the question reached
+    // them once, in the second.
+    const held = await tools.sendReply.execute({ message: `Also: ${C.VOICE_READ_ASK}` }, {});
+    const asked = state.sentMessages.join("\n").split(C.VOICE_READ_ASK).length - 1;
+    check("6. and never twice in a turn: a third text with nothing new is held, and the question went exactly once", held?.note === ONE_REPLY_NOTE && state.sentMessages.length === 2 && asked === 1, { held, sent: state.sentMessages });
+    // When a later text may go (another tool ran since), the question still isn't said again: the carry is spent.
+    state.workSinceSend = true;
     await tools.sendReply.execute({ message: `Also: ${C.VOICE_READ_ASK}` }, {});
-    check("6. and never twice in a turn", state.sentMessages.length === 3 && !state.sentMessages[2].includes("Hume"), state.sentMessages[2]);
+    check("6. …and a later text that may go never repeats it", state.sentMessages.length === 3 && !state.sentMessages[2].includes("Hume") && state.sentMessages.join("\n").split(C.VOICE_READ_ASK).length - 1 === 1, state.sentMessages[2]);
   }
   check("6. the tool tells Cue its own part asks nothing beside the question", /yours asks nothing/.test(tools.slice(tools.indexOf("    voiceRead: tool({"), tools.indexOf("    answerShareAsks: tool({"))));
   // The yes and stop lines already end their sentence: carried as written, never "anytime..".
@@ -657,7 +667,7 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   const now = new Date();
   const ctxLine = E.renderEmotionalContext({ current: null, lastCall: { at: new Date(now.getTime() - 2 * 86_400_000), moments: [{ source: "call", emotion: "flat under upbeat words", intensity: "high", valence: "negative", about: null, quote: "it's fine", at: now, target: "life", basis: "voice" } as any] }, recurring: [], voice: null } as any, now);
   const system = EL2.withVoiceReadRule(`Notes on them.\nThey live in Oakland.\n${ctxLine}\nThey like jazz.`, true);
-  check("16. the call opens with the last call's voice moments and the rule for a stop on a call (only while it's on)", /their voice showed: flat under upbeat words/.test(system) && system.includes(C.VOICE_READ_CALL_RULE) && !EL2.withVoiceReadRule("x", false).includes(C.VOICE_READ_CALL_RULE));
+  check("16. the call opens with the last call's voice moments and the rule for a stop on a call (only while it's on)", system.includes(`${HDR} flat under upbeat words`) && system.includes(C.VOICE_READ_CALL_RULE) && !EL2.withVoiceReadRule("x", false).includes(C.VOICE_READ_CALL_RULE));
   // The real call start, ElevenLabs' client stubbed: the rule rides in the call's context only while the read is on.
   const registered: any[] = [];
   const twilio = EL2.elevenLabs().conversationalAi.twilio as any;
@@ -709,7 +719,7 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   const msgs = [{ role: "system", content: system }, { role: "user", content: [{ type: "text", text: `earlier\n${ctxLine}\nmore` }] }, { role: "assistant", content: "Sure." }];
   const stripped = C.stripVoiceReadLines(msgs as any);
   const flatText = JSON.stringify(stripped);
-  check("16. the voice lines are taken out of the messages (strings and text parts); everything else stays", !/their voice showed/.test(flatText) && !flatText.includes(C.VOICE_READ_CALL_RULE) && /They live in Oakland/.test(flatText) && /They like jazz/.test(flatText) && /earlier/.test(flatText) && /more/.test(flatText) && (stripped[2] as any).content === "Sure.", stripped);
+  check("16. the voice lines are taken out of the messages (strings and text parts); everything else stays", !flatText.includes(HDR) && !flatText.includes(C.VOICE_READ_CALL_RULE) && /They live in Oakland/.test(flatText) && /They like jazz/.test(flatText) && /earlier/.test(flatText) && /more/.test(flatText) && (stripped[2] as any).content === "Sure.", stripped);
 
   // Through the real call endpoint, two requests on one call: the second, after the stop, reaches the model without the lines.
   const { createCallLlmRouter } = await import("../../src/routes/callLlm.js");
@@ -730,7 +740,7 @@ check("5. the reply tool is removed wherever the read can't run, with or without
   await live.run("voiceRead", { answer: "stop", theirWords: "stop" }, "tu2");
   await post(token);
   console.log = quietLog;
-  check("16. through the endpoint: before the stop the model sees the voice lines; after it, on the next turn of the same call, it doesn't", seen.length === 2 && /their voice showed/.test(seen[0]) && !/their voice showed/.test(seen[1]) && !seen[1].includes("only your voiceRead tool stops it") && /They live in Oakland/.test(seen[1]), seen.map((x) => x.slice(0, 80)));
+  check("16. through the endpoint: before the stop the model sees the voice lines; after it, on the next turn of the same call, it doesn't", seen.length === 2 && seen[0].includes(HDR) && !seen[1].includes(HDR) && !seen[1].includes("only your voiceRead tool stops it") && /They live in Oakland/.test(seen[1]), seen.map((x) => x.slice(0, 80)));
 
   // A2: the reply agent hands the tools the original arrival, on the first attempt and on a retry.
   const taps: Record<string, unknown>[] = [];

@@ -50,7 +50,9 @@ const turn = (gate: (d: string, findsWaiting?: () => boolean) => string = (d) =>
     t.state.sentMessages.push("Let me look");
     t.state.holdLines.push("Let me look");
   }
-  const send = (message: string, toolCallId = "x") => t.tools.sendReply.execute({ message }, { toolCallId, messages: [] });
+  // Each send here follows a tool's result (a search), as a later send in a real turn must (agent/conversationTools.ts wrapSendsForOneReply
+  // holds a second text with nothing new since the reply).
+  const send = (message: string, toolCallId = "x") => ((t.state.workSinceSend = true), t.tools.sendReply.execute({ message }, { toolCallId, messages: [] }));
   return { send, state: t.state, sends, reads, gates };
 };
 

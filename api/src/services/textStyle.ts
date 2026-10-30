@@ -111,7 +111,9 @@ export function dropRepeatedQuestion(draft: string, recentConversation: string):
       // Share of THIS question already asked: a new question that only
       // contains an earlier short one ("How's the permit going, and did the
       // venue get back about Saturday?") isn't a repeat.
-      return shared / w.size >= 0.6;
+      // 0.8, not 0.6 (prompt sweep 2026-10-29): at 0.6 a building follow-up on the same subject was cut (a next question about the
+      // launch-party venue search right after they answered how it was going); the 09-23 repeat still clears 0.8 (evals/calls/sep23Bugs.ts).
+      return shared / w.size >= 0.8;
     });
   };
   const kept = draft.replace(/[^.!?\n]*\?/g, (q) => (repeats(q) ? "" : q)).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();

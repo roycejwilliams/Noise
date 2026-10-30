@@ -1,7 +1,7 @@
 {
   "hash": "d9e67eb204932cc5",
   "case": "checkin-nothing",
-  "recorded_at": "2026-10-28T01:28:50.781Z",
+  "recorded_at": "2026-10-29T23:16:04.631Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"good to hear from you. What's on your mind?\\\" is only warm presence plus an open question, no status or invented plans\"}",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"good to hear from you. What's on your mind?\\\" is only warm presence plus an open question, with no status or invented details.\"}",
       "usage": {
         "input_tokens": 229,
         "cache_creation_input_tokens": 0,
@@ -54,13 +54,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgTmVk9AKVkChXapjUmx5",
+        "id": "msg_011CgXNzLfBctVN8v8vzcj2n",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"good to hear from you. What's on your mind?\\\" is only warm presence plus an open question, no status or invented plans\"}"
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"good to hear from you. What's on your mind?\\\" is only warm presence plus an open question, with no status or invented details.\"}"
           }
         ],
         "container": null,

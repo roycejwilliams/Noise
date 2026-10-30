@@ -88,7 +88,7 @@ const now = new Date("2026-10-03T20:00:00Z");
 const callRead = [{ source: "call" as const, emotion: "stressed", intensity: "medium" as const, valence: "negative" as const, about: "the launch", quote: "the launch got pushed", at: new Date("2026-10-03T18:00:00Z") }];
 const ctx = { ...summarizeSignals(callRead, now), voice: shown };
 const rendered = renderEmotionalContext(ctx, now);
-check("the text read's call line and the voice line both show", /their voice showed: stressed/.test(rendered) && /their voice said more than their words/.test(rendered));
+check("the text read's call line and the voice line both show", /a read of the call picked up: stressed/.test(rendered) && /their voice said more than their words/.test(rendered));
 const noVoice = summarizeSignals(callRead, now);
 check("voice flags change nothing else Cue computes (care, recurring, current)", JSON.stringify(summarizeSignals(callRead, now)) === JSON.stringify(noVoice) && renderEmotionalContext(noVoice, now) === rendered.split("\n").filter((l) => !/said more than their words/.test(l)).join("\n"));
 

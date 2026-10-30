@@ -1,0 +1,95 @@
+{
+  "hash": "1acd567f1f24a5ff",
+  "case": "nothing-at-all",
+  "recorded_at": "2026-10-29T23:13:54.442Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Nothing is running for the member; Cue may offer once to start something. Cue's text: \"\"\"Honestly, nothing right now. Nothing's running for you at the moment, I only go looking once you point me at something, like an event, a pe...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Nothing is running for the member; Cue may offer once to start something.\n\nCue's text:\n\"\"\"Honestly, nothing right now. Nothing's running for you at the moment, I only go looking once you point me at something, like an event, a person, or a kind of opportunity you want found.\"\"\"\n\nHow many separate offers does the text make to start, turn on, set up or look for something for them (e.g. \"Want me to start on it?\", \"I can look if you like\", \"Should I turn it back on?\")? An offer repeated in other words counts again. Answer \"yes\" if the count is 0 or 1, \"no\" if it is 2 or more, and give the count.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"count\": 0, \"reason\": \"No offer phrasing like 'want me to' or 'should I' appears; it only describes how the system works.\"}",
+      "usage": {
+        "input_tokens": 284,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 139,
+        "output_tokens_details": {
+          "thinking_tokens": 83
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgXNpgP4FhgS5JSrWzLKH",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EpgFCsQCCBMYAipAiCEOG8PzrN9kF/Fog4Ijf5d1PnB5ZTuu/wFKPNFC/M+ibJnjA3bgUypntxeJ/IJ2iPtUJj26U/JllTXD+J6aUjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBsaaP1wbCAToIBBAAGgwC2ooDTzcFxOMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAYlsp6ryOqmVQPGNUeVYkm4SwsK2PK9Az1kYVQye1NLCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzx7e9I+yEN6W5aiC0aDLA5jkIGYlG8z3pJNSIw05BdE7j29wWk/r8CVYYuHqU1nHvgrq9EQQf1M6VbIJSXgn1Fmdgn03QVVhgiMTIzKoAC79GStCTpoupYf1fPzrENfRbNBc2rsw7mGIRhc+Fz8uwP8hCczC09zUrU/c43DCznntsYKBEeg03HEF7uQc7nosn0VKHsM3toDimrZUnjBQa+zF/Jx2F9QL2pJGHVkswDcxcQr6RNlSP7buRcCLbsS1UkgZRlgLMWXTAnZbEtgRC6bhjN2yjANCDfDq4S+KEM7H1Cxvjd8RiNTK+iedriwMaUnYCyySN8kkCe0ujzlwI2jAdH8v7+cjzoPo/xk+kkormI8XzRPa1SMu5C1CO4w8DYJkyS4GoNgZHmc5VhTJeUcebKYyG5ZExGvMQoi62/7LBXHhhPJj6fUUFN5CrfYhgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"count\": 0, \"reason\": \"No offer phrasing like 'want me to' or 'should I' appears; it only describes how the system works.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 284,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 139,
+          "output_tokens_details": {
+            "thinking_tokens": 83
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}
