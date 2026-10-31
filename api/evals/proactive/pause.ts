@@ -24,7 +24,8 @@ check("not paused: the dispatcher reads its queue as before", touched > 0);
 check("the switch sits at the top of both doors, before any lock or insert", /export async function runProactiveDispatch\(registry: ProactiveRegistry\): Promise<void> \{\n  if \(proactivePaused\(\)\) return;/.test(src) && /if \(proactivePaused\(\)\) return \{ sent: false, reason: "proactive outreach is paused" \};\n  \/\/ Monitoring visibility/.test(src));
 // ---- automatic calls
 {
-  const { triggerCallForUser } = await import("../../src/services/callTrigger.js");
+  const { triggerCallForUser, setPreflightForTests } = await import("../../src/services/callTrigger.js");
+  setPreflightForTests(async () => ({ ok: true })); // GPT-Live's check before dialing (evals/calls/gptLiveOutbound.ts)
   process.env.PROACTIVE_PAUSED = "true";
   touched = 0;
   const unprompted = await Promise.all([triggerCallForUser("u", null, { kind: "auto_intake" } as any), triggerCallForUser("u", null, { kind: "checkin_cadence" } as any)]);

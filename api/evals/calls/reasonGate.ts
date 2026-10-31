@@ -220,7 +220,10 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
   check("the gate reads the reason in gatherCallState and checks it in decideCall", /evidence\.callReason = await callReasonForCall\(userId, kind, now\)/.test(gate) && /name: "member_reason"/.test(gate));
   const trig = read("src/services/callTrigger.ts");
   check("every dial goes through gatherCallState + decideCall, and the evidence (with the reason) is logged", /gatherCallState\(userId, user, auth\)/.test(trig) && /proposal: \{ requested: auth, evidence: callState\.evidence \}/.test(trig));
-  check("the opening is prepared after the gate (so the held reason is this call's)", trig.indexOf("decideCall(") < trig.indexOf("prebuildOpening("));
+  // Since 2026-10-31 every call runs on GPT-Live: no written opener is prebuilt; the call's reason is read when they answer (routes/co.ts
+  // gptLiveAnswer callReasonVariable), after the gate held it, so it is this call's either way.
+  const coSrc = read("src/routes/co.ts");
+  check("the opening's reason is this call's: read after the gate (no written opener before it)", !/^\s*prebuildOpening\(/m.test(trig) && /callReasonVariable\(o\.userId, o\.direction\)/.test(coSrc.slice(coSrc.indexOf("async function gptLiveAnswer"))));
   const op = read("src/services/callOpening.ts");
   check("prebuildOpening writes the outbound line from the held reason", /heldCallReason\(userId, now\)\?\.result\.reason/.test(op) && /writeOpening\(\{ firstName, direction, summary: s, userId, reason \}\)/.test(op));
   const job = read("src/jobs/proactiveCheckinCall.ts");

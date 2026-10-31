@@ -308,7 +308,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const db = (secs: number) => ({ sqls: [] as string[], query: async function (sql: string) { this.sqls.push(sql); return { rows: [{ s: String(secs) }] }; } });
   G.openSessions.clear();
   const min = 60_000;
-  check("the team's budget is one number: 300 minutes a month (about $21 at ~$0.07 a minute; Royce to confirm)", G.GPT_LIVE.teamMonthlyMinutes === 300 && !("trialMinutesCap" in G.GPT_LIVE));
+  check("the budget is one number for every member's calls: 300 minutes a month until Royce confirms (proposed 400)", G.GPT_LIVE.monthlyMinutes === 300 && !("teamMonthlyMinutes" in G.GPT_LIVE) && !("trialMinutesCap" in G.GPT_LIVE));
   const a1 = await G.admitSession(db(270 * 60));
   check("270 of 300 minutes used: admitted with the full 30-minute session cap", a1?.capMs === 30 * min && a1.budgetLimited === false, a1);
   G.openSessions.clear();
@@ -347,7 +347,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   check("each session is capped at 30 minutes: at its limit the session is closed", b.ai.of("session.close").length === 1);
   b.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 1800 } });
   check("...recorded as ended by the session cap", b.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "session_cap");
-  check("GPT-Live checks team, then the minutes, before anything of theirs is loaded; the trial number refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf("async function gptLiveAnswer"), co.indexOf('"/gpt-live/after-stream"')); return h.indexOf("SELECT mo_approver FROM users") > 0 && h.indexOf("SELECT mo_approver FROM users") < h.indexOf("admitSession()") && h.indexOf("admitSession()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
+  check("GPT-Live checks team, then the minutes, before anything of theirs is loaded; the trial number refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf("async function gptLiveAnswer"), co.indexOf('"/gpt-live/after-stream"')); return h.indexOf("isTeamMember(o.userId)") < h.indexOf("admitSession()") && h.indexOf("admitSession()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
   G.openSessions.clear();
 }
 
@@ -371,24 +371,18 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   check("an unknown number hears today's line and the call ends, nothing streamed", unknown.status === 200 && /we don't recognize this number/.test(unknown.text) && /<Hangup\/>/.test(unknown.text) && !/<Stream/.test(unknown.text), unknown);
   // A verified member who isn't on the team: refused busy, with a decision row, and nothing of theirs loaded or sent.
   const writes: { sql: string; params: any[] }[] = [];
-  let team: boolean | "throw" = false, logged = 0;
+  let team = false, logged = 0;
   (pool as any).query = async (sql: string, params: any[] = []) => {
     if (/^\s*(INSERT|UPDATE)/.test(sql)) writes.push({ sql, params });
     if (/FROM users WHERE phone_number/.test(sql)) return { rows: [{ id: "u-noor", invite_verified: true, identity_captured: true, archived_at: null }] };
-    if (/SELECT mo_approver FROM users/.test(sql)) { if (team === "throw") throw new Error("db down"); return { rows: [{ mo_approver: team }] }; }
+    if (/SELECT mo_approver FROM users/.test(sql)) return { rows: [{ mo_approver: team }] };
     if (/FROM gpt_live_minutes/.test(sql)) return { rows: [{ s: String(logged) }] };
     return { rows: [] };
   };
   const member = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-m", StirVerstat: "TN-Validation-Passed-A" });
   const refusedRow = (why: string) => writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_refused" && w.params[4] === why);
-  check("team only: a member not on the team is refused busy, with a decision row; nothing is loaded or streamed", /<Reject reason="busy"\/>/.test(member.text) && !/<Stream/.test(member.text) && refusedRow("not_team") && !writes.some((w) => /call_status = 'initiated'/.test(w.sql)), member);
-  // The team list can't be read: fails closed (review of #333), the can't-connect line, logged, never quietly ElevenLabs.
-  team = "throw";
-  const quietErr = console.error; console.error = () => {};
-  const unread = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-u", StirVerstat: "TN-Validation-Passed-A" });
-  console.error = quietErr;
-  const unreadRow = writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_unavailable" && w.params[4] === "team_unreadable");
-  check("the team list can't be read: can't connect now (team_unreadable), logged; never ElevenLabs, nothing streamed", unreadRow && unread.text.includes("can't connect right now") && !/<Stream/.test(unread.text) && !/elevenlabs/i.test(unread.text), unread);
+  void refusedRow;
+  check("everyone (2026-10-31): a verified member not on the team gets GPT-Live on the trial number too", /<Stream url="wss:\/\/cue\.example\.test\/co\/gpt-live\/stream">/.test(member.text) && !/Reject/.test(member.text), member);
   team = true;
   logged = 300 * 60;
   const capped = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-c", StirVerstat: "TN-Validation-Passed-A" });
@@ -448,12 +442,12 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const { createCoRouter } = await import("../../src/routes/co.js");
   const routes = ((createCoRouter(null as any) as any).stack as any[]).filter((l) => l.route).map((l) => `${Object.keys(l.route.methods).join(",")} ${l.route.path}`);
   check("the ElevenLabs routes are all still there", ["post /incoming-call", "post /el/outbound-twiml", "post /el/tool/:name", "post /el/post-call"].every((r) => routes.includes(r)), routes);
-  check("the trial number keeps its own route; /incoming-call's only GPT-Live code is the team hand-off, before ElevenLabs as it was", routes.includes("post /gpt-live/incoming-call") && (() => {
+  check("ElevenLabs is out of the call path: /incoming-call and /el/outbound-twiml only answer through GPT-Live; their old ElevenLabs answers are kept, uncalled", routes.includes("post /gpt-live/incoming-call") && (() => {
     const co = src("routes/co.ts");
-    const h = co.slice(co.indexOf('"/incoming-call"'), co.indexOf("// ---------- ElevenLabs calls"));
-    const a = h.indexOf("// The team's calls answer with GPT-Live"), b = h.indexOf("\n", h.indexOf("gptLiveRefusalTwiml(userId"));
-    const rest = h.slice(0, a) + h.slice(b);
-    return a > 0 && b > a && (h.match(/gptLiveAnswer\(/g) ?? []).length === 1 && h.indexOf("gptLiveAnswer(") < h.indexOf("registerElevenLabsCall({") && h.indexOf("inboundCallerVerified(") < h.indexOf("gptLiveAnswer(") && rest.includes("registerElevenLabsCall({") && !/gpt-?live/i.test(rest);
+    const inbound = co.slice(co.indexOf('"/incoming-call"'), co.indexOf("// ElevenLabs is out of the call path (2026-10-31): /co/incoming-call"));
+    const outbound = co.slice(co.indexOf('router.post("/el/outbound-twiml"'), co.indexOf("// ElevenLabs is out of the call path (2026-10-31): /co/el/outbound-twiml"));
+    const calls = (fn: string) => (co.match(new RegExp(`\\b${fn}\\(`, "g")) ?? []).length;
+    return /gptLiveAnswer\(/.test(inbound) && /gptLiveAnswer\(/.test(outbound) && !/registerElevenLabsCall\(/.test(inbound) && !/registerElevenLabsCall\(/.test(outbound) && calls("elevenLabsInboundTwiml") === 1 && calls("elevenLabsOutboundTwiml") === 1 && (co.match(/registerElevenLabsCall\(\{/g) ?? []).length === 2;
   })());
   const server = src("server.ts");
   check("the voice read's stream handler is unchanged beside GPT-Live's", /if \(!isVoiceStreamPath\(req\.url\)\) return;/.test(server) && /if \(!isGptLiveStreamPath\(req\.url\)\) return;/.test(server) && /handleTwilioStream\(ws as unknown as SocketLike\)/.test(server));
@@ -503,15 +497,14 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const decided = (decision: string, action: string) => sqls.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === decision && w.params[4] === action);
   const reset = () => { registered.length = 0; sqls.length = 0; G.openSessions.clear(); };
 
-  // Not on the team: today's ElevenLabs path, byte for byte.
+  // Not on the team: GPT-Live too (2026-10-31), never ElevenLabs.
   reset();
   const noor = await call("+15550000002", "CA-noor");
-  const reg = registered[0];
-  const vars = reg?.conversationInitiationClientData?.dynamicVariables ?? {};
-  check("main number, not on the team: the TwiML is ElevenLabs' own, byte for byte", noor.status === 200 && noor.text === EL_TWIML, noor);
-  check("...registered with ElevenLabs once, inbound, from their number to ours, as today", registered.length === 1 && reg.agentId === "agent-x" && reg.fromNumber === "+15550000002" && reg.toNumber === "+15550009999" && reg.direction === "inbound" && vars.user_id === "u-noor" && vars.first_name === "Noor" && vars.direction === "inbound" && /^This call: they called you\./.test(vars.context_summary) && !vars.context_summary.includes(TEAM_BUILDER_LINE), reg);
-  check("...nothing of GPT-Live touched: no minutes read, nothing admitted, no stream, no fallback row", !sqls.some((w) => /gpt_live/.test(w.sql)) && G.openSessions.size === 0 && !/gpt-live/.test(noor.text) && !sqls.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && /^call\.gpt_live/.test(String(w.params[1]))));
-  check("...and the same call status write as today", sqls.filter((w) => /^\s*UPDATE users SET call_sid/.test(w.sql)).length === 1 && sqls.some((w) => /UPDATE users SET call_sid = \$2, call_status = 'initiated'/.test(w.sql) && w.params[0] === "u-noor" && w.params[1] === "CA-noor"));
+  const nc = G.takeLiveLink(streamId(noor.text));
+  check("main number, a verified member not on the team: GPT-Live's stream, ElevenLabs never registered", noor.status === 200 && /<Stream url="wss:\/\/cue\.example\.test\/co\/gpt-live\/stream">/.test(noor.text) && registered.length === 0 && nc?.userId === "u-noor" && !nc.instructions.includes(TEAM_BUILDER_LINE), noor);
+  check("...the same call status write", sqls.some((w) => /UPDATE users SET call_sid = \$2, call_status = 'initiated'/.test(w.sql) && w.params[0] === "u-noor" && w.params[1] === "CA-noor"));
+  const unknownCaller = await call("+15550009876", "CA-unknown");
+  check("an unknown number is still declined, nothing streamed or registered", /we don't recognize this number/.test(unknownCaller.text) && !/<Stream/.test(unknownCaller.text) && registered.length === 0);
 
   // On the team, minutes left: GPT-Live.
   reset();
@@ -555,10 +548,10 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   reset();
   const [j2, n2, e2] = await Promise.all([call("+15550000001", "CA-j"), call("+15550000002", "CA-n"), call("+15550000003", "CA-e")]);
   const jc = G.takeLiveLink(streamId(j2.text)), ec = G.takeLiveLink(streamId(e2.text));
-  check("at once: Jordan and Ellis (team) on GPT-Live, Noor on ElevenLabs", !!jc && !!ec && n2.text === EL_TWIML && registered.length === 1 && registered[0].conversationInitiationClientData.dynamicVariables.user_id === "u-noor");
-  check("at once: each GPT-Live call is its own member's, with nobody else's name in either prompt", jc?.userId === "u-jordan" && ec?.userId === "u-ellis" && !/Ellis|Noor/.test(jc!.instructions + jc!.backendSystem) && !/Jordan|Noor/.test(ec!.instructions + ec!.backendSystem));
-  check("at once: Noor's ElevenLabs registration carries nothing of Jordan's or Ellis's", !/Jordan|Ellis|u-jordan|u-ellis/.test(JSON.stringify(registered[0])));
-  check("at once: two admissions, each with its own reservation", G.openSessions.size === 2);
+  const nc2 = G.takeLiveLink(streamId(n2.text));
+  check("at once: Jordan, Ellis and Noor all on GPT-Live, ElevenLabs never registered", !!jc && !!ec && !!nc2 && registered.length === 0);
+  check("at once: each call is its own member's, with nobody else's name in either prompt", jc?.userId === "u-jordan" && ec?.userId === "u-ellis" && nc2?.userId === "u-noor" && !/Ellis|Noor/.test(jc!.instructions + jc!.backendSystem) && !/Jordan|Noor/.test(ec!.instructions + ec!.backendSystem) && !/Jordan|Ellis/.test(nc2!.instructions + nc2!.backendSystem));
+  check("at once: three admissions, each with its own reservation", G.openSessions.size === 3);
 
   server.close();
   tw.registerCall = realRegister;

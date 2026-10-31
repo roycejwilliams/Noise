@@ -666,6 +666,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         return {
           ok: true,
           groups: got.view.groups.map((g) => ({ title: g.title, lines: g.lines.map((l) => ({ refs: l.refs, text: l.text, theirWords: l.theirWords, canCorrect: l.canCorrect })) })),
+          // Where their calls go (whatCoKnows.ts CALLS_PROCESSOR_LINE): shown with what Cue knows, in these exact words.
+          calls: got.view.calls,
           note: "Lines starting 'my read:' are your own read of them, so say so. canCorrect false: it can be removed, not reworded. Never show refs.",
         };
       },

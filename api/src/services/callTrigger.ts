@@ -85,7 +85,7 @@ export async function triggerCallForUser(
   // pick up). A team call GPT-Live can't take isn't dialed: the month's team minutes used is held, OpenAI unavailable is a call that
   // never started (reported like a refused dial). Everyone else: null, and the dial below is today's.
   const live = await preflight(userId).catch(() => ({ ok: false, kind: "unavailable", failClass: "refused", status: null }) as const);
-  if (live && !live.ok) return gptLiveNotPlaced(userId, auth, live);
+  if (!live.ok) return gptLiveNotPlaced(userId, auth, live);
 
   // One dial at a time (concurrency audit, 2026-10-12): the gate above reads call_status, which used to be written only after Twilio
   // placed the call, so two triggers at once (the */5 and */15 jobs together, or a "call me" text) both passed and both dialed. The
@@ -106,7 +106,7 @@ export async function triggerCallForUser(
   const summary = prebuildCallContext(userId, buildCallContextSummary);
   // And the opening line, written from that context while it rings (services/callOpening.ts). Not for a GPT-Live call: it opens in
   // its own words (services/gptLive.ts).
-  if (!live) prebuildOpening(userId, user.first_name ?? "", "outbound", summary);
+  void prebuildOpening; // GPT-Live opens in its own words; the written opener was for ElevenLabs (kept for the deletion PR)
   // And the clock and what Co has found for them, so the call never waits on a lookup (services/callBriefing.ts).
   prebuildCallBriefing(userId);
   let call: { sid: string };
@@ -125,7 +125,7 @@ export async function triggerCallForUser(
     timeout: 20,
     // A GPT-Live call (the team's) also gets Twilio's async answering-machine detection: GPT-Live has no voicemail tool, so the
     // verdict tells it when to leave its message (services/gptLive.ts). Everyone else's dial is today's, unchanged.
-    ...(live ? amdDialOptions(process.env.API_URL) : {}),
+    ...amdDialOptions(process.env.API_URL),
     });
   } catch (err) {
     if (callId) await dropCallLink(callId).catch(() => {});
@@ -153,7 +153,7 @@ export async function triggerCallForUser(
 }
 
 // The GPT-Live check before a team member's dial (services/gptLive.ts outboundPreflight), swappable in layer-1 tests.
-type PreflightFn = (userId: string) => Promise<Preflight | null>;
+type PreflightFn = (userId: string) => Promise<Preflight>;
 let preflight: PreflightFn = (userId) => outboundPreflight(userId);
 export function setPreflightForTests(fn: PreflightFn | null): void {
   preflight = fn ?? ((userId) => outboundPreflight(userId));
@@ -164,7 +164,7 @@ export function setPreflightForTests(fn: PreflightFn | null): void {
 // rang), so the reply's honesty rules for a failed call (#302/#303) apply as they are; a refused key also raises the dead-key text.
 async function gptLiveNotPlaced(userId: string, auth: CallAuthorization | null, p: Exclude<Preflight, { ok: true }>): Promise<TriggerCallResult> {
   if (p.kind === "budget") {
-    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: p.why, proposal: { direction: "outbound", requested: auth?.kind ?? null }, reason: p.why === "unreadable" ? "the team's GPT-Live minutes couldn't be read, so the call was held (fails closed)" : "the team's GPT-Live minutes for the month are used, so the call was held" }).catch(() => {});
+    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: p.why, proposal: { direction: "outbound", requested: auth?.kind ?? null }, reason: p.why === "unreadable" ? "GPT-Live's minutes couldn't be read, so the call was held (fails closed)" : "GPT-Live's minutes for the month are used, so the call was held" }).catch(() => {});
     return { success: false, error: p.why === "unreadable" ? GPT_LIVE_CANT_PLACE : GPT_LIVE_MINUTES_USED };
   }
   await recordDecision({ layer: 8, decision: "call.gpt_live_unavailable", userId, outcome: "skip", action: p.failClass, proposal: { direction: "outbound", failClass: p.failClass, status: p.status, stage: "preflight", requested: auth?.kind ?? null } }).catch(() => {});

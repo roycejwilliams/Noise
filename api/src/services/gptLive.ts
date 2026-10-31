@@ -31,9 +31,10 @@ export const GPT_LIVE = {
   url: "wss://api.openai.com/v1/live/sessions",
   defaultVoice: "marin",
   maxSessionMs: 30 * 60_000, // each session
-  // The team's GPT-Live minutes per calendar month (UTC), all calls together: 300 is about $21 at ~$0.07 a minute, and this is the one
-  // place the number lives. Held while calls run (admitSession); used up, a team call is refused busy (never ElevenLabs).
-  teamMonthlyMinutes: 300,
+  // GPT-Live minutes per calendar month (UTC), every member's calls together: 300 (about $21 at ~$0.07 a minute) until Royce confirms
+  // a number sized from real use (10-31: 125 ElevenLabs minutes in October; proposed 400, about $28). The one place it lives. Held
+  // while calls run (admitSession); used up, inbound is busy and outbound is held (never ElevenLabs).
+  monthlyMinutes: 300,
   maxInstructionChars: 6500, // GPT-Live's own prompt stays short (OpenAI's prompting guide); everything detailed is the thinking's
   minAdmitMs: 60_000, // a call that would get less than this is refused
   startTimeoutMs: 10_000, // Twilio's start, then OpenAI's session.started, each within this or the call is ended cleanly
@@ -449,25 +450,18 @@ export function failClassOf(e: { code?: unknown; type?: unknown; message?: unkno
 // refusal from OpenAI in the last GPT_LIVE.breakerMs (OpenAI only says "no balance" when a session starts), and OpenAI accepting the
 // key (GET /v1/models/gpt-live-1, free). A check that can't run fails closed.
 export type Preflight = { ok: true } | { ok: false; kind: "budget"; why: "minutes_used" | "unreadable" } | { ok: false; kind: "unavailable"; failClass: FailClass | "no_api_url"; status: number | null };
-export type PreflightDeps = { team: (userId: string) => Promise<boolean>; env: NodeJS.ProcessEnv; db: Db; fetch: typeof fetch; now: () => number };
-const preflightDefaults = (): PreflightDeps => ({ team: async (id) => {
-  // Read directly, not through isTeamMember (which reads an error as "not on the team"): a failed read must not quietly send a team call
-  // to ElevenLabs (review of #333).
-  const { rows } = await pool.query(`SELECT mo_approver FROM users WHERE id = $1`, [id]);
-  return rows[0]?.mo_approver === true;
-}, env: process.env, db: pool, fetch: (...a) => fetch(...a), now: Date.now });
-export async function outboundPreflight(userId: string, deps: Partial<PreflightDeps> = {}): Promise<Preflight | null> {
+export type PreflightDeps = { env: NodeJS.ProcessEnv; db: Db; fetch: typeof fetch; now: () => number };
+const preflightDefaults = (): PreflightDeps => ({ env: process.env, db: pool, fetch: (...a) => fetch(...a), now: Date.now });
+export async function outboundPreflight(userId: string, deps: Partial<PreflightDeps> = {}): Promise<Preflight> {
   const d = { ...preflightDefaults(), ...deps };
-  let team: boolean;
-  try { team = await d.team(userId); } catch { return { ok: false, kind: "unavailable", failClass: "team_unreadable", status: null }; }
-  if (!team) return null;
+  void userId; // every member's call is checked the same way (2026-10-31: everyone on GPT-Live)
   const key = d.env.OPENAI_API_KEY?.trim();
   if (!key) return { ok: false, kind: "unavailable", failClass: "no_key", status: null };
   if (!gptLiveStreamUrl(d.env.API_URL)) return { ok: false, kind: "unavailable", failClass: "no_api_url", status: null };
   try {
     pruneSlots(d.now());
     const reserved = [...openSessions.values()].reduce((a, v) => a + v.capMs, 0);
-    const left = GPT_LIVE.teamMonthlyMinutes * 60_000 - (await loggedSeconds(d.db)) * 1000 - reserved;
+    const left = GPT_LIVE.monthlyMinutes * 60_000 - (await loggedSeconds(d.db)) * 1000 - reserved;
     if (left < GPT_LIVE.minAdmitMs) return { ok: false, kind: "budget", why: "minutes_used" };
   } catch {
     return { ok: false, kind: "budget", why: "unreadable" };
@@ -524,7 +518,7 @@ export const amdDialOptions = (apiUrl: string | undefined) => ({ machineDetectio
 
 // ---------------------------------------------------------------- the minute caps
 
-// Each session: 30 minutes. The team: GPT_LIVE.teamMonthlyMinutes per calendar month (UTC), held while calls run, not only when they
+// Each session: 30 minutes. The team: GPT_LIVE.monthlyMinutes per calendar month (UTC), held while calls run, not only when they
 // start: a call is admitted with its own cap, min(30 min, what the month has left after every minute logged and every open call's
 // whole reservation), and the bridge closes it there. Minutes live in gpt_live_minutes (db/migrations.ts), one row per session,
 // written as the call starts and about every minute after, so a restart mid-call still counts. That table has no user column and
@@ -558,7 +552,7 @@ export function admitSession(db: Db = pool, now = Date.now()): Promise<Admitted 
     const reserved = [...openSessions.values()].reduce((a, v) => a + v.capMs, 0);
     let logged: number;
     try { logged = await loggedSeconds(db); } catch { return { refused: "unreadable" }; }
-    const left = GPT_LIVE.teamMonthlyMinutes * 60_000 - logged * 1000 - reserved;
+    const left = GPT_LIVE.monthlyMinutes * 60_000 - logged * 1000 - reserved;
     const capMs = Math.min(GPT_LIVE.maxSessionMs, left);
     if (capMs < GPT_LIVE.minAdmitMs) return { refused: "minutes_used" };
     const id = randomBytes(32).toString("base64url");
