@@ -41,6 +41,7 @@ export const STORES: Store[] = [
   { name: "member_threads: open or waiting", table: "member_threads", owner: "user_id", cols: ["text", "opened_quote", "closed_quote"], where: "t.status IN ('open', 'waiting')" },
   { name: "member_threads: any status", table: "member_threads", owner: "user_id", cols: ["text", "opened_quote", "closed_quote"] },
   { name: "person_snapshots", table: "person_snapshots", owner: "user_id", cols: ["snapshot"] },
+  { name: "member_snapshots (the shadow snapshot's body)", table: "member_snapshots", owner: "user_id", cols: ["body"] },
   { name: "co_profiles (fields and intent)", table: "co_profiles", owner: "user_id", cols: ["goals", "intent", "blockers", "activity_preferences", "life_chapters", "long_term_direction", "city", "avoid"] },
   { name: "co_goals", table: "co_goals", owner: "user_id", cols: ["title", "their_words", "items"] },
   { name: "open_loops: open", table: "open_loops", owner: "user_id", cols: ["title", "detail"], where: "t.closed_at IS NULL" },

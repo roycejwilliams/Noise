@@ -269,6 +269,17 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // The member snapshot's upkeep (services/memberSnapshot.ts, shadow): stored snapshots that went stale or are past 24h are rebuilt,
+  // so something a member removed leaves the stored copy within a pass even while nothing reads it. Code only, no model call.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const { snapshotUpkeep } = await import("../services/memberSnapshot.js");
+      await snapshotUpkeep();
+    } catch (err: any) {
+      console.error("member snapshot upkeep error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // What Co said on a call it would send (services/callCommitments.ts): once it has had time to fall due, was a text actually sent?
   cron.schedule("*/10 * * * *", async () => {
     try {

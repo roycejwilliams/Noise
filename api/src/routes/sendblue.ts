@@ -2798,7 +2798,12 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           message: resolvedContent,
           coReply,
           coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
-        }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err));
+        })
+          .catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err))
+          // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts). Shadow:
+          // nothing reads it yet. Code only, no model call; it never throws.
+          .then(() => import("../services/memberSnapshot.js").then((S) => S.rebuildSnapshot(user.id, "learn")))
+          .catch(() => {});
         // Keep the current picture of them fresh (harness/personSnapshot.ts);
         // rebuilds only when they've said something new, at most every 10 min,
         // with their open threads in the same call.

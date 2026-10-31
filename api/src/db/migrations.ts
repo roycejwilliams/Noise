@@ -3103,6 +3103,15 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS intro_requests_due ON intro_requests (close_due_at) WHERE close_queued_at IS NULL`))
     .catch((err: Error) => console.error("intro_requests init failed:", err));
+  // The member snapshot, built in shadow (services/memberSnapshot.ts, snapshot design 2026-10-29 step 2): its table, the marks table,
+  // and a staleness trigger on every source table that exists (services/memberSnapshotSchema.ts). Additive; last, so every source
+  // table above is there first. Each table's trigger is its own step and never blocks startup.
+  await import("../services/memberSnapshotSchema.js")
+    .then((S) => S.snapshotMigrations(pool))
+    .then((r) => {
+      if (r.missing.length || r.failed.length) console.error(`member snapshot triggers: ${r.triggers.length} on, missing tables ${r.missing.join(", ") || "none"}, failed ${r.failed.join(", ") || "none"}`);
+    })
+    .catch((err: Error) => console.error("member snapshot init failed:", err));
   await concurrencyMigrations();
 }
 
