@@ -85,6 +85,15 @@ export function guardRefusalTellsThem(result: unknown): boolean {
   return isGuardRefusal(result) && GUARD_REFUSALS.get(result as object)!.tellsThem;
 }
 
+// What a call actually did, kept off the result the model reads (shareFinds: only the finds that went). The model still reads every
+// refused item and why; only the record changes, so a refused find is never recorded as sent (the guard's log, its content-keyed fact
+// and its ledger row all read this). Remembered by identity, like the guard's refusals above.
+const RECORD_AS = new WeakMap<object, object>();
+export function withRecordAs<T extends object>(result: T, recordAs: object): T {
+  RECORD_AS.set(result, recordAs);
+  return result;
+}
+
 // Pure: the receipt for a voiceRead call (services/voiceReadConsent.ts): which answer the model read, never their words or message, so
 // a yes taken back leaves no copy of what they said in the decision log. Null for any other tool.
 export function voiceReadReceipt(name: string, input: any): { answer: string } | null {
@@ -236,10 +245,11 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       if (failed && !made && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
       if (made) ctx.notDone(`${name} made ${made}, but the text with it didn't send.`);
       else if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
-      // recordAs: a tool that did only part of what it was asked names the part that happened (shareLink: only the links that went),
-      // so the lasting record never says more than the turn's facts do. It's logged too, so the every-boot backfill rebuilds from it,
-      // never from the full ask (review of #284).
-      const partial = !!result && typeof result === "object" && result.recordAs && typeof result.recordAs === "object" ? result.recordAs : null;
+      // recordAs: a tool that did only part of what it was asked names the part that happened (shareLink: only the links that went;
+      // shareFinds: only the finds that went, through withRecordAs so the model's result is unchanged), so the lasting record never
+      // says more than the turn's facts do. It's logged too, so the every-boot backfill rebuilds from it, never from the full ask
+      // (review of #284).
+      const partial = !!result && typeof result === "object" ? (result.recordAs && typeof result.recordAs === "object" ? result.recordAs : (RECORD_AS.get(result) ?? null)) : null;
       const recordAs = partial ?? input;
       // person: the oncePerPerson key, so a later "Sarah" + "Kim" and "Sarah Kim" both find this row (2026-10-28).
       await log(failed ? "not_done" : "done", { ...(failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : partial ? { recordAs: partial } : {}), ...(person ? { person } : {}) });

@@ -13,6 +13,7 @@ import { deckTools } from "./deckTools.js";
 import { artifactTools } from "./artifactTools.js";
 import { owedAnswerNote } from "./linkAnswer.js";
 import { recordDecision } from "../harness/core.js";
+import { withRecordAs } from "./toolGuard.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
 import { loadBrief, saveBrief, type SearchIntent } from "../services/searchIntent.js";
@@ -569,6 +570,8 @@ export function loopTools(
         await seeded();
         const notes = await loadBrief(ctx.userId).catch(() => null);
         const sent: string[] = [];
+        // The finds that went (their link did), for the record only: a refused or skipped one is never recorded as sent.
+        const went: { link: string; caption: string }[] = [];
         const refused: string[] = [];
         const uncaptioned: string[] = [];
         // Their limits at keep (Phase A2), all items in one read: a kind they ruled out (judged by its main activity), an event outside
@@ -635,6 +638,7 @@ export function loopTools(
           // The link went out, so it's shared whatever happens to its caption.
           loop.shared.push(it.link);
           sent.push(f.name);
+          went.push({ link: it.link, caption: it.caption });
           state.sent = true;
           await new Promise((r) => setTimeout(r, ctx.dryRun ? 0 : 1500));
           // The caption is its own receipt (2026-10-01 code review: a failed
@@ -655,7 +659,8 @@ export function loopTools(
         if (sent.length) await remember({ shortlist: [...(notes?.shortlist ?? []), ...items.filter((i) => loop.shared.includes(i.link)).map((i) => ({ name: loop.found.get(i.link)?.name ?? i.link, url: i.link, note: i.caption.slice(0, 200) }))].slice(-8) });
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "loop.shareFinds", userId: ctx.userId, outcome: sent.length ? "act" : "skip", action: `sent ${sent.length}`, proposal: { sent, refused, seconds: Math.round((Date.now() - loop.started) / 1000) } }).catch(() => {});
         if (refused.length) notDone(`Not sent: ${refused.join(" | ")}`);
-        return {
+        // What the model reads is unchanged: every refused find and why. The record (agent/toolGuard.ts) reads only what went.
+        return withRecordAs({
           ok: sent.length > 0,
           sent,
           refused,
@@ -665,7 +670,7 @@ export function loopTools(
             : uncaptioned.length
               ? `Sent. The caption didn't go out for ${uncaptioned.join(", ")}: only the link did, so say what it is in your reply. The rest went with their captions; don't repeat those.`
               : "Sent, each link then its caption. Don't repeat them in your reply; add only what's left to say.",
-        };
+        }, { items: went });
       },
     }),
 
