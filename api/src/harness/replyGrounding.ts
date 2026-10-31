@@ -131,7 +131,8 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // keep a backed world line and to end dead air with a true one.
 // moment: what they're doing in this message, from the turn's moment read (services/connectDots.ts readMoment: "sharing", "feedback",
 // ...). The reply check reads it to tell a cut that left a sharing reply flat (repairShareCut); never rendered into a prompt.
-export type ReplyFacts = { moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+// changedBy: the tools that changed a setting or a record this turn (services/capabilities.ts CHANGES_SOMETHING, recorded by the guard).
+export type ReplyFacts = { changedBy?: string[]; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -1294,24 +1295,32 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
 }
 
 // Cue saying it changed how it works for them, or what it does from now on, in its own voice (regex over Cue's draft only, never their
-// message). A switch said bare ("switching to SF", "Switched over to SF"); a change with Cue as the one making it ("I've moved your
-// searches to SF", "I'll set it to Oakland"); or "from now on" and its kin with Cue as the one doing it ("From now on I'll keep it short").
+// message). A change is one of:
+//   - Cue the one making it: "I've moved your searches to SF", "I'll move the dinner to Thursday" ("let me" is talk, not a change:
+//     "Let me switch over to your calendar question");
+//   - a bare switch onto something of theirs: "Switched your searches over to SF";
+//   - a bare switch said as lasting: "Got it, switching to SF from here on out." (the 10-31 reply).
+// A bare switch on its own is advice or pointing ("Swap it to this: ...", "switching to the Friday one: <link>"), never a change.
+// "From now on" with Cue as the one doing it ("From now on I'll keep it short") is something Cue says it does from now on.
 // Not advice to them ("going forward, it might help to..."), not their own move ("Moving to SF is huge").
 const GOING_FORWARD = /\b(?:from (?:here|now) on(?: out)?|going forward|moving forward|for now on|from this point(?: on)?|from today on|starting (?:now|today|tomorrow))\b/i;
-const CUE_ACTS = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|let me|cue)\b/i;
-const SWITCH_BARE = /(?:^|[,;:]\s*|\b(?:got it|done|ok(?:ay)?|sure|noted)\W+)(?:switch(?:ed|ing)?|swap(?:ped|ping)?)\b(?!\s+gears)[^.?!]{0,40}?\b(?:to|over)\b/i;
-const CUE_CHANGES = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|let me|cue(?:'s| is| has| will)?)\s+(?:just\s+|now\s+|already\s+|go(?:ing)? to\s+|gonna\s+)?(?:switch(?:ed|ing)?|swap(?:ped|ping)?|chang(?:e|ed|ing)|updat(?:e|ed|ing)|mov(?:e|ed|ing)(?!\s+on\b)|shift(?:ed|ing)?|set(?:ting)?(?!\s+(?:you\s+)?up\b)|redirect(?:ed|ing)?)\b(?!\s+gears)[^.?!]{0,40}?\b(?:to|over)\b/i;
+const CUE_ACTS = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|cue)\b/i;
+const SWITCH = /\b(?:switch(?:ed|ing)?|swap(?:ped|ping)?)\b(?!\s+gears)/i;
+const SWITCH_YOURS = /\b(?:switch(?:ed|ing)?|swap(?:ped|ping)?)\s+(?:over\s+)?your\b[^.?!]{0,40}?\b(?:to|over|for)\b/i;
+const CUE_CHANGES = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|cue(?:'s| is| has| will)?)\s+(?:just\s+|now\s+|already\s+|go(?:ing)? to\s+|gonna\s+)?(?:switch(?:ed|ing)?|swap(?:ped|ping)?|chang(?:e|ed|ing)|updat(?:e|ed|ing)|mov(?:e|ed|ing)(?!\s+on\b)|shift(?:ed|ing)?|set(?:ting)?(?!\s+(?:you\s+)?up\b)|redirect(?:ed|ing)?)\b(?!\s+gears)[^.?!]{0,40}?\b(?:to|over)\b/i;
 // change: a change said as made or being made. forward: something Cue says it does from now on.
 export function changeClaims(draft: string): { sentence: string; kind: "change" | "forward" }[] {
   return (draft.match(SENTENCES) ?? [])
     .map((x) => x.trim())
     .filter((x) => x && !/\?\s*["')\]]*$/.test(x))
-    .flatMap((x): { sentence: string; kind: "change" | "forward" }[] => (SWITCH_BARE.test(x) || CUE_CHANGES.test(x) ? [{ sentence: x, kind: "change" }] : GOING_FORWARD.test(x) && CUE_ACTS.test(x) ? [{ sentence: x, kind: "forward" }] : []));
+    .flatMap((x): { sentence: string; kind: "change" | "forward" }[] =>
+      CUE_CHANGES.test(x) || SWITCH_YOURS.test(x) || (SWITCH.test(x) && GOING_FORWARD.test(x)) ? [{ sentence: x, kind: "change" }] : GOING_FORWARD.test(x) && CUE_ACTS.test(x) ? [{ sentence: x, kind: "forward" }] : [],
+    );
 }
-// A tool changed something this turn: a receipt of something done (not one saying it wasn't, and not a note saved for the team, which
-// changes nothing), or an ask saved for the daily search.
-export function lastingChangeThisTurn(rf: Pick<ReplyFacts, "facts">): boolean {
-  return rf.facts.some((f) => (f.kind === "did_this_turn" && !NEGATIVE_RECEIPT.test(f.text) && !/^Saved for the team:/.test(f.text)) || (f.kind === "ongoing" && SAVED_THIS_TURN.test(f.text)));
+// A tool that changes a setting or a record went through this turn (services/capabilities.ts CHANGES_SOMETHING, recorded by the
+// guard). Any other receipt (a search, a send, a note for the team) changed nothing, so it backs no change.
+export function lastingChangeThisTurn(rf: Pick<ReplyFacts, "changedBy">): boolean {
+  return (rf.changedBy?.length ?? 0) > 0;
 }
 
 function extractJson(text: string): any {
@@ -1582,8 +1591,9 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       return { name: `claim_${c.type}`, pass: false, reason: `${reason} (a saved feedback note isn't a report of Cue's failure, and no report of that is on record)` };
     }
     // A note saved for the team never backs a change, or something Cue does from now on (2026-10-31: "Saved for the team: ... switch his
-    // searches to SF going forward" sat behind "switching to SF from here on out", and nothing had changed). Passing it along still stands.
-    if (pass && isFeedbackReceipt(citedFact) && (changeClaims(c.text).length > 0 || GOING_FORWARD.test(c.text)) && !/\bteam\b/i.test(c.text)) {
+    // searches to SF going forward" sat behind "switching to SF from here on out", and nothing had changed). Passing it along still
+    // stands; passing it along "so your searches switch to SF going forward" doesn't (review of #336).
+    if (pass && isFeedbackReceipt(citedFact) && (changeClaims(c.text).length > 0 || GOING_FORWARD.test(c.text))) {
       return { name: `claim_${c.type}`, pass: false, reason: `${reason} (a note saved for the team backs only saying it went to the team, never that Cue changed or will do anything)` };
     }
     // A report status that says there's no report, or that it couldn't be checked, is about an absence: it backs nothing.

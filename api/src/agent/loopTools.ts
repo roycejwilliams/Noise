@@ -197,6 +197,9 @@ export function mailtoLink(to: string, subject: string, body: string): string {
   return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+// A search-area read that failed (searchHome): the search doesn't run.
+const AREA_UNREAD = Symbol("area unread");
+
 export function loopTools(
   ctx: ConversationToolContext,
   state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean; holdLines?: string[] },
@@ -260,10 +263,26 @@ export function loopTools(
   // built over a few turns: "I'd love a hackathon again", "which weekend?", "the 20th"), never the whole call (review of #139).
   const askWords = () => (ctx.isVoice ? String(ctx.turn?.message ?? "").split("\n").filter((l) => l.trim()).slice(-3).join("\n") || ctx.resolvedContent : theirWords());
   // What stands in for "their home" in a search with no place of its own (services/askPlace.ts): where they asked Cue to search from
-  // now on (services/searchArea.ts, its resolved place), else their home city. Read once a turn; a dry run reads nothing.
-  let areaRead: Promise<string | null> | null = null;
-  const searchHome = async (): Promise<string | null> =>
-    (await (areaRead ??= ctx.dryRun ? Promise.resolve(null) : import("../services/searchArea.js").then((A) => A.searchAreaOf(ctx.userId)).then((a) => (a ? (a.label ?? a.place) : null)).catch(() => null))) ?? ctx.turn?.profile?.city ?? null;
+  // now on (services/searchArea.ts, its resolved place), else their home city. Read once a turn; a dry run reads nothing. A read that
+  // fails is never quietly their home city (review of #336): the search doesn't run, it's logged, and Cue says so (areaUnread).
+  let areaRead: Promise<{ ok: true; area: string | null } | { ok: false }> | null = null;
+  const searchHome = async (): Promise<string | null | typeof AREA_UNREAD> => {
+    const r = await (areaRead ??= ctx.dryRun
+      ? Promise.resolve({ ok: true as const, area: null })
+      : import("../services/searchArea.js")
+          .then((A) => A.searchAreaOf(ctx.userId))
+          .then((a) => ({ ok: true as const, area: a ? (a.label ?? a.place) : null }))
+          .catch((err: any) => {
+            console.error("loopTools: reading their search area failed (that search doesn't run):", err?.message ?? err);
+            void recordDecision({ layer: 3, decision: "search.area_unread", userId: ctx.userId, outcome: "skip", action: "not_searched", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
+            return { ok: false as const };
+          }));
+    return r.ok ? (r.area ?? ctx.turn?.profile?.city ?? null) : AREA_UNREAD;
+  };
+  const areaUnread = () => {
+    notDone("Nothing was searched: where they asked Cue to search couldn't be read just now.");
+    return { ok: false, error: "Nothing was searched: where they asked you to search couldn't be read just now. Say plainly the search didn't run and offer to try again in a moment." };
+  };
   const ruledOut = async (query: string): Promise<string | null> => {
     const l = await limits();
     if (!l?.avoid.length) return null;
@@ -347,13 +366,15 @@ export function loopTools(
         }
         if (outOfTime()) return OUT_OF_TIME;
         // LOOP_BUDGET.eventSearches a turn, like webSearches: each one can be an Exa search now (services/lumaViaExa.ts).
+        const eventsHome = await searchHome();
+        if (eventsHome === AREA_UNREAD) return areaUnread();
         if ((loop.eventSearches ?? 0) >= LOOP_BUDGET.eventSearches) return { ok: false, error: `No event searches left this turn (${LOOP_BUDGET.eventSearches} used): work with the events you already have, or try webSearch.` };
         loop.eventSearches = (loop.eventSearches ?? 0) + 1;
         await hold(whileLooking);
         // Where it looks (services/askPlace.ts): the city passed, unless it's just their home city and "what" names another place
         // ("in/near/around X", or SF/NYC-style short names; "visiting Lisbon" or lowercase isn't seen); else that named place; else their
         // home city.
-        const where = replySearchPlace({ kind: "events", words: what, toolCity: city, message: askWords(), home: await searchHome() });
+        const where = replySearchPlace({ kind: "events", words: what, toolCity: city, message: askWords(), home: eventsHome });
         const [r, earlier] = await Promise.all([
           // No Exa search on a call (ctx.isVoice: services/callTools.ts): a voice turn can't wait up to 10s for Exa plus the page reads.
           eventCandidates(what, where.place, { when: when ?? null, userId: ctx.userId, limit: 8, viaExa: !ctx.isVoice, source: "request" }),
@@ -418,6 +439,8 @@ export function loopTools(
           return { ...STUB, results: [] };
         }
         if (outOfTime()) return OUT_OF_TIME;
+        const home = await searchHome();
+        if (home === AREA_UNREAD) return areaUnread();
         const left = LOOP_BUDGET.webSearches - loop.webQueries;
         if (left <= 0) return { ok: false, error: "No web searches left this turn: work with what you have, or read a page you already found." };
         const run = [...new Set(queries.map((q) => q.trim().slice(0, 90)).filter(Boolean))].slice(0, left);
@@ -427,7 +450,6 @@ export function loopTools(
         // Where each search looks (services/askPlace.ts): a query that names a place ("in/near/around X", or SF/NYC-style short names;
         // "visiting Lisbon" or lowercase isn't seen) gets nothing added on top; else theirs.city; else their home city, unless the query
         // says it's for no place (online, remote).
-        const home = await searchHome();
         const cityFor = (q: string) => webSearchCity(replySearchPlace({ kind: "web", words: q, toolCity: theirs?.city ?? null, message: askWords(), home }));
         const siteList = (sites ?? []).filter((s) => /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)).slice(0, 4);
         const all = await Promise.all(run.map((q) => taskWebSearch(ctx.userId, q, { city: cityFor(q), sites: siteList, source: "request", log: !ctx.dryRun }).catch(() => ({ kept: [], dropped: [], droppedDetails: [], note: "Web search failed: error." }))));

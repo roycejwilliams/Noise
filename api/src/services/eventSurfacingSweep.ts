@@ -53,7 +53,10 @@ export type SurfacingCandidate = {
 
 // Where this search looks (services/wantPlace.ts, Royce 2026-10-15): the want's own place, else their home city. The want is the one
 // the candidate names, else the ask row it searches for; a profile search with no want named has no place of its own.
-export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps?: import("./wantPlace.js").PlaceDeps): Promise<{ city: string | null; searchedIn: SearchedIn }> {
+// areaUnread: their search area couldn't be read, so this want with no place of its own has nowhere true to look this run (never
+// their home city instead: review of #336); placeToSearch retries it next run. A promise Cue made on a call (askId "promise:...") also
+// looks in their search area when they set one: it is where they asked Cue to search.
+export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps?: import("./wantPlace.js").PlaceDeps): Promise<{ city: string | null; searchedIn: SearchedIn; areaUnread?: boolean }> {
   const W = await import("./wantPlace.js");
   let want = candidate.want ?? null;
   // A promise Co made on a call (askId "promise:...") is Co's own words, not a want of theirs: it searches their home city.
@@ -62,8 +65,15 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
     want = { key: W.wantKeyForAsk(candidate.askId), text: candidate.askText, createdAt: rows[0]?.created_at ? new Date(rows[0].created_at) : null };
   }
   // What stands in for a want with no place of its own: where they asked Cue to search from now on (searchArea.ts), else their home city.
-  const fallback = async (key: string | null): Promise<{ city: string | null; searchedIn: SearchedIn }> => {
-    const area = await (deps ?? W.realPlaceDeps).area?.(candidate.userId).catch(() => null);
+  const fallback = async (key: string | null): Promise<{ city: string | null; searchedIn: SearchedIn; areaUnread?: boolean }> => {
+    const read = (deps ?? W.realPlaceDeps).area;
+    let area: import("./searchArea.js").SearchArea | null = null;
+    try {
+      area = read ? await read(candidate.userId) : null;
+    } catch (err: any) {
+      console.error("searchPlace: reading their search area failed (not searched this run):", err?.message ?? err);
+      return { city: null, searchedIn: { key, place: null, source: "area" }, areaUnread: true };
+    }
     return area ? { city: area.place, searchedIn: { key, place: area.place, source: "area" } } : { city: candidate.city, searchedIn: { key, place: candidate.city, source: "home" } };
   };
   if (!want) return fallback(null);
@@ -79,6 +89,7 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
 export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null; retry?: string | null; point?: import("./geocoding.js").GeoPoint | null };
 export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps: { place?: import("./wantPlace.js").PlaceDeps; resolve?: import("./placeResolve.js").ResolveDeps } = {}): Promise<SearchWhere> {
   const where = await searchPlace(candidate, deps.place).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } as SearchedIn }));
+  if ("areaUnread" in where && where.areaUnread) return { ...where, city: null, skip: null, place: null, retry: "their search area couldn't be read this run; tried again next run" };
   // Their search area (searchArea.ts): resolved once, when they set it, on its own row; searched at that point, never the bare word.
   if (where.searchedIn.source === "area" && where.city) {
     const R = await import("./placeResolve.js");

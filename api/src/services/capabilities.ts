@@ -886,6 +886,15 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   updateDeck: AFTER,
   writeDocument: AFTER,
 };
+// The tools that change a setting or a record for them (2026-10-31, review of #336): only one of these, done this turn, backs a reply
+// that says Cue changed something (harness/replyGrounding.ts no_unbacked_change). Reading, searching, sending and noting for the team
+// change nothing. evals/discovery/searchArea.ts checks each name is a registry tool.
+export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
+  "setSearchArea", "correctWhatCoKnows", "steerAwayFrom", "saveAsk", "closeAsk", "saveKitFact", "noteRoomTaste", "noteFreeTime",
+  "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "markGoal", "moveLane", "updateGoing", "voiceRead",
+  "shareLocationYes", "stopSharing", "takeDownPage", "deleteImages", "deleteMyFiles", "sendProductUpdates",
+]);
+
 // What can never run on a call, even if it were listed above.
 const NEVER_ON_CALL: ReadonlySet<NonNullable<Ability["confirm"]>> = new Set(["affects_another_member", "costs_money"]);
 export const callRunFor = (tool: string): CallRun | null => CALL_RUN[tool] ?? null;

@@ -213,8 +213,8 @@ try {
   // Their home for a search with no place of its own is searchHome (agent/loopTools.ts): where they asked Cue to search from now on
   // (services/searchArea.ts), else the profile city, read in that one place only.
   const loopSrc = readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8");
-  const searchHomeDef = /const searchHome = async \(\): Promise<string \| null> =>[\s\S]{0,400}?searchAreaOf\(ctx\.userId\)[\s\S]{0,200}?\?\? ctx\.turn\?\.profile\?\.city \?\? null;/.test(loopSrc);
-  check("searchEvents looks where replySearchPlace says, and reads their home (search area, else profile city) only as its home fallback", searchHomeDef && /const where = replySearchPlace\(\{ kind: "events", words: what, toolCity: city, message: askWords\(\), home: await searchHome\(\) \}\);/.test(ev) && /eventCandidates\(what, where\.place,/.test(ev) && (ev.match(/profile\?\.city/g) ?? []).length === 0);
+  const searchHomeDef = /const searchHome = async \(\)[\s\S]{0,400}?searchAreaOf\(ctx\.userId\)[\s\S]{0,900}?return r\.ok \? \(r\.area \?\? ctx\.turn\?\.profile\?\.city \?\? null\) : AREA_UNREAD;/.test(loopSrc);
+  check("searchEvents looks where replySearchPlace says, and reads their home (search area, else profile city) only as its home fallback", searchHomeDef && /const eventsHome = await searchHome\(\);/.test(ev) && /const where = replySearchPlace\(\{ kind: "events", words: what, toolCity: city, message: askWords\(\), home: eventsHome \}\);/.test(ev) && /eventCandidates\(what, where\.place,/.test(ev) && (ev.match(/profile\?\.city/g) ?? []).length === 0);
   check("webSearch hands each search the city replySearchPlace gives it, and reads their home (search area, else profile city) only as its home fallback", searchHomeDef && /taskWebSearch\(ctx\.userId, q, \{ city: cityFor\(q\),/.test(ws) && /webSearchCity\(replySearchPlace\(\{ kind: "web", words: q, toolCity: theirs\?\.city \?\? null, message: askWords\(\), home \}\)\)/.test(ws) && (ws.match(/profile\?\.city/g) ?? []).length === 0 && /const home = await searchHome\(\);/.test(ws));
 }
 

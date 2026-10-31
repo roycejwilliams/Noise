@@ -126,7 +126,8 @@ export type ConversationToolContext = {
   recentExchange?: string | null;
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
-  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done" | "capability", text: string) => void; text: () => string };
+  // changed: a tool that changes a setting or a record went through (the reply check's backing for "I changed it").
+  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done" | "capability", text: string) => void; text: () => string; changed?: (tool: string) => void };
   // A first read this turn (services/theDoor.ts): held until the reply goes out, then counted as given only if a sent text says it back.
   onFirstRead?: (pending: import("../services/theDoor.js").FirstReadPending) => void;
   // Thread the next text under theirs too (routes/sendblue.ts): the first find
@@ -700,6 +701,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           stillSays: r.alsoSays.map((l) => ({ refs: l.refs, text: l.text })),
           // What was waiting on it and was taken out of line (cancelled) or sent back to be judged again (recheck). No need to list it.
           queuedStopped: (r.cancelled ?? []).map((c) => ({ what: c.what, action: c.action })),
+          ...(r.areaUnsettled ? { searchArea: r.areaUnsettled } : {}),
         };
       },
     }),
@@ -2085,7 +2087,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
-  guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });
+  guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx), changed: (t) => ctx.facts?.changed?.(t) });
   // One reply, unless something new came in (2026-10-28 before/after run: a job-offer reply sent "That's huge, Priya. Congratulations."
   // then a second text, "Congratulations. That it's the first one in years...", and golden nothing-at-all records the same shape: a
   // sendReply, its ok, then another step and a second text). The loop doesn't stop after a send, and the send's own "ok" read as a
