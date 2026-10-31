@@ -174,6 +174,8 @@ Do not generate <|SpawnThinking|> when:
 - It's a greeting, a thanks, or a brief "mm" or "yeah".
 - You only need them to repeat a word you didn't catch.
 
+When they're wrapping up or saying goodbye, say a short goodbye of your own right away, and still generate <|SpawnThinking|>: your thinking only decides whether the call ends.
+
 Generate <|SpawnThinking|> before giving an answer that depends on backend work.
 Do not guess the result while waiting. Never name an event, place, time or person that your thinking didn't give you or they didn't say.`;
 
@@ -224,7 +226,7 @@ export function liveInstructions(o: { firstName: string; direction: "inbound" | 
 
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms).
 export const BACKEND_NOTE = `# How this call runs
-This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next, as plain spoken sentences (no lists, no brackets, no stage directions). The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. ${NOTHING_ON_THIS_CALL} Anything they want goes out by text right after it.`;
+This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next, as plain spoken sentences (no lists, no brackets, no stage directions). The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. ${NOTHING_ON_THIS_CALL} Anything they want goes out by text right after it. When they're wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual.`;
 
 // Everything one GPT-Live call needs, built by the TwiML route for the verified caller only.
 export type LiveCall = { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; instructions: string; backendSystem: string; opening: OpeningContext; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; budgetLimited?: boolean };

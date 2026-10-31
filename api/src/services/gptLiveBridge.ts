@@ -214,6 +214,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     while (d.now() - at < GPT_LIVE.catchUpMs && latest() < offsetMs - 300) await new Promise((r) => setTimeout(r, 50));
     const waitMs = d.now() - at;
     const turns = turnsFrom(frags);
+    const theirTurnEnd = turns.filter((t) => t.who === "member").reduce((m, t) => Math.max(m, t.endMs), 0);
     const seenUpTo = Math.max(offsetMs, ...turns.filter((t) => t.who === "member").map((t) => t.startMs));
     let dropped = 0, error = false;
     const c = call;
@@ -237,13 +238,15 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     // Their voicemail is recording (review of #333: someone else may hear it): no thinking answer is ever spoken from here on.
     const onVoicemail = voicemailAt != null;
     if (onVoicemail) d.record({ layer: 8, decision: "call.gpt_live_answer_dropped", userId: c.userId, outcome: "skip", action: "voicemail", proposal: { provider: "gpt-live", sessionId, chars: out.text.length } });
-    if (!finished && !stale && !onVoicemail)
+    // Cue's thinking ended the call: GPT-Live has said its own goodbye, so nothing is sent (no answer to repeat it, and no "no answer"
+    // note, which made it answer an echoed "bye" with "I'll text you"; review of #331).
+    if (!finished && !stale && !onVoicemail && !out.endCall)
       send(ai, out.text
         ? out.exact
           ? { type: "session.instructions.append", event_id: `answer_${id}`, delegation_id: id, content: sayExactly(out.text) }
           : { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
         : { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." });
-    if (out.endCall && !finished && !stale && !onVoicemail && out.text) pendingEnd = { at: d.now(), fromMs: frags.reduce((m, f) => Math.max(m, f.endMs), 0) };
+    if (out.endCall && !finished && !stale && !onVoicemail) pendingEnd = { at: d.now(), fromMs: theirTurnEnd };
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
     d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.exact } });
   };
