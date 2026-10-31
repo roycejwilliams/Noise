@@ -28,7 +28,10 @@ class FakeSocket extends EventEmitter {
   in(m: unknown) { this.emit("message", JSON.stringify(m)); }
   of(type: string) { return this.sent.filter((m) => m.type === type || m.event === type); }
 }
-const textEvents = (s: string) => [{ type: "content_block_start", index: 0, content_block: { type: "text" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: s } }, { type: "content_block_stop", index: 0 }];
+// An answer "…|END" is Claude's text plus an end_call tool use (Cue's thinking deciding to hang up).
+const endEvents = [{ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_end", name: "end_call" } }, { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } }, { type: "content_block_stop", index: 1 }, { type: "message_delta", delta: { stop_reason: "tool_use" } }];
+const textEvents = (s: string) => s.endsWith("|END") ? [...textEvents0(s.slice(0, -4)), ...endEvents] : textEvents0(s);
+const textEvents0 = (s: string) => [{ type: "content_block_start", index: 0, content_block: { type: "text" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: s } }, { type: "content_block_stop", index: 0 }];
 type Opts = Partial<import("../../src/services/gptLiveBridge.js").LiveDeps> & { answer?: (req: any) => string };
 function bridge(o: Opts = {}, call = callFor()) {
   const tw = new FakeSocket(), ai = new FakeSocket();
@@ -48,7 +51,8 @@ function bridge(o: Opts = {}, call = callFor()) {
     startTimeoutMs: 60_000,
     heartbeatMs: 60_000,
     silenceEndMs: 60_000,
-    goodbyeQuietMs: 60_000,
+    endGraceMs: 30,
+    endWaitMs: 60_000,
     wrapUpMs: 10,
     guardRows: async () => [],
     safetyCut: async (c) => { cuts.push(c.userId); },
@@ -70,9 +74,9 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   check("the post-call adapter hands call health the mapped termination", /terminationReason: G\.liveTermination\(r\.endedBy, r\.reason\)/.test(src("routes/co.ts")));
 }
 
-// ---------------------------------------------------------------- 2. one activity timer: silence, and after both say goodbye
+// ---------------------------------------------------------------- 2. one activity timer: silence, and Cue's own end_call
 {
-  check("silence ends a call after the ElevenLabs agent's own 120 s; goodbye after 4 s", G.GPT_LIVE.silenceEndMs === E.AGENT_DEFAULTS.silenceEndCallSecs * 1000 && G.GPT_LIVE.goodbyeQuietMs === 4000);
+  check("silence ends a call after the ElevenLabs agent's own 120 s; Cue's end_call waits for its goodbye plus 2 s", G.GPT_LIVE.silenceEndMs === E.AGENT_DEFAULTS.silenceEndCallSecs * 1000 && G.GPT_LIVE.endGraceMs === 2000);
   const quiet = bridge({ silenceEndMs: 60 });
   await start(quiet, "live_q");
   say(quiet, "cue", "Hey, what's up?", 0);
@@ -90,27 +94,67 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   check("silence: never while Cue's audio is still playing", playing.ai.of("session.close").length === 0);
   playing.tw.close();
 
-  const bye = bridge({ goodbyeQuietMs: 40 });
+  // Ending the call is Cue's decision (review of #331): goodbyes are delegated and the thinking has one tool, end_call; the bridge hangs
+  // up after Cue's goodbye has played, guarded on facts only. No code reads their words for a goodbye.
+  check("the thinking gets end_call with its rule; GPT-Live delegates goodbyes; the regex goodbye end is gone", JSON.stringify(G.delegationRequest(callFor(), []).tools) === JSON.stringify([G.END_CALL_TOOL]) && G.END_CALL_TOOL.function.description === G.END_CALL_RULE && /- They're wrapping up the call or saying goodbye\./.test(callFor().instructions) && !/a greeting, a thanks, a goodbye/.test(callFor().instructions) && !("bothSaidGoodbye" in B) && !/MEMBER_CLOSING/.test(src("services/gptLiveBridge.ts")));
+  const turn = async (b: ReturnType<typeof bridge>, id: string, member: string, at: number) => {
+    say(b, "member", member, at);
+    b.ai.in({ type: "session.delegation.created", offset_ms: at + 900, delegation: { id, target: "client" } });
+    await sleep(40);
+  };
+  // The reviewer's mid-conversation cases (rv331/goodbye.mts): Cue's thinking answers and doesn't end; nothing else can.
+  const midCases: [string, string][] = [
+    ["she just said goodbye and walked out, after eight years", "Eight years. Do you want to tell me what happened?"],
+    ["my manager said we'd talk soon about the promotion", "That's worth preparing for. What do you want to see happen?"],
+    ["I have to go see my mom this weekend, she's sick and I'm scared", "I'm sorry. Is anyone going with you?"],
+    ["I just... I need to go. I can't...", "Take your time. I'm here."],
+  ];
+  for (const [theirs, ours] of midCases) {
+    const m = bridge({ answer: () => ours, endGraceMs: 20 });
+    await start(m, "live_mid");
+    await turn(m, "m1", theirs, 0);
+    say(m, "cue", ours, 2000);
+    await sleep(80);
+    check(`mid-conversation ("${theirs}"): the call stays open`, m.ai.of("session.close").length === 0);
+    m.tw.close();
+  }
+  // A real mutual goodbye: Cue's thinking says goodbye and calls end_call; once the goodbye has played and the grace passed, it ends.
+  const bye = bridge({ answer: () => "Talk soon, Jordan. Good luck tomorrow.|END", endGraceMs: 30 });
   await start(bye, "live_bye");
-  say(bye, "cue", "Hey, what's up?", 0);
-  say(bye, "member", "Not much, just wanted to say thanks. Okay, I gotta go, bye.", 1000);
-  say(bye, "cue", "Talk soon, Jordan.", 3000);
-  await sleep(20);
-  check("goodbye: not before the quiet window", bye.ai.of("session.close").length === 0);
+  await turn(bye, "b1", "Okay, I should get going. Talk soon.", 0);
+  check("a real goodbye: the goodbye goes to GPT-Live (commentary) and nothing ends before it's said", bye.ai.sent.some((m: any) => m.event_id === "answer_b1" && /Talk soon, Jordan/.test(m.content)) && bye.ai.of("session.close").length === 0);
+  say(bye, "cue", "Talk soon, Jordan. Good luck tomorrow.", 2000);
+  bye.ai.in({ type: "session.output_audio.delta", delta: Buffer.alloc(8000, 9).toString("base64") }); // a second of it, still playing
+  await sleep(60);
+  check("...not while the goodbye is still playing", bye.ai.of("session.close").length === 0);
+  await sleep(1100);
+  check("...then, played and the grace passed, Cue's end_call ends the call", bye.ai.of("session.close").length === 1);
+  bye.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 12 } });
+  check("...recorded as ended by goodbye; the Twilio stream closes (the <Connect> action hangs up)", bye.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "goodbye" && bye.tw.readyState === 3);
+  // The guards, on facts only.
+  const refusedWith = (b: ReturnType<typeof bridge>) => b.records.filter((r) => r.decision === "call.end_refused").map((r) => r.action);
+  const asked = bridge({ answer: () => "Bye for now. Same time next week?|END", endGraceMs: 20 });
+  await start(asked, "live_asked");
+  await turn(asked, "a1", "Okay bye.", 0);
+  say(asked, "cue", "Bye for now. Same time next week?", 2000);
   await sleep(80);
-  check("goodbye: both said goodbye and nothing more came: the session is closed", bye.ai.of("session.close").length === 1);
-  bye.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 20 } });
-  check("...the Twilio stream is closed too (the <Connect> action then hangs up) and it's recorded as goodbye", bye.tw.readyState === 3 && bye.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "goodbye");
-
-  const more = bridge({ goodbyeQuietMs: 40 });
-  await start(more, "live_more");
-  say(more, "member", "Okay bye.", 0);
-  say(more, "cue", "Take care.", 1000);
-  say(more, "member", "Oh wait, one more thing about the move.", 2000);
-  await sleep(100);
-  check("goodbye: something real said after it keeps the call open", more.ai.of("session.close").length === 0);
-  more.tw.close();
-  check("both-said-goodbye reads the call brain's own closing words, not a new list", B.bothSaidGoodbye([{ who: "member", text: "I'll let you go.", startMs: 0, endMs: 1 }, { who: "cue", text: "Bye Jordan.", startMs: 2, endMs: 3 }]) && !B.bothSaidGoodbye([{ who: "member", text: "bye", startMs: 0, endMs: 1 }]) && /MEMBER_CLOSING/.test(src("services/gptLiveBridge.ts")));
+  check("guard: Cue's last line ends in a question: refused (call.end_refused cue_asked), the call stays open", asked.ai.of("session.close").length === 0 && refusedWith(asked).join() === "cue_asked", refusedWith(asked));
+  asked.tw.close();
+  const after = bridge({ answer: () => "Bye, Jordan.|END", endGraceMs: 20 });
+  await start(after, "live_after");
+  await turn(after, "f1", "Okay bye.", 0);
+  say(after, "cue", "Bye, Jordan.", 2000);
+  say(after, "member", "Oh wait, one more thing.", 3000);
+  await sleep(80);
+  check("guard: they said something after Cue's last line: refused (member_spoke_after)", after.ai.of("session.close").length === 0 && refusedWith(after).join() === "member_spoke_after", refusedWith(after));
+  after.tw.close();
+  check("guard: they're speaking now (heard within the grace): refused (member_speaking)", B.endGuard({ cueLast: { text: "Bye, Jordan.", startMs: 2000 }, memberAfterMs: 0, memberHeardAgoMs: 10, graceMs: 2000 }) === "member_speaking" && B.endGuard({ cueLast: { text: "Bye, Jordan.", startMs: 2000 }, memberAfterMs: 0, memberHeardAgoMs: 5000, graceMs: 2000 }) === null && B.endGuard({ cueLast: { text: "Bye, Jordan?", startMs: 2000 }, memberAfterMs: null, memberHeardAgoMs: null, graceMs: 2000 }) === "cue_asked");
+  const never = bridge({ answer: () => "Bye, Jordan.|END", endGraceMs: 20, endWaitMs: 50 });
+  await start(never, "live_never");
+  await turn(never, "n1", "Okay bye.", 0);
+  await sleep(120);
+  check("an end_call whose goodbye is never said is dropped (no_goodbye), never a silent hang-up", never.ai.of("session.close").length === 0 && refusedWith(never).join() === "no_goodbye", refusedWith(never));
+  never.tw.close();
 }
 
 // ---------------------------------------------------------------- 3. a wrap-up before the cap, in GPT-Live's own words
@@ -206,6 +250,27 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   plain.ai.in({ type: "session.closed", reason: "content", usage: { seconds: 10 } });
   await sleep(5);
   check("a safety-filter cut with no safety moment on the call: no safety path (call health flags it)", plain.cuts.length === 0 && !plain.records.some((r) => r.decision === "call.gpt_live_safety_cut"));
+}
+
+// ---------------------------------------------------------------- 5b. the safety moment is the answer's, not the call history's (review of #331)
+{
+  const lay = bridge({ answer: () => "That's a relief. Did he say what happens to your team?" });
+  await start(lay, "live_lay");
+  say(lay, "member", "The boss said I'm safe from the layoffs.", 0);
+  lay.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "l1", target: "client" } });
+  await sleep(40);
+  lay.ai.in({ type: "session.closed", reason: "content", usage: { seconds: 20 } });
+  await sleep(5);
+  check("an ordinary line (\"I'm safe from the layoffs\") then a safety-filter close: no safety path (no hold, no alert, no check-in)", lay.cuts.length === 0 && !lay.records.some((r) => r.decision === "call.gpt_live_safety_cut"));
+  const LINE2 = "I'm really glad you told me. You can call or text 988 right now. Are you safe tonight?";
+  const real = bridge({ answer: () => LINE2 });
+  await start(real, "live_real");
+  say(real, "member", "Honestly I don't want to be here anymore.", 0);
+  real.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "r1", target: "client" } });
+  await sleep(40);
+  real.ai.in({ type: "session.closed", reason: "content", usage: { seconds: 20 } });
+  await sleep(5);
+  check("a real crisis answer then a safety-filter close: the safety path runs once", real.cuts.length === 1 && real.records.filter((r) => r.decision === "call.gpt_live_safety_cut").length === 1);
 }
 
 // ---------------------------------------------------------------- 6. no voice-read ask after a GPT-Live call (the read can't run on one yet)

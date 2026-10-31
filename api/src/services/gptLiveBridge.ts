@@ -16,7 +16,7 @@ import { timingSafeEqual } from "crypto";
 import WebSocket from "ws";
 import { recordDecision, type HarnessDecision } from "../harness/core.js";
 import { guardCallMessages } from "./whatCoKnows.js";
-import { anthropicStream, MEMBER_CLOSING } from "./callLlmProxy.js";
+import { anthropicStream } from "./callLlmProxy.js";
 import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, openSessions, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
@@ -48,7 +48,8 @@ export type LiveDeps = {
   startTimeoutMs: number;
   heartbeatMs: number;
   silenceEndMs: number;
-  goodbyeQuietMs: number;
+  endGraceMs: number;
+  endWaitMs: number;
   wrapUpMs: number;
   // The live guards for this member (services/whatCoKnows.ts forgottenRows + guardCallMessages), read at most every guardCacheMs.
   guardRows: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
@@ -71,7 +72,8 @@ const defaults = (): LiveDeps => ({
   startTimeoutMs: GPT_LIVE.startTimeoutMs,
   heartbeatMs: GPT_LIVE.heartbeatMs,
   silenceEndMs: GPT_LIVE.silenceEndMs,
-  goodbyeQuietMs: GPT_LIVE.goodbyeQuietMs,
+  endGraceMs: GPT_LIVE.endGraceMs,
+  endWaitMs: GPT_LIVE.endWaitMs,
   wrapUpMs: GPT_LIVE.wrapUpMs,
   guardRows: (userId) => import("./whatCoKnows.js").then((W) => W.forgottenRows(userId)).catch(() => []),
   guardMessages: (messages, rows) => guardCallMessages(messages, rows),
@@ -87,14 +89,14 @@ const parse = (raw: unknown): any => { try { return JSON.parse(typeof raw === "s
 const send = (ws: SocketLike | null, m: unknown) => { try { if (ws && ws.readyState === OPEN) ws.send(JSON.stringify(m)); } catch { /* the close handler ends it */ } };
 const timer = (fn: () => void, ms: number) => { const t = setTimeout(fn, ms); (t as any).unref?.(); return t; };
 
-// Pure: both have said goodbye and nothing real was said after: the latest member turn and the latest Cue turn are both closings
-// (callLlmProxy.ts MEMBER_CLOSING, the words the call brain and call health already read as a goodbye), and the last turn is one of them.
-export function bothSaidGoodbye(frags: Frag[]): boolean {
-  const turns = turnsFrom(frags).filter((t) => !listeningSound(t.text));
-  const lastMember = turns.map((t) => t.who).lastIndexOf("member");
-  const lastCue = turns.map((t) => t.who).lastIndexOf("cue");
-  if (lastMember < 0 || lastCue < 0) return false;
-  return MEMBER_CLOSING.test(turns[lastMember].text) && MEMBER_CLOSING.test(turns[lastCue].text) && Math.max(lastMember, lastCue) === turns.length - 1;
+// Pure: whether Cue's end_call may hang up now, on facts only (never reading their words for intent): Cue's last line doesn't end on a
+// question, nothing of theirs was heard after Cue's last line started, and they aren't speaking now. null: it may; else why not.
+export function endGuard(o: { cueLast: { text: string; startMs: number } | null; memberAfterMs: number | null; memberHeardAgoMs: number | null; graceMs: number }): "cue_asked" | "member_spoke_after" | "member_speaking" | "no_goodbye" | null {
+  if (!o.cueLast) return "no_goodbye";
+  if (/\?["'\u201d\u2019)\]]*\s*$/.test(o.cueLast.text.trim())) return "cue_asked";
+  if (o.memberAfterMs != null && o.memberAfterMs >= o.cueLast.startMs) return "member_spoke_after";
+  if (o.memberHeardAgoMs != null && o.memberHeardAgoMs < o.graceMs) return "member_speaking";
+  return null;
 }
 
 export function handleGptLiveStream(twilio: SocketLike): void {
@@ -120,7 +122,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let beat: ReturnType<typeof setInterval> | null = null;
   let quiet: ReturnType<typeof setInterval> | null = null;
   let lastHeard = t0; // the last words either side said (transcripts), for the silence and goodbye ends
-  let safetyMoment = false; // a delegated turn on this call touched their safety
+  let safetyMoment = false; // a delegated answer on this call carried a crisis or safety line (out.exact)
+  // Cue's thinking called end_call: hang up once its goodbye has played and endGraceMs passed, if endGuard allows.
+  let pendingEnd: { at: number; fromMs: number } | null = null;
+  let memberHeardAt: number | null = null; // wall clock of their last transcript fragment
   let guardAt = 0, guardRowsP: Promise<import("./whatCoKnows.js").ForgottenRow[]> | null = null;
   const elapsedSecs = () => Math.round((d.now() - startedAt) / 1000);
 
@@ -213,8 +218,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
-    }, guard).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false }; });
-    if (out.safety) safetyMoment = true;
+    }, guard).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false }; });
+    // Only an answer that itself carried a crisis or safety line makes this a safety moment (review of #331: safetyCall reads the whole
+    // call, so "I'm safe from the layoffs" then a content close set off the safety path).
+    if (out.exact) safetyMoment = true;
     // The caller has moved on (said something new since this turn was handed over): the answer is to a question no longer asked.
     const stale = turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
     if (stale) staleDropped++;
@@ -224,6 +231,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
           ? { type: "session.instructions.append", event_id: `answer_${id}`, delegation_id: id, content: sayExactly(out.text) }
           : { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
         : { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." });
+    if (out.endCall && !finished && !stale && out.text) pendingEnd = { at: d.now(), fromMs: frags.reduce((m, f) => Math.max(m, f.endMs), 0) };
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
     d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.exact } });
   };
@@ -244,16 +252,33 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         (beat as any).unref?.();
         for (const a of early.splice(0)) send(ai, { type: "session.input_audio.append", audio: a });
         // Its own cap, set at admission: 30 minutes, or less when the month's team minutes have less left (gptLive.ts admitSession).
-        // One activity timer (OpenAI: "use an application-controlled inactivity timeout"; GPT-Live has no end-call tool). With nothing
-        // playing: silenceEndMs with nothing said either way ends the call (the ElevenLabs agent's silence_end_call_timeout), and once
-        // both have said goodbye and nothing more is said for goodbyeQuietMs, it ends (ElevenLabs' end_call after a mutual goodbye).
+        // One activity timer (OpenAI: "use an application-controlled inactivity timeout"). With nothing playing: silenceEndMs with
+        // nothing said either way ends the call (the ElevenLabs agent's silence_end_call_timeout). And Cue's own end_call (the thinking
+        // decides, on a delegated goodbye): once its goodbye has been said and played and endGraceMs has passed, it hangs up if endGuard
+        // allows on facts; refused, the call stays open and call.end_refused says why.
         lastHeard = d.now();
         quiet = setInterval(() => {
           const now = d.now();
           if (queued || playhead > now) return;
           if (now - lastHeard >= d.silenceEndMs) return close("silence", "silence");
-          if (now - lastHeard >= d.goodbyeQuietMs && bothSaidGoodbye(frags)) close("goodbye", "goodbye");
-        }, Math.max(10, Math.min(500, Math.floor(Math.min(d.goodbyeQuietMs, d.silenceEndMs) / 4))));
+          const pend = pendingEnd;
+          if (!pend || !call) return;
+          const turns = turnsFrom(frags);
+          const cueTurns = turns.filter((t) => t.who === "cue" && t.startMs >= pend.fromMs - 1);
+          if (!cueTurns.length) {
+            if (now - pend.at < d.endWaitMs) return;
+            d.record({ layer: 8, decision: "call.end_refused", userId: call.userId, outcome: "skip", action: "no_goodbye", proposal: { provider: "gpt-live", sessionId } });
+            pendingEnd = null;
+            return;
+          }
+          if (now - lastHeard < d.endGraceMs) return;
+          const cueLast = [...turns].reverse().find((t) => t.who === "cue") ?? null;
+          const memberAfter = turns.filter((t) => t.who === "member" && !listeningSound(t.text)).reduce<number | null>((m, t) => Math.max(m ?? -1, t.startMs), null);
+          const why = endGuard({ cueLast, memberAfterMs: memberAfter, memberHeardAgoMs: memberHeardAt == null ? null : now - memberHeardAt, graceMs: d.endGraceMs });
+          pendingEnd = null;
+          if (why) return d.record({ layer: 8, decision: "call.end_refused", userId: call.userId, outcome: "skip", action: why, proposal: { provider: "gpt-live", sessionId } });
+          close("goodbye", "goodbye");
+        }, Math.max(10, Math.min(500, Math.floor(Math.min(d.endGraceMs, d.silenceEndMs) / 4))));
         (quiet as any).unref?.();
         const capMs = Math.min(call.capMs ?? d.maxSessionMs, d.maxSessionMs);
         // About a minute before the cap, GPT-Live is asked to bring the call to a close in its own words (no set line).
@@ -274,6 +299,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         if (typeof m.delta !== "string") return;
         const member = m.type === "session.input_transcript.delta";
         lastHeard = d.now();
+        if (member) memberHeardAt = d.now();
         frags.push({ who: member ? "member" : "cue", text: m.delta, startMs: Number(m.start_ms) || 0, endMs: Number(m.end_ms) || 0 });
         if (!member) { memberRun = ""; cleared = false; return; }
         memberRun += m.delta;
