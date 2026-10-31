@@ -485,9 +485,16 @@ export function placesBacked(text: string, facts: string): { ok: boolean; missin
 }
 
 // Co can't call, book, or contact anyone for them; a task text never offers to. Nor can it fill in, submit or apply on their
-// behalf (Royce, 2026-10-31: "Want me to start the Francisco San form now?"). Drafting answers for them to paste is Cue's to offer,
-// so a form or application offer that drafts, writes or outlines is left alone.
-export const OFFERS_WHAT_CO_CANT = /\b(want me to|should i|i can|i'?ll|let me)\s+(?:(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b|submit\b|apply\s+(?:for|to|on)\b|fill\s+(?:it|this|that|them)\s+(?:in|out)\b|(?:start|fill(?:\s+(?:in|out))?|complete|send\s+in|file)\b(?![^.?!\n]{0,40}\b(?:draft|drafting|write|writing|outline|answers?)\b)[^.?!\n]{0,40}?\b(?:forms?|applications?)\b)/i;
+// behalf (Royce, 2026-10-31: "Want me to start the Francisco San form now?"). The form or application has to be what the verb acts
+// on: a determiner and at most three name words between them, none a preposition, so "start watching for when applications
+// open", "a cover letter for the application" or "a reminder for the form deadline" aren't offers to fill one in. Drafting,
+// writing or outlining for them to paste is Cue's to offer, and so are "application answers", "deadlines", "questions", "essays",
+// and submitting feedback to the team.
+const NOT_A_NAME_WORD = String.raw`(?:of|for|on|with|into|in|when|to|about|from|by|and|or|you|so|that|which|while|draft|drafting|drafts|write|writing|outline|outlining|answers?)`;
+export const OFFERS_WHAT_CO_CANT = new RegExp(
+  String.raw`\b(want me to|should i|i can|i'?ll|let me)\s+(?:(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b|submit\b(?![^.?!\n]{0,30}\bto\s+(?:the|our|my)\s+team\b)|apply\s+(?:for|to|on)\b|fill\s+(?:it|this|that|them)\s+(?:in|out)\b|(?:start|fill(?:\s+(?:in|out))?|complete|send\s+in|file)\s+(?!(?:drafting|writing|outlining)\b)(?:(?:the|your|their|this|that|a|an|its|my)\s+)?(?:(?!${NOT_A_NAME_WORD}\b)[\w'’.&-]+\s+){0,3}?(?:forms?|applications?)\b(?!\s+(?:answers?|drafts?|essays?|questions?|deadlines?)\b))`,
+  "i",
+);
 
 // Claims a page rarely makes and a text easily implies (2026-09-30): that it's
 // available on their date, confirmed, open or happy to host, or has done
