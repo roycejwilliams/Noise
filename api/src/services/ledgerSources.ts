@@ -229,7 +229,14 @@ export function reconcileMember(src: Sources, ledger: StoredLedgerRow[] = src.le
       continue;
     }
     const k = textKey(r.text);
-    tally("transcript lines", texted.some((l) => near(l.at, r.at, ITEM_WINDOW_MS) && textKey(l.label) === k), r.id, r.at, r.text);
+    // Its own row (a line with no outbound row, services/ledger.ts transcriptTextRow), or the outbound row holding the same words,
+    // the rule the backfill skips it by: both hold after a row's words aged out (services/ledgerWords.ts). Or, as before, a texted
+    // row with the same words.
+    const ok =
+      byKey.has(`L|memory:${r.id}`) ||
+      src.outbound.some((o) => near(o.at, r.at, ITEM_WINDOW_MS) && textKey(o.content) === k && byKey.has(`L|outbound:${o.handle}`)) ||
+      texted.some((l) => near(l.at, r.at, ITEM_WINDOW_MS) && textKey(l.label) === k);
+    tally("transcript lines", ok, r.id, r.at, r.text);
   }
   for (const t of src.tools) {
     const p = t.proposal ?? {};
@@ -283,7 +290,8 @@ export function reconcileMember(src: Sources, ledger: StoredLedgerRow[] = src.le
     }
   }
   let repeatedTexts = 0;
-  const byTime = [...texted].sort((a, b) => a.at.getTime() - b.at.getTime());
+  // A text whose words aged out ("a text") can't be compared by its words, so it's left out of this check.
+  const byTime = texted.filter((l) => !l.meta?.words_aged).sort((a, b) => a.at.getTime() - b.at.getTime());
   const tk = byTime.map((l) => textKey(l.label));
   for (let i = 0; i < byTime.length; i++) {
     for (let j = i + 1; j < byTime.length && byTime[j].at.getTime() - byTime[i].at.getTime() <= ITEM_WINDOW_MS; j++) {

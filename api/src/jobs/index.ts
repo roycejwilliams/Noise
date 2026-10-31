@@ -1110,6 +1110,10 @@ export function registerJobs(io: Server) {
       const { rowCount } = await pool.query(`DELETE FROM harness_decisions WHERE created_at < NOW() - INTERVAL '60 days'`);
       if (rowCount) console.log(`harness_decisions: removed ${rowCount} rows older than 60 days`);
       await pool.query(`DELETE FROM inbound_webhook_handles WHERE received_at < NOW() - INTERVAL '3 days'`);
+      // The same window for the member's words in Cue's action record (Royce, 2026-10-31): the act and its date stay, their words
+      // go (services/ledgerWords.ts). After the prune, so no decision row is left to rebuild a reduced row from.
+      const aged = await import("../services/ledgerWords.js").then((W) => W.ageLedgerWords());
+      if (aged.rows) console.log(`co_facts: words aged out of ${aged.rows} action rows older than 60 days`);
     } catch (error) {
       console.error("harness_decisions retention cron error:", error);
     }
