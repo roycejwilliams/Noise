@@ -21,6 +21,7 @@ import { isStated, UNCONFIRMED_RULE } from "./provenance.js";
 import pool from "../db/db.js";
 import { DEFAULT_ZONE, dateNote, localToday, readDates } from "./dateGuard.js";
 import { memberZone } from "./memberTime.js";
+import { WORDS_DAYS } from "./ledgerWords.js";
 
 export type Visibility = "owner" | "room" | "team";
 export type CoFact = {
@@ -343,8 +344,10 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
   const { rows } = await pool
     .query(
       // recordAs: the part a tool actually did, when it did only part (agent/toolGuard.ts), never the full ask.
+      // Inside the words window (services/ledgerWords.ts, 60 days, the decision log's own): a row whose words have aged out is never
+      // rebuilt with them from a decision row the prune hasn't reached yet.
       `SELECT user_id, decision, created_at, COALESCE(proposal->'recordAs', proposal->'input') AS input FROM harness_decisions
-       WHERE decision LIKE 'tool.%' AND action = 'done' AND user_id IS NOT NULL AND created_at > NOW() - INTERVAL '90 days'`,
+       WHERE decision LIKE 'tool.%' AND action = 'done' AND user_id IS NOT NULL AND created_at > NOW() - make_interval(days => ${WORDS_DAYS})`,
     )
     .catch(() => ({ rows: [] as any[] }));
   let tools = 0;
