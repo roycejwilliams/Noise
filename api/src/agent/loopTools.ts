@@ -259,6 +259,11 @@ export function loopTools(
   // The words an ask is judged on: a text's message (with the text it replies to), or on a call their last three lines (an ask is often
   // built over a few turns: "I'd love a hackathon again", "which weekend?", "the 20th"), never the whole call (review of #139).
   const askWords = () => (ctx.isVoice ? String(ctx.turn?.message ?? "").split("\n").filter((l) => l.trim()).slice(-3).join("\n") || ctx.resolvedContent : theirWords());
+  // What stands in for "their home" in a search with no place of its own (services/askPlace.ts): where they asked Cue to search from
+  // now on (services/searchArea.ts, its resolved place), else their home city. Read once a turn; a dry run reads nothing.
+  let areaRead: Promise<string | null> | null = null;
+  const searchHome = async (): Promise<string | null> =>
+    (await (areaRead ??= ctx.dryRun ? Promise.resolve(null) : import("../services/searchArea.js").then((A) => A.searchAreaOf(ctx.userId)).then((a) => (a ? (a.label ?? a.place) : null)).catch(() => null))) ?? ctx.turn?.profile?.city ?? null;
   const ruledOut = async (query: string): Promise<string | null> => {
     const l = await limits();
     if (!l?.avoid.length) return null;
@@ -348,7 +353,7 @@ export function loopTools(
         // Where it looks (services/askPlace.ts): the city passed, unless it's just their home city and "what" names another place
         // ("in/near/around X", or SF/NYC-style short names; "visiting Lisbon" or lowercase isn't seen); else that named place; else their
         // home city.
-        const where = replySearchPlace({ kind: "events", words: what, toolCity: city, message: askWords(), home: ctx.turn?.profile?.city ?? null });
+        const where = replySearchPlace({ kind: "events", words: what, toolCity: city, message: askWords(), home: await searchHome() });
         const [r, earlier] = await Promise.all([
           // No Exa search on a call (ctx.isVoice: services/callTools.ts): a voice turn can't wait up to 10s for Exa plus the page reads.
           eventCandidates(what, where.place, { when: when ?? null, userId: ctx.userId, limit: 8, viaExa: !ctx.isVoice, source: "request" }),
@@ -422,7 +427,7 @@ export function loopTools(
         // Where each search looks (services/askPlace.ts): a query that names a place ("in/near/around X", or SF/NYC-style short names;
         // "visiting Lisbon" or lowercase isn't seen) gets nothing added on top; else theirs.city; else their home city, unless the query
         // says it's for no place (online, remote).
-        const home = ctx.turn?.profile?.city ?? null;
+        const home = await searchHome();
         const cityFor = (q: string) => webSearchCity(replySearchPlace({ kind: "web", words: q, toolCity: theirs?.city ?? null, message: askWords(), home }));
         const siteList = (sites ?? []).filter((s) => /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)).slice(0, 4);
         const all = await Promise.all(run.map((q) => taskWebSearch(ctx.userId, q, { city: cityFor(q), sites: siteList, source: "request", log: !ctx.dryRun }).catch(() => ({ kept: [], dropped: [], droppedDetails: [], note: "Web search failed: error." }))));

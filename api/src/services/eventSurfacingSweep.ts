@@ -61,9 +61,14 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
     const { rows } = await pool.query(`SELECT created_at FROM ask_checkins WHERE id::text = $1`, [candidate.askId]).catch(() => ({ rows: [] as any[] }));
     want = { key: W.wantKeyForAsk(candidate.askId), text: candidate.askText, createdAt: rows[0]?.created_at ? new Date(rows[0].created_at) : null };
   }
-  if (!want) return { city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" } };
+  // What stands in for a want with no place of its own: where they asked Cue to search from now on (searchArea.ts), else their home city.
+  const fallback = async (key: string | null): Promise<{ city: string | null; searchedIn: SearchedIn }> => {
+    const area = await (deps ?? W.realPlaceDeps).area?.(candidate.userId).catch(() => null);
+    return area ? { city: area.place, searchedIn: { key, place: area.place, source: "area" } } : { city: candidate.city, searchedIn: { key, place: candidate.city, source: "home" } };
+  };
+  if (!want) return fallback(null);
   const wp = await W.placeFor(candidate.userId, want, deps ?? W.realPlaceDeps).catch(() => null);
-  return wp?.place ? { city: wp.place, searchedIn: { key: want.key, place: wp.place, source: wp.source } } : { city: candidate.city, searchedIn: { key: want.key, place: candidate.city, source: "home" } };
+  return wp?.place ? { city: wp.place, searchedIn: { key: want.key, place: wp.place, source: wp.source } } : fallback(want.key);
 }
 // The want's place resolved against their home (services/placeResolve.ts, Royce 2026-10-29: "Bay Area" from a Sacramento member was
 // searched in Houston): city is the qualified place to search ("San Francisco Bay Area, California"); skip says why this want isn't
@@ -74,18 +79,27 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
 export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null; retry?: string | null; point?: import("./geocoding.js").GeoPoint | null };
 export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps: { place?: import("./wantPlace.js").PlaceDeps; resolve?: import("./placeResolve.js").ResolveDeps } = {}): Promise<SearchWhere> {
   const where = await searchPlace(candidate, deps.place).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } as SearchedIn }));
+  // Their search area (searchArea.ts): resolved once, when they set it, on its own row; searched at that point, never the bare word.
+  if (where.searchedIn.source === "area" && where.city) {
+    const R = await import("./placeResolve.js");
+    const { AREA_KEY } = await import("./searchArea.js");
+    const r = await R.resolveWantPlace({ userId: candidate.userId, key: AREA_KEY, place: where.city, source: "their_words", homeCity: candidate.city }, deps.resolve ?? R.realResolveDeps).catch(() => null);
+    if (!r) return { ...where, city: null, skip: null, place: null, retry: "their search area couldn't be resolved this run; tried again next run" };
+    return { city: r.skip || r.retry ? null : r.city, searchedIn: where.searchedIn, skip: r.skip, place: r.place, retry: r.retry ?? null, point: r.skip || r.retry ? null : (r.point ?? null) };
+  }
   if (!where.searchedIn.key || where.searchedIn.source === "home" || !where.city) return { ...where, skip: null, place: null };
   // Their home city by another spelling ("Portland" for a "Portland, ME" member) is home, searched as their home is on file (the
   // qualified one, never the bare word). Only when the want says no region or country, or the same ones as home: "Portland, OR" from
   // a Portland, ME home, "Cambridge, England" from Cambridge, MA, "Springfield, MA" from Springfield, IL are resolved, not home.
   const R = await import("./placeResolve.js");
   if ((await import("./wantPlace.js")).samePlace(where.city, candidate.city) && R.sameQualifiers(where.city, candidate.city)) return { ...where, city: candidate.city, skip: null, place: null };
-  const r = await R.resolveWantPlace({ userId: candidate.userId, key: where.searchedIn.key, place: where.city, source: where.searchedIn.source, homeCity: candidate.city }, deps.resolve ?? R.realResolveDeps).catch(() => null);
+  const r = await R.resolveWantPlace({ userId: candidate.userId, key: where.searchedIn.key, place: where.city, source: where.searchedIn.source as import("./wantPlace.js").PlaceSource, homeCity: candidate.city }, deps.resolve ?? R.realResolveDeps).catch(() => null);
   if (!r) return { ...where, city: null, skip: null, place: null, retry: "its place couldn't be resolved this run; tried again next run" };
   return { city: r.skip || r.retry ? null : r.city, searchedIn: where.searchedIn, skip: r.skip, place: r.place, retry: r.retry ?? null, point: r.skip || r.retry ? null : (r.point ?? null) };
 }
 // Where a find was searched, kept on the find (its match) so the send can say so once (wantPlace.ts noteDue).
-export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" };
+// source "area": the want has no place of its own and looked where they asked Cue to search from now on (searchArea.ts).
+export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" | "area" };
 
 // How long an unanswered tease stays "open" before Co treats it as
 // abandoned. Referenced by sendblue.ts's pending-offer lookup too — a reply

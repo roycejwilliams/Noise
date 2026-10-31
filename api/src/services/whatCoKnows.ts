@@ -163,6 +163,8 @@ export type RawKnown = {
   // Where Co looks for each of their wants (services/wantPlace.ts): the want's own place, or none (their home city stands in).
   // searching: where on the map Cue searches it (services/placeResolve.ts), when that's said differently from their place.
   places?: { key: string; want: string; place: string | null; source?: string | null; until?: string | null; searching?: string | null }[];
+  // Where they asked Cue to search from now on (services/searchArea.ts): what stands in for home for a want with no place of its own.
+  area?: { place: string; searching: string | null } | null;
   // When they said they're free (services/wantWhen.ts): stated gaps, proposed against, never held.
   freeTimes?: { id: string; text: string; quote: string }[];
   // Their calendar grant (services/cueGrants.ts): free/busy only; removing it disconnects.
@@ -270,7 +272,10 @@ export function knownItems(r: RawKnown): KnownItem[] {
   // A row made only by a window ("unread") has no place read yet: nothing true to say about where.
   // Where on the map it's searched, after their place, when it reads differently (Royce, 2026-10-29: "Bay Area" was searched in Houston
   // and nothing they could see said so): "... : Bay Area · searching San Francisco Bay Area, California". Corrected the same way.
-  for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}${searchingNote(x.place, x.searching)}` : `where I look for "${x.want.slice(0, 120)}": near home${p?.city ? ` (${p.city})` : ""}`);
+  // Where they asked Cue to search from now on (services/searchArea.ts), first: it's where every want below with no place of its own looks.
+  if (r.area) add("place:area:search", "place", "where", `where I search for you when something doesn't name a place: ${r.area.place}${searchingNote(r.area.place, r.area.searching)}`);
+  const noPlace = r.area ? `${r.area.place}, where you asked me to search` : `near home${p?.city ? ` (${p.city})` : ""}`;
+  for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}${searchingNote(x.place, x.searching)}` : `where I look for "${x.want.slice(0, 120)}": ${noPlace}`);
   // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
   if (r.calendar) add("grant:calendar", "grant", "where", `your calendar, connected ${r.calendar.since}: I see only when you're busy or free, never what, where or with whom, and it's never shared`, null, false);
   if (r.docs) add("grant:docs", "grant", "where", `Google Docs, connected ${r.docs.since}: I save documents I make for you to your Drive and see only those, nothing else there`, null, false);
@@ -596,6 +601,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     }),
     asks: asks.map((a) => ({ id: String(a.ask_id), text: String(a.ask_text ?? "") })).filter((a) => a.text.trim()),
     places: await livePlaces(places, p),
+    area: await import("./searchArea.js").then((A) => A.searchAreaOf(userId, db as any)).then((a) => (a ? { place: a.place, searching: a.label } : null)).catch(() => null),
     freeTimes: freeRows,
     calendar: await import("./cueGrants.js").then((C) => C.calendarConnected(userId, db as any)).catch(() => null),
     docs: await import("./cueGrants.js").then((C) => C.docsConnected(userId, db as any)).catch(() => null),
@@ -859,7 +865,7 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const { setPlace } = await import("./wantPlace.js");
       const r = await setPlace(db, userId, key, v ? v.trim().slice(0, 40) : null, theirWords);
       if (!r.rowCount) throw new NotApplied();
-      const was = (raw.places ?? []).find((x) => x.key === key)?.place ?? "near home";
+      const was = (key === "area:search" ? raw.area?.place : (raw.places ?? []).find((x) => x.key === key)?.place) ?? "near home";
       return { ref: item.ref, source: "place", was, now: v ? v.trim().slice(0, 40) : null };
     }
     case "window": {

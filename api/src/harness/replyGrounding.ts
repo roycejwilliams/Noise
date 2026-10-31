@@ -1279,7 +1279,39 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   for (const s of staleCurrentClaims(draft, rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text))) {
     checks.push({ name: "no_stale_as_current", pass: false, reason: `detail: "${s.sentence}" (states a stored detail as current; it was last read earlier, so say when, or check it live)` });
   }
+  // A change said as made, or something Cue says it does from now on, needs a tool that changed something this turn (2026-10-31:
+  // "Got it, switching to SF from here on out." went out with only a note for the team behind it). Quoted, so stripUnsupported cuts
+  // exactly that sentence; with a real receipt the claim read still holds the sentence to what that receipt says.
+  // Something it keeps doing "from now on" may also stand on work already running for them (the daily search of an open ask); a
+  // change needs this turn's receipt.
+  const changed = lastingChangeThisTurn(rf);
+  const running = changed || rf.facts.some((f) => f.kind === "ongoing" || f.kind === "scheduled");
+  for (const c of changeClaims(draft)) {
+    if (c.kind === "change" ? changed : running) continue;
+    checks.push({ name: "no_unbacked_change", pass: false, reason: `change: "${c.sentence}" (says Cue changed something or does it from now on, but nothing was changed this turn: say plainly it isn't changed)` });
+  }
   return checks;
+}
+
+// Cue saying it changed how it works for them, or what it does from now on, in its own voice (regex over Cue's draft only, never their
+// message). A switch said bare ("switching to SF", "Switched over to SF"); a change with Cue as the one making it ("I've moved your
+// searches to SF", "I'll set it to Oakland"); or "from now on" and its kin with Cue as the one doing it ("From now on I'll keep it short").
+// Not advice to them ("going forward, it might help to..."), not their own move ("Moving to SF is huge").
+const GOING_FORWARD = /\b(?:from (?:here|now) on(?: out)?|going forward|moving forward|for now on|from this point(?: on)?|from today on|starting (?:now|today|tomorrow))\b/i;
+const CUE_ACTS = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|let me|cue)\b/i;
+const SWITCH_BARE = /(?:^|[,;:]\s*|\b(?:got it|done|ok(?:ay)?|sure|noted)\W+)(?:switch(?:ed|ing)?|swap(?:ped|ping)?)\b(?!\s+gears)[^.?!]{0,40}?\b(?:to|over)\b/i;
+const CUE_CHANGES = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|let me|cue(?:'s| is| has| will)?)\s+(?:just\s+|now\s+|already\s+|go(?:ing)? to\s+|gonna\s+)?(?:switch(?:ed|ing)?|swap(?:ped|ping)?|chang(?:e|ed|ing)|updat(?:e|ed|ing)|mov(?:e|ed|ing)(?!\s+on\b)|shift(?:ed|ing)?|set(?:ting)?(?!\s+(?:you\s+)?up\b)|redirect(?:ed|ing)?)\b(?!\s+gears)[^.?!]{0,40}?\b(?:to|over)\b/i;
+// change: a change said as made or being made. forward: something Cue says it does from now on.
+export function changeClaims(draft: string): { sentence: string; kind: "change" | "forward" }[] {
+  return (draft.match(SENTENCES) ?? [])
+    .map((x) => x.trim())
+    .filter((x) => x && !/\?\s*["')\]]*$/.test(x))
+    .flatMap((x): { sentence: string; kind: "change" | "forward" }[] => (SWITCH_BARE.test(x) || CUE_CHANGES.test(x) ? [{ sentence: x, kind: "change" }] : GOING_FORWARD.test(x) && CUE_ACTS.test(x) ? [{ sentence: x, kind: "forward" }] : []));
+}
+// A tool changed something this turn: a receipt of something done (not one saying it wasn't, and not a note saved for the team, which
+// changes nothing), or an ask saved for the daily search.
+export function lastingChangeThisTurn(rf: Pick<ReplyFacts, "facts">): boolean {
+  return rf.facts.some((f) => (f.kind === "did_this_turn" && !NEGATIVE_RECEIPT.test(f.text) && !/^Saved for the team:/.test(f.text)) || (f.kind === "ongoing" && SAVED_THIS_TURN.test(f.text)));
 }
 
 function extractJson(text: string): any {
@@ -1548,6 +1580,11 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     const citedFact = rf.facts.find((f) => f.id === c.factId);
     if (pass && failureUnreported && isFeedbackReceipt(citedFact)) {
       return { name: `claim_${c.type}`, pass: false, reason: `${reason} (a saved feedback note isn't a report of Cue's failure, and no report of that is on record)` };
+    }
+    // A note saved for the team never backs a change, or something Cue does from now on (2026-10-31: "Saved for the team: ... switch his
+    // searches to SF going forward" sat behind "switching to SF from here on out", and nothing had changed). Passing it along still stands.
+    if (pass && isFeedbackReceipt(citedFact) && (changeClaims(c.text).length > 0 || GOING_FORWARD.test(c.text)) && !/\bteam\b/i.test(c.text)) {
+      return { name: `claim_${c.type}`, pass: false, reason: `${reason} (a note saved for the team backs only saying it went to the team, never that Cue changed or will do anything)` };
     }
     // A report status that says there's no report, or that it couldn't be checked, is about an absence: it backs nothing.
     if (pass && citedFact && isFailureReportFact(citedFact) && !reportFactBacks(citedFact)) {
@@ -2091,6 +2128,9 @@ const CLAIM_SHAPED = [
   /\b(?:i|i'?ve|i have|i just|i already)\s+(?:just\s+|already\s+)?(?:left|put|kept|added|included|built|wrote|written|set up|made|drafted|filled in|laid out|structured|organized|framed)\b/i,
   /\b(?:the|your|this|that|my)\s+(?:doc|document|deck|page|pdf|draft|brief|sheet|plan|slides?|outline|proposal|one-pager|section|template)\b[^.?!]{0,50}\b(?:has|have|includes?|covers?|contains?|opens? with|ends? with|lays out|walks through|starts with|leads with|closes with|is (?:built|set up|structured))\b/i,
   /\b(?:it|each slide|every section|the first|the last)\s+(?:covers|includes|contains|opens with|ends with|lays out|walks through)\b/i,
+  // Cue saying it changed something, or what it does from now on (2026-10-31: "Got it, switching to SF from here on out." skipped
+  // the read: no digit, no "I", and SF isn't Title Case).
+  /\b(?:switch(?:ed|ing)?|swap(?:ped|ping)?)\b|\b(?:from (?:here|now) on|going forward|moving forward|for now on|from this point)\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {
