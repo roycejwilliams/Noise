@@ -359,6 +359,7 @@ export async function runConversationReplyAgent(
     facts: {
       add: (kind, text) => addFact(input.facts, kind, text),
       text: () => renderReplyFacts(input.facts),
+      changed: (tool) => void (input.facts.changedBy ??= []).push(tool),
     },
     gate: async (draft, sentThisTurn, answeredThisTurn, findsWaiting) => {
       // Tests only, in a dry run: the first reply is cut to nothing, the way a fact check that strips every claim leaves it, so a

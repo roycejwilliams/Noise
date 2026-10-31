@@ -105,7 +105,8 @@ export type KnownView = { groups: { group: KnownGroup; title: string; lines: Kno
 
 export type Change = { refs: string[]; action: "correct" | "remove"; now?: string | null };
 export type Applied = { ref: string; source: KnownSource; was: string; now: string | null };
-export type ChangeResult = { ok: boolean; applied: Applied[]; refused: { ref: string; why: string }[]; alsoSays: KnownLine[]; cancelled?: Cancelled[] };
+// areaUnsettled: their search area was corrected to a place that couldn't be settled on the map right away (searchArea.ts settleArea).
+export type ChangeResult = { ok: boolean; applied: Applied[]; refused: { ref: string; why: string }[]; alsoSays: KnownLine[]; cancelled?: Cancelled[]; areaUnsettled?: string };
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -601,7 +602,8 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     }),
     asks: asks.map((a) => ({ id: String(a.ask_id), text: String(a.ask_text ?? "") })).filter((a) => a.text.trim()),
     places: await livePlaces(places, p),
-    area: await import("./searchArea.js").then((A) => A.searchAreaOf(userId, db as any)).then((a) => (a ? { place: a.place, searching: a.label } : null)).catch(() => null),
+    // Never guessed: a read that fails fails the whole view (no "near home" said for a member who set an area).
+    area: await import("./searchArea.js").then((A) => A.searchAreaOf(userId, db as any)).then((a) => (a ? { place: a.place, searching: a.label } : null)),
     freeTimes: freeRows,
     calendar: await import("./cueGrants.js").then((C) => C.calendarConnected(userId, db as any)).catch(() => null),
     docs: await import("./cueGrants.js").then((C) => C.docsConnected(userId, db as any)).catch(() => null),
@@ -1027,6 +1029,11 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { kind: "file", on: new Date().toISOString().slice(0, 10), id: n }, checks: [{ name: "removal_asked", pass: true }] });
   }
   for (const d of decisions) await recordDecision(d).catch(() => {});
+  // Their search area corrected (searchArea.ts): resolved now, not at the next sweep, so where it searches is settled (or asked about)
+  // in this same reply (review of #336).
+  const areaNow = applied.find((a) => a.ref === "place:area:search" && a.now)?.now ?? null;
+  type Settle = { ok: true; label: string | null } | { ok: false; ask?: string[]; why: string };
+  const areaSettle: Settle | null = areaNow ? await import("./searchArea.js").then((A): Promise<Settle> => A.settleArea(userId, areaNow, A.realSetAreaDeps())).catch((): Settle => ({ ok: false, why: "where that is couldn't be checked just now" })) : null;
   // Something removed or corrected: all of their model prompt/answer text goes (services/llmTraceText.ts; Royce, 2026-10-18:
   // "corrections delete the old value" too). A prompt holds many facts at once, so a row can't be matched to the one thing
   // changed. Best-effort, after the change committed.
@@ -1055,7 +1062,7 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   }
   // What else still says it, from the fresh read (stripped like the view).
   const after = await whatCoKnows(userId).catch(() => null);
-  return { ok: applied.length > 0, applied, refused, alsoSays: after ? stillSaying(after.view, applied, changedRefs) : [], cancelled: cancelled.map((c) => ({ ...c, what: clean(c.what) })) };
+  return { ok: applied.length > 0, applied, refused, alsoSays: after ? stillSaying(after.view, applied, changedRefs) : [], cancelled: cancelled.map((c) => ({ ...c, what: clean(c.what) })), ...(areaSettle && !areaSettle.ok ? { areaUnsettled: areaSettle.ask?.length ? `It's saved as ${areaNow}, but ${areaNow} could be ${areaSettle.ask.join(" or ")}: nothing is searched there until they say which. Ask which, in one line.` : `It's saved as ${areaNow}, but ${areaSettle.why}: nothing is searched there until it's settled. Say so plainly.` } : {}) };
 }
 
 // Pure: the decision-log proposal for one removal: the kind of thing, the day, and its profile_corrections row id. Nothing that
@@ -1131,7 +1138,19 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
     if (kind === "place") {
       const wantKey = a.ref.slice("place:".length);
       const askId = wantKey.startsWith("ask:") ? wantKey.slice(4) : null;
-      for (const c of cands) {
+      // Their search area (searchArea.ts) corrected or removed: what every want with no place of its own looks at moved, so what was
+      // found for the old one goes (pooled finds dropped, pending offers cancelled as "place corrected"); finds for wants with their
+      // own place stay (review of #336).
+      if (wantKey === "area:search") {
+        const { dropFallbackFinds } = await import("./searchArea.js");
+        const r = await dropFallbackFinds(db, userId, because);
+        for (const c of r.cancelled) {
+          done.add(`c${c.id}`);
+          out.push({ kind: "candidate", id: c.id, what: c.what, action: "cancelled", because });
+        }
+        if (r.dropped) out.push({ kind: "backlog", id: "area:search", what: `${r.dropped} find${r.dropped === 1 ? "" : "s"} found for where they used to search`, action: "cancelled", because });
+      }
+      for (const c of wantKey === "area:search" ? [] : cands) {
         const k = `c${c.id}`;
         if (done.has(k) || String(c.type) !== "event_offer") continue;
         let pl: any = null;

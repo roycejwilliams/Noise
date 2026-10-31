@@ -56,11 +56,13 @@ export async function setSearchArea(userId: string, input: { place: string; thei
   const home = await deps.home(userId).catch(() => null);
   // Their home city by name: back to home (the area cleared), never their home written as an area.
   if (home && W.samePlace(backed.place, home) && R.sameQualifiers(backed.place, home)) {
-    await deps.db.query(
+    const cleared = await deps.db.query(
       `UPDATE want_places SET place = NULL, source = 'removed', quote = $3, updated_at = NOW(), resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_home_country = NULL, resolved_at = NULL
-        WHERE user_id = $1 AND want_key = $2`,
+        WHERE user_id = $1 AND want_key = $2 AND place IS NOT NULL`,
       [userId, AREA_KEY, backed.quote.slice(0, 300)],
     );
+    // What was found in their old area goes; with no area set, nothing moved and nothing goes.
+    if (cleared.rowCount) await dropFallbackFinds(deps.db, userId, "their search area set back to home");
     return { ok: true, changed: "home", home };
   }
   // Resolved fresh against their home, the same way a want's place is; the answer is kept only when both lookups were in hand.
@@ -76,6 +78,7 @@ export async function setSearchArea(userId: string, input: { place: string; thei
   const unplaced = !home && r && !r.skip && !r.retry;
   if (!unplaced && (!r || r.retry || !r.city || !stored)) return { ok: false, error: `where ${backed.place} is couldn't be checked just now` };
   const s = stored;
+  const before = await searchAreaOf(userId, deps.db);
   await deps.db.query(
     `INSERT INTO want_places (user_id, want_key, want_text, place, source, quote, noted_at, resolved_for, resolved_home, resolved_status, resolved_label, resolved_lat, resolved_lng, resolved_options, resolved_home_country, resolved_at)
        VALUES ($1, $2, $3, $4, 'their_words', $5, NOW(), $6, $7, $8, $9, $10, $11, $12::jsonb, $13, CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END)
@@ -84,6 +87,8 @@ export async function setSearchArea(userId: string, input: { place: string; thei
        resolved_lat = EXCLUDED.resolved_lat, resolved_lng = EXCLUDED.resolved_lng, resolved_options = EXCLUDED.resolved_options, resolved_home_country = EXCLUDED.resolved_home_country, resolved_at = EXCLUDED.resolved_at`,
     [userId, AREA_KEY, AREA_TEXT, backed.place, backed.quote.slice(0, 300), s?.forPlace ?? null, s?.forHome ?? null, s?.status ?? null, s?.label ?? null, s?.lat ?? null, s?.lng ?? null, JSON.stringify(s?.options ?? []), s?.homeCountry ?? null],
   );
+  // What was found where wants with no place looked before (home, or the old area) goes; the same area said again moves nothing.
+  if (!before || before.place !== backed.place) await dropFallbackFinds(deps.db, userId, "their search area changed");
   return { ok: true, changed: "set", place: backed.place, label: s?.label ?? null, home, quote: backed.quote };
 }
 
@@ -99,6 +104,54 @@ export function answerToWhich(i: { place: string; theirWords: string; message: s
   const has = (text: string, part: string) => new RegExp(`(^|[^a-z0-9])${sq(part).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^a-z0-9])`).test(sq(text));
   if (!parts.some((p) => has(quote, p))) return null;
   return parts.every((p) => has(i.message, p) || has(i.recent ?? "", p)) ? { place, quote } : null;
+}
+
+// Their area as corrected in what Cue knows (whatCoKnows.ts, after the change committed): resolved now against their home and stored
+// on its row, so the next search uses it and the reply knows whether it's settled.
+export async function settleArea(userId: string, place: string, deps: SetAreaDeps): Promise<{ ok: true; label: string | null } | { ok: false; ask?: string[]; why: string }> {
+  const home = await deps.home(userId).catch(() => null);
+  if (!home) return { ok: true, label: null };
+  let kept: StoredResolution | null = null;
+  const r = await (await import("./placeResolve.js")).resolveWantPlace(
+    { userId, key: AREA_KEY, place, source: "corrected", homeCity: home },
+    { ...deps.resolve, row: async () => null, store: async (u, k, s) => { kept = s; await deps.resolve.store(u, k, s); } },
+  ).catch(() => null);
+  const stored = kept as StoredResolution | null;
+  if (r?.place?.verdict === "ambiguous") return { ok: false, ask: stored?.options ?? String(r.place.label).split(" / ").filter(Boolean), why: "it could be more than one place" };
+  if (r?.place?.verdict === "rejected") return { ok: false, why: `no place called ${place} came back near what they'd mean` };
+  if (!r || r.retry || !r.city || !stored) return { ok: false, why: `where ${place} is couldn't be checked just now` };
+  return { ok: true, label: stored.label };
+}
+
+// ---------------------------------------------------------------- what was found for the old fallback
+// When the area is set, cleared back to home, corrected or removed, what a want with no place of its own looks at has moved, so the
+// finds found for the old one go (Royce, 2026-10-29: a corrected place "invalidates that ask's old cached location and its cached
+// results"; review of #336): its pooled finds are dropped, and its pending offers are cancelled as "place corrected" (workingSet.ts
+// isFailedAttempt: no decision, so the same event can queue again if it's found for the new place). A want's own place, and its finds,
+// are never touched.
+// Pure: a find searched where a want with no place looks (their home city, or their area), not at a want's own place.
+export const isFallbackFind = (it: any): boolean => ["home", "area"].includes(String(it?.match?.searchedIn?.source ?? ""));
+export const withoutFallbackFinds = (items: unknown[]): unknown[] => items.filter((it) => !isFallbackFind(it));
+export async function dropFallbackFinds(db: Db, userId: string, because: string): Promise<{ dropped: number; cancelled: { id: string; what: string }[] }> {
+  let dropped = 0;
+  const { rows } = await db.query(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1 FOR UPDATE`, [userId]);
+  for (const b of rows) {
+    const items = Array.isArray(b.items) ? b.items : [];
+    const kept = withoutFallbackFinds(items);
+    if (kept.length === items.length) continue;
+    dropped += items.length - kept.length;
+    await db.query(`UPDATE event_backlogs SET items = $3, updated_at = NOW() WHERE user_id = $1 AND ask_id = $2`, [userId, b.ask_id, JSON.stringify(kept)]);
+  }
+  const cancelled: { id: string; what: string }[] = [];
+  const cands = (await db.query(`SELECT id, summary, payload::text AS payload FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND type = 'event_offer'`, [userId])).rows;
+  for (const c of cands) {
+    let pl: any = null;
+    try { pl = JSON.parse(String(c.payload)); } catch { pl = null; }
+    if (!isFallbackFind(pl)) continue;
+    const r = await db.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $3, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'pending'`, [c.id, userId, `place corrected: ${because}`.slice(0, 300)]);
+    if (r.rowCount) cancelled.push({ id: String(c.id), what: `event_offer: ${String(c.summary ?? "").slice(0, 120)}` });
+  }
+  return { dropped, cancelled };
 }
 
 // The turn's receipt for a change that went through (the reply check's DONE THIS TURN): what changed, what didn't.

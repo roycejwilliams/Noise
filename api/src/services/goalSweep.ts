@@ -205,7 +205,10 @@ const realDeps: GoalSweepDeps = {
     const W = await import("./wantPlace.js");
     const active = plan?.active ?? [];
     const places = active.length ? await goalPlaces(row, active.map((e) => ({ key: W.wantKeyForGoal(goalHash(e.goal)), goal: e.goal }))) : [];
-    const { home, own } = W.splitByPlace(active.map((e) => ({ key: W.wantKeyForGoal(goalHash(e.goal)), item: e })), places, row.city ?? null);
+    // With a search area set (searchArea.ts) the shared search looks there, so a goal naming their home city goes on its own, at home.
+    // A read that fails counts as set: a home-named goal is searched at home either way, and the shared search retries (placeToSearch).
+    const areaSet = await import("./searchArea.js").then((A) => A.searchAreaOf(row.user_id)).then((a) => !!a).catch(() => true);
+    const { home, own } = W.splitByPlace(active.map((e) => ({ key: W.wantKeyForGoal(goalHash(e.goal)), item: e })), places, row.city ?? null, { homeIsOwn: areaSet });
     const base = { askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared };
     // Nothing placed elsewhere: the one search, as it was.
     const sharedText = own.length ? edgeSearchText(home.map((h) => h.item), plan?.extras ?? {}) : context;

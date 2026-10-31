@@ -183,14 +183,16 @@ export async function placesOf(userId: string, keys: string[], db: { query: (sql
   return rows.map((r: any) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null, source: String(r.source) as PlaceSource }));
 }
 
-// Pure: which of these wants search their home city together, and which have a place of their own that isn't home (each searched
-// on its own, there). No place, or the home city by name, is home.
-export function splitByPlace<T>(items: { key: string; item: T }[], places: { key: string; place: string | null }[], home: string | null): { home: { key: string; item: T }[]; own: { key: string; item: T; place: string }[] } {
+// Pure: which of these wants search together where wants with no place look, and which have a place of their own (each searched on
+// its own, there). No place is the shared search. The home city by name rides it too, unless that shared search no longer looks at
+// home (homeIsOwn: they set a search area, searchArea.ts): then a goal naming their home city is its own place, searched at home
+// (review of #336: "Sacramento founder dinners" rode the shared search into San Francisco).
+export function splitByPlace<T>(items: { key: string; item: T }[], places: { key: string; place: string | null }[], home: string | null, opts: { homeIsOwn?: boolean } = {}): { home: { key: string; item: T }[]; own: { key: string; item: T; place: string }[] } {
   const by = new Map(places.map((p) => [p.key, p.place]));
   const out = { home: [] as { key: string; item: T }[], own: [] as { key: string; item: T; place: string }[] };
   for (const it of items) {
     const p = by.get(it.key) ?? null;
-    if (p && !samePlace(p, home)) out.own.push({ ...it, place: p });
+    if (p && (opts.homeIsOwn || !samePlace(p, home))) out.own.push({ ...it, place: p });
     else out.home.push(it);
   }
   return out;

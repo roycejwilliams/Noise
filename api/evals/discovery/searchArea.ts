@@ -42,10 +42,25 @@ const OPEN: Record<string, C[]> = {
 };
 const SAC = { lat: 38.5781342, lng: -121.4944209 };
 
-// The member's record, stubbed: their home city and what's written.
-function world(o: { home?: string | null; down?: boolean } = {}) {
+// The member's record, stubbed: their home city, their area row, their pooled finds and pending offers, and what's written.
+// Royce's real shape on 10-31: finds pooled for his asks and goals searched in Sacramento by fallback ("home"), one for his Bay Area
+// ask at its own place.
+const find = (name: string, source: string, key: string | null, place: string) => ({ name, match: { name, searchedIn: { key, place, source } } });
+function world(o: { home?: string | null; down?: boolean; area?: string | null; backlog?: any[]; offers?: any[] } = {}) {
   const writes: { sql: string; args: unknown[] }[] = [];
-  const db = { query: async (sql: string, args: unknown[] = []) => (writes.push({ sql, args }), { rows: [] as any[], rowCount: 1 }) };
+  const backlog = [{ ask_id: "a1", items: o.backlog ?? [] }];
+  const offers = o.offers ?? [];
+  const db = {
+    query: async (sql: string, args: unknown[] = []) => {
+      if (/^\s*SELECT place, source, quote/.test(sql)) return { rows: o.area ? [{ place: o.area, source: "their_words", quote: null, resolved_for: o.area, resolved_status: "resolved", resolved_label: `${o.area}, California` }] : [], rowCount: 0 };
+      if (/^\s*SELECT ask_id, items FROM event_backlogs/.test(sql)) return { rows: backlog, rowCount: backlog.length };
+      if (/^\s*SELECT id, summary, payload::text AS payload FROM proactive_candidates/.test(sql)) return { rows: offers.map((x, i) => ({ id: i + 1, summary: x.name, payload: JSON.stringify(x) })), rowCount: offers.length };
+      writes.push({ sql, args });
+      if (/AND place IS NOT NULL/.test(sql) && /SET place = NULL/.test(sql)) return { rows: [], rowCount: o.area ? 1 : 0 };
+      return { rows: [] as any[], rowCount: 1 };
+    },
+  };
+  const stores: any[] = [];
   const resolve: import("../../src/services/placeResolve.js").ResolveDeps = {
     home: async (city) => (city === "Sacramento" ? SAC : null),
     homeCountry: async () => "US",
@@ -54,11 +69,14 @@ function world(o: { home?: string | null; down?: boolean } = {}) {
       return { google: [], local: OPEN[R.normName(R.parseQualified(place).name)] ?? [] };
     },
     row: async () => null,
-    store: async () => {},
+    store: async (_u, _k, r) => void stores.push(r),
     log: async () => {},
     today: async () => "2026-10-31",
   };
-  return { writes, deps: { db, home: async () => (o.home === undefined ? "Sacramento" : o.home), resolve } as import("../../src/services/searchArea.js").SetAreaDeps };
+  const changed = () => writes.filter((x) => /INSERT INTO want_places|UPDATE want_places/.test(x.sql));
+  const backlogWrite = () => writes.find((x) => /UPDATE event_backlogs/.test(x.sql));
+  const cancels = () => writes.filter((x) => /UPDATE proactive_candidates SET status = 'skipped'/.test(x.sql));
+  return { writes, stores, changed, backlogWrite, cancels, deps: { db, home: async () => (o.home === undefined ? "Sacramento" : o.home), resolve } as import("../../src/services/searchArea.js").SetAreaDeps };
 }
 
 // ---------------------------------------------------------------- 1. Royce's message: the change is made, and its receipt backs the reply
@@ -66,11 +84,13 @@ function world(o: { home?: string | null; down?: boolean } = {}) {
   const w = world();
   const r = await A.setSearchArea("royce", { place: "San Francisco", theirWords: "switch the search to San Francisco please going forward", message: ROYCE }, w.deps);
   check("Royce's exact message sets his search area to San Francisco, resolved against his Sacramento home", r.ok && r.changed === "set" && r.label === "San Francisco, California", r);
-  const up = w.writes.find((x) => /INSERT INTO want_places/.test(x.sql));
+  const up = w.changed().find((x) => /INSERT INTO want_places/.test(x.sql));
   check("... kept on his own row under the area key, as his words, with the point it resolved to", !!up && up.args[0] === "royce" && up.args[1] === A.AREA_KEY && up.args[3] === "San Francisco" && /'their_words'/.test(up.sql) && up.args[8] === "San Francisco, California" && up.args[9] === 37.77493, up?.args);
-  check("... and nothing else is written (his home city, his asks and goals keep their own places)", w.writes.length === 1 && !w.writes.some((x) => /co_profiles|UPDATE want_places SET place/.test(x.sql)));
+  check("... and nothing else about places is written (his home city, his asks and goals keep their own places)", w.changed().length === 1 && !w.writes.some((x) => /co_profiles|UPDATE want_places SET place/.test(x.sql)));
   const rf = G.baseReplyFacts();
   if (r.ok) G.addFact(rf, "did_this_turn", A.areaReceipt(r));
+  // What the guard records when setSearchArea goes through (agent/toolGuard.ts, CHANGES_SOMETHING; checked in section 6).
+  rf.changedBy = ["setSearchArea"];
   check("the receipt says where, what follows it, and that home stays", /San Francisco, California/.test(rf.facts.at(-1)!.text) && /home city stays Sacramento/.test(rf.facts.at(-1)!.text) && /name a place keep it/.test(rf.facts.at(-1)!.text));
   const honest = "Done. Your searches look in San Francisco from now on; asks that name a place keep theirs.";
   check("an honest reply on that receipt passes the change check", !G.codeChecks(honest, rf, { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
@@ -117,7 +137,7 @@ function world(o: { home?: string | null; down?: boolean } = {}) {
   check("... and writes nothing", w.writes.length === 0, w.writes);
   const which = world();
   const settled = await A.setSearchArea("royce", { place: "Springfield, Missouri", theirWords: "the Missouri one", message: "the Missouri one", recent: "Royce: Springfield going forward\nCue: Which Springfield, Missouri or Massachusetts?" }, which.deps);
-  check("his answer to 'which Springfield?' settles it: Springfield, Missouri, kept", settled.ok && settled.changed === "set" && settled.label === "Springfield, Missouri" && which.writes.length === 1, settled);
+  check("his answer to 'which Springfield?' settles it: Springfield, Missouri, kept", settled.ok && settled.changed === "set" && settled.label === "Springfield, Missouri" && which.changed().length === 1, settled);
   const made = world();
   const invented = await A.setSearchArea("royce", { place: "Springfield, Missouri", theirWords: "yes", message: "yes", recent: "Royce: anything fun this weekend?" }, made.deps);
   check("... but a place no one said in the exchange is never kept", !invented.ok && made.writes.length === 0, invented);
@@ -127,9 +147,9 @@ function world(o: { home?: string | null; down?: boolean } = {}) {
   const nq = world();
   const q = await A.setSearchArea("royce", { place: "San Francisco", theirWords: "search San Francisco", message: ROYCE }, nq.deps);
   check("a quote that isn't in their message changes nothing", !q.ok && nq.writes.length === 0, q);
-  const back = world();
+  const back = world({ area: "San Francisco" });
   const h = await A.setSearchArea("royce", { place: "Sacramento", theirWords: "back to Sacramento from now on", message: "ok back to Sacramento from now on" }, back.deps);
-  check("their home city by name sets it back to home: the area is cleared, never their home written as an area", h.ok && h.changed === "home" && back.writes.length === 1 && /SET place = NULL, source = 'removed'/.test(back.writes[0].sql), back.writes);
+  check("their home city by name sets it back to home: the area is cleared, never their home written as an area", h.ok && h.changed === "home" && back.changed().length === 1 && /SET place = NULL, source = 'removed'/.test(back.changed()[0].sql), back.writes);
 }
 
 // ---------------------------------------------------------------- 4. the sweep uses it, for him only
@@ -176,6 +196,91 @@ function world(o: { home?: string | null; down?: boolean } = {}) {
   check("... its result can be worth a line to them (not silent bookkeeping)", CT.NEW_FOR_THEM.has("setSearchArea") && !CT.SILENT_TOOLS.has("setSearchArea"));
   check("the turn says where Cue searches while it's set", /areaFact\(a, profile\?\.city/.test(src("routes/sendblue.ts")));
   check("the reply's own searches use it as home when it's set", (src("agent/loopTools.ts").match(/await searchHome\(\)/g) ?? []).length === 2);
+}
+
+// ---------------------------------------------------------------- 6. review of #336
+// 6a. The hourly goal sweep: a goal naming their home city is searched at home, never carried into the area by the shared search.
+{
+  const W = await import("../../src/services/wantPlace.js");
+  const items = [{ key: "goal:sac", item: "Sacramento founder dinners" }, { key: "goal:none", item: "investors" }, { key: "goal:bay", item: "Bay Area mixers" }];
+  const places = [{ key: "goal:sac", place: "Sacramento" }, { key: "goal:none", place: null }, { key: "goal:bay", place: "Bay Area" }];
+  const before = W.splitByPlace(items, places, "Sacramento");
+  check("with no area, a home-named goal rides the shared (home) search, as before", before.home.map((x) => x.key).join() === "goal:sac,goal:none" && before.own.map((x) => x.key).join() === "goal:bay", before);
+  const after = W.splitByPlace(items, places, "Sacramento", { homeIsOwn: true });
+  check("with an area set, a home-named goal is its own search; only goals with no place share the area search", after.home.map((x) => x.key).join() === "goal:none" && after.own.map((x) => x.key).join() === "goal:sac,goal:bay", after);
+  check("the hourly sweep sets homeIsOwn from their search area (a failed read counts as set)", /searchAreaOf\(row\.user_id\)\)\.then\(\(a\) => !!a\)\.catch\(\(\) => true\)/.test(src("services/goalSweep.ts")) && /row\.city \?\? null, \{ homeIsOwn: areaSet \}\)/.test(src("services/goalSweep.ts")));
+  const area = { place: "San Francisco", source: "their_words" as const, quote: null, label: "San Francisco, California" };
+  const pd: import("../../src/services/wantPlace.js").PlaceDeps = { since: async () => null, row: async () => ({ key: "goal:sac", place: "Sacramento", source: "their_words", quote: null, notedAt: null }), told: async () => [], model: async () => "{}", save: async () => {}, log: async () => {}, area: async () => area };
+  const rd: import("../../src/services/placeResolve.js").ResolveDeps = { home: async () => SAC, homeCountry: async () => "US", lookup: async () => { throw new Error("none"); }, row: async () => null, store: async () => {}, log: async () => {}, today: async () => "2026-10-31" };
+  const sac = await E.placeToSearch({ askId: "profile", userId: "royce", askText: "x", city: "Sacramento", want: { key: "goal:sac", text: "Sacramento founder dinners", createdAt: null } }, { place: pd, resolve: rd });
+  check("... and that own search looks in Sacramento, not San Francisco", sac.city === "Sacramento" && sac.searchedIn.source === "their_words", sac);
+}
+// 6b. What was found for the old fallback goes when the area moves; finds for wants with their own place stay.
+{
+  const backlog = [find("Sac mixer", "home", "goal:inv", "Sacramento"), find("Sac dinner", "home", "ask:a1", "Sacramento"), find("SF thing", "area", "goal:inv", "San Francisco"), find("Bay dinner", "their_words", "ask:bay", "Bay Area"), { name: "old find, no searchedIn" }];
+  const offers = [find("Sac offer", "home", "goal:inv", "Sacramento"), find("Bay offer", "their_words", "ask:bay", "Bay Area")];
+  const w = world({ backlog, offers });
+  const r = await A.setSearchArea("royce", { place: "San Francisco", theirWords: "switch the search to San Francisco please going forward", message: ROYCE }, w.deps);
+  const kept = JSON.parse(String(w.backlogWrite()?.args[2] ?? "[]")).map((x: any) => x.name);
+  check("setting the area drops the finds found where wants with no place looked (home, or an old area)", r.ok && kept.join() === "Bay dinner,old find, no searchedIn", kept);
+  check("... and cancels their pending offers as 'place corrected' (so they can queue again), leaving own-place offers alone", w.cancels().length === 1 && w.cancels()[0].args[0] === 1 && /^place corrected: /.test(String(w.cancels()[0].args[2])), w.cancels());
+  const same = world({ area: "San Francisco", backlog, offers });
+  await A.setSearchArea("royce", { place: "San Francisco", theirWords: "switch the search to San Francisco please going forward", message: ROYCE }, same.deps);
+  check("the same area said again moves nothing, so nothing is dropped", !same.backlogWrite() && same.cancels().length === 0);
+  const clear = world({ area: "San Francisco", backlog, offers });
+  const c = await A.setSearchArea("royce", { place: "Sacramento", theirWords: "back to Sacramento from now on", message: "ok back to Sacramento from now on" }, clear.deps);
+  const keptC = JSON.parse(String(clear.backlogWrite()?.args[2] ?? "[]")).map((x: any) => x.name);
+  check("clearing it back to home does the same: fallback finds dropped, own-place finds kept", c.ok && keptC.join() === "Bay dinner,old find, no searchedIn" && clear.cancels().length === 1, keptC);
+  const none = world({ backlog, offers });
+  await A.setSearchArea("royce", { place: "Sacramento", theirWords: "back to Sacramento from now on", message: "ok back to Sacramento from now on" }, none.deps);
+  check("... but with no area set, home by name changes nothing and drops nothing", !none.backlogWrite() && none.cancels().length === 0);
+  // Corrected or removed in what Cue knows: the same drop, on the change's own transaction (whatCoKnows.ts cancelQueued).
+  const cq = world({ backlog, offers });
+  const db2 = { query: async (sql: string, args: unknown[] = []) => (/FROM co_tasks|FROM deferred_sends/.test(sql) || /SELECT id, type, target_key, summary/.test(sql) ? { rows: [] as any[], rowCount: 0 } : cq.deps.db.query(sql, args)) };
+  const out = await K.cancelQueued(db2 as any, "royce", [{ ref: `place:${A.AREA_KEY}`, source: "place", was: "San Francisco", now: null } as any]);
+  const keptK = JSON.parse(String(cq.backlogWrite()?.args[2] ?? "[]")).map((x: any) => x.name);
+  check("removing the area in what Cue knows drops the fallback finds and cancels their offers, and says so", keptK.join() === "Bay dinner,old find, no searchedIn" && out.some((x) => x.kind === "candidate" && x.action === "cancelled") && out.some((x) => x.kind === "backlog"), out);
+  check("a corrected area is resolved right away, not at the next sweep", /A\.settleArea\(userId, areaNow, A\.realSetAreaDeps\(\)\)/.test(src("services/whatCoKnows.ts")));
+  const st = world();
+  const settled = await A.settleArea("royce", "San Francisco", st.deps);
+  check("... settleArea stores the resolution on the row", settled.ok && settled.label === "San Francisco, California" && st.stores[0]?.label === "San Francisco, California", settled);
+  const amb = await A.settleArea("royce", "Springfield", world().deps);
+  check("... and an ambiguous correction says which ones, so Cue asks", !amb.ok && (amb.ask?.length ?? 0) >= 2, amb);
+}
+// 6c. No silent fallback: an area that can't be read is never quietly home.
+{
+  const pd: import("../../src/services/wantPlace.js").PlaceDeps = { since: async () => null, row: async () => ({ key: "goal:inv", place: null, source: "none", quote: null, notedAt: null }), told: async () => [], model: async () => "{}", save: async () => {}, log: async () => {}, area: async () => { throw new Error("db down"); } };
+  const r = await E.placeToSearch({ askId: "profile", userId: "royce", askText: "x", city: "Sacramento", want: { key: "goal:inv", text: "investors", createdAt: null } }, { place: pd });
+  check("the sweep: an area read that fails searches nowhere this run and retries, never Sacramento", r.city === null && !!r.retry && /search area couldn't be read/.test(r.retry ?? ""), r);
+  const loop = src("agent/loopTools.ts");
+  check("reply searches: an area read that fails runs no search, is logged, and Cue is told (never the profile city)", /decision: "search\.area_unread"/.test(loop) && (loop.match(/=== AREA_UNREAD\) return areaUnread\(\)/g) ?? []).length === 2 && /r\.ok \? \(r\.area \?\? ctx\.turn\?\.profile\?\.city \?\? null\) : AREA_UNREAD/.test(loop));
+}
+// 6d. The change check, tightened.
+{
+  const fb = `Saved for the team: their feedback, summarized as "switch searches to SF going forward". Only that feedback was saved; it is not a report of anything that broke on Cue's side.`;
+  for (const ok of ["Swap it to this: a smaller dinner, six people.", "Got it, switching to the Friday one: https://lu.ma/abc", "Let me switch over to your calendar question."]) check(`not a change claim: "${ok}"`, G.changeClaims(ok).length === 0, G.changeClaims(ok));
+  check("'I'll move the dinner to Thursday.' is a change claim", G.changeClaims("I'll move the dinner to Thursday.").some((c) => c.kind === "change"));
+  check("'Switched your searches over to SF.' is a change claim (bare, onto something of theirs)", G.changeClaims("Switched your searches over to SF.").some((c) => c.kind === "change"));
+  const unrelated = G.baseReplyFacts();
+  G.addFact(unrelated, "did_this_turn", "Sent them the link to the Friday dinner.");
+  check("an unrelated receipt this turn (a send) backs no change claim", G.codeChecks("Got it, switching to SF from here on out.", unrelated, { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  const real = G.baseReplyFacts();
+  real.changedBy = ["updateTask"];
+  check("a tool that changed a record this turn backs it (the claim read still matches the words to its receipt)", !G.codeChecks("I'll move the dinner to Thursday.", real, { message: "x", recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  const team = G.baseReplyFacts();
+  G.addFact(team, "did_this_turn", fb);
+  const said = "I passed it to the team so your searches switch to SF going forward.";
+  check("'passed it to the team so your searches switch to SF going forward' is cut with only the team note behind it", G.codeChecks(said, team, { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  const id = team.facts.find((f) => f.text === fb)!.id;
+  const read = G.claimChecks([{ text: said, type: "past_action", supported: true, factId: id, quote: null }], team, { message: ROYCE, recentConversation: "" });
+  check("... and the team note can't back it in the claim read either, 'team' in it or not", read.length === 1 && !read[0].pass, read);
+  check("every tool that counts as changing something is a registry tool", [...CAP.CHANGES_SOMETHING].every((t) => CAP.ABILITIES.some((a) => a.tool === t)) && CAP.CHANGES_SOMETHING.has("setSearchArea") && !CAP.CHANGES_SOMETHING.has("saveFeedbackForTeam") && !CAP.CHANGES_SOMETHING.has("shareLink"));
+  // The guard records it: setSearchArea, run through Cue's own guarded tools (dry run), lands in the turn's changedBy.
+  const changed: string[] = [];
+  const { tools } = CT.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: ROYCE, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true, facts: { add: () => {}, text: () => "", changed: (t: string) => changed.push(t) } } as any);
+  await (tools as any).setSearchArea.execute({ place: "San Francisco", theirWords: "switch the search to San Francisco please going forward" }, {});
+  await (tools as any).listSentOffers.execute({}, {});
+  check("the guard records a state-changing tool that went through, and only that one", changed.join() === "setSearchArea", changed);
 }
 
 console.log(`${total - failed}/${total} passed`);

@@ -15,7 +15,7 @@ import { z } from "zod";
 import pool from "../db/db.js";
 import { recordDecisionRow } from "../harness/core.js";
 import { ledgerFailed, ledgerWrite, toolOutcomeRow } from "../services/ledger.js";
-import { abilityForTool } from "../services/capabilities.js";
+import { abilityForTool, CHANGES_SOMETHING } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
 import { recordToolAction } from "../services/coFacts.js";
 import { logKind } from "../services/whatCoKnows.js";
@@ -40,6 +40,8 @@ type GuardCtx = {
   // The exchange before their message (services/theirYes.ts exchangeText): where the offer their yes answers is. A thread's log or a
   // call's turns, built by the caller.
   recentExchange?: string | null;
+  // A tool that changes a setting or a record went through this turn (services/capabilities.ts CHANGES_SOMETHING).
+  changed?: (tool: string) => void;
 };
 
 // asked_back: the tool did nothing yet and asked a question back (requestEventIntro's "what's their last name?"). Logged, never
@@ -241,6 +243,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       if (made) madeThisTurn.set(name, made);
       if (failed && !made) refusedThisTurn.set(name, (refusedThisTurn.get(name) ?? 0) + 1);
       else doneThisTurn.add(name);
+      if (!failed && CHANGES_SOMETHING.has(name)) ctx.changed?.(name);
       // A free retry only for a refusal: something made is never made twice.
       if (failed && !made && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
       if (made) ctx.notDone(`${name} made ${made}, but the text with it didn't send.`);
