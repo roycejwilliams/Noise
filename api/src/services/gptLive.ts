@@ -1,25 +1,27 @@
-// The GPT-Live trial (Royce, 2026-10-31): a second Twilio number where Cue's calls run on OpenAI's gpt-live-1, a full-duplex
-// voice model, side by side with the ElevenLabs number (which this never touches). Royce judges how natural it feels; the
-// numbers (talk-over, latency, member_confused, hung_up_after_cue) compare in call_health and call.turn_latency.
+// GPT-Live calls (Royce, 2026-10-31): the team's calls (Royce and Jacqueline) run on OpenAI's gpt-live-1, a full-duplex voice model.
+// Every other member stays on ElevenLabs until a consent note is approved: their context would otherwise go to OpenAI.
 //
 // How it fits (design: ~/cue-worktrees/notes/gpt-live-trial-design.md):
-//   - The trial number's Voice webhook is routes/co.ts /co/gpt-live/incoming-call: the same member check as /co/incoming-call,
-//     the trial's minute cap, then TwiML that streams the call to services/gptLiveBridge.ts. Live only on that route: no switch.
-//   - GPT-Live speaks. Its instructions are Cue's call prompt (the ElevenLabs agent's own, promptForElevenLabs over
-//     prompts/co-system-prompt.md, filled with this member's values), adapted only in format, plus the three policy headings
-//     OpenAI's prompting guide asks for.
+//   - The main number's Voice webhook (routes/co.ts /co/incoming-call) answers a verified team member with GPT-Live while the
+//     month's team minutes last (admitSession); everyone else, and the team once the minutes are used, get ElevenLabs as before.
+//     The trial number (/co/gpt-live/incoming-call) stays as a second way in for the team. Gated on team and minutes: no switch.
+//   - GPT-Live speaks, with a short prompt (liveInstructions: Cue's voice, the three policy headings OpenAI's prompting guide asks
+//     for, when to hand a turn over, and that nothing happens on the call). Everything detailed (what Cue knows about them, the
+//     rules, what Cue can do) is in the thinking's prompt: the ElevenLabs agent's own (promptForElevenLabs over
+//     prompts/co-system-prompt.md, filled with this member's values).
 //   - Thinking is Claude through the call brain (services/callLlmProxy.ts runCallLlm) with no tools: read-only. GPT-Live hands
 //     a turn over (client delegation), the brain answers from the caller's own prompt and this call's transcript, and GPT-Live
 //     says the answer. Nothing is sent or written mid-call; promises are picked up after it (services/callFollowThrough.ts).
 //   - After the call the transcript runs the same post-call steps as ElevenLabs' webhook (routes/co.ts runGptLivePostCall).
 import { randomBytes } from "crypto";
+import { DateTime } from "luxon";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { CALL_CRITERIA } from "./callEvals.js";
 import { runCallLlm, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
-import { AGENT_DEFAULTS, promptForElevenLabs, SPOKEN_ALOUD } from "./elevenLabsCalls.js";
+import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { parseModelJson } from "./modelJson.js";
 
@@ -27,8 +29,11 @@ export const GPT_LIVE = {
   model: "gpt-live-1",
   url: "wss://api.openai.com/v1/live/sessions",
   defaultVoice: "marin",
-  maxSessionMs: 30 * 60_000, // each trial session
-  trialMinutesCap: 130, // all trial sessions together (Royce: under $10), enforced while calls run (admitSession)
+  maxSessionMs: 30 * 60_000, // each session
+  // The team's GPT-Live minutes per calendar month (UTC), all calls together: 300 is about $21 at ~$0.07 a minute. Royce still has
+  // to confirm the number; this is the one place it lives. Held while calls run (admitSession); used up, the team gets ElevenLabs.
+  teamMonthlyMinutes: 300,
+  maxInstructionChars: 6000, // GPT-Live's own prompt stays short (OpenAI's prompting guide); everything detailed is the thinking's
   minAdmitMs: 60_000, // a call that would get less than this is refused
   startTimeoutMs: 10_000, // Twilio's start, then OpenAI's session.started, each within this or the call is ended cleanly
   heartbeatMs: 60_000, // a running session's minutes are written this often
@@ -42,7 +47,7 @@ export const GPT_LIVE = {
 export const GPT_LIVE_STREAM_PATH = "/co/gpt-live/stream";
 export const gptLiveVoice = (env: NodeJS.ProcessEnv = process.env): string => env.GPT_LIVE_VOICE?.trim() || GPT_LIVE.defaultVoice;
 
-// The wss:// URL Twilio streams the trial call to (https://host -> wss://host/co/gpt-live/stream). Null without API_URL.
+// The wss:// URL Twilio streams a GPT-Live call to (https://host -> wss://host/co/gpt-live/stream). Null without API_URL.
 export function gptLiveStreamUrl(apiUrl: string | undefined): string | null {
   try {
     const u = new URL(apiUrl ?? "");
@@ -62,7 +67,7 @@ export const isGptLiveStreamPath = (url: string | undefined): boolean => {
 
 // ---------------------------------------------------------------- the prompts
 
-// Nothing happens on a trial call (no tools, no sends), so the agent prompt's lines that tell Cue to act on the call and say so are
+// Nothing happens on a GPT-Live call (no tools, no sends), so the agent prompt's lines that tell Cue to act on the call and say so are
 // rewritten to "right after the call" (review of #325: leaving both in contradicts the honesty rule). A line that has moved makes
 // GPT_LIVE_FORBIDDEN fail the layer-1 test (evals/calls/gptLive.ts), never a silent mismatch.
 export const ON_CALL_REWRITES: [string, string][] = [
@@ -74,10 +79,10 @@ export const ON_CALL_REWRITES: [string, string][] = [
   ["and text them the link to any of them while you talk", "and text them the links right after the call"],
   ["end the call with end_call and say nothing more", "say nothing more"],
 ];
-// What the trial call's instructions must never say (the layer-1 test reads both prompts for these).
+// What a GPT-Live call's prompts must never say (the layer-1 test reads both prompts for these).
 export const GPT_LIVE_FORBIDDEN = [/say it'?s set up/i, /look it up now/i, /set it up now, on the call/i, /then and there/i, /do it now, on the call/i, /\bend_call\b/, /link to any of them while you talk/i, /When you start something with a tool/i];
-// Pure: the ElevenLabs agent's prompt in GPT-Live's format: minus the bracketed voice cues ([laughs], ElevenLabs v4 audio tags
-// GPT-Live would read out), with the act-on-the-call lines rewritten (ON_CALL_REWRITES).
+// Pure: the ElevenLabs agent's prompt in GPT-Live's format, for the thinking behind the voice: minus the bracketed voice cues
+// ([laughs], ElevenLabs v4 audio tags), with the act-on-the-call lines rewritten (ON_CALL_REWRITES).
 export function liveCallPrompt(voiceLayer: string): string {
   let p = promptForElevenLabs(voiceLayer)
     .replace(`Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`, `${SPOKEN_ALOUD} `)
@@ -85,18 +90,52 @@ export function liveCallPrompt(voiceLayer: string): string {
   for (const [from, to] of ON_CALL_REWRITES) p = p.split(from).join(to);
   return p;
 }
-// Said to both models on a trial call (review of #325).
+// Said to both models on a GPT-Live call (review of #325).
 export const NOTHING_ON_THIS_CALL = "Nothing can be set up, looked up, sent or scheduled on this call, and you can't end it. When they want something done, say you'll do it right after the call. Never say it's done, set up, started or on its way.";
 // Pure: {{name}} filled the way ElevenLabs fills the agent's dynamic variables; an unknown name stays as it is.
 export const fillCallVars = (template: string, vars: Record<string, string>): string => template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => (k in vars ? vars[k] : m));
 
-// GPT-Live's own headings (OpenAI's prompting guide keeps these three and the literal <|SpawnThinking|>).
+// Cue's voice for GPT-Live, every line copied word for word from where it already lives (no new rules): the call prompt
+// (prompts/co-system-prompt.md), CO_VOICE (services/coVoice.ts), VARIETY_GUIDE (harness/stockLines.ts) and OPENING_NOTE
+// (services/elevenLabsCalls.ts). The layer-1 test checks each is still in its source and in the built prompt. The trial call
+// (2026-10-31) said "I hear you.", explained how voice systems work and ran long on the full prompt; OpenAI's guide says keep it short.
+// The call prompt's own first sentences open GPT-Live's prompt (word for word, so scripts/checkCoVoice.ts reads it as the voice layer's).
+export const LIVE_WHO = "You are Cue. Cue gets to know people over time and brings the right people and moments into their lives.";
+// Who Cue is never, and its old name: read from the voice layer itself at build time, not copied here (the name and voice checks keep
+// those words to the files that own them). Empty if the voice layer ever loses them; the layer-1 test fails then.
+export function identityFromVoice(voiceLayer: string): string {
+  return /You are only ever "Cue":[^\n]*?don't correct them\./.exec(voiceLayer)?.[0] ?? "";
+}
+export const LIVE_VOICE_RULES: { from: "call prompt" | "CO_VOICE" | "VARIETY_GUIDE" | "OPENING_NOTE"; line: string }[] = [
+  { from: "call prompt", line: "You talk like a thoughtful person who knows them, not a service. Calm, unhurried, specific. One real thought beats three filler lines." },
+  { from: "CO_VOICE", line: "You're composed and warm, and you're there for them." },
+  { from: "CO_VOICE", line: "Say less than you could." },
+  { from: "call prompt", line: "Short sentences, one thought each, as many as the moment needs and no more." },
+  { from: "call prompt", line: "Talk like a person, not a script. Skip filler like \"absolutely\", \"happy to help\", and stock lines of empathy. Vary how you start your turns: never start with \"Okay, so\", and don't open most turns with the same word. Show you got it by responding to the specific thing they said." },
+  { from: "VARIETY_GUIDE", line: "Never sound scripted. Answer what this person just said, in words that could only follow it. A sentence that would fit after any answer is a stock sentence: comfort that sums up how heavy things are, gratitude for their opening up, praise for their honesty, a claim that you can only guess, a line that names the size of what happened. Don't say those." },
+  { from: "call prompt", line: "Ask one question per turn. Once you've asked it, stop and let them answer; never follow it with the same question in other words." },
+  { from: "call prompt", line: "Speak to what happened, not to how they feel about it, and let your next question show you caught it." },
+  { from: "OPENING_NOTE", line: "How you work behind the scenes is never news." },
+  { from: "call prompt", line: "Never state a fact you weren't given, about them, other people, events, or yourself and what you can do. If you don't know, say so." },
+  { from: "call prompt", line: "If someone goes quiet: let it breathe, and say nothing just to fill it." },
+  { from: "call prompt", line: "If they say \"hello?\" in the middle of the call, they think the line dropped: say you're still here and pick up where you were, never greet them like a new call." },
+  { from: "call prompt", line: "The goodbye comes only at the real end of the call, when they're done or need to go: never sign off at the end of an ordinary turn, or after you've done something for them mid-call. Say that goodbye once." },
+];
+
+// What GPT-Live may say without its thinking (Royce, 10-31: the honesty gap). Its own lines are conversational only; every fact about
+// them, every event, place, time, person or link, every promise and every claim about what Cue knows or has done comes from the
+// thinking, whose answer passes the call brain's checks (claim hold, offer guard) before it is spoken.
+export const SAY_ON_YOUR_OWN = "On your own, say only conversational lines: acknowledging, saying back what they just said, a short warm response, or a clarifying question. Anything else comes from your thinking: any fact about their life, plans or history; any event, place, time, person or link; any promise or anything Cue will do; anything about what Cue knows or has done.";
+
+// GPT-Live's own headings (OpenAI's prompting guide keeps these three, in this order after role and style, and the literal
+// <|SpawnThinking|>). The extra backchannel and interruption lines are the call prompt's own.
 export const LIVE_POLICY = `# On this line
 You are speaking out loud and listening at the same time. Your thinking (what you know about them, what's true, what to say on anything that matters) runs behind you: when it answers, say that answer in your own words and keep its facts exactly. ${NOTHING_ON_THIS_CALL} They hang up when they're done.
+${SAY_ON_YOUR_OWN}
 
-Backchannel policy: Light. A quiet "mm" or "yeah" while they work through something, never over their words when they pause to think.
+Backchannel policy: Light. A quiet "mm" or "yeah" while they work through something, never over their words when they pause to think. If their words stop mid-thought, they are likely still going: say very little and let them carry on.
 
-Interruption policy: When they speak over you, stop right away and listen. Answer what they said; don't resume an answer they've replaced.
+Interruption policy: When they speak over you, stop right away and listen. Answer what they said; don't resume an answer they've replaced. A brief sound of agreement while you talk is them listening: carry on from where you were, never from the top.
 
 Delegation policy:
 Backend tools:
@@ -105,6 +144,10 @@ Backend tools:
 Generate <|SpawnThinking|> when:
 - They tell you something real about their life, ask a question, or want help or advice.
 - The answer depends on what you know about them: their plans, people, events, or anything found for them.
+- You would state a fact about their life, plans or history.
+- You would name an event, place, time, person or link.
+- You would promise anything, or say what Cue will do.
+- You would say what Cue knows or has done.
 - They correct you or push back.
 - Anything touches their safety.
 
@@ -115,45 +158,87 @@ Do not generate <|SpawnThinking|> when:
 Generate <|SpawnThinking|> before giving an answer that depends on backend work.
 Do not guess the result while waiting. Never name an event, place, time or person that your thinking didn't give you or they didn't say.`;
 
+// How GPT-Live opens (Royce, 2026-10-31: no scripted opening line on GPT-Live, no template fallback). It greets in its own words when
+// the session starts, from only what it needs to open well: their first name, the time of day for them, and why the call is happening
+// (outbound: the reason the call gate held; inbound: one line of what they're in the middle of, when the call's context has one).
+// The background is framed as background, never as words to say. The ElevenLabs path's opener (services/callOpening.ts, the
+// OPENINGS pool) is untouched and never reached from here.
+export type OpeningContext = { timeOfDay: string | null; reason: string | null; middleOf: string | null };
+export const OPEN_IN_OWN_WORDS = "When the call connects, you speak first: open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
+export const OPEN_NOW = "The call just connected. Open it now, in your own words.";
+// The ElevenLabs opener writer's own rule, copied word for word (the 10-31 smoke opened with "I've been thinking about you").
+export const OPEN_NO_STOCK = `No "how are you", no "good to hear your voice", no "I remember", no "I was thinking about you".`;
+// Pure: what they're in the middle of, one line, from the call's context (services/callContext.ts "What they're in the middle of:").
+export function middleOfLine(contextSummary: string): string | null {
+  const m = /What they're in the middle of:\n- ([^\n]+)/.exec(contextSummary);
+  return m ? m[1].trim().slice(0, 240) : null;
+}
+// Pure: "Saturday afternoon", in their zone.
+export function timeOfDay(now: Date, zone: string): string | null {
+  const t = DateTime.fromJSDate(now).setZone(zone);
+  if (!t.isValid) return null;
+  const part = t.hour < 5 ? "night" : t.hour < 12 ? "morning" : t.hour < 17 ? "afternoon" : t.hour < 21 ? "evening" : "night";
+  return `${t.toFormat("cccc")} ${part}`;
+}
+// Pure: the opening's background lines (only the ones there are).
+export function openingBackground(c: OpeningContext): string {
+  return [
+    c.timeOfDay ? `It's ${c.timeOfDay} for them.` : null,
+    c.reason ? `Why you called them (background for how you open, never to read out): ${c.reason}` : null,
+    c.middleOf ? `What they're in the middle of (background, never to read out): ${c.middleOf}` : null,
+  ].filter(Boolean).join("\n");
+}
+
+// Pure: GPT-Live's whole prompt. Role and style (who's on the line, who called whom, how to open, Cue's voice), then the three
+// policies. Nothing about the member beyond their first name, the call's situation and the opening's background: what Cue knows
+// about them is the thinking's (BACKEND_NOTE).
+export function liveInstructions(o: { firstName: string; direction: "inbound" | "outbound"; team: boolean; opening?: OpeningContext; identity?: string }): string {
+  const bg = o.opening ? openingBackground(o.opening) : "";
+  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK}${bg ? `\n${bg}` : ""}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line), o.identity ?? ""].filter(Boolean).join("\n")}\n\n${LIVE_POLICY}`;
+}
+
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms).
 export const BACKEND_NOTE = `# How this call runs
 This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next, as plain spoken sentences (no lists, no brackets, no stage directions). The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. ${NOTHING_ON_THIS_CALL} Anything they want goes out by text right after it.`;
 
-// Everything one trial call needs, built by the TwiML route for the verified caller only.
-export type LiveCall = { userId: string; callSid: string | null; firstName: string; instructions: string; backendSystem: string; opening: string; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; trialLimited?: boolean };
+// Everything one GPT-Live call needs, built by the TwiML route for the verified caller only.
+export type LiveCall = { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; instructions: string; backendSystem: string; opening: OpeningContext; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; budgetLimited?: boolean };
 
-// Pure: the call's two prompts from the voice layer and this member's values (the same values registerElevenLabsCall sends).
-export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; opening: string }): LiveCall {
+// Pure: the call's two prompts: GPT-Live's short one, and the thinking's, which is the ElevenLabs agent's prompt filled with this
+// member's values (the same values registerElevenLabsCall sends, the call's situation first in the context).
+export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null }): LiveCall {
   const findsNow = o.findsNow || "Nothing to offer right now. Don't offer an event.";
-  const prompt = fillCallVars(liveCallPrompt(o.voiceLayer), { first_name: o.firstName || "there", context_summary: o.contextSummary, direction: "inbound", right_now: o.rightNow, finds_now: findsNow, call_reason: o.callReason, user_id: "", call_token: "" });
+  const contextSummary = withCallSituation(o.contextSummary, { direction: o.direction, team: o.team });
+  const opening: OpeningContext = { timeOfDay: o.timeOfDay, reason: o.direction === "outbound" ? o.callReason.replace(/\s+/g, " ").trim().slice(0, 400) || null : null, middleOf: o.direction === "inbound" ? middleOfLine(o.contextSummary) : null };
+  const prompt = fillCallVars(liveCallPrompt(o.voiceLayer), { first_name: o.firstName || "there", context_summary: contextSummary, direction: o.direction, right_now: o.rightNow, finds_now: findsNow, call_reason: o.callReason, user_id: "", call_token: "" });
   return {
     userId: o.userId,
     callSid: o.callSid,
     firstName: o.firstName,
-    instructions: `${prompt}\n\n${LIVE_POLICY}`,
+    direction: o.direction,
+    instructions: liveInstructions({ firstName: o.firstName, direction: o.direction, team: o.team, opening, identity: identityFromVoice(o.voiceLayer) }),
     backendSystem: `${prompt}\n\n${BACKEND_NOTE}`,
-    opening: o.opening,
-    given: { firstName: o.firstName, contextSummary: o.contextSummary, findsNow, rightNow: o.rightNow },
+    opening,
+    given: { firstName: o.firstName, contextSummary, findsNow, rightNow: o.rightNow },
   };
 }
 
-// Pure: the session.start event for the call. G.711 mu-law at 8 kHz both ways, Twilio's own format, so audio passes through.
+// Pure: the session.start event for the call. G.711 mu-law at 8 kHz both ways, Twilio's own format, so audio passes through. The
+// developer message only says the call has connected: no greeting text. GPT-Live speaks first from it, in its own words
+// (OPEN_IN_OWN_WORDS); a commentary append was tried and dropped (10-31 smoke: GPT-Live said the nudge itself, "You're here.").
 export function sessionStart(call: LiveCall, voice: string): Record<string, unknown> {
-  const greet = `Greet them now with this line, then pause and listen: "${call.opening}"`;
   return {
     type: "session.start",
     event_id: "start",
     session: {
       model: GPT_LIVE.model,
       instructions: call.instructions,
-      input: [{ type: "message", role: "developer", content: [{ type: "input_text", text: greet }] }],
+      input: [{ type: "message", role: "developer", content: [{ type: "input_text", text: `${OPEN_NOW} ${OPEN_NO_STOCK}` }] }],
       audio: { format: { type: "audio/pcmu", rate: 8000 }, output: { voice } },
       delegation: { type: "client", acknowledgement_delay_ms: GPT_LIVE.ackDelayMs },
     },
   };
 }
-export const greetingEvent = (call: LiveCall) => ({ type: "session.commentary.append", event_id: "greeting", delegation_id: null, content: `Greet them now with this line, then pause and listen: "${call.opening}"` });
-
 // ---------------------------------------------------------------- the transcript
 
 export type Frag = { who: "member" | "cue"; text: string; startMs: number; endMs: number };
@@ -230,30 +315,46 @@ export function takeLiveLink(id: unknown, now = Date.now()): LiveCall | null {
   return hit && hit.expires > now ? hit.call : null;
 }
 
-// How each trial call's stream went, by Twilio's call sid, for the <Connect> action (routes/co.ts /co/gpt-live/after-stream): a call
-// whose session never started hears the ElevenLabs path's CANT_CONNECT_LINE and has its call_status released.
-const callStates = new Map<string, { userId: string; state: "pending" | "started" | "failed"; at: number }>();
-export function markCall(callSid: string | null | undefined, userId: string, state: "pending" | "started" | "failed", now = Date.now()): void {
+// How each GPT-Live call's stream went, by Twilio's call sid, for the <Connect> action (routes/co.ts /co/gpt-live/after-stream): a call
+// whose session never started hears the ElevenLabs path's CANT_CONNECT_LINE, has its call_status released, and is logged
+// call.gpt_live_unavailable with why OpenAI didn't start (FailClass; never the error's words).
+export type FailClass = "no_key" | "auth" | "quota" | "rate_limit" | "connect" | "timeout" | "refused" | "no_stream";
+type CallState = { userId: string; state: "pending" | "started" | "failed"; at: number; failClass?: FailClass };
+const callStates = new Map<string, CallState>();
+export function markCall(callSid: string | null | undefined, userId: string, state: "pending" | "started" | "failed", now = Date.now(), failClass?: FailClass): void {
   if (!callSid) return;
   for (const [k, v] of callStates) if (now - v.at > 3 * 3_600_000) callStates.delete(k);
   const had = callStates.get(callSid);
   if (had?.state === "started" && state === "failed") return; // a started call ended later is not a failed connect
-  callStates.set(callSid, { userId, state, at: now });
+  callStates.set(callSid, { userId, state, at: now, ...(failClass ? { failClass } : {}) });
 }
-export function takeCallState(callSid: unknown): { userId: string; state: "pending" | "started" | "failed" } | null {
+export function takeCallState(callSid: unknown): { userId: string; state: "pending" | "started" | "failed"; failClass?: FailClass } | null {
   if (typeof callSid !== "string") return null;
   const hit = callStates.get(callSid) ?? null;
   callStates.delete(callSid);
   return hit;
 }
+// Pure: why OpenAI didn't start a session, from its error event's code or the connection's error (status or words). The words are
+// read here and never stored.
+export function failClassOf(e: { code?: unknown; type?: unknown; message?: unknown; status?: unknown } | string | null | undefined): FailClass {
+  const o = typeof e === "string" ? { message: e } : (e ?? {});
+  const text = `${String(o.code ?? "")} ${String(o.type ?? "")} ${String(o.message ?? "")}`;
+  const status = Number(o.status ?? /\b(?:response|status)[: ]+(\d{3})\b/i.exec(text)?.[1] ?? NaN);
+  if (/insufficient_quota|billing|quota|balance|credit/i.test(text) || status === 402) return "quota";
+  if (status === 401 || status === 403 || /invalid_api_key|incorrect api key|unauthori[sz]ed|authentication|permission/i.test(text)) return "auth";
+  if (status === 429 || /rate.?limit/i.test(text)) return "rate_limit";
+  if (/timeout|timed out/i.test(text)) return "timeout";
+  if (/ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|network|unexpected server response|handshake/i.test(text)) return "connect";
+  return "refused";
+}
 
 // ---------------------------------------------------------------- the minute caps
 
-// Each session: 30 minutes. The trial: GPT_LIVE.trialMinutesCap in all, held while calls run, not only when they start: a call is
-// admitted with its own cap, min(30 min, what the trial has left after every minute logged and every open call's whole reservation),
-// and the bridge closes it there. Minutes live in gpt_live_minutes (db/migrations.ts), one row per session, written as the call
-// starts and about every minute after, so a restart mid-call still counts. That table has no user column and nothing prunes it, so
-// neither the 60-day harness_decisions prune nor a member's deletion (ON DELETE CASCADE) can take minutes off the total.
+// Each session: 30 minutes. The team: GPT_LIVE.teamMonthlyMinutes per calendar month (UTC), held while calls run, not only when they
+// start: a call is admitted with its own cap, min(30 min, what the month has left after every minute logged and every open call's
+// whole reservation), and the bridge closes it there. Minutes live in gpt_live_minutes (db/migrations.ts), one row per session,
+// written as the call starts and about every minute after, so a restart mid-call still counts. That table has no user column and
+// nothing prunes it, so neither the 60-day harness_decisions prune nor a member's deletion (ON DELETE CASCADE) can take minutes off.
 export type Slot = { capMs: number; admittedAt: number; startedAt: number | null; sessionId: string | null };
 export const openSessions = new Map<string, Slot>(); // by stream id
 type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
@@ -262,32 +363,34 @@ const pruneSlots = (now: number) => {
 };
 const loggedSeconds = async (db: Db): Promise<number> => {
   const running = [...openSessions.values()].map((v) => v.sessionId).filter((x): x is string => !!x);
-  const { rows } = await db.query(`SELECT COALESCE(SUM(seconds), 0) AS s FROM gpt_live_minutes WHERE NOT (session_id = ANY($1::text[]))`, [running]);
+  const { rows } = await db.query(`SELECT COALESCE(SUM(seconds), 0) AS s FROM gpt_live_minutes WHERE started_at >= date_trunc('month', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AND NOT (session_id = ANY($1::text[]))`, [running]);
   return Number(rows[0]?.s ?? 0);
 };
-// Minutes used so far: every session logged, plus the open ones' time on the line.
-export async function trialMinutesUsed(db: Db = pool, now = Date.now()): Promise<number> {
+// The team's minutes this month: every session logged, plus the open ones' time on the line.
+export async function teamMinutesThisMonth(db: Db = pool, now = Date.now()): Promise<number> {
   pruneSlots(now);
   const open = [...openSessions.values()].reduce((a, v) => a + (v.startedAt == null ? 0 : Math.max(0, now - v.startedAt) / 1000), 0);
   return ((await loggedSeconds(db)) + open) / 60;
 }
 let admitting: Promise<unknown> = Promise.resolve();
-// Admits one call: its stream id and its own cap, or null when the trial can't give it a minute. One admission at a time, so two
-// calls at once can't both take the last minutes. A total that can't be read refuses (fails closed).
-export function admitSession(db: Db = pool, now = Date.now()): Promise<{ id: string; capMs: number; trialLimited: boolean } | null> {
+// Admits one call: its stream id and its own cap, or null when the month can't give it a minute. One admission at a time, so two
+// calls at once can't both take the last minutes. A total that can't be read refuses (fails closed): the call goes to ElevenLabs.
+export function admitSession(db: Db = pool, now = Date.now()): Promise<{ id: string; capMs: number; budgetLimited: boolean } | null> {
   const run = admitting.then(async () => {
     pruneSlots(now);
     const reserved = [...openSessions.values()].reduce((a, v) => a + v.capMs, 0);
-    const left = GPT_LIVE.trialMinutesCap * 60_000 - (await loggedSeconds(db)) * 1000 - reserved;
+    const left = GPT_LIVE.teamMonthlyMinutes * 60_000 - (await loggedSeconds(db)) * 1000 - reserved;
     const capMs = Math.min(GPT_LIVE.maxSessionMs, left);
     if (capMs < GPT_LIVE.minAdmitMs) return null;
     const id = randomBytes(32).toString("base64url");
     openSessions.set(id, { capMs, admittedAt: now, startedAt: null, sessionId: null });
-    return { id, capMs, trialLimited: capMs < GPT_LIVE.maxSessionMs };
+    return { id, capMs, budgetLimited: capMs < GPT_LIVE.maxSessionMs };
   }).catch(() => null);
   admitting = run;
   return run;
 }
+// An admitted call that never got its stream (the TwiML couldn't be built): its reservation goes back at once.
+export const releaseSession = (id: string): void => void openSessions.delete(id);
 // A session's minutes so far (and how it ended, at the end). Never throws.
 export async function writeMinutes(sessionId: string, seconds: number, endedBy: string | null, db: Db = pool): Promise<void> {
   await db
@@ -312,13 +415,13 @@ ${CALL_CRITERIA.map((c) => `- ${c.id}: ${c.conversation_goal_prompt}`).join("\n"
 The call ("assistant" or "agent" is Cue, "user" is the member), whole:
 ${transcript.slice(-40000)}
 
-Return ONLY JSON: {"results": [{"id": "criterion id", "result": "success" | "failure", "rationale": "one sentence; on a failure, quote Cue's exact words"}]}`;
+Return ONLY JSON: {"results": [{"id": "criterion id", "result": "success" | "failure", "rationale": "one sentence; on a failure, quote Cue's exact words", "quote": "on a failure, the exact words of the one Cue line it's about; otherwise empty"}]}`;
 }
-export async function gradeLiveCall(transcript: string, read: (prompt: string) => Promise<string> = defaultRead): Promise<{ evaluation_criteria_results: Record<string, { criteria_id: string; result: string; rationale: string }> }> {
+export async function gradeLiveCall(transcript: string, read: (prompt: string) => Promise<string> = defaultRead): Promise<{ evaluation_criteria_results: Record<string, { criteria_id: string; result: string; rationale: string; quote?: string }> }> {
   const ids = new Set(CALL_CRITERIA.map((c) => c.id));
-  const results = parseModelJson<{ results?: { id?: string; result?: string; rationale?: string }[] }>(await read(gradePrompt(transcript))).results ?? [];
+  const results = parseModelJson<{ results?: { id?: string; result?: string; rationale?: string; quote?: string }[] }>(await read(gradePrompt(transcript))).results ?? [];
   const kept = results.filter((r) => r && ids.has(String(r.id)) && (r.result === "success" || r.result === "failure"));
-  return { evaluation_criteria_results: Object.fromEntries(kept.map((r) => [String(r.id), { criteria_id: String(r.id), result: String(r.result), rationale: String(r.rationale ?? "") }])) };
+  return { evaluation_criteria_results: Object.fromEntries(kept.map((r) => [String(r.id), { criteria_id: String(r.id), result: String(r.result), rationale: String(r.rationale ?? ""), ...(r.result === "failure" && typeof r.quote === "string" && r.quote.trim() ? { quote: r.quote.trim().slice(0, 300) } : {}) }])) };
 }
 async function defaultRead(prompt: string): Promise<string> {
   const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, maxOutputTokens: 2500, experimental_telemetry: { isEnabled: true, functionId: "call.evaluation.gpt_live", recordInputs: false, recordOutputs: false }, prompt });

@@ -18,13 +18,13 @@ const tools: any[] = ap.tools;
 const text = JSON.stringify(cfg);
 
 // ---- 2. the call brain is Sonnet 4.6, called directly by ElevenLabs (2026-10-08, Hume's setup)
-// The GPT-Live trial (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
+// GPT-Live (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
 // ever holds ElevenLabs code, so this can't quietly hide an ElevenLabs call site.
 const coEl = (t: string) => {
-  const m = /\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ After a GPT-Live trial call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
-  if (!m) throw new Error("the GPT-Live trial block's markers in routes/co.ts moved: update coEl");
+  const m = /\/\/ ---------- GPT-Live calls[\s\S]*?(?=\/\/ After a GPT-Live call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
+  if (!m) throw new Error("the GPT-Live block's markers in routes/co.ts moved: update coEl");
   const el = /registerElevenLabsCall|verifyPostCallWebhook|elevenlabs-signature|takeCallContext|callKey: `el:|elTurnMetrics|forgetAfterCall/.exec(m[0]);
-  if (el) throw new Error(`ElevenLabs code inside the GPT-Live trial block: ${el[0]}`);
+  if (el) throw new Error(`ElevenLabs code inside the GPT-Live block: ${el[0]}`);
   return t.replace(m[0], "");
 };
 check("the call brain is Sonnet 4.6", ap.llm === "claude-sonnet-4-6");

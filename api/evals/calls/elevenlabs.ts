@@ -40,17 +40,17 @@ const now = 1_790_000_000;
 
 const trigger = readFileSync(new URL("../../src/services/callTrigger.ts", import.meta.url), "utf8");
 const coSrc = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
-// The GPT-Live trial (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
+// GPT-Live (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
 // ever holds ElevenLabs code, so this can't quietly hide an ElevenLabs call site.
 const coEl = (t: string) => {
-  const m = /\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ After a GPT-Live trial call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
-  if (!m) throw new Error("the GPT-Live trial block's markers in routes/co.ts moved: update coEl");
+  const m = /\/\/ ---------- GPT-Live calls[\s\S]*?(?=\/\/ After a GPT-Live call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
+  if (!m) throw new Error("the GPT-Live block's markers in routes/co.ts moved: update coEl");
   const el = /registerElevenLabsCall|verifyPostCallWebhook|elevenlabs-signature|takeCallContext|callKey: `el:|elTurnMetrics|forgetAfterCall/.exec(m[0]);
-  if (el) throw new Error(`ElevenLabs code inside the GPT-Live trial block: ${el[0]}`);
+  if (el) throw new Error(`ElevenLabs code inside the GPT-Live block: ${el[0]}`);
   return t.replace(m[0], "");
 };
 check("Hume is gone: every call is registered with the ElevenLabs agent, in and out", /\/co\/el\/outbound-twiml/.test(trigger) && !/mediaStreamBridge|media-stream|hume/i.test(trigger) && /direction: "inbound"/.test(coSrc) && !/api\.hume\.ai|router\.post\(\s*"\/webhook"/.test(coSrc));
-check("a call that can't connect says so on the line and is noted, never dead air", (coSrc.match(/noteCallFailure\(userId, "registration"\)/g) ?? []).length === 2 && (coSrc.match(/CANT_CONNECT_LINE/g) ?? []).length >= 3);
+check("a call that can't connect says so on the line and is noted, never dead air", (coEl(coSrc).match(/noteCallFailure\(userId, "registration"\)/g) ?? []).length === 2 && (coSrc.match(/CANT_CONNECT_LINE/g) ?? []).length >= 3);
 
 const tok = issueCallToken("user-1", now, env);
 check("a call token verifies for its own member", verifyCallToken("user-1", tok, now + 60, env));
@@ -142,7 +142,7 @@ check("a misfired voicemail goes through as a conversation, logged; inbound stat
   check("1 both kinds claim the call once, run the old gate (once per call, none queued, none recent) and log it, and release the claim if the send fails", /INSERT INTO voicemail_calls/.test(handler) && /decideMissedCallFollowUp\(await gatherMissedCallState\(user\.id, callSid\)/.test(handler) && /action: `missed_call_followup:\$\{kind\}`/.test(handler) && /DELETE FROM voicemail_calls WHERE call_sid = \$1/.test(handler) && /Cue left this voicemail/.test(handler));
   check("1 the post-call route uses it, and never the member's latest call_sid", /handleMissedVoiceCall\(u\[0\], callSid, kind, conversationId\)/.test(coSrc) && /vars\.system__call_sid \?\? `el:\$\{conversationId\}`/.test(coSrc) && !/u\[0\]\?\.call_sid/.test(coSrc) && /direction: o\.direction,/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")));
   // 2. Failed registration frees the call.
-  check("2 a call that can't register resets its live status (both paths, scoped to the call's sid)", (coSrc.match(/await releaseFailedCall\(userId,/g) ?? []).length === 2 && /call_status = 'failed'[^`]*call_sid = \$2/.test(coSrc));
+  check("2 a call that can't register resets its live status (both paths, scoped to the call's sid)", (coEl(coSrc).match(/await releaseFailedCall\(userId,/g) ?? []).length === 2 && /call_status = 'failed'[^`]*call_sid = \$2/.test(coSrc));
   // 3. The coverage route is gone too; the tool route's body limit stays.
   check("3 the coverage branch is gone from the tool route", !/assess_conversation_coverage|COVERAGE_TRANSCRIPT_CHARS|assessConversationCoverage/.test(coSrc));
   check("3 the tools' requests may be 2mb (the default 100kb would reject a long call before the route), set before the global parser in both servers", ["../../src/server.ts", "../../../co-test/src/server.ts"].every((p) => { const t = readFileSync(new URL(p, import.meta.url), "utf8"); const i = t.indexOf('app.use("/co/el/tool", express.json({ limit: "2mb" }))'); return i > 0 && i < t.search(/app\.use\(express\.json\(/); }));
