@@ -460,7 +460,7 @@ export function buildAgentConfig(o: {
           // It was "disabled" until 2026-10-31 (an off-brain answer seemed worse than a pause); with it disabled a slow endpoint ended the call.
           backup_llm_config: { preference: "override", order: [o.proxy ? AGENT_DEFAULTS.proxyBackupLlm : AGENT_DEFAULTS.backupLlm] },
           // Behind our endpoint, ElevenLabs' wait before it tries again or falls back is CALL_PROXY_CASCADE_TIMEOUT_SECS (2-15s allowed;
-          // services/callLlmProxy.ts ends every turn by 4s, 1s inside it). 3s, the direct path's, retried nearly every turn that used a tool.
+          // services/callLlmProxy.ts holds its first-words and silence deadlines at 3.5s, 1.5s inside it). 3s, the direct path's, retried nearly every turn that used a tool.
           cascade_timeout_seconds: o.proxy ? CALL_PROXY_CASCADE_TIMEOUT_SECS : AGENT_DEFAULTS.cascadeTimeoutSecs,
           tools: [
             // ElevenLabs' own system tools ride in the same list (type "system");

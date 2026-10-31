@@ -42,9 +42,11 @@ const baseBody = (extra: any = {}) => ({
 const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   const spoken: string[] = [], dropped: string[] = [];
   const out: any[] = [];
-  for await (const c of P.runCallLlm(body, { stream: upstream(events), onSpoken: (s) => spoken.push(s), onDropped: (s, w) => dropped.push(`${s} | ${w}`), ...o })) out.push(c);
+  // handedOff: nothing Cue could say, so the turn failed before a byte and ElevenLabs' backup answers (2026-10-31: no scripted line).
+  let handedOff = false;
+  try { for await (const c of P.runCallLlm(body, { stream: upstream(events), onSpoken: (s) => spoken.push(s), onDropped: (s, w) => dropped.push(`${s} | ${w}`), ...o })) out.push(c); } catch (err) { if (err instanceof P.TurnDeadline && err.kind === "held") handedOff = true; else throw err; }
   const content = out.map((c) => c.choices[0].delta.content ?? "").join("");
-  return { out, content, spoken, dropped, finish: out[out.length - 1].choices[0].finish_reason };
+  return { out, content, spoken, dropped, handedOff, finish: out[out.length - 1].choices[0].finish_reason };
 };
 
 // ---- translation: OpenAI in, Anthropic out
@@ -149,7 +151,8 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("an event with no source row is never said", !/Founders Mixer|Battery|7pm/.test(invented.content) && invented.dropped.length >= 1, invented.content);
   check("the member still hears the rest of the reply", /Want the link\?/.test(invented.content), invented.content);
   const only = await run(baseBody(), text("There's a Founders Mixer at The Battery on Friday at 7pm."));
-  check("if that was the whole reply, Cue says it will look, never silence", only.content.trim() === G.SAFE_LINE, only.content);
+  // 2026-10-31 (Royce): no scripted line on a call. Nothing left to say, nothing sent: the backup model answers in its own words.
+  check("if that was the whole reply, no fixed line: the turn hands off to the backup model, with nothing sent", only.handedOff && !only.content.trim() && only.spoken.length === 0, only);
   const said = await run(baseBody({ messages: [...baseBody().messages, { role: "assistant", content: "x" }, { role: "user", content: "What about the Founders Mixer at The Battery?" }] }), text("The Founders Mixer at The Battery sounds good."));
   check("a name the member said themselves is theirs to be repeated", /Founders Mixer/.test(said.content), said.content);
   const lowSelf = await run(baseBody({ messages: [{ role: "system", content: "You are Cue. What Cue has found: nothing." }, { role: "user", content: "hi" }, { role: "assistant", content: "There's a Founders Mixer at The Battery." }, { role: "user", content: "ok" }] }), text("That Founders Mixer at The Battery is on Friday."));

@@ -826,12 +826,12 @@ export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; li
 //   now    quick and certain: run inside the turn, with a tight timeout of their own (ms). Sending a link, event or find already
 //          on file, saving what they want or think, starting work that runs after the call, keeping their notes and tasks
 //          current. Past its timeout a tool keeps going on its own; a send that hasn't come back is owed right after the call.
-//   after  slow or multi-step, started from the call and carried on after it. Nothing uses it since 2026-10-31: a tool whose input
-//          is long to write (a task, research, a page, a deck, a document) isn't on a call at all; it opens after the call.
+// A tool whose input is long to write (a task, research, a page, a deck, a document) isn't on a call at all since 2026-10-31: it
+// opens after the call from what was said (services/callTasks.ts, services/callCommitments.ts).
 // Never on a call, whatever the registry says: anything that needs another member's yes (an intro), anything that costs money,
 // and everything not listed here (web research, reading pages, drafting email: slow or multi-step, so a task or a promise
 // picks it up right after the call).
-export type CallRun = { run: "now"; kind: "send" | "save" | "start" | "read"; ms: number } | { run: "after"; waitMs: number };
+export type CallRun = { run: "now"; kind: "send" | "save" | "start" | "read"; ms: number };
 const SEND: CallRun = { run: "now", kind: "send", ms: 4000 };
 const SAVE: CallRun = { run: "now", kind: "save", ms: 3000 };
 const START: CallRun = { run: "now", kind: "start", ms: 3000 };

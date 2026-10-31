@@ -8,7 +8,7 @@ import { recordDecision } from "../harness/core.js";
 import { exchangeText } from "../services/theirYes.js";
 import { verifyCallToken } from "../services/elevenLabsCalls.js";
 import { noteTraceUser } from "../services/llmTraceText.js";
-import { anthropicStream, capTurn, runCallLlm, safetyCall, TurnDeadline, type TurnDeadlineKind, type ARequest, type AnthropicEvent, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
+import { anthropicStream, capTurn, runCallLlm, safetyCall, TurnDeadline, type TurnDeadlineKind, type TurnState, type ARequest, type AnthropicEvent, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
 import { setScopeMember, withMember } from "../services/llmUsage.js";
 import { commitmentProblem, trackCallCommitment } from "../services/callCommitments.js";
 import type { CallToolset, MemberOnCall } from "../services/callTools.js";
@@ -165,10 +165,13 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream, o: { 
     let deadline: { kind: TurnDeadlineKind; ended: "backup" | "said" } | null = null;
     let heartbeats = 0;
     const stop = new AbortController();
+    // The Cue tool whose input is being written right now, and whether the spoken turn has ended (services/callLlmProxy.ts TurnState).
+    const turnState: TurnState = { toolInput: null, spokenEnded: false };
     const deps: ProxyDeps = {
       stream: (r) => upstream(r, userId, stop.signal),
       startedAt: t0,
       signal: stop.signal,
+      turn: turnState,
       ...(o.silenceMs ? { silenceMs: o.silenceMs } : {}),
       clean: process.env.CALL_LLM_CLEAN !== "off",
       voiceOnly,
@@ -226,14 +229,24 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream, o: { 
       startedAt: t0,
       abort: () => stop.abort(),
       onHeartbeat: () => { heartbeats++; },
+      // A quick write whose input was mid-way at the silence deadline is finished and run, never dropped (review of #327).
+      drainable: () => (turnState.toolInput && tools?.quickWrite?.(turnState.toolInput) ? turnState.toolInput : null),
+      endSpoken: () => { turnState.spokenEnded = true; },
       onDeadline: (d) => {
         deadline = { kind: d.kind, ended: d.said ? "said" : "backup" };
         slow = true;
+        // Draining: the row and the after-turn check wait for the write (onDrained).
+        if (d.draining) return;
         // The after-turn check (services/callTools.ts afterTurn: a specific they gave and Cue said back, with nothing written, goes on the
         // task in their words) still runs for what was said; the ended turn doesn't run it itself.
         if (d.said && tools?.afterTurn) Promise.resolve().then(() => tools!.afterTurn!({ spoken: [...spokenLines], ran: [...ranTools] })).catch(() => {});
         // Whether the heartbeats kept ElevenLabs' clock going is read against its agents_llm_service_failed_attempts_latency after the call.
         if (userId) recordDecision({ layer: 8, decision: "call.turn_deadline", userId, outcome: "skip", action: d.kind, proposal: { deadline: d.kind, ended: deadline.ended, heartbeats: d.heartbeats, msSinceArrival: Date.now() - t0, spoken, dropped, tools: toolTimes.map((x) => x.name) } }).catch(() => {});
+      },
+      onDrained: (tool) => {
+        const ran = ranTools.includes(tool);
+        if (tools?.afterTurn) Promise.resolve().then(() => tools!.afterTurn!({ spoken: [...spokenLines], ran: [...ranTools] })).catch(() => {});
+        if (userId) recordDecision({ layer: 8, decision: "call.turn_deadline", userId, outcome: "skip", action: "silence", proposal: { deadline: "silence", ended: "said", tool_finished_after: tool, toolRan: ran, heartbeats, msSinceArrival: Date.now() - t0, spoken, dropped, tools: toolTimes.map((x) => x.name) } }).catch(() => {});
       },
     });
     const write = (c: OaiChunk) => res.write(`data: ${JSON.stringify(c)}\n\n`);
@@ -269,7 +282,14 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream, o: { 
       res.end();
     } catch (err: any) {
       // No words by the first deadline: the error is the hand-off to ElevenLabs' backup model, not a failure of the model.
-      if (err instanceof TurnDeadline) { if (!res.headersSent) return res.status(502).json({ error: "no words in time; the backup answers this turn" }); }
+      if (err instanceof TurnDeadline) {
+        // Nothing Cue could say (everything held back): the same hand-off as no words in time (Royce, 2026-10-31: no scripted line).
+        if (err.kind === "held") {
+          deadline = { kind: "held", ended: "backup" };
+          if (userId) recordDecision({ layer: 8, decision: "call.turn_deadline", userId, outcome: "skip", action: "held", proposal: { deadline: "held", ended: "backup", heartbeats, msSinceArrival: Date.now() - t0, spoken, dropped, tools: toolTimes.map((x) => x.name) } }).catch(() => {});
+        }
+        if (!res.headersSent) return res.status(502).json({ error: "no words in time; the backup answers this turn" });
+      }
       else {
         console.error("co/el/llm failed:", err?.message ?? err);
         brainError = true;

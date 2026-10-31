@@ -107,11 +107,6 @@ export type SpokenSources = {
 };
 export type SpokenProblem = { kind: "event" | "name" | "number" | "promise"; missing: string[] };
 
-// Said in place of a sentence whose name or number nothing backs: unknown stays unknown, once per turn.
-export const UNSURE_NAME = "I'm not sure of the name.";
-export const UNSURE_NUMBER = "I'm not sure of the exact number.";
-// Said when everything else this turn was held back and none of it was an event offer (whose fallback is SAFE_LINE).
-export const HELD_LINE = "Got it.";
 
 // Capitalized words that are formats, everyday apps and titles, not a claim about anyone or anywhere ("I'll send the PDF",
 // "a Google Doc"). They back a spoken name like any source line (callLlmProxy.ts callSources); a promise's subject never.
@@ -169,7 +164,6 @@ export function spokenProblem(sentence: string, src: SpokenSources): SpokenProbl
   return null;
 }
 
-export const SAFE_LINE = "I'll look into that after the call and text it over.";
 
 // Pure: the sentences of a finished call that name something nothing backs. The call's own dynamic variables (context, finds, clock)
 // and the member's lines are the source; Co's lines never are. ElevenLabs' own grader can't see the finds list, so this is the grade.

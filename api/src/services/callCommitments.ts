@@ -37,17 +37,23 @@ export const AFTER_CALL_TIME = new RegExp(
   String.raw`\b(?:(?:right |just |straight )?after (?:the|our|this) call|(?:right |just |straight )?after (?:we|you) (?:hang up|get off|'re off|are off|'re done|are done|wrap up)|${AFTER_THIS}|(?:once|when|as soon as|the moment|the second) (?:we|you)(?:'re| are)? (?:off|done|hang up|get off|wrap up|finish)(?: (?:the|this) (?:call|phone))?|(?:once|when|as soon as) (?:the|this|our) call (?:ends|is over|'s over|wraps up)|after we finish (?:up|talking|here))`,
   "i",
 );
-const FIRST_PERSON_FUTURE = /\b(?:i'?ll|i will|i'?m going to|i'?m gonna|i'?m (?:gonna |going to )?(?:start|get|dig|look|work)|let me)\b/i;
-// Pure: a sentence where Cue says it'll do something once the call is over (not a question, not an offer).
+// Cue's own first-person future, then a verb of work within two small words of it ("I'll dig into", "let me look", "I'm going to
+// start on", "I'll be looking into"). Being around, talking, letting them go, missing or thinking about something, and "let me know"
+// are no work and never open a task (review of #327: "I'll be around after the call" and "Let me know how it goes after the call"
+// opened tasks).
+const WORK = String.raw`(?:set(?:ting)? (?:that |it |this |those |them |things )?up|look(?:ing)?|dig(?:ging)?|find(?:ing)?|put(?:ting)? together|pull(?:ing)?(?: together)?|draft(?:ing)?|send(?:ing)?|text(?:ing)?|research(?:ing)?|start(?:ing)?(?: on)?|writ(?:e|ing)|mak(?:e|ing)|map(?:ping)? out|check(?:ing)?|get(?:ting)? (?:you|them|on|started|going)|work(?:ing)? on|lin(?:e|ing) up|round(?:ing)? up|compil(?:e|ing)|gather(?:ing)?|track(?:ing)? down|search(?:ing)?|hunt(?:ing)?|shortlist(?:ing)?|shar(?:e|ing)|forward(?:ing)?)`;
+const WORK_PROMISE = new RegExp(String.raw`\b(?:i'?ll|i will|i'?m going to|i'?m gonna|let me|i'?m)\s+(?:(?:also|just|then|go|be|definitely|actually|quickly|start to)\s+){0,2}${WORK}\b`, "i");
+// Pure: a sentence where Cue says it'll do some work once the call is over (not a question, not an offer).
 export function afterCallPromise(s: string): boolean {
-  return FIRST_PERSON_FUTURE.test(s) && AFTER_CALL_TIME.test(s) && !/\?\s*$/.test(s) && !/^\s*(?:want me to|should i|would you like me to|do you want me to)\b/i.test(s);
+  return WORK_PROMISE.test(s) && AFTER_CALL_TIME.test(s) && !/\?\s*$/.test(s) && !/^\s*(?:want me to|should i|would you like me to|do you want me to)\b/i.test(s);
 }
 
 // Pure: why a sentence is not a commitment a task can keep, or null when it is one.
 export function commitmentProblem(s: string): string | null {
   // Said for after the call, in Cue's own words: kept, whatever the work (a search, a task over days, a deck), unless it's something
-  // Cue can't do at all (call, book or contact someone). The same work asked in their words (services/callTasks.ts) joins this task.
-  if (afterCallPromise(s)) return OFFERS_WHAT_CO_CANT.test(s) ? "something Cue can't do" : null;
+  // Cue can't do (call, book or contact someone; find sponsors, investors, funders or grants). The same work asked in their words
+  // (services/callTasks.ts) joins this task.
+  if (afterCallPromise(s)) return CANT.test(s) || OFFERS_WHAT_CO_CANT.test(s) ? "something Cue can't do" : null;
   if (!COMMIT_RE.test(s)) return "not a commitment to send something";
   if (/\?\s*$/.test(s)) return "a question";
   if (/^\s*(?:want me to|should i|would you like me to|do you want me to)\b/i.test(s)) return "an offer";

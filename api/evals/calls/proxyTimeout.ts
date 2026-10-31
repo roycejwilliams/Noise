@@ -30,7 +30,9 @@ const CC = await import("../../src/services/callCommitments.js");
 const TK = await import("../../src/services/callTasks.js");
 const CAP = await import("../../src/services/capabilities.js");
 const { createConversationTools } = await import("../../src/agent/conversationTools.js");
-const { SAFE_LINE } = await import("../../src/services/offerGuard.js");
+// The fixed lines the proxy used to say (gone 2026-10-31: no scripted line on a call); none may reach the member.
+const OLD_LINES = ["I'll look into that after the call and text it over.", "Got it.", "That didn't go through, so I'll text it to you right after the call."];
+const saysOldLine = (t: string) => OLD_LINES.some((l) => (l === "Got it." ? t.trim() === l : t.includes(l)));
 const { default: pool } = await import("../../src/db/db.js");
 (await import("../../src/services/abilitySwitches.js")).setSwitchesForTest({});
 (await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
@@ -136,7 +138,7 @@ const timed = async (gen: AsyncGenerator<any>) => {
   }), { firstMs: 400, gapMs: 400, ceilingMs: 5000, heartbeatMs: 100, abort: () => { stop.abort(); endedAt = Date.now(); }, onDeadline: (d) => { ended2 = d; } }));
   await wait(700);
   check("1. a long silence mid-reply ends the turn on what was said, about one silence after the last words", ended2?.kind === "silence" && ended2?.said === true && r2.lastWordsAt !== null && r2.ms - r2.lastWordsAt! <= 400 + 120 && r2.finish === "stop", { ended2, ms: r2.ms, lastWordsAt: r2.lastWordsAt });
-  check("1. ...with nothing added: no fixed line, and the held claim never went out", /let me get that going/.test(r2.content) && !r2.content.includes(SAFE_LINE) && !/That's set up/.test(r2.content), r2.content);
+  check("1. ...with nothing added: no fixed line, and the held claim never went out", /let me get that going/.test(r2.content) && !saysOldLine(r2.content) && !/That's set up/.test(r2.content), r2.content);
   check("1. ...heartbeats filled the silence (empty, never words), and didn't extend it", r2.beats >= 2 && r2.maxGap <= 100 + 80 && ended2.heartbeats === r2.beats, { beats: r2.beats, maxGap: r2.maxGap });
   check("1. once the turn has ended, nothing in it speaks, logs a last resort or calls the model again", spokenAfter.length === 0 && lastResort.length === 0 && m.reqs.length <= 2, { spokenAfter, lastResort, reqs: m.reqs.length });
 
@@ -189,7 +191,7 @@ const timed = async (gen: AsyncGenerator<any>) => {
   const b = await quiet(() => post(stall));
   await wait(30);
   const sse = b.written.join("");
-  check("route: a stall mid-reply ends on what was said, with no line added, and closes the stream", /Let me look into that\./.test(sse) && !sse.includes(SAFE_LINE) && sse.trim().endsWith("data: [DONE]") && b.res.statusCode === 200, sse.slice(0, 300));
+  check("route: a stall mid-reply ends on what was said, with no line added, and closes the stream", /Let me look into that\./.test(sse) && !saysOldLine(sse) && sse.trim().endsWith("data: [DONE]") && b.res.statusCode === 200, sse.slice(0, 300));
   check("route: logged as call.turn_deadline ended on what was said, with the heartbeats it sent", rows.some((x) => x.decision === "call.turn_deadline" && x.proposal?.ended === "said" && x.proposal?.deadline === "silence" && x.proposal?.heartbeats >= 1) && rows.some((x) => x.decision === "call.turn_latency" && x.proposal?.endedOn === "said" && x.proposal?.heartbeats >= 1), rows.map((x) => [x.decision, x.proposal]));
   for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
   Object.assign(process.env, saved);
@@ -323,7 +325,7 @@ const timed = async (gen: AsyncGenerator<any>) => {
 
   // How Cue says it, in its own words: each one is an after-call promise, opening exactly one task tied to that turn's request.
   const phrasings = [
-    "I'll dig into grants that fit the dinners right after the call.",
+    "I'll dig into venues that fit the dinners right after the call.",
     "Let me look into that once we hang up, and I'll text you what turns up.",
     "I'm going to start on venue options right after this.",
     "I'll pull together a few options once we're off.",
@@ -347,7 +349,24 @@ const timed = async (gen: AsyncGenerator<any>) => {
   const notPromises = ["Want me to look into that after the call?", "After this weekend I'll know more about the venue.", "I'll be honest, the dinner sounds great.", "They said they'd call after the meeting."];
   check("6. a question, an offer, another time or someone else's plan isn't an after-call promise", notPromises.every((s) => !CC.afterCallPromise(s)), notPromises.map((s) => [s, CC.afterCallPromise(s)]));
   check("6. the commitment tracker still won't keep what Cue can't do (call or book someone), after the call or not", CC.commitmentProblem("I'll call the venue right after we hang up.") !== null);
-  check("6. the after-call promise line that remains (a held event offer's fallback) now opens its task too", CC.commitmentProblem(SAFE_LINE) === null);
+  // Round 2 of review: being around, talking, letting them go, missing or thinking about something, "let me know": no work, no task.
+  const noWork = ["I'll be around after the call if you need me.", "Let's talk after the call.", "Talk after the call.", "I'll talk to you after this.", "I'll let you go so you can get to dinner after this.", "Let me know how it goes after the call.", "I'll be thinking about it after we hang up.", "I'm going to miss this after we hang up.", "I'll call you back after this."];
+  check("6. an after-the-call sentence with no work in it opens nothing (review's sentences)", noWork.every((s) => !CC.afterCallPromise(s) && CC.commitmentProblem(s) !== null), noWork.map((s) => [s, CC.afterCallPromise(s), CC.commitmentProblem(s)]));
+  check("6. after the call or not, Cue never promises investors, sponsors, funders or grants", ["I'll find you investors right after the call.", "I'll dig into grants that fit what you're building right after we hang up.", "Let me look for sponsors once we're off."].every((s) => CC.commitmentProblem(s) === "something Cue can't do"));
+  check("6. a real promise to text after the call is still one", CC.commitmentProblem("I'll text you after the call.") === null && CC.commitmentProblem("I'll set that up when we hang up and text you what I find.") === null);
+
+  // The 10-31 words, end to end: the live promise, the transcript pass after the call and the read of their asks open one task.
+  {
+    const L = "Um, yeah, knowing what you know about our company, um, I would want you to go research and find that. And if you could kind of bring that back to me, uh, that'll be great.";
+    const S = "I'll dig into that right after we hang up and text you what I find.";
+    const tasks: any[] = [];
+    const deps: any = { open: async () => tasks, start: async (t: any) => { const task = { id: 100 + tasks.length, source: t.source, goal: t.goal, theirWords: t.theirWords, createdAt: new Date().toISOString(), status: "open" }; tasks.push(task); return { ok: true, task }; }, setDue: async () => {}, note: async () => null, zone: async () => null };
+    const live = await CC.trackCallCommitment({ userId: "u", sentence: S, theirLine: L, coBefore: "Got it." }, deps);
+    const tx = `assistant: Hey Royce, it's Cue.\nuser: We're planning three dinners.\nassistant: Love that.\nuser: ${L}\nassistant: Got it. ${S}\nuser: Great, thanks.\nassistant: Talk soon.`;
+    await CC.trackCommitmentsFromTranscript("u", tx, {}, (o: any) => CC.trackCallCommitment(o, deps));
+    const fromAsks = await TK.tasksFromCall("u", tx, { read: async () => [{ goal: "Research grants that fit Noise's dinners", quote: "knowing what you know about our company, I would want you to go research and find that" }], start: deps.start, alreadyDone: async () => false, record: async () => {}, existing: async () => tasks.map((t) => ({ id: t.id, goal: t.goal, theirWords: t.theirWords })), note: deps.note } as any);
+    check("6. the 10-31 turn, end to end (live, transcript, their ask): one task, tied to their words", live.ok === true && tasks.length === 1 && tasks[0].theirWords.includes("go research and find that") && fromAsks.length === 1, { tasks: tasks.map((t) => t.goal), fromAsks });
+  }
 
   // The research ask in their words, read after the call: one task, once, joined by the promise if Cue made one.
   let started = 0;
@@ -366,6 +385,62 @@ const timed = async (gen: AsyncGenerator<any>) => {
   let started2 = 0, noted = 0;
   const joined = await TK.tasksFromCall("u-r2", tx, { ...taskDeps, alreadyDone: async () => false, start: async () => { started2++; return { ok: true, task: { id: 10 } }; }, existing: async () => [{ id: 1, goal: `${CC.COMMIT_PREFIX}I'll dig into grants right after the call. (what they asked: ${ask})`, theirWords: ask }], note: async () => { noted++; } });
   check("6. ...and when Cue already promised it on the call, that promise's task carries it: still one", started2 === 0 && noted === 1 && joined.length === 1, { started2, noted });
+}
+
+// ---------------------------------------------------------------- 7. a silence never drops a write; nothing to say hands off with zero bytes
+{
+  // The silence deadline hits while the model is still writing updateTask's input: the spoken turn ends there, the input is read to
+  // its end, the write runs once, and nothing else is said or asked of the model.
+  const turn = { toolInput: null as string | null, spokenEnded: false };
+  const ran: any[] = [];
+  const tools = { ...fakeSet(async (name, input) => { ran.push({ name, input }); return { ok: true }; }, ["updateTask", "shareLink"]), quickWrite: (n: string) => n === "updateTask" };
+  const ev = [...text("Got it, three dinners."), { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "u1", name: "updateTask" } }, { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"taskId":7,' } }, { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '"note":"three dinners"}' } }, { type: "content_block_stop", index: 1 }];
+  const m = paced([ev, text("It's on the task.")], { gap: 5, slowAt: { 7: 500 } });
+  const stop = new AbortController();
+  let dl: any = null, drained: string | null = null;
+  const spokenAfter: string[] = [];
+  let endedAt = 0;
+  const r = await timed(P.capTurn(P.runCallLlm(body() as any, { stream: (q: any) => m.stream(q, null, stop.signal), signal: stop.signal, turn, tools, onSpoken: (x: string) => { if (endedAt) spokenAfter.push(x); } }), {
+    firstMs: 1000, gapMs: 300, ceilingMs: 5000, heartbeatMs: 100, abort: () => stop.abort(),
+    drainable: () => (turn.toolInput && tools.quickWrite(turn.toolInput) ? turn.toolInput : null), endSpoken: () => { turn.spokenEnded = true; endedAt = Date.now(); },
+    onDeadline: (d) => { dl = d; }, onDrained: (t) => { drained = t; },
+  }));
+  await wait(700);
+  check("7. a silence mid-way through updateTask's input: the spoken turn ends on what was said", dl?.kind === "silence" && dl?.draining === "updateTask" && /Got it, three dinners\./.test(r.content) && !/on the task/.test(r.content) && r.finish === "stop", { dl, content: r.content });
+  check("7. ...the input is read to its end and the write runs once, after the turn ended", ran.length === 1 && ran[0].name === "updateTask" && ran[0].input?.note === "three dinners" && drained === "updateTask", { ran, drained });
+  check("7. ...and nothing else: no more speech, no further model request", spokenAfter.length === 0 && m.reqs.length === 1 && !stop.signal.aborted, { spokenAfter, reqs: m.reqs.length });
+  // A send mid-input isn't run this way: the turn ends and the request is aborted (a spoken promise is followed through after the call).
+  const turn2 = { toolInput: null as string | null, spokenEnded: false };
+  const ran2: string[] = [];
+  const tools2 = { ...fakeSet(async (name) => { ran2.push(name); return { ok: true }; }, ["updateTask", "shareLink"]), quickWrite: (n: string) => n === "updateTask" };
+  const ev2 = [...text("Sure, one sec."), { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "s1", name: "shareLink" } }, { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"what":' } }, { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '["Jazz"]}' } }, { type: "content_block_stop", index: 1 }];
+  const stop2 = new AbortController();
+  let dl2: any = null;
+  await timed(P.capTurn(P.runCallLlm(body() as any, { stream: (q: any) => paced([ev2], { gap: 5, slowAt: { 6: 500 } }).stream(q, null, stop2.signal), signal: stop2.signal, turn: turn2, tools: tools2 }), {
+    firstMs: 1000, gapMs: 300, ceilingMs: 5000, heartbeatMs: 100, abort: () => stop2.abort(),
+    drainable: () => (turn2.toolInput && tools2.quickWrite(turn2.toolInput) ? turn2.toolInput : null), endSpoken: () => { turn2.spokenEnded = true; }, onDeadline: (d) => { dl2 = d; },
+  }));
+  await wait(600);
+  check("7. a send mid-input isn't drained: the request is aborted and nothing is sent from the call", dl2?.draining === null && stop2.signal.aborted && ran2.length === 0, { dl2, ran2 });
+  check("7. the real call toolset marks quick writes (saves, notes, task and loop updates, saving an ask), never a send or a read", (() => { const set = CT.buildCallTools({ userId: "u-q", callKey: "u-q:t", turnWords: "hi", callWords: "hi", lastCoLine: null, member: { phone: "", firstName: "R", city: null, tasks: [{ id: 1, goal: "g" }], loops: null } as any, dryRun: true }); return ["updateTask", "closeTask", "updateNotes", "updateLoop", "saveAsk", "noteReaction"].every((n) => set.quickWrite!(n)) && !["shareLink", "resendLink", "searchEvents", "whatCoKnows"].some((n) => set.quickWrite!(n)); })());
+
+  // Nothing Cue could say (an unbacked event offer, then its retry held too): no fixed line, a zero-byte 502, the backup answers.
+  const U = "71717171-1111-2222-3333-444444444444";
+  const saved = { ...process.env };
+  Object.assign(process.env, { CALL_LLM_PROXY_SECRET: "proxy-secret", ELEVENLABS_TOOL_SECRET: "tool-secret", CALL_TOOLS: "off" });
+  rows.length = 0;
+  const router = R.createCallLlmRouter(((req: any, _u: any, signal?: AbortSignal) => paced([text("There's a mixer at Foundry Hall on Friday.")], { gap: 1 }).stream(req, _u, signal)) as any, { heartbeatMs: 50 });
+  const written: string[] = [];
+  let status = 0;
+  await quiet(() => new Promise<void>((resolve) => {
+    const res: any = { statusCode: 200, headersSent: false, status(c: number) { status = c; this.statusCode = c; return this; }, json() { resolve(); return this; }, set() { return this; }, flushHeaders() { this.headersSent = true; }, write(x: string) { this.headersSent = true; written.push(x); return true; }, end() { resolve(); } };
+    const req: any = { method: "POST", url: "/", headers: { authorization: "Bearer proxy-secret" }, body: { ...body([{ role: "system", content: "You are Cue." }, { role: "assistant", content: "Hey Royce." }, { role: "user", content: "Anything happening this week?" }]), elevenlabs_extra_body: { user_id: U, call_token: E.issueCallToken(U) } } };
+    (router as any).handle(req, res, () => resolve());
+  }));
+  await wait(30);
+  check("7. everything held and nothing sent: a 502 with zero bytes (the backup answers), no fixed line, logged as a hand-off", status === 502 && written.length === 0 && rows.some((x) => x.decision === "call.turn_deadline" && x.proposal?.deadline === "held" && x.proposal?.ended === "backup"), { status, written: written.length, rows: rows.map((x) => x.decision) });
+  for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  Object.assign(process.env, saved);
 }
 
 (pool as any).query = realQuery;

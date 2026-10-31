@@ -10,15 +10,16 @@
 // (the stream passes through untouched, no push needed).
 import { SpeakableStream } from "./speakable.js";
 import { stockSentence } from "../harness/stockLines.js";
-import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
+import { SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
 import { memberStateSignal } from "./memberState.js";
 import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.js";
 import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
 import { classifyModelFailure, failureLabel, noteModelFailure } from "./modelKeyAlert.js";
 import { plainPunctuation } from "./safetyText.js";
 import { claimHeld, claimKind, emptyClaimState, SEND_TALK, type ClaimState } from "./callClaims.js";
-// After "texting it to you now" and a send that didn't go: approved copy (Royce, 2026-10-29), spoken by code so it's never missing.
-export const FAILED_SEND_LINE = "That didn't go through, so I'll text it to you right after the call.";
+// After "texting it to you now" and a send that didn't land: the model is told, and says it in its own words (Royce, 2026-10-31: no
+// scripted line on a call). What's owed still goes the moment the call ends (services/callFollowThrough.ts).
+export const SEND_NOT_LANDED_NOTE = "(The text you just told them was going didn't go through yet: it goes to them right after the call. If you say anything more, say that first, briefly and in your own words; never that it went.)";
 // Said as coming right after the call.
 const AFTER_CALL = /\b(?:right after|after (?:we|the call|this call|you hang up)|once we (?:hang up|'re done|are done)|when we hang up|as soon as we hang up)\b/i;
 // What a send tool call is for: its names (shareLink on a call), else which page or deck.
@@ -82,7 +83,13 @@ export type CallToolset = {
   // Whether a tool with this input texts them (a send): its "texting it now" line may be said while it runs, and only what it
   // delivered may be called sent (services/callClaims.ts).
   texts?: (name: string, input: unknown) => boolean;
+  // A quick write (a save, a note, a task update): one whose input was still being written when the silence deadline hit is read
+  // to its end and run (capTurn drain), never dropped.
+  quickWrite?: (name: string) => boolean;
 };
+// Shared between runCallLlm, capTurn and the route for one turn: the Cue tool whose input is being written right now, and whether
+// the spoken turn has ended (a drain: the rest is read only to finish that tool's input and run it).
+export type TurnState = { toolInput: string | null; spokenEnded: boolean };
 
 // Hume's brain (2026-10-08, Royce chose it over Haiku 5.5 for depth: ~1.4s to first words vs ~0.7s): Sonnet 4.6, temperature from the
 // agent (1, as Hume ran it), no default thinking.
@@ -331,6 +338,8 @@ export type ProxyDeps = {
   silenceMs?: number;
   // Aborted once capTurn has ended the turn: from then on nothing here reports, logs or calls the model (review of #327).
   signal?: AbortSignal;
+  // The turn's shared state (TurnState); with spokenEnded, a quick write mid-input is finished and run, and nothing else happens.
+  turn?: TurnState;
   // Each of Co's tools as it comes back (or doesn't, inside the budget), and each round fed back to the model.
   onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
   // overBudget: the turn had used its whole time budget (CALL_TOOL_BUDGET_MS) when the round ended.
@@ -357,7 +366,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const now = deps.now ?? Date.now;
   const t0 = deps.startedAt ?? now();
   // The turn has been ended by capTurn: every report, the after-turn check and any further model request stop here.
-  const ended = () => deps.signal?.aborted === true;
+  const ended = () => deps.signal?.aborted === true || deps.turn?.spokenEnded === true;
   const given = deps;
   deps = {
     ...given,
@@ -397,7 +406,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let lastSaidAt = t0;
   let toolIndex = -1;
   let finish = "stop";
-  // What was said aloud this turn, and whether an event offer was among what was held back (its fallback is SAFE_LINE).
+  // What was said aloud this turn, and whether an event offer was among what was held back.
   const spokenLines: string[] = [];
   // What they last said, and whether Co's previous line was already a goodbye (both from this request's own messages).
   const theirLast = textOf(b.messages[lastAt]?.content ?? "");
@@ -429,8 +438,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // A "texting it to you now" line said before its send is called: held until the send is in flight in this same reply, else dropped.
   let pendingNow: string[] = [];
   let nowSaid = false;
-  // The fixed line after a failed in-flight send has been said this turn.
-  let owedLineSaid = false;
+  // The model was told a send it said was going hasn't landed (SEND_NOT_LANDED_NOTE), once a turn.
+  let owedNoted = false;
   // Lines said since the last round of tools came back (a failed send's next words must say it comes right after the call).
   let linesSinceTools: string[] = [];
   // Said anything since the last round of Cue's tools came back: a turn whose only words after a tool were held back (a "sent" that
@@ -614,6 +623,13 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           // Started the moment its input is complete, while the voice is still saying the line before it.
           let input: unknown = {};
           try { input = cur.json.trim() ? JSON.parse(cur.json) : {}; } catch { input = {}; }
+          if (deps.turn) deps.turn.toolInput = null;
+          // The spoken turn ended while this input was being written (capTurn drain): a quick write runs, to the ceiling at most, and
+          // that's all; nothing more is said or asked of the model.
+          if (deps.turn?.spokenEnded) {
+            if (!deps.signal?.aborted && co!.quickWrite?.(cur.name)) await runTool(co!, cur.id, cur.name, input, Math.max(1000, CALL_TURN_CEILING_MS - (now() - t0)), deps.onTool);
+            return;
+          }
           blocks.push({ type: "tool_use", id: cur.id, name: cur.name, input });
           ran.push(cur.name);
           // A send that texts them starts now: the turn is about sending, what it's for is tried, and a "texting it now" line held
@@ -637,6 +653,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         if (co?.names.has(name)) {
           // Past the cap a Co tool is never run, whatever the model sends (the request already said none).
           cur = toolsOff ? { kind: "skip" } : { kind: "co", id: String(ev.content_block.id ?? `co_${step}_${runs.length}`), name, json: "" };
+          if (deps.turn && cur.kind === "co") deps.turn.toolInput = name;
           continue;
         }
         // end_call only once they've closed: their goodbye now, or any reply to Co's goodbye. Held, the call stays open a turn.
@@ -724,22 +741,17 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     deps.onToolRound?.({ step: step + 1, last, overBudget });
     spokeSinceTools = false;
     linesSinceTools = [];
-    // They just heard it was being texted and nothing went: the next thing they hear is that it comes right after the call, before
-    // anything else the model says (a question included), in these approved words. The model is told it was said.
-    if (nowSaid && roundTried && !roundWent && !owedLineSaid) {
-      owedLineSaid = true;
-      spokeAny = true;
-      spokeSinceTools = true;
-      spokenLines.push(FAILED_SEND_LINE);
-      linesSinceTools.push(FAILED_SEND_LINE);
-      deps.onSpoken?.(FAILED_SEND_LINE);
-      yield chunk({ content: FAILED_SEND_LINE + " " });
+    // They just heard it was being texted and nothing landed: the next round is told so, and says it first in its own words if it
+    // speaks at all (Royce, 2026-10-31: no scripted line). If the turn has to end first, it ends; what's owed still goes after the call.
+    if (nowSaid && roundTried && !roundWent && !owedNoted) {
+      owedNoted = true;
       const lastMsg = req.messages[req.messages.length - 1];
-      lastMsg.content = [...lastMsg.content, { type: "text", text: `(You just told them: "${FAILED_SEND_LINE}" Don't say it again or say it went; carry on.)` }];
+      lastMsg.content = [...lastMsg.content, { type: "text", text: SEND_NOT_LANDED_NOTE }];
+      // Its words back the model's own way of saying it (offerGuard.ts: a promise must stand on something said or returned).
+      toolCorpus += `\n${SEND_NOT_LANDED_NOTE}`;
+      if (clean) sources = callSources(b, co?.records ?? "", toolCorpus);
     }
   }
-  // Everything this turn was going to say was kept back: say the one safe thing, never silence.
-  // An event offer held back gets the safe line (as before); anything else held back, a plain acknowledgement, never a new promise.
   if (repeatGoodbye && !spokeAny && finish !== "tool_calls") {
     // Both sides have said goodbye and nothing else was left to say: end the call (ElevenLabs' own end_call), in silence.
     yield chunk({ tool_calls: [{ index: 0, id: `call_end_${Date.now().toString(36)}`, type: "function", function: { name: "end_call", arguments: JSON.stringify({ reason: "goodbyes already said" }) } }] });
@@ -804,13 +816,12 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
     if (heldStock && !spokeAny) { const h = sayHeld(); if (h) yield chunk({ content: h }); }
   }
-  // Last resort only (the retry was held back too, or failed): one plain line, never silence.
+  // Everything this turn was going to say was held back and its retry was too (or failed), and nothing has gone out: no scripted line
+  // (Royce, 2026-10-31). The request fails before a byte (the route answers with an error), and ElevenLabs' backup model answers the
+  // turn in its own words. Counted as a member who didn't get Cue's own answer (harness/failureCount.ts).
   if ((blanked || heldEnd) && !spokeAny && finish !== "tool_calls" && !ended()) {
-    const line = heldEvent ? SAFE_LINE : HELD_LINE;
-    spokenLines.push(line);
-    deps.onSpoken?.(line);
-    deps.onLastResort?.(line);
-    yield chunk({ content: line + " " });
+    deps.onLastResort?.(heldEvent ? "(handed to the backup: an event offer was held)" : "(handed to the backup: everything was held)");
+    throw new TurnDeadline("held");
   }
   if (co?.afterTurn && !ended()) Promise.resolve().then(() => co.afterTurn!({ spoken: spokenLines, ran })).catch((err: any) => console.error("call: after-turn check failed (non-fatal):", err?.message ?? err));
   yield chunk({}, finish === "length" ? "stop" : finish);
@@ -822,13 +833,20 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
 //   - no new words for gapMs, or the whole turn past ceilingMs: ends on what was said, nothing added
 // Either way the upstream is aborted; a tool still running keeps going on its own. Once anything real has gone out, an empty chunk
 // every heartbeatMs (never counted as words). Before that nothing is sent, not even a heartbeat.
-export type TurnDeadlineKind = "first_words" | "silence" | "ceiling";
+// held: runCallLlm itself had nothing it could say (everything held back) and nothing had gone out.
+export type TurnDeadlineKind = "first_words" | "silence" | "ceiling" | "held";
 export class TurnDeadline extends Error {
   constructor(public readonly kind: TurnDeadlineKind) { super(`call turn deadline: ${kind}`); }
 }
 export async function* capTurn(
   gen: AsyncGenerator<OaiChunk>,
-  o: { firstMs?: number; gapMs?: number; ceilingMs?: number; heartbeatMs?: number; startedAt?: number; abort?: () => void; onDeadline?: (d: { kind: TurnDeadlineKind; said: boolean; heartbeats: number }) => void; onHeartbeat?: () => void } = {},
+  o: {
+    firstMs?: number; gapMs?: number; ceilingMs?: number; heartbeatMs?: number; startedAt?: number; abort?: () => void;
+    onDeadline?: (d: { kind: TurnDeadlineKind; said: boolean; heartbeats: number; draining: string | null }) => void; onHeartbeat?: () => void;
+    // The silence deadline while a quick write's input is still being written: its name (the route reads TurnState), else null. Then
+    // the spoken turn ends as usual, but the rest is read in the background, to the ceiling at most, so the write runs (onDrained).
+    drainable?: () => string | null; endSpoken?: () => void; onDrained?: (tool: string) => void;
+  } = {},
 ): AsyncGenerator<OaiChunk> {
   const firstMs = o.firstMs ?? CALL_FIRST_WORDS_MS;
   const gapMs = o.gapMs ?? CALL_SILENCE_MS;
@@ -877,11 +895,30 @@ export async function* capTurn(
     yield c;
     if (c.choices[0]?.finish_reason) return;
   }
+  // A silence while a quick write's input is mid-way: the spoken turn ends here, and the generator is read on in the background
+  // (nothing it yields goes anywhere) until that tool has run, or the ceiling aborts it. A write is never dropped for a silence.
+  const draining = kind === "silence" && live ? (o.drainable?.() ?? null) : null;
+  if (draining) {
+    o.endSpoken?.();
+    const ceilingTimer = setTimeout(() => { try { o.abort?.(); } catch { /* never fails the turn */ } }, Math.max(0, startedAt + ceilingMs - Date.now()));
+    const first = pending;
+    void (async () => {
+      try {
+        let p = first ?? gen.next();
+        for (;;) { const r = await p; if (r.done) break; p = gen.next(); }
+      } catch { /* aborted at the ceiling, or the model failed: the write didn't run */ }
+      finally { clearTimeout(ceilingTimer); }
+      o.onDrained?.(draining);
+    })();
+    o.onDeadline?.({ kind, said, heartbeats, draining });
+    yield { ...(last as OaiChunk), choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
+    return;
+  }
   // A deadline: whatever the generator was waiting on is let go (its rejection after the abort is expected and swallowed).
   pending?.catch(() => {});
   try { o.abort?.(); } catch { /* the abort itself never fails the turn */ }
   void gen.return(undefined).catch(() => {});
-  o.onDeadline?.({ kind, said, heartbeats });
+  o.onDeadline?.({ kind, said, heartbeats, draining: null });
   // Nothing has gone out: an error, so ElevenLabs' backup answers. The route never wrote a byte (its first chunk waits for a second).
   if (!live) throw new TurnDeadline(kind);
   yield { ...(last as OaiChunk), choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
