@@ -18,7 +18,7 @@ import { recordDecision, type HarnessDecision } from "../harness/core.js";
 import { guardCallMessages } from "./whatCoKnows.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
 import { anthropicStream } from "./callLlmProxy.js";
-import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
+import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -53,6 +53,7 @@ export type LiveDeps = {
   endGraceMs: number;
   endWaitMs: number;
   openWaitMs: number;
+  confirmSettleMs: number;
   wrapUpMs: number;
   // The live guards for this member (services/whatCoKnows.ts forgottenRows + guardCallMessages), read at most every guardCacheMs.
   guardRows: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
@@ -78,6 +79,7 @@ const defaults = (): LiveDeps => ({
   endGraceMs: GPT_LIVE.endGraceMs,
   endWaitMs: GPT_LIVE.endWaitMs,
   openWaitMs: GPT_LIVE.openWaitMs,
+  confirmSettleMs: GPT_LIVE.confirmSettleMs,
   wrapUpMs: GPT_LIVE.wrapUpMs,
   guardRows: (userId) => import("./whatCoKnows.js").then((W) => W.forgottenRows(userId)).catch(() => []),
   guardMessages: (messages, rows) => guardCallMessages(messages, rows),
@@ -132,10 +134,29 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let memberHeardAt: number | null = null; // wall clock of their last transcript fragment
   let voicemailAt: number | null = null; // when GPT-Live was told to leave a message (Twilio's AMD heard a machine)
   let voicemailMs = 0; // where the session's transcript timeline was then: Cue's words after it are the message
+  // Outbound: when a person was confirmed on the line (AMD's human verdict, or their real words once settled); inbound: from the start.
+  // Until then no thinking answer is spoken and GPT-Live hasn't been given the call's reason (review of #333: an answer could reach a
+  // voicemail before Twilio's verdict).
+  let personAt: number | null = null;
   let opened = false; // outbound: whether the opening has happened (their first words, AMD's human verdict, or the wait ran out)
   let stopWaiting: () => void = () => {};
   let guardAt = 0, guardRowsP: Promise<import("./whatCoKnows.js").ForgottenRow[]> | null = null;
   const elapsedSecs = () => Math.round((d.now() - startedAt) / 1000);
+  // A person really spoke: two words or more, not a "yeah" or "mm", and not a voicemail greeting.
+  const realWords = (t: LiveTurn) => t.who === "member" && !listeningSound(t.text) && !isVoicemailGreeting(t.text) && t.text.split(/\s+/).length >= 2;
+  const confirmPerson = (why: "amd_human" | "their_words") => {
+    if (personAt != null || voicemailAt != null || finished || !call) return;
+    personAt = d.now();
+    d.record({ layer: 8, decision: "call.gpt_live_person", userId: call.userId, outcome: "act", action: why, proposal: { provider: "gpt-live", sessionId } });
+    // The reason reaches GPT-Live only now, as silent context (never in its instructions, where any line of its own could carry it).
+    if (call.opening.reason) send(ai, { type: "session.thinking.append", event_id: "reason", delegation_id: null, content: reasonNote(call.opening.reason) });
+  };
+  // Their words count only once their turn has settled (no new words for confirmSettleMs): a greeting's transcript can arrive in pieces,
+  // and "Hi, it's Jordan," alone isn't yet a voicemail greeting.
+  const checkPerson = () => {
+    if (personAt != null || memberHeardAt == null || d.now() - memberHeardAt < d.confirmSettleMs) return;
+    if (turnsFrom(frags).some(realWords)) confirmPerson("their_words");
+  };
 
   // Cue's audio to Twilio, never more than leadMs ahead of real time (8 bytes of mu-law per ms).
   const drain = () => {
@@ -232,23 +253,38 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     // Only an answer that itself carried a crisis or safety line makes this a safety moment (review of #331: safetyCall reads the whole
     // call, so "I'm safe from the layoffs" then a content close set off the safety path).
     if (out.exact) safetyMoment = true;
+    // Outbound: the answer is held until a person is confirmed on the line; still held when the voicemail message is asked for, it's
+    // dropped (below, logged).
+    const heldFrom = d.now();
+    while (personAt == null && voicemailAt == null && !finished) {
+      checkPerson();
+      if (personAt != null) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const heldMs = d.now() - heldFrom;
     // The caller has moved on (said something new since this turn was handed over): the answer is to a question no longer asked.
     const stale = turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
     if (stale) staleDropped++;
     // Their voicemail is recording (review of #333: someone else may hear it): no thinking answer is ever spoken from here on.
     const onVoicemail = voicemailAt != null;
-    if (onVoicemail) d.record({ layer: 8, decision: "call.gpt_live_answer_dropped", userId: c.userId, outcome: "skip", action: "voicemail", proposal: { provider: "gpt-live", sessionId, chars: out.text.length } });
+    if (onVoicemail) d.record({ layer: 8, decision: "call.gpt_live_answer_dropped", userId: c.userId, outcome: "skip", action: "voicemail", proposal: { provider: "gpt-live", sessionId, chars: out.text.length, heldMs } });
     // Cue's thinking ended the call: GPT-Live has said its own goodbye, so nothing is sent (no answer to repeat it, and no "no answer"
     // note, which made it answer an echoed "bye" with "I'll text you"; review of #331).
-    if (!finished && !stale && !onVoicemail && !out.endCall)
+    // An empty answer with no end_call (or a failed one) after GPT-Live already spoke this turn (its own goodbye, say): no "no answer"
+    // note, which would have it say one more line (review of #333). Spoke this turn: a line of its own that started after their turn
+    // ended, allowing goodbyeOverlapMs of overlap.
+    const fromMs = Math.max(0, theirTurnEnd - GPT_LIVE.goodbyeOverlapMs);
+    const spokeThisTurn = turnsFrom(frags).some((t) => t.who === "cue" && t.startMs >= fromMs);
+    const noteSkipped = !out.text && !out.endCall && spokeThisTurn;
+    if (!finished && !stale && !onVoicemail && !out.endCall && !noteSkipped)
       send(ai, out.text
         ? out.exact
           ? { type: "session.instructions.append", event_id: `answer_${id}`, delegation_id: id, content: sayExactly(out.text) }
           : { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
         : { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." });
-    if (out.endCall && !finished && !stale && !onVoicemail) pendingEnd = { at: d.now(), fromMs: theirTurnEnd };
+    if (out.endCall && !finished && !stale && !onVoicemail) pendingEnd = { at: d.now(), fromMs };
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
-    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.exact } });
+    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.exact, heldMs, noteSkipped } });
   };
 
   const onAi = (raw: unknown) => {
@@ -273,9 +309,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         // allows on facts; refused, the call stays open and call.end_refused says why.
         // Outbound: the person who picks up usually speaks first ("Hello?"), so GPT-Live opens once they do (it answers them), once
         // Twilio's AMD says a human answered, or after openWaitMs if neither came; never over a voicemail greeting (review of #333).
-        // AMD heard a machine whose greeting ended: unless a person already really spoke (a misfire, logged and ignored, as the
+        // AMD heard a machine whose greeting ended: unless a person was already confirmed (a misfire, logged and ignored, as the
         // ElevenLabs path's verdict treats it), GPT-Live is told to leave the privacy-limited message (VOICEMAIL_NOW), and from then
-        // on no thinking answer is ever spoken.
+        // on no thinking answer is ever spoken. Words still arriving then are let settle first (a greeting's transcript can trail).
+        if (call.direction === "inbound") personAt = d.now();
         if (call.direction === "outbound") {
           const c = call;
           const openNow = (why: string) => {
@@ -286,22 +323,33 @@ export function handleGptLiveStream(twilio: SocketLike): void {
             send(ai, { type: "session.thinking.append", event_id: "open", delegation_id: null, content: `${OPEN_NOW} ${OPEN_NO_STOCK}` });
           };
           timers.push(timer(() => { if (!frags.some((f) => f.who === "member")) openNow("no_words_in_time"); }, d.openWaitMs));
-          stopWaiting = onAmd(c.callSid, (by) => {
-            if (by === "human") return openNow("amd_human");
-            if (!/^machine_end_/.test(by) || voicemailAt != null || finished) return;
-            const spoke = turnsFrom(frags).some((t) => t.who === "member" && !listeningSound(t.text) && !isVoicemailGreeting(t.text) && t.text.split(/\s+/).length >= 2);
-            d.record({ layer: 8, decision: "call.gpt_live_amd", userId: c.userId, outcome: spoke ? "skip" : "act", action: spoke ? "misfire" : "leave_message", proposal: { provider: "gpt-live", sessionId } });
-            if (spoke) return;
+          // (Declared before onAmd, which calls back at once when the verdict came before the stream.)
+          const leaveMessage = () => {
             voicemailAt = d.now();
             opened = true;
             pendingEnd = null;
             voicemailMs = frags.reduce((m, f) => Math.max(m, f.endMs), 0);
             send(ai, { type: "session.instructions.append", event_id: "voicemail", delegation_id: null, content: VOICEMAIL_NOW });
+          };
+          stopWaiting = onAmd(c.callSid, (by) => {
+            if (by === "human") { confirmPerson("amd_human"); return openNow("amd_human"); }
+            if (!/^machine_end_/.test(by)) return;
+            const decide = () => {
+              if (voicemailAt != null || finished) return;
+              if (memberHeardAt != null && d.now() - memberHeardAt < d.confirmSettleMs) return void timers.push(timer(decide, d.confirmSettleMs - (d.now() - memberHeardAt) + 10));
+              checkPerson();
+              const spoke = personAt != null;
+              d.record({ layer: 8, decision: "call.gpt_live_amd", userId: c.userId, outcome: spoke ? "skip" : "act", action: spoke ? "misfire" : "leave_message", proposal: { provider: "gpt-live", sessionId } });
+              if (spoke) return;
+              leaveMessage();
+            };
+            decide();
           });
         }
         lastHeard = d.now();
         quiet = setInterval(() => {
           const now = d.now();
+          if (call?.direction === "outbound" && voicemailAt == null) checkPerson();
           if (queued || playhead > now) return;
           if (now - lastHeard >= d.silenceEndMs) return close("silence", "silence");
           // The voicemail message has been said and has finished playing: the call ends, as the ElevenLabs voicemail tool ends it.
@@ -312,7 +360,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
           const pend = pendingEnd;
           if (!pend || !call) return;
           const turns = turnsFrom(frags);
-          const cueTurns = turns.filter((t) => t.who === "cue" && t.startMs >= pend.fromMs - 1);
+          const cueTurns = turns.filter((t) => t.who === "cue" && t.startMs >= pend.fromMs);
           if (!cueTurns.length) {
             if (now - pend.at < d.endWaitMs) return;
             d.record({ layer: 8, decision: "call.end_refused", userId: call.userId, outcome: "skip", action: "no_goodbye", proposal: { provider: "gpt-live", sessionId } });

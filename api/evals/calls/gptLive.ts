@@ -78,7 +78,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const longReason = G.buildLiveCall({ userId: "u-noor", callSid: "CA-N", firstName: "Noor", direction: "outbound", team: true, voiceLayer: VOICE, contextSummary: "x".repeat(9000), rightNow: "y".repeat(500), findsNow: "- " + "z".repeat(3000), callReason: "Their pitch to the second fund is Thursday.", timeOfDay: "Tuesday morning" });
   const worst = G.buildLiveCall({ userId: "u-noor", callSid: "CA-N", firstName: "Maximiliana-Josephine", direction: "outbound", team: true, voiceLayer: VOICE, contextSummary: "What they're in the middle of:\n- " + "m".repeat(2000), rightNow: "", findsNow: "", callReason: "r".repeat(3000), timeOfDay: "Wednesday afternoon" });
   check("...even with the longest reason and name", worst.instructions.length < G.GPT_LIVE.maxInstructionChars, worst.instructions.length);
-  check("...whatever the member's context or finds weigh (none of it is in GPT-Live's prompt; the call's reason is)", longReason.instructions.length < G.GPT_LIVE.maxInstructionChars && !/xxxx|yyyy|zzzz/.test(longReason.instructions) && longReason.instructions.includes("Their pitch to the second fund is Thursday."), longReason.instructions.length);
+  check("...whatever the member's context or finds weigh (none of it is in GPT-Live's prompt, nor the call's reason)", longReason.instructions.length < G.GPT_LIVE.maxInstructionChars && !/xxxx|yyyy|zzzz|wwww|rrrr/.test(longReason.instructions + outbound.instructions + worst.instructions), longReason.instructions.length);
   check("...roles and style first, then the three policy headings in the guide's order, and <|SpawnThinking|>", I.startsWith(`${G.LIVE_WHO} You're on a phone call with Jordan.`) && I.indexOf("Backchannel policy:") > I.indexOf(G.LIVE_VOICE_RULES[0].line) && I.indexOf("Backchannel policy:") < I.indexOf("Interruption policy:") && I.indexOf("Interruption policy:") < I.indexOf("Delegation policy:") && /Generate <\|SpawnThinking\|> when:/.test(I) && /Do not generate <\|SpawnThinking\|> when:/.test(I) && /Backend tools:/.test(I));
   check("...opens with the call prompt's own first sentences, word for word", VOICE.startsWith(G.LIVE_WHO));
   check("...carries who Cue is never and its old name, read from the voice layer (not copied into code)", G.identityFromVoice(VOICE).startsWith('You are only ever "Cue":') && G.identityFromVoice(VOICE).endsWith("don't correct them.") && I.includes(G.identityFromVoice(VOICE)) && !src("services/gptLive.ts").includes("never a concierge"));
@@ -110,7 +110,9 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   check("opening: the opener writer's no-stock-opener rule, word for word from it", I.includes(G.OPEN_NO_STOCK) && fs.readFileSync(new URL("../../src/services/callOpening.ts", import.meta.url), "utf8").includes(`- ${G.OPEN_NO_STOCK}`));
   const withMiddle = G.buildLiveCall({ userId: "u-jordan", callSid: null, firstName: "Jordan", direction: "inbound", team: true, voiceLayer: VOICE, contextSummary: "Where things stand now: x\n\nWhat they're in the middle of:\n- the move to Oakland in March (they said Oct 28)", rightNow: "", findsNow: "", callReason: "Not used inbound.", timeOfDay: "Saturday afternoon" });
   check("opening, inbound: only their name and the time of day; what they're in the middle of stays the thinking's (in its prompt, not GPT-Live's)", !withMiddle.instructions.includes("the move to Oakland") && !withMiddle.instructions.includes("Not used inbound.") && withMiddle.backendSystem.includes("the move to Oakland") && withMiddle.opening.reason === null && Object.keys(withMiddle.opening).join() === "timeOfDay,reason");
-  check("opening, outbound: the call's reason as background, never to read out", /Why you called them \(background for how you open, never to read out\): Their pitch to the second fund is Thursday\./.test(longReason.instructions) && !("middleOf" in longReason.opening));
+  // Review of #333: the reason is never in GPT-Live's instructions (a fallback opening could carry it onto a voicemail); the bridge
+  // gives it as silent context once a person is confirmed (gptLiveOutbound.ts).
+  check("opening, outbound: the call's reason is kept for the bridge, never in GPT-Live's instructions", longReason.opening.reason === "Their pitch to the second fund is Thursday." && !longReason.instructions.includes("second fund") && G.reasonNote("R.") === "Why you called them (background for how you open, never to read out): R." && !("middleOf" in longReason.opening));
   check("opening: time of day in their zone", G.timeOfDay(new Date("2026-10-31T16:00:00Z"), "America/Los_Angeles") === "Saturday morning" && G.timeOfDay(new Date("2026-10-31T23:30:00Z"), "America/Los_Angeles") === "Saturday afternoon" && G.timeOfDay(new Date("2026-11-01T05:00:00Z"), "America/Los_Angeles") === "Saturday night");
   const gptPath = src("services/gptLive.ts") + src("services/gptLiveBridge.ts") + (() => { const co = src("routes/co.ts"); return co.slice(co.indexOf("// ---------- GPT-Live calls"), co.indexOf("// Root-cause guard")); })();
   const gptCode = gptPath.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
@@ -340,7 +342,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   check("each session is capped at 30 minutes: at its limit the session is closed", b.ai.of("session.close").length === 1);
   b.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 1800 } });
   check("...recorded as ended by the session cap", b.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "session_cap");
-  check("GPT-Live checks team, then the minutes, before anything of theirs is loaded; the trial number refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf("async function gptLiveAnswer"), co.indexOf('"/gpt-live/after-stream"')); return h.indexOf("isTeamMember(o.userId)") < h.indexOf("admitSession()") && h.indexOf("admitSession()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
+  check("GPT-Live checks team, then the minutes, before anything of theirs is loaded; the trial number refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf("async function gptLiveAnswer"), co.indexOf('"/gpt-live/after-stream"')); return h.indexOf("SELECT mo_approver FROM users") > 0 && h.indexOf("SELECT mo_approver FROM users") < h.indexOf("admitSession()") && h.indexOf("admitSession()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
   G.openSessions.clear();
 }
 
@@ -364,17 +366,24 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   check("an unknown number hears today's line and the call ends, nothing streamed", unknown.status === 200 && /we don't recognize this number/.test(unknown.text) && /<Hangup\/>/.test(unknown.text) && !/<Stream/.test(unknown.text), unknown);
   // A verified member who isn't on the team: refused busy, with a decision row, and nothing of theirs loaded or sent.
   const writes: { sql: string; params: any[] }[] = [];
-  let team = false, logged = 0;
+  let team: boolean | "throw" = false, logged = 0;
   (pool as any).query = async (sql: string, params: any[] = []) => {
     if (/^\s*(INSERT|UPDATE)/.test(sql)) writes.push({ sql, params });
     if (/FROM users WHERE phone_number/.test(sql)) return { rows: [{ id: "u-noor", invite_verified: true, identity_captured: true, archived_at: null }] };
-    if (/SELECT mo_approver FROM users/.test(sql)) return { rows: [{ mo_approver: team }] };
+    if (/SELECT mo_approver FROM users/.test(sql)) { if (team === "throw") throw new Error("db down"); return { rows: [{ mo_approver: team }] }; }
     if (/FROM gpt_live_minutes/.test(sql)) return { rows: [{ s: String(logged) }] };
     return { rows: [] };
   };
   const member = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-m", StirVerstat: "TN-Validation-Passed-A" });
   const refusedRow = (why: string) => writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_refused" && w.params[4] === why);
   check("team only: a member not on the team is refused busy, with a decision row; nothing is loaded or streamed", /<Reject reason="busy"\/>/.test(member.text) && !/<Stream/.test(member.text) && refusedRow("not_team") && !writes.some((w) => /call_status = 'initiated'/.test(w.sql)), member);
+  // The team list can't be read: fails closed (review of #333), the can't-connect line, logged, never quietly ElevenLabs.
+  team = "throw";
+  const quietErr = console.error; console.error = () => {};
+  const unread = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-u", StirVerstat: "TN-Validation-Passed-A" });
+  console.error = quietErr;
+  const unreadRow = writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_unavailable" && w.params[4] === "team_unreadable");
+  check("the team list can't be read: can't connect now (team_unreadable), logged; never ElevenLabs, nothing streamed", unreadRow && unread.text.includes("can't connect right now") && !/<Stream/.test(unread.text) && !/elevenlabs/i.test(unread.text), unread);
   team = true;
   logged = 300 * 60;
   const capped = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-c", StirVerstat: "TN-Validation-Passed-A" });

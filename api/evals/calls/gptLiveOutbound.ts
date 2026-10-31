@@ -224,11 +224,11 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
     in(m: unknown) { this.emit("message", JSON.stringify(m)); }
   }
   const textEv = (t: string) => [{ type: "content_block_start", index: 0, content_block: { type: "text" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } }, { type: "content_block_stop", index: 0 }];
-  const run = (callSid: string, o: { openWaitMs?: number; answer?: string; delayMs?: number } = {}) => {
+  const run = (callSid: string, o: { openWaitMs?: number; answer?: string; delayMs?: number; callReason?: string; settleMs?: number } = {}) => {
     const tw = new FakeSocket(), ai = new FakeSocket(), records: any[] = [];
-    const call = G.buildLiveCall({ userId: "u-jordan", callSid, firstName: "Jordan", direction: "outbound", team: true, voiceLayer: VOICE, contextSummary: "x", rightNow: "", findsNow: "", callReason: "", timeOfDay: null });
+    const call = G.buildLiveCall({ userId: "u-jordan", callSid, firstName: "Jordan", direction: "outbound", team: true, voiceLayer: VOICE, contextSummary: "x", rightNow: "", findsNow: "", callReason: o.callReason ?? "", timeOfDay: null });
     const id = G.issueLiveLink(call);
-    B.setLiveDeps({ connectOpenAI: () => { setImmediate(() => ai.emit("open")); return ai as any; }, apiKey: () => "sk-test", upstream: () => (async function* () { if (o.delayMs) await sleep(o.delayMs); for (const e of textEv(o.answer ?? "How did the pitch go?")) yield e as any; })(), record: (d) => records.push(d), postCall: async () => {}, minutes: () => {}, log: () => {}, now: Date.now, maxSessionMs: 60_000, startTimeoutMs: 60_000, heartbeatMs: 60_000, silenceEndMs: 60_000, endGraceMs: 40, openWaitMs: o.openWaitMs ?? 60_000, guardRows: async () => [] });
+    B.setLiveDeps({ connectOpenAI: () => { setImmediate(() => ai.emit("open")); return ai as any; }, apiKey: () => "sk-test", upstream: () => (async function* () { if (o.delayMs) await sleep(o.delayMs); for (const e of textEv(o.answer ?? "How did the pitch go?")) yield e as any; })(), record: (d) => records.push(d), postCall: async () => {}, minutes: () => {}, log: () => {}, now: Date.now, maxSessionMs: 60_000, startTimeoutMs: 60_000, heartbeatMs: 60_000, silenceEndMs: 60_000, endGraceMs: 40, openWaitMs: o.openWaitMs ?? 60_000, confirmSettleMs: o.settleMs ?? 30, guardRows: async () => [] });
     B.handleGptLiveStream(tw as any);
     B.setLiveDeps(null);
     tw.in({ event: "start", streamSid: "MZ1", start: { customParameters: { s: id } } });
@@ -251,6 +251,7 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   };
   check("an unsigned machine verdict is refused", (await amd({ CallSid: "CA-amd", AnsweredBy: "machine_end_beep" }, false)) === 401 && vm.ai.sent.filter((m) => m.event_id === "voicemail").length === 0);
   check("a signed one is taken", (await amd({ CallSid: "CA-amd", AnsweredBy: "machine_end_beep" })) === 204 && G.answeredByFor("CA-amd") === "machine_end_beep");
+  await sleep(60); // words heard just before the verdict settle first (confirmSettleMs)
   const told = vm.ai.sent.find((m) => m.event_id === "voicemail");
   check("the voicemail instruction limits what's said (someone else may hear it): first name, that it's Cue, sorry, a text coming; never why or anything about them", /someone else may hear it/.test(G.VOICEMAIL_NOW) && /saying only this: their first name, that it's Cue, that you're sorry you missed them, and that you'll text them/.test(G.VOICEMAIL_NOW) && /Never say why you called, and nothing about them or their life/.test(G.VOICEMAIL_NOW));
   check("machine, greeting over: GPT-Live is told to leave a short message in its own words (no set line), once", told?.type === "session.instructions.append" && told.content === G.VOICEMAIL_NOW && !/it's Cue\./.test(G.VOICEMAIL_NOW) && vm.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "leave_message"));
@@ -267,6 +268,7 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   person.ai.in({ type: "session.started", session: { id: "live_person" } });
   person.ai.in({ type: "session.input_transcript.delta", delta: "Hello? Oh hey, yeah I can talk.", start_ms: 0, end_ms: 2000 });
   G.noteAnsweredBy("CA-person", "machine_end_other");
+  await sleep(60);
   check("a machine verdict after a person really spoke is a misfire: logged, ignored, no message", !person.ai.sent.some((m) => m.event_id === "voicemail") && person.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "misfire"));
   G.noteAnsweredBy("CA-human", "human");
   const human = run("CA-human");
@@ -303,6 +305,61 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   check("voicemail: a thinking answer pending when it began, and one asked for after, are never sent to GPT-Live", pend.ai.sent.some((m) => m.event_id === "voicemail") && !pend.ai.sent.some((m) => m.event_id === "answer_p1" || m.event_id === "answer_p2") && !JSON.stringify(pend.ai.sent).includes("second fund"));
   check("...and each is logged as dropped", pend.records.filter((r) => r.decision === "call.gpt_live_answer_dropped" && r.action === "voicemail").length === 2, pend.records.map((r) => r.decision + ":" + r.action));
   pend.tw.close();
+
+  // Review of #333 (blocker): every delegated outbound answer is held until a person is confirmed, AMD "human" or their real words
+  // once settled; the call's reason reaches GPT-Live only then, as silent context, never in its instructions.
+  const REASON = "Their pitch to the second fund is Thursday.";
+  const said = (b: ReturnType<typeof run>) => JSON.stringify(b.ai.sent);
+  // The early answer: the greeting is still playing, the thinking's answer is back before Twilio's verdict.
+  const earlyVm = run("CA-early", { answer: "How did the pitch to the second fund go?", callReason: REASON });
+  await sleep(5);
+  earlyVm.ai.in({ type: "session.started", session: { id: "live_early" } });
+  check("outbound: the call's reason isn't in GPT-Live's instructions", !said(earlyVm).includes("second fund") && !G.buildLiveCall({ userId: "u", callSid: null, firstName: "J", direction: "outbound", team: true, voiceLayer: VOICE, contextSummary: "x", rightNow: "", findsNow: "", callReason: REASON, timeOfDay: null }).instructions.includes("second fund"));
+  earlyVm.ai.in({ type: "session.input_transcript.delta", delta: "Hey, you've reached Jordan.", start_ms: 0, end_ms: 1500 });
+  earlyVm.ai.in({ type: "session.delegation.created", offset_ms: 1600, delegation: { id: "e1", target: "client" } });
+  await sleep(150);
+  check("early answer: back before the verdict, it's held (nothing sent to GPT-Live, no reason given)", !earlyVm.ai.sent.some((m) => m.event_id === "answer_e1" || m.event_id === "reason") && !said(earlyVm).includes("second fund"));
+  earlyVm.ai.in({ type: "session.input_transcript.delta", delta: " Leave a message after the tone.", start_ms: 1500, end_ms: 3000 });
+  G.noteAnsweredBy("CA-early", "machine_end_beep");
+  await sleep(120);
+  check("...the verdict is a machine: the message is asked for, and the held answer is dropped and logged, never spoken", earlyVm.ai.sent.some((m) => m.event_id === "voicemail") && !said(earlyVm).includes("second fund") && earlyVm.records.some((r) => r.decision === "call.gpt_live_answer_dropped" && r.action === "voicemail" && r.proposal.heldMs > 0), earlyVm.records.map((r) => r.decision + ":" + r.action));
+  earlyVm.tw.close();
+  // A greeting whose transcript arrives in pieces: "Hi, it's Jordan," alone looks like a person; the rest makes it a greeting.
+  const late = run("CA-late", { answer: "How did the pitch to the second fund go?", callReason: REASON, settleMs: 60 });
+  await sleep(5);
+  late.ai.in({ type: "session.started", session: { id: "live_late" } });
+  late.ai.in({ type: "session.input_transcript.delta", delta: "Hi, it's Jordan,", start_ms: 0, end_ms: 1200 });
+  late.ai.in({ type: "session.delegation.created", offset_ms: 1300, delegation: { id: "l1", target: "client" } });
+  await sleep(25);
+  G.noteAnsweredBy("CA-late", "machine_end_beep"); // the verdict lands while the transcript is still arriving
+  await sleep(10);
+  late.ai.in({ type: "session.input_transcript.delta", delta: " tell me what you're calling about.", start_ms: 1200, end_ms: 3000 });
+  await sleep(200);
+  check("late greeting transcript: no person is confirmed from its first words; the verdict waits for them to settle, then leaves the message", !late.records.some((r) => r.decision === "call.gpt_live_person") && late.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "leave_message") && late.ai.sent.some((m) => m.event_id === "voicemail"), late.records.map((r) => r.decision + ":" + r.action));
+  check("...and the held answer and the reason never reach GPT-Live", !late.ai.sent.some((m) => m.event_id === "answer_l1" || m.event_id === "reason") && !said(late).includes("second fund") && late.records.some((r) => r.decision === "call.gpt_live_answer_dropped"));
+  late.tw.close();
+  // A person: their real words, once settled, confirm them; the reason goes in as silent context, then the held answer.
+  const real = run("CA-real", { answer: "How did the pitch to the second fund go?", callReason: REASON });
+  await sleep(5);
+  real.ai.in({ type: "session.started", session: { id: "live_real" } });
+  real.ai.in({ type: "session.input_transcript.delta", delta: "Hey, yeah I can talk.", start_ms: 0, end_ms: 1500 });
+  real.ai.in({ type: "session.delegation.created", offset_ms: 1600, delegation: { id: "r1", target: "client" } });
+  await sleep(150);
+  const ri = real.ai.sent.findIndex((m) => m.event_id === "reason"), ai1 = real.ai.sent.findIndex((m) => m.event_id === "answer_r1");
+  check("a person's real words, settled: confirmed (logged), the reason given once as silent context, then the answer", real.records.some((r) => r.decision === "call.gpt_live_person" && r.action === "their_words") && ri >= 0 && real.ai.sent[ri].type === "session.thinking.append" && real.ai.sent[ri].content === G.reasonNote(REASON) && real.ai.sent.filter((m) => m.event_id === "reason").length === 1 && ai1 > ri, real.ai.sent.map((m) => m.event_id));
+  real.tw.close();
+  // AMD's human verdict confirms at once.
+  const amdHuman = run("CA-amdh", { answer: "How did the pitch go?", callReason: REASON });
+  await sleep(5);
+  amdHuman.ai.in({ type: "session.started", session: { id: "live_amdh" } });
+  amdHuman.ai.in({ type: "session.input_transcript.delta", delta: "Hello?", start_ms: 0, end_ms: 500 });
+  amdHuman.ai.in({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "h1", target: "client" } });
+  await sleep(120);
+  check("\"Hello?\" alone confirms no one: the answer is held", !amdHuman.ai.sent.some((m) => m.event_id === "answer_h1"));
+  G.noteAnsweredBy("CA-amdh", "human");
+  await sleep(80);
+  check("...AMD says human: confirmed, the reason given, the held answer sent", amdHuman.records.some((r) => r.decision === "call.gpt_live_person" && r.action === "amd_human") && amdHuman.ai.sent.some((m) => m.event_id === "reason") && amdHuman.ai.sent.some((m) => m.event_id === "answer_h1"));
+  amdHuman.tw.close();
 
   // Outbound opening (review of #333): never at session start; on their first words, AMD's human verdict, or after the wait.
   const outStart: any = G.sessionStart(G.buildLiveCall({ userId: "u-jordan", callSid: "CA-x", firstName: "Jordan", direction: "outbound", team: true, voiceLayer: VOICE, contextSummary: "x", rightNow: "", findsNow: "", callReason: "", timeOfDay: null }), "sage");
