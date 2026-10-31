@@ -30,10 +30,10 @@ export const GPT_LIVE = {
   url: "wss://api.openai.com/v1/live/sessions",
   defaultVoice: "marin",
   maxSessionMs: 30 * 60_000, // each session
-  // GPT-Live minutes per calendar month (UTC), every member's calls together: 300 (about $21 at ~$0.07 a minute) until Royce confirms
-  // a number sized from real use (10-31: 125 ElevenLabs minutes in October; proposed 400, about $28). The one place it lives. Held
-  // while calls run (admitSession); used up, inbound is busy and outbound is held (never ElevenLabs).
-  monthlyMinutes: 300,
+  // GPT-Live minutes per calendar month (UTC), every member's calls together: 400, about $28 at ~$0.07 a minute (Royce, 10-31; sized
+  // from 125 ElevenLabs minutes in October). The one place it lives. Held while calls run (admitSession); used up, inbound is busy and
+  // outbound is held (never ElevenLabs).
+  monthlyMinutes: 400,
   maxInstructionChars: 6500, // GPT-Live's own prompt stays short (OpenAI's prompting guide); everything detailed is the thinking's
   minAdmitMs: 60_000, // a call that would get less than this is refused
   startTimeoutMs: 10_000, // Twilio's start, then OpenAI's session.started, each within this or the call is ended cleanly

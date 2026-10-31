@@ -308,16 +308,16 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const db = (secs: number) => ({ sqls: [] as string[], query: async function (sql: string) { this.sqls.push(sql); return { rows: [{ s: String(secs) }] }; } });
   G.openSessions.clear();
   const min = 60_000;
-  check("the budget is one number for every member's calls: 300 minutes a month until Royce confirms (proposed 400)", G.GPT_LIVE.monthlyMinutes === 300 && !("teamMonthlyMinutes" in G.GPT_LIVE) && !("trialMinutesCap" in G.GPT_LIVE));
-  const a1 = await G.admitSession(db(270 * 60));
+  check("the budget is one number for every member's calls: 400 minutes a month (Royce, 10-31)", G.GPT_LIVE.monthlyMinutes === 400 && !("teamMonthlyMinutes" in G.GPT_LIVE) && !("trialMinutesCap" in G.GPT_LIVE));
+  const a1 = await G.admitSession(db((G.GPT_LIVE.monthlyMinutes - 30) * 60));
   check("270 of 300 minutes used: admitted with the full 30-minute session cap", a1?.capMs === 30 * min && a1.budgetLimited === false, a1);
   G.openSessions.clear();
-  const a2 = await G.admitSession(db(285 * 60));
-  check("285 used: admitted, capped at the 15 minutes the month has left", a2?.capMs === 15 * min && a2.budgetLimited === true, a2);
+  const a2 = await G.admitSession(db((G.GPT_LIVE.monthlyMinutes - 15) * 60));
+  check("15 minutes left: admitted, capped at the 15 minutes the month has left", a2?.capMs === 15 * min && a2.budgetLimited === true, a2);
   G.openSessions.clear();
-  check("299.5 used: refused (less than a minute left)", JSON.stringify(await G.admitSession(db(299.5 * 60))) === JSON.stringify({ refused: "minutes_used" }));
+  check("half a minute left: refused (less than a minute left)", JSON.stringify(await G.admitSession(db((G.GPT_LIVE.monthlyMinutes - 0.5) * 60))) === JSON.stringify({ refused: "minutes_used" }));
   G.openSessions.clear();
-  const both = await Promise.all([G.admitSession(db(250 * 60)), G.admitSession(db(250 * 60)), G.admitSession(db(250 * 60))]);
+  const both = await Promise.all([G.admitSession(db((G.GPT_LIVE.monthlyMinutes - 50) * 60)), G.admitSession(db((G.GPT_LIVE.monthlyMinutes - 50) * 60)), G.admitSession(db((G.GPT_LIVE.monthlyMinutes - 50) * 60))]);
   check("calls at once share what's left: 30, then the 20 left after it, then none", both[0]?.capMs === 30 * min && both[1]?.capMs === 20 * min && JSON.stringify(both[2]) === JSON.stringify({ refused: "minutes_used" }), both.map((x: any) => x?.capMs ?? x));
   G.openSessions.clear();
   check("a total that can't be read refuses (fails closed)", JSON.stringify(await G.admitSession({ query: async () => { throw new Error("db down"); } })) === JSON.stringify({ refused: "unreadable" }));
@@ -327,7 +327,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   G.openSessions.clear();
 
   // Held while the call runs: the bridge closes the session at its own cap, the same way as the 30-minute one.
-  const adm = await G.admitSession(db(299 * 60 - 0.04)); // just over a minute left
+  const adm = await G.admitSession(db((G.GPT_LIVE.monthlyMinutes - 1) * 60 - 0.04)); // just over a minute left
   check("near the end of the month's minutes a call gets only what's left", adm?.budgetLimited === true && adm.capMs < 2 * min, adm);
   const short = { ...callFor("Jordan", "x"), capMs: 40, budgetLimited: true };
   const t = bridge(short, { id: adm!.id, heartbeatMs: 15 });
@@ -384,10 +384,10 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   void refusedRow;
   check("everyone (2026-10-31): a verified member not on the team gets GPT-Live on the trial number too", /<Stream url="wss:\/\/cue\.example\.test\/co\/gpt-live\/stream">/.test(member.text) && !/Reject/.test(member.text), member);
   team = true;
-  logged = 300 * 60;
+  logged = G.GPT_LIVE.monthlyMinutes * 60;
   const capped = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-c", StirVerstat: "TN-Validation-Passed-A" });
   const budgetRow = writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_budget_reached" && w.params[4] === "minutes_used");
-  check("on the trial number, a team member past the month's 300 minutes is refused busy, logged call.gpt_live_budget_reached", /<Reject reason="busy"\/>/.test(capped.text) && budgetRow, capped);
+  check("on the trial number, a team member past the month's minutes is refused busy, logged call.gpt_live_budget_reached", /<Reject reason="busy"\/>/.test(capped.text) && budgetRow, capped);
   // The <Connect> action: a stream that never started plays the existing can't-connect line and releases call_status.
   const { CANT_CONNECT_LINE } = await import("../../src/services/elevenLabsCalls.js");
   G.markCall("CA-fail", "u-noor", "pending");
@@ -518,7 +518,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
 
   // On the team, the month's minutes used: busy, never ElevenLabs (Royce, 10-31).
   reset();
-  loggedSecs = 300 * 60;
+  loggedSecs = G.GPT_LIVE.monthlyMinutes * 60;
   const spent = await call("+15550000001", "CA-jordan2");
   check("main number, on the team, minutes used: refused busy, ElevenLabs never registered", /<Reject reason="busy"\/>/.test(spent.text) && registered.length === 0 && !/<Stream/.test(spent.text), spent);
   check("...logged call.gpt_live_budget_reached, nothing of theirs loaded, no call status written", sqls.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_budget_reached" && w.params[4] === "minutes_used") && !sqls.some((w) => /UPDATE users SET call_sid/.test(w.sql)));
