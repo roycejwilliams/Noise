@@ -8,7 +8,7 @@ import { recordDecision } from "../harness/core.js";
 import { exchangeText } from "../services/theirYes.js";
 import { verifyCallToken } from "../services/elevenLabsCalls.js";
 import { noteTraceUser } from "../services/llmTraceText.js";
-import { anthropicStream, runCallLlm, safetyCall, type ARequest, type AnthropicEvent, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
+import { anthropicStream, capTurn, runCallLlm, safetyCall, TurnDeadline, type TurnDeadlineKind, type TurnState, type ARequest, type AnthropicEvent, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
 import { setScopeMember, withMember } from "../services/llmUsage.js";
 import { commitmentProblem, trackCallCommitment } from "../services/callCommitments.js";
 import type { CallToolset, MemberOnCall } from "../services/callTools.js";
@@ -29,13 +29,20 @@ const textOfMsg = (m: OaiRequest["messages"][number] | undefined): string =>
   typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m!.content.map((p: any) => p?.text ?? "").join("") : "";
 
 // Pure: what the member said this turn (their lines since Co last spoke), everything they said on the call, and Co's last line.
+// Cue's own words AFTER their last line are this same turn, not a new one: ElevenLabs re-sends a turn it gave up waiting on with what
+// Cue had already said appended (2026-10-31 call: the second and third tries read their turn as empty, so startTask's quote check had
+// nothing to check against). Those trailing lines are skipped; the turn is still their last words. A re-prompt after their silence
+// (Cue's whole line last) reads the same way and shares that turn's dedupe key (services/callTools.ts turnKeyOf): intended. An empty
+// line of theirs after Cue's newest line is an empty turn, never their older words (review of #327).
 export function callWordsOf(b: OaiRequest): { turnWords: string; callWords: string; lastCoLine: string | null; recentExchange: string } {
   const msgs = b.messages.filter((m) => m.role === "user" || (m.role === "assistant" && textOfMsg(m).trim()));
-  let i = msgs.length;
+  let end = msgs.length;
+  while (end > 0 && msgs[end - 1].role === "assistant" && msgs.slice(0, end - 1).some((m) => m.role === "user")) end--;
+  let i = end;
   while (i > 0 && msgs[i - 1].role === "user") i--;
   const lastCo = i > 0 ? textOfMsg(msgs[i - 1]).trim() : "";
   return {
-    turnWords: msgs.slice(i).map(textOfMsg).join(" ").trim(),
+    turnWords: msgs.slice(i, end).map(textOfMsg).join(" ").trim(),
     callWords: msgs.filter((m) => m.role === "user").map(textOfMsg).join("\n"),
     lastCoLine: lastCo || null,
     // The turns before this one, for the yes read on a confirm tool (services/theirYes.ts).
@@ -100,10 +107,12 @@ const lastUserLine = (b: OaiRequest): string => {
 };
 
 // The upstream gets the call's member so each turn's cost row names them (llm_usage "call.turn").
-export type CallUpstream = (req: ARequest, userId: string | null) => AsyncIterable<AnthropicEvent>;
-const realUpstream: CallUpstream = (req, userId) => anthropicStream(req, undefined, undefined, userId);
+// signal: the turn's deadlines stop the model request (services/callLlmProxy.ts capTurn).
+export type CallUpstream = (req: ARequest, userId: string | null, signal?: AbortSignal) => AsyncIterable<AnthropicEvent>;
+const realUpstream: CallUpstream = (req, userId, signal) => anthropicStream(req, undefined, undefined, userId, signal);
 
-export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Router {
+// Deadlines: tests only (short ones); a call always runs on services/callLlmProxy.ts CALL_FIRST_WORDS_MS and the rest.
+export function createCallLlmRouter(upstream: CallUpstream = realUpstream, o: { firstMs?: number; gapMs?: number; ceilingMs?: number; silenceMs?: number; heartbeatMs?: number } = {}): Router {
   const router = Router();
   // Every model call a turn makes (its tools, a task it starts) is the call's member's (services/llmUsage.ts withMember).
   const handler = (req: Request, res: Response) => withMember(null, () => handleTurn(req, res));
@@ -145,21 +154,37 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
     const commitments: string[] = [];
     let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
     let spoken = 0, dropped = 0;
+    // What was said aloud and which of Cue's tools came back, for the after-turn check when the cap ends the turn.
+    const spokenLines: string[] = [];
+    const ranTools: string[] = [];
     // The after-call health check reads these (services/callHealth.ts): the turn hit its time budget or a tool was still running at
     // it, or the model failed. Codes only.
     let slow = false, brainError = false;
+    // The turn's deadline, when one ended it (services/callLlmProxy.ts capTurn), and the empty chunks it sent; capTurn aborts the
+    // model request in flight and the turn's own reports stop (ProxyDeps.signal).
+    let deadline: { kind: TurnDeadlineKind; ended: "backup" | "said" } | null = null;
+    let heartbeats = 0;
+    const stop = new AbortController();
+    // The Cue tool whose input is being written right now, and whether the spoken turn has ended (services/callLlmProxy.ts TurnState).
+    const turnState: TurnState = { toolInput: null, spokenEnded: false };
     const deps: ProxyDeps = {
-      stream: (r) => upstream(r, userId),
+      stream: (r) => upstream(r, userId, stop.signal),
+      startedAt: t0,
+      signal: stop.signal,
+      turn: turnState,
+      ...(o.silenceMs ? { silenceMs: o.silenceMs } : {}),
       clean: process.env.CALL_LLM_CLEAN !== "off",
       voiceOnly,
       onSpoken: (s) => {
         spoken++;
+        spokenLines.push(s);
         // A spoken "I'll text you the links" opens a task when the turn ends (below), unless a tool already did the thing.
         if (userId && commitmentProblem(s) === null) commitments.push(s);
       },
       tools,
       onTool: (t) => {
         toolRuns++;
+        ranTools.push(t.name);
         if (t.timedOut) slow = true;
         if (!t.timedOut && (t.result as any)?.ok !== false) toolOk++;
         toolTimes.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" });
@@ -193,7 +218,37 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
       // They turned the voice read off earlier on this call: its lines are gone from every later turn (services/voiceReadConsent.ts).
       if ((await import("../services/callTools.js")).callVoiceReadOff(callKey)) body.messages = (await import("../services/voiceReadConsent.js")).stripVoiceReadLines(body.messages);
     }
-    const gen = runCallLlm(body, deps);
+    // Silence is capped, not length (Royce, 2026-10-31: three tries of one turn ran 10-14s each against a 3s timeout, and the call
+    // ended mid-sentence). No words by the first deadline: an error before any byte, and ElevenLabs' backup model answers in its own
+    // words. A silence mid-reply: the turn ends on what was said. No scripted line either way.
+    const gen = capTurn(runCallLlm(body, deps), {
+      firstMs: o.firstMs,
+      gapMs: o.gapMs,
+      ceilingMs: o.ceilingMs,
+      heartbeatMs: o.heartbeatMs,
+      startedAt: t0,
+      abort: () => stop.abort(),
+      onHeartbeat: () => { heartbeats++; },
+      // A quick write whose input was mid-way at the silence deadline is finished and run, never dropped (review of #327).
+      drainable: () => (turnState.toolInput && tools?.quickWrite?.(turnState.toolInput) ? turnState.toolInput : null),
+      endSpoken: () => { turnState.spokenEnded = true; },
+      onDeadline: (d) => {
+        deadline = { kind: d.kind, ended: d.said ? "said" : "backup" };
+        slow = true;
+        // Draining: the row and the after-turn check wait for the write (onDrained).
+        if (d.draining) return;
+        // The after-turn check (services/callTools.ts afterTurn: a specific they gave and Cue said back, with nothing written, goes on the
+        // task in their words) still runs for what was said; the ended turn doesn't run it itself.
+        if (d.said && tools?.afterTurn) Promise.resolve().then(() => tools!.afterTurn!({ spoken: [...spokenLines], ran: [...ranTools] })).catch(() => {});
+        // Whether the heartbeats kept ElevenLabs' clock going is read against its agents_llm_service_failed_attempts_latency after the call.
+        if (userId) recordDecision({ layer: 8, decision: "call.turn_deadline", userId, outcome: "skip", action: d.kind, proposal: { deadline: d.kind, ended: deadline.ended, heartbeats: d.heartbeats, msSinceArrival: Date.now() - t0, spoken, dropped, tools: toolTimes.map((x) => x.name) } }).catch(() => {});
+      },
+      onDrained: (tool) => {
+        const ran = ranTools.includes(tool);
+        if (tools?.afterTurn) Promise.resolve().then(() => tools!.afterTurn!({ spoken: [...spokenLines], ran: [...ranTools] })).catch(() => {});
+        if (userId) recordDecision({ layer: 8, decision: "call.turn_deadline", userId, outcome: "skip", action: "silence", proposal: { deadline: "silence", ended: "said", tool_finished_after: tool, toolRan: ran, heartbeats, msSinceArrival: Date.now() - t0, spoken, dropped, tools: toolTimes.map((x) => x.name) } }).catch(() => {});
+      },
+    });
     const write = (c: OaiChunk) => res.write(`data: ${JSON.stringify(c)}\n\n`);
     try {
       if (body.stream === false) {
@@ -226,8 +281,19 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
       res.write("data: [DONE]\n\n");
       res.end();
     } catch (err: any) {
-      console.error("co/el/llm failed:", err?.message ?? err);
-      brainError = true;
+      // No words by the first deadline: the error is the hand-off to ElevenLabs' backup model, not a failure of the model.
+      if (err instanceof TurnDeadline) {
+        // Nothing Cue could say (everything held back): the same hand-off as no words in time (Royce, 2026-10-31: no scripted line).
+        if (err.kind === "held") {
+          deadline = { kind: "held", ended: "backup" };
+          if (userId) recordDecision({ layer: 8, decision: "call.turn_deadline", userId, outcome: "skip", action: "held", proposal: { deadline: "held", ended: "backup", heartbeats, msSinceArrival: Date.now() - t0, spoken, dropped, tools: toolTimes.map((x) => x.name) } }).catch(() => {});
+        }
+        if (!res.headersSent) return res.status(502).json({ error: "no words in time; the backup answers this turn" });
+      }
+      else {
+        console.error("co/el/llm failed:", err?.message ?? err);
+        brainError = true;
+      }
       if (!res.headersSent) return res.status(502).json({ error: "upstream model failed" });
       // Mid-reply: close the stream cleanly with what was already said.
       res.write(`data: ${JSON.stringify({ id: "chatcmpl-co", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "co", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
@@ -253,7 +319,7 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
       // model's first token and to the first sentence released to the voice, the whole turn, and each of Cue's tools. Numbers and
       // tool names only, never anyone's words. ElevenLabs' own per-turn numbers for every call, direct or not, are logged after the
       // call (routes/co.ts call.el_turn_metrics).
-      if (userId) recordDecision({ layer: 8, decision: "call.turn_latency", userId, outcome: "act", action: voiceOnly ? "proxy_voice" : "proxy", proposal: { firstTokenMs: t?.upstreamFirstTokenMs ?? null, firstSentenceMs: t?.firstSentenceMs ?? null, totalMs: Date.now() - t0, toolMs: toolTimes.reduce((a, x) => a + x.ms, 0), tools: toolTimes, spoken, dropped, slow, error: brainError } }).catch(() => {});
+      if (userId) recordDecision({ layer: 8, decision: "call.turn_latency", userId, outcome: "act", action: voiceOnly ? "proxy_voice" : "proxy", proposal: { firstTokenMs: t?.upstreamFirstTokenMs ?? null, firstSentenceMs: t?.firstSentenceMs ?? null, totalMs: Date.now() - t0, toolMs: toolTimes.reduce((a, x) => a + x.ms, 0), tools: toolTimes, spoken, dropped, slow, error: brainError, deadline: (deadline as { kind: TurnDeadlineKind; ended: string } | null)?.kind ?? null, endedOn: (deadline as { kind: TurnDeadlineKind; ended: string } | null)?.ended ?? null, heartbeats } }).catch(() => {});
       console.log(`co/el/llm: ${userId ? "call" : "anon"} first_token=${t?.upstreamFirstTokenMs ?? "-"}ms first_sentence=${t?.firstSentenceMs ?? "-"}ms total=${Date.now() - t0}ms spoken=${spoken} dropped=${dropped} tools=${(body.tools ?? []).map((x) => x?.function?.name).filter(Boolean).join(",") || "none"}${tools ? `+co(${tools.defs.length})` : ""} co_tool_runs=${toolRuns}${process.env.CALL_LLM_CLEAN === "off" ? " (clean off)" : ""}`);
     }
   };

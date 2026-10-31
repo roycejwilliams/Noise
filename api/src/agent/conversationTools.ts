@@ -732,13 +732,16 @@ export function createConversationTools(ctx: ConversationToolContext) {
               .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
               .catch(() => "");
         const yesToOffer = T.isYesToOffer(ctx.resolvedContent, ctx.lastCoMessage);
-        if (!yesToOffer && !T.wordsAreTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
+        // On a call their words are a transcript: a quote may leave out its "um"s (2026-10-31: refused on a call), read over the same
+        // words as ever (this turn and their recent texts), never the whole call (review of #327: a "yes please" from earlier passed).
+        const taskQuoteIsTheirs = (q: string, written: string) => T.wordsAreTheirs(q, written) || (ctx.onCall === true && T.spokenWordsAreTheirs(q, written));
+        if (!yesToOffer && !taskQuoteIsTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
           notDone("No task was started: the quote isn't in their words.");
-          return { ok: false, error: "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
+          return { ok: false, error: ctx.onCall ? "theirWords must be their own words from this call, as they said them. Don't start a task they didn't ask for." : "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
         }
         // Something that may be an open task of Co's (services/statusCheck.ts, Royce 2026-10-13): said once, Co decides. A lookout on
         // their own watch words goes ahead (#194's exemption); the open task is named in its result.
-        const theirWatch = !!lookout && T.WATCH_ASK.test(ctx.resolvedContent) && T.wordsAreTheirs(theirWords, ctx.resolvedContent);
+        const theirWatch = !!lookout && T.WATCH_ASK.test(ctx.resolvedContent) && taskQuoteIsTheirs(theirWords, ctx.resolvedContent);
         let alsoOpen: string | null = null;
         if (theirWatch) {
           const S = await import("../services/statusCheck.js");
@@ -751,7 +754,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // A task becomes a lookout only on their words (laneMoves.ts, Royce 2026-10-13): unless their own message asks Co to watch (and
         // the quote is from it), a lookout never restates one of their tasks or open asks (closed this turn or still open). A yes to Co's
         // offer to watch doesn't count: Co never offers to turn a task into a lookout (review, 2026-10-13).
-        if (lookout && !(T.WATCH_ASK.test(ctx.resolvedContent) && T.wordsAreTheirs(theirWords, ctx.resolvedContent))) {
+        if (lookout && !(T.WATCH_ASK.test(ctx.resolvedContent) && taskQuoteIsTheirs(theirWords, ctx.resolvedContent))) {
           const open = ctx.dryRun
             ? []
             : await Promise.all([

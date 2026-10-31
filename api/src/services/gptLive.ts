@@ -65,12 +65,11 @@ export const isGptLiveStreamPath = (url: string | undefined): boolean => {
 // Nothing happens on a trial call (no tools, no sends), so the agent prompt's lines that tell Cue to act on the call and say so are
 // rewritten to "right after the call" (review of #325: leaving both in contradicts the honesty rule). A line that has moved makes
 // GPT_LIVE_FORBIDDEN fail the layer-1 test (evals/calls/gptLive.ts), never a silent mismatch.
+// (The help-over-days lines in the call guide and the capability sheet already say "right after you hang up" since #327: no rewrite.)
 export const ON_CALL_REWRITES: [string, string][] = [
   ["do it now, on the call, and say plainly what you did.", "say plainly you'll do it right after the call."],
   ["When you start something with a tool, say what you started; when it's done, say what it is. ", ""],
-  ["say yes and set it up now, on the call, then say plainly that you have.", "say yes, and say you'll set it up right after the call."],
   ["look it up now, or say you don't have it.", "say you don't have it, and that you'll look into it right after the call."],
-  ["Say yes to this on a call and set it up then and there, and say it's set up.", "Say yes to this on a call, and say you'll set it up right after the call."],
   ["and text them the link to any of them while you talk", "and text them the links right after the call"],
   ["end the call with end_call and say nothing more", "say nothing more"],
 ];

@@ -42,9 +42,11 @@ const baseBody = (extra: any = {}) => ({
 const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   const spoken: string[] = [], dropped: string[] = [];
   const out: any[] = [];
-  for await (const c of P.runCallLlm(body, { stream: upstream(events), onSpoken: (s) => spoken.push(s), onDropped: (s, w) => dropped.push(`${s} | ${w}`), ...o })) out.push(c);
+  // handedOff: nothing Cue could say, so the turn failed before a byte and ElevenLabs' backup answers (2026-10-31: no scripted line).
+  let handedOff = false;
+  try { for await (const c of P.runCallLlm(body, { stream: upstream(events), onSpoken: (s) => spoken.push(s), onDropped: (s, w) => dropped.push(`${s} | ${w}`), ...o })) out.push(c); } catch (err) { if (err instanceof P.TurnDeadline && err.kind === "held") handedOff = true; else throw err; }
   const content = out.map((c) => c.choices[0].delta.content ?? "").join("");
-  return { out, content, spoken, dropped, finish: out[out.length - 1].choices[0].finish_reason };
+  return { out, content, spoken, dropped, handedOff, finish: out[out.length - 1].choices[0].finish_reason };
 };
 
 // ---- translation: OpenAI in, Anthropic out
@@ -149,7 +151,8 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("an event with no source row is never said", !/Founders Mixer|Battery|7pm/.test(invented.content) && invented.dropped.length >= 1, invented.content);
   check("the member still hears the rest of the reply", /Want the link\?/.test(invented.content), invented.content);
   const only = await run(baseBody(), text("There's a Founders Mixer at The Battery on Friday at 7pm."));
-  check("if that was the whole reply, Cue says it will look, never silence", only.content.trim() === G.SAFE_LINE, only.content);
+  // 2026-10-31 (Royce): no scripted line on a call. Nothing left to say, nothing sent: the backup model answers in its own words.
+  check("if that was the whole reply, no fixed line: the turn hands off to the backup model, with nothing sent", only.handedOff && !only.content.trim() && only.spoken.length === 0, only);
   const said = await run(baseBody({ messages: [...baseBody().messages, { role: "assistant", content: "x" }, { role: "user", content: "What about the Founders Mixer at The Battery?" }] }), text("The Founders Mixer at The Battery sounds good."));
   check("a name the member said themselves is theirs to be repeated", /Founders Mixer/.test(said.content), said.content);
   const lowSelf = await run(baseBody({ messages: [{ role: "system", content: "You are Cue. What Cue has found: nothing." }, { role: "user", content: "hi" }, { role: "assistant", content: "There's a Founders Mixer at The Battery." }, { role: "user", content: "ok" }] }), text("That Founders Mixer at The Battery is on Friday."));
@@ -172,7 +175,9 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("'I'll put together a PDF after we hang up' is one", said("I'll put together a PDF after we hang up.") === null);
   check("'I'll send you the links tonight' is one", said("I'll send you the links tonight.") === null);
   check("a question or an offer is not", said("Want me to text you those links?") !== null && said("I can text you the link.") !== null);
-  check("multi-day work set up from their words is not (the call-task read opens that)", said("I'll set that up when we hang up and text you what I find.") !== null);
+  // 2026-10-31 (Royce): Cue's own after-call wording is a promise, whatever the work; the call-task read (services/callTasks.ts) joins
+  // the same ask in their words to it instead of opening a second task (evals/calls/proxyTimeout.ts 6).
+  check("multi-day work promised for after the call is one now (the call-task read joins it)", said("I'll set that up when we hang up and text you what I find.") === null);
   check("so is 'I'll text you what I find over the next few days' (a task they asked for, opened from their words)", said("I'll text you what I find over the next few days.") !== null);
   check("what Cue can't do is not", said("I'll send you a list of investors.") !== null && said("I'll email Maya for you.") !== null);
   const calls: any[] = []; const dues: Date[] = []; const notes: string[] = [];
@@ -198,7 +203,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   // the transcript fallback finds the same ones, once each
   const fromTranscript = C.commitmentsIn(fixture.turns.filter((t: any) => t.role === "agent").map((t: any) => String(t.message)));
   check("the real call's 'I'll text them to you right after we hang up' is found from its transcript", fromTranscript.some((s: string) => /text them to you right after we hang up/.test(s)), fromTranscript);
-  check("and its 'I'll set that up when we hang up and text you what I find' is not double-counted", !fromTranscript.some((s: string) => /what I find/.test(s)));
+  check("and its 'I'll set that up when we hang up and text you what I find' is found once, never twice", fromTranscript.filter((s: string) => /what I find/.test(s)).length === 1, fromTranscript);
   // the check that it actually went out
   const recorded: any[] = []; const checked: string[] = [];
   const mkCheck = (sent: Date | null): any => ({
@@ -301,25 +306,27 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   // 3. the real guard: a tool that needs their yes is refused without it (and runs with it)
   {
     let wrote = 0;
-    const raw = () => ({ writeDocument: aiTool({ description: "write", inputSchema: z.object({ title: z.string() }), execute: async () => { wrote++; return { ok: true }; } }) });
+    const raw = () => ({ correctWhatCoKnows: aiTool({ description: "write", inputSchema: z.object({ title: z.string() }), execute: async () => { wrote++; return { ok: true }; } }) });
     const member = { phone: "", firstName: "Jordan", city: "San Francisco", tasks: [], loops: null };
     const noYes = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t1", turnWords: "We have a partner event in November.", callWords: "We have a partner event in November.", lastCoLine: "Want me to put that in a doc?", member, dryRun: true, tools: raw() });
-    check("the call's writeDocument carries the registry's theirYes field (the same guard as texting)", JSON.stringify(noYes.defs.find((d) => d.name === "writeDocument")?.input_schema).includes("theirYes"));
-    const up = scripted([[...text("Let me write that up."), ...tool("w1", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}')], text("I'll hold off until you say so.")]);
+    check("the call's correctWhatCoKnows carries the registry's theirYes field (the same guard as texting)", JSON.stringify(noYes.defs.find((d) => d.name === "correctWhatCoKnows")?.input_schema).includes("theirYes"));
+    const up = scripted([[...text("Let me write that up."), ...tool("w1", "correctWhatCoKnows", '{"title":"Partner plan","theirYes":"yes please"}')], text("I'll hold off until you say so.")]);
     await go(baseBody(), { stream: up.stream, tools: noYes });
     const fed = up.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
     check("a tool needing their yes is refused when their words this turn hold no yes", wrote === 0 && /Quote only the words in their message that say yes/.test(fed), fed);
     const yes = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t1", turnWords: "Yes please, take the lead on it.", callWords: "Yes please, take the lead on it.", lastCoLine: null, member, dryRun: true, tools: raw() });
-    const up2 = scripted([[...tool("w2", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}', 0)], text("It's on its way by text.")]);
+    const up2 = scripted([[...tool("w2", "correctWhatCoKnows", '{"title":"Partner plan","theirYes":"yes please"}', 0)], text("It's on its way by text.")]);
     await go(baseBody(), { stream: up2.stream, tools: yes });
     check("and runs when their yes is in what they just said", wrote === 1);
     // A refused attempt can be fixed and tried once more in the same turn (the tool's own refusal says so), not a third time.
     let tries = 0;
-    const flaky = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t2", turnWords: "Yes please.", callWords: "Yes please.", lastCoLine: null, member, dryRun: true, tools: { writeDocument: aiTool({ description: "w", inputSchema: z.object({ title: z.string() }), execute: async () => { tries++; return { ok: false, error: "Not sent: fix the second line." }; } }) } });
-    const a1: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "1");
-    const a2: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "2");
-    const a3: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "3");
-    check("a refused document is retried once in the turn, then the per-turn limit holds", tries === 2 && a1.ok === false && a2.ok === false && /Already done this turn/.test(a3.error ?? ""), { tries, a3 });
+    const flaky = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t2", turnWords: "Yes please.", callWords: "Yes please.", lastCoLine: null, member, dryRun: true, tools: { correctWhatCoKnows: aiTool({ description: "w", inputSchema: z.object({ title: z.string() }), execute: async () => { tries++; return { ok: false, error: "Not sent: fix the second line." }; } }) } });
+    const a1: any = await flaky.run("correctWhatCoKnows", { title: "A", theirYes: "yes please" }, "1");
+    const a2: any = await flaky.run("correctWhatCoKnows", { title: "A", theirYes: "yes please" }, "2");
+    const a3: any = await flaky.run("correctWhatCoKnows", { title: "A", theirYes: "yes please" }, "3");
+    const a4: any = await flaky.run("correctWhatCoKnows", { title: "A", theirYes: "yes please" }, "4");
+    // (a document was the example until 2026-10-31; documents aren't on a call any more. A correction allows 2 a turn, plus the free retry.)
+    check("a refused tool gets one free retry in the turn, then the per-turn limit holds", tries === 3 && a1.ok === false && a2.ok === false && a3.ok === false && /Already done this turn/.test(a4.error ?? ""), { tries, a3 });
   }
   // 4. the step cap and the time budget
   {
@@ -327,20 +334,21 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const loopForever = scripted([[...text("One more."), ...tool("s", "startTask", '{"goal":"again"}')]]);
     const r = await go(baseBody(), { stream: loopForever.stream, tools: fakeSet(async () => { runs++; return { ok: true }; }), maxToolSteps: 2 });
     check("the step cap: at most maxToolSteps rounds of Cue's tools, then the model answers with tools off", runs === 2 && loopForever.reqs.length === 3 && loopForever.reqs[2].tool_choice?.type === "none" && !loopForever.reqs[1].tool_choice, { runs, reqs: loopForever.reqs.length });
-    check("the default cap is 3 rounds in 8 seconds", P.CALL_TOOL_STEPS === 3 && P.CALL_TOOL_BUDGET_MS === 8000);
+    check("the default cap is 3 rounds; no new round past the ceiling less one silence, or with under reserve + floor of the silence left", P.CALL_TOOL_STEPS === 3 && P.CALL_TOOL_BUDGET_MS === P.CALL_TURN_CEILING_MS - P.CALL_SILENCE_MS && P.CALL_SILENCE_MS - P.CALL_ANSWER_RESERVE_MS - P.CALL_TOOL_FLOOR_MS >= 0);
     const slow = scripted([[...text("On it."), ...tool("sl", "startTask", '{"goal":"slow"}')], text("It'll come by text.")]);
     let finished = false;
     const t0 = Date.now();
     const rounds: any[] = [];
-    const r2 = await go(baseBody(), { stream: slow.stream, toolBudgetMs: 60, onToolRound: (x: any) => rounds.push(x), tools: fakeSet(() => new Promise((res) => setTimeout(() => { finished = true; res({ ok: true }); }, 400))) });
+    const r2 = await go(baseBody(), { stream: slow.stream, toolBudgetMs: 60, onToolRound: (x: any) => rounds.push(x), tools: fakeSet(() => new Promise((res) => setTimeout(() => { finished = true; res({ ok: true }); }, P.CALL_TOOL_FLOOR_MS + 600))) });
     // The after-call health check's slow_turn (services/callHealth.ts, via routes/callLlm.ts call.turn_health).
     check("a round past the time budget says so (overBudget), for the after-call health check", rounds.length === 1 && rounds[0].overBudget === true && rounds[0].last === true, rounds);
     const fastRounds: any[] = [];
     await go(baseBody(), { stream: scripted([[...text("On it."), ...tool("f1", "startTask", '{"goal":"quick"}')], text("Done.")]).stream, onToolRound: (x: any) => fastRounds.push(x), tools: fakeSet(async () => ({ ok: true })) });
     check("a round inside the budget is not overBudget", fastRounds.length === 1 && fastRounds[0].overBudget === false, fastRounds);
     const fed = slow.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
-    check("the time budget: a slow tool doesn't hold the voice past it; the model is told it isn't back yet", Date.now() - t0 < 350 && /stillRunning/.test(fed) && slow.reqs[1].tool_choice?.type === "none" && /It'll come by text/.test(r2.content), { ms: Date.now() - t0, fed });
-    await new Promise((res) => setTimeout(res, 450));
+    // Past the budget a tool still gets CALL_TOOL_FLOOR_MS (a 93ms startTask was called "not back yet" at 0ms, 2026-10-31), no more.
+    check("the time budget: a slow tool doesn't hold the voice past it (or past the floor); the model is told it isn't back yet", Date.now() - t0 < P.CALL_TOOL_FLOOR_MS + 300 && /stillRunning/.test(fed) && slow.reqs[1].tool_choice?.type === "none" && /It'll come by text/.test(r2.content), { ms: Date.now() - t0, fed });
+    await new Promise((res) => setTimeout(res, 700));
     check("and the slow tool still finishes on its own (the action happens)", finished);
     void r;
   }
@@ -374,12 +382,12 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const member = { phone: "", firstName: "Jordan", city: "San Francisco", tasks: [], loops: null };
     const real = CT.buildCallTools({ userId: "u-real", callKey: "u-real:t", turnWords: "hi", callWords: "hi", lastCoLine: null, member: { ...member, tasks: [{ id: 3, goal: "Venue by Friday" }] }, dryRun: true, stubSearch: true });
     const none = CT.buildCallTools({ userId: "u-real", callKey: "u-real:t", turnWords: "hi", callWords: "hi", lastCoLine: null, member, dryRun: true, stubSearch: true });
-    check("with no open task, updateTask and closeTask aren't offered (the same situations as texting)", !none.names.has("updateTask") && !none.names.has("closeTask") && none.names.has("startTask"), [...none.names]);
+    check("with no open task, updateTask and closeTask aren't offered (the same situations as texting); startTask never is on a call", !none.names.has("updateTask") && !none.names.has("closeTask") && !none.names.has("startTask") && !real.names.has("startTask") && none.names.has("updateNotes"), [...none.names]);
     const C = await import("../../src/services/capabilities.js");
     // The voice read's answers only where the read can run (services/voiceRead.ts voiceReadPrereqs), as by text.
     const runsHere = (await import("../../src/services/voiceRead.js")).voiceReadPrereqs();
     check("the real call toolset is the texting tools: every one, described by its registry entry", CT.CALL_TOOL_NAMES.every((n) => real.names.has(n) || (n === "voiceRead" && !runsHere)) && real.defs.every((d) => d.description === C.toolUse(d.name, "call")), [...real.names]);
-    check("each schema is a JSON object schema with the guard's fields", real.defs.every((d: any) => d.input_schema.type === "object" && d.input_schema.properties?.why) && JSON.stringify(real.defs.find((d) => d.name === "researchBrief")?.input_schema).includes("theirYes"));
+    check("each schema is a JSON object schema with the guard's fields", real.defs.every((d: any) => d.input_schema.type === "object" && d.input_schema.properties?.why) && JSON.stringify(real.defs.find((d) => d.name === "correctWhatCoKnows")?.input_schema).includes("theirYes"));
   }
 }
 

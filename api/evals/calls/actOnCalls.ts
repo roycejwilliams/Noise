@@ -50,7 +50,7 @@ const body = () => ({
     { role: "user", content: "Can you text me that jazz thing?" },
   ],
 });
-const go = async (deps: any) => { const out: any[] = []; const spoken: string[] = []; const dropped: string[] = []; for await (const c of P.runCallLlm(body() as any, { onSpoken: (s: string) => spoken.push(s), onDropped: (s: string, w: string) => dropped.push(`${s} | ${w}`), ...deps })) out.push(c); return { spoken, dropped, content: out.map((c) => c.choices[0].delta.content ?? "").join("") }; };
+const go = async (deps: any) => { const out: any[] = []; const spoken: string[] = []; const dropped: string[] = []; let handedOff = false; try { for await (const c of P.runCallLlm(body() as any, { onSpoken: (s: string) => spoken.push(s), onDropped: (s: string, w: string) => dropped.push(`${s} | ${w}`), ...deps })) out.push(c); } catch (err) { if (err instanceof P.TurnDeadline) handedOff = true; else throw err; } return { spoken, dropped, handedOff, content: out.map((c) => c.choices[0].delta.content ?? "").join("") }; };
 const member = { phone: "+14155550123", firstName: "Jordan", city: "San Francisco", tasks: [], loops: null } as any;
 const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", caption: "Rooftop Jazz Night, tomorrow 7pm" };
 
@@ -63,9 +63,10 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   const never = CAP.ABILITIES.filter((a) => a.confirm === "affects_another_member" || a.confirm === "costs_money").map((a) => a.tool!).filter(Boolean);
   check("1. nothing that needs another member's yes or costs money is on a call", never.length > 0 && never.every((t) => !names.has(t)), never);
   check("1. intros, invites, web research, page reads, email drafts and Pinterest reads stay off calls", ["requestEventIntro", "sendInvite", "webSearch", "searchPosts", "readPage", "draftEmail", "emailPlan", "readInspo", "shareFinds", "sendReply"].every((t) => !names.has(t)));
-  check("1. sending what's on file, saving an event they're into, starting a search or a task, saving an ask: now", ["shareLink", "resendLink", "noteReaction", "searchEvents", "startTask", "saveAsk", "updateTask"].every((t) => CAP.callRunFor(t)?.run === "now"));
-  check("1. decks, pages and documents: after (started on the call, made and texted after)", ["makeDeck", "updateDeck", "makePage", "updatePage", "writeDocument"].every((t) => CAP.callRunFor(t)?.run === "after"));
-  check("1. sends get 3-5 seconds, saves and starts 3", ["shareLink", "resendLink", "resetLink"].every((t) => { const r: any = CAP.callRunFor(t); return r.ms >= 3000 && r.ms <= 5000; }) && ["saveAsk", "startTask", "updateNotes"].every((t) => (CAP.callRunFor(t) as any).ms === 3000));
+  check("1. sending what's on file, saving an event they're into, starting a search, saving an ask: now", ["shareLink", "resendLink", "noteReaction", "searchEvents", "saveAsk", "updateTask"].every((t) => CAP.callRunFor(t)?.run === "now"));
+  // 2026-10-31 (Royce): a tool whose input is long to write isn't on a call at all; it opens after the call from what they said.
+  check("1. tasks, research, decks, pages and documents: not on a call (they start right after it)", ["startTask", "researchBrief", "makeDeck", "updateDeck", "makePage", "updatePage", "writeDocument"].every((t) => CAP.callRunFor(t) === null && !names.has(t)));
+  check("1. sends get 3-5 seconds, saves and starts 3", ["shareLink", "resendLink", "resetLink"].every((t) => { const r: any = CAP.callRunFor(t); return r.ms >= 3000 && r.ms <= 5000; }) && ["saveAsk", "updateNotes"].every((t) => (CAP.callRunFor(t) as any).ms === 3000));
   // A tool handed in that isn't on the list is never offered or run, whatever the model asks for.
   let ran = 0;
   const raw = { webSearch: aiTool({ description: "w", inputSchema: z.object({ q: z.string() }), execute: async () => { ran++; return { ok: true }; } }), updateNotes: aiTool({ description: "n", inputSchema: z.object({ what: z.string().optional() }), execute: async () => ({ ok: true }) }) };
@@ -136,7 +137,8 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   check("2. F4: with no send called, \"texting it now\" is never said", !/Texting it/.test(ns.content), ns);
   const failAfterNow = scripted([[...text("Texting it to you now."), ...tool("x", "shareLink", send)], text("Anything else on your mind?"), text("That didn't go through, so I'll text it to you right after we hang up.")]);
   const fa = await go({ stream: failAfterNow.stream, tools: fake(JAZZ_FAIL) });
-  check("2. F4: the send they heard was going fails: the next words say it comes right after the call, never \"sent\"", /Texting it to you now/.test(fa.content) && fa.content.includes(P.FAILED_SEND_LINE) && !/\bsent\b/i.test(fa.content), fa);
+  // 2026-10-31 (Royce): no fixed line. The model is told the send hasn't landed and says so in its own words.
+  check("2. F4: the send they heard was going fails: Cue's own next words say it comes right after the call, never \"sent\", no fixed line", /Texting it to you now/.test(fa.content) && /right after we hang up/.test(fa.content) && !/That didn't go through, so I'll text it to you right after the call\./.test(fa.content) && !/\bsent\b/i.test(fa.content) && JSON.stringify(failAfterNow.reqs[1]).includes("didn't go through yet"), fa);
   const slowFail = scripted([[...text("Texting it to you now."), ...tool("y", "shareLink", send)], text("I'll text it to you right after the call.")]);
   const sf = await go({ stream: slowFail.stream, tools: fake(JAZZ_SLOW) });
   check("2. F4: timed out after the in-flight line: it says right after the call, with no retry needed", /right after the call/.test(sf.content) && slowFail.reqs.length === 2, { sf, reqs: slowFail.reqs.length });
@@ -201,8 +203,7 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   check("3. a quick tool past its own timeout comes back not confirmed (no stall), and keeps going on its own", Date.now() - t0 < 100 && r?.stillRunning === true && r?.ok === false && !/owed/i.test(JSON.stringify(r)), r);
   await wait(200);
   check("3. ...and its write still lands", landed);
-  const route = src("services/callTools.ts");
-  check("3. decks, pages and documents carry on in the background past a short wait, never holding the call", /plan\.run === "after" && !i\.dryRun/.test(route) && /const quick = await within\(work, plan\.waitMs\)/.test(route) && (CAP.callRunFor("makeDeck") as any).waitMs <= 3500);
+  check("3. nothing on a call runs in the background past a short wait any more (no tool is 'after')", Object.values(CAP.CALL_RUN).every((r) => r.run === "now"));
 }
 
 // ---------------------------------------------------------------- 4. right after the call: the owed link goes, nothing done twice
@@ -400,21 +401,23 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   check(`7. item 3: a claim naming the item that didn't go, in part, is held (${half.join(" | ") || "none said"}); the one that went is said`, !half.length && /Sent you the jazz one/.test(jazzOut), { half, jazzOut });
   const doneJazz = [{ kind: "send", label: "the link to Rooftop Jazz Night (https://lu.ma/rooftop-jazz)", names: ["Rooftop Jazz Night"], urls: ["https://lu.ma/rooftop-jazz"] }];
   check("7. item 3: the audit excuses \"I just sent you the jazz link\" (its word is one sent item's), not \"the rooftop bar list\" or \"the Night Market link\"", G.doneOnCallVerdict("I just sent you the jazz link.", doneJazz).done && !G.doneOnCallVerdict("I texted you the rooftop bar list.", doneJazz).done && !G.doneOnCallVerdict("I just sent you the Night Market link.", doneJazz).done);
-  // Item 4: after the in-flight line and a failed send, the approved line comes first, before the model's own question.
+  // Item 4 (2026-10-31, Royce: no scripted line on a call): after the in-flight line and a send that didn't land, the next round is told
+  // so (P.SEND_NOT_LANDED_NOTE) and says it in its own words; no fixed sentence is spoken by code. What's owed still goes after the call.
+  const FIXED = "That didn't go through, so I'll text it to you right after the call.";
   const FAIL = { ok: false, owedAfterCall: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: false }] };
-  const q = scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("So what else is on this week?")]);
+  const q = scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Hm, that didn't go through, so I'll text it to you right after we hang up. So what else is on this week?")]);
   const qo = await run1(offerBody("Yes please."), q, sendFake(FAIL));
-  check("7. item 4: the fixed after-call line is spoken, before the trailing question, in the approved words", qo.indexOf(P.FAILED_SEND_LINE) > 0 && qo.indexOf(P.FAILED_SEND_LINE) < qo.indexOf("So what else") && P.FAILED_SEND_LINE === "That didn't go through, so I'll text it to you right after the call." && !/—/.test(P.FAILED_SEND_LINE), qo);
+  check("7. item 4: no fixed line; the model's own words say it comes right after the call, before its question", !qo.includes(FIXED) && /that didn't go through, so I'll text it to you right after we hang up/.test(qo) && qo.indexOf("right after we hang up") < qo.indexOf("So what else") && !("FAILED_SEND_LINE" in P), qo);
   const sentAfter = await run1(offerBody("Yes please."), scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Sent!")]), sendFake(FAIL));
-  check("7. item 4: when the model's next words claim it went, they're held and the fixed line still stands", sentAfter.includes(P.FAILED_SEND_LINE) && !/Sent!/.test(sentAfter), sentAfter);
-  const throws = await run1(offerBody("Yes please."), scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Okay.")]), sendFake(async () => { throw new Error("boom"); }));
-  check("7. item 4: a send that throws gets the line too", throws.includes(P.FAILED_SEND_LINE), throws);
+  check("7. item 4: when the model's next words claim it went, they're held, and no fixed line stands in", !/Sent!/.test(sentAfter) && !sentAfter.includes(FIXED), sentAfter);
+  const throws = await run1(offerBody("Yes please."), scripted([[...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')], text("Okay, that didn't send, so it comes by text right after the call.")]), sendFake(async () => { throw new Error("boom"); }));
+  check("7. item 4: a send that throws: the model is told and says it in its own words", throws.includes("comes by text right after the call") && !throws.includes(FIXED), throws);
   let n = 0;
   const dies = { reqs: [] as any[], stream: (_r: any) => { n++; return (async function* () { if (n === 1) { for (const e of [...text("Texting it to you now."), ...tool("i", "shareLink", '{"what":["Rooftop Jazz Night"]}')]) yield e as any; } else { yield* (text("Part") as any[]); throw new Error("upstream 529"); } })(); } };
   const got: string[] = [];
   try { for await (const c of P.runCallLlm(offerBody("Yes please.") as any, { stream: dies.stream, tools: sendFake(FAIL) as any })) got.push(c.choices[0].delta.content as string ?? ""); } catch { /* the endpoint closes the stream with what was said */ }
-  check("7. item 4: the model failing after the send still leaves the line said (it goes before the next request)", got.join("").includes(P.FAILED_SEND_LINE), got.join(""));
-  check("7. item 4: once said, the model is told so (no repeat)", q.reqs[1]?.messages.at(-1).content.some((b: any) => b.type === "text" && b.text.includes(P.FAILED_SEND_LINE)));
+  check("7. item 4: the model failing after the send: the turn ends on what was said, with no fixed line added", !got.join("").includes(FIXED) && /Texting it to you now/.test(got.join("")), got.join(""));
+  check("7. item 4: the next round is told, once, that the send hasn't landed and goes right after the call", q.reqs[1]?.messages.at(-1).content.filter((b: any) => b.type === "text" && b.text === P.SEND_NOT_LANDED_NOTE).length === 1);
   // Item 5: a commitment that names something no tool ran for stays open.
   const jazzSend = [{ name: "shareLink", input: { what: ["Rooftop Jazz Night"] }, result: { ok: true, delivered: true, items: [{ name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", delivered: true }] } }];
   const covered: [string, string | undefined, boolean][] = [["I'll text you the jazz link.", undefined, true], ["I'll send you the gallery opening right after the call, that one's Friday.", "Want the gallery opening too?", false], ["I'll send that brunch one too.", undefined, false], ["I'll text you the brunch spot after, it's a good one.", undefined, false], ["I'll send it right after.", "Want the gallery opening too?", false], ["I'll send it right after.", "Want the jazz one?", true], ["I'll send you the gallery opening and the jazz one.", undefined, false]];

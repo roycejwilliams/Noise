@@ -82,7 +82,7 @@ const toolEv = (id: string, name: string, args: string, index = 1) => [
   { type: "content_block_stop", index },
 ];
 const scripted = (replies: any[][]) => { const reqs: any[] = []; let n = 0; return { reqs, stream: (r: any) => { reqs.push(JSON.parse(JSON.stringify(r))); const ev = replies[Math.min(n++, replies.length - 1)]; return (async function* () { for (const e of ev) yield e; })(); } }; };
-const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: string[] = [], dropped: string[] = []; for await (const c of P.runCallLlm(b, { onSpoken: (s: string) => spoken.push(s), onDropped: (s: string, w: string) => dropped.push(`${s} | ${w}`), ...deps })) out.push(c); return { spoken, dropped, content: out.map((c) => c.choices[0].delta.content ?? "").join("") }; };
+const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: string[] = [], dropped: string[] = []; let handedOff = false; try { for await (const c of P.runCallLlm(b, { onSpoken: (s: string) => spoken.push(s), onDropped: (s: string, w: string) => dropped.push(`${s} | ${w}`), ...deps })) out.push(c); } catch (err) { if (err instanceof P.TurnDeadline && err.kind === "held") handedOff = true; else throw err; } return { spoken, dropped, handedOff, content: out.map((c) => c.choices[0].delta.content ?? "").join("") }; };
 {
   const live = await go(body(), { stream: scripted([text("Got it, Ellis Works, and the date stays open. I'll keep the planning doc moving with that in mind. I'll text you what I find on venues.")]).stream, tools: { defs: [], names: new Set(), note: CT.callToolsNote({ tasks, loops: null }, []), records, run: async () => ({ ok: true }) } });
   check("the live turn: 'Got it, Ellis Works' and the planning doc line reach the voice", /Got it, Ellis Works, and the date stays open\./.test(live.content) && /planning doc moving/.test(live.content), live.content);
@@ -95,14 +95,14 @@ const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: s
   check("the retry tells Cue what it couldn't back and to say it doesn't know (they asked)", unk.reqs.length === 2 && JSON.stringify(unk.reqs[1].system).includes("names what nothing backs") && JSON.stringify(unk.reqs[1].system).includes("say plainly that you don't know it"));
   const tw = scripted([text("Maybe Harbor Lane Studio. Or Brightline Loft."), text("Maybe Harbor Lane again."), text("x")]);
   const twice = await go(body("Who else could host?"), { stream: tw.stream });
-  check("one retry per turn, never a loop; if the retry is held too, one plain line, never silence", tw.reqs.length === 2 && !/Brightline|Harbor/.test(twice.content) && twice.content.trim().length > 0, twice.content);
+  check("one retry per turn, never a loop; if the retry is held too, no fixed line: the backup model answers (nothing was sent)", tw.reqs.length === 2 && !/Brightline|Harbor/.test(twice.content) && twice.handedOff && !twice.content.trim(), twice);
   const nm = scripted([text("You said 85."), text("I don't have the number you gave me, so tell me again?")]);
   const num = await go(body("How many people did I say?"), { stream: nm.stream });
   check("an unbacked number never reaches the voice; Cue says so in its own words", !/85/.test(num.content) && /don't have the number/.test(num.content), num.content);
   const only = await go(body(), { stream: scripted([text("I'll text you what I find on venues.")]).stream });
-  check("a turn that was only an unasked promise says a plain 'Got it.', never a new promise in its place", only.content.trim() === G.HELD_LINE && only.spoken.join(" ") === G.HELD_LINE, only);
+  check("a turn that was only an unasked promise says no line of ours and no promise: the backup model answers", only.handedOff && !only.content.trim() && only.spoken.length === 0, only);
   const ev = await go(body("Anything happening this week?"), { stream: scripted([text("There's a mixer at Foundry Hall on Friday.")]).stream });
-  check("an unbacked event offer is still held with the safe line (unchanged)", ev.content.trim() === G.SAFE_LINE, ev.content);
+  check("an unbacked event offer is held, and the backup model answers instead (no fixed line, 2026-10-31)", ev.handedOff && !/Foundry/.test(ev.content), ev);
   const backed = await go(body("We're doing about 60 people at Ellis Works."), { stream: scripted([text("Sixty at Ellis Works works well. 60 is a good size for a talk.")]).stream });
   check("backed names and numbers pass untouched", /Ellis Works works well\. 60 is a good size/.test(backed.content) && !backed.dropped.length, backed);
   // A tool result this turn backs what follows it.
@@ -158,7 +158,7 @@ const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: s
 }
 
 // ---- the spoken line rules still hold on the replacement lines
-for (const l of [G.UNSURE_NAME, G.UNSURE_NUMBER, G.HELD_LINE]) check(`"${l}" is speakable and narrates nothing`, S.speakable(l) === l && S.narratesInternalState(l) === null);
+check("no fixed spoken line is left to say on a call (2026-10-31, Royce)", !["UNSURE_NAME", "UNSURE_NUMBER", "HELD_LINE", "SAFE_LINE"].some((k) => k in G) && !("FAILED_SEND_LINE" in P));
 
 // ---- 2026-10-08 live call: "Should I keep sending PDFs for now?" was replaced with "I'm not sure of the name."
 {
