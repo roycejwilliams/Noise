@@ -27,6 +27,7 @@ import { createCallLlmRouter } from "../../api/src/routes/callLlm.js";
 import { WebSocketServer } from "ws";
 import { handleGptLiveStream, twilioStreamSignatureOk } from "../../api/src/services/gptLiveBridge.js";
 import { gptLiveStreamUrl, isGptLiveStreamPath } from "../../api/src/services/gptLive.js";
+import { handleTwilioStream, isVoiceStreamPath, voiceStreamSignatureOk, type SocketLike } from "../../api/src/services/mediaStreamBridge.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
@@ -111,6 +112,28 @@ async function main() {
         handleGptLiveStream(ws as any);
       } catch (err: any) {
         console.error("gpt-live: stream handler failed:", err?.message ?? err);
+        ws.close();
+      }
+    });
+  });
+  // The voice read's listen-only fork of the caller's audio (api/src/services/mediaStreamBridge.ts), as in api/src/server.ts: this
+  // service answers test.copatible.com, where withVoiceReadFork points Twilio's <Start><Stream>, so without this the fork never
+  // connects. Twilio's signature on the handshake is checked before the upgrade; an unsigned or wrongly signed stream is refused,
+  // and the call goes on without the read either way.
+  const voiceStreamWss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+  httpServer.on("upgrade", (req, socket, head) => {
+    if (!isVoiceStreamPath(req.url)) return;
+    if (!voiceStreamSignatureOk(req.headers["x-twilio-signature"])) {
+      console.warn("voiceRead: stream refused (Twilio signature missing or invalid)");
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    voiceStreamWss.handleUpgrade(req, socket, head, (ws) => {
+      try {
+        handleTwilioStream(ws as unknown as SocketLike);
+      } catch (err: any) {
+        console.error("voiceRead: stream handler failed (the call is unaffected):", err?.message ?? err);
         ws.close();
       }
     });
