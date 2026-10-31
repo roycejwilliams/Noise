@@ -119,13 +119,18 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
     m.tw.close();
   }
   // A real mutual goodbye: Cue's thinking says goodbye and calls end_call; once the goodbye has played and the grace passed, it ends.
-  const bye = bridge({ answer: () => "Talk soon, Jordan. Good luck tomorrow.|END", endGraceMs: 30 });
+  // GPT-Live says its own short goodbye at once (review of #331: a delegated goodbye arrived 4-5.5 s late); the turn is still delegated
+  // and the thinking only decides whether the call ends (end_call with no text).
+  check("GPT-Live is told to say its own short goodbye right away and still hand the turn over; the thinking, to end with no text", /say a short goodbye of your own right away, and still generate <\|SpawnThinking\|>: your thinking only decides whether the call ends/.test(callFor().instructions) && /if the call should end, use your tool that ends the call and write nothing/.test(callFor().backendSystem));
+  const bye = bridge({ answer: () => "|END", endGraceMs: 30 });
   await start(bye, "live_bye");
-  await turn(bye, "b1", "Okay, I should get going. Talk soon.", 0);
-  check("a real goodbye: the goodbye goes to GPT-Live (commentary) and nothing ends before it's said", bye.ai.sent.some((m: any) => m.event_id === "answer_b1" && /Talk soon, Jordan/.test(m.content)) && bye.ai.of("session.close").length === 0);
-  say(bye, "cue", "Talk soon, Jordan. Good luck tomorrow.", 2000);
+  say(bye, "member", "Okay, I should get going. Talk soon.", 0);
+  say(bye, "cue", "Talk soon, Jordan. Good luck tomorrow.", 1200); // GPT-Live's own goodbye, at once
   bye.ai.in({ type: "session.output_audio.delta", delta: Buffer.alloc(8000, 9).toString("base64") }); // a second of it, still playing
-  await sleep(60);
+  bye.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "b1", target: "client" } });
+  await sleep(40);
+  check("a real goodbye: nothing is sent back for the turn (no answer to repeat the goodbye, no \"no answer\" note)", !bye.ai.sent.some((m: any) => m.event_id === "answer_b1") && bye.ai.of("session.close").length === 0, bye.ai.sent.filter((m: any) => m.event_id === "answer_b1"));
+  await sleep(20);
   check("...not while the goodbye is still playing", bye.ai.of("session.close").length === 0);
   await sleep(1100);
   check("...then, played and the grace passed, Cue's end_call ends the call", bye.ai.of("session.close").length === 1);
@@ -133,14 +138,14 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   check("...recorded as ended by goodbye; the Twilio stream closes (the <Connect> action hangs up)", bye.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "goodbye" && bye.tw.readyState === 3);
   // The guards, on facts only.
   const refusedWith = (b: ReturnType<typeof bridge>) => b.records.filter((r) => r.decision === "call.end_refused").map((r) => r.action);
-  const asked = bridge({ answer: () => "Bye for now. Same time next week?|END", endGraceMs: 20 });
+  const asked = bridge({ answer: () => "|END", endGraceMs: 20 });
   await start(asked, "live_asked");
   await turn(asked, "a1", "Okay bye.", 0);
   say(asked, "cue", "Bye for now. Same time next week?", 2000);
   await sleep(80);
   check("guard: Cue's last line ends in a question: refused (call.end_refused cue_asked), the call stays open", asked.ai.of("session.close").length === 0 && refusedWith(asked).join() === "cue_asked", refusedWith(asked));
   asked.tw.close();
-  const after = bridge({ answer: () => "Bye, Jordan.|END", endGraceMs: 20 });
+  const after = bridge({ answer: () => "|END", endGraceMs: 20 });
   await start(after, "live_after");
   await turn(after, "f1", "Okay bye.", 0);
   say(after, "cue", "Bye, Jordan.", 2000);
@@ -149,10 +154,18 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   check("guard: they said something after Cue's last line: refused (member_spoke_after)", after.ai.of("session.close").length === 0 && refusedWith(after).join() === "member_spoke_after", refusedWith(after));
   after.tw.close();
   check("guard: they're speaking now (heard within the grace): refused (member_speaking)", B.endGuard({ cueLast: { text: "Bye, Jordan.", startMs: 2000 }, memberAfterMs: 0, memberHeardAgoMs: 10, graceMs: 2000 }) === "member_speaking" && B.endGuard({ cueLast: { text: "Bye, Jordan.", startMs: 2000 }, memberAfterMs: 0, memberHeardAgoMs: 5000, graceMs: 2000 }) === null && B.endGuard({ cueLast: { text: "Bye, Jordan?", startMs: 2000 }, memberAfterMs: null, memberHeardAgoMs: null, graceMs: 2000 }) === "cue_asked");
-  const never = bridge({ answer: () => "Bye, Jordan.|END", endGraceMs: 20, endWaitMs: 50 });
+  const never = bridge({ answer: () => "|END", endGraceMs: 20, endWaitMs: 50 });
   await start(never, "live_never");
   await turn(never, "n1", "Okay bye.", 0);
   await sleep(120);
+  const stay = bridge({ answer: () => "Before you go, did the landlord get back to you?", endGraceMs: 20 });
+  await start(stay, "live_stay");
+  say(stay, "member", "Okay bye.", 0);
+  say(stay, "cue", "Bye, Jordan.", 1200);
+  stay.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "s1", target: "client" } });
+  await sleep(120);
+  check("no end_call from the thinking: nothing ends, and its answer carries the conversation on", stay.ai.of("session.close").length === 0 && stay.ai.sent.some((m: any) => m.event_id === "answer_s1" && /landlord/.test(m.content)));
+  stay.tw.close();
   check("an end_call whose goodbye is never said is dropped (no_goodbye), never a silent hang-up", never.ai.of("session.close").length === 0 && refusedWith(never).join() === "no_goodbye", refusedWith(never));
   never.tw.close();
 }
