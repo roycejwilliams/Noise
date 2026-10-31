@@ -50,7 +50,7 @@ export function providerOf(id: string | null | undefined): Provider | null {
 // COPY: awaiting Royce's OK (PR "Copy" section). Team-only lines, to TEAM_ALERT_PHONE; never to a member.
 export const KEY_DEAD_TEXT: Record<Provider, string> = {
   anthropic: "Cue alert: Anthropic is rejecting Cue's API key (ANTHROPIC_API_KEY). Replies, calls and background work fail until the key is replaced on Railway.",
-  openai: "Cue alert: OpenAI is rejecting Cue's API key (OPENAI_API_KEY). Memory search fails until the key is replaced on Railway.",
+  openai: "Cue alert: OpenAI is rejecting Cue's API key (OPENAI_API_KEY). Calls on GPT-Live and memory search fail until the key is replaced on Railway.",
   jev: "Cue alert: the AI gateway is rejecting Cue's key (AI_GATEWAY_API_KEY). Jev reads fail until the key is replaced on Railway.",
 };
 

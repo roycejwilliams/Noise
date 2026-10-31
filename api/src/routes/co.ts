@@ -762,12 +762,15 @@ export async function runGptLivePostCall(r: import("../services/gptLiveBridge.js
   import("../services/offerGuard.js").then((m) => m.recordOfferSourceCheck(userId, conversationId, turns, given)).catch(() => {});
   let ended: Awaited<ReturnType<typeof processEndedCall>>;
   try {
-    ended = await processEndedCall({ userId, callKey: conversationId, offered: given.findsNow, offerSource: { turns, given }, startedAt: r.startedAt, endedAt: r.endedAt, twilioMetadata: r.call.callSid ? { call_sid: r.call.callSid } : null, load: async () => ({ transcript, recordingUrl: null }) });
+    // No voice read on GPT-Live calls yet (the Hume tee is its own PR), so no ask for one after them.
+    ended = await processEndedCall({ userId, callKey: conversationId, offered: given.findsNow, offerSource: { turns, given }, startedAt: r.startedAt, endedAt: r.endedAt, twilioMetadata: r.call.callSid ? { call_sid: r.call.callSid } : null, load: async () => ({ transcript, recordingUrl: null }), askVoiceRead: false });
   } catch (err) {
     flagNotStored({ userId, conversationId, startedAt: r.startedAt, endedAt: r.endedAt }).catch(() => {});
     throw err;
   }
-  recordCallHealth({ userId, conversationId, turns, durationSecs: r.seconds, terminationReason: r.reason, status: null, startedAt: r.startedAt, endedAt: r.endedAt }).catch(() => {});
+  // OpenAI ending the session itself (its safety filter, a lost connection, its own time limit) is an abnormal end, as an ElevenLabs
+  // error is (gptLive.ts liveTermination).
+  recordCallHealth({ userId, conversationId, turns, durationSecs: r.seconds, terminationReason: G.liveTermination(r.endedBy, r.reason), status: null, startedAt: r.startedAt, endedAt: r.endedAt }).catch(() => {});
   const cueLines = turns.filter((t) => t.role !== "user").map((t) => t.message);
   const labelled = cueLines.filter((m) => !checkNoEmotionLabelOnCall(m).pass);
   if (labelled.length) recordDecision({ layer: 8, decision: "call.emotion_label", userId, outcome: "skip", action: "named_their_feeling", proposal: { conversationId, lines: labelled.slice(0, 5) }, reason: checkNoEmotionLabelOnCall(labelled[0]).reason ?? null }).catch(() => {});
@@ -910,6 +913,9 @@ async function processEndedCallInScope(o: {
   // What the offer source check reads (services/offerGuard.ts unsourcedInCall): the call's turns and what it was given. Run for the
   // audit with the finds from the call's ledger added (harness/callGrounding.ts offerSourceCorrections).
   offerSource?: { turns: { role?: string; message?: string | null }[]; given: { firstName?: string; contextSummary?: string; findsNow?: string; rightNow?: string } };
+  // false: don't queue the voice read's ask after this call (GPT-Live calls, 2026-10-31: the read can't run on them yet, so the ask
+  // would offer something that doesn't happen). Default: asked as before.
+  askVoiceRead?: boolean;
 }): Promise<{ status: number; body: unknown; stored?: { transcriptSha256: string }; unstored?: true }> {
   const user_id = o.userId;
   const chat_id = o.callKey;
@@ -1193,7 +1199,7 @@ async function processEndedCallInScope(o: {
       }
       // After their first call: the voice read's one question, queued once ever, only where the read can run and only if it was
       // never asked or answered (services/voiceReadConsent.ts). Sent by the proactive queue; no answer means it stays off.
-      if (callUser) import("../services/voiceReadConsent.js").then((m) => m.queueVoiceReadAsk(user_id)).catch(() => {});
+      if (callUser && o.askVoiceRead !== false) import("../services/voiceReadConsent.js").then((m) => m.queueVoiceReadAsk(user_id)).catch(() => {});
 
       // The transcript is stored and the processing completed: what ElevenLabs' copy may be deleted against (the raw transcript,
       // the one stored above).

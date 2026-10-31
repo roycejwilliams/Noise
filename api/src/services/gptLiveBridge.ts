@@ -15,8 +15,9 @@
 import { timingSafeEqual } from "crypto";
 import WebSocket from "ws";
 import { recordDecision, type HarnessDecision } from "../harness/core.js";
-import { anthropicStream } from "./callLlmProxy.js";
-import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, openSessions, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type Upstream } from "./gptLive.js";
+import { guardCallMessages } from "./whatCoKnows.js";
+import { anthropicStream, MEMBER_CLOSING } from "./callLlmProxy.js";
+import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, openSessions, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -31,7 +32,7 @@ export function twilioStreamSignatureOk(signature: string | string[] | undefined
 }
 
 // endedBy: who or what ended the call, so the comparison can set aside endings ElevenLabs has no match for.
-export type EndedBy = "caller_hangup" | "session_cap" | "budget_cap" | "openai_closed" | "not_started";
+export type EndedBy = "caller_hangup" | "session_cap" | "budget_cap" | "goodbye" | "silence" | "openai_closed" | "not_started";
 export type LiveResult = { call: LiveCall; sessionId: string; turns: LiveTurn[]; startedAt: Date; endedAt: Date; seconds: number | null; reason: string; endedBy: EndedBy };
 export type LiveDeps = {
   connectOpenAI: (apiKey: string) => SocketLike;
@@ -46,6 +47,15 @@ export type LiveDeps = {
   maxSessionMs: number;
   startTimeoutMs: number;
   heartbeatMs: number;
+  silenceEndMs: number;
+  goodbyeQuietMs: number;
+  wrapUpMs: number;
+  // The live guards for this member (services/whatCoKnows.ts forgottenRows + guardCallMessages), read at most every guardCacheMs.
+  guardRows: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
+  guardMessages: (messages: Parameters<MessageGuard>[0], rows: import("./whatCoKnows.js").ForgottenRow[]) => Parameters<MessageGuard>[0];
+  // OpenAI's safety filter closed the call during a safety moment: the existing safety path (services/safety.ts recordSafetyConcern:
+  // the team alert, the hold, and the gentle check-in the next day).
+  safetyCut: (call: LiveCall) => Promise<void>;
 };
 const defaults = (): LiveDeps => ({
   connectOpenAI: (key) => new WebSocket(GPT_LIVE.url, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: GPT_LIVE.startTimeoutMs, perMessageDeflate: false }) as unknown as SocketLike,
@@ -60,6 +70,15 @@ const defaults = (): LiveDeps => ({
   maxSessionMs: GPT_LIVE.maxSessionMs,
   startTimeoutMs: GPT_LIVE.startTimeoutMs,
   heartbeatMs: GPT_LIVE.heartbeatMs,
+  silenceEndMs: GPT_LIVE.silenceEndMs,
+  goodbyeQuietMs: GPT_LIVE.goodbyeQuietMs,
+  wrapUpMs: GPT_LIVE.wrapUpMs,
+  guardRows: (userId) => import("./whatCoKnows.js").then((W) => W.forgottenRows(userId)).catch(() => []),
+  guardMessages: (messages, rows) => guardCallMessages(messages, rows),
+  safetyCut: async (call) => {
+    const S = await import("./safety.js");
+    await S.recordSafetyConcern(call.userId, call.firstName || null, "co", "a GPT-Live call was cut by OpenAI's safety filter during a safety moment");
+  },
 });
 let override: Partial<LiveDeps> | null = null;
 export const setLiveDeps = (d: Partial<LiveDeps> | null): void => void (override = d);
@@ -67,6 +86,16 @@ const OPEN = 1;
 const parse = (raw: unknown): any => { try { return JSON.parse(typeof raw === "string" ? raw : Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw)); } catch { return null; } };
 const send = (ws: SocketLike | null, m: unknown) => { try { if (ws && ws.readyState === OPEN) ws.send(JSON.stringify(m)); } catch { /* the close handler ends it */ } };
 const timer = (fn: () => void, ms: number) => { const t = setTimeout(fn, ms); (t as any).unref?.(); return t; };
+
+// Pure: both have said goodbye and nothing real was said after: the latest member turn and the latest Cue turn are both closings
+// (callLlmProxy.ts MEMBER_CLOSING, the words the call brain and call health already read as a goodbye), and the last turn is one of them.
+export function bothSaidGoodbye(frags: Frag[]): boolean {
+  const turns = turnsFrom(frags).filter((t) => !listeningSound(t.text));
+  const lastMember = turns.map((t) => t.who).lastIndexOf("member");
+  const lastCue = turns.map((t) => t.who).lastIndexOf("cue");
+  if (lastMember < 0 || lastCue < 0) return false;
+  return MEMBER_CLOSING.test(turns[lastMember].text) && MEMBER_CLOSING.test(turns[lastCue].text) && Math.max(lastMember, lastCue) === turns.length - 1;
+}
 
 export function handleGptLiveStream(twilio: SocketLike): void {
   const d: LiveDeps = { ...defaults(), ...(override ?? {}) };
@@ -89,6 +118,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   const timers: ReturnType<typeof setTimeout>[] = [];
   let pump: ReturnType<typeof setInterval> | null = null;
   let beat: ReturnType<typeof setInterval> | null = null;
+  let quiet: ReturnType<typeof setInterval> | null = null;
+  let lastHeard = t0; // the last words either side said (transcripts), for the silence and goodbye ends
+  let safetyMoment = false; // a delegated turn on this call touched their safety
+  let guardAt = 0, guardRowsP: Promise<import("./whatCoKnows.js").ForgottenRow[]> | null = null;
   const elapsedSecs = () => Math.round((d.now() - startedAt) / 1000);
 
   // Cue's audio to Twilio, never more than leadMs ahead of real time (8 bytes of mu-law per ms).
@@ -122,6 +155,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     for (const t of timers) clearTimeout(t);
     if (pump) clearInterval(pump);
     if (beat) clearInterval(beat);
+    if (quiet) clearInterval(quiet);
     if (slotKey) openSessions.delete(slotKey);
     try { ai?.close(); } catch { /* gone */ }
     try { if (twilio.readyState === OPEN) twilio.close(); } catch { /* gone */ }
@@ -136,6 +170,11 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     d.record({ layer: 8, decision: "call.gpt_live_session", userId: call.userId, outcome: "act", action: endedBy, proposal: { provider: "gpt-live", sessionId, seconds: secs, confirmed: seconds != null, endedBy, reason, capMs: call.capMs ?? null, delegations, staleDropped, clears, maxQueuedMs, turns: turns.length } });
     for (const gapMs of replyGaps(turns)) d.record({ layer: 8, decision: "call.turn_latency", userId: call.userId, outcome: "act", action: "gpt_live_voice", proposal: { provider: "gpt-live", sessionId, gapMs } });
     d.log(`gpt-live: session ${sessionId} ended (${endedBy}: ${reason}) ${secs}s, ${turns.length} turns, ${delegations} delegations, ${clears} clears`);
+    // OpenAI's safety filter ended the call while it was on their safety: the team hears now and they get the safety path's follow-up.
+    if (endedBy === "openai_closed" && reason === "content" && safetyMoment) {
+      d.record({ layer: 8, decision: "call.gpt_live_safety_cut", userId: call.userId, outcome: "act", action: "safety_path", proposal: { provider: "gpt-live", sessionId } });
+      d.safetyCut(call).catch((err: any) => d.log(`gpt-live: safety path failed for ${sessionId}: ${err?.message ?? err}`));
+    }
     d.postCall({ call, sessionId, turns, startedAt: new Date(startedAt), endedAt: new Date(d.now()), seconds: secs, reason, endedBy: endedBy! }).catch((err: any) => d.log(`gpt-live: post-call failed for ${sessionId}: ${err?.message ?? err}`));
   };
   // Ask OpenAI to close, keep reading until session.closed (final usage), then finish. Every ending (hang-up, either cap) goes here.
@@ -164,11 +203,18 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const seenUpTo = Math.max(offsetMs, ...turns.filter((t) => t.who === "member").map((t) => t.startMs));
     let dropped = 0, error = false;
     const c = call;
+    // The live guards, read at most every guardCacheMs: a correction or removal texted during the call reaches this turn.
+    const guard: MessageGuard = async (messages) => {
+      if (!guardRowsP || d.now() - guardAt > GPT_LIVE.guardCacheMs) { guardAt = d.now(); guardRowsP = d.guardRows(c.userId).catch(() => []); }
+      const rows = await guardRowsP;
+      return rows.length ? d.guardMessages(messages, rows) : messages;
+    };
     const out = await thinkOnCall(c, turns, d.upstream, (sentence, why) => {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
-    }).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false }; });
+    }, guard).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false }; });
+    if (out.safety) safetyMoment = true;
     // The caller has moved on (said something new since this turn was handed over): the answer is to a question no longer asked.
     const stale = turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
     if (stale) staleDropped++;
@@ -198,7 +244,20 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         (beat as any).unref?.();
         for (const a of early.splice(0)) send(ai, { type: "session.input_audio.append", audio: a });
         // Its own cap, set at admission: 30 minutes, or less when the month's team minutes have less left (gptLive.ts admitSession).
+        // One activity timer (OpenAI: "use an application-controlled inactivity timeout"; GPT-Live has no end-call tool). With nothing
+        // playing: silenceEndMs with nothing said either way ends the call (the ElevenLabs agent's silence_end_call_timeout), and once
+        // both have said goodbye and nothing more is said for goodbyeQuietMs, it ends (ElevenLabs' end_call after a mutual goodbye).
+        lastHeard = d.now();
+        quiet = setInterval(() => {
+          const now = d.now();
+          if (queued || playhead > now) return;
+          if (now - lastHeard >= d.silenceEndMs) return close("silence", "silence");
+          if (now - lastHeard >= d.goodbyeQuietMs && bothSaidGoodbye(frags)) close("goodbye", "goodbye");
+        }, Math.max(10, Math.min(500, Math.floor(Math.min(d.goodbyeQuietMs, d.silenceEndMs) / 4))));
+        (quiet as any).unref?.();
         const capMs = Math.min(call.capMs ?? d.maxSessionMs, d.maxSessionMs);
+        // About a minute before the cap, GPT-Live is asked to bring the call to a close in its own words (no set line).
+        if (capMs > 2 * d.wrapUpMs) timers.push(timer(() => send(ai, { type: "session.instructions.append", event_id: "wrap_up", delegation_id: null, content: WRAP_UP }), capMs - d.wrapUpMs));
         timers.push(timer(() => close(call?.budgetLimited ? "budget cap" : "session cap", call?.budgetLimited ? "budget_cap" : "session_cap"), capMs));
         return;
       }
@@ -214,6 +273,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       case "session.output_transcript.delta": {
         if (typeof m.delta !== "string") return;
         const member = m.type === "session.input_transcript.delta";
+        lastHeard = d.now();
         frags.push({ who: member ? "member" : "cue", text: m.delta, startMs: Number(m.start_ms) || 0, endMs: Number(m.end_ms) || 0 });
         if (!member) { memberRun = ""; cleared = false; return; }
         memberRun += m.delta;

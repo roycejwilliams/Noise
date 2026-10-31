@@ -44,6 +44,10 @@ export const GPT_LIVE = {
   catchUpMs: 400, // a delegation waits at most this long for the transcript to reach where it was made
   commentaryMaxChars: 1600, // OpenAI's limit is 500 tokens per append
   closeWaitMs: 5000, // after session.close, how long to wait for session.closed
+  silenceEndMs: AGENT_DEFAULTS.silenceEndCallSecs * 1000, // nothing said either way this long ends the call, as on the ElevenLabs agent
+  goodbyeQuietMs: 4000, // after both have said goodbye, this long with nothing more said ends the call (Cue can't hang up itself)
+  wrapUpMs: 60_000, // how long before a session's cap GPT-Live is asked to wrap up
+  guardCacheMs: 20_000, // the live guards are read at most this often per call, as on the ElevenLabs proxy
 } as const;
 export const GPT_LIVE_STREAM_PATH = "/co/gpt-live/stream";
 export const gptLiveVoice = (env: NodeJS.ProcessEnv = process.env): string => env.GPT_LIVE_VOICE?.trim() || GPT_LIVE.defaultVoice;
@@ -292,10 +296,13 @@ export function delegationRequest(call: LiveCall, turns: LiveTurn[]): OaiRequest
 }
 export type Upstream = (req: ARequest, userId: string) => AsyncIterable<AnthropicEvent>;
 // One delegated turn through the call brain, with no tools: it can only think and answer. Its sentences are cleaned and checked
-// as on the ElevenLabs path (speakable, offer guard); what it held back is reported. safety: the turn touched their safety
-// (callLlmProxy.ts safetyCall, over the request and the answer), so the bridge has its words said exactly (sayExactly).
-export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void) {
+// as on the ElevenLabs path (speakable, offer guard); what it held back is reported. guard: the live guards (services/whatCoKnows.ts
+// guardCallMessages), so a correction or removal made by text during the call reaches the very next turn. safety: the turn touched
+// their safety (callLlmProxy.ts safetyCall, over the request and the answer), so its words are said exactly (SAY_EXACTLY).
+export type MessageGuard = (messages: OaiRequest["messages"]) => Promise<OaiRequest["messages"]>;
+export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard) {
   const req = delegationRequest(call, turns);
+  if (guard) req.messages = await guard(req.messages).catch(() => req.messages);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped })) {
@@ -309,6 +316,8 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
 // A safety turn's answer goes as a trusted instruction to say it word for word (OpenAI: session.instructions.append "can be used to
 // request exact spoken wording"; commentary is paraphrased), so crisis resources like 988 are never reworded.
 export const sayExactly = (text: string): string => `Say this to them now, exactly as written and in full, before anything else: "${text}"`;
+// About a minute before the session's cap (OpenAI's guidance: the app ends the session; ElevenLabs had max_conversation_duration_message).
+export const WRAP_UP = "About a minute is left on this call. Bring it to a warm close now, in your own words, and don't mention any time limit.";
 
 // ---------------------------------------------------------------- one-time stream ids (in memory: Twilio logs TwiML)
 
@@ -416,6 +425,17 @@ export async function writeMinutes(sessionId: string, seconds: number, endedBy: 
       [sessionId, Math.round(seconds * 10) / 10, endedBy],
     )
     .catch((err: any) => console.error(`gpt-live: minutes for ${sessionId} not written (${String(err?.message ?? err).slice(0, 80)})`));
+}
+
+// ---------------------------------------------------------------- how the call ended, for call health
+
+// Pure: the termination call_health reads (services/callHealth.ts abnormal_end matches /error|fail|time ?out/). A close we asked for
+// (hang-up, a cap, goodbye, silence) is a normal end. OpenAI closing on its own is not: "content" (its safety filter),
+// "connection_lost", "expired", or the socket dropping before session.closed. Those read "failed: ..." so they flag as abnormal_end.
+export const OPENAI_NORMAL_CLOSE = new Set(["close_requested", "remote_hangup"]);
+export function liveTermination(endedBy: string, reason: string): string {
+  if (endedBy !== "openai_closed") return reason;
+  return OPENAI_NORMAL_CLOSE.has(reason) ? reason : `failed: GPT-Live closed the session (${reason || "unknown"})`;
 }
 
 // ---------------------------------------------------------------- the grade
