@@ -155,16 +155,23 @@ const wordBacked = (w: string, src: Source) => stems(w).some((x) => src.hay.incl
 // crisis text line). Always backed: found 2026-10-31, the number check below dropped "you can call or text 988 right now" from a
 // crisis turn, because 988 lives in the prompt's guardrails, not in what Cue knows about them.
 export const CRISIS_NUMBERS: ReadonlySet<string> = new Set(["988", "911", "741741"]);
+// Pure: the sentence gives a crisis resource (review of #330: "$988 a month", "room 911" or "about 741741 people" are just numbers and
+// stay checked). Call, text or dial one of the crisis numbers (spelled 9-8-8 or "nine eight eight" too), or the line named.
+export const CRISIS_RESOURCE_LINE = /\b(?:call|text|dial|reach|contact)\b[^.!?]{0,40}?(?:\b988\b|\b911\b|\b741741\b|\b9-8-8\b|\bnine[- ]eight[- ]eight\b)|\b988\s+(?:suicide|lifeline|crisis)\b|\bcrisis (?:text )?line\b/i;
+// The crisis text line's keyword ("text HOME to 741741") and the lifeline's own name, on such a line only.
+const CRISIS_WORDS = /^(?:home|988|911|741741|lifeline|crisis|suicide|(?:the )?988 suicide (?:&|and) crisis lifeline|crisis text line)$/i;
 export function spokenProblem(sentence: string, src: SpokenSources): SpokenProblem | null {
   const s = sentence.replace(/\[[a-z][a-z ]*\]\s*/gi, "").trim();
   if (!s) return null;
+  const crisis = CRISIS_RESOURCE_LINE.test(s);
   const mentions = mentionsIn(s);
-  const bad = unbackedMentions(mentions, src.all);
+  const bad = unbackedMentions(mentions, src.all).filter((m) => !(crisis && CRISIS_WORDS.test(m.text.trim())));
   // A clock time makes it an event placement (placesAnEvent), held as before; a name elsewhere is said as not known.
   if (bad.length) return { kind: placesAnEvent(s) ? "event" : "name", missing: bad.map((m) => m.text) };
   // Clock times were checked as mentions; the rest of the digits as numbers.
   // A number has to come from what Co knows about them, what they said, a tool or Co's records: never the prompt's own examples.
-  const nums = [...numbersOf(s.replace(new RegExp(TIME.source, "gi"), " "))].filter((n) => !src.asked.nums.has(n) && !CRISIS_NUMBERS.has(n));
+  const digits = (crisis ? s.replace(/\b9-8-8\b/g, "988") : s).replace(new RegExp(TIME.source, "gi"), " ");
+  const nums = [...numbersOf(digits)].filter((n) => !src.asked.nums.has(n) && !(crisis && CRISIS_NUMBERS.has(n)));
   if (nums.length) return { kind: "number", missing: nums };
   if (promisesLaterWork(s)) {
     const missing = promiseTopic(s).filter((w) => !wordBacked(w, src.asked));

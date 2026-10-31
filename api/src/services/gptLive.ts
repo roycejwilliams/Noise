@@ -21,7 +21,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { CALL_CRITERIA } from "./callEvals.js";
-import { runCallLlm, safetyCall, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
+import { runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
 import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { parseModelJson } from "./modelJson.js";
@@ -311,11 +311,16 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   }
   const said = stripCues(text).replace(/\s+/g, " ").trim().slice(0, GPT_LIVE.commentaryMaxChars);
   const safety = safetyCall(req) || (!!said && safetyCall({ ...req, messages: [...req.messages, { role: "assistant", content: said }] }));
-  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety };
+  // Said exactly only when this answer itself carries a crisis or safety line (review of #330: safetyCall reads the whole call, so after
+  // one safety mention every later answer went out word for word, "what's on for Friday?" included).
+  const exact = !!said && SAFETY_LINE.test(said);
+  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact };
 }
 // A safety turn's answer goes as a trusted instruction to say it word for word (OpenAI: session.instructions.append "can be used to
 // request exact spoken wording"; commentary is paraphrased), so crisis resources like 988 are never reworded.
-export const sayExactly = (text: string): string => `Say this to them now, exactly as written and in full, before anything else: "${text}"`;
+// OpenAI's docs don't say whether an appended instruction stays for the rest of the session, and give no way to clear one, so it scopes
+// itself: once, now, and not again unless they ask.
+export const sayExactly = (text: string): string => `Say this to them now, once, exactly as written and in full, before anything else: "${text}" After you've said it, don't say it again unless they ask.`;
 // About a minute before the session's cap (OpenAI's guidance: the app ends the session; ElevenLabs had max_conversation_duration_message).
 export const WRAP_UP = "About a minute is left on this call. Bring it to a warm close now, in your own words, and don't mention any time limit.";
 
