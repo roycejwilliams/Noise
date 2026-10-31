@@ -151,6 +151,10 @@ const stems = (w: string) => [w, w.replace(/'s$/, ""), w.replace(/ies$/, "y"), w
 const wordBacked = (w: string, src: Source) => stems(w).some((x) => src.hay.includes(` ${x}`));
 
 // Pure: what in one spoken sentence nothing backs, or null.
+// The crisis numbers the safety rules tell Cue to give (services/coCore.ts safety: 988, and 911 for immediate danger; 741741 is the
+// crisis text line). Always backed: found 2026-10-31, the number check below dropped "you can call or text 988 right now" from a
+// crisis turn, because 988 lives in the prompt's guardrails, not in what Cue knows about them.
+export const CRISIS_NUMBERS: ReadonlySet<string> = new Set(["988", "911", "741741"]);
 export function spokenProblem(sentence: string, src: SpokenSources): SpokenProblem | null {
   const s = sentence.replace(/\[[a-z][a-z ]*\]\s*/gi, "").trim();
   if (!s) return null;
@@ -160,7 +164,7 @@ export function spokenProblem(sentence: string, src: SpokenSources): SpokenProbl
   if (bad.length) return { kind: placesAnEvent(s) ? "event" : "name", missing: bad.map((m) => m.text) };
   // Clock times were checked as mentions; the rest of the digits as numbers.
   // A number has to come from what Co knows about them, what they said, a tool or Co's records: never the prompt's own examples.
-  const nums = [...numbersOf(s.replace(new RegExp(TIME.source, "gi"), " "))].filter((n) => !src.asked.nums.has(n));
+  const nums = [...numbersOf(s.replace(new RegExp(TIME.source, "gi"), " "))].filter((n) => !src.asked.nums.has(n) && !CRISIS_NUMBERS.has(n));
   if (nums.length) return { kind: "number", missing: nums };
   if (promisesLaterWork(s)) {
     const missing = promiseTopic(s).filter((w) => !wordBacked(w, src.asked));
