@@ -16,8 +16,14 @@
 //                                           ledgerFacts and followThrough: reduced the same way. A label-keyed row's object_key (the
 //                                           lowercased label) becomes "aged|<id>"; a link-keyed row keeps its link.
 //   tools whose label never held input   (the contact card, an invite link, a tapback...): marked, label and key left as they are.
-// Not here: content-keyed texted rows (proactive_sends) and sent items recorded outside the tool guard; their source rows
-// (proactive_sends, the transcript, outbound_messages) still hold the words and the every-boot backfill rebuilds from them.
+//   content-keyed texted rows           Cue's first text (source proactive_sends:<id>), which often quotes them: reduced to the links
+//     (source proactive_sends:*)        it carried, or "a text". meta.type stays. The every-boot backfill (services/coFacts.ts
+//                                       backfillCoActions) rebuilds these from proactive_sends inside the same 60 days only, so a
+//                                       reduced row is never rebuilt with its words.
+//   reaction catch-up rows              'noted how "<the thing>" landed: <reaction> (their words: "<quote>")': their quote goes from
+//     (source reaction.catchup)         the label and meta.quote; the thing's own name, the reaction and the provenance stay.
+// Not here: sent items recorded outside the tool guard (the event's own name), and the source tables (proactive_sends, outbound_messages,
+// the members' own memories and transcripts): those are theirs to see and delete, or the record of what went out.
 import pool from "../db/db.js";
 
 export const WORDS_DAYS = 60;
@@ -109,6 +115,17 @@ export function agedRow(r: AgingRow, day: string): AgedRow | null {
     }
     return null;
   }
+  if (r.relation === "texted" && /^proactive_sends:/.test(r.source)) {
+    // A text that carried a link keeps it: ledgerLine reads a texted row with a link as "sent them this link, unprompted".
+    const links = [...new Set(r.label.match(/https?:\/\/\S+/g) ?? [])];
+    return { kind: "proactive texted", label: links.length ? links.join(" ") : "a text", objectKey: `aged|${r.id}`, meta: { ...m, ...mark } };
+  }
+  if (r.source === "reaction.catchup") {
+    const cut = r.label.indexOf(' (their words: "');
+    const label = cut > 0 ? r.label.slice(0, cut) : /^noted how ".+" landed: [a-z_]+$/.test(r.label) ? r.label : actLabel("noteReaction", r.relation);
+    const { quote: _q, ...rest } = m;
+    return { kind: "reaction catch-up", label, objectKey: label === r.label ? r.objectKey : `aged|${r.id}`, meta: { ...rest, ...mark } };
+  }
   if (!/^tool\./.test(r.source)) return null;
   const tool = toolOfSource(r.source);
   if (FIXED.has(tool)) return { kind: `content-keyed ${r.relation}`, label: r.label, objectKey: r.objectKey, meta: { ...m, ...mark } };
@@ -121,7 +138,8 @@ export function agedRow(r: AgingRow, day: string): AgedRow | null {
 // The rows due: older than the window, not reduced yet, of the kinds above. One page at a time, by id (the column, numerically: the
 // id is read out as text, and ORDER BY id would sort that text, skipping 7 after 23).
 const DUE = `subject = 'co' AND happened_at < $1 AND NOT (meta ? 'words_aged')
-  AND ((meta ? 'ledger' AND meta->>'kind' IN ('tool', 'text', 'document')) OR (NOT (meta ? 'ledger') AND source LIKE 'tool.%'))`;
+  AND ((meta ? 'ledger' AND meta->>'kind' IN ('tool', 'text', 'document'))
+    OR (NOT (meta ? 'ledger') AND (source LIKE 'tool.%' OR (relation = 'texted' AND source LIKE 'proactive_sends:%') OR source = 'reaction.catchup')))`;
 async function duePage(q: Query, cutoff: Date, afterId: string, limit: number, owner: string | null): Promise<AgingRow[]> {
   const { rows } = await q(
     `SELECT id::text AS id, owner_user_id::text AS owner, relation, object_label, object_key, url, source, happened_at, meta FROM co_facts
