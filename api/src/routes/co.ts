@@ -51,7 +51,7 @@ import { callerTurnsFrom, momentSignals } from "../services/voiceRead.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { forgetAfterCall, transcriptHash } from "../services/elevenLabsForget.js";
 import { flagNotStored, recordCallHealth } from "../services/callHealth.js";
-import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
+import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook, withCallSituation } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
 import { withMember } from "../services/llmUsage.js";
 
@@ -620,6 +620,76 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     next(err);
   }
 });
+
+// ---------- The GPT-Live trial (services/gptLive.ts, Royce 2026-10-31): a second Twilio number, read-only, side by side.
+// The trial number's Voice webhook. The same member check as /co/incoming-call (a verified member's number, else the same
+// decline), then the trial's minute cap (past it the call is refused busy: no new words), then TwiML that streams the call to
+// the bridge (services/gptLiveBridge.ts). The stream carries a one-time id only; the member's id never goes to Twilio.
+router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!validateTwilioSignature(req, "/co/gpt-live/incoming-call")) return res.status(401).send("Invalid Twilio signature.");
+    const from = req.body.From as string | undefined;
+    const callSid = (req.body.CallSid as string | undefined) ?? null;
+    const caller = await inboundCallMember(from);
+    const userId = caller.userId;
+    if (!userId && caller.why !== "no account" && caller.why !== "no caller number") await recordDecision({ layer: 1, decision: "call.inbound", userId: null, outcome: "skip", action: "not_a_member", reason: caller.why }).catch(() => {});
+    const twiml = new twilio.twiml.VoiceResponse();
+    if (!userId || !inboundCallerVerified((req.body.StirVerstat as string | undefined) ?? null, process.env.ALLOW_UNVERIFIED_INBOUND_CALLERS === "true")) {
+      twiml.say("Sorry, we don't recognize this number. Text us instead and we'll get you set up.");
+      twiml.hangup();
+      return res.type("text/xml").send(twiml.toString());
+    }
+    const G = await import("../services/gptLive.js");
+    const streamUrl = G.gptLiveStreamUrl(process.env.API_URL);
+    if (!streamUrl || !(await G.trialOpen())) {
+      await recordDecision({ layer: 8, decision: "call.gpt_live_refused", userId, outcome: "skip", action: streamUrl ? "trial_minutes_used" : "no_api_url" }).catch(() => {});
+      twiml.reject({ reason: "busy" });
+      return res.type("text/xml").send(twiml.toString());
+    }
+    if (callSid) await pool.query(`UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [userId, callSid]);
+    const [{ rows: u }, contextSummary, briefing, team, voiceLayer] = await Promise.all([
+      pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
+      buildCallContextSummary(userId).catch(() => ""),
+      takeCallBriefing(userId),
+      import("../services/extensions.js").then((m) => m.isTeamMember(userId)).catch(() => false),
+      import("../services/coPersona.js").then((m) => m.getCoPersonaPrompt()),
+    ]);
+    const firstName = u[0]?.first_name ?? "";
+    const call = G.buildLiveCall({ userId, callSid, firstName, voiceLayer: voiceLayer ?? "", contextSummary: withCallSituation(contextSummary, { direction: "inbound", team }), rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason: "", opening: await openingForCall(userId, firstName, "inbound", contextSummary) });
+    twiml.connect().stream({ url: streamUrl }).parameter({ name: "s", value: G.issueLiveLink(call) });
+    return res.type("text/xml").send(twiml.toString());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// After a GPT-Live trial call (services/gptLiveBridge.ts): the same steps as /co/el/post-call, fed from GPT-Live's transcript in
+// ElevenLabs' turn shape. The conversation id is "gpt-live:<session>" so call_health and the decision rows compare the two by source.
+// ElevenLabs grades its own calls; this one is graded here against the same criteria (gptLive.ts gradeLiveCall).
+export async function runGptLivePostCall(r: import("../services/gptLiveBridge.js").LiveResult): Promise<unknown> {
+  const G = await import("../services/gptLive.js");
+  const userId = r.call.userId;
+  const conversationId = `gpt-live:${r.sessionId}`;
+  const turns = G.elTurnsOf(r.turns);
+  const transcript = transcriptFromTurns(turns);
+  const given = r.call.given;
+  G.gradeLiveCall(transcript).then((analysis) => import("../services/callEvals.js").then((m) => m.recordCallEvaluation(userId, conversationId, analysis, undefined, { transcript, given: [given.contextSummary, given.findsNow].filter(Boolean).join("\n") }))).catch(() => {});
+  import("../services/offerGuard.js").then((m) => m.recordOfferSourceCheck(userId, conversationId, turns, given)).catch(() => {});
+  let ended: Awaited<ReturnType<typeof processEndedCall>>;
+  try {
+    ended = await processEndedCall({ userId, callKey: conversationId, offered: given.findsNow, offerSource: { turns, given }, startedAt: r.startedAt, endedAt: r.endedAt, twilioMetadata: r.call.callSid ? { call_sid: r.call.callSid } : null, load: async () => ({ transcript, recordingUrl: null }) });
+  } catch (err) {
+    flagNotStored({ userId, conversationId, startedAt: r.startedAt, endedAt: r.endedAt }).catch(() => {});
+    throw err;
+  }
+  recordCallHealth({ userId, conversationId, turns, durationSecs: r.seconds, terminationReason: r.reason, status: null, startedAt: r.startedAt, endedAt: r.endedAt }).catch(() => {});
+  const cueLines = turns.filter((t) => t.role !== "user").map((t) => t.message);
+  const labelled = cueLines.filter((m) => !checkNoEmotionLabelOnCall(m).pass);
+  if (labelled.length) recordDecision({ layer: 8, decision: "call.emotion_label", userId, outcome: "skip", action: "named_their_feeling", proposal: { conversationId, lines: labelled.slice(0, 5) }, reason: checkNoEmotionLabelOnCall(labelled[0]).reason ?? null }).catch(() => {});
+  const narrated = cueLines.filter((m) => narratesInternalState(m));
+  if (narrated.length) recordDecision({ layer: 8, decision: "call.narration", userId, outcome: "skip", action: "narrated_state", proposal: { conversationId, lines: narrated.slice(0, 5) }, reason: narratesInternalState(narrated[0]) }).catch(() => {});
+  return ended.body;
+}
 
 // Root-cause guard (Royce, 2026-09-02, "check the recent text messages
 // through sendblue" — Co had fired off 4 texts once the postCallFollowUp

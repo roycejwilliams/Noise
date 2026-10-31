@@ -159,6 +159,7 @@
     "evals/tasks/looseEnds.ts",
     "evals/calls/llmProxy.ts",
     "evals/calls/actOnCalls.ts",
+    "evals/calls/gptLive.ts",
     "evals/calls/provenance.ts",
     "evals/calls/spokenGrounding.ts",
     "evals/docs/document.ts",
