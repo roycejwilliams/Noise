@@ -105,7 +105,7 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   T.setPreflightForTests(async () => ({ ok: true }));
   const j: any = await T.triggerCallForUser("u-jordan", null, { kind: "router_decision" });
   check("on the team, check passed: the same dial (the TwiML route picks GPT-Live when they answer)", j?.success === true && dials.length === 1 && /\/co\/el\/outbound-twiml\?c=/.test(dials[0].url) && dials[0].to === "+15550000001");
-  check("...plus Twilio's async answering-machine detection, waiting for the greeting to end, posted to us", dials[0].machineDetection === "DetectMessageEnd" && dials[0].asyncAmd === "true" && dials[0].asyncAmdStatusCallback === "https://cue.example.test/co/gpt-live/amd" && dials[0].asyncAmdStatusCallbackMethod === "POST", dials[0]);
+  check("...plus Twilio's async answering-machine detection, waiting for the greeting to end, posted to us", dials[0].machineDetection === "DetectMessageEnd" && dials[0].machineDetectionTimeout === 30 && G.GPT_LIVE.amdHoldMs > G.GPT_LIVE.amdTimeoutSecs * 1000 && G.GPT_LIVE.amdHoldMs <= G.GPT_LIVE.amdTimeoutSecs * 1000 + 5000 && dials[0].asyncAmd === "true" && dials[0].asyncAmdStatusCallback === "https://cue.example.test/co/gpt-live/amd" && dials[0].asyncAmdStatusCallbackMethod === "POST", dials[0]);
 
   reset(); dials.length = 0;
   T.setPreflightForTests(async () => ({ ok: false, kind: "budget", why: "unreadable" }));
@@ -224,11 +224,11 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
     in(m: unknown) { this.emit("message", JSON.stringify(m)); }
   }
   const textEv = (t: string) => [{ type: "content_block_start", index: 0, content_block: { type: "text" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } }, { type: "content_block_stop", index: 0 }];
-  const run = (callSid: string, o: { openWaitMs?: number; answer?: string; delayMs?: number; callReason?: string; settleMs?: number } = {}) => {
+  const run = (callSid: string, o: { openWaitMs?: number; answer?: string; delayMs?: number; callReason?: string; settleMs?: number; amdHoldMs?: number } = {}) => {
     const tw = new FakeSocket(), ai = new FakeSocket(), records: any[] = [];
     const call = G.buildLiveCall({ userId: "u-jordan", callSid, firstName: "Jordan", direction: "outbound", team: true, voiceLayer: VOICE, contextSummary: "x", rightNow: "", findsNow: "", callReason: o.callReason ?? "", timeOfDay: null });
     const id = G.issueLiveLink(call);
-    B.setLiveDeps({ connectOpenAI: () => { setImmediate(() => ai.emit("open")); return ai as any; }, apiKey: () => "sk-test", upstream: () => (async function* () { if (o.delayMs) await sleep(o.delayMs); for (const e of textEv(o.answer ?? "How did the pitch go?")) yield e as any; })(), record: (d) => records.push(d), postCall: async () => {}, minutes: () => {}, log: () => {}, now: Date.now, maxSessionMs: 60_000, startTimeoutMs: 60_000, heartbeatMs: 60_000, silenceEndMs: 60_000, endGraceMs: 40, openWaitMs: o.openWaitMs ?? 60_000, confirmSettleMs: o.settleMs ?? 30, guardRows: async () => [] });
+    B.setLiveDeps({ connectOpenAI: () => { setImmediate(() => ai.emit("open")); return ai as any; }, apiKey: () => "sk-test", upstream: () => (async function* () { if (o.delayMs) await sleep(o.delayMs); for (const e of textEv(o.answer ?? "How did the pitch go?")) yield e as any; })(), record: (d) => records.push(d), postCall: async () => {}, minutes: () => {}, log: () => {}, now: Date.now, maxSessionMs: 60_000, startTimeoutMs: 60_000, heartbeatMs: 60_000, silenceEndMs: 60_000, endGraceMs: 40, openWaitMs: o.openWaitMs ?? 60_000, wordsSettleMs: o.settleMs ?? 30, amdHoldMs: o.amdHoldMs ?? 60_000, guardRows: async () => [] });
     B.handleGptLiveStream(tw as any);
     B.setLiveDeps(null);
     tw.in({ event: "start", streamSid: "MZ1", start: { customParameters: { s: id } } });
@@ -338,16 +338,55 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   check("late greeting transcript: no person is confirmed from its first words; the verdict waits for them to settle, then leaves the message", !late.records.some((r) => r.decision === "call.gpt_live_person") && late.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "leave_message") && late.ai.sent.some((m) => m.event_id === "voicemail"), late.records.map((r) => r.decision + ":" + r.action));
   check("...and the held answer and the reason never reach GPT-Live", !late.ai.sent.some((m) => m.event_id === "answer_l1" || m.event_id === "reason") && !said(late).includes("second fund") && late.records.some((r) => r.decision === "call.gpt_live_answer_dropped"));
   late.tw.close();
-  // A person: their real words, once settled, confirm them; the reason goes in as silent context, then the held answer.
-  const real = run("CA-real", { answer: "How did the pitch to the second fund go?", callReason: REASON });
+  // Only AMD releases (review of #333, final ruling): a custom greeting the greeting check doesn't know, then a long pause, releases
+  // nothing.
+  const custom = run("CA-custom", { answer: "How did the pitch to the second fund go?", callReason: REASON });
   await sleep(5);
-  real.ai.in({ type: "session.started", session: { id: "live_real" } });
-  real.ai.in({ type: "session.input_transcript.delta", delta: "Hey, yeah I can talk.", start_ms: 0, end_ms: 1500 });
-  real.ai.in({ type: "session.delegation.created", offset_ms: 1600, delegation: { id: "r1", target: "client" } });
+  custom.ai.in({ type: "session.started", session: { id: "live_custom" } });
+  custom.ai.in({ type: "session.input_transcript.delta", delta: "Hey, it's Sam, out on the water till Monday.", start_ms: 0, end_ms: 2500 });
+  custom.ai.in({ type: "session.delegation.created", offset_ms: 2600, delegation: { id: "c1", target: "client" } });
+  await sleep(150); // well past the 30 ms settle used here (the 800 ms pause, scaled)
+  check("a custom greeting the check doesn't know, then a pause: nothing released, no person confirmed (only AMD releases)", !custom.ai.sent.some((m) => m.event_id === "answer_c1" || m.event_id === "reason") && !said(custom).includes("second fund") && !custom.records.some((r) => r.decision === "call.gpt_live_person"));
+  G.noteAnsweredBy("CA-custom", "machine_end_beep");
+  await sleep(100);
+  // Known limit: the greeting reads as real words, so the machine verdict is taken as a misfire: no message is left, and still nothing
+  // private is released (the misfire path only holds back the message).
+  check("...then AMD says machine: the unknown greeting reads as words (a misfire: no message), and nothing is released", custom.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "misfire") && !custom.ai.sent.some((m) => m.event_id === "voicemail" || m.event_id === "answer_c1" || m.event_id === "reason") && !said(custom).includes("second fund"));
+  custom.tw.close();
+  // A misfire (machine verdict after real words) holds back the message only; it releases nothing.
+  const mis = run("CA-mis", { answer: "How did the pitch to the second fund go?", callReason: REASON });
+  await sleep(5);
+  mis.ai.in({ type: "session.started", session: { id: "live_mis" } });
+  mis.ai.in({ type: "session.input_transcript.delta", delta: "Hello? Oh hey, yeah I can talk.", start_ms: 0, end_ms: 2000 });
+  mis.ai.in({ type: "session.delegation.created", offset_ms: 2100, delegation: { id: "m1", target: "client" } });
+  await sleep(60);
+  G.noteAnsweredBy("CA-mis", "machine_end_other");
+  await sleep(100);
+  check("misfire: no message, and the held answer and the reason stay held", mis.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "misfire") && !mis.ai.sent.some((m) => m.event_id === "voicemail" || m.event_id === "answer_m1" || m.event_id === "reason"));
+  mis.tw.close();
+  // AMD finishing with no machine verdict releases: "unknown".
+  const unk = run("CA-unk", { answer: "How did the pitch to the second fund go?", callReason: REASON });
+  await sleep(5);
+  unk.ai.in({ type: "session.started", session: { id: "live_unk" } });
+  unk.ai.in({ type: "session.input_transcript.delta", delta: "Yeah?", start_ms: 0, end_ms: 400 });
+  unk.ai.in({ type: "session.delegation.created", offset_ms: 500, delegation: { id: "u1", target: "client" } });
+  await sleep(60);
+  G.noteAnsweredBy("CA-unk", "unknown");
+  await sleep(100);
+  const ri = unk.ai.sent.findIndex((m) => m.event_id === "reason"), ui = unk.ai.sent.findIndex((m) => m.event_id === "answer_u1");
+  check("AMD says unknown: released (call.gpt_live_person via amd_unknown), the reason once as silent context, then the answer", unk.records.some((r) => r.decision === "call.gpt_live_person" && r.proposal.via === "amd_unknown") && ri >= 0 && unk.ai.sent[ri].type === "session.thinking.append" && unk.ai.sent[ri].content === G.reasonNote(REASON) && unk.ai.sent.filter((m) => m.event_id === "reason").length === 1 && ui > ri, unk.ai.sent.map((m) => m.event_id));
+  unk.tw.close();
+  // AMD never answers by the ceiling: released as unknown, logged via amd_timeout.
+  const slow = run("CA-slow", { answer: "How did the pitch go?", callReason: REASON, amdHoldMs: 120 });
+  await sleep(5);
+  slow.ai.in({ type: "session.started", session: { id: "live_slow" } });
+  slow.ai.in({ type: "session.input_transcript.delta", delta: "Hello?", start_ms: 0, end_ms: 500 });
+  slow.ai.in({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "s1", target: "client" } });
+  await sleep(60);
+  check("no verdict yet: held", !slow.ai.sent.some((m) => m.event_id === "answer_s1"));
   await sleep(150);
-  const ri = real.ai.sent.findIndex((m) => m.event_id === "reason"), ai1 = real.ai.sent.findIndex((m) => m.event_id === "answer_r1");
-  check("a person's real words, settled: confirmed (logged), the reason given once as silent context, then the answer", real.records.some((r) => r.decision === "call.gpt_live_person" && r.action === "their_words") && ri >= 0 && real.ai.sent[ri].type === "session.thinking.append" && real.ai.sent[ri].content === G.reasonNote(REASON) && real.ai.sent.filter((m) => m.event_id === "reason").length === 1 && ai1 > ri, real.ai.sent.map((m) => m.event_id));
-  real.tw.close();
+  check("...no verdict by the ceiling: released, logged call.gpt_live_person via amd_timeout", slow.records.some((r) => r.decision === "call.gpt_live_person" && r.proposal.via === "amd_timeout") && slow.ai.sent.some((m) => m.event_id === "reason") && slow.ai.sent.some((m) => m.event_id === "answer_s1"));
+  slow.tw.close();
   // AMD's human verdict confirms at once.
   const amdHuman = run("CA-amdh", { answer: "How did the pitch go?", callReason: REASON });
   await sleep(5);
