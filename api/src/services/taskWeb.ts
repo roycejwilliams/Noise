@@ -484,8 +484,10 @@ export function placesBacked(text: string, facts: string): { ok: boolean; missin
   return { ok: missing.length === 0, missing };
 }
 
-// Co can't call, book, or contact anyone for them; a task text never offers to.
-export const OFFERS_WHAT_CO_CANT = /\b(want me to|should i|i can|i'?ll|let me)\s+(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b/i;
+// Co can't call, book, or contact anyone for them; a task text never offers to. Nor can it fill in, submit or apply on their
+// behalf (Royce, 2026-10-31: "Want me to start the Francisco San form now?"). Drafting answers for them to paste is Cue's to offer,
+// so a form or application offer that drafts, writes or outlines is left alone.
+export const OFFERS_WHAT_CO_CANT = /\b(want me to|should i|i can|i'?ll|let me)\s+(?:(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b|submit\b|apply\s+(?:for|to|on)\b|fill\s+(?:it|this|that|them)\s+(?:in|out)\b|(?:start|fill(?:\s+(?:in|out))?|complete|send\s+in|file)\b(?![^.?!\n]{0,40}\b(?:draft|drafting|write|writing|outline|answers?)\b)[^.?!\n]{0,40}?\b(?:forms?|applications?)\b)/i;
 
 // Claims a page rarely makes and a text easily implies (2026-09-30): that it's
 // available on their date, confirmed, open or happy to host, or has done
