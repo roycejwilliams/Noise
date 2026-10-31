@@ -168,6 +168,44 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   stay.tw.close();
   check("an end_call whose goodbye is never said is dropped (no_goodbye), never a silent hang-up", never.ai.of("session.close").length === 0 && refusedWith(never).join() === "no_goodbye", refusedWith(never));
   never.tw.close();
+  // The end_call rule matches the flow: the voice has already said its goodbye, the thinking writes nothing (review of #333).
+  check("END_CALL_RULE: the voice has already said its goodbye; write nothing with it", /the voice has already said its goodbye/.test(G.END_CALL_RULE) && /Write nothing with it/.test(G.END_CALL_RULE) && !/your reply says goodbye/.test(G.END_CALL_RULE));
+  // Goodbye overlap (review of #333): GPT-Live's goodbye may start up to goodbyeOverlapMs before the end of their turn and still count.
+  const overlap = bridge({ answer: () => "|END", endGraceMs: 20 });
+  await start(overlap, "live_overlap");
+  say(overlap, "member", "Okay, talk soon.", 0); // their turn: 0-800 ms
+  say(overlap, "cue", "Talk soon, Jordan.", 800 - G.GPT_LIVE.goodbyeOverlapMs + 100); // starts 400 ms before their turn ends
+  overlap.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "o1", target: "client" } });
+  await sleep(150);
+  check("goodbye overlap: a goodbye that starts just before their words end still counts, and end_call ends the call", G.GPT_LIVE.goodbyeOverlapMs === 500 && overlap.ai.of("session.close").length === 1 && refusedWith(overlap).length === 0, refusedWith(overlap));
+  overlap.tw.close();
+  const early = bridge({ answer: () => "|END", endGraceMs: 20, endWaitMs: 50 });
+  await start(early, "live_early");
+  say(early, "member", "Okay, talk soon.", 0);
+  say(early, "cue", "Mm-hm, yeah.", 800 - G.GPT_LIVE.goodbyeOverlapMs - 200); // well inside their turn: not this turn's goodbye
+  early.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "e1", target: "client" } });
+  await sleep(150);
+  check("...a line that started well inside their turn isn't the goodbye: no_goodbye, nothing ends", early.ai.of("session.close").length === 0 && refusedWith(early).join() === "no_goodbye", refusedWith(early));
+  early.tw.close();
+  // No "no answer" note once GPT-Live has spoken this turn (its goodbye): an empty answer with no tool, or a failed one (review of #333).
+  const latency = (b: ReturnType<typeof bridge>) => b.records.filter((r) => r.decision === "call.turn_latency").map((r) => r.proposal);
+  for (const [label, answer] of [["an empty answer with no end_call", () => ""], ["a failed answer", () => { throw new Error("upstream down"); }]] as const) {
+    const b = bridge({ answer: answer as any, endGraceMs: 20 });
+    await start(b, `live_nonote_${label.length}`);
+    say(b, "member", "Okay bye.", 0);
+    say(b, "cue", "Bye, Jordan.", 900);
+    b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "q1", target: "client" } });
+    await sleep(80);
+    check(`GPT-Live already said its goodbye, then ${label}: no "no answer" note (nothing sent for the turn)`, !b.ai.sent.some((m: any) => m.event_id === "answer_q1") && latency(b).some((l) => l.noteSkipped === true), latency(b));
+    b.tw.close();
+  }
+  const note = bridge({ answer: () => "", endGraceMs: 20 });
+  await start(note, "live_note");
+  say(note, "member", "What was the name of that climbing gym?", 0);
+  note.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "q2", target: "client" } });
+  await sleep(80);
+  check("...but with nothing said yet this turn, an empty answer still gets the note (it says it'll text, never guesses)", note.ai.sent.some((m: any) => m.event_id === "answer_q2" && m.type === "session.thinking.append" && /No answer came back/.test(m.content)));
+  note.tw.close();
 }
 
 // ---------------------------------------------------------------- 3. a wrap-up before the cap, in GPT-Live's own words

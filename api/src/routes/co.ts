@@ -647,9 +647,17 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
 // can't be read, is "budget_used"). Then TwiML that streams the call to the bridge (services/gptLiveBridge.ts) with a one-time id only
 // (the member's id never goes to Twilio), and a <Connect> action for when the stream ends. GPT-Live opens in its own words from the
 // opening's background (gptLive.ts OpeningContext): no written or template opening line on this path.
-type GptLiveAnswer = { twiml: string } | { refused: "not_team" } | { refused: "budget_used"; why: "minutes_used" | "unreadable" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" };
+type GptLiveAnswer = { twiml: string } | { refused: "not_team" } | { refused: "budget_used"; why: "minutes_used" | "unreadable" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" | "team_unreadable" };
 async function gptLiveAnswer(o: { userId: string; callSid: string | null; direction: "inbound" | "outbound"; context?: () => Promise<string> }): Promise<GptLiveAnswer> {
-  const team = await import("../services/extensions.js").then((m) => m.isTeamMember(o.userId)).catch(() => false);
+  // A team list that can't be read fails closed (review of #333): the call can't be placed now, logged, never quietly routed to
+  // ElevenLabs as if they weren't on the team.
+  let team: boolean;
+  // (A direct read: isTeamMember answers false on a failed read, which is right for what it guards and wrong here.)
+  try { team = (await pool.query(`SELECT mo_approver FROM users WHERE id = $1`, [o.userId])).rows[0]?.mo_approver === true; }
+  catch (err: any) {
+    console.error(`gpt-live: team list unreadable for ${o.userId.slice(0, 8)} (${String(err?.message ?? err).slice(0, 120)})`);
+    return { refused: "unavailable", failClass: "team_unreadable" };
+  }
   if (!team) return { refused: "not_team" };
   const G = await import("../services/gptLive.js");
   if (!process.env.OPENAI_API_KEY?.trim()) return { refused: "unavailable", failClass: "no_key" };

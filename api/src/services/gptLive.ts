@@ -46,8 +46,10 @@ export const GPT_LIVE = {
   closeWaitMs: 5000, // after session.close, how long to wait for session.closed
   silenceEndMs: AGENT_DEFAULTS.silenceEndCallSecs * 1000, // nothing said either way this long ends the call, as on the ElevenLabs agent
   endGraceMs: 2000, // after Cue's goodbye has finished playing, this long before end_call hangs up (a last word from them keeps it open)
-  endWaitMs: 15_000,
-  openWaitMs: 4000, // outbound: how long GPT-Live waits for their first words (or AMD's human verdict) before it opens anyway // an end_call whose goodbye isn't said within this is dropped
+  endWaitMs: 15_000, // an end_call whose goodbye isn't said within this is dropped
+  openWaitMs: 4000, // outbound: how long GPT-Live waits for their first words (or AMD's human verdict) before it opens anyway
+  confirmSettleMs: 800, // outbound: their words count as a person (not a greeting) only once their turn has had no new words this long
+  goodbyeOverlapMs: 500, // GPT-Live's goodbye may start this much before the end of their turn and still be the goodbye
   wrapUpMs: 60_000, // how long before a session's cap GPT-Live is asked to wrap up
   guardCacheMs: 20_000, // the live guards are read at most this often per call, as on the ElevenLabs proxy
   preflightTimeoutMs: 3000, // the outbound check of OpenAI's key before dialing
@@ -199,11 +201,13 @@ export function timeOfDay(now: Date, zone: string): string | null {
   const part = t.hour < 5 ? "night" : t.hour < 12 ? "morning" : t.hour < 17 ? "afternoon" : t.hour < 21 ? "evening" : "night";
   return `${t.toFormat("cccc")} ${part}`;
 }
+// Outbound: the call's reason, given to GPT-Live as silent context only once a person is confirmed on the line (review of #333: in
+// the instructions, a fallback opening or any line of its own could carry it onto a voicemail recording).
+export const reasonNote = (reason: string): string => `Why you called them (background for how you open, never to read out): ${reason}`;
 // Pure: the opening's background lines (only the ones there are).
 export function openingBackground(c: OpeningContext): string {
   return [
     c.timeOfDay ? `It's ${c.timeOfDay} for them.` : null,
-    c.reason ? `Why you called them (background for how you open, never to read out): ${c.reason}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -314,7 +318,7 @@ export function replyGaps(turns: LiveTurn[]): number[] {
 // Ending the call is Cue's decision (Royce, 2026-10-31: Cue decides, code guards; never code reading their words for a goodbye). GPT-Live
 // can't call a function (OpenAI rejects session.tools: "Unknown parameter"), so the decision is the thinking's: goodbyes are delegated,
 // and Claude has this one tool. The bridge hangs up after Cue's goodbye has played, guarded on facts only (gptLiveBridge.ts endGuard).
-export const END_CALL_RULE = "End the phone call. Use it only after they have clearly wrapped up and your reply says goodbye: never mid-thought, never after you've asked a question, never during an emotional moment. Your goodbye is said first, then the call ends.";
+export const END_CALL_RULE = "End the phone call. Use it only after they have clearly wrapped up and the voice has already said its goodbye: never mid-thought, never after a question, never during an emotional moment. Write nothing with it: the voice's goodbye is the last word.";
 export const END_CALL_TOOL = { type: "function", function: { name: "end_call", description: END_CALL_RULE, parameters: { type: "object", properties: {} } } };
 export function delegationRequest(call: LiveCall, turns: LiveTurn[]): OaiRequest {
   return { messages: [{ role: "system", content: call.backendSystem }, ...turns.map((t) => ({ role: t.who === "member" ? "user" : "assistant", content: t.text }))], tools: [END_CALL_TOOL], stream: true, temperature: AGENT_DEFAULTS.temperature };
