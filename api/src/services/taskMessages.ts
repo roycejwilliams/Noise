@@ -28,19 +28,16 @@ export function assembleMessages(items: { url: string; caption: string }[], clos
   return out;
 }
 
-// A caption says only what its own item's verified facts say, or what the member said themselves (their budget, their headcount,
-// their city), the same backing a search find's caption gets (agent/loopTools.ts captionProblems). Royce, 2026-10-31: his own
-// "5,000 or 8,000" grant target failed a caption as "not in its facts".
-export function captionOk(caption: string, itemFacts: string, theirs = ""): { ok: boolean; why: string | null } {
+// A caption says only what its own item's verified facts say.
+export function captionOk(caption: string, itemFacts: string): { ok: boolean; why: string | null } {
   const rules = checkDraft(caption, { maxSentences: 2, maxChars: 300 }).filter((c) => !c.pass);
   if (rules.length) return { ok: false, why: rules.map((r) => r.name).join(", ") };
-  const backing = `${itemFacts} ${theirs}`;
-  const nums = numbersBacked(caption, backing);
+  const nums = numbersBacked(caption, itemFacts);
   if (!nums.ok) return { ok: false, why: `numbers not in its facts: ${nums.missing.join(", ")}` };
-  const places = placesBacked(caption, backing);
+  const places = placesBacked(caption, itemFacts);
   if (!places.ok) return { ok: false, why: `places not in its facts: ${places.missing.join(", ")}` };
   // Scarcity, "free" and "sold out" with no number behind them (Phase B, B4): the same rule a find's caption is held to.
-  const said = captionNumbersBacked(caption, backing);
+  const said = captionNumbersBacked(caption, itemFacts);
   if (!said.ok) return { ok: false, why: said.problems.join("; ") };
   if (OFFERS_WHAT_CO_CANT.test(caption)) return { ok: false, why: "offers something Cue can't do" };
   return { ok: true, why: null };

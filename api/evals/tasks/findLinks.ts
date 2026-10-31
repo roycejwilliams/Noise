@@ -127,20 +127,24 @@ const namedWithLink = (sent: string[][]) => sent.every((m) => !m.some((x) => /fr
     check(`${label}: ${goes ? "goes" : "held"}`, (o.sent.length === 1) === goes, { sent: o.sent, notes: o.notes });
   }
 }
-// 7. Root cause of the dropped caption: the member's own target backs a caption's numbers, as it does for a search find. Royce's
-//    words on the call that started the task (post_call_follow_ups, 2026-10-31 9:42am). francisco san's caption that afternoon isn't
-//    recorded, only why it failed ("numbers not in its facts: 19, 8"); FSAN_BAD fails the same way. The "8" was his own target; the
-//    "19" ("$19k" against facts that spell out "nineteen thousand") still needs the redraft, numbersBacked unchanged.
+// 7. Root cause of the dropped caption, and why it stays dropped: Royce's own words on the call that started the task
+//    (post_call_follow_ups, 2026-10-31 9:42am) carry "5,000 or 8,000", and the "8" in the afternoon's failure was his target. A
+//    caption is still held to its own find's facts only (review of #335, round 2: backing captions with the member's words let
+//    "A $5,000 microgrant" pass for a $1,000 grant). francisco san's caption that afternoon isn't recorded, only why it failed
+//    ("numbers not in its facts: 19, 8"); FSAN_BAD fails the same way. The redraft carries the reason back, and the link goes.
 {
   const ROYCE = "Yeah, I really wanna start with, like, six to eight people and then kind of gradually, uh, push it up through there. Um, so in order to fund it, since we have no funding, we're thinking about just applying for grants. I think that was a big emphasis of what we talked about yesterday. Um, and I feel like if we get a grant for at least, like, 5,000 or 8,000, that would kind of carry over for the last two months.";
-  const facts = `${FSAN.name} ${FSAN.facts.join(" ")}`;
-  check("before: Royce's target alone fails a caption (\"8\")", TM.captionOk("Grants from zero to nineteen thousand dollars, right in your $5k-8k range.", facts).why === "numbers not in its facts: 8");
-  check("now: his own words back it", TM.captionOk("Grants from zero to nineteen thousand dollars, right in your $5k-8k range.", facts, ROYCE).ok);
-  check("the afternoon's caption still fails only on \"19\"", TM.captionOk(FSAN_BAD, facts, ROYCE).why === "numbers not in its facts: 19", TM.captionOk(FSAN_BAD, facts, ROYCE));
-  check("a number neither the find nor they said still fails", !TM.captionOk("Grants up to $25k, right in your $5k-8k range.", facts, ROYCE).ok);
-  const cap = "Grants from zero to nineteen thousand dollars for parties and pop-ups, right in your $5k-8k range.";
-  const o = await run([{ text: JSON.stringify({ done: false, quote: null }) }, tellThem, { text: captions({ awesome: AWESOME_CAPTION, fsan: cap, closing: null }) }], { recent: `[Oct 31 9:40am] User said: ${ROYCE}` });
-  check("in a task turn, his words reach the caption check: francisco san's link goes first time", o.all.includes(FSAN.url) && o.all.includes(cap) && o.redrafts === 0, { sent: o.sent, notes: o.notes, redrafts: o.redrafts });
+  const recent = `[Oct 31 9:40am] User said: ${ROYCE}`;
+  const notDone = { text: JSON.stringify({ done: false, quote: null }) };
+  check("the afternoon's caption fails on its facts alone (\"19, 8\")", TM.captionOk(FSAN_BAD, `${FSAN.name} ${FSAN.facts.join(" ")}`).why === "numbers not in its facts: 19, 8");
+  // A number they said about something else never backs a caption, even with their words in the conversation.
+  const inflated = "A $5,000 microgrant from the SF chapter, every month.";
+  const a = await run([notDone, { tool: "tellThem", input: { what: "Awesome Foundation SF", links: [AWESOME.url] } }, { text: JSON.stringify({ captions: [{ n: 1, caption: inflated }], closing: null }) }, { text: JSON.stringify({ captions: [{ n: 1, caption: inflated }], closing: null }) }], { recent });
+  check("a number the member said (\"5,000\") can't back a caption about a $1,000 grant", !a.all.includes(inflated) && a.redrafts === 1, { sent: a.sent, asked: a.asked });
+  // End to end: his target in the caption is dropped, the redraft is told why, and francisco san's link goes after it.
+  const o = await run([notDone, tellThem, { text: captions({ awesome: AWESOME_CAPTION, fsan: FSAN_BAD, closing: null }) }, { text: captions({ awesome: AWESOME_CAPTION, fsan: FSAN_GOOD, closing: null }) }], { recent });
+  check("with his words in the conversation, the caption still fails first and the redraft is told \"19, 8\"", o.redrafts === 1 && /francisco san: numbers not in its facts: 19, 8/.test(o.asked[0]), o.asked);
+  check("after the redraft, francisco san's link goes with the Awesome caption that names it", o.all.includes(FSAN.url) && o.all.includes(FSAN_GOOD) && o.all.includes(AWESOME_CAPTION) && namedWithLink(o.sent), o.sent);
 }
 
 // Pure pieces.
@@ -150,6 +154,8 @@ const cant = [
   "Want me to start the Francisco San form now?", "Should I submit it for you?", "I'll fill out the application tonight.", "Want me to apply for it?", "Want me to fill it in?",
   "I can complete the Block Party Fund application.", "Want me to send in the form?", "I'll apply on your behalf", "I'll file the application Friday", CLOSING,
   "Want me to start your application?", "Want me to fill out the Awesome Foundation form?", "Want me to call and check before Friday?",
+  // Review of #335, round 2: "to the team" doesn't make submitting a form or application something Cue can do.
+  "Want me to submit your application to the team at Awesome?", "Want me to submit the form to the team?", "I'll submit it to our team tomorrow",
 ];
 check(`fill in / submit / apply offers are caught: ${cant.filter((t) => !W.OFFERS_WHAT_CO_CANT.test(t)).join(" | ") || "all"}`, cant.every((t) => W.OFFERS_WHAT_CO_CANT.test(t)));
 const can = [

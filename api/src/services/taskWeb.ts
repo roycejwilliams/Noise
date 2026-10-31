@@ -488,11 +488,12 @@ export function placesBacked(text: string, facts: string): { ok: boolean; missin
 // behalf (Royce, 2026-10-31: "Want me to start the Francisco San form now?"). The form or application has to be what the verb acts
 // on: a determiner and at most three name words between them, none a preposition, so "start watching for when applications
 // open", "a cover letter for the application" or "a reminder for the form deadline" aren't offers to fill one in. Drafting,
-// writing or outlining for them to paste is Cue's to offer, and so are "application answers", "deadlines", "questions", "essays",
-// and submitting feedback to the team.
+// writing or outlining for them to paste is Cue's to offer, and so are "application answers", "deadlines", "questions", "essays".
+// "Submit" is refused unless the clause is about feedback and names no form or application ("I'll submit that to the team as
+// feedback" is Cue's to do; "submit your application to the team at Awesome" isn't).
 const NOT_A_NAME_WORD = String.raw`(?:of|for|on|with|into|in|when|to|about|from|by|and|or|you|so|that|which|while|draft|drafting|drafts|write|writing|outline|outlining|answers?)`;
 export const OFFERS_WHAT_CO_CANT = new RegExp(
-  String.raw`\b(want me to|should i|i can|i'?ll|let me)\s+(?:(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b|submit\b(?![^.?!\n]{0,30}\bto\s+(?:the|our|my)\s+team\b)|apply\s+(?:for|to|on)\b|fill\s+(?:it|this|that|them)\s+(?:in|out)\b|(?:start|fill(?:\s+(?:in|out))?|complete|send\s+in|file)\s+(?!(?:drafting|writing|outlining)\b)(?:(?:the|your|their|this|that|a|an|its|my)\s+)?(?:(?!${NOT_A_NAME_WORD}\b)[\w'’.&-]+\s+){0,3}?(?:forms?|applications?)\b(?!\s+(?:answers?|drafts?|essays?|questions?|deadlines?)\b))`,
+  String.raw`\b(want me to|should i|i can|i'?ll|let me)\s+(?:(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b|submit\b(?!(?![^.?!\n]*\b(?:forms?|applications?)\b)[^.?!\n]*\bfeedback\b)|apply\s+(?:for|to|on)\b|fill\s+(?:it|this|that|them)\s+(?:in|out)\b|(?:start|fill(?:\s+(?:in|out))?|complete|send\s+in|file)\s+(?!(?:drafting|writing|outlining)\b)(?:(?:the|your|their|this|that|a|an|its|my)\s+)?(?:(?!${NOT_A_NAME_WORD}\b)[\w'’.&-]+\s+){0,3}?(?:forms?|applications?)\b(?!\s+(?:answers?|drafts?|essays?|questions?|deadlines?)\b))`,
   "i",
 );
 
