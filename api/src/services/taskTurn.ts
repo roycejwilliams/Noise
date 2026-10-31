@@ -257,6 +257,15 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   // A send held for pacing (harness/proactive.ts coInitiated): the next look is no sooner than the hold, and the wake isn't spent.
   let heldUntil: Date | null = null;
   const linkOk = (l: string) => verified.some((v) => v.url === l) || events.some((e) => e.url === l);
+  // The finds a text may not name without carrying the link: every find this task holds whose link hasn't already gone to them
+  // since the task started (naming one they already have isn't a tease). Read once a turn.
+  let sentBefore: string[] | null = null;
+  const unsentFinds = async (): Promise<{ name: string; url: string }[]> => {
+    sentBefore ??= ((await deps.sentSince?.(new Date(task.createdAt)).catch(() => [] as Sent[])) ?? []).map((x) => x.text);
+    const bare = (u: string) => u.replace(/[)\].,;!?]+$/, "").replace(/\/+$/, "");
+    const out = new Set([...sentBefore, ...texts].flatMap((t) => t.match(/https?:\/\/\S+/g) ?? []).map(bare));
+    return ([...events, ...verified].filter((x) => !!x.url) as { name: string; url: string }[]).filter((f) => !out.has(bare(f.url)));
+  };
   // Co's daily pick rejected these for them: a task never sends them either (Royce, 2026-10-09: Claude for Games came back as
   // "confirmed" after the pick rejected it as not his interest).
   const rejected = new Set(((await deps.rejected?.().catch(() => [] as string[])) ?? []).map((n) => n.toLowerCase().replace(/[^a-z0-9|:\u2014\u2013]+/g, " ").trim()).filter(Boolean));
@@ -361,13 +370,15 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           const draft = (fix?: string) => draftTaskMessages({ firstName: deps.person.first_name || "them", goal: task.goal, items, what, context: [facts.verified_page_facts, `their deadline: ${task.deadline ?? "none"}`].join(" | "), fix }).catch(() => null);
           // Every find this task holds: one named in a caption or the closing goes with its own link in this send, or not at all
           // (the tease rule, PR #59; Royce 2026-10-31: "stackable with Francisco San" went out after francisco san's caption was dropped).
-          const finds = [...events, ...verified].filter((x) => !!x.url) as { name: string; url: string }[];
+          const finds = await unsentFinds();
+          // What they said themselves backs a caption's numbers and places too (their budget, their target), as for a search find.
+          const theirs = [task.theirWords ?? "", ...newestMemberLines(deps.recent, 50)].join(" ");
           const vet = (d: { captions: Map<string, string>; closing: string | null }) => {
             const good: { url: string; caption: string; name: string }[] = [];
             const dropped: string[] = [];
             for (const it of items) {
               const cap = d.captions.get(it.url);
-              const verdict = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`) : { ok: false, why: "no caption" };
+              const verdict = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`, theirs) : { ok: false, why: "no caption" };
               if (cap && verdict.ok) good.push({ url: it.url, caption: cap, name: it.name });
               else dropped.push(`${it.name}: ${verdict.why}`);
             }
@@ -442,7 +453,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         // A plain text carries no links, so it never names a find: a question, or saying plainly what can't be done, may go, but one
         // that names something found (a question too: "Want me to start the Francisco San form?", Royce 2026-10-31) is a tease
         // without its answer (PR #59), and waits for the message that carries the link.
-        const named = namedFinds(text, [...events, ...verified].filter((x) => !!x.url) as { name: string }[]);
+        const named = namedFinds(text, await unsentFinds());
         if (named.length) return { ok: false, error: `Not sent: it names ${named.slice(0, 2).join(", ")} without the link. A find goes as its link, then its caption: send it with tellThem and the links, or leave it unnamed.` };
         if (!final && progressReport(text, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
         const chase = chases(text, asOfNow, { final });

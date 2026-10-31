@@ -28,28 +28,33 @@ export function assembleMessages(items: { url: string; caption: string }[], clos
   return out;
 }
 
-// A caption says only what its own item's verified facts say.
-export function captionOk(caption: string, itemFacts: string): { ok: boolean; why: string | null } {
+// A caption says only what its own item's verified facts say, or what the member said themselves (their budget, their headcount,
+// their city), the same backing a search find's caption gets (agent/loopTools.ts captionProblems). Royce, 2026-10-31: his own
+// "5,000 or 8,000" grant target failed a caption as "not in its facts".
+export function captionOk(caption: string, itemFacts: string, theirs = ""): { ok: boolean; why: string | null } {
   const rules = checkDraft(caption, { maxSentences: 2, maxChars: 300 }).filter((c) => !c.pass);
   if (rules.length) return { ok: false, why: rules.map((r) => r.name).join(", ") };
-  const nums = numbersBacked(caption, itemFacts);
+  const backing = `${itemFacts} ${theirs}`;
+  const nums = numbersBacked(caption, backing);
   if (!nums.ok) return { ok: false, why: `numbers not in its facts: ${nums.missing.join(", ")}` };
-  const places = placesBacked(caption, itemFacts);
+  const places = placesBacked(caption, backing);
   if (!places.ok) return { ok: false, why: `places not in its facts: ${places.missing.join(", ")}` };
   // Scarcity, "free" and "sold out" with no number behind them (Phase B, B4): the same rule a find's caption is held to.
-  const said = captionNumbersBacked(caption, itemFacts);
+  const said = captionNumbersBacked(caption, backing);
   if (!said.ok) return { ok: false, why: said.problems.join("; ") };
   if (OFFERS_WHAT_CO_CANT.test(caption)) return { ok: false, why: "offers something Cue can't do" };
   return { ok: true, why: null };
 }
 
-// The found things a text names, by the first words of each name, so a find never goes out named without its link (Royce,
-// 2026-10-31: "stackable with Francisco San" went out and francisco san's link never did). The words count only inside one clause,
-// so "San Francisco, San Mateo" never names "francisco san"; a name that a sent item's own name contains is left alone, since the
-// words may mean that one.
+// The found things a text names, so a find never goes out named without its link (Royce, 2026-10-31: "stackable with Francisco
+// San" went out and francisco san's link never did). A name counts only when its first words appear as a proper noun: every
+// content word capitalised as written ("Francisco San", "the Founders Dinner"), never the same words as ordinary speech ("a
+// founders dinner series", "after the run club"), and a one-word name never at the start of a sentence. The words count only
+// inside one clause, so "San Francisco, San Mateo" never names "francisco san"; a name that a sent item's own name contains is
+// left alone, since the words may mean that one.
 const nameWords = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const NAME_GLUE = new Set(["a", "an", "the", "of", "in", "for", "at", "x", "and", "on", "to", "by", "with"]);
 export function namedFinds(text: string, finds: { name: string }[], sent: { name: string }[] = []): string[] {
-  const t = text.toLowerCase();
   const sentKeys = sent.map((s) => nameWords(s.name));
   const out: string[] = [];
   for (const f of finds) {
@@ -57,7 +62,13 @@ export function namedFinds(text: string, finds: { name: string }[], sent: { name
     const lead = (w[0] === "the" ? w.slice(1) : w).slice(0, 3);
     const key = lead.join(" ");
     if (key.length < 6 || out.includes(f.name) || sentKeys.some((k) => k.includes(key))) continue;
-    if (new RegExp(`(?<![a-z0-9])${lead.join("[^a-z0-9.,;:!?()\\n]+")}(?![a-z0-9])`).test(t)) out.push(f.name);
+    const content = lead.filter((x) => !NAME_GLUE.has(x)).length;
+    const re = new RegExp(`(?<![A-Za-z0-9])${lead.map((x) => `(${x})`).join("[^A-Za-z0-9.,;:!?()\\n]+")}(?![A-Za-z0-9])`, "gi");
+    for (const m of text.matchAll(re)) {
+      const proper = m.slice(1).every((x, i) => NAME_GLUE.has(lead[i]) || /^[A-Z0-9]/.test(x));
+      const atStart = /(^|[.!?]\s+)$/.test(text.slice(0, m.index));
+      if (proper && !(content === 1 && atStart)) { out.push(f.name); break; }
+    }
   }
   return out;
 }

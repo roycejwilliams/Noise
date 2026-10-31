@@ -113,15 +113,86 @@ const namedWithLink = (sent: string[][]) => sent.every((m) => !m.some((x) => /fr
   check("the same plain question without the name still goes", c.sent.length === 1 && c.sent[0][0] === ok, c.sent);
 }
 
+// 6. Review of #335: a find whose link already went to them since the task started isn't a tease to name again, and ordinary
+//    words that happen to match a generic find's name ("a run club grant") don't count as naming it.
+{
+  const RUN = { name: "Run Club", url: "https://lu.ma/runclub", tier: 2, facts: ["date: 2026-11-08"] };
+  const sentFsan = async () => [{ at: new Date("2026-10-31T19:00:00Z"), text: FSAN.url, kind: "link" }];
+  for (const [label, text, over, goes] of [
+    ["naming francisco san after its link already went", "Francisco San is the one to do first; the Awesome Foundation one can wait.", { sentSince: sentFsan }, true],
+    ["the same, before its link ever went", "Francisco San is the one to do first; the Awesome Foundation one can wait.", {}, false],
+    ["\"a run club grant\" with a find called Run Club on file", "Nothing new on grants yet that beats what you have; a run club grant came up but it's tiny.", { onFile: async () => [AWESOME, FSAN, SFGOV, RUN] }, true],
+  ] as const) {
+    const o = await run([{ tool: "tellThem", input: { what: label } }, { text }, { text }], over as any);
+    check(`${label}: ${goes ? "goes" : "held"}`, (o.sent.length === 1) === goes, { sent: o.sent, notes: o.notes });
+  }
+}
+// 7. Root cause of the dropped caption: the member's own target backs a caption's numbers, as it does for a search find. Royce's
+//    words on the call that started the task (post_call_follow_ups, 2026-10-31 9:42am). francisco san's caption that afternoon isn't
+//    recorded, only why it failed ("numbers not in its facts: 19, 8"); FSAN_BAD fails the same way. The "8" was his own target; the
+//    "19" ("$19k" against facts that spell out "nineteen thousand") still needs the redraft, numbersBacked unchanged.
+{
+  const ROYCE = "Yeah, I really wanna start with, like, six to eight people and then kind of gradually, uh, push it up through there. Um, so in order to fund it, since we have no funding, we're thinking about just applying for grants. I think that was a big emphasis of what we talked about yesterday. Um, and I feel like if we get a grant for at least, like, 5,000 or 8,000, that would kind of carry over for the last two months.";
+  const facts = `${FSAN.name} ${FSAN.facts.join(" ")}`;
+  check("before: Royce's target alone fails a caption (\"8\")", TM.captionOk("Grants from zero to nineteen thousand dollars, right in your $5k-8k range.", facts).why === "numbers not in its facts: 8");
+  check("now: his own words back it", TM.captionOk("Grants from zero to nineteen thousand dollars, right in your $5k-8k range.", facts, ROYCE).ok);
+  check("the afternoon's caption still fails only on \"19\"", TM.captionOk(FSAN_BAD, facts, ROYCE).why === "numbers not in its facts: 19", TM.captionOk(FSAN_BAD, facts, ROYCE));
+  check("a number neither the find nor they said still fails", !TM.captionOk("Grants up to $25k, right in your $5k-8k range.", facts, ROYCE).ok);
+  const cap = "Grants from zero to nineteen thousand dollars for parties and pop-ups, right in your $5k-8k range.";
+  const o = await run([{ text: JSON.stringify({ done: false, quote: null }) }, tellThem, { text: captions({ awesome: AWESOME_CAPTION, fsan: cap, closing: null }) }], { recent: `[Oct 31 9:40am] User said: ${ROYCE}` });
+  check("in a task turn, his words reach the caption check: francisco san's link goes first time", o.all.includes(FSAN.url) && o.all.includes(cap) && o.redrafts === 0, { sent: o.sent, notes: o.notes, redrafts: o.redrafts });
+}
+
 // Pure pieces.
 check("the form offer is an offer Cue can't keep", W.OFFERS_WHAT_CO_CANT.test(CLOSING));
-const cant = ["Should I submit it for you?", "I'll fill out the application tonight.", "Want me to apply for it?", "Want me to fill it in?", "I can complete the Block Party Fund application.", "Want me to call and check before Friday?"];
+// The review's probes (#335): refusals that must be caught, and things Cue can do that must not be.
+const cant = [
+  "Want me to start the Francisco San form now?", "Should I submit it for you?", "I'll fill out the application tonight.", "Want me to apply for it?", "Want me to fill it in?",
+  "I can complete the Block Party Fund application.", "Want me to send in the form?", "I'll apply on your behalf", "I'll file the application Friday", CLOSING,
+  "Want me to start your application?", "Want me to fill out the Awesome Foundation form?", "Want me to call and check before Friday?",
+];
 check(`fill in / submit / apply offers are caught: ${cant.filter((t) => !W.OFFERS_WHAT_CO_CANT.test(t)).join(" | ") || "all"}`, cant.every((t) => W.OFFERS_WHAT_CO_CANT.test(t)));
-const can = ["Want me to draft answers for the francisco san form?", "Want me to start drafting your application?", "Want me to write up answers for the application?", "The form takes ten minutes to fill out.", "You could start the form this weekend.", "Want me to keep an eye on when applications open?", "Want me to start a list of grants for LA?"];
-check(`drafting for them and plain mentions aren't refused: ${can.filter((t) => W.OFFERS_WHAT_CO_CANT.test(t)).join(" | ") || "none"}`, can.every((t) => !W.OFFERS_WHAT_CO_CANT.test(t)));
+const can = [
+  "I can draft your answers", "Want me to outline the application?", "I'll apply the filter", "I'll apply that to your list tomorrow", "I'll submit that to the team as feedback",
+  "I'll start a list of application deadlines for you by Friday", "Want me to start on a cover letter for the application?", "Want me to start a page for the application?",
+  "I'll start tracking when applications open, and text you Monday", "Want me to start watching for when applications open?", "I can complete the deadline list for the applications tomorrow",
+  "Want me to start a doc with your application answers?", "I'll file the grant notes under your Noise doc", "I'll start a one-pager you can paste into the application",
+  "Want me to fill in the gaps in your pitch for the application?", "I'll send in a few more options tomorrow", "I'll start a shortlist of fellowships with open applications by Thursday",
+  "Want me to put together the application materials?", "I'll file a reminder for the form deadline", "Should I start the research for your application this week?",
+  "Want me to draft answers for the francisco san form?", "Want me to start drafting your application?", "Want me to write up answers for the application?", "The form takes ten minutes to fill out.",
+  "You could start the form this weekend.", "Want me to keep an eye on when applications open?", "Want me to start a list of grants for LA?", "Want me to start the application answers?",
+];
+const wrong = can.filter((t) => W.OFFERS_WHAT_CO_CANT.test(t));
+check(`what Cue can do isn't refused: ${wrong.join(" | ") || "none"}`, !wrong.length);
 check("\"Francisco San\" names the find francisco san", TM.namedFinds(AWESOME_CAPTION, [FSAN]).length === 1);
 check("\"San Francisco, San Mateo\" doesn't", TM.namedFinds("Two in San Francisco, San Mateo too.", [FSAN]).length === 0);
 check("a name a sent item's own name holds is left alone", TM.namedFinds("The Awesome Foundation SF chapter.", [{ name: "Awesome Foundation" }], [AWESOME]).length === 0);
+// The review's naming probe (#335): a realistic kept list of generic names, and task texts that don't name any of them as a find.
+// Only a proper noun counts; what's left is place and week names written as proper nouns.
+const generic = [
+  "Awesome Foundation San Francisco Chapter Grant", "francisco san", "SF Open Funding Opportunity", "Community Arts Grant", "Small Business Grant Program", "The Awesome Foundation", "Bay Area Community Fund", "Los Angeles Arts Council", "Neighborhood Empowerment Network", "Kickstarter",
+  "Run Club", "SF Run Club", "Builders who Run SF — 5M Run & BBQ at Angel Island", "A Jar of Pickles x Junbi Mountain View", "Founders Dinner", "Tech Week", "SF Climate Week", "Demo Day", "Happy Hour", "Book Club", "Coffee + Code", "Sunday Supper", "AI Happy Hour", "Women in Tech Brunch", "Hackathon", "A Night of Jazz", "Open Studio Night", "Startup Grind", "Supper Club", "Dinner Party", "San Francisco Tech Week", "Founders & Funders", "Pitch Night", "Climate Week", "The Social", "Creative Mornings", "Morning Run", "Community Dinner", "Writers Workshop",
+  "The Commons", "The Battery", "The Interval", "The Laundry", "The Midway", "Ferry Building", "Golden Gate Park", "Dolores Park", "Mission Bay", "The Ramp",
+].map((name) => ({ name }));
+const ordinary = [
+  "A $1,000 monthly microgrant from the SF chapter, no application overhead.", "Small and quick: a run club that meets Saturdays at 8am, then coffee.", "A founders dinner series in SoMa, ten seats, the host picks the table.",
+  "Happy hour after the talks, on the rooftop.", "Want me to keep an eye out for more run clubs near you?", "Free, outdoors, and the demo day crowd tends to stay late.",
+  "A small book club for founders, monthly, at a bookstore in the Mission.", "A Sunday supper series at a chef's home, twelve seats.", "It's a hackathon for climate tools, two days, teams of three.",
+  "A night of jazz and natural wine at a small bar in North Beach.", "Their pitch night is open to anyone with a deck.", "A supper club format, so you'd sit with strangers.",
+  "Grants go to community dinners and gatherings in the Bay Area.", "A good fit for your dinner party idea: they fund food and space.", "Social, low-key, and mostly first-timers.",
+  "A writers workshop in a bookstore, six weeks.", "Funding for small business owners in SF, up to $10,000.", "Creative mornings style talks, 8:30am, coffee included.",
+  "Open studio night at a ceramics co-op, BYO clay.", "The commons area has room for forty people.", "Monthly, rotating hosts, a community dinner every first Friday.",
+  "A morning run then breakfast; they keep it under twenty people.", "Women in tech brunch, every other Sunday.", "Startup grind events tend to be big; this one is smaller.",
+  "Coffee + code on Saturday mornings at a cafe in Hayes Valley.", "Want me to look for a few more in Los Angeles arts circles too?", "The Bay Area community fund backs neighborhood events.",
+];
+const hit = ordinary.filter((t) => TM.namedFinds(t, generic).length);
+check(`ordinary words don't name a generic find (${hit.length}/${ordinary.length}): ${hit.join(" | ") || "none"}`, !hit.length);
+const proper = ["Hosted during Tech Week, so expect a crowd of founders.", "The space is right by Golden Gate Park.", "Two blocks from Dolores Park, with a back patio."];
+check("a generic find written as a proper noun still counts (the known limit)", proper.every((t) => TM.namedFinds(t, generic).length === 1));
+const real = [AWESOME_CAPTION, "Want me to start the Francisco San form now?", "Francisco San looks like the strongest fit so far, want the details?", "The Founders Dinner at Zuni is Thursday.", "Also on the list: Dolores Run Club."];
+const realFinds = [FSAN, { name: "Founders Dinner at Zuni" }, { name: "Dolores Run Club 🏃 #SFRuns" }];
+check("Royce's real texts and real find names still count", real.every((t) => TM.namedFinds(t, realFinds).length === 1), real.map((t) => TM.namedFinds(t, realFinds)));
+check("a one-word name never at a sentence start", TM.namedFinds("Kickstarter campaigns are slow.", [{ name: "Kickstarter" }]).length === 0 && TM.namedFinds("It also takes Kickstarter backers.", [{ name: "Kickstarter" }]).length === 1);
 
 console.log(`find links: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
