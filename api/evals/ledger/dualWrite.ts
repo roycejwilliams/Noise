@@ -320,13 +320,15 @@ check("sameThing: a shared link is the same thing; one name at two links is not;
   await S.runBackfill(filled, two);
   check("…and the backfill writes both, each with its own link", filled.rows.filter((r) => r.meta.kind === "find").map((r) => r.url).sort().join(" ") === "https://lu.ma/run-oakland https://lu.ma/run-sf" && S.reconcileMember(two, filled.rows).unmatched.length === 0, filled.rows.map((r) => [r.objectKey, r.url]));
 }
-// The probe's other two cases, kept as they are by ruling (known limits in the PR): a partly refused shareFinds is recorded from its
-// input, and the same link sent on purpose twice within the window is one act.
+// The probe's other two cases. A partly refused shareFinds is recorded from what went only (its recordAs, fixed in
+// fix/sharefinds-records-what-went; the tool through the guard is tested in evals/ledger/shareFindsRecord.ts), so with the one that
+// went already recorded as a recommendation, nothing new is written. The same link sent on purpose twice within the window is one
+// act, by design.
 {
   const st = L.memoryLedgerStore();
   await L.writeLedgerRow(st, L.recommendationRow({ userId: U, memoryId: "j1", at: T0, name: "Jazz Night", url: "https://lu.ma/jazz", sentAs: "https://lu.ma/jazz" }));
-  const r = await L.writeLedgerRow(st, L.toolOutcomeRow({ userId: U, tool: "shareFinds", receipt: "done", input: { items: [{ link: "https://lu.ma/jazz", caption: "Jazz Night, Thursday" }, { link: "https://lu.ma/refused", caption: "Private dinner (refused)" }] }, decisionId: "9", at: at(2_000) }));
-  check("known limit (own PR before the reader switch): a partly refused shareFinds keeps its refused item as sent", r === "written" && st.rows.some((x) => x.url === "https://lu.ma/refused"));
+  const r = await L.writeLedgerRow(st, L.toolOutcomeRow({ userId: U, tool: "shareFinds", receipt: "done", input: { items: [{ link: "https://lu.ma/jazz", caption: "Jazz Night, Thursday" }] }, decisionId: "9", at: at(2_000) }));
+  check("a partly refused shareFinds (recorded as what went) never keeps the refused item as sent", r === "collapsed" && !st.rows.some((x) => x.url === "https://lu.ma/refused") && st.rows.length === 1, { r, rows: st.rows.map((x) => x.url) });
   const s3 = L.memoryLedgerStore();
   await L.writeLedgerRow(s3, L.toolOutcomeRow({ userId: U, tool: "shareLink", receipt: "done", input: { urls: ["https://lu.ma/a"] }, decisionId: "1", at: T0 }));
   const x2 = await L.writeLedgerRow(s3, L.toolOutcomeRow({ userId: U, tool: "shareLink", receipt: "done", input: { urls: ["https://lu.ma/a"] }, decisionId: "2", at: at(90_000) }));
