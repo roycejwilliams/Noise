@@ -22,7 +22,7 @@ import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { VARIETY_GUIDE } from "../harness/stockLines.js";
 import { BRAND, CALL_COACHING } from "./textRhythm.js";
 import { CO_CORE_PARTS } from "./coCore.js";
-import { CALL_LLM_MODEL } from "./callLlmProxy.js";
+import { CALL_LLM_MODEL, CALL_PROXY_CASCADE_TIMEOUT_SECS } from "./callLlmProxy.js";
 import { CUE_GUIDE, VOICE_CUES, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
@@ -364,6 +364,13 @@ export const AGENT_DEFAULTS = {
   // dated 4.6, so Sonnet 4.5. Never Haiku: the voice would change mid-call.
   backupLlm: "claude-sonnet-4-5@20250929",
   cascadeTimeoutSecs: 3,
+  // Behind our endpoint (2026-10-31, Royce, after Cue hung up mid-call: with backup "disabled" ElevenLabs retried our endpoint three
+  // times and then ended the call): when our endpoint fails or runs past the timeout, ElevenLabs' own Sonnet 4.6, the direct path's
+  // model, answers that turn from the same prompt. What it can't do: Cue's own tools (startTask, shareLink, notes, tasks...: only
+  // ElevenLabs' end_call and voicemail tools are on the agent), the held-claim and spoken fact checks, the one-question rule, the turn
+  // and voice-read notes, and per-turn dedupe. A promise it speaks is still picked up after the call from the transcript
+  // (services/callFollowThrough.ts). An off-brain turn beats a hang-up.
+  proxyBackupLlm: "claude-sonnet-4-6",
   // Hume ran Co at temperature 1. The agent was left at ElevenLabs' default of 0,
   // where the model repeats the prompt's own example lines almost word for word
   // (2026-10-04: "sounds scripted"). 0.8 keeps it varied; the rules the prompt
@@ -449,10 +456,12 @@ export function buildAgentConfig(o: {
           custom_llm: o.proxy ? { url: o.proxy.url, model_id: o.proxy.model ?? CALL_LLM_MODEL, api_key: { secret_id: o.proxy.secretId }, api_type: "chat_completions", ...(o.proxy.voiceOnly ? { request_headers: { "x-co-mode": "voice" } } : {}) } : null,
           temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
           // If the main model is slow to start, ElevenLabs falls to another; pin it to the same model so the voice and style don't shift mid-call.
-          // Behind our endpoint there is no fallback (2026-10-08): ElevenLabs' backup would answer from its own Haiku, without Co's tools,
-          // the spoken fact check or the brain the call runs on. A slow first token is a pause; an off-brain answer is worse.
-          backup_llm_config: o.proxy ? { preference: "disabled" } : { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },
-          cascade_timeout_seconds: AGENT_DEFAULTS.cascadeTimeoutSecs,
+          // Behind our endpoint the backup is ElevenLabs' own Sonnet 4.6 (AGENT_DEFAULTS.proxyBackupLlm: what it can't do is listed there).
+          // It was "disabled" until 2026-10-31 (an off-brain answer seemed worse than a pause); with it disabled a slow endpoint ended the call.
+          backup_llm_config: { preference: "override", order: [o.proxy ? AGENT_DEFAULTS.proxyBackupLlm : AGENT_DEFAULTS.backupLlm] },
+          // Behind our endpoint, ElevenLabs' wait before it tries again or falls back is CALL_PROXY_CASCADE_TIMEOUT_SECS (2-15s allowed;
+          // services/callLlmProxy.ts ends every turn 2.5s inside it). 3s, the direct path's, retried nearly every turn that used a tool.
+          cascade_timeout_seconds: o.proxy ? CALL_PROXY_CASCADE_TIMEOUT_SECS : AGENT_DEFAULTS.cascadeTimeoutSecs,
           tools: [
             // ElevenLabs' own system tools ride in the same list (type "system");
             // the separate built_in_tools field silently stored nothing (2026-10-03).

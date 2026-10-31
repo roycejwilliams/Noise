@@ -113,6 +113,16 @@ export function wordsAreTheirs(quote: unknown, theirText: string): boolean {
   return q.length >= 6 && norm(theirText).includes(q);
 }
 
+// On a call there is nothing written: their words are the call's transcript of what they said, with its "um"s and "uh"s, and a quote
+// of it leaves those out (2026-10-31 call: "knowing what you know about our company, I would want you to go research" was refused
+// against "knowing what you know about our company, um, I would want you to go research"). Same check, fillers taken out of both.
+const SPOKEN_FILLER = /\b(?:u+m+|u+h+m*|e+r+m+|e+r+|a+h+|h+m+|m+h*m+)\b/g;
+const unfill = (s: unknown) => norm(s).replace(SPOKEN_FILLER, " ").replace(/\s+/g, " ").trim();
+export function spokenWordsAreTheirs(quote: unknown, transcript: string): boolean {
+  const q = unfill(quote);
+  return q.length >= 6 && unfill(transcript).includes(q);
+}
+
 // A short yes to Co's own offer ("want me to check in after?" / "yes") is the member asking: the quote
 // check needs six characters, which "yes" and "sure" never have.
 const YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|do it|sounds good|that would be great|yes please|go ahead|definitely|absolutely)[.!]*$/i;

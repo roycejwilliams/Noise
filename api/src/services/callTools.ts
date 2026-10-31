@@ -80,7 +80,9 @@ const CALL_MEMORY_MS = 60 * 60_000;
 // found: events a search on this call returned, by name. owed: links a send on this call didn't get to them yet (sent the moment
 // the call ends). inflight: what a send that's still running was for, by its tool call, so a timeout knows what's owed.
 type OnFile = { name: string; url: string; caption: string };
-type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
+// turnRuns: what each write tool did on each of the member's turns, by the request that ran it (see turnToolKey).
+type TurnRun = { attempt: string; result: Promise<any> };
+type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]>; turnRuns?: Map<string, TurnRun> };
 const callMemory = new Map<string, CallMem>();
 function memoryFor(key: string): CallMem {
   const now = Date.now();
@@ -362,9 +364,37 @@ export type CallToolsInput = {
   sendText?: (text: string) => Promise<boolean>;
 };
 
+// One turn of theirs, the same across every request ElevenLabs sends for it: how many lines they've said on the call and what they
+// said this turn. ElevenLabs re-sends a turn it gave up waiting on (its cascade: at least three tries of our endpoint, each with
+// whatever Cue had already said appended), and the tries overlap: 2026-10-31, three requests for one turn, each writing its own
+// startTask, and earlier on the same call updateTask ran three times for one turn.
+export function turnKeyOf(turnWords: string, callWords: string): string {
+  const lines = callWords.split("\n").filter((l) => l.trim()).length;
+  return `${lines}|${normWords(turnWords).trim().slice(0, 300)}`;
+}
+// Pure: a write tool's key within one turn: its name, and the task or loop it's on when it names one (two tasks updated on one turn
+// are two writes; the same tool again is the same write).
+export function turnToolKey(turnKey: string, name: string, input: unknown): string {
+  const x = (input ?? {}) as { taskId?: unknown; loopId?: unknown };
+  const on = x.taskId ?? x.loopId;
+  return `${turnKey}|${name}${on !== undefined && on !== null ? `#${String(on)}` : ""}`;
+}
+const ALREADY_THIS_TURN = "Already done on this turn: an earlier try of this same reply did it (the result above is that one). It's done; don't do it again, and say so only as what the result says.";
+const STARTED_THIS_TURN = "Already started on this turn: an earlier try of this same reply started it and it's still going on its own. Don't start it again, and don't say it's done.";
+let attempts = 0;
+
 // Pure enough to test: the call's toolset for one turn, from the texting tools, guarded the same way.
 export function buildCallTools(i: CallToolsInput): CallToolset {
+  // Never an empty turn: when a request carries no words of theirs for this turn, their last line on the call stands for it (a
+  // quote or a yes is checked against what they said, never against nothing).
+  if (!i.turnWords.trim()) {
+    const last = i.callWords.split("\n").filter((l) => l.trim()).pop() ?? "";
+    i = { ...i, turnWords: last.trim() };
+  }
   const mem = memoryFor(i.callKey);
+  // This request (one try of the turn), and the turn it is a try of.
+  const attempt = `a${++attempts}`;
+  const turnKey = turnKeyOf(i.turnWords, i.callWords);
   // A text to them during the call, from Co's number (a page's or deck's link, or a background tool's honest "it didn't come
   // together"), logged like any text. A test member's texts are logged, never sent (services/sendblue.ts).
   const textThem = i.sendText ?? (async (text: string): Promise<boolean> => {
@@ -465,6 +495,28 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     const parsed = t.inputSchema && typeof t.inputSchema.safeParse === "function" ? t.inputSchema.safeParse(input ?? {}) : { success: true, data: input ?? {} };
     if (!parsed.success) return { ok: false, error: `The input didn't fit: ${parsed.error.issues.slice(0, 3).map((x: any) => `${x.path.join(".")}: ${x.message}`).join("; ")}. Fix it and try once more, or say plainly it wasn't done.` };
     const t0 = Date.now();
+    // The same write from another try of this same turn: never run twice. Done (or still going) there, its result is this one's; refused
+    // there, this try may run it. A read runs again (it changes nothing). Inside one request the guard's own per-turn limits hold.
+    const tk = plan.run === "after" || plan.kind !== "read" ? turnToolKey(turnKey, name, parsed.data) : null;
+    const prior = tk ? mem.turnRuns?.get(tk) : undefined;
+    if (prior && prior.attempt !== attempt) {
+      const r = await prior.result.catch(() => null);
+      if (r && (r.ok !== false || r.stillRunning === true || r.pending === true || typeof r.made === "string")) {
+        if (!i.dryRun) recordDecision({ layer: 8, decision: "call.tool", userId: i.userId, outcome: "skip", action: name, proposal: { ms: Date.now() - t0, turn: i.turnWords.slice(0, 200), repeatOfEarlierTry: true }, reason: "already done on this turn by an earlier try of the same reply" }).catch(() => {});
+        return { ...r, note: r.ok === false || r.pending === true ? STARTED_THIS_TURN : ALREADY_THIS_TURN, alreadyThisTurn: true };
+      }
+    }
+    let result: any;
+    let settle: (v: any) => void = () => {};
+    if (tk) (mem.turnRuns ??= new Map()).set(tk, { attempt, result: new Promise((res) => { settle = res; }) });
+    try {
+      result = await runOnce(name, input, toolUseId, t, plan, parsed, t0);
+    } finally {
+      settle(result ?? null);
+    }
+    return result;
+  };
+  const runOnce = async (name: string, input: unknown, toolUseId: string, t: any, plan: CallRun, parsed: any, t0: number): Promise<any> => {
     let result: any;
     const work = (async () => t.execute(parsed.data, { toolCallId: toolUseId, messages: [] }))().catch((err: any) => ({ ok: false, error: `It failed: ${String(err?.message ?? err).slice(0, 160)}. Say plainly it wasn't done.` }));
     if (plan.run === "after" && !i.dryRun) {

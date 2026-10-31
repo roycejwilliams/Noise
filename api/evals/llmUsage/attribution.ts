@@ -112,7 +112,7 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   await it.return(undefined);
   check("a turn cut off mid-stream still writes what it used (null member: no verified token)", rows.length === 1 && rows[0].userId === null);
   const route = src("routes/callLlm.ts");
-  check("the call route hands the verified member to the upstream and scopes the turn", /stream: \(r\) => upstream\(r, userId\)/.test(route) && /withMember\(null, \(\) => handleTurn\(req, res\)\)/.test(route) && /setScopeMember\(userId\)/.test(route));
+  check("the call route hands the verified member to the upstream and scopes the turn", /stream: \(r\) => upstream\(r, userId, stop\.signal\)/.test(route) && /withMember\(null, \(\) => handleTurn\(req, res\)\)/.test(route) && /setScopeMember\(userId\)/.test(route));
 }
 
 // ---------------------------------------------------------------- the direct SDK calls

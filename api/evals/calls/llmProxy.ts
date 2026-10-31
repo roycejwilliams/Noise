@@ -327,20 +327,21 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const loopForever = scripted([[...text("One more."), ...tool("s", "startTask", '{"goal":"again"}')]]);
     const r = await go(baseBody(), { stream: loopForever.stream, tools: fakeSet(async () => { runs++; return { ok: true }; }), maxToolSteps: 2 });
     check("the step cap: at most maxToolSteps rounds of Cue's tools, then the model answers with tools off", runs === 2 && loopForever.reqs.length === 3 && loopForever.reqs[2].tool_choice?.type === "none" && !loopForever.reqs[1].tool_choice, { runs, reqs: loopForever.reqs.length });
-    check("the default cap is 3 rounds in 8 seconds", P.CALL_TOOL_STEPS === 3 && P.CALL_TOOL_BUDGET_MS === 8000);
+    check("the default cap is 3 rounds in 6.5 seconds (2026-10-31: the answer gets the rest of the 9.5s turn cap)", P.CALL_TOOL_STEPS === 3 && P.CALL_TOOL_BUDGET_MS === 6500 && P.CALL_TURN_CAP_MS - P.CALL_TOOL_BUDGET_MS >= P.CALL_REGEN_MIN_MS);
     const slow = scripted([[...text("On it."), ...tool("sl", "startTask", '{"goal":"slow"}')], text("It'll come by text.")]);
     let finished = false;
     const t0 = Date.now();
     const rounds: any[] = [];
-    const r2 = await go(baseBody(), { stream: slow.stream, toolBudgetMs: 60, onToolRound: (x: any) => rounds.push(x), tools: fakeSet(() => new Promise((res) => setTimeout(() => { finished = true; res({ ok: true }); }, 400))) });
+    const r2 = await go(baseBody(), { stream: slow.stream, toolBudgetMs: 60, onToolRound: (x: any) => rounds.push(x), tools: fakeSet(() => new Promise((res) => setTimeout(() => { finished = true; res({ ok: true }); }, P.CALL_TOOL_FLOOR_MS + 600))) });
     // The after-call health check's slow_turn (services/callHealth.ts, via routes/callLlm.ts call.turn_health).
     check("a round past the time budget says so (overBudget), for the after-call health check", rounds.length === 1 && rounds[0].overBudget === true && rounds[0].last === true, rounds);
     const fastRounds: any[] = [];
     await go(baseBody(), { stream: scripted([[...text("On it."), ...tool("f1", "startTask", '{"goal":"quick"}')], text("Done.")]).stream, onToolRound: (x: any) => fastRounds.push(x), tools: fakeSet(async () => ({ ok: true })) });
     check("a round inside the budget is not overBudget", fastRounds.length === 1 && fastRounds[0].overBudget === false, fastRounds);
     const fed = slow.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
-    check("the time budget: a slow tool doesn't hold the voice past it; the model is told it isn't back yet", Date.now() - t0 < 350 && /stillRunning/.test(fed) && slow.reqs[1].tool_choice?.type === "none" && /It'll come by text/.test(r2.content), { ms: Date.now() - t0, fed });
-    await new Promise((res) => setTimeout(res, 450));
+    // Past the budget a tool still gets CALL_TOOL_FLOOR_MS (a 93ms startTask was called "not back yet" at 0ms, 2026-10-31), no more.
+    check("the time budget: a slow tool doesn't hold the voice past it (or past the floor); the model is told it isn't back yet", Date.now() - t0 < P.CALL_TOOL_FLOOR_MS + 300 && /stillRunning/.test(fed) && slow.reqs[1].tool_choice?.type === "none" && /It'll come by text/.test(r2.content), { ms: Date.now() - t0, fed });
+    await new Promise((res) => setTimeout(res, 700));
     check("and the slow tool still finishes on its own (the action happens)", finished);
     void r;
   }

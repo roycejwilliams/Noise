@@ -4,6 +4,7 @@ process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 import fs from "node:fs";
 const E = await import("../../src/services/elevenLabsCalls.js");
+const CLP = await import("../../src/services/callLlmProxy.js");
 const V = await import("../../src/services/voiceFinds.js");
 const B = await import("../../src/services/callBriefing.js");
 const { default: pool } = await import("../../src/db/db.js");
@@ -105,7 +106,11 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
   const on: any = E.buildAgentConfig({ name: "Cue", prompt, voiceId: "v", apiUrl: "https://x.test", proxy: { url: "https://x.test/co/el/llm", secretId: "sec_1" } });
   const p: any = on.conversation_config.agent.prompt;
   check("proxy on: the agent's LLM is the custom one, at our endpoint, with the workspace secret as its bearer", p.llm === "custom-llm" && p.custom_llm.url === "https://x.test/co/el/llm" && p.custom_llm.api_key.secret_id === "sec_1" && p.custom_llm.api_type === "chat_completions", p.custom_llm);
-  check("proxy on: the endpoint names the call brain (Sonnet 4.6), the tools stay on the agent, and there is no off-proxy fallback", p.custom_llm.model_id === "claude-sonnet-4-6" && p.tools.length === tools.length && p.backup_llm_config.preference === "disabled");
+  check("proxy on: the endpoint names the call brain (Sonnet 4.6) and the tools stay on the agent", p.custom_llm.model_id === "claude-sonnet-4-6" && p.tools.length === tools.length);
+  // 2026-10-31: with the backup "disabled", ElevenLabs retried our endpoint three times and ended the call mid-sentence.
+  check("proxy on: a failed or slow endpoint falls back to ElevenLabs' own Sonnet 4.6 (the direct path's model), never a hang-up", p.backup_llm_config.preference === "override" && p.backup_llm_config.order.join() === "claude-sonnet-4-6" && !/haiku/i.test(JSON.stringify(p.backup_llm_config)), p.backup_llm_config);
+  check("proxy on: ElevenLabs waits 12s on the endpoint (2-15 allowed), and every proxy turn ends 2.5s inside it", p.cascade_timeout_seconds === 12 && p.cascade_timeout_seconds >= 2 && p.cascade_timeout_seconds <= 15 && p.cascade_timeout_seconds * 1000 - CLP.CALL_TURN_CAP_MS >= 2500, p.cascade_timeout_seconds);
+  check("proxy off keeps its own 3s timeout and dated Sonnet 4.5 backup", ap.cascade_timeout_seconds === 3);
   check("proxy off (the live path): the backup is pinned to the nearest Sonnet", ap.backup_llm_config.preference === "override" && ap.backup_llm_config.order[0] === "claude-sonnet-4-5@20250929");
   check("proxy off (the live path): direct Sonnet 4.6, no custom_llm at all", ap.llm === "claude-sonnet-4-6" && ap.custom_llm === null);
   check("the call's user id and token may ride to our endpoint (custom_llm_extra_body), and registration sends them", cfg.platform_settings.overrides.custom_llm_extra_body === true && /customLlmExtraBody: \{ user_id: o\.userId, call_token: callToken \}/.test(src("services/elevenLabsCalls.ts")));

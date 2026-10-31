@@ -28,9 +28,25 @@ const itemsOf = (input: unknown): string[] => { const i = (input ?? {}) as { wha
 // database and the tools' imports). One turn's bounds: at most CALL_TOOL_STEPS rounds of Co's tools, inside CALL_TOOL_BUDGET_MS from
 // the request arriving. A tool still running at the budget keeps running on its own (its write lands, the guard logs it) and the
 // model is told it isn't back yet. 3 rounds: say a line, act, maybe one follow-on (start the task after a refused document), answer.
-// 8 seconds: a task or note write is ~50ms, a document's PDF and send a few seconds; past that the voice has waited long enough.
+// The budget: a task or note write is ~50ms, a document's PDF and send a few seconds; past that the voice has waited long enough.
 export const CALL_TOOL_STEPS = 3;
-export const CALL_TOOL_BUDGET_MS = 8000;
+// No new round of tools starts past this (2026-10-31: was 8s, and a turn with a refused tool and its retry ran 13.7s): what's left of
+// the turn's hard cap below is for the answer.
+export const CALL_TOOL_BUDGET_MS = 6500;
+// ElevenLabs waits cascade_timeout_seconds on our endpoint, then gives up on the try and sends the turn again (at least three tries;
+// with no backup the call ends: "custom_llm generation failed", 2026-10-31). Its docs don't say whether that clock is the first
+// token, the gap between chunks or the whole reply (elevenlabs.io/docs/eleven-agents/customization/llm/llm-cascading), so a proxy
+// turn holds to all three: the agent's timeout is CALL_PROXY_CASCADE_TIMEOUT_SECS (services/elevenLabsCalls.ts buildAgentConfig),
+// every turn ends by CALL_TURN_CAP_MS (2.5s inside it), and once anything has gone out the stream is never quiet longer than
+// CALL_HEARTBEAT_MS (an empty chunk, nothing spoken).
+export const CALL_PROXY_CASCADE_TIMEOUT_SECS = 12;
+export const CALL_TURN_CAP_MS = 9500;
+export const CALL_HEARTBEAT_MS = 1000;
+// A held line is answered again only with this much of the cap left (a model's first sentence is ~1.2-1.8s on a call).
+export const CALL_REGEN_MIN_MS = 2000;
+// A tool started late in the turn still gets this long to come back before it's called "not back yet" (2026-10-31: startTask was
+// done in 93ms, but started past the budget it was given 0ms, told the model "not back yet", and the model tried it again).
+export const CALL_TOOL_FLOOR_MS = 750;
 export type CallToolset = {
   defs: { name: string; description: string; input_schema: unknown }[];
   names: Set<string>;
@@ -298,6 +314,8 @@ export type ProxyDeps = {
   tools?: CallToolset | null;
   maxToolSteps?: number;
   toolBudgetMs?: number;
+  // The turn's hard cap (capTurn ends the stream there); here it decides whether there's time to answer a held line again.
+  turnCapMs?: number;
   // Each of Co's tools as it comes back (or doesn't, inside the budget), and each round fed back to the model.
   onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
   // overBudget: the turn had used its whole time budget (CALL_TOOL_BUDGET_MS) when the round ended.
@@ -536,6 +554,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // What Co's tools returned this turn also backs what Co says (an event searchEvents found can be named).
   let toolCorpus = "";
   let toolsOff = false;
+  // A tool refused this turn (not run: a quote that isn't theirs, an input to fix), by name. One retry, then the model answers.
+  const refusals = new Map<string, number>();
+  const capMs = deps.turnCapMs ?? CALL_TURN_CAP_MS;
+  const timeLeft = () => capMs - (now() - t0);
   for (let step = 0; ; step++) {
     const blocks: ABlock[] = [];
     const runs: Promise<{ block: ABlock; raw: unknown; timedOut: boolean }>[] = [];
@@ -573,7 +595,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
             pendingNow = [];
             for (const p of release) { const out = say(p); if (out) yield chunk({ content: out }); }
           }
-          runs.push(runTool(co!,cur.id, cur.name, input, Math.max(0, budgetMs - (now() - t0)), deps.onTool));
+          runs.push(runTool(co!, cur.id, cur.name, input, Math.max(CALL_TOOL_FLOOR_MS, budgetMs - (now() - t0)), deps.onTool));
         } else if (cur?.kind === "el" && !cur.args) {
           // A call tool with no input still sends valid JSON: ElevenLabs parses the arguments string.
           yield chunk({ tool_calls: [{ index: toolIndex, function: { arguments: "{}" } }] });
@@ -627,9 +649,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     // What came back done: only now may the turn's words say it went (services/callTools.ts marks a send that reached them delivered).
     claims.inFlight = false;
     let roundTried = 0, roundWent = 0;
-    for (const x of settled) {
-      const raw = x.raw as { ok?: unknown; delivered?: unknown; pending?: unknown; items?: { name?: unknown; url?: unknown; delivered?: unknown }[] } | null;
+    let refusedTwice = false;
+    for (const [k, x] of settled.entries()) {
+      const raw = x.raw as { ok?: unknown; delivered?: unknown; pending?: unknown; stillRunning?: unknown; items?: { name?: unknown; url?: unknown; delivered?: unknown }[] } | null;
       const id = (x.block as { tool_use_id?: string }).tool_use_id ?? "";
+      if (!x.timedOut && raw && raw.ok === false && raw.stillRunning !== true) {
+        const name = (blocks.filter((b) => b.type === "tool_use")[k] as { name?: string } | undefined)?.name ?? "";
+        const n = (refusals.get(name) ?? 0) + 1;
+        refusals.set(name, n);
+        if (n >= 2) refusedTwice = true;
+      }
       const tried = sendIds.get(id);
       if (tried) {
         // Per item: what went, and what was tried and didn't (failed, not back in time).
@@ -651,7 +680,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     // ElevenLabs' own tool in the same message (a goodbye with end_call): Co's tools have run; the call's tool goes out as it is.
     if (elCalled) break;
     const overBudget = now() - t0 >= budgetMs;
-    const last = step + 1 >= maxSteps || overBudget;
+    // A tool refused twice this turn (its one retry refused too): no third try, the model answers (2026-10-31: startTask refused on
+    // three tries of one turn).
+    const last = step + 1 >= maxSteps || overBudget || refusedTwice;
     toolsOff = last;
     req = {
       ...req,
@@ -693,7 +724,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     blanked = true;
     spokeSinceTools = false;
   }
-  if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools)) {
+  // Too little of the turn left to answer again: the held line's fallback below (or what was said) ends it, never a reply cut mid-way.
+  const roomToRegen = timeLeft() >= CALL_REGEN_MIN_MS;
+  if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools) && roomToRegen) {
     const already = spokenLines.length ? ` You already said: "${spokenLines.join(" ")}". Carry on from it; don't repeat it.` : "";
     const note = `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${already}`;
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
@@ -717,7 +750,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   }
   if (heldStock && !spokeAny && !blanked && finish !== "tool_calls") { const h = sayHeld(); if (h) yield chunk({ content: h }); }
   // end_call was held and nothing else was said: Co answers them instead, once, in its own words (never a scripted line).
-  if (heldEnd && !spokeAny && finish !== "tool_calls") {
+  if (heldEnd && !spokeAny && finish !== "tool_calls" && timeLeft() >= CALL_REGEN_MIN_MS) {
     const note = "You were about to end the call, but they haven't said goodbye. Don't end it and don't say goodbye: answer what they last said.";
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
     inRetry = true;
@@ -751,6 +784,57 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   yield chunk({}, finish === "length" ? "stop" : finish);
 }
 
+// The turn's hard cap and its heartbeat, around runCallLlm's stream (routes/callLlm.ts). At the cap the turn ends on what was already
+// said (the upstream is aborted, a tool still running keeps going on its own); if nothing was said, on SAFE_LINE, the approved
+// after-call line ("I'll look into that after the call and text it over."), which the caller opens as a promise like any spoken one.
+// Between chunks, once anything has gone out, an empty chunk every heartbeatMs: nothing is spoken, the stream is never quiet. Before
+// the first chunk nothing is sent, so a failure there is still a real error ElevenLabs can fall back on.
+export async function* capTurn(
+  gen: AsyncGenerator<OaiChunk>,
+  o: { capMs?: number; heartbeatMs?: number; startedAt?: number; abort?: () => void; onCapped?: (line: string | null) => void } = {},
+): AsyncGenerator<OaiChunk> {
+  const capMs = o.capMs ?? CALL_TURN_CAP_MS;
+  const beatMs = o.heartbeatMs ?? CALL_HEARTBEAT_MS;
+  const startedAt = o.startedAt ?? Date.now();
+  let said = false;
+  // Something real has gone out (words or a tool call), so the route has sent its headers: only then do heartbeats go out.
+  let live = false;
+  let last: OaiChunk | null = null;
+  let pending: Promise<IteratorResult<OaiChunk>> | null = null;
+  for (;;) {
+    const left = capMs - (Date.now() - startedAt);
+    if (left <= 0) break;
+    pending ??= gen.next();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wait = Math.min(left, live ? beatMs : left);
+    const tick = new Promise<"tick">((r) => { timer = setTimeout(() => r("tick"), wait); });
+    const r = await Promise.race([pending, tick]);
+    if (timer) clearTimeout(timer);
+    if (r === "tick") {
+      if (live && last && capMs - (Date.now() - startedAt) > 0) yield { ...last, choices: [{ index: 0, delta: { content: "" }, finish_reason: null }] };
+      continue;
+    }
+    pending = null;
+    if (r.done) return;
+    const c = r.value;
+    if (typeof c.choices[0]?.delta?.content === "string" && c.choices[0].delta.content.trim()) said = live = true;
+    if (Array.isArray(c.choices[0]?.delta?.tool_calls)) live = true;
+    last = c;
+    yield c;
+    if (c.choices[0]?.finish_reason) return;
+  }
+  // Capped: whatever the generator was waiting on is let go (its rejection after the abort is expected and swallowed).
+  pending?.catch(() => {});
+  try { o.abort?.(); } catch { /* the abort itself never fails the turn */ }
+  void gen.return(undefined).catch(() => {});
+  const line = said ? null : SAFE_LINE;
+  o.onCapped?.(line);
+  const base: OaiChunk = last ?? { id: `chatcmpl-co-${startedAt.toString(36)}`, object: "chat.completion.chunk", created: Math.floor(startedAt / 1000), model: CALL_LLM_MODEL, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] };
+  if (!last) yield base;
+  if (line) yield { ...base, choices: [{ index: 0, delta: { content: line + " " }, finish_reason: null }] };
+  yield { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
+}
+
 export const TOOL_TOO_SLOW = "Not back yet: it keeps running on its own and lands when it's done, but it couldn't finish inside this turn of the call. Don't say it's done or sent; say it'll come by text right after the call, and if it's real looking they need, take it on with startTask.";
 
 // One of Co's tools, inside what's left of the turn's budget. Past it, the tool is left to finish on its own (its write still lands
@@ -774,12 +858,14 @@ async function runTool(co: CallToolset, id: string, name: string, input: unknown
 // The real upstream: Anthropic's streaming Messages API.
 // Each request's usage (message_start carries the input side, message_delta the running output count) is written to llm_usage as
 // "call.turn" when the stream ends, however it ends (2026-10-23: call turns were the one path with no cost row).
-export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHROPIC_API_KEY, fetchImpl: typeof fetch = fetch, userId: string | null = null): AsyncGenerator<AnthropicEvent> {
+// signal: the turn's cap (capTurn) stops the request; what it used so far is still written.
+export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHROPIC_API_KEY, fetchImpl: typeof fetch = fetch, userId: string | null = null, signal?: AbortSignal): AsyncGenerator<AnthropicEvent> {
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
   const res = await fetchImpl("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify(req),
+    ...(signal ? { signal } : {}),
   });
   if (!res.ok || !res.body) {
     const detail = `anthropic ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`;
