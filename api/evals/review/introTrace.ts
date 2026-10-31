@@ -34,6 +34,7 @@ const { default: pool } = await import("../../src/db/db.js");
 // The guard's own reads of what it logged (once per person, per day) and the lasting record, over the world's query handler.
 const world = (pool as any).query;
 const cofacts: { owner: string; label: string }[] = [];
+const ledgerRows: { relation: string; receipt: string }[] = [];
 const proposalOf = (d: any) => (typeof d.proposal === "string" ? JSON.parse(d.proposal) : d.proposal) ?? {};
 (pool as any).query = async (sql: string, p: any[] = []) => {
   const flat = sql.replace(/\s+/g, " ");
@@ -43,6 +44,8 @@ const proposalOf = (d: any) => (typeof d.proposal === "string" ? JSON.parse(d.pr
     return { rows: W.decisions.filter((d) => d.decision === p[0] && d.user_id === p[1] && d.outcome === "act" && key(d) === p[2]).map(() => ({ x: 1 })) };
   }
   if (/COUNT\(\*\)::int AS n FROM harness_decisions/.test(flat)) return { rows: [{ n: W.decisions.filter((d) => d.decision === p[0] && d.user_id === p[1] && d.outcome === "act").length }] };
+  // The action ledger's own rows (services/ledger.ts, object_key "L|...") are kept apart: tested in evals/ledger/dualWrite.ts.
+  if (/INSERT INTO co_facts/i.test(flat) && String(p[3]).startsWith("L|")) { ledgerRows.push({ relation: String(p[1]), receipt: JSON.parse(String(p[7] ?? "{}")).receipt }); return { rows: [] }; }
   if (/INSERT INTO co_facts/i.test(flat)) { cofacts.push({ owner: p[0], label: String(p[3]) }); return { rows: [] }; }
   return world(sql, p);
 };
@@ -62,6 +65,7 @@ type World = { jo: ReturnType<typeof addMember>; sarah: ReturnType<typeof addMem
 const build = (): World => {
   reset();
   cofacts.length = 0;
+  ledgerRows.length = 0;
   const jo = addMember({ first_name: "Jo", last_name: "Lee", intent: [ask("a cofounder for a climate startup")] });
   const sarah = addMember({ first_name: "Sarah", last_name: "Kim", intent: [ask("an engineer who has shipped hardware")] });
   addEvent({ api_id: "evt-trace", name: "Cue Night" }, [{ m: jo }, { m: sarah }]);
@@ -84,7 +88,7 @@ const guardRows = (w: World) => W.decisions.filter((d) => d.decision === "tool.r
   const w = build();
   const first = await turn(w, { personName: "Sarah" }, 0);
   check("the first-name call asks for the last name, and the model reads exactly the note it read before (askedBack is the guard's, taken off)", first.result?.ok === true && /ask for the person's last name/.test(first.result?.note ?? "") && !("askedBack" in (first.result ?? {})), first.result);
-  check("…logged as asked_back, not a request (outcome skip), and nothing goes in the lasting record", JSON.stringify(guardRows(w).map((r) => [r.outcome, r.action])) === JSON.stringify([["skip", "asked_back"]]) && cofacts.length === 0, { rows: guardRows(w), cofacts });
+  check("…logged as asked_back, not a request (outcome skip), and nothing goes in the lasting record", JSON.stringify(guardRows(w).map((r) => [r.outcome, r.action])) === JSON.stringify([["skip", "asked_back"]]) && cofacts.length === 0 && ledgerRows.every((r) => r.relation === "not_done" && r.receipt === "asked_back"), { rows: guardRows(w), cofacts, ledgerRows });
   const second = await turn(w, { personName: "Sarah", lastName: "Kim" }, 1);
   await settle(1);
   const askedSarah = W.sent.filter((s) => s.to === w.sarah.phone_number);

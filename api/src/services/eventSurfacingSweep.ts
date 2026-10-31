@@ -14,6 +14,7 @@ import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findFor
 import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
 import { MULTI_DAY_HOURS, START_LEAD_MINUTES, leadFor, matchStartProblem } from "./eventStart.js";
+import { ledgerWrite, offerRow } from "./ledger.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -1050,10 +1051,17 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
   const pendingContent = JSON.stringify({ askText, match });
   const embeddingSource = `${match.name}: ${match.reason} (asked about: ${askText})`;
   await pool
-    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_pending', $2) RETURNING id`, [
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_pending', $2) RETURNING id, created_at`, [
       userId,
       pendingContent,
     ])
+    .then((mem) => {
+      // The triple (this row, the surfacing line, the resolved row) is one act in the action ledger (services/ledger.ts), in the
+      // background: its answer is kept on the row (meta.offer_state).
+      const row = mem?.rows?.[0];
+      if (row) ledgerWrite(offerRow({ userId, memoryId: String(row.id), at: new Date(row.created_at), match, offerState: revealed ? "revealed_directly" : "pending" }));
+      return mem;
+    })
     .then((mem) =>
       generateEmbedding(embeddingSource)
         .then((emb) =>

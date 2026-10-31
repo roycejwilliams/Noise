@@ -13,7 +13,9 @@ import { generateEmbedding } from "./embeddings.js";
 //   recommendation memory   "Co surfaced ...", which grounding reads as sent
 //   surfaced_events         Tier 1/2 only, so another person getting the same
 //                           event is caught as a certain match (eventMatching.ts)
-export async function recordRecommendationsSent(userId: string, matches: TierMatch[]): Promise<void> {
+// sentAs: the link each match went out under, in order, when the caller knows it (agent/loopTools.ts shareFinds), for the action
+// ledger only (services/ledger.ts recommendationRow).
+export async function recordRecommendationsSent(userId: string, matches: TierMatch[], sentAs: (string | null)[] = []): Promise<void> {
   if (!matches.length) return;
   // Sent in a reply: the same thing queued as an offer doesn't go out again.
   await pool
@@ -36,12 +38,25 @@ export async function recordRecommendationsSent(userId: string, matches: TierMat
     }),
     "recommendationsSent",
   );
+  const offered = matches.map((m) => JSON.stringify({ name: m.name, event_api_id: "event_api_id" in m ? m.event_api_id : null }));
   await pool
     .query(
       `INSERT INTO co_memories (user_id, memory_type, content)
-       SELECT $1, 'recommendation_offered', x FROM UNNEST($2::text[]) AS x`,
-      [userId, matches.map((m) => JSON.stringify({ name: m.name, event_api_id: "event_api_id" in m ? m.event_api_id : null }))],
+       SELECT $1, 'recommendation_offered', x FROM UNNEST($2::text[]) AS x RETURNING id, created_at, content`,
+      [userId, offered],
     )
+    .then(async (r: any) => {
+      // The pair (this row and the "recommendation" memory below) is one act per find in the action ledger (services/ledger.ts),
+      // anchored on this row and written in the background.
+      const L = await import("./ledger.js");
+      for (const row of r?.rows ?? []) {
+        const i = offered.indexOf(String(row.content));
+        const m = matches[i];
+        if (!m) continue;
+        const d = itemDays(m);
+        L.ledgerWrite(L.recommendationRow({ userId, memoryId: String(row.id), at: new Date(row.created_at), name: m.name, url: "url" in m ? (m.url ?? null) : null, sentAs: sentAs[i] ?? null, eventApiId: "event_api_id" in m ? m.event_api_id : null, when: d.start, whenEnd: d.end, tier: String(m.tier) }));
+      }
+    })
     .catch((err: any) => console.error("recordRecommendationsSent: recommendation_offered write failed (non-fatal):", err?.message ?? err));
 
   const tieredContent = `Cue surfaced ${matches.length} tiered recommendation(s) — ${matches.map((m) => `[Tier ${m.kind}] ${m.name}: ${m.reason}`).join(" | ")}`;

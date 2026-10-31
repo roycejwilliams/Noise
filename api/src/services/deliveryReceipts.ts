@@ -195,7 +195,12 @@ export const pgReceipts: ReceiptStore = {
        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
       [r.userId, r.docKey, r.version, r.title, r.kind, JSON.stringify(r.doc), r.contentHash, r.channel, r.status, r.line, r.link, r.taskId, r.source, r.changeNote, r.error, r.attempts ?? 0, r.nextRetryAt, r.deliveredAt, r.driveFileId ?? null, r.driveGrant ?? null],
     );
-    return fromRow(rows[0]);
+    const receipt = fromRow(rows[0]);
+    // Every delivery is also one 'sent' row in the action ledger (services/ledger.ts), anchored on this row, in the background.
+    void import("./ledger.js")
+      .then((L) => L.ledgerWrite(L.documentRow({ userId: receipt.userId, id: receipt.id, at: receipt.deliveredAt, title: receipt.title, channel: receipt.channel, version: receipt.version, docKey: receipt.docKey, link: receipt.link, status: receipt.status })))
+      .catch(() => {});
+    return receipt;
   },
   get: async (userId, id) => {
     const { rows } = await pool.query(`SELECT * FROM document_deliveries WHERE user_id = $1 AND id = $2`, [userId, id]);

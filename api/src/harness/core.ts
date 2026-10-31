@@ -54,10 +54,16 @@ export async function recordDecision(d: HarnessDecision): Promise<void> {
 // The same write, saying whether the row landed. For a record Cue may tell a member about ("that's on record for the team",
 // services/callReasons.ts): it can only say so when this is true. Never throws.
 export async function recordDecisionLanded(d: HarnessDecision): Promise<boolean> {
+  return (await recordDecisionRow(d)).landed;
+}
+
+// The same write, with the row's id and time when it landed (agent/toolGuard.ts: the action ledger's row for a tool call is
+// anchored on its decision row, services/ledger.ts). Never throws.
+export async function recordDecisionRow(d: HarnessDecision): Promise<{ landed: boolean; id: string | null; at: Date | null }> {
   return pool
     .query(
       `INSERT INTO harness_decisions (layer, decision, user_id, outcome, action, proposal, checks, confidence, reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, created_at`,
       [
         d.layer,
         d.decision,
@@ -70,9 +76,12 @@ export async function recordDecisionLanded(d: HarnessDecision): Promise<boolean>
         d.reason ?? null,
       ],
     )
-    .then(() => true)
+    .then((r: any) => {
+      const row = r?.rows?.[0];
+      return { landed: true, id: row?.id != null ? String(row.id) : null, at: row?.created_at ? new Date(row.created_at) : null };
+    })
     .catch((err: any) => {
       console.error(`recordDecision(${d.decision}) failed (non-fatal):`, err?.message ?? err);
-      return false;
+      return { landed: false, id: null, at: null };
     });
 }

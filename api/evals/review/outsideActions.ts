@@ -37,7 +37,8 @@ const decisions: { decision: string; user_id: string; outcome: string; action: s
   // The guard's once-per-person and per-day reads, over the rows it logged.
   if (/SELECT 1 FROM harness_decisions/.test(sql)) return { rows: decisions.filter((d) => d.decision === p[0] && d.user_id === p[1] && d.outcome === "act" && String(d.proposal?.input?.personName ?? "").toLowerCase() === p[2]).map(() => ({ "?column?": 1 })) };
   if (/COUNT\(\*\)::int AS n FROM harness_decisions/.test(sql)) return { rows: [{ n: decisions.filter((d) => d.decision === p[0] && d.user_id === p[1] && d.outcome === "act").length }] };
-  if (/INSERT INTO co_facts/i.test(sql)) inserts.push(p);
+  // The content-keyed record; the action ledger's own row (services/ledger.ts, object_key "L|...") is tested in evals/ledger/dualWrite.ts.
+  if (/INSERT INTO co_facts/i.test(sql) && !String(p[3] ?? "").startsWith("L|")) inserts.push(p);
   return { rows: [] };
 };
 (await import("../../src/services/abilitySwitches.js")).setSwitchesForTest({});

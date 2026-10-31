@@ -1220,7 +1220,7 @@ export function sendblueRouter(io: Server): Router {
           const link = r?.fromCo ? bareLink(r.text) : null;
           if (!r || !link) return r;
           const { rows } = await pool
-            .query(`SELECT object_label FROM co_facts WHERE owner_user_id = (SELECT id FROM users WHERE phone_number = $1 LIMIT 1) AND (url = $2 OR object_label LIKE $2 || '%') ORDER BY happened_at DESC LIMIT 1`, [number, link])
+            .query(`SELECT object_label FROM co_facts WHERE owner_user_id = (SELECT id FROM users WHERE phone_number = $1 LIMIT 1) AND (url = $2 OR object_label LIKE $2 || '%') AND NOT (meta ? 'ledger') ORDER BY happened_at DESC LIMIT 1`, [number, link])
             .catch(() => ({ rows: [] as any[] }));
           const label = String(rows[0]?.object_label ?? "").replace(link, "").trim();
           return label ? { ...r, what: label } : r;
@@ -2083,6 +2083,8 @@ export function sendblueRouter(io: Server): Router {
               `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', $2)`,
               [user.id, eventReplyAction],
             ).catch((err: any) => console.error("sendblue: event_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
+            // The offer's one row in the action ledger takes their answer (services/ledger.ts), in the background.
+            void import("../services/ledger.js").then((L) => L.ledgerOfferState(user.id, pendingEventOffer.memoryId, eventReplyAction)).catch(() => {});
 
             const parsed = JSON.parse(pendingEventOffer.content) as { askText: string; match: any };
             // Real details and a personal reason for the reveal (filled in on
