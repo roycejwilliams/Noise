@@ -29,7 +29,10 @@ check("co_facts' DDL is read from the migrations, its owner cascading on account
 // reads no further back than that window, so a reduced row is never rebuilt with its words.
 const jobs = fs.readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
 const retention = jobs.slice(jobs.indexOf("DELETE FROM harness_decisions WHERE created_at < NOW() - INTERVAL '60 days'"));
-check("words: the daily retention job runs the words job after the decision log prune", retention.length > 0 && /ageLedgerWords\(\)/.test(retention.slice(0, 900)));
+check("words: the daily retention job runs the words job after the decision log prune", retention.length > 0 && /ageLedgerWords\(\)/.test(retention.slice(0, 1600)));
+// Each step in its own try: a failing prune or handles delete never skips the words job (review of #329).
+const retentionBlock = retention.slice(0, retention.indexOf("co_facts word-aging cron error") + 40);
+check("words: the words job has its own try, separate from the prune and the handles delete", (retentionBlock.match(/catch \(error\)/g) ?? []).length === 3 && retentionBlock.includes("co_facts word-aging cron error"));
 const cfSrc = fs.readFileSync(new URL("../../src/services/coFacts.ts", import.meta.url), "utf8");
 check("words: the every-boot tool backfill reads decisions inside the words window only", /decision LIKE 'tool\.%' AND action = 'done' AND user_id IS NOT NULL AND created_at > NOW\(\) - make_interval\(days => \$\{WORDS_DAYS\}\)/.test(cfSrc));
 const { WORDS_DAYS } = await import("../../src/services/ledgerWords.js");

@@ -1105,17 +1105,28 @@ export function registerJobs(io: Server) {
 
   // Harness decision log retention: keep 60 days. Every reply, route, and
   // skipped send writes a row, so without this the table only grows.
+  // Each step has its own try, so one failing delete never stalls the others (review of #329: a failing handles delete skipped the
+  // aging, silently, every night).
   cron.schedule("17 4 * * *", async () => {
     try {
       const { rowCount } = await pool.query(`DELETE FROM harness_decisions WHERE created_at < NOW() - INTERVAL '60 days'`);
       if (rowCount) console.log(`harness_decisions: removed ${rowCount} rows older than 60 days`);
+    } catch (error) {
+      console.error("harness_decisions retention cron error:", error);
+    }
+    try {
       await pool.query(`DELETE FROM inbound_webhook_handles WHERE received_at < NOW() - INTERVAL '3 days'`);
-      // The same window for the member's words in Cue's action record (Royce, 2026-10-31): the act and its date stay, their words
-      // go (services/ledgerWords.ts). After the prune, so no decision row is left to rebuild a reduced row from.
+    } catch (error) {
+      console.error("inbound_webhook_handles retention cron error:", error);
+    }
+    // The same window for the member's words in Cue's action record (Royce, 2026-10-31): the act and its date stay, their words go
+    // (services/ledgerWords.ts). After the prune; and safe even when the prune failed, since the boot backfill only reads 60 days of
+    // decisions, so a decision older than that can't rebuild a reduced row.
+    try {
       const aged = await import("../services/ledgerWords.js").then((W) => W.ageLedgerWords());
       if (aged.rows) console.log(`co_facts: words aged out of ${aged.rows} action rows older than 60 days`);
     } catch (error) {
-      console.error("harness_decisions retention cron error:", error);
+      console.error("co_facts word-aging cron error:", error);
     }
   });
 
