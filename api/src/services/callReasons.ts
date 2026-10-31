@@ -44,6 +44,10 @@ export function failureDetail(err: unknown): { status: number | null; code: stri
   return { status, code, message };
 }
 
+// The error triggerCallForUser returns for a team call held because the month's GPT-Live minutes are used (services/callTrigger.ts).
+export const GPT_LIVE_MINUTES_USED = "Call held: this month's call minutes are used.";
+// The minutes couldn't be read (review of #333: saying they're used up would be false).
+export const GPT_LIVE_CANT_PLACE = "Call not placed: it couldn't be placed right now.";
 // The error triggerCallForUser returns for a dial that never started, and its reading back.
 export function dialFailureError(f: DialFailure, reported: boolean): string {
   const what = f.stage === "link" ? "setting up the call failed" : `the phone service turned the dial down (${[f.status !== null ? `HTTP ${f.status}` : null, f.code !== null ? `code ${f.code}` : null].filter(Boolean).join(", ") || "no code"})`;
@@ -73,6 +77,8 @@ export function callNotPlacedReason(error: string | null | undefined): string {
   if (/subscription/i.test(e)) return "Their membership isn't active, so calls are paused.";
   if (/8am-9pm|UTC|outside .*time/i.test(e)) return "It's outside the hours Cue calls (8am to 9pm their time).";
   if (/opted out/i.test(e)) return "They've opted out of calls and texts.";
+  if (e.startsWith(GPT_LIVE_CANT_PLACE)) return "Cue couldn't place the call right now; the problem was on Cue's side.";
+  if (e.startsWith(GPT_LIVE_MINUTES_USED)) return "Cue's call minutes for this month are used up, so calls are held until the team raises the limit or the month turns.";
   return "Something stopped the call before it was placed; the reason isn't clear.";
 }
 

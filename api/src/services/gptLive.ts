@@ -46,9 +46,12 @@ export const GPT_LIVE = {
   closeWaitMs: 5000, // after session.close, how long to wait for session.closed
   silenceEndMs: AGENT_DEFAULTS.silenceEndCallSecs * 1000, // nothing said either way this long ends the call, as on the ElevenLabs agent
   endGraceMs: 2000, // after Cue's goodbye has finished playing, this long before end_call hangs up (a last word from them keeps it open)
-  endWaitMs: 15_000, // an end_call whose goodbye isn't said within this is dropped
+  endWaitMs: 15_000,
+  openWaitMs: 4000, // outbound: how long GPT-Live waits for their first words (or AMD's human verdict) before it opens anyway // an end_call whose goodbye isn't said within this is dropped
   wrapUpMs: 60_000, // how long before a session's cap GPT-Live is asked to wrap up
   guardCacheMs: 20_000, // the live guards are read at most this often per call, as on the ElevenLabs proxy
+  preflightTimeoutMs: 3000, // the outbound check of OpenAI's key before dialing
+  breakerMs: 15 * 60_000, // after OpenAI refused a session for balance or key, outbound calls aren't dialed for this long
 } as const;
 export const GPT_LIVE_STREAM_PATH = "/co/gpt-live/stream";
 export const gptLiveVoice = (env: NodeJS.ProcessEnv = process.env): string => env.GPT_LIVE_VOICE?.trim() || GPT_LIVE.defaultVoice;
@@ -180,6 +183,9 @@ Do not guess the result while waiting. Never name an event, place, time or perso
 // of is Claude's to bring up when it fits. The background is framed as background, never as words to say. The ElevenLabs path's opener (services/callOpening.ts, the
 // OPENINGS pool) is untouched and never reached from here.
 export type OpeningContext = { timeOfDay: string | null; reason: string | null };
+// Outbound (review of #333): whoever picks up usually speaks first, so GPT-Live waits for them (the bridge opens it after openWaitMs if
+// nothing comes, or on AMD's human verdict).
+export const OPEN_WHEN_THEY_ANSWER = "When they answer, open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
 export const OPEN_IN_OWN_WORDS = "When the call connects, you speak first: open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
 export const OPEN_NOW = "The call just connected. Open it now, in your own words.";
 // The ElevenLabs opener writer's own rule, copied word for word (the 10-31 smoke opened with "I've been thinking about you").
@@ -199,12 +205,21 @@ export function openingBackground(c: OpeningContext): string {
   ].filter(Boolean).join("\n");
 }
 
+// Outbound voicemail (the ElevenLabs agent's voicemail tool, done here with Twilio's async answering-machine detection, since GPT-Live
+// has no tools). While a recorded greeting plays, GPT-Live waits; when Twilio hears the greeting end (machine_end_*), it's told to leave
+// a short message in its own words saying what the ElevenLabs path's message says (sorry it missed them, it'll text), with no set line.
+export const VOICEMAIL_WAIT = "If a recorded voicemail greeting answers instead of them, say nothing until you're told to leave a message.";
+// Privacy (review of #333): someone else in the household may hear a voicemail, so the message says only who it's for and from, sorry, and
+// a text is coming; never why Cue called, and nothing about them.
+export const VOICEMAIL_NOW = "Their voicemail is recording now, and someone else may hear it. Leave a short message in your own words saying only this: their first name, that it's Cue, that you're sorry you missed them, and that you'll text them. Never say why you called, and nothing about them or their life. Then say nothing more.";
+
 // Pure: GPT-Live's whole prompt. Role and style (who's on the line, who called whom, how to open, Cue's voice), then the three
 // policies. Nothing about the member beyond their first name, the call's situation and the opening's background: what Cue knows
 // about them is the thinking's (BACKEND_NOTE).
 export function liveInstructions(o: { firstName: string; direction: "inbound" | "outbound"; team: boolean; opening?: OpeningContext; identity?: string }): string {
   const bg = o.opening ? openingBackground(o.opening) : "";
-  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK}${bg ? `\n${bg}` : ""}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n\n${LIVE_POLICY}`;
+  const vm = o.direction === "outbound" ? `\n${VOICEMAIL_WAIT}` : "";
+  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${o.direction === "outbound" ? OPEN_WHEN_THEY_ANSWER : OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK}${bg ? `\n${bg}` : ""}${vm}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n\n${LIVE_POLICY}`;
 }
 
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms).
@@ -243,7 +258,8 @@ export function sessionStart(call: LiveCall, voice: string): Record<string, unkn
     session: {
       model: GPT_LIVE.model,
       instructions: call.instructions,
-      input: [{ type: "message", role: "developer", content: [{ type: "input_text", text: `${OPEN_NOW} ${OPEN_NO_STOCK}` }] }],
+      // Inbound: open now. Outbound: nothing at start; the bridge opens once they speak, AMD says a human answered, or the wait ends.
+      ...(call.direction === "inbound" ? { input: [{ type: "message", role: "developer", content: [{ type: "input_text", text: `${OPEN_NOW} ${OPEN_NO_STOCK}` }] }] } : {}),
       audio: { format: { type: "audio/pcmu", rate: 8000 }, output: { voice } },
       delegation: { type: "client", acknowledgement_delay_ms: GPT_LIVE.ackDelayMs },
     },
@@ -352,7 +368,7 @@ export function takeLiveLink(id: unknown, now = Date.now()): LiveCall | null {
 // How each GPT-Live call's stream went, by Twilio's call sid, for the <Connect> action (routes/co.ts /co/gpt-live/after-stream): a call
 // whose session never started hears the ElevenLabs path's CANT_CONNECT_LINE, has its call_status released, and is logged
 // call.gpt_live_unavailable with why OpenAI didn't start (FailClass; never the error's words).
-export type FailClass = "no_key" | "auth" | "quota" | "rate_limit" | "connect" | "timeout" | "refused" | "no_stream";
+export type FailClass = "no_key" | "auth" | "quota" | "rate_limit" | "connect" | "timeout" | "refused" | "no_stream" | "team_unreadable";
 type CallState = { userId: string; state: "pending" | "started" | "failed"; at: number; failClass?: FailClass };
 const callStates = new Map<string, CallState>();
 export function markCall(callSid: string | null | undefined, userId: string, state: "pending" | "started" | "failed", now = Date.now(), failClass?: FailClass): void {
@@ -381,6 +397,87 @@ export function failClassOf(e: { code?: unknown; type?: unknown; message?: unkno
   if (/ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|network|unexpected server response|handshake/i.test(text)) return "connect";
   return "refused";
 }
+
+// ---------------------------------------------------------------- before dialing a team member (services/callTrigger.ts)
+
+// Royce, 10-31: a team member's call never goes to ElevenLabs, so an outbound call GPT-Live can't take isn't dialed at all. Checked
+// after the call gate and before the dial: on the team (else null: the ElevenLabs path, untouched), an OpenAI key and API_URL here,
+// a minute of the month's team minutes left (read, not reserved: the TwiML route reserves when they answer), no balance or key
+// refusal from OpenAI in the last GPT_LIVE.breakerMs (OpenAI only says "no balance" when a session starts), and OpenAI accepting the
+// key (GET /v1/models/gpt-live-1, free). A check that can't run fails closed.
+export type Preflight = { ok: true } | { ok: false; kind: "budget"; why: "minutes_used" | "unreadable" } | { ok: false; kind: "unavailable"; failClass: FailClass | "no_api_url"; status: number | null };
+export type PreflightDeps = { team: (userId: string) => Promise<boolean>; env: NodeJS.ProcessEnv; db: Db; fetch: typeof fetch; now: () => number };
+const preflightDefaults = (): PreflightDeps => ({ team: async (id) => {
+  // Read directly, not through isTeamMember (which reads an error as "not on the team"): a failed read must not quietly send a team call
+  // to ElevenLabs (review of #333).
+  const { rows } = await pool.query(`SELECT mo_approver FROM users WHERE id = $1`, [id]);
+  return rows[0]?.mo_approver === true;
+}, env: process.env, db: pool, fetch: (...a) => fetch(...a), now: Date.now });
+export async function outboundPreflight(userId: string, deps: Partial<PreflightDeps> = {}): Promise<Preflight | null> {
+  const d = { ...preflightDefaults(), ...deps };
+  let team: boolean;
+  try { team = await d.team(userId); } catch { return { ok: false, kind: "unavailable", failClass: "team_unreadable", status: null }; }
+  if (!team) return null;
+  const key = d.env.OPENAI_API_KEY?.trim();
+  if (!key) return { ok: false, kind: "unavailable", failClass: "no_key", status: null };
+  if (!gptLiveStreamUrl(d.env.API_URL)) return { ok: false, kind: "unavailable", failClass: "no_api_url", status: null };
+  try {
+    pruneSlots(d.now());
+    const reserved = [...openSessions.values()].reduce((a, v) => a + v.capMs, 0);
+    const left = GPT_LIVE.teamMonthlyMinutes * 60_000 - (await loggedSeconds(d.db)) * 1000 - reserved;
+    if (left < GPT_LIVE.minAdmitMs) return { ok: false, kind: "budget", why: "minutes_used" };
+  } catch {
+    return { ok: false, kind: "budget", why: "unreadable" };
+  }
+  const recent = await d.db
+    .query(`SELECT action FROM harness_decisions WHERE decision = 'call.gpt_live_unavailable' AND action = ANY($1::text[]) AND created_at > NOW() - make_interval(secs => $2) ORDER BY created_at DESC LIMIT 1`, [["quota", "auth"], Math.round(GPT_LIVE.breakerMs / 1000)])
+    .then((r) => (r.rows[0]?.action as FailClass | undefined) ?? null)
+    .catch(() => "refused" as FailClass);
+  if (recent) return { ok: false, kind: "unavailable", failClass: recent, status: null };
+  try {
+    const r = await d.fetch(`https://api.openai.com/v1/models/${GPT_LIVE.model}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(GPT_LIVE.preflightTimeoutMs) });
+    if (r.ok) return { ok: true };
+    const body = await r.text().catch(() => "");
+    return { ok: false, kind: "unavailable", failClass: failClassOf({ status: r.status, message: body.slice(0, 400) }), status: r.status };
+  } catch (err: any) {
+    return { ok: false, kind: "unavailable", failClass: failClassOf(err?.name === "TimeoutError" ? "timeout" : err), status: null };
+  }
+}
+
+// ---------------------------------------------------------------- a call Cue placed that reached voicemail, or nobody
+
+// Pure: the ElevenLabs path's missed-call verdict, read from GPT-Live's transcript (GPT-Live has no voicemail tool): on a call Cue
+// placed, nobody really talked (callGate.hasRealUserTurn) and the line answered with a recorded greeting (callGate's own check) is a
+// voicemail; nobody really talked otherwise is "silent". A call they placed is never missed. Fed to the ElevenLabs path's own
+// voicemailVerdict / missedKind, so both providers send the same gated missed-call text.
+export function liveVoicemailHeard(turns: LiveTurn[], isGreeting: (t: string) => boolean): boolean {
+  return turns.some((t) => t.who === "member" && isGreeting(t.text));
+}
+
+// ---------------------------------------------------------------- Twilio's answering-machine verdict (outbound)
+
+// Twilio posts its async AMD verdict (routes/co.ts /co/gpt-live/amd) by call sid, and the call's bridge, in this process, acts on it.
+// The verdict is kept for the post-call steps (a voicemail is a missed call, as on ElevenLabs). In memory, like the stream ids.
+const answeredBy = new Map<string, { by: string; at: number }>();
+const amdWaiters = new Map<string, (by: string) => void>();
+export const isMachine = (by: string | null | undefined): boolean => /^machine_end_/.test(by ?? "");
+export function noteAnsweredBy(callSid: string, by: string, now = Date.now()): void {
+  for (const [k, v] of answeredBy) if (now - v.at > 3 * 3_600_000) answeredBy.delete(k);
+  answeredBy.set(callSid, { by, at: now });
+  amdWaiters.get(callSid)?.(by);
+}
+export const answeredByFor = (callSid: string | null | undefined): string | null => (callSid ? answeredBy.get(callSid)?.by ?? null : null);
+// The bridge hears every verdict for its call (human: open; machine_end_*: leave the message); one that came before the session started
+// is passed on at once.
+export function onAmd(callSid: string | null | undefined, fn: (by: string) => void): () => void {
+  if (!callSid) return () => {};
+  amdWaiters.set(callSid, fn);
+  const had = answeredByFor(callSid);
+  if (had) fn(had);
+  return () => { if (amdWaiters.get(callSid) === fn) amdWaiters.delete(callSid); };
+}
+// The dial's extra settings for a GPT-Live call (services/callTrigger.ts): async AMD, waiting for the greeting to end, posted to us.
+export const amdDialOptions = (apiUrl: string | undefined) => ({ machineDetection: "DetectMessageEnd", asyncAmd: "true", asyncAmdStatusCallback: `${apiUrl}/co/gpt-live/amd`, asyncAmdStatusCallbackMethod: "POST" });
 
 // ---------------------------------------------------------------- the minute caps
 
