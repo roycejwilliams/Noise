@@ -163,6 +163,7 @@
     "evals/calls/gptLive.ts",
     "evals/calls/crisisNumbers.ts",
     "evals/calls/gptLiveParity.ts",
+    "evals/calls/gptLiveOutbound.ts",
     "evals/calls/provenance.ts",
     "evals/calls/spokenGrounding.ts",
     "evals/docs/document.ts",

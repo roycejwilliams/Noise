@@ -10,7 +10,9 @@ import { prebuildCallBriefing } from "./callBriefing.js";
 import { prebuildOpening } from "./callOpening.js";
 import { buildCallContextSummary } from "./callContext.js";
 import { recordDecision, recordDecisionLanded } from "../harness/core.js";
-import { dialFailureError, failureDetail, type DialFailure } from "./callReasons.js";
+import { dialFailureError, failureDetail, GPT_LIVE_CANT_PLACE, GPT_LIVE_MINUTES_USED, type DialFailure } from "./callReasons.js";
+import { amdDialOptions, outboundPreflight, type Preflight } from "./gptLive.js";
+import { noteModelFailure } from "./modelKeyAlert.js";
 import { decideCall, gatherCallState, LIVE_CALL_RECLAIM_MINUTES, LIVE_CALL_STATUSES, type CallAuthorization } from "../harness/callGate.js";
 
 // Extracted from co.ts's POST /call/:user_id so a second call site (Co
@@ -79,6 +81,12 @@ export async function triggerCallForUser(
     return { success: false, error: gateResult.error ?? "Call blocked." };
   }
 
+  // The team's calls run on GPT-Live and never on ElevenLabs (Royce, 2026-10-31; routes/co.ts gptLiveAnswer answers them when they
+  // pick up). A team call GPT-Live can't take isn't dialed: the month's team minutes used is held, OpenAI unavailable is a call that
+  // never started (reported like a refused dial). Everyone else: null, and the dial below is today's.
+  const live = await preflight(userId).catch(() => ({ ok: false, kind: "unavailable", failClass: "refused", status: null }) as const);
+  if (live && !live.ok) return gptLiveNotPlaced(userId, auth, live);
+
   // One dial at a time (concurrency audit, 2026-10-12): the gate above reads call_status, which used to be written only after Twilio
   // placed the call, so two triggers at once (the */5 and */15 jobs together, or a "call me" text) both passed and both dialed. The
   // dial is claimed first; the claim is let go if the dial fails, back to the status it replaced.
@@ -96,8 +104,9 @@ export async function triggerCallForUser(
   // tool leaves the message, and the post-call webhook sends the missed-call text.
   // Context built while it rings, ready the moment they answer.
   const summary = prebuildCallContext(userId, buildCallContextSummary);
-  // And the opening line, written from that context while it rings (services/callOpening.ts).
-  prebuildOpening(userId, user.first_name ?? "", "outbound", summary);
+  // And the opening line, written from that context while it rings (services/callOpening.ts). Not for a GPT-Live call: it opens in
+  // its own words (services/gptLive.ts).
+  if (!live) prebuildOpening(userId, user.first_name ?? "", "outbound", summary);
   // And the clock and what Co has found for them, so the call never waits on a lookup (services/callBriefing.ts).
   prebuildCallBriefing(userId);
   let call: { sid: string };
@@ -114,6 +123,9 @@ export async function triggerCallForUser(
     statusCallbackEvent: ["ringing", "answered", "completed"],
     statusCallbackMethod: "POST",
     timeout: 20,
+    // A GPT-Live call (the team's) also gets Twilio's async answering-machine detection: GPT-Live has no voicemail tool, so the
+    // verdict tells it when to leave its message (services/gptLive.ts). Everyone else's dial is today's, unchanged.
+    ...(live ? amdDialOptions(process.env.API_URL) : {}),
     });
   } catch (err) {
     if (callId) await dropCallLink(callId).catch(() => {});
@@ -138,6 +150,28 @@ export async function triggerCallForUser(
   }
   await recordCallPlaced(userId, user.first_name, call.sid, io);
   return { success: true, call_sid: call.sid };
+}
+
+// The GPT-Live check before a team member's dial (services/gptLive.ts outboundPreflight), swappable in layer-1 tests.
+type PreflightFn = (userId: string) => Promise<Preflight | null>;
+let preflight: PreflightFn = (userId) => outboundPreflight(userId);
+export function setPreflightForTests(fn: PreflightFn | null): void {
+  preflight = fn ?? ((userId) => outboundPreflight(userId));
+}
+// A team call GPT-Live can't take. Minutes used: held, logged call.gpt_live_budget_reached (the morning review shows it), and the
+// reason the reply reads (services/callReasons.ts GPT_LIVE_MINUTES_USED). OpenAI unavailable: logged call.gpt_live_unavailable, and
+// reported exactly as a dial that never started (call.dial dial_failed, stage "link": set-up failed on Cue's side before their phone
+// rang), so the reply's honesty rules for a failed call (#302/#303) apply as they are; a refused key also raises the dead-key text.
+async function gptLiveNotPlaced(userId: string, auth: CallAuthorization | null, p: Exclude<Preflight, { ok: true }>): Promise<TriggerCallResult> {
+  if (p.kind === "budget") {
+    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: p.why, proposal: { direction: "outbound", requested: auth?.kind ?? null }, reason: p.why === "unreadable" ? "the team's GPT-Live minutes couldn't be read, so the call was held (fails closed)" : "the team's GPT-Live minutes for the month are used, so the call was held" }).catch(() => {});
+    return { success: false, error: p.why === "unreadable" ? GPT_LIVE_CANT_PLACE : GPT_LIVE_MINUTES_USED };
+  }
+  await recordDecision({ layer: 8, decision: "call.gpt_live_unavailable", userId, outcome: "skip", action: p.failClass, proposal: { direction: "outbound", failClass: p.failClass, status: p.status, stage: "preflight", requested: auth?.kind ?? null } }).catch(() => {});
+  if (p.failClass === "auth") noteModelFailure("openai", { kind: "auth", status: p.status });
+  const failure: DialFailure = { stage: "link", status: p.status, code: `gpt_live_${p.failClass}`, message: `GPT-Live unavailable: ${p.failClass}` };
+  const reported = await recordDecisionLanded({ layer: 8, decision: "call.dial", userId, outcome: "skip", action: "dial_failed", proposal: { requested: auth?.kind ?? null, ...failure }, checks: [{ name: "dial_started", pass: false, reason: "GPT-Live couldn't take the call, so it wasn't dialed" }], reason: failure.message });
+  return { success: false, error: dialFailureError(failure, reported), dialFailed: true };
 }
 
 // The dial claim: call_status 'dialing' (a live status to the gate, harness/callGate.ts), set only when no live call holds it. A live
