@@ -1,7 +1,7 @@
 {
   "hash": "070bcf9142496ce6",
   "case": "hey-co-alias",
-  "recorded_at": "2026-10-30T00:06:19.651Z",
+  "recorded_at": "2026-10-31T23:09:21.933Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or lecture about the name, and doesn't misname itself.\"}",
+      "text": "```json\n{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or name correction, and names itself only implicitly (no lecture, no wrong name).\"}\n```",
       "usage": {
         "input_tokens": 233,
         "cache_creation_input_tokens": 0,
@@ -44,7 +44,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 60,
+        "output_tokens": 74,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -54,13 +54,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgXSpaw6z1aBcLHHqTf5W",
+        "id": "msg_011CgbA6TvfGdBZU5GpkqQqq",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or lecture about the name, and doesn't misname itself.\"}"
+            "text": "```json\n{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or name correction, and names itself only implicitly (no lecture, no wrong name).\"}\n```"
           }
         ],
         "container": null,
@@ -75,7 +75,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 60,
+          "output_tokens": 74,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

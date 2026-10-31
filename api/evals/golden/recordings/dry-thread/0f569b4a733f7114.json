@@ -1,0 +1,102 @@
+{
+  "hash": "0f569b4a733f7114",
+  "case": "dry-thread",
+  "recorded_at": "2026-10-31T23:11:54.542Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. Let me actually say what I mean.\n\nA birthday morning walking the water with no phone, feeling hopeful for the first time in months, that's worth more than a passing line. That sounds like real relief after the stretch you've been in.\n\nAnd telling your team you need two weeks, after running on empty for this long, that's not a small thing to say out loud. Good for you.\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"that's worth more than a passing line\\\" explains its prior tone instead of just owning it and moving on\"}",
+      "usage": {
+        "input_tokens": 474,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 518,
+        "output_tokens_details": {
+          "thinking_tokens": 468
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgbAHMZim715XaWhkVNVi",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"that's worth more than a passing line\\\" explains its prior tone instead of just owning it and moving on\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 474,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 518,
+          "output_tokens_details": {
+            "thinking_tokens": 468
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "0f569b4a733f7114",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
