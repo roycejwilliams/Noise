@@ -324,12 +324,10 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   check("a real crisis answer then a safety-filter close: the safety path runs once", real.cuts.length === 1 && real.records.filter((r) => r.decision === "call.gpt_live_safety_cut").length === 1);
 }
 
-// ---------------------------------------------------------------- 6. no voice-read ask after a GPT-Live call (the read can't run on one yet)
+// ---------------------------------------------------------------- 6. the voice-read ask after a call (back on GPT-Live with the Hume tee: evals/calls/gptLiveHume.ts)
 {
   const co = src("routes/co.ts");
-  const post = co.slice(co.indexOf("export async function runGptLivePostCall"), co.indexOf("// Root-cause guard"));
-  check("GPT-Live's post-call steps don't queue the voice read's ask", /askVoiceRead: false/.test(post));
-  check("...the ElevenLabs path still does, as before", /if \(callUser && o\.askVoiceRead !== false\) import\("\.\.\/services\/voiceReadConsent\.js"\)\.then\(\(m\) => m\.queueVoiceReadAsk\(user_id\)\)/.test(co) && !/askVoiceRead/.test(co.slice(co.indexOf('router.post("/el/post-call"'), co.indexOf("// ---------- GPT-Live calls"))));
+  check("the ElevenLabs path still queues the voice read's ask after a call", /if \(callUser && o\.askVoiceRead !== false\) import\("\.\.\/services\/voiceReadConsent\.js"\)\.then\(\(m\) => m\.queueVoiceReadAsk\(user_id\)\)/.test(co));
 }
 
 console.log(`gpt-live parity: ${total - failed}/${total} passed`);

@@ -22,7 +22,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { CALL_CRITERIA } from "./callEvals.js";
 import { runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
-import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation } from "./elevenLabsCalls.js";
+import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation, withVoiceReadRule } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { parseModelJson } from "./modelJson.js";
 
@@ -239,13 +239,14 @@ export const BACKEND_NOTE = `# How this call runs
 This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next, as plain spoken sentences (no lists, no brackets, no stage directions). The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. ${NOTHING_ON_THIS_CALL} Anything they want goes out by text right after it. When they're wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual.`;
 
 // Everything one GPT-Live call needs, built by the TwiML route for the verified caller only.
-export type LiveCall = { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; instructions: string; backendSystem: string; opening: OpeningContext; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; budgetLimited?: boolean };
+export type LiveCall = { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; callKey: string; voiceOn: boolean; instructions: string; backendSystem: string; opening: OpeningContext; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; budgetLimited?: boolean };
 
 // Pure: the call's two prompts: GPT-Live's short one, and the thinking's, which is the ElevenLabs agent's prompt filled with this
 // member's values (the same values registerElevenLabsCall sends, the call's situation first in the context).
-export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null }): LiveCall {
+export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; callKey?: string; voiceOn?: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null }): LiveCall {
   const findsNow = o.findsNow || "Nothing to offer right now. Don't offer an event.";
-  const contextSummary = withCallSituation(o.contextSummary, { direction: o.direction, team: o.team });
+  // While the voice read is on for them, the thinking is told how a stop works on a call (VOICE_READ_CALL_RULE), as on ElevenLabs.
+  const contextSummary = withCallSituation(withVoiceReadRule(o.contextSummary, !!o.voiceOn), { direction: o.direction, team: o.team });
   const opening: OpeningContext = { timeOfDay: o.timeOfDay, reason: o.direction === "outbound" ? o.callReason.replace(/\s+/g, " ").trim().slice(0, 300) || null : null };
   const prompt = fillCallVars(liveCallPrompt(o.voiceLayer), { first_name: o.firstName || "there", context_summary: contextSummary, direction: o.direction, right_now: o.rightNow, finds_now: findsNow, call_reason: o.callReason, user_id: "", call_token: "" });
   return {
@@ -253,6 +254,9 @@ export function buildLiveCall(o: { userId: string; callSid: string | null; first
     callSid: o.callSid,
     firstName: o.firstName,
     direction: o.direction,
+    // The voice read's key for this call (never sent to Twilio or OpenAI; the session is held under its hash).
+    callKey: o.callKey ?? `${o.userId}:gl:${o.callSid ?? "nocall"}`,
+    voiceOn: !!o.voiceOn,
     instructions: liveInstructions({ firstName: o.firstName, direction: o.direction, team: o.team, opening, identity: identityFromVoice(o.voiceLayer) }),
     backendSystem: `${prompt}\n\n${BACKEND_NOTE}`,
     opening,
@@ -335,13 +339,16 @@ export type Upstream = (req: ARequest, userId: string) => AsyncIterable<Anthropi
 // guardCallMessages), so a correction or removal made by text during the call reaches the very next turn. safety: the turn touched
 // their safety (callLlmProxy.ts safetyCall, over the request and the answer), so its words are said exactly (SAY_EXACTLY).
 export type MessageGuard = (messages: OaiRequest["messages"]) => Promise<OaiRequest["messages"]>;
-export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard) {
+// voiceLine: the live voice read's line for this turn (services/mediaStreamBridge.ts voiceReadLineFor, through routes/callLlm.ts
+// voiceLineForTurn), to Claude only, never to GPT-Live; runCallLlm puts it after their words and drops it on a safety call.
+export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard, voiceLine?: (callKey: string, req: OaiRequest) => Promise<string | null>) {
   const req = delegationRequest(call, turns);
   if (guard) req.messages = await guard(req.messages).catch(() => req.messages);
+  const voiceRead = call.voiceOn && voiceLine ? await voiceLine(call.callKey, req).catch(() => null) : null;
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false;
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") text += d.content;
     if (d.tool_calls?.some((t) => t.function?.name === "end_call")) endCall = true;

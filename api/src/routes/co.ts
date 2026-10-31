@@ -677,7 +677,10 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
     ]);
     const firstName = u[0]?.first_name ?? "";
     const callReason = await import("../services/callReason.js").then((m) => m.callReasonVariable(o.userId, o.direction)).catch(() => "");
-    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone) });
+    // The Hume voice read (services/mediaStreamBridge.ts startVoiceTee), as on ElevenLabs: only where it may run for them (their yes on
+    // file and not taken back, or a test number; voiceReadConsent.ts voiceReadOnFor). Read again when the session starts.
+    const voiceOn = await import("../services/voiceReadConsent.js").then((m) => m.voiceReadOnFor(o.userId)).catch(() => false);
+    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone) });
     const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, budgetLimited: admitted.budgetLimited }, Date.now(), admitted.id);
     G.markCall(o.callSid, o.userId, "pending");
     // What the opening had to go on (which pieces, never their words): GPT-Live writes the line itself.
@@ -811,8 +814,9 @@ export async function runGptLivePostCall(r: import("../services/gptLiveBridge.js
   import("../services/offerGuard.js").then((m) => m.recordOfferSourceCheck(userId, conversationId, turns, given)).catch(() => {});
   let ended: Awaited<ReturnType<typeof processEndedCall>>;
   try {
-    // No voice read on GPT-Live calls yet (the Hume tee is its own PR), so no ask for one after them.
-    ended = await processEndedCall({ userId, callKey: conversationId, offered: given.findsNow, offerSource: { turns, given }, startedAt: r.startedAt, endedAt: r.endedAt, twilioMetadata: r.call.callSid ? { call_sid: r.call.callSid } : null, load: async () => ({ transcript, recordingUrl: null }), askVoiceRead: false });
+    // The voice read's moments for this call (the tee's session, by the call's own key), checked against their consent again inside,
+    // as on ElevenLabs; the ask after the call is queued as there too, now that the read runs on GPT-Live calls.
+    ended = await processEndedCall({ userId, callKey: conversationId, offered: given.findsNow, offerSource: { turns, given }, startedAt: r.startedAt, endedAt: r.endedAt, twilioMetadata: r.call.callSid ? { call_sid: r.call.callSid } : null, load: async () => ({ transcript, recordingUrl: null, voice: async () => momentSignals(await takeVoiceMoments(r.call.callKey, callerTurnsFrom(turns))) }) });
   } catch (err) {
     flagNotStored({ userId, conversationId, startedAt: r.startedAt, endedAt: r.endedAt }).catch(() => {});
     throw err;
