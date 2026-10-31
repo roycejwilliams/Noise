@@ -166,6 +166,37 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   check("...and call health marks it an abnormal end", H.callHealthReasons({ durationSecs: 40, terminationReason: G.liveTermination("openai_closed", "content"), status: null, turns: [], decisions: [], frustratedWithCo: false }).includes("abnormal_end"));
   check("the safety path is the existing one (services/safety.ts recordSafetyConcern), never a new alert", /recordSafetyConcern\(call\.userId, call\.firstName \|\| null, "co",/.test(src("services/gptLiveBridge.ts")));
 
+  // Exact wording only when the answer itself carries a crisis or safety line (review of #330).
+  check("the exact-wording instruction scopes itself: once, now, not again unless they ask", /once, exactly as written and in full/.test(G.sayExactly("x")) && /don't say it again unless they ask/.test(G.sayExactly("x")));
+  const everyday = [
+    ["The boss said I'm safe from the layoffs.", "That's a relief. Did he say what happens to your team?"],
+    ["I'll stay safe on the drive, don't worry.", "Good. Text me when you're there if you want."],
+    ["I can't do this anymore, the visa paperwork is endless.", "That paperwork sounds brutal. Which part is holding it up?"],
+    ["I feel like I'm a burden on my cofounder.", "What makes it feel that way this week?"],
+  ];
+  for (const [theirs, ours] of everyday) {
+    const e = bridge({ answer: () => ours });
+    await start(e, "live_e");
+    say(e, "member", theirs, 0);
+    e.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "e1", target: "client" } });
+    await sleep(40);
+    const sent = e.ai.sent.find((m: any) => m.event_id === "answer_e1");
+    check(`an everyday line ("${theirs}"): the answer goes in GPT-Live's own words (commentary), not as an exact-wording instruction`, sent?.type === "session.commentary.append" && sent.content === ours, sent);
+    e.tw.close();
+  }
+  const sticky = bridge({ answer: (req: any) => (JSON.stringify(req.messages).includes("Friday") ? "Nothing on Friday yet. Want me to look into it after the call?" : LINE) });
+  await start(sticky, "live_sticky");
+  say(sticky, "member", "Honestly I don't want to be here anymore.", 0);
+  sticky.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "k1", target: "client" } });
+  await sleep(40);
+  say(sticky, "cue", "I'm really glad you told me.", 1500);
+  say(sticky, "member", "I'm okay now. What's on for Friday?", 4000);
+  sticky.ai.in({ type: "session.delegation.created", offset_ms: 5000, delegation: { id: "k2", target: "client" } });
+  await sleep(40);
+  const k1 = sticky.ai.sent.find((m: any) => m.event_id === "answer_k1"), k2 = sticky.ai.sent.find((m: any) => m.event_id === "answer_k2");
+  check("a real crisis answer goes word for word", k1?.type === "session.instructions.append" && k1.content.includes("988"));
+  check("...but it isn't sticky: a later everyday answer on the same call goes in GPT-Live's own words", k2?.type === "session.commentary.append" && /Friday/.test(k2.content), k2);
+  sticky.tw.close();
   const plain = bridge({ answer: () => "Mostly bouldering, or rope too?" });
   await start(plain, "live_plain");
   say(plain, "member", "I've been climbing a lot lately.", 0);

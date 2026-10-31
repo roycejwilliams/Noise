@@ -213,19 +213,19 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
-    }, guard).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false }; });
+    }, guard).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false }; });
     if (out.safety) safetyMoment = true;
     // The caller has moved on (said something new since this turn was handed over): the answer is to a question no longer asked.
     const stale = turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
     if (stale) staleDropped++;
     if (!finished && !stale)
       send(ai, out.text
-        ? out.safety
+        ? out.exact
           ? { type: "session.instructions.append", event_id: `answer_${id}`, delegation_id: id, content: sayExactly(out.text) }
           : { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
         : { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." });
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
-    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.safety } });
+    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.exact } });
   };
 
   const onAi = (raw: unknown) => {

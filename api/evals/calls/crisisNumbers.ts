@@ -23,7 +23,9 @@ const events = (s: string) => [{ type: "content_block_start", index: 0, content_
 // ---- the check itself
 {
   const srcs = P.callSources({ messages: [{ role: "system", content: "You are Cue." }, { role: "user", content: THEIRS }] } as any);
-  check("988, 911 and 741741 are always backed in the spoken check", ["You can call or text 988 right now.", "If you're in danger, call 911.", "You can also text 741741."].every((x) => O.spokenProblem(x, srcs) === null) && [...O.CRISIS_NUMBERS].join() === "988,911,741741");
+  check("988, 911 and 741741 are backed on a crisis-resource line", ["You can call or text 988 right now.", "If you're in danger, call 911.", "You can also text 741741."].every((x) => O.spokenProblem(x, srcs) === null) && [...O.CRISIS_NUMBERS].join() === "988,911,741741");
+  check("...the text line's keyword and other spellings too: \"Text HOME to 741741\", \"Call 9-8-8\", \"nine eight eight\"", ["Text HOME to 741741.", "Call 9-8-8 any time.", "You can call nine eight eight."].every((x) => O.spokenProblem(x, srcs) === null), ["Text HOME to 741741.", "Call 9-8-8 any time."].map((x) => O.spokenProblem(x, srcs)));
+  check("...but the same numbers anywhere else are just numbers, checked as any other (review of #330)", O.spokenProblem("It was $988 a month.", srcs)?.kind === "number" && O.spokenProblem("We met in room 911.", srcs)?.kind === "number" && O.spokenProblem("About 741741 people went.", srcs)?.kind === "number");
   check("...any other number nothing backs is still held (the check isn't loosened)", O.spokenProblem("Call me back at 4155550123.", srcs)?.kind === "number" && O.spokenProblem("It starts at 8 and costs 45 dollars.", srcs) !== null);
 }
 
