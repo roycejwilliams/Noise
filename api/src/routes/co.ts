@@ -623,8 +623,10 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
 
 // ---------- The GPT-Live trial (services/gptLive.ts, Royce 2026-10-31): a second Twilio number, read-only, side by side.
 // The trial number's Voice webhook. The same member check as /co/incoming-call (a verified member's number, else the same
-// decline), then the trial's minute cap (past it the call is refused busy: no new words), then TwiML that streams the call to
-// the bridge (services/gptLiveBridge.ts). The stream carries a one-time id only; the member's id never goes to Twilio.
+// decline). Then team only: the trial sends the caller's context to OpenAI, which members haven't agreed to, so anyone else is
+// refused busy (widening it needs consent wording first). Then the trial's minutes (admitSession: refused busy when none are
+// left; otherwise this call's own cap). Then TwiML that streams the call to the bridge (services/gptLiveBridge.ts) with a one-time
+// id only (the member's id never goes to Twilio), and a <Connect> action for when the stream ends.
 router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!validateTwilioSignature(req, "/co/gpt-live/incoming-call")) return res.status(401).send("Invalid Twilio signature.");
@@ -641,22 +643,46 @@ router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next:
     }
     const G = await import("../services/gptLive.js");
     const streamUrl = G.gptLiveStreamUrl(process.env.API_URL);
-    if (!streamUrl || !(await G.trialOpen())) {
-      await recordDecision({ layer: 8, decision: "call.gpt_live_refused", userId, outcome: "skip", action: streamUrl ? "trial_minutes_used" : "no_api_url" }).catch(() => {});
+    const team = await import("../services/extensions.js").then((m) => m.isTeamMember(userId)).catch(() => false);
+    const admitted = streamUrl && team ? await G.admitSession() : null;
+    if (!admitted) {
+      await recordDecision({ layer: 8, decision: "call.gpt_live_refused", userId, outcome: "skip", action: !streamUrl ? "no_api_url" : !team ? "not_team" : "trial_minutes_used" }).catch(() => {});
       twiml.reject({ reason: "busy" });
       return res.type("text/xml").send(twiml.toString());
     }
     if (callSid) await pool.query(`UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [userId, callSid]);
-    const [{ rows: u }, contextSummary, briefing, team, voiceLayer] = await Promise.all([
+    G.markCall(callSid, userId, "pending");
+    const [{ rows: u }, contextSummary, briefing, voiceLayer] = await Promise.all([
       pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
       buildCallContextSummary(userId).catch(() => ""),
       takeCallBriefing(userId),
-      import("../services/extensions.js").then((m) => m.isTeamMember(userId)).catch(() => false),
       import("../services/coPersona.js").then((m) => m.getCoPersonaPrompt()),
     ]);
     const firstName = u[0]?.first_name ?? "";
     const call = G.buildLiveCall({ userId, callSid, firstName, voiceLayer: voiceLayer ?? "", contextSummary: withCallSituation(contextSummary, { direction: "inbound", team }), rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason: "", opening: await openingForCall(userId, firstName, "inbound", contextSummary) });
-    twiml.connect().stream({ url: streamUrl }).parameter({ name: "s", value: G.issueLiveLink(call) });
+    const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, trialLimited: admitted.trialLimited }, Date.now(), admitted.id);
+    twiml.connect({ action: `${process.env.API_URL}/co/gpt-live/after-stream` }).stream({ url: streamUrl! }).parameter({ name: "s", value: id });
+    return res.type("text/xml").send(twiml.toString());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// The <Connect> action: Twilio asks for what comes next when the stream ends. A call whose session started just hangs up (its
+// post-call steps run from the bridge). One that never got going hears the ElevenLabs path's own can't-connect line (approved
+// copy), has the failure noted the way that path notes it, and has its call_status released so the next call isn't blocked.
+router.post("/gpt-live/after-stream", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!validateTwilioSignature(req, "/co/gpt-live/after-stream")) return res.status(401).send("Invalid Twilio signature.");
+    const G = await import("../services/gptLive.js");
+    const st = G.takeCallState(req.body.CallSid);
+    const twiml = new twilio.twiml.VoiceResponse();
+    if (st && st.state !== "started") {
+      noteCallFailure(st.userId, "initiation");
+      await releaseFailedCall(st.userId, req.body.CallSid as string | undefined);
+      twiml.say(CANT_CONNECT_LINE);
+    }
+    twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   } catch (err) {
     next(err);

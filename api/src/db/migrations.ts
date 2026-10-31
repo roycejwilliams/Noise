@@ -3138,6 +3138,20 @@ export async function concurrencyMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("member_threads_one_open init failed:", err));
+  // The GPT-Live trial's minute ledger (services/gptLive.ts): one row per session, written as it starts and about every minute after,
+  // so the trial's total cap counts a call cut short by a restart. No user column (a member's deletion can't cascade into it) and
+  // nothing prunes it. New and empty: nothing existing is touched.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS gpt_live_minutes (
+        session_id TEXT PRIMARY KEY,
+        seconds NUMERIC NOT NULL DEFAULT 0,
+        ended_by TEXT,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("gpt_live_minutes init failed:", err));
   // One live copy of a photo per member (services/memberAssets.ts keepAsset). Numbered images only: a cleaned-up copy is kept as -N
   // and may share its original's bytes. If copies already exist this fails and is logged; keepAsset works either way.
   await pool

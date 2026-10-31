@@ -28,7 +28,11 @@ export const GPT_LIVE = {
   url: "wss://api.openai.com/v1/live/sessions",
   defaultVoice: "marin",
   maxSessionMs: 30 * 60_000, // each trial session
-  trialMinutesCap: 150, // all trial sessions together; past it new calls are refused
+  trialMinutesCap: 130, // all trial sessions together (Royce: under $10), enforced while calls run (admitSession)
+  minAdmitMs: 60_000, // a call that would get less than this is refused
+  startTimeoutMs: 10_000, // Twilio's start, then OpenAI's session.started, each within this or the call is ended cleanly
+  heartbeatMs: 60_000, // a running session's minutes are written this often
+  ackDelayMs: 800, // GPT-Live waits this long before its automatic "let me think" (we cancel it with an empty thinking append)
   linkTtlMs: 2 * 60_000, // the TwiML's one-time stream id
   leadMs: 300, // how far ahead of real time Cue's audio may be handed to Twilio (the rest waits here, so a barge-in stops sooner)
   catchUpMs: 400, // a delegation waits at most this long for the transcript to reach where it was made
@@ -58,19 +62,37 @@ export const isGptLiveStreamPath = (url: string | undefined): boolean => {
 
 // ---------------------------------------------------------------- the prompts
 
-// Pure: the ElevenLabs agent's prompt in GPT-Live's format. Same content, minus the bracketed voice cues ([laughs]), which are
-// ElevenLabs v4 audio tags: GPT-Live would read them out.
+// Nothing happens on a trial call (no tools, no sends), so the agent prompt's lines that tell Cue to act on the call and say so are
+// rewritten to "right after the call" (review of #325: leaving both in contradicts the honesty rule). A line that has moved makes
+// GPT_LIVE_FORBIDDEN fail the layer-1 test (evals/calls/gptLive.ts), never a silent mismatch.
+export const ON_CALL_REWRITES: [string, string][] = [
+  ["do it now, on the call, and say plainly what you did.", "say plainly you'll do it right after the call."],
+  ["When you start something with a tool, say what you started; when it's done, say what it is. ", ""],
+  ["say yes and set it up now, on the call, then say plainly that you have.", "say yes, and say you'll set it up right after the call."],
+  ["look it up now, or say you don't have it.", "say you don't have it, and that you'll look into it right after the call."],
+  ["Say yes to this on a call and set it up then and there, and say it's set up.", "Say yes to this on a call, and say you'll set it up right after the call."],
+  ["and text them the link to any of them while you talk", "and text them the links right after the call"],
+  ["end the call with end_call and say nothing more", "say nothing more"],
+];
+// What the trial call's instructions must never say (the layer-1 test reads both prompts for these).
+export const GPT_LIVE_FORBIDDEN = [/say it'?s set up/i, /look it up now/i, /set it up now, on the call/i, /then and there/i, /do it now, on the call/i, /\bend_call\b/, /link to any of them while you talk/i, /When you start something with a tool/i];
+// Pure: the ElevenLabs agent's prompt in GPT-Live's format: minus the bracketed voice cues ([laughs], ElevenLabs v4 audio tags
+// GPT-Live would read out), with the act-on-the-call lines rewritten (ON_CALL_REWRITES).
 export function liveCallPrompt(voiceLayer: string): string {
-  return promptForElevenLabs(voiceLayer)
+  let p = promptForElevenLabs(voiceLayer)
     .replace(`Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`, `${SPOKEN_ALOUD} `)
     .replace(`\n\n${CUE_GUIDE}`, "");
+  for (const [from, to] of ON_CALL_REWRITES) p = p.split(from).join(to);
+  return p;
 }
+// Said to both models on a trial call (review of #325).
+export const NOTHING_ON_THIS_CALL = "Nothing can be set up, looked up, sent or scheduled on this call, and you can't end it. When they want something done, say you'll do it right after the call. Never say it's done, set up, started or on its way.";
 // Pure: {{name}} filled the way ElevenLabs fills the agent's dynamic variables; an unknown name stays as it is.
 export const fillCallVars = (template: string, vars: Record<string, string>): string => template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => (k in vars ? vars[k] : m));
 
 // GPT-Live's own headings (OpenAI's prompting guide keeps these three and the literal <|SpawnThinking|>).
 export const LIVE_POLICY = `# On this line
-You are speaking out loud and listening at the same time. Your thinking (what you know about them, what's true, what to say on anything that matters) runs behind you: when it answers, say that answer in your own words and keep its facts exactly. You can't end the call or send anything; they hang up when they're done.
+You are speaking out loud and listening at the same time. Your thinking (what you know about them, what's true, what to say on anything that matters) runs behind you: when it answers, say that answer in your own words and keep its facts exactly. ${NOTHING_ON_THIS_CALL} They hang up when they're done.
 
 Backchannel policy: Light. A quiet "mm" or "yeah" while they work through something, never over their words when they pause to think.
 
@@ -95,10 +117,10 @@ Do not guess the result while waiting. Never name an event, place, time or perso
 
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms).
 export const BACKEND_NOTE = `# How this call runs
-This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next, as plain spoken sentences (no lists, no brackets, no stage directions). The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. Nothing can be sent, saved or done during this call; anything they want goes out by text right after it.`;
+This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next, as plain spoken sentences (no lists, no brackets, no stage directions). The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. ${NOTHING_ON_THIS_CALL} Anything they want goes out by text right after it.`;
 
 // Everything one trial call needs, built by the TwiML route for the verified caller only.
-export type LiveCall = { userId: string; callSid: string | null; firstName: string; instructions: string; backendSystem: string; opening: string; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string } };
+export type LiveCall = { userId: string; callSid: string | null; firstName: string; instructions: string; backendSystem: string; opening: string; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; trialLimited?: boolean };
 
 // Pure: the call's two prompts from the voice layer and this member's values (the same values registerElevenLabsCall sends).
 export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; opening: string }): LiveCall {
@@ -126,7 +148,7 @@ export function sessionStart(call: LiveCall, voice: string): Record<string, unkn
       instructions: call.instructions,
       input: [{ type: "message", role: "developer", content: [{ type: "input_text", text: greet }] }],
       audio: { format: { type: "audio/pcmu", rate: 8000 }, output: { voice } },
-      delegation: { type: "client" },
+      delegation: { type: "client", acknowledgement_delay_ms: GPT_LIVE.ackDelayMs },
     },
   };
 }
@@ -195,9 +217,9 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
 // ---------------------------------------------------------------- one-time stream ids (in memory: Twilio logs TwiML)
 
 const links = new Map<string, { call: LiveCall; expires: number }>();
-export function issueLiveLink(call: LiveCall, now = Date.now()): string {
+// The stream id is the admission's own key (admitSession), so the reservation and the call are one thing.
+export function issueLiveLink(call: LiveCall, now = Date.now(), id = randomBytes(32).toString("base64url")): string {
   for (const [k, v] of links) if (v.expires <= now) links.delete(k);
-  const id = randomBytes(32).toString("base64url");
   links.set(id, { call, expires: now + GPT_LIVE.linkTtlMs });
   return id;
 }
@@ -208,20 +230,73 @@ export function takeLiveLink(id: unknown, now = Date.now()): LiveCall | null {
   return hit && hit.expires > now ? hit.call : null;
 }
 
-// ---------------------------------------------------------------- the minute cap
-
-// Sessions running now (the bridge adds and removes them), so a cap check counts calls still on the line.
-export const openSessions = new Map<string, number>();
-type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
-// Minutes used by the whole trial: every finished session's logged seconds plus those running now.
-export async function trialMinutesUsed(db: Db = pool, now = Date.now()): Promise<number> {
-  const { rows } = await db.query(`SELECT COALESCE(SUM((proposal->>'seconds')::numeric), 0) AS s FROM harness_decisions WHERE decision = 'call.gpt_live_session'`);
-  const open = [...openSessions.values()].reduce((a, t) => a + Math.max(0, now - t) / 1000, 0);
-  return (Number(rows[0]?.s ?? 0) + open) / 60;
+// How each trial call's stream went, by Twilio's call sid, for the <Connect> action (routes/co.ts /co/gpt-live/after-stream): a call
+// whose session never started hears the ElevenLabs path's CANT_CONNECT_LINE and has its call_status released.
+const callStates = new Map<string, { userId: string; state: "pending" | "started" | "failed"; at: number }>();
+export function markCall(callSid: string | null | undefined, userId: string, state: "pending" | "started" | "failed", now = Date.now()): void {
+  if (!callSid) return;
+  for (const [k, v] of callStates) if (now - v.at > 3 * 3_600_000) callStates.delete(k);
+  const had = callStates.get(callSid);
+  if (had?.state === "started" && state === "failed") return; // a started call ended later is not a failed connect
+  callStates.set(callSid, { userId, state, at: now });
 }
-// Under the cap. A cap that can't be read refuses: the guard fails closed.
-export async function trialOpen(db: Db = pool, now = Date.now()): Promise<boolean> {
-  return trialMinutesUsed(db, now).then((m) => m < GPT_LIVE.trialMinutesCap).catch(() => false);
+export function takeCallState(callSid: unknown): { userId: string; state: "pending" | "started" | "failed" } | null {
+  if (typeof callSid !== "string") return null;
+  const hit = callStates.get(callSid) ?? null;
+  callStates.delete(callSid);
+  return hit;
+}
+
+// ---------------------------------------------------------------- the minute caps
+
+// Each session: 30 minutes. The trial: GPT_LIVE.trialMinutesCap in all, held while calls run, not only when they start: a call is
+// admitted with its own cap, min(30 min, what the trial has left after every minute logged and every open call's whole reservation),
+// and the bridge closes it there. Minutes live in gpt_live_minutes (db/migrations.ts), one row per session, written as the call
+// starts and about every minute after, so a restart mid-call still counts. That table has no user column and nothing prunes it, so
+// neither the 60-day harness_decisions prune nor a member's deletion (ON DELETE CASCADE) can take minutes off the total.
+export type Slot = { capMs: number; admittedAt: number; startedAt: number | null; sessionId: string | null };
+export const openSessions = new Map<string, Slot>(); // by stream id
+type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
+const pruneSlots = (now: number) => {
+  for (const [k, v] of openSessions) if (v.startedAt == null && now - v.admittedAt > GPT_LIVE.linkTtlMs + 2 * GPT_LIVE.startTimeoutMs) openSessions.delete(k);
+};
+const loggedSeconds = async (db: Db): Promise<number> => {
+  const running = [...openSessions.values()].map((v) => v.sessionId).filter((x): x is string => !!x);
+  const { rows } = await db.query(`SELECT COALESCE(SUM(seconds), 0) AS s FROM gpt_live_minutes WHERE NOT (session_id = ANY($1::text[]))`, [running]);
+  return Number(rows[0]?.s ?? 0);
+};
+// Minutes used so far: every session logged, plus the open ones' time on the line.
+export async function trialMinutesUsed(db: Db = pool, now = Date.now()): Promise<number> {
+  pruneSlots(now);
+  const open = [...openSessions.values()].reduce((a, v) => a + (v.startedAt == null ? 0 : Math.max(0, now - v.startedAt) / 1000), 0);
+  return ((await loggedSeconds(db)) + open) / 60;
+}
+let admitting: Promise<unknown> = Promise.resolve();
+// Admits one call: its stream id and its own cap, or null when the trial can't give it a minute. One admission at a time, so two
+// calls at once can't both take the last minutes. A total that can't be read refuses (fails closed).
+export function admitSession(db: Db = pool, now = Date.now()): Promise<{ id: string; capMs: number; trialLimited: boolean } | null> {
+  const run = admitting.then(async () => {
+    pruneSlots(now);
+    const reserved = [...openSessions.values()].reduce((a, v) => a + v.capMs, 0);
+    const left = GPT_LIVE.trialMinutesCap * 60_000 - (await loggedSeconds(db)) * 1000 - reserved;
+    const capMs = Math.min(GPT_LIVE.maxSessionMs, left);
+    if (capMs < GPT_LIVE.minAdmitMs) return null;
+    const id = randomBytes(32).toString("base64url");
+    openSessions.set(id, { capMs, admittedAt: now, startedAt: null, sessionId: null });
+    return { id, capMs, trialLimited: capMs < GPT_LIVE.maxSessionMs };
+  }).catch(() => null);
+  admitting = run;
+  return run;
+}
+// A session's minutes so far (and how it ended, at the end). Never throws.
+export async function writeMinutes(sessionId: string, seconds: number, endedBy: string | null, db: Db = pool): Promise<void> {
+  await db
+    .query(
+      `INSERT INTO gpt_live_minutes (session_id, seconds, ended_by) VALUES ($1, $2, $3)
+       ON CONFLICT (session_id) DO UPDATE SET seconds = GREATEST(gpt_live_minutes.seconds, EXCLUDED.seconds), ended_by = COALESCE(EXCLUDED.ended_by, gpt_live_minutes.ended_by), updated_at = NOW()`,
+      [sessionId, Math.round(seconds * 10) / 10, endedBy],
+    )
+    .catch((err: any) => console.error(`gpt-live: minutes for ${sessionId} not written (${String(err?.message ?? err).slice(0, 80)})`));
 }
 
 // ---------------------------------------------------------------- the grade

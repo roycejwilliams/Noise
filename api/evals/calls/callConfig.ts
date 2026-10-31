@@ -18,7 +18,15 @@ const tools: any[] = ap.tools;
 const text = JSON.stringify(cfg);
 
 // ---- 2. the call brain is Sonnet 4.6, called directly by ElevenLabs (2026-10-08, Hume's setup)
-const coEl = (t: string) => t.replace(/\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ Root-cause guard)/, ""); // the GPT-Live trial (evals/calls/gptLive.ts) is its own path
+// The GPT-Live trial (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
+// ever holds ElevenLabs code, so this can't quietly hide an ElevenLabs call site.
+const coEl = (t: string) => {
+  const m = /\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ After a GPT-Live trial call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
+  if (!m) throw new Error("the GPT-Live trial block's markers in routes/co.ts moved: update coEl");
+  const el = /registerElevenLabsCall|verifyPostCallWebhook|elevenlabs-signature|takeCallContext|callKey: `el:|elTurnMetrics|forgetAfterCall/.exec(m[0]);
+  if (el) throw new Error(`ElevenLabs code inside the GPT-Live trial block: ${el[0]}`);
+  return t.replace(m[0], "");
+};
 check("the call brain is Sonnet 4.6", ap.llm === "claude-sonnet-4-6");
 check("the fallback is the nearest Sonnet by a dated id (there is no dated 4.6)", ap.backup_llm_config.preference === "override" && ap.backup_llm_config.order.join() === "claude-sonnet-4-5@20250929");
 check("no Haiku anywhere in the call brain's model settings (the voice would change mid-call)", !/haiku/i.test(JSON.stringify({ llm: ap.llm, backup: ap.backup_llm_config })));
