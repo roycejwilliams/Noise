@@ -16,7 +16,7 @@ import { timingSafeEqual } from "crypto";
 import WebSocket from "ws";
 import { recordDecision, type HarnessDecision } from "../harness/core.js";
 import { anthropicStream } from "./callLlmProxy.js";
-import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, openSessions, replyGaps, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type Upstream } from "./gptLive.js";
+import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, openSessions, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -75,6 +75,9 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let streamSid = "", slotKey = "", sessionId = "", reason = "", seconds: number | null = null;
   let endedBy: EndedBy | null = null;
   let failClass: FailClass | null = null; // why OpenAI didn't start, when it didn't
+  // The most telling cause wins: a harmless early error event ("refused") never masks a later balance, key or timeout failure.
+  const RANK: Record<FailClass, number> = { quota: 6, auth: 6, no_key: 6, rate_limit: 5, connect: 4, timeout: 3, refused: 1, no_stream: 0 };
+  const noteFail = (c: FailClass) => { if (!failClass || RANK[c] > RANK[failClass]) failClass = c; };
   let started = false, finished = false, closing = false;
   const t0 = d.now();
   let startedAt = t0;
@@ -165,16 +168,18 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
-    }).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null }; });
+    }).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false }; });
     // The caller has moved on (said something new since this turn was handed over): the answer is to a question no longer asked.
     const stale = turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
     if (stale) staleDropped++;
     if (!finished && !stale)
       send(ai, out.text
-        ? { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
+        ? out.safety
+          ? { type: "session.instructions.append", event_id: `answer_${id}`, delegation_id: id, content: sayExactly(out.text) }
+          : { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
         : { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." });
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
-    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error } });
+    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.safety } });
   };
 
   const onAi = (raw: unknown) => {
@@ -226,7 +231,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         return;
       case "error":
         d.log(`gpt-live: error ${m.error?.code ?? "?"}: ${String(m.error?.message ?? "").slice(0, 160)}`);
-        if (!started) failClass ??= failClassOf(m.error);
+        if (!started) noteFail(failClassOf(m.error));
         return;
     }
   };
@@ -237,7 +242,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     try { ai = d.connectOpenAI(key); } catch (err: any) { failClass = failClassOf(err); return finish(`connect: ${String(err?.message ?? err).slice(0, 80)}`, "not_started"); }
     ai.on("open", () => send(ai, sessionStart(c, gptLiveVoice())));
     ai.on("message", (raw: unknown) => { try { onAi(raw); } catch { /* one bad event never ends the call */ } });
-    ai.on("error", (err: any) => { reason ||= `openai: ${String(err?.message ?? err).slice(0, 80)}`; if (!started) failClass ??= failClassOf(err); });
+    ai.on("error", (err: any) => { reason ||= `openai: ${String(err?.message ?? err).slice(0, 80)}`; if (!started) noteFail(failClassOf(err)); });
     ai.on("close", () => finish(started ? "openai closed" : reason || "openai refused", started ? "openai_closed" : "not_started"));
   };
 
@@ -252,7 +257,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       if (!call) { d.log("gpt-live: stream refused (no live stream id)"); slotKey = ""; return finish("no live stream id", "not_started"); }
       pump = setInterval(drain, 20);
       (pump as any).unref?.();
-      timers.push(timer(() => { if (!started) { failClass ??= "timeout"; finish("session not started in time", "not_started"); } }, d.startTimeoutMs));
+      timers.push(timer(() => { if (!started) { noteFail("timeout"); finish("session not started in time", "not_started"); } }, d.startTimeoutMs));
       openAi(call);
     } else if (m?.event === "media" && call && typeof m.media?.payload === "string") {
       if (m.media.track && m.media.track !== "inbound") return;

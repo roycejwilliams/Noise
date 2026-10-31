@@ -640,7 +640,7 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
 // can't be read, is "budget_used"). Then TwiML that streams the call to the bridge (services/gptLiveBridge.ts) with a one-time id only
 // (the member's id never goes to Twilio), and a <Connect> action for when the stream ends. GPT-Live opens in its own words from the
 // opening's background (gptLive.ts OpeningContext): no written or template opening line on this path.
-type GptLiveAnswer = { twiml: string } | { refused: "not_team" } | { refused: "budget_used" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" };
+type GptLiveAnswer = { twiml: string } | { refused: "not_team" } | { refused: "budget_used"; why: "minutes_used" | "unreadable" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" };
 async function gptLiveAnswer(o: { userId: string; callSid: string | null; direction: "inbound" | "outbound" }): Promise<GptLiveAnswer> {
   const team = await import("../services/extensions.js").then((m) => m.isTeamMember(o.userId)).catch(() => false);
   if (!team) return { refused: "not_team" };
@@ -648,8 +648,9 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
   if (!process.env.OPENAI_API_KEY?.trim()) return { refused: "unavailable", failClass: "no_key" };
   const streamUrl = G.gptLiveStreamUrl(process.env.API_URL);
   if (!streamUrl) return { refused: "unavailable", failClass: "no_api_url" };
-  const admitted = await G.admitSession();
-  if (!admitted) return { refused: "budget_used" };
+  const slot = await G.admitSession();
+  if (!G.admitted(slot)) return { refused: "budget_used", why: slot.refused };
+  const admitted = slot;
   try {
     if (o.callSid && o.direction === "inbound") await pool.query(`UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [o.userId, o.callSid]);
     const [{ rows: u }, contextSummary, briefing, voiceLayer, zone] = await Promise.all([
@@ -665,7 +666,7 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
     const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, budgetLimited: admitted.budgetLimited }, Date.now(), admitted.id);
     G.markCall(o.callSid, o.userId, "pending");
     // What the opening had to go on (which pieces, never their words): GPT-Live writes the line itself.
-    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason, middleOf: !!call.opening.middleOf } } }).catch(() => {});
+    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason } } }).catch(() => {});
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.connect({ action: `${process.env.API_URL}/co/gpt-live/after-stream` }).stream({ url: streamUrl }).parameter({ name: "s", value: id });
     return { twiml: twiml.toString() };
@@ -681,7 +682,7 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
 async function gptLiveRefusalTwiml(userId: string, callSid: string | null, r: Exclude<GptLiveAnswer, { twiml: string } | { refused: "not_team" }>): Promise<string> {
   const twiml = new twilio.twiml.VoiceResponse();
   if (r.refused === "budget_used") {
-    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: "inbound_refused", reason: "the team's GPT-Live minutes for the month are used (or couldn't be read)" }).catch(() => {});
+    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: r.why, proposal: { direction: "inbound" }, reason: r.why === "unreadable" ? "the team's GPT-Live minutes couldn't be read, so the call was refused (fails closed)" : "the team's GPT-Live minutes for the month are used" }).catch(() => {});
     twiml.reject({ reason: "busy" });
     return twiml.toString();
   }
