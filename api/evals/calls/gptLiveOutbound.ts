@@ -69,22 +69,22 @@ const reset = () => { sqls.length = 0; G.openSessions.clear(); loggedSecs = 0; r
   const ok = (async () => { fetched++; return new Response("{}", { status: 200 }); }) as any;
   const team = async () => true, notTeam = async () => false;
   reset();
-  check("not on the team: no check at all (null), OpenAI never asked", (await G.outboundPreflight("u-noor", { team: notTeam, env, fetch: ok })) === null && fetched === 0);
-  check("on the team, all clear: ok (the model read is free: GET /v1/models/gpt-live-1)", (await G.outboundPreflight("u-jordan", { team, env, fetch: ok }))?.ok === true && fetched === 1);
-  check("no OpenAI key: unavailable no_key, nothing fetched", JSON.stringify(await G.outboundPreflight("u-jordan", { team, env: { API_URL: env.API_URL } as any, fetch: ok })) === JSON.stringify({ ok: false, kind: "unavailable", failClass: "no_key", status: null }) && fetched === 1);
+  void notTeam;
+  check("every member is checked the same way (2026-10-31: everyone on GPT-Live), team or not", (await G.outboundPreflight("u-noor", { env, fetch: ok }))?.ok === true && fetched === 1);
+  fetched = 0;
+  check("on the team, all clear: ok (the model read is free: GET /v1/models/gpt-live-1)", (await G.outboundPreflight("u-jordan", { env, fetch: ok }))?.ok === true && fetched === 1);
+  check("no OpenAI key: unavailable no_key, nothing fetched", JSON.stringify(await G.outboundPreflight("u-jordan", { env: { API_URL: env.API_URL } as any, fetch: ok })) === JSON.stringify({ ok: false, kind: "unavailable", failClass: "no_key", status: null }) && fetched === 1);
   loggedSecs = 300 * 60;
-  check("the month's team minutes used: budget (held)", (await G.outboundPreflight("u-jordan", { team, env, fetch: ok }) as any)?.why === "minutes_used");
+  check("the month's team minutes used: budget (held)", (await G.outboundPreflight("u-jordan", { env, fetch: ok }) as any)?.why === "minutes_used");
   loggedSecs = 0;
-  const teamErr = await G.outboundPreflight("u-jordan", { team: async () => { throw new Error("db down"); }, env, fetch: ok }) as any;
-  check("the team read fails at dial time: can't place the call now (team_unreadable), never quietly ElevenLabs", teamErr?.ok === false && teamErr.kind === "unavailable" && teamErr.failClass === "team_unreadable");
-  check("minutes that can't be read: budget (fails closed)", (await G.outboundPreflight("u-jordan", { team, env, fetch: ok, db: { query: async () => { throw new Error("db down"); } } }) as any)?.why === "unreadable");
+  check("minutes that can't be read: budget (fails closed)", (await G.outboundPreflight("u-jordan", { env, fetch: ok, db: { query: async () => { throw new Error("db down"); } } }) as any)?.why === "unreadable");
   recentRefusal = "quota";
-  const q = await G.outboundPreflight("u-jordan", { team, env, fetch: ok }) as any;
+  const q = await G.outboundPreflight("u-jordan", { env, fetch: ok }) as any;
   check("OpenAI refused a session for balance in the last 15 minutes: unavailable quota, not dialed", q?.kind === "unavailable" && q.failClass === "quota" && fetched === 1, q);
   recentRefusal = null;
-  const a = await G.outboundPreflight("u-jordan", { team, env, fetch: (async () => new Response('{"error":{"code":"invalid_api_key"}}', { status: 401 })) as any }) as any;
+  const a = await G.outboundPreflight("u-jordan", { env, fetch: (async () => new Response('{"error":{"code":"invalid_api_key"}}', { status: 401 })) as any }) as any;
   check("OpenAI refuses the key: unavailable auth with its status", a?.failClass === "auth" && a.status === 401, a);
-  const c = await G.outboundPreflight("u-jordan", { team, env, fetch: (async () => { throw new Error("getaddrinfo ENOTFOUND api.openai.com"); }) as any }) as any;
+  const c = await G.outboundPreflight("u-jordan", { env, fetch: (async () => { throw new Error("getaddrinfo ENOTFOUND api.openai.com"); }) as any }) as any;
   check("OpenAI unreachable: unavailable connect", c?.failClass === "connect", c);
 }
 
@@ -95,11 +95,11 @@ const alerts: string[] = [];
 KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), true) }));
 {
   reset();
-  T.setPreflightForTests(null);
+  let checked = 0;
+  T.setPreflightForTests(async () => (checked++, { ok: true }));
   const r: any = await T.triggerCallForUser("u-noor", null, { kind: "router_decision" });
   const d = dials[0];
-  check("not on the team: dialed exactly as today (ElevenLabs' TwiML route, our number, status callbacks, 20 s)", r?.success === true && dials.length === 1 && d.to === "+15550000002" && d.from === "+15550009999" && /^https:\/\/cue\.example\.test\/co\/el\/outbound-twiml\?c=[^&]+$/.test(d.url) && d.method === "POST" && d.statusCallback === "https://cue.example.test/co/call-status" && JSON.stringify(d.statusCallbackEvent) === JSON.stringify(["ringing", "answered", "completed"]) && d.statusCallbackMethod === "POST" && d.timeout === 20 && Object.keys(d).length === 8, d);
-  check("...and nothing of GPT-Live: no minutes read, no GPT-Live rows", !sqls.some((w) => /gpt_live/.test(w.sql) || /^call\.gpt_live/.test(String(w.params?.[1]))));
+  check("a member not on the team: checked before dialing and dialed for GPT-Live (the same route, our number, callbacks, 20 s, plus AMD)", checked === 1 && r?.success === true && dials.length === 1 && d.to === "+15550000002" && d.from === "+15550009999" && /^https:\/\/cue\.example\.test\/co\/el\/outbound-twiml\?c=[^&]+$/.test(d.url) && d.statusCallback === "https://cue.example.test/co/call-status" && d.timeout === 20 && d.asyncAmd === "true", d);
 
   reset(); dials.length = 0;
   T.setPreflightForTests(async () => ({ ok: true }));
@@ -132,7 +132,7 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   await sleep(10);
   check("a refused OpenAI key: not dialed, a call that never started on Cue's side, and the dead-key text to the team", k?.success === false && dials.length === 0 && R.parseDialFailure(k.error)?.stage === "link" && decided("call.gpt_live_unavailable", "auth").length === 1 && alerts.length === 1 && alerts[0] === KA.KEY_DEAD_TEXT.openai, { k, alerts });
   T.setPreflightForTests(null);
-  check("the team's call isn't given a written opening while it rings (GPT-Live opens in its own words)", /if \(!live\) prebuildOpening\(/.test(src("services/callTrigger.ts")));
+  check("no call is given a written opening while it rings (GPT-Live opens in its own words)", !/^\s*prebuildOpening\(/m.test(src("services/callTrigger.ts")) && /void prebuildOpening;/.test(src("services/callTrigger.ts")));
 }
 
 // ---------------------------------------------------------------- 3. they answer (routes/co.ts /co/el/outbound-twiml)
@@ -161,8 +161,8 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
 
   reset(); registered.length = 0;
   const noor = await answer("u-noor", "CA-noor");
-  check("not on the team, answered: ElevenLabs' TwiML byte for byte, registered outbound from our number to theirs", noor.text === EL_TWIML && registered.length === 1 && registered[0].direction === "outbound" && registered[0].fromNumber === "+15550009999" && registered[0].toNumber === "+15550000002" && registered[0].conversationInitiationClientData.dynamicVariables.user_id === "u-noor", { noor, reg: registered[0] });
-  check("...nothing of GPT-Live touched", !sqls.some((w) => /gpt_live/.test(w.sql)) && G.openSessions.size === 0);
+  const nc = G.takeLiveLink(streamId(noor.text));
+  check("a member not on the team, answered: GPT-Live's stream, ElevenLabs never registered", /<Stream url="wss:\/\/cue\.example\.test\/co\/gpt-live\/stream">/.test(noor.text) && registered.length === 0 && nc?.userId === "u-noor" && nc.direction === "outbound", { noor });
 
   reset(); registered.length = 0;
   const jordan = await answer("u-jordan", "CA-jordan");
@@ -184,7 +184,8 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   reset(); registered.length = 0;
   const [j2, n2] = await Promise.all([answer("u-jordan", "CA-j2"), answer("u-noor", "CA-n2")]);
   const jc2 = G.takeLiveLink(streamId(j2.text));
-  check("at once: Jordan on GPT-Live with only his own name, Noor on ElevenLabs with nothing of his", jc2?.userId === "u-jordan" && !/Noor/.test(jc2.instructions + jc2.backendSystem) && n2.text === EL_TWIML && registered.length === 1 && !/Jordan|u-jordan/.test(JSON.stringify(registered[0])));
+  const nc2 = G.takeLiveLink(streamId(n2.text));
+  check("at once: Jordan and Noor each on GPT-Live with only their own name, ElevenLabs never registered", jc2?.userId === "u-jordan" && nc2?.userId === "u-noor" && !/Noor/.test(jc2.instructions + jc2.backendSystem) && !/Jordan/.test(nc2!.instructions + nc2!.backendSystem) && registered.length === 0);
   server.close();
   tw.registerCall = realRegister;
   G.openSessions.clear();

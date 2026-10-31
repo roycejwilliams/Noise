@@ -29,6 +29,9 @@ globalThis.Date = class extends RealDate {
 const dials: any[] = [];
 Object.defineProperty((twilio as any).Twilio.prototype, "calls", { configurable: true, get() { return { create: async (o: any) => { dials.push(o); return { sid: "CA_test_dashboard" }; } }; } });
 
+// GPT-Live's check before dialing passes here (its own tests: evals/calls/gptLiveOutbound.ts).
+(await import("../../src/services/callTrigger.js")).setPreflightForTests(async () => ({ ok: true }));
+
 // One member, the shape a brand-new member has: identity captured, subscription active, no profile content, no call yet.
 const member = { profile: false, realCall: false, attempts: 0 };
 const gate: any[] = [];

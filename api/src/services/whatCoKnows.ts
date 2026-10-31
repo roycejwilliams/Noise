@@ -101,7 +101,10 @@ const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "mind", "likes", "s
 export type KnownItem = { ref: string; source: KnownSource; group: KnownGroup; text: string; theirWords: string | null; canCorrect: boolean };
 // What the member is shown: items in a group that say the same thing, as one line with all their refs.
 export type KnownLine = { refs: string[]; text: string; theirWords: string | null; canCorrect: boolean };
-export type KnownView = { groups: { group: KnownGroup; title: string; lines: KnownLine[] }[] };
+export type KnownView = { groups: { group: KnownGroup; title: string; lines: KnownLine[] }[]; calls?: string };
+// Where their calls go (Royce, 2026-10-31, approved wording, fixed; checked against OpenAI's API data docs): a processor disclosure, part
+// of what they can see about what Cue knows and where it goes. Never sent to them on its own.
+export const CALLS_PROCESSOR_LINE = "Cue's phone calls run on OpenAI's voice model, so OpenAI processes the call audio and what Cue knows to help on it. OpenAI doesn't train on it and keeps it at most 30 days for safety checks.";
 
 export type Change = { refs: string[]; action: "correct" | "remove"; now?: string | null };
 export type Applied = { ref: string; source: KnownSource; was: string; now: string | null };
@@ -303,13 +306,14 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
     }
     if (lines.length) groups.push({ group: g, title: GROUP_TITLES[g], lines: lines.slice(0, perGroup) });
   }
-  return { groups };
+  return { groups, calls: CALLS_PROCESSOR_LINE };
 }
 
 // Pure: the view as one fact line for the reply's grounding (refs left out: they're for the tool, never for a text).
 export function knownFact(v: KnownView): string {
-  if (!v.groups.length) return "What Cue knows about them: nothing yet beyond their name and number.";
-  return `What Cue knows about them, the complete list (answer only from this; never add to it): ${v.groups.map((g) => `${g.title}: ${g.lines.map((l) => (l.theirWords ? `${l.text} (their words: "${l.theirWords}")` : l.text)).join("; ")}`).join(". ")}.`;
+  const calls = v.calls ? ` Where their calls go, word for word: ${v.calls}` : "";
+  if (!v.groups.length) return `What Cue knows about them: nothing yet beyond their name and number.${calls}`;
+  return `What Cue knows about them, the complete list (answer only from this; never add to it): ${v.groups.map((g) => `${g.title}: ${g.lines.map((l) => (l.theirWords ? `${l.text} (their words: "${l.theirWords}")` : l.text)).join("; ")}`).join(". ")}.${calls}`;
 }
 
 // Pure: a corrected value has to rest on their words: at least one of its real words is in what they said this turn.

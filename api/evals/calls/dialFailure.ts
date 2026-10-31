@@ -11,6 +11,8 @@ process.env.TWILIO_LIVE_SID ||= "ACtest";
 import fs from "node:fs";
 const { default: pool } = await import("../../src/db/db.js");
 const T = await import("../../src/services/callTrigger.js");
+// GPT-Live's check before dialing passes here (its own tests: evals/calls/gptLiveOutbound.ts).
+T.setPreflightForTests(async () => ({ ok: true }));
 const R = await import("../../src/services/callReasons.js");
 const D = await import("../../src/harness/devReview.js");
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");

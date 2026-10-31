@@ -99,7 +99,9 @@ check("a prepared line older than five minutes isn't used", /none prepared/.test
 const co = read("src/routes/co.ts");
 const trig = read("src/services/callTrigger.ts");
 const el = read("src/services/elevenLabsCalls.ts");
-check("outbound: the context and the opening are prepared while it rings", /const summary = prebuildCallContext\(userId, buildCallContextSummary\);\s*[^;]*\s*prebuildOpening\(userId, user\.first_name \?\? "", "outbound", summary\);/.test(trig));
+// Since every call runs on GPT-Live (2026-10-31), it opens in its own words: the context is still prepared while it rings, the written
+// opener isn't (it was ElevenLabs'; kept for the deletion PR).
+check("outbound: the context is prepared while it rings; no written opening (GPT-Live opens in its own words)", /const summary = prebuildCallContext\(userId, buildCallContextSummary\);/.test(trig) && !/^\s*prebuildOpening\(/m.test(trig));
 check("prebuildCallContext hands back the summary it is building", /export function prebuildCallContext\(.*\): Promise<string> \{/.test(el));
 check("both call paths take the written opening, the pool only as the fallback", (coEl(co).match(/opening: await openingForCall\(/g) ?? []).length === 2 && /written\.line \?\? \(await chooseOpening\(userId, firstName, direction\)\)/.test(co));
 check("inbound waits a bounded time, outbound only for what was prepared", /withTimeout\(writeOpening\([^)]*\), OPENING_WRITER\.inboundBudgetMs/.test(co) && /\? await takeOpening\(userId\)/.test(co));

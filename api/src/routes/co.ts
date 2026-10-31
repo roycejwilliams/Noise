@@ -358,60 +358,67 @@ router.post(
         return res.type("text/xml").send(twiml.toString());
       }
 
-      // The team's calls answer with GPT-Live (Royce, 2026-10-31; gptLiveAnswer below), and never fall back to ElevenLabs: minutes
-      // used is busy, GPT-Live unavailable is the can't-connect line. Every other member goes on to ElevenLabs exactly as before.
+      // Every verified member's call answers with GPT-Live (Royce, 2026-10-31; gptLiveAnswer below), never ElevenLabs: minutes used is
+      // busy, GPT-Live unavailable is the can't-connect line. The ElevenLabs answer is elevenLabsInboundTwiml, no longer called.
       const live = await gptLiveAnswer({ userId, callSid: callSid ?? null, direction: "inbound" });
       if ("twiml" in live) return res.type("text/xml").send(live.twiml);
-      if (live.refused !== "not_team") return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, callSid ?? null, live));
-
-      // Fixed 2026-09-17: this never set call_sid/call_status for an inbound
-      // call, so the LEFTOVER state from whatever call last touched this
-      // user's row (often 'completed', set by the previous call's own
-      // chat_ended) was still sitting there. /webhook's chat_ended handler
-      // reads call_status to decide if a call was "already processed" — so
-      // after any finished call, every later inbound call looked already
-      // done and got silently skipped: no transcript, no profile update, no
-      // follow-up. Mirrors what callTrigger.ts already does for outbound.
-      if (callSid) {
-        await pool.query(
-          `UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`,
-          [userId, callSid],
-        );
-      }
-
-      // Register the call with Co's ElevenLabs agent and hand Twilio the
-      // TwiML that connects it (services/elevenLabsCalls.ts).
-      const [{ rows: u }, contextSummary, briefing] = await Promise.all([
-        pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [userId]),
-        buildCallContextSummary(userId).catch(() => ""),
-        takeCallBriefing(userId),
-      ]);
-      try {
-        const elTwiml = await registerElevenLabsCall({
-          userId,
-          firstName: u[0]?.first_name ?? "",
-          opening: await openingForCall(userId, u[0]?.first_name ?? "", "inbound", contextSummary),
-          contextSummary,
-          rightNow: briefing.rightNow,
-          findsNow: briefing.findsNow,
-          from: from!,
-          to: (req.body.To as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
-          direction: "inbound",
-        });
-        return res.type("text/xml").send(elTwiml);
-      } catch (regErr: any) {
-        console.error("incoming-call: ElevenLabs registration failed:", regErr?.message ?? regErr);
-        noteCallFailure(userId, "registration");
-        await releaseFailedCall(userId, callSid);
-        twiml.say(CANT_CONNECT_LINE);
-        twiml.hangup();
-        return res.type("text/xml").send(twiml.toString());
-      }
+      return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, callSid ?? null, live));
     } catch (err) {
       next(err);
     }
   },
 );
+
+// ElevenLabs is out of the call path (2026-10-31): /co/incoming-call's old ElevenLabs answer, unchanged and no longer called (kept for
+// the deletion PR, with registerElevenLabsCall, /co/el/* and the agent).
+async function elevenLabsInboundTwiml(req: Request, res: Response, userId: string, callSid: string | undefined, from: string | undefined) {
+  const twiml = new twilio.twiml.VoiceResponse();
+
+  // Fixed 2026-09-17: this never set call_sid/call_status for an inbound
+  // call, so the LEFTOVER state from whatever call last touched this
+  // user's row (often 'completed', set by the previous call's own
+  // chat_ended) was still sitting there. /webhook's chat_ended handler
+  // reads call_status to decide if a call was "already processed" — so
+  // after any finished call, every later inbound call looked already
+  // done and got silently skipped: no transcript, no profile update, no
+  // follow-up. Mirrors what callTrigger.ts already does for outbound.
+  if (callSid) {
+    await pool.query(
+      `UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`,
+      [userId, callSid],
+    );
+  }
+
+  // Register the call with Co's ElevenLabs agent and hand Twilio the
+  // TwiML that connects it (services/elevenLabsCalls.ts).
+  const [{ rows: u }, contextSummary, briefing] = await Promise.all([
+    pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [userId]),
+    buildCallContextSummary(userId).catch(() => ""),
+    takeCallBriefing(userId),
+  ]);
+  try {
+    const elTwiml = await registerElevenLabsCall({
+      userId,
+      firstName: u[0]?.first_name ?? "",
+      opening: await openingForCall(userId, u[0]?.first_name ?? "", "inbound", contextSummary),
+      contextSummary,
+      rightNow: briefing.rightNow,
+      findsNow: briefing.findsNow,
+      from: from!,
+      to: (req.body.To as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
+      direction: "inbound",
+    });
+    return res.type("text/xml").send(elTwiml);
+  } catch (regErr: any) {
+    console.error("incoming-call: ElevenLabs registration failed:", regErr?.message ?? regErr);
+    noteCallFailure(userId, "registration");
+    await releaseFailedCall(userId, callSid);
+    twiml.say(CANT_CONNECT_LINE);
+    twiml.hangup();
+    return res.type("text/xml").send(twiml.toString());
+  }
+}
+void elevenLabsInboundTwiml;
 
 // ---------- ElevenLabs calls (services/elevenLabsCalls.ts)
 
@@ -439,45 +446,51 @@ router.post("/el/outbound-twiml", async (req: Request, res: Response, next: Next
     // Good once, within the call's window: a second fetch, an old link or a made-up one gets nothing.
     const userId = await takeCallLink(typeof req.query.c === "string" ? req.query.c : null);
     if (!userId) return res.status(401).send("Invalid call link.");
-    // A team member's call runs on GPT-Live (Royce, 2026-10-31; gptLiveAnswer below), with the context prebuilt while it rang. It was
+    // Every member's call runs on GPT-Live (Royce, 2026-10-31; gptLiveAnswer below), with the context prebuilt while it rang. It was
     // only dialed after its check passed (services/callTrigger.ts); if GPT-Live still can't take it now that they've answered, they
-    // hear the can't-connect line, never ElevenLabs. Every other member goes on to ElevenLabs exactly as before.
+    // hear the can't-connect line, never ElevenLabs. The ElevenLabs answer is elevenLabsOutboundTwiml, no longer called.
     const live = await gptLiveAnswer({ userId, callSid: (req.body.CallSid as string | undefined) ?? null, direction: "outbound", context: () => takeCallContext(userId, buildCallContextSummary).then((c) => c.summary) });
     if ("twiml" in live) return res.type("text/xml").send(live.twiml);
-    if (live.refused !== "not_team") return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, (req.body.CallSid as string | undefined) ?? null, live, "outbound"));
-    const [{ rows: u }, ctx, briefing] = await Promise.all([
-      pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [userId]),
-      takeCallContext(userId, buildCallContextSummary),
-      takeCallBriefing(userId),
-    ]);
-    const contextSummary = ctx.summary;
-    if (!u[0]) return res.status(404).send("Unknown user.");
-    try {
-      const twiml = await registerElevenLabsCall({
-        userId,
-        firstName: u[0].first_name ?? "",
-        opening: await openingForCall(userId, u[0].first_name ?? "", "outbound", contextSummary),
-        contextSummary,
-        rightNow: briefing.rightNow,
-        findsNow: briefing.findsNow,
-        from: (req.body.From as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
-        to: (req.body.To as string | undefined) ?? u[0].phone_number,
-        direction: "outbound",
-      });
-      return res.type("text/xml").send(twiml);
-    } catch (regErr: any) {
-      console.error("el/outbound-twiml: ElevenLabs registration failed:", regErr?.message ?? regErr);
-      noteCallFailure(userId, "registration");
-      await releaseFailedCall(userId, req.body.CallSid as string | undefined);
-      const fallback = new twilio.twiml.VoiceResponse();
-      fallback.say(CANT_CONNECT_LINE);
-      fallback.hangup();
-      return res.type("text/xml").send(fallback.toString());
-    }
+    return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, (req.body.CallSid as string | undefined) ?? null, live, "outbound"));
   } catch (err) {
     next(err);
   }
 });
+
+// ElevenLabs is out of the call path (2026-10-31): /co/el/outbound-twiml's old ElevenLabs answer, unchanged and no longer called (kept
+// for the deletion PR).
+async function elevenLabsOutboundTwiml(req: Request, res: Response, userId: string) {
+  const [{ rows: u }, ctx, briefing] = await Promise.all([
+    pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [userId]),
+    takeCallContext(userId, buildCallContextSummary),
+    takeCallBriefing(userId),
+  ]);
+  const contextSummary = ctx.summary;
+  if (!u[0]) return res.status(404).send("Unknown user.");
+  try {
+    const twiml = await registerElevenLabsCall({
+      userId,
+      firstName: u[0].first_name ?? "",
+      opening: await openingForCall(userId, u[0].first_name ?? "", "outbound", contextSummary),
+      contextSummary,
+      rightNow: briefing.rightNow,
+      findsNow: briefing.findsNow,
+      from: (req.body.From as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
+      to: (req.body.To as string | undefined) ?? u[0].phone_number,
+      direction: "outbound",
+    });
+    return res.type("text/xml").send(twiml);
+  } catch (regErr: any) {
+    console.error("el/outbound-twiml: ElevenLabs registration failed:", regErr?.message ?? regErr);
+    noteCallFailure(userId, "registration");
+    await releaseFailedCall(userId, req.body.CallSid as string | undefined);
+    const fallback = new twilio.twiml.VoiceResponse();
+    fallback.say(CANT_CONNECT_LINE);
+    fallback.hangup();
+    return res.type("text/xml").send(fallback.toString());
+  }
+}
+void elevenLabsOutboundTwiml;
 
 // The agent's tools. Answered in the response (ElevenLabs waits on it), with
 // the call's user id checked against its token.
@@ -634,8 +647,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
   }
 });
 
-// ---------- GPT-Live calls (services/gptLive.ts, Royce 2026-10-31): the team's calls run on GPT-Live; everyone else stays on ElevenLabs.
-// Royce, 10-31: the team never falls back to ElevenLabs (the goal is to leave it; its credits run out fast). So for a team member:
+// ---------- GPT-Live calls (services/gptLive.ts, Royce 2026-10-31): every member's calls run on GPT-Live; ElevenLabs is out of the call path.
+// Royce, 10-31: no call falls back to ElevenLabs (the goal is to leave it; its credits run out fast). So for any member:
 //   - the month's minutes used: refused busy, logged call.gpt_live_budget_reached (the morning review shows it, so the cap can rise);
 //   - GPT-Live unavailable (no OpenAI key or API_URL here, the answer couldn't be built, or OpenAI refused before the session started):
 //     the existing CANT_CONNECT_LINE, the failure noted as on the ElevenLabs path, logged call.gpt_live_unavailable with its class (a
@@ -647,18 +660,10 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
 // can't be read, is "budget_used"). Then TwiML that streams the call to the bridge (services/gptLiveBridge.ts) with a one-time id only
 // (the member's id never goes to Twilio), and a <Connect> action for when the stream ends. GPT-Live opens in its own words from the
 // opening's background (gptLive.ts OpeningContext): no written or template opening line on this path.
-type GptLiveAnswer = { twiml: string } | { refused: "not_team" } | { refused: "budget_used"; why: "minutes_used" | "unreadable" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" | "team_unreadable" };
+type GptLiveAnswer = { twiml: string } | { refused: "budget_used"; why: "minutes_used" | "unreadable" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" };
 async function gptLiveAnswer(o: { userId: string; callSid: string | null; direction: "inbound" | "outbound"; context?: () => Promise<string> }): Promise<GptLiveAnswer> {
-  // A team list that can't be read fails closed (review of #333): the call can't be placed now, logged, never quietly routed to
-  // ElevenLabs as if they weren't on the team.
-  let team: boolean;
-  // (A direct read: isTeamMember answers false on a failed read, which is right for what it guards and wrong here.)
-  try { team = (await pool.query(`SELECT mo_approver FROM users WHERE id = $1`, [o.userId])).rows[0]?.mo_approver === true; }
-  catch (err: any) {
-    console.error(`gpt-live: team list unreadable for ${o.userId.slice(0, 8)} (${String(err?.message ?? err).slice(0, 120)})`);
-    return { refused: "unavailable", failClass: "team_unreadable" };
-  }
-  if (!team) return { refused: "not_team" };
+  // Every verified member (Royce, 2026-10-31, with the processor line in what Cue knows). Team only shapes the prompt (TEAM_BUILDER_LINE).
+  const team = await import("../services/extensions.js").then((m) => m.isTeamMember(o.userId)).catch(() => false);
   const G = await import("../services/gptLive.js");
   if (!process.env.OPENAI_API_KEY?.trim()) return { refused: "unavailable", failClass: "no_key" };
   const streamUrl = G.gptLiveStreamUrl(process.env.API_URL);
@@ -695,17 +700,17 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
   }
 }
 
-// A team member GPT-Live can't take (Royce, 10-31: never ElevenLabs for the team). Minutes used: busy. Unavailable: the existing
+// A member GPT-Live can't take (Royce, 10-31: never ElevenLabs). Minutes used: busy. Unavailable: the existing
 // can't-connect line, the failure noted and the call's status released, as when ElevenLabs can't register a call.
-async function gptLiveRefusalTwiml(userId: string, callSid: string | null, r: Exclude<GptLiveAnswer, { twiml: string } | { refused: "not_team" }>, direction: "inbound" | "outbound" = "inbound"): Promise<string> {
+async function gptLiveRefusalTwiml(userId: string, callSid: string | null, r: Exclude<GptLiveAnswer, { twiml: string }>, direction: "inbound" | "outbound" = "inbound"): Promise<string> {
   const twiml = new twilio.twiml.VoiceResponse();
   if (r.refused === "budget_used" && direction === "inbound") {
-    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: r.why, proposal: { direction: "inbound" }, reason: r.why === "unreadable" ? "the team's GPT-Live minutes couldn't be read, so the call was refused (fails closed)" : "the team's GPT-Live minutes for the month are used" }).catch(() => {});
+    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: r.why, proposal: { direction: "inbound" }, reason: r.why === "unreadable" ? "GPT-Live's minutes couldn't be read, so the call was refused (fails closed)" : "GPT-Live's minutes for the month are used" }).catch(() => {});
     twiml.reject({ reason: "busy" });
     return twiml.toString();
   }
   // Outbound, they've already answered: the minutes ran out between the check and the pickup (rare) is told like a failure to connect.
-  if (r.refused === "budget_used") await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: r.why, proposal: { direction: "outbound", stage: "answered" }, reason: "the team's GPT-Live minutes ran out (or couldn't be read) between the dial and the answer" }).catch(() => {});
+  if (r.refused === "budget_used") await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: r.why, proposal: { direction: "outbound", stage: "answered" }, reason: "GPT-Live's minutes ran out (or couldn't be read) between the dial and the answer" }).catch(() => {});
   else await recordDecision({ layer: 8, decision: "call.gpt_live_unavailable", userId, outcome: "skip", action: r.failClass, proposal: { direction, failClass: r.failClass, stage: "answer" } }).catch(() => {});
   noteCallFailure(userId, "registration");
   // Only a call whose status was set (inbound: the build failed after this path set it; outbound: the dial set it) has one to release,
@@ -717,8 +722,7 @@ async function gptLiveRefusalTwiml(userId: string, callSid: string | null, r: Ex
 }
 
 // The trial number's Voice webhook, kept as a second way in for the team. The same member check as /co/incoming-call (a verified
-// member's number, else the same decline), then gptLiveAnswer. A member who isn't on the team is refused busy here, as on the trial
-// (this number has never been an ElevenLabs line); the team gets what the main number gives them.
+// member's number, else the same decline), then gptLiveAnswer: every member gets what the main number gives them.
 router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!validateTwilioSignature(req, "/co/gpt-live/incoming-call")) return res.status(401).send("Invalid Twilio signature.");
@@ -735,10 +739,7 @@ router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next:
     }
     const live = await gptLiveAnswer({ userId, callSid, direction: "inbound" });
     if ("twiml" in live) return res.type("text/xml").send(live.twiml);
-    if (live.refused !== "not_team") return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, callSid, live));
-    await recordDecision({ layer: 8, decision: "call.gpt_live_refused", userId, outcome: "skip", action: "not_team" }).catch(() => {});
-    twiml.reject({ reason: "busy" });
-    return res.type("text/xml").send(twiml.toString());
+    return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, callSid, live));
   } catch (err) {
     next(err);
   }

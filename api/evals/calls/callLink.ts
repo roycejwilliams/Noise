@@ -117,7 +117,11 @@ globalThis.fetch = (async (input: any, init?: any) => {
 }) as typeof fetch;
 
 process.env.API_URL = "https://api.cue.example";
-const { triggerCallForUser } = await import("../../src/services/callTrigger.js");
+const { triggerCallForUser, setPreflightForTests } = await import("../../src/services/callTrigger.js");
+// GPT-Live's check before dialing (services/gptLive.ts outboundPreflight) passes here; its own tests are evals/calls/gptLiveOutbound.ts.
+setPreflightForTests(async () => ({ ok: true }));
+const G = await import("../../src/services/gptLive.js");
+const streamIdOf = (t: string) => /<Parameter name="s" value="([^"]+)"\/>/.exec(t)?.[1] ?? null;
 
 // ---- the dial: what Twilio is given
 let aliceId = "";
@@ -171,10 +175,11 @@ try {
   const unsigned = await twiml(`?c=${aliceId}`, false);
   check("a request Twilio didn't sign is refused, before the id is touched", unsigned.status === 401 && /Twilio signature/.test(unsigned.body) && links.has(L.callLinkHash(aliceId)));
   const first = await twiml(`?c=${aliceId}`);
-  check("the valid id, once: the call is connected (ElevenLabs TwiML returned)", first.status === 200 && /stub\.elevenlabs/.test(first.body), `${first.status} ${first.body.slice(0, 200)}`);
-  const vars = elBodies.at(-1)?.conversation_initiation_client_data?.dynamic_variables ?? {};
-  check("...for the right member: ElevenLabs is told this member's id and name", vars.user_id === ALICE && vars.first_name === "Jordan", JSON.stringify(vars).slice(0, 200));
-  check("...and the hand-off to ElevenLabs keeps its own call token (unchanged)", TOKEN_SHAPE.test(String(vars.call_token ?? "")) && elBodies.at(-1)?.conversation_initiation_client_data?.custom_llm_extra_body?.user_id === ALICE);
+  // Since 2026-10-31 every call runs on GPT-Live: the answer is its stream (services/gptLive.ts), never ElevenLabs.
+  check("the valid id, once: the call is connected (GPT-Live's stream; ElevenLabs never asked)", first.status === 200 && /<Stream url="wss?:\/\/[^"]+\/co\/gpt-live\/stream">/.test(first.body) && elBodies.length === 0, `${first.status} ${first.body.slice(0, 200)}`);
+  const firstCall = G.takeLiveLink(streamIdOf(first.body));
+  check("...for the right member: the stream's one-time id opens this member's call, with their name", firstCall?.userId === ALICE && firstCall.firstName === "Jordan" && firstCall.direction === "outbound");
+  check("...and the TwiML carries no member id or token, only the one-time stream id", !first.body.includes(ALICE) && !TOKEN_SHAPE.test(first.body));
   check("...and the id is used up", !links.has(L.callLinkHash(aliceId)));
   const again = await twiml(`?c=${aliceId}`);
   check("the same id again: refused", again.status === 401 && /Invalid call link/.test(again.body));
@@ -189,8 +194,8 @@ try {
   check("an expired id: refused, and its row is gone", expired.status === 401 && !links.has(L.callLinkHash(expiredId)));
   const bobId = await L.issueCallLink(BOB);
   const bob = await twiml(`?c=${bobId}`);
-  const bobVars = elBodies.at(-1)?.conversation_initiation_client_data?.dynamic_variables ?? {};
-  check("another member's id connects that member, not the first", bob.status === 200 && bobVars.user_id === BOB && bobVars.first_name === "Ellis");
+  const bobCall = G.takeLiveLink(streamIdOf(bob.body));
+  check("another member's id connects that member, not the first", bob.status === 200 && bobCall?.userId === BOB && bobCall.firstName === "Ellis");
 } finally {
   server.close();
 }
