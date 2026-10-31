@@ -183,7 +183,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const req = jordan.reqs[0];
   const sys = req?.system?.map((x: any) => x.text).join("\n") ?? "";
   check("the brain is Claude through the call brain, with the caller's prompt and this call's transcript", /^claude-/.test(req?.model) && sys.includes("Jordan is moving to Oakland") && sys.includes(G.BACKEND_NOTE) && JSON.stringify(req.messages).includes("Any climbing gyms near the new place?"));
-  check("read-only: the brain gets no tools", !req?.tools || req.tools.length === 0);
+  check("read-only: the brain gets no action tools, only end_call (Cue's own decision to hang up, review of #331)", (req?.tools ?? []).map((t: any) => t.name).join() === "end_call");
   const lat = jordan.records.find((r) => r.decision === "call.turn_latency" && r.action === "gpt_live");
   check("each delegated turn records its latency, tagged with the provider", lat?.proposal.provider === "gpt-live" && typeof lat.proposal.totalMs === "number" && "firstTokenMs" in lat.proposal && lat.userId === "u-jordan", lat);
   const both = [...jordan.reqs, ...noor.reqs];

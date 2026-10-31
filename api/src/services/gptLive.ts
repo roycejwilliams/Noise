@@ -45,7 +45,8 @@ export const GPT_LIVE = {
   commentaryMaxChars: 1600, // OpenAI's limit is 500 tokens per append
   closeWaitMs: 5000, // after session.close, how long to wait for session.closed
   silenceEndMs: AGENT_DEFAULTS.silenceEndCallSecs * 1000, // nothing said either way this long ends the call, as on the ElevenLabs agent
-  goodbyeQuietMs: 4000, // after both have said goodbye, this long with nothing more said ends the call (Cue can't hang up itself)
+  endGraceMs: 2000, // after Cue's goodbye has finished playing, this long before end_call hangs up (a last word from them keeps it open)
+  endWaitMs: 15_000, // an end_call whose goodbye isn't said within this is dropped
   wrapUpMs: 60_000, // how long before a session's cap GPT-Live is asked to wrap up
   guardCacheMs: 20_000, // the live guards are read at most this often per call, as on the ElevenLabs proxy
 } as const;
@@ -96,7 +97,7 @@ export function liveCallPrompt(voiceLayer: string): string {
   return p;
 }
 // Said to the thinking on a GPT-Live call (review of #325): Claude promises "right after the call", through the call brain's checks.
-export const NOTHING_ON_THIS_CALL = "Nothing can be set up, looked up, sent or scheduled on this call, and you can't end it. When they want something done, say you'll do it right after the call. Never say it's done, set up, started or on its way.";
+export const NOTHING_ON_THIS_CALL = "Nothing can be set up, looked up, sent or scheduled on this call. When they want something done, say you'll do it right after the call. Never say it's done, set up, started or on its way.";
 // GPT-Live's version: it never promises anything itself (every promise is the thinking's, so it passes the offer guard's promise
 // check), and never says something is done.
 export const NOTHING_ON_THIS_CALL_LIVE = "Nothing can be set up, looked up, sent or scheduled on this call, and you can't end it. Never promise anything yourself, and never say it's done, set up, started or on its way: what happens and when comes from your thinking.";
@@ -164,9 +165,10 @@ Generate <|SpawnThinking|> when:
 - You would say what Cue knows or has done.
 - They correct you or push back.
 - Anything touches their safety.
+- They're wrapping up the call or saying goodbye.
 
 Do not generate <|SpawnThinking|> when:
-- It's a greeting, a thanks, a goodbye, or a brief "mm" or "yeah".
+- It's a greeting, a thanks, or a brief "mm" or "yeah".
 - You only need them to repeat a word you didn't catch.
 
 Generate <|SpawnThinking|> before giving an answer that depends on backend work.
@@ -291,8 +293,13 @@ export function replyGaps(turns: LiveTurn[]): number[] {
 // ---------------------------------------------------------------- delegation (read-only)
 
 // Pure: the call brain's request for a delegated turn: the caller's own prompt and this call's transcript, nothing else.
+// Ending the call is Cue's decision (Royce, 2026-10-31: Cue decides, code guards; never code reading their words for a goodbye). GPT-Live
+// can't call a function (OpenAI rejects session.tools: "Unknown parameter"), so the decision is the thinking's: goodbyes are delegated,
+// and Claude has this one tool. The bridge hangs up after Cue's goodbye has played, guarded on facts only (gptLiveBridge.ts endGuard).
+export const END_CALL_RULE = "End the phone call. Use it only after they have clearly wrapped up and your reply says goodbye: never mid-thought, never after you've asked a question, never during an emotional moment. Your goodbye is said first, then the call ends.";
+export const END_CALL_TOOL = { type: "function", function: { name: "end_call", description: END_CALL_RULE, parameters: { type: "object", properties: {} } } };
 export function delegationRequest(call: LiveCall, turns: LiveTurn[]): OaiRequest {
-  return { messages: [{ role: "system", content: call.backendSystem }, ...turns.map((t) => ({ role: t.who === "member" ? "user" : "assistant", content: t.text }))], stream: true, temperature: AGENT_DEFAULTS.temperature };
+  return { messages: [{ role: "system", content: call.backendSystem }, ...turns.map((t) => ({ role: t.who === "member" ? "user" : "assistant", content: t.text }))], tools: [END_CALL_TOOL], stream: true, temperature: AGENT_DEFAULTS.temperature };
 }
 export type Upstream = (req: ARequest, userId: string) => AsyncIterable<AnthropicEvent>;
 // One delegated turn through the call brain, with no tools: it can only think and answer. Its sentences are cleaned and checked
@@ -305,16 +312,18 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   if (guard) req.messages = await guard(req.messages).catch(() => req.messages);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
+  let endCall = false;
   for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped })) {
-    const d = c.choices[0].delta as { content?: unknown };
+    const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") text += d.content;
+    if (d.tool_calls?.some((t) => t.function?.name === "end_call")) endCall = true;
   }
   const said = stripCues(text).replace(/\s+/g, " ").trim().slice(0, GPT_LIVE.commentaryMaxChars);
   const safety = safetyCall(req) || (!!said && safetyCall({ ...req, messages: [...req.messages, { role: "assistant", content: said }] }));
   // Said exactly only when this answer itself carries a crisis or safety line (review of #330: safetyCall reads the whole call, so after
   // one safety mention every later answer went out word for word, "what's on for Friday?" included).
   const exact = !!said && SAFETY_LINE.test(said);
-  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact };
+  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact, endCall };
 }
 // A safety turn's answer goes as a trusted instruction to say it word for word (OpenAI: session.instructions.append "can be used to
 // request exact spoken wording"; commentary is paraphrased), so crisis resources like 988 are never reworded.
