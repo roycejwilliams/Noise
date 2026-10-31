@@ -211,7 +211,7 @@ export async function ledgerFacts(userId: string, context: string, zoneIn?: stri
   const { rows } = await pool
     .query(
       `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end, source, meta->>'provenance' AS provenance FROM co_facts
-       WHERE owner_user_id = $1 AND subject = 'co' AND relation <> 'exited' AND happened_at > NOW() - INTERVAL '90 days'
+       WHERE owner_user_id = $1 AND subject = 'co' AND relation <> 'exited' AND NOT (meta ? 'ledger') AND happened_at > NOW() - INTERVAL '90 days'
        ORDER BY happened_at DESC LIMIT 400`,
       [userId],
     )
@@ -334,7 +334,7 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
        WHERE m.memory_type = 'recommendation_offered' AND m.created_at > NOW() - INTERVAL '90 days'
          AND m.content ~ '^\\{' AND coalesce(m.content::jsonb ->> 'name', '') <> ''
          -- Not already recorded live when it was sent (recordSentItems).
-         AND NOT EXISTS (SELECT 1 FROM co_facts f WHERE f.owner_user_id = m.user_id AND f.relation = 'sent' AND lower(f.object_label) = lower(m.content::jsonb ->> 'name') AND f.source NOT LIKE 'memory:%' AND abs(extract(epoch FROM f.happened_at - m.created_at)) < 300)
+         AND NOT EXISTS (SELECT 1 FROM co_facts f WHERE f.owner_user_id = m.user_id AND f.relation = 'sent' AND lower(f.object_label) = lower(m.content::jsonb ->> 'name') AND f.source NOT LIKE 'memory:%' AND NOT (f.meta ? 'ledger') AND abs(extract(epoch FROM f.happened_at - m.created_at)) < 300)
        ON CONFLICT (owner_user_id, relation, object_key, happened_at) DO NOTHING`,
     )
     .then((r) => r.rowCount ?? 0)
@@ -349,7 +349,7 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
     .catch(() => ({ rows: [] as any[] }));
   let tools = 0;
   const { rows: live } = await pool
-    .query(`SELECT owner_user_id, relation, object_key, happened_at FROM co_facts WHERE subject = 'co' AND source NOT LIKE '%backfill' AND happened_at > NOW() - INTERVAL '90 days'`)
+    .query(`SELECT owner_user_id, relation, object_key, happened_at FROM co_facts WHERE subject = 'co' AND source NOT LIKE '%backfill' AND NOT (meta ? 'ledger') AND happened_at > NOW() - INTERVAL '90 days'`)
     .catch(() => ({ rows: [] as any[] }));
   const already = (owner: string, relation: string, k: string, at: Date) =>
     live.some((l: any) => l.owner_user_id === owner && l.relation === relation && l.object_key === k && Math.abs(new Date(l.happened_at).getTime() - at.getTime()) < 5 * 60_000);

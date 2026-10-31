@@ -253,7 +253,7 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     (
       await rows(
         `SELECT object_label, url, meta->>'kind' AS kind, happened_at FROM co_facts
-         WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND retired_at IS NULL AND happened_at > NOW() - INTERVAL '45 days'
+         WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND retired_at IS NULL AND NOT (meta ? 'ledger') AND happened_at > NOW() - INTERVAL '45 days'
          ORDER BY happened_at DESC LIMIT 80`,
         [userId],
       )

@@ -193,7 +193,14 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
       await pool.query(`UPDATE co_event_announcements SET sent_at = NOW() WHERE id = $1`, [r.id]);
       // So the ask path and the sweep don't pitch the same Co event again.
       await pool
-        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation_offered', $2)`, [r.user_id, JSON.stringify({ name: event.name, event_api_id: event.api_id })])
+        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation_offered', $2) RETURNING id, created_at`, [r.user_id, JSON.stringify({ name: event.name, event_api_id: event.api_id })])
+        .then(async (m: any) => {
+          // One act in the action ledger (services/ledger.ts) with the surfacing line below, written in the background.
+          const row = m?.rows?.[0];
+          if (!row) return;
+          const L = await import("./ledger.js");
+          L.ledgerWrite(L.recommendationRow({ userId: r.user_id, memoryId: String(row.id), at: new Date(row.created_at), name: event.name, eventApiId: event.api_id, tier: "1" }));
+        })
         .catch(() => {});
       await writeMemory(r.user_id, "event_discovery_surfacing", `Announced Noise's own event "${event.name}" when it was created`).catch(() => {});
     } else if ((result as any).reason === "already sent") {

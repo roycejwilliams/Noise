@@ -219,7 +219,7 @@ export async function loadSentItems(userId: string, days = 45): Promise<SentItem
     pool
       .query(
         `SELECT object_label AS name, meta->>'when' AS when, meta->>'when_end' AS when_end FROM co_facts
-         WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND happened_at > NOW() - make_interval(days => $2)
+         WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND NOT (meta ? 'ledger') AND happened_at > NOW() - make_interval(days => $2)
          ORDER BY happened_at DESC LIMIT 60`,
         [userId, days],
       )

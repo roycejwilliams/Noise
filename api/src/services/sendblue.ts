@@ -138,17 +138,25 @@ function reportSendBreaker(number: string, count: number, resumesAt: number, rea
     .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));
 }
 
-// Every send is Co's (outbound_messages.sender keeps its default, "co").
+// Every send is Co's (outbound_messages.sender keeps its default, "co"). It is also one 'texted' row in the action ledger
+// (services/ledger.ts), anchored on this row and queued in the background: the send never waits on it.
 function recordOutbound(handle: string, number: string, content: string): void {
   import("../db/db.js")
     .then(({ default: pool }) =>
       pool.query(
         `INSERT INTO outbound_messages (message_handle, user_id, content)
          SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3
-         ON CONFLICT (message_handle) DO NOTHING`,
+         ON CONFLICT (message_handle) DO NOTHING RETURNING user_id, sent_at`,
         [handle, number, content.slice(0, 2000)],
       ),
     )
+    .then(async (r: any) => {
+      const row = r?.rows?.[0];
+      // No row: the handle was already recorded (its ledger row with it), or the number isn't a member's.
+      if (!row?.user_id) return;
+      const L = await import("./ledger.js");
+      L.ledgerWrite(L.textedRow({ userId: String(row.user_id), handle, content, at: new Date(row.sent_at) }));
+    })
     .catch((err: any) => console.error("sendblue: outbound handle not recorded (non-fatal):", err?.message ?? err));
 }
 

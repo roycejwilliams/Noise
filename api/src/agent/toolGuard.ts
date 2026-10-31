@@ -13,7 +13,8 @@
 // services/capabilities.ts, so every tool gets the same guards.
 import { z } from "zod";
 import pool from "../db/db.js";
-import { recordDecision } from "../harness/core.js";
+import { recordDecisionRow } from "../harness/core.js";
+import { ledgerWrite, toolOutcomeRow } from "../services/ledger.js";
 import { abilityForTool } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
 import { recordToolAction } from "../services/coFacts.js";
@@ -118,10 +119,12 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       // their yes, the why, the refs (their hash part is made from the text) or a judge's words about it (forget-delete-spec.md §2.26).
       // A voiceRead call the same way: the answer read, never their words (voiceReadReceipt).
       const removal = removalReceipt(name, input) ?? voiceReadReceipt(name, input);
+      // Every outcome is also one row in the action ledger (services/ledger.ts), anchored on this decision row and written in the
+      // background: what the call did (recordAs when it did only part), or for a removal or a voice read the tool's name only.
       const log = (receipt: Receipt, detail: Record<string, unknown> = {}) =>
         ctx.dryRun
           ? Promise.resolve()
-          : recordDecision({
+          : recordDecisionRow({
               layer: 3,
               decision: `tool.${name}`,
               userId: ctx.userId,
@@ -131,7 +134,16 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
               proposal: removal
                 ? { ability: ability.id, ...removal, ...(typeof detail.yesCheck === "string" ? { yesCheck: detail.yesCheck } : {}), ...("error" in detail ? { error: "not done" } : {}) }
                 : { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
-            }).catch(() => {});
+            })
+              .then((d) =>
+                ledgerWrite(
+                  toolOutcomeRow({
+                    userId: ctx.userId, tool: name, receipt, input: removal ? null : (detail.recordAs ?? input), made: typeof detail.made === "string" ? detail.made : null,
+                    decisionId: d.id, at: d.at ?? new Date(), background: input?.background === true,
+                  }),
+                ),
+              )
+              .catch(() => {});
       const refuse = async (receipt: Receipt, receiptText: string, tell: string, detail: Record<string, unknown> = {}) => {
         ctx.notDone(receiptText);
         await log(receipt, detail);

@@ -40,6 +40,7 @@ const DAY = 86_400_000;
 const { default: pool } = await import("../../src/db/db.js");
 const world = (pool as any).query;
 const cofacts: { owner: string; label: string }[] = [];
+const ledgerRows: { relation: string; receipt: string }[] = [];
 // intro_requests (services/introRequestClose.ts), answered the way Postgres would.
 const requests: any[] = [];
 let failMarkOnce = false;
@@ -86,6 +87,8 @@ const handler = async (sql: string, p: any[] = []) => {
     return { rows: W.decisions.filter((d) => d.decision === p[0] && d.user_id === p[1] && d.outcome === "act" && key(d) === p[2]).map(() => ({ x: 1 })) };
   }
   if (/COUNT\(\*\)::int AS n FROM harness_decisions/.test(flat)) return { rows: [{ n: W.decisions.filter((d) => d.decision === p[0] && d.user_id === p[1] && d.outcome === "act").length }] };
+  // The action ledger's own rows (services/ledger.ts, object_key "L|...") are kept apart: tested in evals/ledger/dualWrite.ts.
+  if (/INSERT INTO co_facts/i.test(flat) && String(p[3]).startsWith("L|")) { ledgerRows.push({ relation: String(p[1]), receipt: JSON.parse(String(p[7] ?? "{}")).receipt }); return { rows: [] }; }
   if (/INSERT INTO co_facts/i.test(flat)) { cofacts.push({ owner: p[0], label: String(p[3]) }); return { rows: [] }; }
   return world(sql, p);
 };
@@ -130,6 +133,7 @@ type World = { jo: ReturnType<typeof addMember>; sarah: ReturnType<typeof addMem
 const build = (): World => {
   reset();
   cofacts.length = 0;
+  ledgerRows.length = 0;
   requests.length = 0;
   const jo = addMember({ first_name: "Jo", last_name: "Lee", intent: [ask("a cofounder for a climate startup")] });
   const sarah = addMember({ first_name: "Sarah", last_name: "Kim", intent: [ask("an engineer who has shipped hardware")] });

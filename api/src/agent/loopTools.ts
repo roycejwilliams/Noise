@@ -131,7 +131,7 @@ export async function storedFinds(userId: string, now = Date.now()): Promise<Sto
   }
   // Events Co sent them in the last few days (its own record of sends, services/coFacts.ts).
   const { rows } = await pool
-    .query(`SELECT object_label, url, happened_at, meta->>'when' AS "when" FROM co_facts WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND url IS NOT NULL AND happened_at > NOW() - make_interval(days => $2) ORDER BY happened_at DESC LIMIT 20`, [userId, SENT_EVENT_DAYS])
+    .query(`SELECT object_label, url, happened_at, meta->>'when' AS "when" FROM co_facts WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND url IS NOT NULL AND NOT (meta ? 'ledger') AND happened_at > NOW() - make_interval(days => $2) ORDER BY happened_at DESC LIMIT 20`, [userId, SENT_EVENT_DAYS])
     .catch(() => ({ rows: [] as any[] }));
   for (const r of rows) {
     const t = new Date(r.happened_at).getTime();
@@ -650,7 +650,7 @@ export function loopTools(
             ctx.facts?.add("did_this_turn", `Sent the link for "${f.name}" (${it.link}), but its caption didn't send`);
             notDone(`The caption for ${f.name} didn't send; only its link went.`);
           }
-          if (f.match && !ctx.dryRun) await recordRecommendationsSent(ctx.userId, [f.match]).catch(() => {});
+          if (f.match && !ctx.dryRun) await recordRecommendationsSent(ctx.userId, [f.match], [it.link]).catch(() => {});
         }
         if (sent.length) await remember({ shortlist: [...(notes?.shortlist ?? []), ...items.filter((i) => loop.shared.includes(i.link)).map((i) => ({ name: loop.found.get(i.link)?.name ?? i.link, url: i.link, note: i.caption.slice(0, 200) }))].slice(-8) });
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "loop.shareFinds", userId: ctx.userId, outcome: sent.length ? "act" : "skip", action: `sent ${sent.length}`, proposal: { sent, refused, seconds: Math.round((Date.now() - loop.started) / 1000) } }).catch(() => {});
