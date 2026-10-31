@@ -40,7 +40,15 @@ const now = 1_790_000_000;
 
 const trigger = readFileSync(new URL("../../src/services/callTrigger.ts", import.meta.url), "utf8");
 const coSrc = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
-const coEl = (t: string) => t.replace(/\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ Root-cause guard)/, ""); // the GPT-Live trial (evals/calls/gptLive.ts) is its own path
+// The GPT-Live trial (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
+// ever holds ElevenLabs code, so this can't quietly hide an ElevenLabs call site.
+const coEl = (t: string) => {
+  const m = /\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ After a GPT-Live trial call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
+  if (!m) throw new Error("the GPT-Live trial block's markers in routes/co.ts moved: update coEl");
+  const el = /registerElevenLabsCall|verifyPostCallWebhook|elevenlabs-signature|takeCallContext|callKey: `el:|elTurnMetrics|forgetAfterCall/.exec(m[0]);
+  if (el) throw new Error(`ElevenLabs code inside the GPT-Live trial block: ${el[0]}`);
+  return t.replace(m[0], "");
+};
 check("Hume is gone: every call is registered with the ElevenLabs agent, in and out", /\/co\/el\/outbound-twiml/.test(trigger) && !/mediaStreamBridge|media-stream|hume/i.test(trigger) && /direction: "inbound"/.test(coSrc) && !/api\.hume\.ai|router\.post\(\s*"\/webhook"/.test(coSrc));
 check("a call that can't connect says so on the line and is noted, never dead air", (coSrc.match(/noteCallFailure\(userId, "registration"\)/g) ?? []).length === 2 && (coSrc.match(/CANT_CONNECT_LINE/g) ?? []).length >= 3);
 

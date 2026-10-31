@@ -38,26 +38,29 @@ class FakeSocket extends EventEmitter {
 const textEvents = (s: string) => [{ type: "content_block_start", index: 0, content_block: { type: "text" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: s } }, { type: "content_block_stop", index: 0 }];
 
 // One bridged call with fakes on every side; returns the sockets and what was recorded.
-function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o: { answer?: (req: any) => string; now?: () => number; maxSessionMs?: number } = {}) {
+function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o: { answer?: (req: any) => string; now?: () => number; maxSessionMs?: number; delayMs?: number; key?: string | undefined; noStart?: boolean; startTimeoutMs?: number; heartbeatMs?: number; id?: string } = {}) {
   const tw = new FakeSocket(), ai = new FakeSocket();
-  const reqs: any[] = [], records: any[] = [], results: any[] = [];
+  const reqs: any[] = [], records: any[] = [], results: any[] = [], minutes: any[] = [];
   let keyUsed = "";
-  const issued = call ? G.issueLiveLink(call) : "not-a-link";
+  const issued = call ? G.issueLiveLink(call, Date.now(), o.id) : "not-a-link";
   B.setLiveDeps({
     connectOpenAI: (k) => { keyUsed = k; setImmediate(() => ai.emit("open")); return ai as any; },
-    apiKey: () => "sk-test",
-    upstream: (req) => { reqs.push(req); const s = (o.answer ?? (() => "Friday works, and the Mission one is at seven."))(req); return (async function* () { for (const e of textEvents(s)) yield e as any; })(); },
+    apiKey: () => ("key" in o ? o.key : "sk-test"),
+    upstream: (req) => { reqs.push(req); const s = (o.answer ?? (() => "Friday works, and the Mission one is at seven."))(req); return (async function* () { if (o.delayMs) await sleep(o.delayMs); for (const e of textEvents(s)) yield e as any; })(); },
     record: (d) => records.push(d),
     postCall: async (r) => { results.push(r); },
+    minutes: (id, secs, by) => minutes.push({ id, secs, by }),
     now: o.now ?? Date.now,
     log: () => {},
     maxSessionMs: o.maxSessionMs ?? 60_000,
+    startTimeoutMs: o.startTimeoutMs ?? 60_000,
+    heartbeatMs: o.heartbeatMs ?? 60_000,
   });
   B.handleGptLiveStream(tw as any);
   B.setLiveDeps(null);
   tw.in({ event: "connected" });
-  tw.in({ event: "start", streamSid: "MZ1", start: { callSid: "CA1", customParameters: { s: issued } } });
-  return { tw, ai, reqs, records, results, key: () => keyUsed };
+  if (!o.noStart) tw.in({ event: "start", streamSid: "MZ1", start: { callSid: "CA1", customParameters: { s: issued } } });
+  return { tw, ai, reqs, records, results, minutes, key: () => keyUsed };
 }
 
 // ---------------------------------------------------------------- 1. session setup
@@ -66,13 +69,20 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const start: any = G.sessionStart(call, G.gptLiveVoice({}));
   check("session.start: gpt-live-1, mu-law 8 kHz both ways (Twilio's own format), client delegation", start.type === "session.start" && start.session.model === "gpt-live-1" && start.session.audio.format.type === "audio/pcmu" && start.session.audio.format.rate === 8000 && start.session.delegation.type === "client");
   check("voice: marin by default, GPT_LIVE_VOICE picks another", start.session.audio.output.voice === "marin" && G.gptLiveVoice({ GPT_LIVE_VOICE: " gleam " }) === "gleam");
-  check("instructions are the ElevenLabs agent's call prompt with this member's values filled in", call.instructions.includes(E.CALL_GUIDE) && call.instructions.includes("Jordan is moving to Oakland") && call.instructions.includes("This call is inbound") && !/\{\{(first_name|context_summary|direction|right_now|finds_now|call_reason)\}\}/.test(call.instructions));
+  check("instructions are the ElevenLabs agent's call prompt with this member's values filled in", ["# Staying with them", "# Names the transcript gets wrong", "# Offers and promises"].every((h) => call.instructions.includes(h)) && call.instructions.includes(E.CALL_NOW.split("\n")[0]) && call.instructions.includes("Jordan is moving to Oakland") && call.instructions.includes("This call is inbound") && !/\{\{(first_name|context_summary|direction|right_now|finds_now|call_reason)\}\}/.test(call.instructions));
   check("...adapted only in format: no bracketed voice cues (GPT-Live would read them aloud)", !call.instructions.includes(CUE_GUIDE) && !/except a cue in square brackets/.test(call.instructions) && E.promptForElevenLabs(VOICE).includes(CUE_GUIDE));
   check("...plus GPT-Live's three policy headings and its <|SpawnThinking|> token", /Backchannel policy:/.test(call.instructions) && /Interruption policy:/.test(call.instructions) && /Delegation policy:/.test(call.instructions) && /Generate <\|SpawnThinking\|> when:/.test(call.instructions));
   check("the brain gets the same prompt plus how the call runs", call.backendSystem.startsWith(call.instructions.slice(0, 2000)) && call.backendSystem.includes(G.BACKEND_NOTE) && !call.backendSystem.includes("<|SpawnThinking|>"));
   check("no finds: the same line ElevenLabs gets", call.given.findsNow === "Nothing to offer right now. Don't offer an event.");
   check("the greeting is the opening line, as a developer message and once as commentary", start.session.input[0].role === "developer" && /Hey Jordan, it's Cue/.test(start.session.input[0].content[0].text) && G.greetingEvent(call).delegation_id === null);
   check("the stream URL is ours, wss", G.gptLiveStreamUrl("https://cue.example.test") === "wss://cue.example.test/co/gpt-live/stream" && G.isGptLiveStreamPath("/co/gpt-live/stream?x=1") && !G.isGptLiveStreamPath("/co/voice-stream"));
+  const raw = E.promptForElevenLabs(VOICE);
+  check("honesty: every act-on-the-call line being rewritten is really in the agent prompt (a moved line fails here, loudly)", G.ON_CALL_REWRITES.every(([from]) => raw.includes(from)), G.ON_CALL_REWRITES.filter(([from]) => !raw.includes(from)).map(([f]) => f));
+  const hits = (t: string) => G.GPT_LIVE_FORBIDDEN.filter((re) => re.test(t)).map(String);
+  check("honesty: GPT-Live's instructions never say to set it up, look it up now, say it's set up, or end_call", hits(call.instructions).length === 0, hits(call.instructions));
+  check("honesty: nor does the brain's prompt", hits(call.backendSystem).length === 0, hits(call.backendSystem));
+  check("honesty: both say nothing can be set up, looked up, sent or scheduled on the call; it's done right after; never claim it", [call.instructions, call.backendSystem].every((t) => t.includes(G.NOTHING_ON_THIS_CALL) && /right after the call/.test(t)) && /Never say it's done, set up, started or on its way/.test(G.NOTHING_ON_THIS_CALL));
+  check("the automatic acknowledgment waits long enough to be cancelled", start.session.delegation.acknowledgement_delay_ms === 800);
   check("instructions fit GPT-Live's 16,384-token limit with room for a long context", call.instructions.length / 4 < 12_000, Math.round(call.instructions.length / 4));
 }
 
@@ -98,11 +108,19 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   now += 500;
   await sleep(45);
   check("...and follows as time passes, never more than ~300 ms ahead", b.tw.of("media").length === 30, b.tw.of("media").length);
+  b.ai.in({ type: "session.input_transcript.delta", delta: "mm", start_ms: 9000, end_ms: 9200 });
+  check("barge-in: a 'mm' while Cue talks clears nothing", b.tw.of("clear").length === 0);
+  b.ai.in({ type: "session.input_transcript.delta", delta: " wait, actually", start_ms: 9200, end_ms: 9800 });
+  check("barge-in: the caller taking the turn clears Twilio's buffer, once", b.tw.of("clear").length === 1 && b.tw.of("clear")[0].streamSid === "MZ1");
+  now += 2000;
+  await sleep(45);
+  check("...and the audio waiting here is dropped, not played after it", b.tw.of("media").length === 30, b.tw.of("media").length);
   b.tw.in({ event: "stop" });
   check("the caller hanging up asks OpenAI to close", b.ai.of("session.close").length === 1);
   b.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 42.5 } });
   const sess = b.records.find((r) => r.decision === "call.gpt_live_session");
-  check("the session's minutes are recorded from OpenAI's final usage", sess?.proposal.seconds === 42.5 && sess.proposal.confirmed === true && sess.proposal.provider === "gpt-live" && sess.proposal.maxQueuedMs === 1000, sess);
+  check("the session's minutes are recorded from OpenAI's final usage", sess?.proposal.seconds === 42.5 && sess.proposal.confirmed === true && sess.proposal.provider === "gpt-live" && sess.proposal.maxQueuedMs === 1000 && sess.proposal.endedBy === "caller_hangup" && sess.proposal.clears === 1, sess);
+  check("minutes are written as the session starts and when it ends, with how it ended", b.minutes[0]?.id === "live_1" && b.minutes[0].secs === 0 && b.minutes.at(-1)?.secs === 42.5 && b.minutes.at(-1)?.by === "caller_hangup", b.minutes);
 }
 
 // ---------------------------------------------------------------- 3. a delegated turn (read-only) and 4. two calls at once
@@ -120,6 +138,8 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   await sleep(60);
   const ans = jordan.ai.of("session.commentary.append").find((m: any) => m.delegation_id === "item_j1");
   check("delegation round trip: the brain's answer goes back as commentary under the delegation's id", ans?.content === "Good question. Do you mostly boulder, or rope climb?", ans);
+  const forJ = jordan.ai.sent.filter((m: any) => m.delegation_id === "item_j1");
+  check("the automatic 'let me think' is cancelled first: an empty thinking append under the delegation's id", forJ[0]?.type === "session.thinking.append" && forJ[0].content === "" && forJ[0].event_id === "quiet_item_j1");
   const req = jordan.reqs[0];
   const sys = req?.system?.map((x: any) => x.text).join("\n") ?? "";
   check("the brain is Claude through the call brain, with the caller's prompt and this call's transcript", /^claude-/.test(req?.model) && sys.includes("Jordan is moving to Oakland") && sys.includes(G.BACKEND_NOTE) && JSON.stringify(req.messages).includes("Any climbing gyms near the new place?"));
@@ -138,7 +158,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   broken.ai.in({ type: "session.started", session: { id: "live_b" } });
   broken.ai.in({ type: "session.delegation.created", offset_ms: 0, delegation: { id: "item_b", target: "client" } });
   await sleep(30);
-  check("a failed brain turn: a silent note to GPT-Live (no guess), and call.turn_health error for the health check", broken.ai.of("session.thinking.append").some((m: any) => m.delegation_id === "item_b") && broken.records.some((r) => r.decision === "call.turn_health" && r.action === "error"));
+  check("a failed brain turn: a silent note to GPT-Live (no guess), and call.turn_health error for the health check", broken.ai.of("session.thinking.append").some((m: any) => m.event_id === "answer_item_b" && m.content) && broken.records.some((r) => r.decision === "call.turn_health" && r.action === "error"));
   // The call brain's own checks still hold: an event, day and time nothing backs is not passed on to be said.
   const unsourced = bridge(callFor("Jordan", "Jordan is moving to Oakland."), { answer: () => "Friday works, and the Mission one is at seven." });
   await sleep(5);
@@ -148,7 +168,19 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   await sleep(40);
   const said = unsourced.ai.sent.filter((m: any) => m.delegation_id === "item_u").map((m: any) => m.content).join(" ");
   check("an unsourced event offer from the brain is held back and logged (call.offer_unsourced), never handed to GPT-Live", !/Mission|Friday/.test(said) && unsourced.records.some((r) => r.decision === "call.offer_unsourced"), said);
-  for (const b of [jordan, noor, broken, unsourced]) b.tw.close();
+  // The caller moved on while the brain thought: its answer is dropped, not said over the new question.
+  const moved = bridge(callFor("Jordan", "Jordan is moving to Oakland."), { answer: () => "The one near you opens at six.", delayMs: 30 });
+  await sleep(5);
+  moved.ai.in({ type: "session.started", session: { id: "live_m" } });
+  moved.ai.in({ type: "session.input_transcript.delta", delta: "Is the gym open early?", start_ms: 0, end_ms: 1000 });
+  moved.ai.in({ type: "session.delegation.created", offset_ms: 1100, delegation: { id: "item_m", target: "client" } });
+  await sleep(10);
+  moved.ai.in({ type: "session.output_transcript.delta", delta: "Mm.", start_ms: 1150, end_ms: 1300 });
+  moved.ai.in({ type: "session.input_transcript.delta", delta: "Actually forget that, what about Sunday?", start_ms: 1500, end_ms: 3000 });
+  await sleep(60);
+  check("stale answer: the caller moved on, so the answer is dropped (and logged stale)", !moved.ai.sent.some((m: any) => m.delegation_id === "item_m" && m.type === "session.commentary.append") && moved.records.some((r) => r.decision === "call.turn_latency" && r.action === "gpt_live" && r.proposal.stale === true));
+  check("...while an answer to the latest question still goes (the Jordan turn above)", jordan.records.some((r) => r.action === "gpt_live" && r.proposal.stale === false));
+  for (const b of [jordan, noor, broken, unsourced, moved]) b.tw.close();
 }
 
 // ---------------------------------------------------------------- 5. the transcript into the post-call steps
@@ -212,22 +244,49 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
 
 // ---------------------------------------------------------------- 6. the cost guard
 {
-  const db = (secs: number) => ({ query: async () => ({ rows: [{ s: String(secs) }] }) });
-  check("under 150 trial minutes: open", (await G.trialOpen(db(149 * 60))) === true);
-  check("at 150 minutes: refused", (await G.trialOpen(db(150 * 60))) === false);
-  G.openSessions.set("live_running", 1_000_000);
-  check("sessions still on the line count toward the cap", (await G.trialMinutesUsed(db(140 * 60), 1_000_000 + 10 * 60_000)) === 150 && (await G.trialOpen(db(140 * 60), 1_000_000 + 10 * 60_000)) === false);
-  G.openSessions.delete("live_running");
-  check("a cap that can't be read refuses (fails closed)", (await G.trialOpen({ query: async () => { throw new Error("db down"); } })) === false);
+  const db = (secs: number) => ({ sqls: [] as string[], query: async function (sql: string) { this.sqls.push(sql); return { rows: [{ s: String(secs) }] }; } });
+  G.openSessions.clear();
+  const min = 60_000;
+  const a1 = await G.admitSession(db(100 * 60));
+  check("100 of 130 minutes used: admitted with the full 30-minute session cap", a1?.capMs === 30 * min && a1.trialLimited === false, a1);
+  G.openSessions.clear();
+  const a2 = await G.admitSession(db(115 * 60));
+  check("115 used: admitted, capped at the 15 minutes the trial has left", a2?.capMs === 15 * min && a2.trialLimited === true, a2);
+  G.openSessions.clear();
+  check("129.5 used: refused (less than a minute left)", (await G.admitSession(db(129.5 * 60))) === null);
+  G.openSessions.clear();
+  const both = await Promise.all([G.admitSession(db(80 * 60)), G.admitSession(db(80 * 60)), G.admitSession(db(80 * 60))]);
+  check("calls at once share what's left: 30, then the 20 left after it, then none", both[0]?.capMs === 30 * min && both[1]?.capMs === 20 * min && both[2] === null, both.map((x) => x?.capMs ?? null));
+  G.openSessions.clear();
+  check("a total that can't be read refuses (fails closed)", (await G.admitSession({ query: async () => { throw new Error("db down"); } })) === null);
+  const d0 = db(0);
+  await G.admitSession(d0);
+  check("minutes come from gpt_live_minutes (no user column, never pruned), not harness_decisions", d0.sqls.every((q) => /FROM gpt_live_minutes/.test(q)) && /CREATE TABLE IF NOT EXISTS gpt_live_minutes \(\s*session_id TEXT PRIMARY KEY,[^)]*\)/.test(src("db/migrations.ts")) && !/gpt_live_minutes[^`]*REFERENCES/.test(src("db/migrations.ts")) && !/DELETE FROM gpt_live_minutes/.test(src("jobs/index.ts")));
+  G.openSessions.clear();
+
+  // Held while the call runs: the bridge closes the session at its own cap, the same way as the 30-minute one.
+  const adm = await G.admitSession(db(129 * 60 - 0.04)); // just over a minute left
+  check("near the end of the trial a call gets only what's left", adm?.trialLimited === true && adm.capMs < 2 * min, adm);
+  const short = { ...callFor("Jordan", "x"), capMs: 40, trialLimited: true };
+  const t = bridge(short, { id: adm!.id, heartbeatMs: 15 });
+  await sleep(5);
+  t.ai.in({ type: "session.started", session: { id: "live_trialcap" } });
+  check("a running session counts while it runs, under its admission", G.openSessions.get(adm!.id)?.sessionId === "live_trialcap" && (await G.trialMinutesUsed(db(0))) >= 0);
+  await sleep(70);
+  check("heartbeat: minutes are written while the call runs", t.minutes.filter((m: any) => m.by === null).length >= 2, t.minutes);
+  check("the trial cap ends the session the same way as the session cap (session.close)", t.ai.of("session.close").length === 1);
+  t.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 64 } });
+  const ts = t.records.find((r) => r.decision === "call.gpt_live_session");
+  check("...recorded as ended by the trial cap, minutes logged, admission released", ts?.proposal.endedBy === "trial_cap" && t.minutes.at(-1)?.by === "trial_cap" && t.tw.readyState === 3 && !G.openSessions.has(adm!.id), ts);
   const b = bridge(callFor("Jordan", "x"), { maxSessionMs: 40 });
   await sleep(5);
   b.ai.in({ type: "session.started", session: { id: "live_cap" } });
-  check("a running session counts while it runs", G.openSessions.has("live_cap"));
   await sleep(70);
-  check("each session is capped: at its limit the session is closed", b.ai.of("session.close").length === 1);
+  check("each session is capped at 30 minutes: at its limit the session is closed", b.ai.of("session.close").length === 1);
   b.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 1800 } });
-  check("...the call ends, it stops counting as open, and its minutes are logged", b.tw.readyState === 3 && !G.openSessions.has("live_cap") && b.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.seconds === 1800);
-  check("the route checks the cap before anything is loaded, and refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf('"/gpt-live/incoming-call"'), co.indexOf("export async function runGptLivePostCall")); return h.indexOf("trialOpen()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
+  check("...recorded as ended by the session cap", b.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "session_cap");
+  check("the route checks team, then the cap, before anything is loaded, and refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf('"/gpt-live/incoming-call"'), co.indexOf('"/gpt-live/after-stream"')); return h.indexOf("isTeamMember(userId)") < h.indexOf("admitSession()") && h.indexOf("admitSession()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
+  G.openSessions.clear();
 }
 
 // ---------------------------------------------------------------- 7. the unknown caller, and a stream nobody issued
@@ -248,6 +307,33 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   };
   const unknown = await post("/co/gpt-live/incoming-call", { From: "+15550001111", To: "+15550002222", CallSid: "CA-x", StirVerstat: "TN-Validation-Passed-A" });
   check("an unknown number hears today's line and the call ends, nothing streamed", unknown.status === 200 && /we don't recognize this number/.test(unknown.text) && /<Hangup\/>/.test(unknown.text) && !/<Stream/.test(unknown.text), unknown);
+  // A verified member who isn't on the team: refused busy, with a decision row, and nothing of theirs loaded or sent.
+  const writes: { sql: string; params: any[] }[] = [];
+  let team = false, logged = 0;
+  (pool as any).query = async (sql: string, params: any[] = []) => {
+    if (/^\s*(INSERT|UPDATE)/.test(sql)) writes.push({ sql, params });
+    if (/FROM users WHERE phone_number/.test(sql)) return { rows: [{ id: "u-noor", invite_verified: true, identity_captured: true, archived_at: null }] };
+    if (/SELECT mo_approver FROM users/.test(sql)) return { rows: [{ mo_approver: team }] };
+    if (/FROM gpt_live_minutes/.test(sql)) return { rows: [{ s: String(logged) }] };
+    return { rows: [] };
+  };
+  const member = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-m", StirVerstat: "TN-Validation-Passed-A" });
+  const refusedRow = (why: string) => writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_refused" && w.params[4] === why);
+  check("team only: a member not on the team is refused busy, with a decision row; nothing is loaded or streamed", /<Reject reason="busy"\/>/.test(member.text) && !/<Stream/.test(member.text) && refusedRow("not_team") && !writes.some((w) => /call_status = 'initiated'/.test(w.sql)), member);
+  team = true;
+  logged = 130 * 60;
+  const capped = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-c", StirVerstat: "TN-Validation-Passed-A" });
+  check("a team member past the trial's 130 minutes is refused busy too", /<Reject reason="busy"\/>/.test(capped.text) && refusedRow("trial_minutes_used"), capped);
+  // The <Connect> action: a stream that never started plays the existing can't-connect line and releases call_status.
+  const { CANT_CONNECT_LINE } = await import("../../src/services/elevenLabsCalls.js");
+  G.markCall("CA-fail", "u-noor", "pending");
+  const failed = await post("/co/gpt-live/after-stream", { CallSid: "CA-fail" });
+  check("never connected: the ElevenLabs path's own can't-connect line, then hang up, and call_status released", failed.text.includes(CANT_CONNECT_LINE) && /<Hangup\/>/.test(failed.text) && writes.some((w) => /SET call_status = 'failed'/.test(w.sql) && w.params[0] === "u-noor"), failed);
+  G.markCall("CA-ok", "u-noor", "pending");
+  G.markCall("CA-ok", "u-noor", "started");
+  G.markCall("CA-ok", "u-noor", "failed");
+  const ok = await post("/co/gpt-live/after-stream", { CallSid: "CA-ok" });
+  check("a call that ran just hangs up (no can't-connect line after a real call)", !ok.text.includes(CANT_CONNECT_LINE) && /<Hangup\/>/.test(ok.text));
   const unsigned = await fetch(`http://127.0.0.1:${port}/co/gpt-live/incoming-call`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "From=%2B15550001111" });
   check("an unsigned request is refused", unsigned.status === 401);
   server.close();
@@ -255,6 +341,17 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const stray = bridge(null);
   await sleep(5);
   check("a stream without a live one-time id is refused: OpenAI is never opened", stray.key() === "" && stray.tw.readyState === 3);
+  G.takeCallState("CA-Jordan");
+  // Hangs end cleanly: no Twilio start, no session.started, no key. Each leaves the call marked failed for the <Connect> action.
+  const noStart = bridge(callFor("Jordan", "x"), { noStart: true, startTimeoutMs: 20 });
+  await sleep(40);
+  check("Twilio never sends start: the stream is closed after the timeout", noStart.tw.readyState === 3 && noStart.key() === "");
+  const noSession = bridge(callFor("Jordan", "x"), { startTimeoutMs: 20 });
+  await sleep(40);
+  check("OpenAI never starts the session: closed after the timeout, both sides", noSession.tw.readyState === 3 && noSession.ai.readyState === 3 && G.takeCallState("CA-Jordan")?.state === "failed");
+  const noKey = bridge(callFor("Jordan", "x"), { key: undefined });
+  await sleep(5);
+  check("no OpenAI key: ended at once, nothing opened, the call marked failed", noKey.key() === "" && noKey.tw.readyState === 3 && G.takeCallState("CA-Jordan")?.state === "failed");
   const once = callFor("Jordan", "x");
   const id = G.issueLiveLink(once);
   check("stream ids are single use and expire", G.takeLiveLink(id) === once && G.takeLiveLink(id) === null && G.takeLiveLink(G.issueLiveLink(once, Date.now() - G.GPT_LIVE.linkTtlMs - 1)) === null);
