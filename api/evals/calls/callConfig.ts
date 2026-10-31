@@ -18,6 +18,7 @@ const tools: any[] = ap.tools;
 const text = JSON.stringify(cfg);
 
 // ---- 2. the call brain is Sonnet 4.6, called directly by ElevenLabs (2026-10-08, Hume's setup)
+const coEl = (t: string) => t.replace(/\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ Root-cause guard)/, ""); // the GPT-Live trial (evals/calls/gptLive.ts) is its own path
 check("the call brain is Sonnet 4.6", ap.llm === "claude-sonnet-4-6");
 check("the fallback is the nearest Sonnet by a dated id (there is no dated 4.6)", ap.backup_llm_config.preference === "override" && ap.backup_llm_config.order.join() === "claude-sonnet-4-5@20250929");
 check("no Haiku anywhere in the call brain's model settings (the voice would change mid-call)", !/haiku/i.test(JSON.stringify({ llm: ap.llm, backup: ap.backup_llm_config })));
@@ -85,7 +86,7 @@ check("a lookup that never answers costs the call at most ~1.5s and is simply no
 
 // ---- wiring
 const co = src("routes/co.ts");
-check("both ways a call is registered take the briefing and pass the clock and the finds", (co.match(/takeCallBriefing\(userId\)/g) ?? []).length === 2 && (co.match(/rightNow: briefing\.rightNow,\s+findsNow: briefing\.findsNow/g) ?? []).length === 2);
+check("both ways a call is registered take the briefing and pass the clock and the finds", (coEl(co).match(/takeCallBriefing\(userId\)/g) ?? []).length === 2 && (coEl(co).match(/rightNow: briefing\.rightNow,\s+findsNow: briefing\.findsNow/g) ?? []).length === 2);
 check("an outbound call builds the briefing while the phone rings", /prebuildCallBriefing\(userId\)/.test(src("services/callTrigger.ts")));
 check("the post-call audit is told what was on file to offer, so a real offer isn't flagged as invented", /offered: typeof vars\.finds_now === "string"/.test(co) && /anything offered from this list is on file/.test(co));
 check("the call summary takes company names from the member's lines, not the assistant's (Boardy, not Bumble)", /Names of companies and people come from what THEY said/.test(src("services/callContext.ts")) && /"Bumble" for the member's "Boardy"/.test(src("services/callContext.ts")));

@@ -40,6 +40,7 @@ const now = 1_790_000_000;
 
 const trigger = readFileSync(new URL("../../src/services/callTrigger.ts", import.meta.url), "utf8");
 const coSrc = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
+const coEl = (t: string) => t.replace(/\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ Root-cause guard)/, ""); // the GPT-Live trial (evals/calls/gptLive.ts) is its own path
 check("Hume is gone: every call is registered with the ElevenLabs agent, in and out", /\/co\/el\/outbound-twiml/.test(trigger) && !/mediaStreamBridge|media-stream|hume/i.test(trigger) && /direction: "inbound"/.test(coSrc) && !/api\.hume\.ai|router\.post\(\s*"\/webhook"/.test(coSrc));
 check("a call that can't connect says so on the line and is noted, never dead air", (coSrc.match(/noteCallFailure\(userId, "registration"\)/g) ?? []).length === 2 && (coSrc.match(/CANT_CONNECT_LINE/g) ?? []).length >= 3);
 
@@ -82,13 +83,13 @@ const docker = readFileSync(new URL("../../../co-test/Dockerfile", import.meta.u
 check("co-test's image carries the prompt file", /COPY api\/prompts \.\/api\/prompts/.test(docker));
 
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
-check("an ElevenLabs call runs the post-call steps (one caller now)", (co.match(/await processEndedCall\(\{/g) ?? []).length === 1 && /callKey: `el:\$\{conversationId\}`/.test(co));
+check("an ElevenLabs call runs the post-call steps (one caller now)", (coEl(co).match(/await processEndedCall\(\{/g) ?? []).length === 1 && /callKey: `el:\$\{conversationId\}`/.test(co));
 check("the post-call webhook is signature-checked on the raw body, in both servers", /verifyPostCallWebhook\(raw, req\.headers\["elevenlabs-signature"\]/.test(co) && ["../../src/server.ts", "../../../co-test/src/server.ts"].every((p) => /app\.use\("\/co\/el\/post-call", express\.raw/.test(readFileSync(new URL(p, import.meta.url), "utf8"))));
 check("tools refuse a call without a valid token", /if \(!verifyCallToken\(userId, b\.call_token\)\) return res\.status\(401\)/.test(co));
 
 // Voice-layer review fixes (2026-10-03).
 check("Cue opens the call itself, so nobody waits in silence (the stored line is the fallback)", cc.agent.first_message === OPENING_LINE && OPENING_LINE === "Hey {{first_name}}, it's Cue.");
-check("the opening can be set per call: the agent allows the override and registration sends it", (cfg as any).platform_settings.overrides.conversation_config_override.agent.first_message === true && /conversationConfigOverride: \{[\s\S]{0,200}?\.\.\.\(o\.opening \? \{ agent: \{ firstMessage: o\.opening \} \}/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")) && (coSrc.match(/opening: await openingForCall\(/g) ?? []).length === 2 && /chooseOpening\(userId, firstName, direction\)/.test(coSrc));
+check("the opening can be set per call: the agent allows the override and registration sends it", (cfg as any).platform_settings.overrides.conversation_config_override.agent.first_message === true && /conversationConfigOverride: \{[\s\S]{0,200}?\.\.\.\(o\.opening \? \{ agent: \{ firstMessage: o\.opening \} \}/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")) && (coEl(coSrc).match(/opening: await openingForCall\(/g) ?? []).length === 2 && /chooseOpening\(userId, firstName, direction\)/.test(coSrc));
 {
   const seen = new Set<string>();
   for (let i = 0; i < 200; i++) seen.add(pickOpening({ direction: "outbound", firstCall: false, hour: 14, firstName: "Jordan", last: null, rand: () => i / 200 }).template);

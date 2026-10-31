@@ -33,6 +33,8 @@ import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
 import { getAudioEntry } from "./services/voiceNote.js";
 import { handleTwilioStream, isVoiceStreamPath, voiceStreamSignatureOk, type SocketLike } from "./services/mediaStreamBridge.js";
+import { handleGptLiveStream, twilioStreamSignatureOk } from "./services/gptLiveBridge.js";
+import { gptLiveStreamUrl, isGptLiveStreamPath } from "./services/gptLive.js";
 import { configureSocket } from "./socket/index.js";
 import { buildCoVCard } from "./utils/vcard.js";
 import { createEmailOptOutRouter } from "./routes/emailOptOut.js";
@@ -69,6 +71,25 @@ httpServer.on("upgrade", (req, socket, head) => {
       handleTwilioStream(ws as unknown as SocketLike);
     } catch (err: any) {
       console.error("voiceRead: stream handler failed (the call is unaffected):", err?.message ?? err);
+      ws.close();
+    }
+  });
+});
+// The GPT-Live trial's call stream (services/gptLiveBridge.ts): Twilio's bidirectional stream for the trial number only, signed by
+// Twilio over its own URL; anything unsigned is refused.
+httpServer.on("upgrade", (req, socket, head) => {
+  if (!isGptLiveStreamPath(req.url)) return;
+  if (!twilioStreamSignatureOk(req.headers["x-twilio-signature"], gptLiveStreamUrl(process.env.API_URL))) {
+    console.warn("gpt-live: stream refused (Twilio signature missing or invalid)");
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  voiceStreamWss.handleUpgrade(req, socket, head, (ws) => {
+    try {
+      handleGptLiveStream(ws as unknown as SocketLike);
+    } catch (err: any) {
+      console.error("gpt-live: stream handler failed:", err?.message ?? err);
       ws.close();
     }
   });

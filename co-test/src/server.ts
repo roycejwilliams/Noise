@@ -24,6 +24,9 @@ import phoneRouter from "./routes/phone.js";
 import { requireTeam, requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
 import { createCallLlmRouter } from "../../api/src/routes/callLlm.js";
+import { WebSocketServer } from "ws";
+import { handleGptLiveStream, twilioStreamSignatureOk } from "../../api/src/services/gptLiveBridge.js";
+import { gptLiveStreamUrl, isGptLiveStreamPath } from "../../api/src/services/gptLive.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
@@ -92,6 +95,26 @@ async function main() {
   const httpServer = createServer(app);
   const io = new Server(httpServer);
   configureCoTestSocket(io);
+  // The GPT-Live trial's call stream (api/src/services/gptLiveBridge.ts), as in api/src/server.ts: Twilio's bidirectional stream for
+  // the trial number only, signed by Twilio over its own URL; anything unsigned is refused.
+  const gptLiveWss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+  httpServer.on("upgrade", (req, socket, head) => {
+    if (!isGptLiveStreamPath(req.url)) return;
+    if (!twilioStreamSignatureOk(req.headers["x-twilio-signature"], gptLiveStreamUrl(process.env.API_URL))) {
+      console.warn("gpt-live: stream refused (Twilio signature missing or invalid)");
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    gptLiveWss.handleUpgrade(req, socket, head, (ws) => {
+      try {
+        handleGptLiveStream(ws as any);
+      } catch (err: any) {
+        console.error("gpt-live: stream handler failed:", err?.message ?? err);
+        ws.close();
+      }
+    });
+  });
 
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));

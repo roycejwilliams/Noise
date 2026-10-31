@@ -37,6 +37,7 @@ const base = [
   "Recent texts: " + "z".repeat(700),
 ].join("\n\n");
 const sum = assembleCallSummary({ now: "- Partnering with Sequin AI on a November event: in progress", lastCalls: "- Oct 7, today: they cancelled the October date and are planning November with Sequin AI.", settled: "- goal, Oct 7: partnering with Sequin AI (not \"first paying customer\")", lessons: ["keep to the cost constraint"], sentLines, threads: [{ text: "sponsors for the event" }, { text: "x", line: "an old thread (they said Sep 21; OLD, so ask whether it is still true and never state it as current)" }], base });
+const coEl = (t: string) => t.replace(/\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ Root-cause guard)/, ""); // the GPT-Live trial (evals/calls/gptLive.ts) is its own path
 check("every part of the picture reaches the call, even with five long sent events", ["What you know about them right now", "What they've told you in the last two days", "Ongoing summary", "How they've been feeling", "Recent texts"].every((h) => sum.includes(h)));
 check(`the whole thing fits ${CALL_CONTEXT_MAX} characters`, sum.length <= CALL_CONTEXT_MAX);
 const sentBlock = sum.slice(sum.indexOf("What you sent them lately"));
@@ -92,7 +93,7 @@ const trig = read("src/services/callTrigger.ts");
 const el = read("src/services/elevenLabsCalls.ts");
 check("outbound: the context and the opening are prepared while it rings", /const summary = prebuildCallContext\(userId, buildCallContextSummary\);\s*[^;]*\s*prebuildOpening\(userId, user\.first_name \?\? "", "outbound", summary\);/.test(trig));
 check("prebuildCallContext hands back the summary it is building", /export function prebuildCallContext\(.*\): Promise<string> \{/.test(el));
-check("both call paths take the written opening, the pool only as the fallback", (co.match(/opening: await openingForCall\(/g) ?? []).length === 2 && /written\.line \?\? \(await chooseOpening\(userId, firstName, direction\)\)/.test(co));
+check("both call paths take the written opening, the pool only as the fallback", (coEl(co).match(/opening: await openingForCall\(/g) ?? []).length === 2 && /written\.line \?\? \(await chooseOpening\(userId, firstName, direction\)\)/.test(co));
 check("inbound waits a bounded time, outbound only for what was prepared", /withTimeout\(writeOpening\([^)]*\), OPENING_WRITER\.inboundBudgetMs/.test(co) && /\? await takeOpening\(userId\)/.test(co));
 check("the opening's source is logged, a fallback apart from the pool's own record", /decision: r\.line \? "call\.opening" : "call\.opening_fallback"/.test(read("src/services/callOpening.ts")) && /recordOpening\(userId, direction, written\)/.test(co));
 
