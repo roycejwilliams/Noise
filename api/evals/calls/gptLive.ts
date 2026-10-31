@@ -177,7 +177,8 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   noor.ai.in({ type: "session.input_transcript.delta", delta: "I handed in my notice today.", start_ms: 900, end_ms: 2400 });
   jordan.ai.in({ type: "session.delegation.created", offset_ms: 3300, delegation: { id: "item_j1", type: "delegation", target: "client" } });
   noor.ai.in({ type: "session.delegation.created", offset_ms: 2500, delegation: { id: "item_n1", type: "delegation", target: "client" } });
-  await sleep(60);
+  // Both delegations finish (each may wait up to catchUpMs for its transcript); a fixed 60 ms flaked when several runs shared the CPU.
+  for (let i = 0; i < 100 && (jordan.reqs.length < 1 || noor.reqs.length < 1 || !jordan.ai.sent.some((m: any) => m.event_id === "answer_item_j1") || !noor.ai.sent.some((m: any) => m.event_id === "answer_item_n1")); i++) await sleep(10);
   const ans = jordan.ai.of("session.commentary.append").find((m: any) => m.delegation_id === "item_j1");
   check("delegation round trip: the brain's answer goes back as commentary under the delegation's id", ans?.content === "Good question. Do you mostly boulder, or rope climb?", ans);
   const forJ = jordan.ai.sent.filter((m: any) => m.delegation_id === "item_j1");
@@ -452,7 +453,9 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   })());
   const server = src("server.ts");
   check("the voice read's stream handler is unchanged beside GPT-Live's", /if \(!isVoiceStreamPath\(req\.url\)\) return;/.test(server) && /if \(!isGptLiveStreamPath\(req\.url\)\) return;/.test(server) && /handleTwilioStream\(ws as unknown as SocketLike\)/.test(server));
-  check("nothing in the ElevenLabs files mentions GPT-Live", ["services/elevenLabsCalls.ts", "routes/callLlm.ts", "services/callLlmProxy.ts", "services/mediaStreamBridge.ts"].every((f) => !/gpt-?live/i.test(src(f))));
+  // services/mediaStreamBridge.ts is shared since the Hume tee (the fork and the tee, one session path): the ElevenLabs voice-read
+  // tests (evals/review/voiceReadConsent.ts, evals/voiceRead/*) hold its fork behavior.
+  check("nothing in the ElevenLabs-only files mentions GPT-Live", ["services/elevenLabsCalls.ts", "routes/callLlm.ts", "services/callLlmProxy.ts"].every((f) => !/gpt-?live/i.test(src(f))));
   check("no switch: GPT-Live is gated on team and minutes only (no GPT_LIVE_ENABLED-style flag)", !/process\.env\.GPT_LIVE_(?!VOICE)/.test(src("services/gptLive.ts") + src("services/gptLiveBridge.ts") + src("routes/co.ts")));
 }
 

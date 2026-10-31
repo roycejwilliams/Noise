@@ -344,6 +344,43 @@ function finish(s: Session, by: string) {
   } else close();
 }
 
+// A new session, unverified: audio that arrives before its consent is read waits in the capped buffer; nothing is sent until then.
+function newSession(d: BridgeDeps, callSid: string | null, streamSid: string | null): Session {
+  let resolveDone = () => {};
+  const done = new Promise<void>((r) => (resolveDone = r));
+  const stats = newSessionStats(d.now());
+  stats.callSid = callSid;
+  stats.streamSid = streamSid;
+  return { key: "", userId: "", verified: false, stats, windows: [], openUtterances: new Map(), hume: null, ready: false, closed: false, finishedAt: null, batch: [], batchBytes: 0, pending: [], sent: [], noisy: null, done, resolveDone, openTimer: null };
+}
+// Verifies a session for its member and opens Hume, the same way for the fork and the tee: one session per call, their consent read
+// before registering and once more after (so a stop that lands in between counts: endVoiceSessionsFor can only end a registered one),
+// and only then Hume. live(): the stream that asked is still the one running. refuse: ends it with why.
+function admitVoiceSession(d: BridgeDeps, s: Session, userId: string, sessionHash: string, live: () => boolean, refuse: (why: string) => void): Promise<void> {
+  prune(d.now());
+  if (sessions.has(sessionHash)) { refuse("this call already has one"); return Promise.resolve(); }
+  // Their consent, read again now: taken back since the call's TwiML was made means no read at all.
+  return d.allowed(userId).catch(() => false).then((ok) => {
+    if (!ok) return refuse("not consented");
+    if (!live()) return;
+    if (sessions.has(sessionHash)) return refuse("this call already has one");
+    s.userId = userId;
+    s.key = sessionHash;
+    s.verified = true;
+    sessions.set(sessionHash, s);
+    // Read once more now that a stop can reach the session (endVoiceSessionsFor): a stop that landed during the read above
+    // ended nothing, so Hume opens only if it's still on and the session wasn't ended meanwhile.
+    return d.allowed(userId).catch(() => false).then((still) => {
+      if (!live() || sessions.get(sessionHash) !== s) return;
+      if (!still) {
+        sessions.delete(sessionHash);
+        return refuse("not consented");
+      }
+      openHume(s);
+    });
+  });
+}
+
 // One Twilio stream (the fork). Everything about who it is comes from the token in its own start message.
 export function handleTwilioStream(ws: SocketLike): void {
   let s: Session | null = null;
@@ -354,13 +391,7 @@ export function handleTwilioStream(ws: SocketLike): void {
       if (m?.event === "start") {
         if (s) return;
         const d = D();
-        let resolveDone = () => {};
-        const done = new Promise<void>((r) => (resolveDone = r));
-        const stats = newSessionStats(d.now());
-        stats.callSid = typeof m.start?.callSid === "string" ? m.start.callSid : null;
-        stats.streamSid = typeof m.streamSid === "string" ? m.streamSid : null;
-        // Audio that arrives while the link is checked waits in the capped buffer; nothing is sent until it is.
-        const pendingSession: Session = { key: "", userId: "", verified: false, stats, windows: [], openUtterances: new Map(), hume: null, ready: false, closed: false, finishedAt: null, batch: [], batchBytes: 0, pending: [], sent: [], noisy: null, done, resolveDone, openTimer: null };
+        const pendingSession = newSession(d, typeof m.start?.callSid === "string" ? m.start.callSid : null, typeof m.streamSid === "string" ? m.streamSid : null);
         s = pendingSession;
         // Who the stream is for comes only from its one-time link (services/voiceStreamLink.ts), never from the stream.
         const refuse = (why: string) => { d.log(`voiceRead: stream refused (${why})`); endHume(pendingSession); s = null; ended = true; try { ws.close(); } catch { /* gone */ } };
@@ -368,29 +399,7 @@ export function handleTwilioStream(ws: SocketLike): void {
           .then((link) => {
             if (!link) return refuse("no live stream link");
             if (ended || s !== pendingSession) return;
-            prune(d.now());
-            // One stream per call.
-            if (sessions.has(link.sessionHash)) return refuse("this call already has one");
-            // Their consent, read again now: taken back since the call's TwiML was made means no read at all.
-            return d.allowed(link.userId).catch(() => false).then((ok) => {
-              if (!ok) return refuse("not consented");
-              if (ended || s !== pendingSession) return;
-              if (sessions.has(link.sessionHash)) return refuse("this call already has one");
-              pendingSession.userId = link.userId;
-              pendingSession.key = link.sessionHash;
-              pendingSession.verified = true;
-              sessions.set(link.sessionHash, pendingSession);
-              // Read once more now that a stop can reach the session (endVoiceSessionsFor): a stop that landed during the read above
-              // ended nothing, so Hume opens only if it's still on and the session wasn't ended meanwhile.
-              return d.allowed(link.userId).catch(() => false).then((still) => {
-                if (ended || s !== pendingSession || sessions.get(link.sessionHash) !== pendingSession) return;
-                if (!still) {
-                  sessions.delete(link.sessionHash);
-                  return refuse("not consented");
-                }
-                openHume(pendingSession);
-              });
-            });
+            return admitVoiceSession(d, pendingSession, link.userId, link.sessionHash, () => !ended && s === pendingSession, refuse);
           })
           .catch(() => refuse("link check failed"));
       } else if (m?.event === "media" && s) {
@@ -407,6 +416,27 @@ export function handleTwilioStream(ws: SocketLike): void {
   });
   ws.on("close", () => { ended = true; if (s) finish(s, "stream closed"); });
   ws.on("error", () => { ended = true; if (s) finish(s, "stream error"); });
+}
+
+// The tee (GPT-Live, services/gptLiveBridge.ts): the bridge already has the caller's audio, so it pushes the same frames here instead
+// of Twilio forking a second stream. The same session, consent reads, Hume and readers as the fork; who it is comes from the bridge's
+// own verified call (its one-time stream id), never from the audio. The call is never kept waiting on it, and a throw ends only the read.
+export type VoiceTee = { push(payloadB64: string): void; end(by: string): void };
+export function startVoiceTee(o: { userId: string; callKey: string; callSid: string | null }): VoiceTee {
+  try {
+    const d = D();
+    const s = newSession(d, o.callSid, null);
+    let ended = false, refused = false;
+    // As the fork does on a refusal: Hume closed, and the session is never finished or recorded (nothing was read).
+    const refuse = (why: string) => { d.log(`voiceRead: tee refused (${why})`); endHume(s); ended = true; refused = true; };
+    admitVoiceSession(d, s, o.userId, sessionHashOf(o.callKey), () => !ended, refuse).catch(() => refuse("consent check failed"));
+    return {
+      push: (p) => { try { if (!ended) onMedia(s, p); } catch (err: any) { if (!s.stats.error) s.stats.error = `tee: ${String(err?.message ?? err).slice(0, 80)}`; } },
+      end: (by) => { if (refused) return; ended = true; try { finish(s, by); } catch { /* the read ends either way */ } },
+    };
+  } catch {
+    return { push: () => {}, end: () => {} };
+  }
 }
 
 // ---------------------------------------------------------------- readers

@@ -16,6 +16,8 @@ import { timingSafeEqual } from "crypto";
 import WebSocket from "ws";
 import { recordDecision, type HarnessDecision } from "../harness/core.js";
 import { guardCallMessages } from "./whatCoKnows.js";
+import { startVoiceTee, type VoiceTee } from "./mediaStreamBridge.js";
+import type { OaiRequest } from "./callLlmProxy.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
 import { anthropicStream } from "./callLlmProxy.js";
 import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
@@ -62,6 +64,10 @@ export type LiveDeps = {
   // OpenAI's safety filter closed the call during a safety moment: the existing safety path (services/safety.ts recordSafetyConcern:
   // the team alert, the hold, and the gentle check-in the next day).
   safetyCut: (call: LiveCall) => Promise<void>;
+  // The Hume voice read (services/mediaStreamBridge.ts startVoiceTee): the caller's frames teed to it, for consented members only.
+  startTee: (o: { userId: string; callKey: string; callSid: string | null }) => VoiceTee;
+  // Its line for a delegated turn (routes/callLlm.ts voiceLineForTurn), Claude only.
+  voiceLine: (callKey: string, req: OaiRequest) => Promise<string | null>;
 };
 const defaults = (): LiveDeps => ({
   connectOpenAI: (key) => new WebSocket(GPT_LIVE.url, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: GPT_LIVE.startTimeoutMs, perMessageDeflate: false }) as unknown as SocketLike,
@@ -85,6 +91,8 @@ const defaults = (): LiveDeps => ({
   wrapUpMs: GPT_LIVE.wrapUpMs,
   guardRows: (userId) => import("./whatCoKnows.js").then((W) => W.forgottenRows(userId)).catch(() => []),
   guardMessages: (messages, rows) => guardCallMessages(messages, rows),
+  startTee: (o) => startVoiceTee(o),
+  voiceLine: (callKey, req) => import("../routes/callLlm.js").then((m) => m.voiceLineForTurn(callKey, req)),
   safetyCut: async (call) => {
     const S = await import("./safety.js");
     await S.recordSafetyConcern(call.userId, call.firstName || null, "co", "a GPT-Live call was cut by OpenAI's safety filter during a safety moment");
@@ -142,6 +150,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let personAt: number | null = null;
   let opened = false; // outbound: whether the opening has happened (their first words, AMD's human verdict, or the wait ran out)
   let stopWaiting: () => void = () => {};
+  let tee: VoiceTee | null = null; // the voice read, while it runs
   let guardAt = 0, guardRowsP: Promise<import("./whatCoKnows.js").ForgottenRow[]> | null = null;
   const elapsedSecs = () => Math.round((d.now() - startedAt) / 1000);
   // A person really spoke: two words or more, not a "yeah" or "mm", and not a voicemail greeting. Used only to call a machine verdict a
@@ -191,6 +200,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     if (beat) clearInterval(beat);
     if (quiet) clearInterval(quiet);
     stopWaiting();
+    if (tee) { tee.end(reason || why); tee = null; }
     if (slotKey) openSessions.delete(slotKey);
     try { ai?.close(); } catch { /* gone */ }
     try { if (twilio.readyState === OPEN) twilio.close(); } catch { /* gone */ }
@@ -249,7 +259,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
-    }, guard).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false }; });
+    }, guard, d.voiceLine).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false }; });
     // Only an answer that itself carried a crisis or safety line makes this a safety moment (review of #331: safetyCall reads the whole
     // call, so "I'm safe from the layoffs" then a content close set off the safety path).
     if (out.exact) safetyMoment = true;
@@ -297,7 +307,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         d.minutes(sessionId, 0, null);
         beat = setInterval(() => d.minutes(sessionId, Math.max(seconds ?? 0, elapsedSecs()), null), d.heartbeatMs);
         (beat as any).unref?.();
-        for (const a of early.splice(0)) send(ai, { type: "session.input_audio.append", audio: a });
+        // The voice read starts with the session, from the same caller frame as OpenAI's, for a member it's on for (decided at the
+        // TwiML route); its own consent reads run again inside (mediaStreamBridge.ts admitVoiceSession). Never awaited.
+        if (call.voiceOn) { try { tee = d.startTee({ userId: call.userId, callKey: call.callKey, callSid: call.callSid }); } catch { tee = null; } }
+        for (const a of early.splice(0)) { send(ai, { type: "session.input_audio.append", audio: a }); tee?.push(a); }
         // Its own cap, set at admission: 30 minutes, or less when the month's team minutes have less left (gptLive.ts admitSession).
         // One activity timer (OpenAI: "use an application-controlled inactivity timeout"). With nothing playing: silenceEndMs with
         // nothing said either way ends the call (the ElevenLabs agent's silence_end_call_timeout). And Cue's own end_call (the thinking
@@ -448,7 +461,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       openAi(call);
     } else if (m?.event === "media" && call && typeof m.media?.payload === "string") {
       if (m.media.track && m.media.track !== "inbound") return;
-      if (started) send(ai, { type: "session.input_audio.append", audio: m.media.payload });
+      if (started) { send(ai, { type: "session.input_audio.append", audio: m.media.payload }); tee?.push(m.media.payload); }
       else if (early.length < 150) early.push(m.media.payload);
     } else if (m?.event === "stop") close("caller hung up", "caller_hangup");
   });
