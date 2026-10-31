@@ -31,7 +31,6 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
 check("a place the want names, with a quote from it, is kept", JSON.stringify(W.backedPlace("SF", "founder dinners in SF", ["Small founder dinners in SF, weeknights"])) === JSON.stringify({ place: "SF", quote: "founder dinners in SF" }));
 check("a quote that isn't in their words is no place", W.backedPlace("SF", "dinners in SF", ["Small founder dinners, weeknights"]) === null);
 check("a place that isn't in its quote is no place", W.backedPlace("Oakland", "founder dinners", ["founder dinners"]) === null);
-check("part of a longer name is no place ('South Park' in South Park Commons)", W.backedPlace("South Park", "get into South Park Commons", ["get into South Park Commons"]) === null);
 check("a whole name that is the place still counts at the end of the quote", W.backedPlace("San Francisco", "communities in San Francisco", ["get outreach help for founder communities in San Francisco"])?.place === "San Francisco");
 check("something too long to be a place is no place", W.backedPlace("the whole bay area and peninsula and south bay", "x", ["x"]) === null);
 // Royce, 2026-10-15: "the new path should apply to wants created after the behavior exists" (feature_epochs, written by the deploy).
@@ -228,8 +227,14 @@ check("no line when the want said where, when they corrected it, or when it's th
 // ---------------------------------------------------------------- 9. the independent review's fixes (2026-10-15)
 {
   check("a kind of thing after the place keeps it ('SF Tech Week', 'SF AI founder events')", W.backedPlace("SF", "SF Tech Week", ["going to SF Tech Week"])?.place === "SF" && W.backedPlace("SF", "SF AI founder events", ["SF AI founder events in November"])?.place === "SF");
-  check("... a name still isn't a place ('South Park Commons', 'Berkeley Rep')", W.backedPlace("South Park", "South Park Commons", ["South Park Commons"]) === null && W.backedPlace("Berkeley", "Berkeley Rep", ["a play at Berkeley Rep"]) === null);
-  check("a place said as where it isn't is no place ('anywhere but SF', 'not in SF', 'outside SF')", W.backedPlace("SF", "anywhere but SF", ["dinners anywhere but SF"]) === null && W.backedPlace("SF", "not in SF", ["meetups, not in SF"]) === null && W.backedPlace("SF", "outside SF", ["something outside SF"]) === null);
+  // Royce, 2026-10-31: code never regex-reads the member's intent; Cue decides, code guards facts. A place they ruled out, or a place word
+  // inside a longer name, is Cue's call (its prompt and tool text say so); the code check is only that the quote is theirs and names it.
+  check("code doesn't read what their words mean: a ruled-out place or a name passes the fact check (quote theirs, place in it)", W.backedPlace("SF", "anywhere but SF", ["dinners anywhere but SF"])?.place === "SF" && W.backedPlace("SF", "outside of SF", ["anything outside of SF"])?.place === "SF" && W.backedPlace("South Park", "South Park Commons", ["South Park Commons"])?.place === "South Park");
+  check("... and the fact checks stand: a quote not in their words, or a place not in the quote, is still no place", W.backedPlace("SF", "anywhere but SF", ["dinners anywhere"]) === null && W.backedPlace("Oakland", "anywhere but SF", ["dinners anywhere but SF"]) === null);
+  const ruledOut = /place they rule(?:d)? out \(\\?"anywhere but SF\\?"/;
+  const tools = src("agent/conversationTools.ts");
+  check("Cue is told: the want's place read says a ruled-out place or a word inside a name is no place", ruledOut.test(W.placePrompt({ key: "k", text: "dinners anywhere but SF", createdAt: null }, [])) && /"South Park" in South Park Commons/.test(W.placePrompt({ key: "k", text: "t", createdAt: null }, [])));
+  check("... and so do saveAsk's place and setSearchArea's place", ruledOut.test(tools.slice(tools.indexOf("saveAsk: tool("), tools.indexOf("saveAsk: tool(") + 1500)) && ruledOut.test(tools.slice(tools.indexOf("setSearchArea: tool("), tools.indexOf("setSearchArea: tool(") + 800)));
   check("no note when the place they told Co is their home city, by any spelling", W.noteDue({ place: "Sacramento", source: "told", notedAt: null }, "Sacramento, CA") === null && W.samePlace("Sacramento", "sacramento, ca") && !W.samePlace("SF", "Sacramento"));
   const split = W.splitByPlace([{ key: "g", item: 1 }], [{ key: "g", place: "Sacramento" }], "Sacramento, CA");
   check("a goal placed in their home city (any spelling) rides the shared search, not a second one", split.own.length === 0 && split.home.length === 1);
@@ -253,7 +258,6 @@ check("no line when the want said where, when they corrected it, or when it's th
   const ex = new Q.QueryLedger([]).checkOrLoosen("web", "AI founder dinner pitch night -crypto");
   check("a too-tight query with an exclusion runs loosened, exclusion kept (not refused)", ex.bad.length === 0 && /-crypto/.test(ex.query), ex);
   check("SF and San Francisco are the same place (no note, no second search for their own city)", W.samePlace("SF", "San Francisco") && W.samePlace("NYC", "New York, NY") && W.noteDue({ place: "SF", source: "told", notedAt: null }, "San Francisco") === null);
-  check("'outside of SF' is no place", W.backedPlace("SF", "outside of SF", ["anything outside of SF"]) === null);
   const SH = await import("../../src/services/sweepShadow.js");
   check("the picker is told a find was searched where its want is, after its own facts (not their far-off home)", /SOLD OUT.*searched in SF, where this want of theirs is/.test(SH.describeMatch({ name: "x", details: { soldOut: true }, searchedIn: { key: "goal:a", place: "SF", source: "their_words" } }) ?? "") && !/searched in/.test(SH.describeMatch({ name: "x", searchedIn: { key: null, place: "Sacramento", source: "home" } }) ?? ""));
   check("the note sits right after its own find's caption", /const i = after \? composed\.messages\.lastIndexOf\(after\) : -1;/.test(src("harness/proactive.ts")) && /W\.noteDue\(row, person\.city \?\? null\)/.test(src("harness/proactive.ts")));

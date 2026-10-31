@@ -1300,6 +1300,8 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
 //     "Let me switch over to your calendar question");
 //   - a change onto something of theirs: "Switched your searches over to SF", "Let me move your searches to SF";
 //   - a change said as lasting: "Got it, switching to SF from here on out." (the 10-31 reply), "Your searches move to SF from now on".
+//   - "we" making it, onto something of theirs or said as lasting: Cue speaks as "I", so its "we" is Cue ("We moved your searches to SF
+//     from now on"). Only with "your" or the marker: "we" alone may be them and someone else.
 // A bare switch on its own is advice or pointing ("Swap it to this: ...", "switching to the Friday one: <link>"), never a change.
 // "From now on" with Cue as the one doing it ("From now on I'll keep it short") is something Cue says it does from now on.
 // Not advice to them ("going forward, it might help to..."), not their own move ("Moving to SF is huge").
@@ -1314,13 +1316,16 @@ const CHANGE_YOURS = new RegExp(String.raw`${NOT_CUES}\b${CHANGE_VERB}\s+(?:over
 // Said as lasting, with the "from now on" kin in the sentence: "switching to SF from here on out", "Your searches move to SF from now on".
 const CHANGE_ONTO = new RegExp(String.raw`${NOT_CUES}\b${CHANGE_VERB}[^.?!]{0,40}?\b(?:to|over)\b`, "i");
 const CUE_CHANGES = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|cue(?:'s| is| has| will)?)\s+(?:just\s+|now\s+|already\s+|go(?:ing)? to\s+|gonna\s+)?(?:switch(?:ed|ing)?|swap(?:ped|ping)?|chang(?:e|ed|ing)|updat(?:e|ed|ing)|mov(?:e|ed|ing)(?!\s+on\b)|shift(?:ed|ing)?|set(?:ting)?(?!\s+(?:you\s+)?up\b)|redirect(?:ed|ing)?)\b(?!\s+gears)[^.?!]{0,40}?\b(?:to|over)\b/i;
+const WE_CHANGE = String.raw`\bwe(?:'ve|'ll|'re|\s+have|\s+will|\s+are)?\s+(?:just\s+|now\s+|already\s+|go(?:ing)?\s+to\s+|gonna\s+)?${CHANGE_VERB}`;
+const WE_CHANGES_YOURS = new RegExp(String.raw`${WE_CHANGE}[^.?!]{0,40}?\byour\b`, "i");
+const WE_CHANGES = new RegExp(WE_CHANGE, "i");
 // change: a change said as made or being made. forward: something Cue says it does from now on.
 export function changeClaims(draft: string): { sentence: string; kind: "change" | "forward" }[] {
   return (draft.match(SENTENCES) ?? [])
     .map((x) => x.trim())
     .filter((x) => x && !/\?\s*["')\]]*$/.test(x))
     .flatMap((x): { sentence: string; kind: "change" | "forward" }[] =>
-      CUE_CHANGES.test(x) || CHANGE_YOURS.test(x) || (CHANGE_ONTO.test(x) && GOING_FORWARD.test(x)) ? [{ sentence: x, kind: "change" }] : GOING_FORWARD.test(x) && CUE_ACTS.test(x) ? [{ sentence: x, kind: "forward" }] : [],
+      CUE_CHANGES.test(x) || CHANGE_YOURS.test(x) || WE_CHANGES_YOURS.test(x) || ((CHANGE_ONTO.test(x) || WE_CHANGES.test(x)) && GOING_FORWARD.test(x)) ? [{ sentence: x, kind: "change" }] : GOING_FORWARD.test(x) && CUE_ACTS.test(x) ? [{ sentence: x, kind: "forward" }] : [],
     );
 }
 // A tool that changes a setting or a record went through this turn (any tool not in services/capabilities.ts CHANGES_NOTHING, recorded
