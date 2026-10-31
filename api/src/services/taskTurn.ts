@@ -371,14 +371,12 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           // Every find this task holds: one named in a caption or the closing goes with its own link in this send, or not at all
           // (the tease rule, PR #59; Royce 2026-10-31: "stackable with Francisco San" went out after francisco san's caption was dropped).
           const finds = await unsentFinds();
-          // What they said themselves backs a caption's numbers and places too (their budget, their target), as for a search find.
-          const theirs = [task.theirWords ?? "", ...newestMemberLines(deps.recent, 50)].join(" ");
           const vet = (d: { captions: Map<string, string>; closing: string | null }) => {
             const good: { url: string; caption: string; name: string }[] = [];
             const dropped: string[] = [];
             for (const it of items) {
               const cap = d.captions.get(it.url);
-              const verdict = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`, theirs) : { ok: false, why: "no caption" };
+              const verdict = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`) : { ok: false, why: "no caption" };
               if (cap && verdict.ok) good.push({ url: it.url, caption: cap, name: it.name });
               else dropped.push(`${it.name}: ${verdict.why}`);
             }
