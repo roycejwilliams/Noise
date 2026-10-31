@@ -886,13 +886,27 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   updateDeck: AFTER,
   writeDocument: AFTER,
 };
-// The tools that change a setting or a record for them (2026-10-31, review of #336): only one of these, done this turn, backs a reply
-// that says Cue changed something (harness/replyGrounding.ts no_unbacked_change). Reading, searching, sending and noting for the team
-// change nothing. evals/discovery/searchArea.ts checks each name is a registry tool.
+// Which tools change a member-facing setting or record (2026-10-31, reviews of #336). Only a tool that did, this turn, backs a reply
+// that says Cue changed something (harness/replyGrounding.ts no_unbacked_change). The guard reads CHANGES_NOTHING, so a new tool backs a
+// change by default (a true "I just updated the deck" is never cut for a missing list entry); every registry tool must be in exactly
+// one of the two lists (evals/discovery/searchArea.ts), so a new one is a conscious choice.
+// Nothing changed: reads, searches, sends (a link, a card, a draft, an invite, finds), the team note, the safety flag, bookkeeping.
+export const CHANGES_NOTHING: ReadonlySet<string> = new Set([
+  "sendReply", "reactInsteadOfReplying", "leaveItAtReaction", "markTopicAsked", "askedWalkin",
+  "searchEvents", "webSearch", "searchPosts", "readPage", "readReference", "readInspo", "readDocument", "openArtifact",
+  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows",
+  "sendContactCard", "shareFinds", "draftEmail", "emailPlan", "shareArtifact", "shareLink", "resendLink", "sendInvite", "sendProductUpdates",
+  "calendarConnection", "docsConnection", "googleConnection",
+  "saveFeedbackForTeam", "flagSafetyConcern",
+]);
+// Something changed: a setting, a record, a piece of work, an artifact.
 export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
   "setSearchArea", "correctWhatCoKnows", "steerAwayFrom", "saveAsk", "closeAsk", "saveKitFact", "noteRoomTaste", "noteFreeTime",
-  "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "markGoal", "moveLane", "updateGoing", "voiceRead",
-  "shareLocationYes", "stopSharing", "takeDownPage", "deleteImages", "deleteMyFiles", "sendProductUpdates",
+  "noteReaction", "noteMetAgain", "noteRoomMeeting", "findReaction", "updateNotes", "updateLoop",
+  "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "markGoal", "moveLane", "updateGoing", "followUp", "firstRead",
+  "researchBrief", "offerDocument", "answerProposal", "answerShareAsks", "shareAskInIntros", "answerBriefName", "requestEventIntro", "markArrived",
+  "voiceRead", "shareLocationYes", "stopSharing",
+  "makePage", "updatePage", "takeDownPage", "keepArtifact", "makeDeck", "updateDeck", "writeDocument", "writeFromFile", "deleteImages", "deleteMyFiles", "resetLink",
 ]);
 
 // What can never run on a call, even if it were listed above.

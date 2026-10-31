@@ -33,8 +33,11 @@ export async function searchAreaOf(userId: string, db: Db = pool): Promise<Searc
   return { place: String(r.place), source: String(r.source) as PlaceSource, quote: r.quote ?? null, label };
 }
 
+// tx: runs its writes in one transaction on one connection: the area and the drop of what was found for the old one both happen, or
+// neither does (review of #336), so the tool's result is the truth either way.
 export type SetAreaDeps = {
   db: Db;
+  tx: <T>(fn: (db: Db) => Promise<T>) => Promise<T>;
   home: (userId: string) => Promise<string | null>;
   resolve: ResolveDeps;
 };
@@ -45,6 +48,7 @@ export type SetAreaResult =
   // ask: the place could mean more than one; nothing changed.
   | { ok: false; ask: string[]; place: string }
   | { ok: false; error: string };
+const NOT_SAVED = "it couldn't be saved just now";
 
 // Set (or clear back to home) their search area from their own words this message. Writes only when the place is settled.
 // recent: the exchange before their message, so an answer to Cue's "which Springfield?" ("the Missouri one") can settle it.
@@ -56,14 +60,17 @@ export async function setSearchArea(userId: string, input: { place: string; thei
   const home = await deps.home(userId).catch(() => null);
   // Their home city by name: back to home (the area cleared), never their home written as an area.
   if (home && W.samePlace(backed.place, home) && R.sameQualifiers(backed.place, home)) {
-    const cleared = await deps.db.query(
-      `UPDATE want_places SET place = NULL, source = 'removed', quote = $3, updated_at = NOW(), resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_home_country = NULL, resolved_at = NULL
-        WHERE user_id = $1 AND want_key = $2 AND place IS NOT NULL`,
-      [userId, AREA_KEY, backed.quote.slice(0, 300)],
-    );
-    // What was found in their old area goes; with no area set, nothing moved and nothing goes.
-    if (cleared.rowCount) await dropFallbackFinds(deps.db, userId, "their search area set back to home");
-    return { ok: true, changed: "home", home };
+    const done = await deps.tx(async (db) => {
+      const cleared = await db.query(
+        `UPDATE want_places SET place = NULL, source = 'removed', quote = $3, updated_at = NOW(), resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_home_country = NULL, resolved_at = NULL
+          WHERE user_id = $1 AND want_key = $2 AND place IS NOT NULL`,
+        [userId, AREA_KEY, backed.quote.slice(0, 300)],
+      );
+      // What was found in their old area goes; with no area set, nothing moved and nothing goes.
+      if (cleared.rowCount) await dropFallbackFinds(db, userId, "their search area set back to home");
+      return true;
+    }).catch((err: any) => (console.error("setSearchArea: setting it back to home failed (nothing changed):", err?.message ?? err), false));
+    return done ? { ok: true, changed: "home", home } : { ok: false, error: NOT_SAVED };
   }
   // Resolved fresh against their home, the same way a want's place is; the answer is kept only when both lookups were in hand.
   let kept: StoredResolution | null = null;
@@ -78,17 +85,21 @@ export async function setSearchArea(userId: string, input: { place: string; thei
   const unplaced = !home && r && !r.skip && !r.retry;
   if (!unplaced && (!r || r.retry || !r.city || !stored)) return { ok: false, error: `where ${backed.place} is couldn't be checked just now` };
   const s = stored;
-  const before = await searchAreaOf(userId, deps.db);
-  await deps.db.query(
-    `INSERT INTO want_places (user_id, want_key, want_text, place, source, quote, noted_at, resolved_for, resolved_home, resolved_status, resolved_label, resolved_lat, resolved_lng, resolved_options, resolved_home_country, resolved_at)
-       VALUES ($1, $2, $3, $4, 'their_words', $5, NOW(), $6, $7, $8, $9, $10, $11, $12::jsonb, $13, CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END)
-     ON CONFLICT (user_id, want_key) DO UPDATE SET place = EXCLUDED.place, source = 'their_words', quote = EXCLUDED.quote, noted_at = NOW(), updated_at = NOW(),
-       resolved_for = EXCLUDED.resolved_for, resolved_home = EXCLUDED.resolved_home, resolved_status = EXCLUDED.resolved_status, resolved_label = EXCLUDED.resolved_label,
-       resolved_lat = EXCLUDED.resolved_lat, resolved_lng = EXCLUDED.resolved_lng, resolved_options = EXCLUDED.resolved_options, resolved_home_country = EXCLUDED.resolved_home_country, resolved_at = EXCLUDED.resolved_at`,
-    [userId, AREA_KEY, AREA_TEXT, backed.place, backed.quote.slice(0, 300), s?.forPlace ?? null, s?.forHome ?? null, s?.status ?? null, s?.label ?? null, s?.lat ?? null, s?.lng ?? null, JSON.stringify(s?.options ?? []), s?.homeCountry ?? null],
-  );
-  // What was found where wants with no place looked before (home, or the old area) goes; the same area said again moves nothing.
-  if (!before || before.place !== backed.place) await dropFallbackFinds(deps.db, userId, "their search area changed");
+  const saved = await deps.tx(async (db) => {
+    const before = await searchAreaOf(userId, db);
+    await db.query(
+      `INSERT INTO want_places (user_id, want_key, want_text, place, source, quote, noted_at, resolved_for, resolved_home, resolved_status, resolved_label, resolved_lat, resolved_lng, resolved_options, resolved_home_country, resolved_at)
+         VALUES ($1, $2, $3, $4, 'their_words', $5, NOW(), $6, $7, $8, $9, $10, $11, $12::jsonb, $13, CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END)
+       ON CONFLICT (user_id, want_key) DO UPDATE SET place = EXCLUDED.place, source = 'their_words', quote = EXCLUDED.quote, noted_at = NOW(), updated_at = NOW(),
+         resolved_for = EXCLUDED.resolved_for, resolved_home = EXCLUDED.resolved_home, resolved_status = EXCLUDED.resolved_status, resolved_label = EXCLUDED.resolved_label,
+         resolved_lat = EXCLUDED.resolved_lat, resolved_lng = EXCLUDED.resolved_lng, resolved_options = EXCLUDED.resolved_options, resolved_home_country = EXCLUDED.resolved_home_country, resolved_at = EXCLUDED.resolved_at`,
+      [userId, AREA_KEY, AREA_TEXT, backed.place, backed.quote.slice(0, 300), s?.forPlace ?? null, s?.forHome ?? null, s?.status ?? null, s?.label ?? null, s?.lat ?? null, s?.lng ?? null, JSON.stringify(s?.options ?? []), s?.homeCountry ?? null],
+    );
+    // What was found where wants with no place looked before (home, or the old area) goes; the same area said again moves nothing.
+    if (!before || before.place !== backed.place) await dropFallbackFinds(db, userId, "their search area changed");
+    return true;
+  }).catch((err: any) => (console.error("setSearchArea: saving it failed (nothing changed):", err?.message ?? err), false));
+  if (!saved) return { ok: false, error: NOT_SAVED };
   return { ok: true, changed: "set", place: backed.place, label: s?.label ?? null, home, quote: backed.quote };
 }
 
@@ -167,6 +178,20 @@ export function areaFact(a: SearchArea, home: string | null): string {
 
 export const realSetAreaDeps = (): SetAreaDeps => ({
   db: pool,
+  tx: async (fn) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const out = await fn(client);
+      await client.query("COMMIT");
+      return out;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
   home: async (userId) => {
     const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]);
     return rows[0]?.city ?? null;
