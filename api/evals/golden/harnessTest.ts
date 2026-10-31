@@ -248,8 +248,11 @@ const api = new URL("../../", import.meta.url).pathname;
   for (const [decl, sentence] of RULES) check(`rule sentence in its protected declaration, not in tone text: ${decl} "${sentence}"`, lit(decl).includes(sentence) && !r.chunks.some((c) => c.text.includes(sentence)));
 
   // The real recorded reply request (checkin-nothing): a mutation inside a protected section changes its skeleton; a tone move doesn't.
-  const recPath = join(api, "evals/golden/recordings/checkin-nothing/0fff26b2dcba61a5.json");
-  const rec = JSON.parse(readFileSync(recPath, "utf8"));
+  // Found by content, not by file name: a re-record renames the file (its name is the request's hash).
+  const recDir = join(api, "evals/golden/recordings/checkin-nothing");
+  const rec = readdirSync(recDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(readFileSync(join(recDir, f), "utf8")))
+    .find((x) => x.request?.grader === false && JSON.stringify(x.request?.body ?? "").includes("call or text 988"));
+  if (!rec) throw new Error("checkin-nothing: no recorded reply request carrying the 988 line");
   // As replay sees a source edit: the request carries the new text, and the registry (read from the edited source) does too.
   const real = (edit: (s: string) => string) => { const body = JSON.parse(edit(JSON.stringify(rec.request.body))); return skeletonOf({ path: "api.anthropic.com/v1/messages", grader: false, beta: rec.request.beta ?? null, body }, r.chunks.map((c) => ({ ...c, text: edit(JSON.stringify(c.text)).slice(1, -1).replace(/\\n/g, "\n").replace(/\\"/g, '"') }))); };
   const base = real((s) => s);
