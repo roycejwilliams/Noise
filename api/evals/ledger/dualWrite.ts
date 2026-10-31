@@ -29,7 +29,7 @@ const docRow = { id: 77, user_id: U, doc_key: "plan", version: 2, title: "Friday
   if (/INSERT INTO outbound_messages/.test(sql)) return { rows: [{ user_id: U, sent_at: T0 }] };
   if (/INSERT INTO harness_decisions/.test(sql)) return { rows: [{ id: String(nextDecision++), created_at: T0 }] };
   if (/'event_offer_pending'/.test(sql) && /INSERT INTO co_memories/.test(sql)) return { rows: [{ id: "pend-1", created_at: T0 }] };
-  if (/'recommendation_offered', x FROM UNNEST/.test(sql)) return { rows: (p[1] as string[]).map((c, i) => ({ id: `ro-${i}`, created_at: T0, content: c })) };
+  if (/'recommendation_offered', u\.x FROM UNNEST/.test(sql)) return { rows: (p[1] as string[]).map((c, i) => ({ id: `ro-${i}`, created_at: T0, content: c })) };
   if (/INSERT INTO document_deliveries/.test(sql)) return { rows: [docRow] };
   if (/INSERT INTO co_facts/.test(sql)) return { rows: [{ id: 1 }] };
   return { rows: [] };
@@ -247,7 +247,7 @@ check("no cross-member leak: the ledger's own reads and writes are the member's"
 
 calls = [];
 let insertsTried = 0;
-L.setLedgerStoreForTest({ covered: async () => { throw Object.assign(new Error("db down"), { code: "57P01" }); }, insert: async () => { insertsTried++; throw new Error("db down"); } });
+L.setLedgerStoreForTest({ nearby: async () => { throw Object.assign(new Error("db down"), { code: "57P01" }); }, insert: async () => { insertsTried++; throw new Error("db down"); } });
 const before = Date.now();
 const sent2: any = await quiet(async () => sendblue.messages.send({ number: "+14155550143", content: "On it.", from_number: "+10000000000" } as any));
 check("a failing ledger never fails the send", !!sent2?.message_handle);
@@ -277,6 +277,124 @@ check("the dry run and the reconcile only ever read: BEGIN READ ONLY (checked), 
 process.env.DATABASE_URL = "postgres://x:y@db.example.com:5432/railway";
 const refused = await (await import("../../src/scripts/ledgerDb.js")).openDevDb(["--dry-run", "--confirm-db", "railway"], { readOnly: true }).then(() => "opened", (e: any) => String(e?.message));
 check("the scripts refuse anything but a local tunnel, before connecting", /^refusing: not a local tunnel/.test(refused), refused);
+
+// ------------------------------------------------------------ review of #324
+
+// (1) Same name, different links: two finds. The review's probe, through the call site and the store.
+calls = [];
+const runs = [
+  { tier: 2, kind: "public_event", event_api_id: null, event_date: "2026-11-02", name: "Sunday Run Club", url: "https://lu.ma/run-sf", reason: "fits" },
+  { tier: 2, kind: "public_event", event_api_id: null, event_date: "2026-11-02", name: "Sunday Run Club", url: "https://lu.ma/run-oakland", reason: "fits" },
+];
+{
+  const st = L.memoryLedgerStore();
+  L.setLedgerStoreForTest(st);
+  await quiet(() => recordRecommendationsSent(U, runs as any));
+  await L.ledgerSettled();
+  L.setLedgerStoreForTest(null);
+  const urls = st.rows.map((r) => r.url).sort();
+  check("two \"Sunday Run Club\" finds at /run-sf and /run-oakland in one call are two rows, each with its own link (paired by position)", st.rows.length === 2 && urls.join(" ") === "https://lu.ma/run-oakland https://lu.ma/run-sf", st.rows.map((r) => [r.objectKey, r.url]));
+  const sql = calls.find((c) => /'recommendation_offered', u\.x FROM UNNEST/.test(c.sql))?.sql ?? "";
+  check("…the rows come back in the order inserted (WITH ORDINALITY ... ORDER BY)", /WITH ORDINALITY AS u\(x, n\) ORDER BY u\.n RETURNING id, created_at, content/.test(sql));
+}
+check("sameThing: a shared link is the same thing; one name at two links is not; a name with a link on one side only is", L.sameThing(["u:a", "n:x"], ["u:a", "n:y"]) && !L.sameThing(["u:a", "n:x"], ["u:b", "n:x"]) && L.sameThing(["n:x"], ["u:b", "n:x"]) && L.sameThing(["n:x"], ["n:x"]) && !L.sameThing(["n:x"], ["n:y"]));
+{
+  // The reconcile follows the same rule: a recommendation whose own row is missing isn't covered by a same-named find at another page.
+  const st = L.memoryLedgerStore();
+  await L.writeLedgerRow(st, L.recommendationRow({ userId: U, memoryId: "rA", at: T0, name: "Sunday Run Club", url: null, sentAs: "https://lu.ma/run-sf" }));
+  const two: any = {
+    userId: U, outboundOther: 0, docs: [], ledger: [], outbound: [],
+    replied: [
+      { id: "c1", at: at(-20), text: "Run SF caption" },
+      { id: "c2", at: at(-10), text: "Run Oakland caption" },
+    ],
+    tools: [{ id: "dd", decision: "tool.shareFinds", action: "done", at: at(30), proposal: { input: { items: [{ link: "https://lu.ma/run-sf", caption: "Run SF caption" }, { link: "https://lu.ma/run-oakland", caption: "Run Oakland caption" }] } } }],
+    memories: [
+      { id: "rA", type: "recommendation_offered", at: at(-15), content: JSON.stringify({ name: "Sunday Run Club", event_api_id: null }) },
+      { id: "rB", type: "recommendation_offered", at: at(-5), content: JSON.stringify({ name: "Sunday Run Club", event_api_id: null }) },
+    ],
+  };
+  const rec2 = S.reconcileMember(two, st.rows);
+  check("reconcile, same rule: the second same-named find (another page, its own row missing) is reported unmatched", rec2.unmatched.some((u) => u.ref === "rB") && !rec2.unmatched.some((u) => u.ref === "rA"), rec2.unmatched);
+  const filled = L.memoryLedgerStore();
+  await S.runBackfill(filled, two);
+  check("…and the backfill writes both, each with its own link", filled.rows.filter((r) => r.meta.kind === "find").map((r) => r.url).sort().join(" ") === "https://lu.ma/run-oakland https://lu.ma/run-sf" && S.reconcileMember(two, filled.rows).unmatched.length === 0, filled.rows.map((r) => [r.objectKey, r.url]));
+}
+// The probe's other two cases, kept as they are by ruling (known limits in the PR): a partly refused shareFinds is recorded from its
+// input, and the same link sent on purpose twice within the window is one act.
+{
+  const st = L.memoryLedgerStore();
+  await L.writeLedgerRow(st, L.recommendationRow({ userId: U, memoryId: "j1", at: T0, name: "Jazz Night", url: "https://lu.ma/jazz", sentAs: "https://lu.ma/jazz" }));
+  const r = await L.writeLedgerRow(st, L.toolOutcomeRow({ userId: U, tool: "shareFinds", receipt: "done", input: { items: [{ link: "https://lu.ma/jazz", caption: "Jazz Night, Thursday" }, { link: "https://lu.ma/refused", caption: "Private dinner (refused)" }] }, decisionId: "9", at: at(2_000) }));
+  check("known limit (own PR before the reader switch): a partly refused shareFinds keeps its refused item as sent", r === "written" && st.rows.some((x) => x.url === "https://lu.ma/refused"));
+  const s3 = L.memoryLedgerStore();
+  await L.writeLedgerRow(s3, L.toolOutcomeRow({ userId: U, tool: "shareLink", receipt: "done", input: { urls: ["https://lu.ma/a"] }, decisionId: "1", at: T0 }));
+  const x2 = await L.writeLedgerRow(s3, L.toolOutcomeRow({ userId: U, tool: "shareLink", receipt: "done", input: { urls: ["https://lu.ma/a"] }, decisionId: "2", at: at(90_000) }));
+  check("by design: the same link sent twice within the window is one act", x2 === "collapsed" && s3.rows.length === 1);
+}
+
+// (2) A team alert is never an act toward a member: the sender flag, never the post-hoc 'ops' rewrite.
+calls = [];
+const alert: any = await sendblue.messages.send({ number: "+14155550144", content: "Cue alert: something to look at.", from_number: "+10000000000", sender: "ops" } as any);
+await waitFor(() => calls.some((c) => /INSERT INTO outbound_messages/.test(c.sql)), 1000);
+await new Promise((r) => setTimeout(r, 50));
+await L.ledgerSettled();
+const alertRow = calls.find((c) => /INSERT INTO outbound_messages/.test(c.sql));
+check("team alert: recorded with sender 'ops' by the wrapper, and no ledger row", !!alert?.message_handle && alertRow?.p[3] === "ops" && ledgerInserts().length === 0, { p: alertRow?.p, ledger: ledgerInserts().length });
+check("…and its sender never reaches Sendblue (taken off the body)", /const \{ sender: senderIn, \.\.\.body \} = bodyIn;/.test(read("services/sendblue.ts")) && /client\.messages\.send\(\{ \.\.\.body, content \}/.test(read("services/sendblue.ts")));
+check("…the backfill agrees: it reads sender 'co' only", /FROM outbound_messages WHERE user_id = \$1 AND sender = 'co'/.test(read("services/ledgerSources.ts")));
+
+// The reverse direction: ledger rows with nothing behind them, with counts and contents.
+{
+  const orphanRows = [...dry.rows, { userId: U, relation: "texted", objectKey: "L|outbound:gone", label: "A text whose row is gone", url: null, at: at(5_000), source: "outbound:gone", meta: { ledger: 1, kind: "text" } },
+    { userId: U, relation: "did", objectKey: "L|decision:old", label: "saved an ask", url: null, at: new Date(Date.now() - 90 * 86_400_000), source: "tool.saveAsk", meta: { ledger: 1, kind: "tool" } }];
+  const rv = S.reconcileMember(src, orphanRows);
+  check("reverse: a ledger row whose old-store row is gone is reported with its contents", rv.orphans.length === 1 && rv.orphans[0].objectKey === "L|outbound:gone" && rv.orphans[0].label === "A text whose row is gone" && rv.agedOut === 1, rv.orphans);
+  const rep = (await import("../../src/scripts/ledgerReconcile.js")).reconcileReport([{ ...rv, group: "test" }]);
+  check("reverse: the report gives the count and the contents", /with no old-store row 1/.test(rep) && rep.includes("A text whose row is gone"), rep);
+  check("reverse: after the backfill, every ledger row has its old-store row", S.reconcileMember(src, dry.rows).orphans.length === 0);
+}
+
+// (5) A text held twice (a transcript row beside its outbound row) is a double; the same words sent twice with their own handles are not.
+{
+  const t1 = { userId: U, relation: "texted", objectKey: "L|outbound:h-9", label: "See you there.", url: null, at: at(0), source: "outbound:h-9", meta: { ledger: 1, kind: "text" } };
+  const t2 = { ...t1, objectKey: "L|memory:m-9", source: "memory:m-9", at: at(50) };
+  const t3 = { ...t1, objectKey: "L|outbound:h-10", source: "outbound:h-10", at: at(70) };
+  const t4 = { ...t1, objectKey: "L|memory:m-10", source: "memory:m-10", at: at(60) };
+  const empty: any = { userId: U, replied: [], outbound: [], outboundOther: 0, tools: [], memories: [], docs: [], ledger: [] };
+  const d = S.reconcileMember(empty, [t1, t2, t3]);
+  check("duplicate texted rows (one send under its handle and its transcript line) are flagged; two real sends are counted apart", d.doubles.filter((x) => x.key.startsWith("text:")).length === 2 && d.repeatedTexts === 1, d);
+  const d2 = S.reconcileMember(empty, [t2, t4]);
+  check("two transcript lines with the same words (an old repeated send) are two sends, not a double", d2.doubles.length === 0 && d2.repeatedTexts === 1, d2);
+}
+
+// (4) Shutdown waits for the queued writes, bounded.
+{
+  let release!: () => void;
+  L.setLedgerStoreForTest({ nearby: async () => [], insert: () => new Promise<boolean>((r) => { release = () => r(true); }) });
+  L.ledgerWrite(L.textedRow({ userId: U, handle: "h-s", content: "x", at: T0 }));
+  const t0 = Date.now();
+  const timed = await L.settleWithin(200);
+  check("shutdown: a stuck write never holds the exit past the bound", timed === "timed_out" && Date.now() - t0 < 1000);
+  release();
+  check("shutdown: queued writes that land in time are waited for", (await L.settleWithin(1000)) === "settled");
+  L.setLedgerStoreForTest(null);
+  check("shutdown: the ledger registers its wait as a shutdown hook, 3s at most", /onShutdown\(\(\) => settleWithin\(SHUTDOWN_WAIT_MS\)\)/.test(read("services/ledger.ts")) && L.SHUTDOWN_WAIT_MS === 3000);
+}
+
+// (6) A tool row that can't be built is a failed ledger write, logged; an offer's answer is never a silent no-op.
+check("toolGuard: an error building the row logs ledger.write_failed instead of being swallowed", /catch \(err\) \{[\s\S]{0,160}return ledgerFailed\(\{ userId: ctx\.userId,/.test(read("agent/toolGuard.ts")));
+{
+  calls = [];
+  const fq = async (sql: string, p?: unknown[]) => { calls.push({ sql, p: p as any[] }); return { rows: [] as any[] }; };
+  const r = await L.applyOfferState(fq, U, "pend-x", "interested");
+  check("offer answer with no row anywhere: a ledger.offer_state_unmatched decision, scoped to the member", r === "unmatched" && calls.some((c) => /INSERT INTO harness_decisions/.test(c.sql) && c.p[1] === "ledger.offer_state_unmatched" && c.p[2] === U) && calls.filter((c) => /co_facts|co_memories/.test(c.sql)).every((c) => c.p[0] === U));
+}
+
+// (3) Forgetting. No member forget path deletes the ledger's sources today (removals are read-time guarded; see the PR); deleting
+// the account deletes the user row, and co_facts cascades with it (run against a real Postgres in evals/ledger/ledgerSql.ts).
+check("forgetting: account deletion deletes the user row, and co_facts' owner cascades", /DELETE FROM users WHERE id = \$1/.test(read("routes/users.ts")) && /owner_user_id UUID NOT NULL REFERENCES users\(id\) ON DELETE CASCADE/.test(read("db/migrations.ts")));
+check("forgetting: the residue audit counts ledger rows with the rest of co_facts", /table: "co_facts", owner: "owner_user_id", cols: \["object_label"\]/.test(read("scripts/forgetResidueAudit.ts")));
 
 console.log(`ledger dual write: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

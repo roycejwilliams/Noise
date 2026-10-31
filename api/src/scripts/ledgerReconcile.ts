@@ -1,7 +1,8 @@
 // Reconcile of the action ledger, READ ONLY (snapshot design 2026-10-29 §3 step 3; services/ledgerSources.ts reconcileMember). Per
-// member, every act the old stores hold is matched against that member's ledger rows in co_facts. It reports counts per source,
-// the contents of every act left unmatched, and any act the ledger holds twice. No reader moves to the ledger until it reports
-// nothing unmatched and no doubles.
+// member, both directions: every act the old stores hold is matched against that member's ledger rows in co_facts, and every
+// ledger row is matched back to the old-store row it mirrors. It reports counts per source, the contents of every act left
+// unmatched and every ledger row with nothing behind it, and any act the ledger holds twice (a thing sent, or a text). No reader
+// moves to the ledger until it reports nothing unmatched, no orphans and no doubles.
 //
 //   --assume-backfill   also runs the backfill (scripts/ledgerBackfill.ts rules) against an in-memory copy of each member's ledger
 //                       rows first, and reconciles against that: what would still be unmatched if the backfill ran. Writes nothing.
@@ -24,15 +25,20 @@ export function reconcileReport(results: (ReconcileResult & { group?: string })[
   }
   const unmatched = results.reduce((a, r) => a + r.unmatched.length, 0);
   const doubles = results.reduce((a, r) => a + r.doubles.length, 0);
+  const orphans = results.reduce((a, r) => a + r.orphans.length, 0);
+  const ledgerRows = results.reduce((a, r) => a + r.ledgerRows, 0);
   out.push(`${results.length} members; old-store acts ${Object.values(totals).reduce((a, t) => a + t.total, 0)}; unmatched ${unmatched}; doubles in the ledger ${doubles}`);
+  out.push(`reverse: ledger rows ${ledgerRows}; with no old-store row ${orphans}; decision row aged out of the 60-day log ${results.reduce((a, r) => a + r.agedOut, 0)}; same words sent twice, each its own record (not doubles) ${results.reduce((a, r) => a + r.repeatedTexts, 0)}`);
   out.push(`  ${"source".padEnd(26)} ${"acts".padStart(6)} ${"matched".padStart(8)} ${"unmatched".padStart(10)}`);
   for (const [k, t] of Object.entries(totals)) out.push(`  ${k.padEnd(26)} ${String(t.total).padStart(6)} ${String(t.matched).padStart(8)} ${String(t.total - t.matched).padStart(10)}`);
   out.push(`  (transcript notes, recorded by their own source: ${results.reduce((a, r) => a + r.notes, 0)}; outbound rows under another sender, left out: ${results.reduce((a, r) => a + r.outboundOther, 0)})`);
   for (const r of results) {
-    if (!r.unmatched.length && !r.doubles.length) continue;
-    out.push(`\nmember ${short(r.userId)}${r.group ? ` (${r.group})` : ""}: ${r.unmatched.length} unmatched, ${r.doubles.length} doubles, ${r.ledgerRows} ledger rows`);
+    if (!r.unmatched.length && !r.doubles.length && !r.orphans.length) continue;
+    out.push(`\nmember ${short(r.userId)}${r.group ? ` (${r.group})` : ""}: ${r.unmatched.length} unmatched, ${r.orphans.length} orphans, ${r.doubles.length} doubles, ${r.ledgerRows} ledger rows`);
     for (const u of r.unmatched.slice(0, limit)) out.push(`  unmatched ${u.source} ${u.ref.slice(0, 12)} ${u.at.toISOString().slice(0, 19)}: ${u.text}`);
     if (r.unmatched.length > limit) out.push(`  ... ${r.unmatched.length - limit} more`);
+    for (const o of r.orphans.slice(0, limit)) out.push(`  orphan ${o.objectKey.slice(0, 48)} ${o.at.toISOString().slice(0, 19)} ${o.relation} (${o.why}): ${o.label}`);
+    if (r.orphans.length > limit) out.push(`  ... ${r.orphans.length - limit} more orphans`);
     for (const d of r.doubles.slice(0, limit)) out.push(`  double ${d.key.slice(0, 80)} at ${d.at.toISOString().slice(0, 19)}: ${d.a} / ${d.b}`);
   }
   return out.join("\n");

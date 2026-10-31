@@ -138,22 +138,27 @@ function reportSendBreaker(number: string, count: number, resumesAt: number, rea
     .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));
 }
 
-// Every send is Co's (outbound_messages.sender keeps its default, "co"). It is also one 'texted' row in the action ledger
-// (services/ledger.ts), anchored on this row and queued in the background: the send never waits on it.
-function recordOutbound(handle: string, number: string, content: string): void {
+// Who a send is from: "co" (every send to a member), or "ops" (a team alert, harness/failureCount.ts, which passes it as the
+// body's sender). Never sent to Sendblue.
+export type Sender = "co" | "ops";
+// Every send is recorded by its handle with its sender. A send of Cue's (sender "co") is also one 'texted' row in the action ledger
+// (services/ledger.ts), anchored on this row and queued in the background: the send never waits on it. A team alert is never an
+// act toward a member, even when the team's number is a member's too, so it writes no ledger row (the backfill reads sender 'co'
+// only, the same rule).
+function recordOutbound(handle: string, number: string, content: string, sender: Sender): void {
   import("../db/db.js")
     .then(({ default: pool }) =>
       pool.query(
-        `INSERT INTO outbound_messages (message_handle, user_id, content)
-         SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3
+        `INSERT INTO outbound_messages (message_handle, user_id, content, sender)
+         SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3, $4
          ON CONFLICT (message_handle) DO NOTHING RETURNING user_id, sent_at`,
-        [handle, number, content.slice(0, 2000)],
+        [handle, number, content.slice(0, 2000), sender],
       ),
     )
     .then(async (r: any) => {
       const row = r?.rows?.[0];
       // No row: the handle was already recorded (its ledger row with it), or the number isn't a member's.
-      if (!row?.user_id) return;
+      if (!row?.user_id || sender !== "co") return;
       const L = await import("./ledger.js");
       L.ledgerWrite(L.textedRow({ userId: String(row.user_id), handle, content, at: new Date(row.sent_at) }));
     })
@@ -181,7 +186,10 @@ const sendblue = {
   ...client,
   messages: {
     ...client.messages,
-    send: (body: Parameters<typeof client.messages.send>[0], options?: Parameters<typeof client.messages.send>[1]) => {
+    send: (bodyIn: Parameters<typeof client.messages.send>[0] & { sender?: Sender }, options?: Parameters<typeof client.messages.send>[1]) => {
+      // The sender is ours, never Sendblue's: taken off before anything goes.
+      const { sender: senderIn, ...body } = bodyIn;
+      const sender: Sender = senderIn === "ops" ? "ops" : "co";
       const content = body.content ? cleanCoMessage(body.content) : body.content;
       // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused, whatever path it came from. A media-only
       // send (a voice note, a card) may have no words.
@@ -216,7 +224,7 @@ const sendblue = {
         noteSent({ to, content, media: !!(body as { media_url?: string }).media_url });
         // Every message Co sends, kept by its handle so a later reply can
         // thread under it (services/inlineReply.ts sentMessageHandle).
-        if (res?.message_handle) recordOutbound(String(res.message_handle), to ?? "", content ?? "");
+        if (res?.message_handle) recordOutbound(String(res.message_handle), to ?? "", content ?? "", sender);
         // Every link Co sends is read once, in the background (services/linkReader.ts).
         if (content && /https?:\/\//.test(content)) import("./linkReader.js").then((l) => l.readLinksLater(content)).catch(() => {});
         return res;

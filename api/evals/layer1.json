@@ -258,6 +258,7 @@
     "evals/review/audience.ts",
     "evals/review/outsideActions.ts",
     "evals/ledger/dualWrite.ts",
+    "evals/ledger/ledgerSql.ts",
     "evals/review/introTrace.ts",
     "evals/review/introClose.ts",
     "evals/review/googleKey.ts",
