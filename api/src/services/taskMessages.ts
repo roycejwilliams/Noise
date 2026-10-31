@@ -43,8 +43,28 @@ export function captionOk(caption: string, itemFacts: string): { ok: boolean; wh
   return { ok: true, why: null };
 }
 
-// One call: a caption per item from that item's facts only, and a short closing line.
-export async function draftTaskMessages(o: { firstName: string; goal: string; items: SendItem[]; what: string; context: string }): Promise<{ captions: Map<string, string>; closing: string | null }> {
+// The found things a text names, by the first words of each name, so a find never goes out named without its link (Royce,
+// 2026-10-31: "stackable with Francisco San" went out and francisco san's link never did). The words count only inside one clause,
+// so "San Francisco, San Mateo" never names "francisco san"; a name that a sent item's own name contains is left alone, since the
+// words may mean that one.
+const nameWords = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+export function namedFinds(text: string, finds: { name: string }[], sent: { name: string }[] = []): string[] {
+  const t = text.toLowerCase();
+  const sentKeys = sent.map((s) => nameWords(s.name));
+  const out: string[] = [];
+  for (const f of finds) {
+    const w = nameWords(f.name).split(" ").filter(Boolean);
+    const lead = (w[0] === "the" ? w.slice(1) : w).slice(0, 3);
+    const key = lead.join(" ");
+    if (key.length < 6 || out.includes(f.name) || sentKeys.some((k) => k.includes(key))) continue;
+    if (new RegExp(`(?<![a-z0-9])${lead.join("[^a-z0-9.,;:!?()\\n]+")}(?![a-z0-9])`).test(t)) out.push(f.name);
+  }
+  return out;
+}
+
+// One call: a caption per item from that item's facts only, and a short closing line. fix: what broke in the first draft, for the
+// one redraft.
+export async function draftTaskMessages(o: { firstName: string; goal: string; items: SendItem[]; what: string; context: string; fix?: string }): Promise<{ captions: Map<string, string>; closing: string | null }> {
   const { text } = await generateText({
     model: anthropic(MODELS.sonnet),
     maxOutputTokens: 3000,
@@ -59,8 +79,8 @@ ${o.items.map((it, i) => `[${i + 1}] ${it.name} (${it.url})\n    verified facts:
 Other verified context (for the closing line only): ${o.context || "(none)"}
 What you want to get across overall (a guide, not a source): ${o.what}
 
-Rules: each caption is one or two short sentences saying what it is and why it fits, using ONLY that item's verified facts. No links in captions. The closing line (one or two sentences) is where you ask your one question or say what's next; never promise a result, and never offer to call, book, reserve or contact anyone for them. No sign-off, no greeting.
-
+Rules: each caption is one or two short sentences saying what it is and why it fits, using ONLY that item's verified facts. No links in captions. The closing line (one or two sentences) is where you ask your one question or say what's next; never promise a result, and never offer to call, book, reserve or contact anyone for them, or to fill in, submit or apply for anything for them. No sign-off, no greeting.
+${o.fix ? `\nYour first draft broke these, so it didn't go: ${o.fix}. Write them all again. Name only the things listed above: anything else you found stays unnamed, since its link isn't going.\n` : ""}
 Return ONLY JSON: {"captions": [{"n": 1, "caption": "..."}], "closing": "..." or null}`,
   });
   const p = parseModelJson<{ captions?: { n?: number; caption?: string }[]; closing?: string | null }>(text);

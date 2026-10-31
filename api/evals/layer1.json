@@ -234,6 +234,7 @@
     "evals/tasks/heldReplay.ts",
     "evals/tasks/olderLogs.ts",
     "evals/tasks/deliveryReplay.ts",
+    "evals/tasks/findLinks.ts",
     "evals/member/safeGaps.ts",
     "evals/member/safeCase.ts",
     "evals/member/textKnowledge.ts",

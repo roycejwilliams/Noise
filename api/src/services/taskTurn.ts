@@ -26,7 +26,7 @@ import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type
 import { exchangeText } from "./followUps.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
-import { assembleMessages, captionOk, draftTaskMessages, orderByTier, type SendItem } from "./taskMessages.js";
+import { assembleMessages, captionOk, draftTaskMessages, namedFinds, orderByTier, type SendItem } from "./taskMessages.js";
 import { promiseKeptBy, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
@@ -358,24 +358,45 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
                 : { url, name: v!.name, tier: 3, facts: [...v!.facts, ...(v!.date ? [`a date its page mentions: ${v!.date}`] : []), ...(v!.deadline ? [`deadline: ${v!.deadline}`] : [])] };
             }),
           );
-          const drafted = await draftTaskMessages({ firstName: deps.person.first_name || "them", goal: task.goal, items, what, context: [facts.verified_page_facts, `their deadline: ${task.deadline ?? "none"}`].join(" | ") }).catch(() => null);
-          if (!drafted) return { ok: false, error: "Couldn't write the captions. Note it and schedule the next look." };
-          const good: { url: string; caption: string }[] = [];
-          const droppedCaptions: string[] = [];
-          for (const it of items) {
-            const cap = drafted.captions.get(it.url);
-            const verdict = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`) : { ok: false, why: "no caption" };
-            if (cap && verdict.ok) good.push({ url: it.url, caption: cap });
-            else droppedCaptions.push(`${it.name}: ${verdict.why}`);
+          const draft = (fix?: string) => draftTaskMessages({ firstName: deps.person.first_name || "them", goal: task.goal, items, what, context: [facts.verified_page_facts, `their deadline: ${task.deadline ?? "none"}`].join(" | "), fix }).catch(() => null);
+          // Every find this task holds: one named in a caption or the closing goes with its own link in this send, or not at all
+          // (the tease rule, PR #59; Royce 2026-10-31: "stackable with Francisco San" went out after francisco san's caption was dropped).
+          const finds = [...events, ...verified].filter((x) => !!x.url) as { name: string; url: string }[];
+          const vet = (d: { captions: Map<string, string>; closing: string | null }) => {
+            const good: { url: string; caption: string; name: string }[] = [];
+            const dropped: string[] = [];
+            for (const it of items) {
+              const cap = d.captions.get(it.url);
+              const verdict = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`) : { ok: false, why: "no caption" };
+              if (cap && verdict.ok) good.push({ url: it.url, caption: cap, name: it.name });
+              else dropped.push(`${it.name}: ${verdict.why}`);
+            }
+            // Leaving one out can leave another naming it, so this runs until nothing changes.
+            const unsent = () => finds.filter((f) => !good.some((g) => g.url === f.url));
+            for (let i = good.findIndex((g) => namedFinds(g.caption, unsent(), good).length); i >= 0; i = good.findIndex((g) => namedFinds(g.caption, unsent(), good).length)) {
+              dropped.push(`${good[i].name}: names ${namedFinds(good[i].caption, unsent(), good).join(", ")}, whose link isn't going`);
+              good.splice(i, 1);
+            }
+            let closing = d.closing;
+            if (closing && chases(closing, asOfNow, { final })) closing = null;
+            if (closing) {
+              const allFacts = Object.values(facts).join(" ");
+              const bad = checkDraft(closing, { maxSentences: 2, maxChars: 280 }).some((c) => !c.pass) || !numbersBacked(closing, allFacts).ok || !placesBacked(closing, allFacts).ok || OFFERS_WHAT_CO_CANT.test(closing) || namedFinds(closing, unsent(), good).length > 0;
+              if (bad) closing = null;
+            }
+            return { good, dropped, closing };
+          };
+          const first = await draft();
+          if (!first) return { ok: false, error: "Couldn't write the captions. Note it and schedule the next look." };
+          let v = vet(first);
+          // One redraft with what broke, so a caption that slipped (a number, another find's name) doesn't cost its link.
+          if (v.dropped.length) {
+            const again = await draft(v.dropped.join("; "));
+            const w = again ? vet(again) : null;
+            if (w && w.good.length >= v.good.length) v = w;
           }
+          const { good, dropped: droppedCaptions, closing } = v;
           if (!good.length) return { ok: false, error: `No caption held up (${droppedCaptions.join("; ")}). Note it and schedule the next look.` };
-          let closing = drafted.closing;
-          if (closing && chases(closing, asOfNow, { final })) closing = null;
-          if (closing) {
-            const allFacts = Object.values(facts).join(" ");
-            const bad = checkDraft(closing, { maxSentences: 2, maxChars: 280 }).some((c) => !c.pass) || !numbersBacked(closing, allFacts).ok || !placesBacked(closing, allFacts).ok || OFFERS_WHAT_CO_CANT.test(closing);
-            if (bad) closing = null;
-          }
           const messages = assembleMessages(good, closing);
           const whole = await wholeDelivery(messages);
           if (whole) return { ok: false, error: whole };
@@ -391,7 +412,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           functionId: "taskTurn.tell",
           firstName: deps.person.first_name || "them",
           facts,
-          task: `${task.source === "promise" ? "Hand them what you promised, the way a friend would: the thing itself, never how you got it (no \"from the call\", nothing confirmed, verified or left off)." : "Tell them where this stands, in your own voice."} What to get across (a guide to your intent, not a source: state only what's in CONFIRMED_FACTS): ${what}. Don't put links in the text; they go right after it. Never offer to call, book, reserve or contact anyone for them: you can't. No sign-off.`,
+          task: `${task.source === "promise" ? "Hand them what you promised, the way a friend would: the thing itself, never how you got it (no \"from the call\", nothing confirmed, verified or left off)." : "Tell them where this stands, in your own voice."} What to get across (a guide to your intent, not a source: state only what's in CONFIRMED_FACTS): ${what}. Don't put links in the text; they go right after it. Never offer to call, book, reserve or contact anyone for them, or to fill in, submit or apply for anything for them: you can't. No sign-off.`,
           maxSentences: 4,
         }).catch(() => null);
         if (!text) return { ok: false, error: "Nothing worth sending came out of the verified facts. Note it and schedule the next look." };
@@ -402,7 +423,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         // Co's steps (2026-09-30: three verified caterers found, nothing sent).
         if (failed.length) {
           const again = await draftAgain({ draft: text, failed: failed.map((f) => f.reason ?? f.name).join("; ") }, () =>
-            draftProactive({ functionId: "taskTurn.tell", firstName: deps.person.first_name || "them", facts, task: `Tell them where this stands in at most 3 short sentences. What to get across (a guide, not a source: state only what's in CONFIRMED_FACTS): ${what}. No links in the text. Never offer to call, book, reserve or contact anyone for them. No sign-off.`, maxSentences: 3 }),
+            draftProactive({ functionId: "taskTurn.tell", firstName: deps.person.first_name || "them", facts, task: `Tell them where this stands in at most 3 short sentences. What to get across (a guide, not a source: state only what's in CONFIRMED_FACTS): ${what}. No links in the text. Never offer to call, book, reserve or contact anyone for them, or to fill in, submit or apply for anything for them. No sign-off.`, maxSentences: 3 }),
           ).catch(() => null);
           if (again) {
             text = again;
@@ -415,15 +436,14 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         const places = placesBacked(text, Object.values(facts).join(" "));
         if (!places.ok) return { ok: false, error: `The draft named places no verified fact backs (${places.missing.join(", ")}). Tell them only verified facts.` };
         const offer = text.match(OFFERS_WHAT_CO_CANT);
-        if (offer) return { ok: false, error: `The draft offered something Cue can't do ("${offer[0]}"): Cue can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
+        if (offer) return { ok: false, error: `The draft offered something Cue can't do ("${offer[0]}"): Cue can't call, book or contact anyone for them, or fill in, submit or apply for anything. Suggest they do it, or ask what they'd like next.` };
         if (inventedFailure(text)) return { ok: false, error: "Not sent: the draft says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
         if (namesRejected(text)) return { ok: false, error: "Not sent: the draft names something Cue's daily pick rejected for them. Leave it off." };
-        // A plain text carries no links, so it isn't the delivery: a question, or saying plainly what can't be done, may go. One
-        // that hands over found things without their links is a partial delivery, and waits for the one message with the links.
-        if (task.source === "promise" && !final && !/\?\s*["')\]]*$/.test(text.trim())) {
-          const named = [...events, ...verified].map((x: any) => String(x.name ?? "")).filter((n) => n.length >= 6 && nameKey(text).includes(nameKey(n).split(" ").slice(0, 3).join(" ")));
-          if (named.length) return { ok: false, error: `Not sent: it hands over ${named.slice(0, 2).join(", ")} without the links. A delivery is one message with its links: send it with tellThem and the links.` };
-        }
+        // A plain text carries no links, so it never names a find: a question, or saying plainly what can't be done, may go, but one
+        // that names something found (a question too: "Want me to start the Francisco San form?", Royce 2026-10-31) is a tease
+        // without its answer (PR #59), and waits for the message that carries the link.
+        const named = namedFinds(text, [...events, ...verified].filter((x) => !!x.url) as { name: string }[]);
+        if (named.length) return { ok: false, error: `Not sent: it names ${named.slice(0, 2).join(", ")} without the link. A find goes as its link, then its caption: send it with tellThem and the links, or leave it unnamed.` };
         if (!final && progressReport(text, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
         const chase = chases(text, asOfNow, { final });
         if (chase) return { ok: false, error: `Not sent: ${chase}. Wait for them; their reply wakes this task.` };
