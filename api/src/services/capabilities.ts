@@ -518,6 +518,14 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 2 },
     use: 'When they say they don\'t want a KIND of thing anymore ("no more hackathons", "stop sending me crypto stuff", "I\'m not into big conferences"), save it so Cue stops suggesting that kind of thing everywhere. Also use it with undo=true when they say they\'re open to that kind of thing again. Not for turning down one specific event.',
   },
+  // Where Cue searches for them from now on (services/searchArea.ts, 2026-10-31).
+  {
+    id: "search_area",
+    can: "When they tell Cue where to search for them from now on (\"switch my searches to SF going forward\"), Cue changes it right away: asks and goals that name no place of their own, and their daily search, look there. Asks and goals that name a place keep it, and their home city stays as it is.",
+    tool: "setSearchArea",
+    limits: { perTurn: 1, perDay: 10 },
+    use: "Call it when they tell you, in this message, to search somewhere else from now on for everything, not just one ask (\"switch the search to San Francisco going forward\", \"look in Oakland from now on\"). Pass the place and their words saying it, copied exactly. One ask or goal in a new place is that ask's place (saveAsk's place, or correctWhatCoKnows), not this. Their home city by name sets it back to home. If it comes back with askThem, nothing changed: ask that in one line inside your reply. Say it changed only once this comes back ok, and say where it searches now; if it didn't go through, say plainly nothing changed.",
+  },
   {
     id: "list_sent",
     can: "Cue can recap what it has sent or recommended them, and resend a link from it.",

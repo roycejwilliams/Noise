@@ -83,6 +83,8 @@ export type PlaceDeps = {
   // The member's own day (their zone), and ending a want's window once that day is past it (wantWhen.ts endWindow).
   today?: (userId: string) => Promise<string>;
   endWindow?: (userId: string, key: string) => Promise<void>;
+  // Where they asked Cue to search from now on (searchArea.ts), which stands in for their home city for a want with no place.
+  area?: (userId: string) => Promise<import("./searchArea.js").SearchArea | null>;
 };
 
 // The place of one want: the stored one, or read now (once) and stored. A read that fails is not stored (read again next time) and
@@ -247,4 +249,5 @@ export const realPlaceDeps: PlaceDeps = {
     );
   },
   log: recordDecision,
+  area: async (userId) => (await import("./searchArea.js")).searchAreaOf(userId),
 };

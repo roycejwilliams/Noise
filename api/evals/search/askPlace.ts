@@ -210,8 +210,12 @@ try {
   const body = (name: string, next: string) => lt.slice(lt.indexOf(`    ${name}: tool({`), lt.indexOf(`    ${next}: tool({`));
   const ev = body("searchEvents", "webSearch");
   const ws = body("webSearch", "searchPosts");
-  check("searchEvents looks where replySearchPlace says, and reads the profile city only as its home fallback", /const where = replySearchPlace\(\{ kind: "events", words: what, toolCity: city, message: askWords\(\), home: ctx\.turn\?\.profile\?\.city \?\? null \}\);/.test(ev) && /eventCandidates\(what, where\.place,/.test(ev) && (ev.match(/profile\?\.city/g) ?? []).length === 1);
-  check("webSearch hands each search the city replySearchPlace gives it, and reads the profile city only as its home fallback", /taskWebSearch\(ctx\.userId, q, \{ city: cityFor\(q\),/.test(ws) && /webSearchCity\(replySearchPlace\(\{ kind: "web", words: q, toolCity: theirs\?\.city \?\? null, message: askWords\(\), home \}\)\)/.test(ws) && (ws.match(/profile\?\.city/g) ?? []).length === 1 && /const home = ctx\.turn\?\.profile\?\.city \?\? null;/.test(ws));
+  // Their home for a search with no place of its own is searchHome (agent/loopTools.ts): where they asked Cue to search from now on
+  // (services/searchArea.ts), else the profile city, read in that one place only.
+  const loopSrc = readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8");
+  const searchHomeDef = /const searchHome = async \(\): Promise<string \| null> =>[\s\S]{0,400}?searchAreaOf\(ctx\.userId\)[\s\S]{0,200}?\?\? ctx\.turn\?\.profile\?\.city \?\? null;/.test(loopSrc);
+  check("searchEvents looks where replySearchPlace says, and reads their home (search area, else profile city) only as its home fallback", searchHomeDef && /const where = replySearchPlace\(\{ kind: "events", words: what, toolCity: city, message: askWords\(\), home: await searchHome\(\) \}\);/.test(ev) && /eventCandidates\(what, where\.place,/.test(ev) && (ev.match(/profile\?\.city/g) ?? []).length === 0);
+  check("webSearch hands each search the city replySearchPlace gives it, and reads their home (search area, else profile city) only as its home fallback", searchHomeDef && /taskWebSearch\(ctx\.userId, q, \{ city: cityFor\(q\),/.test(ws) && /webSearchCity\(replySearchPlace\(\{ kind: "web", words: q, toolCity: theirs\?\.city \?\? null, message: askWords\(\), home \}\)\)/.test(ws) && (ws.match(/profile\?\.city/g) ?? []).length === 0 && /const home = await searchHome\(\);/.test(ws));
 }
 
 console.log(`\naskPlace: ${total - failed}/${total} passed`);

@@ -249,7 +249,7 @@ export const NEW_FOR_THEM = new Set([
   "firstRead", "makePage", "updatePage", "takeDownPage", "readInspo", "readReference", "makeDeck", "updateDeck", "openArtifact",
   "shareArtifact", "deleteImages", "resetLink", "resendLink", "stopSharing", "searchEvents", "webSearch", "searchPosts", "readPage",
   "shareFinds", "draftEmail", "emailPlan", "researchBrief", "writeDocument", "readDocument", "writeFromFile", "deleteMyFiles",
-  "offerDocument", "calendarConnection", "docsConnection", "googleConnection",
+  "offerDocument", "calendarConnection", "docsConnection", "googleConnection", "setSearchArea",
   // Re-review of #310: each of these can return something to say (a link that moved, the next step on a yes, a playback of their time).
   "keepArtifact", "findReaction", "noteFreeTime",
   // #304: a change to their voice-read consent is worth a line (its question itself rides as a lane note, owed once).
@@ -1796,6 +1796,35 @@ export function createConversationTools(ctx: ConversationToolContext) {
           undo ? `Cue will suggest "${k}" again when something fits.` : `Cue will stop suggesting "${k}" in every search and sweep from now on, until they say otherwise.`,
         );
         return { ok: true };
+      },
+    }),
+
+    // Where Cue searches for them from now on (services/searchArea.ts; Royce's 10-31 "switch the search to San Francisco please going
+    // forward" got "switching to SF from here on out" with nothing behind it). Their words name the place; it's resolved against their
+    // home before it's kept, an ambiguous one is asked about, and the receipt says exactly what changed and what didn't.
+    setSearchArea: tool({
+      description: toolUse("setSearchArea"),
+      inputSchema: z.object({
+        place: z.string().describe("The city or area, as they said it (\"San Francisco\", \"SF\")."),
+        theirWords: z.string().describe("Their words in THIS message saying to search there from now on, copied exactly."),
+      }),
+      execute: async ({ place, theirWords }) => {
+        if (ctx.dryRun) return { ok: true, note: "(dry run) nothing changed." };
+        const A = await import("../services/searchArea.js");
+        const r = await A.setSearchArea(ctx.userId, { place, theirWords, message: ctx.resolvedContent, recent: recentOf(ctx) }, A.realSetAreaDeps()).catch((err: any): { ok: false; error: string } => {
+          console.error("setSearchArea: failed (non-fatal):", err?.message ?? err);
+          return { ok: false, error: "it couldn't be saved just now" };
+        });
+        if (r.ok) {
+          ctx.facts?.add("did_this_turn", A.areaReceipt(r));
+          return { ok: true, searchesIn: r.changed === "home" ? r.home : (r.label ?? r.place), ...(r.changed === "home" ? { backToHome: true } : {}) };
+        }
+        if ("ask" in r) {
+          notDone(`Where Cue searches for them wasn't changed: ${r.place} could be ${r.ask.join(" or ")}, and nothing changes until they say which.`);
+          return { ok: true, askedBack: true, askThem: `Nothing changed yet. Ask which ${r.place} they mean (${r.ask.join(" / ")}) in one line inside your reply.` };
+        }
+        notDone(`Where Cue searches for them wasn't changed: ${r.error}.`);
+        return { ok: false, error: `Nothing changed: ${r.error}. Say plainly it didn't change.` };
       },
     }),
 

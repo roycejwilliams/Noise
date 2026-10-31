@@ -2670,6 +2670,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           (await relayFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
           // Reminders waiting for their morning read as queued, never as sent (services/deferredSends.ts).
           (await reminderFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
+          // Where they asked Cue to search from now on (services/searchArea.ts), only while it's set: so Cue says it the way it is.
+          const area = await import("../services/searchArea.js").then(async (A) => { const a = await A.searchAreaOf(user.id); return a ? A.areaFact(a, profile?.city ?? null) : null; }).catch(() => null);
+          if (area) addFact(replyFacts, "known", area);
           // The reply check reads the moment too: a cut that leaves a reply to something they shared flat gets one rewrite
           // (harness/replyGrounding.ts repairShareCut, Royce 2026-10-28).
           replyFacts.moment = moment?.mode ?? null;

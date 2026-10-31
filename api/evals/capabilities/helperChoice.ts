@@ -36,7 +36,7 @@ const known: string[] = [];
   const ev = body("searchEvents", "webSearch");
   const ws = body("webSearch", "searchPosts");
   check("reply search: neither search reads their goals", !/goals/.test(ev) && !/goals/.test(ws));
-  check("reply search: the profile city is read once in each, only as the home fallback handed to replySearchPlace", (ev.match(/profile\?\.city/g) ?? []).length === 1 && /home: ctx\.turn\?\.profile\?\.city \?\? null \}\)/.test(ev) && (ws.match(/profile\?\.city/g) ?? []).length === 1 && /const home = ctx\.turn\?\.profile\?\.city \?\? null;/.test(ws));
+  check("reply search: their home (search area, else profile city) is read once a turn in searchHome, only as the home fallback handed to replySearchPlace", (ev.match(/profile\?\.city/g) ?? []).length === 0 && /home: await searchHome\(\) \}\)/.test(ev) && (ws.match(/profile\?\.city/g) ?? []).length === 0 && /const home = await searchHome\(\);/.test(ws));
   check("reply search: what runs is the model's queries from the ask, unchanged by anything on file", /const run = \[\.\.\.new Set\(queries\.map\(\(q\) => q\.trim\(\)\.slice\(0, 90\)\)\.filter\(Boolean\)\)\]\.slice\(0, left\);/.test(ws) && /taskWebSearch\(ctx\.userId, q, \{ city: cityFor\(q\),/.test(ws) && /eventCandidates\(what, where\.place,/.test(ev));
 }
 
