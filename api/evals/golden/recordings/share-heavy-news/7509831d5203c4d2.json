@@ -1,0 +1,102 @@
+{
+  "hash": "7509831d5203c4d2",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-10-31T23:10:34.816Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"This is the kind of news that doesn't let you sit still. I'm glad you're not alone in that waiting room, even if it feels like it right now.\n\nHow are you holding up?\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"even if it feels like it right now\\\" presumes a feeling (aloneness) they never expressed\"}",
+      "usage": {
+        "input_tokens": 308,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 157,
+        "output_tokens_details": {
+          "thinking_tokens": 108
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgbABnfRU8Q86U6D1TsqC",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvoFCsQCCBMYAipA4o0ZHtg/BXAkDPjWZifN3cVj0P4u/HBw+uuA/UU7P0DtSdSLKOfwHtzWHMzWGLdY3b9dvfiR6OurpNeiztomnTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB6uqZ1wbCAToIBBAAGgwC2ooDTzcF3dwEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCsurbJyE7N3Hb3LRmA2MzDPb33N9N2/O/33py0uTCOLyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwHwAMGrB6HlnevaFYaDJ08qNN7aSVDCTP1wyIwfJYxNVWt3mJgrOe2o/wA/QJB7tJllXU9pNrKgxjAlhOKBKOhdaPM/kWyloa+s0YLKuICAB/shdfEEjY55905PsdP9/ORfz6d9mF3PTN93ZSXqLASRihbPhHUvf+y8+h0sYsB5kzQe4+U/to8R3lizVSwzAvWYxyExGjAKWN0OwU33fS+Qhn9+F5pxKrPAHXD9SaF4+JaYuUeOYXWf4xuNb4ah0lL3jJaPfgk5SIq5PcxuuijzjDtEBiq5J2LjE/qmw4BBJaaF4vSIMt/lo4YuqsPeA04u1JN+3tm5R+7vNTu/twF91w0DwRQpDSxAdB/hVdjM1EI0wSQBKNSWQfSy7ViBiCoPlr6PVtrcznKM3cBiNYoCopF1vrcA+NKlfXH+OeoYGSZPdkUNTzObwa6jBPkhoJb+TmBTNs+iL50TFSntutWG5kGRL1WnyiL+tv9R3hwwftK+AIEk0Iqr8EWo7XCCfdmUQnKU3q3kSoPzXAQD8iM8Ubk+2aTK/Bb8t2+UEBog53rvGq2Wi/m5wP19Q3hUSukGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"even if it feels like it right now\\\" presumes a feeling (aloneness) they never expressed\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 308,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 157,
+          "output_tokens_details": {
+            "thinking_tokens": 108
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "7509831d5203c4d2",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "hash": "138873740123ba94",
+  "case": "checkin-tell-me-more",
+  "recorded_at": "2026-10-31T23:08:51.592Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue's last text was \"Good to hear from you. Harbor Light Fellowship is there whenever you want it.\" The member replied \"Tell me more\". On file: an 8-week fellowship for full-time founders, $75K on incorporation...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue's last text was \"Good to hear from you. Harbor Light Fellowship is there whenever you want it.\" The member replied \"Tell me more\". On file: an 8-week fellowship for full-time founders, $75K on incorporation, second cohort open, deadline Dec 15.\n\nCue's text:\n\"\"\"It's an 8 week program for full time founders, needs $75K on incorporation. Applications for the second cohort are open now, deadline is December 15.\"\"\"\n\nDoes the text expand on the Harbor Light Fellowship with what's on file, picking up straight from the last message WITHOUT greeting them again or restarting the conversation? Answer yes only if both hold.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Starts with 'It's an 8 week program...' - no greeting, directly expands with facts from file\"}",
+      "usage": {
+        "input_tokens": 288,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 77,
+        "output_tokens_details": {
+          "thinking_tokens": 29
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgbA4Fahba5SeFRZDnUNg",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvcDCsQCCBMYAipAm3kaRJ/6MXAJ836fcVmKpGoNtgSHC62uGhR8hq/z6runo7YwGQ1vzfRaIwsmSx0AzD0CmND9k3BbPXrMpI5cBzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBg+qZ1wbCAToIBBAAGgwC2ooDTzcF5WUEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCxDsBGQbjmyIJ8V3T2MhVx8Ucwdi2Cy5YPvkEdPObCJSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxTbz2Qf7gXGLWETi0aDHsAFStZuZZjAetoGiIwqmUz0XasDBHSPM1cfSxbee/yio9GdlSFJskwALEc4mp9bSg/J4DDhQQGRXHge1LwKmCSoRMIAfk8vxXe6Q0boNBEd6Uhipmx38WBKBh4G0x9Ie7YlrJOgYEdguWL1x9va26hGAS1h910ElPUWqwnJGyUP8oPULZ1LZvMGGtXgrzCI675Qb8OjnIwQ6HvGyvgQWgYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Starts with 'It's an 8 week program...' - no greeting, directly expands with facts from file\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 288,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 77,
+          "output_tokens_details": {
+            "thinking_tokens": 29
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "138873740123ba94",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

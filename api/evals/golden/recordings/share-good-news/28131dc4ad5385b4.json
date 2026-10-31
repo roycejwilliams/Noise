@@ -1,0 +1,102 @@
+{
+  "hash": "28131dc4ad5385b4",
+  "case": "share-good-news",
+  "recorded_at": "2026-10-31T23:10:26.176Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"Two years and it finally landed. That's real, Mara.\n\nCongratulations. Say the number if you want, or don't, either way, take a second with this one before tomorrow's meeting even enters your head.\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens with 'Two years and it finally landed' which just restates her own words, and the news already happened so 'tomorrow's meeting' is an invented/confused detail.\"}",
+      "usage": {
+        "input_tokens": 346,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 374,
+        "output_tokens_details": {
+          "thinking_tokens": 304
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgbAAygvYUwRX1Hi5nXo1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvcKCsQCCBMYAipAS6+wVXWp85D5w0/0uUlp6fpwKuBVhlPWumYHqy37Tpo4LvAOd5tqdsJpJ78cwpbGpcEOLO1lKXrPy+lWbJwN+DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB4eqZ1wbCAToIBBAAGgwC2ooDTzcFPrIEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBrKm5z8PL7TbIbhh3JPNI+d0n7SSkfIJX+JgGFTTbrfyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgz+3nIL94wEaTgLCMEaDOKh+Fx9epMWUL4KgiIwxC+oq3wHH+T0gsK8Pg6zQdGZbvW7FO0yru4E484eidDxC8X6WtYKlR5+eADuzPeQKt8HAlQFbdmZskYXJP6bXMNBGY5BYLuzaIVCMHtIU9SIX8bPVkJTRwY/xm5pgpY7ASOyNSPP499Vbt0FEoNbbjVppJBLh6uOzjMx+tAV6fl4dkJgxn6tPeIIzX2BTLr0cxqRev3rlXMdSfDhaolK3wL2BUWXYO4+kj/QSOmOMjHFyPW9bCJTKl0vtdkICumjFSPJQ+9ZiMceuwCUjq9UlqUptBwYqajt4F9ulC7WW8THyXiSlGZVHOP0fNlq+oBQCDrs5aEo7XTn8XOQ1xE05xPupOAbwzBssNcNYemHhVSKOJor4pPsbtlTQDNNtPxeDy3jeF+F0zv0QNjBRKGLmx/05Q+mhD1h+gpZOioGwY4hG74omTnk+1RZt0Zr9hWVX8OJKhw6yoxrbFSIg+fCtv2hKBhPEFOIT+AZopUfFlbDRiF8SSCcTYWQHAtnQaDmkkdR+wnvh/T5xQ9R5XfiloTyfax8FljwDBGk0+qFWXtYnjSNxdw+AmRlMCp2mPBRAtmor8col3FveR9TZcr5Jd8Xo4YrKLk8hjQYhkihozICZip594wbLcvfTQ/k4KLWwmHuYpVtRevw3Lb7LAGapS6BaZuFoEVu0nz7VwZjtgioKCMNEFQ2sjDQvqi9psrBoaL8Lq8X8wbGEiCiB7PFKVKMAyZzdEc8n9n0rHLdIVwYDf1rIpZ9K0tDAeTyp5LYZ2ocROODGfTsPW12AzlKrs/UeRk6gBUwjtU/Je8hnw1pFCuPUtZOmMcEzOiY5XqfpW6bv2XbEckOq2gFQFEj6gfC8Yfa1Iwav+zR5Booj6ywVnoncU4p+5irXDeq9xfPYYgCeKuhcbY7L7kkDCSB2AfV5McPUqZzmWsYKdL1ZXvOjrmgRxpJQRNylB4+w8GXIhwydxhe0uPxNuG2b6HIPD4wqrkUKidcO+YR0mNcHCMqnvYj8FDgmRu8D/l2a76eebbQFqs4u/hvyi7fi/ThSK9Fb45bXkEyk5AinA0NmfZ8alrSHYSNiQEBs5NutEArlk7LAsRSTOx6br6+p1DPH+nIG4btnDfekWaXETsgg2JV6PkhLBJi6oJSE58EU9zlgBGeMdiH/l4lVldsVDHsakdkIFsliW5zihM3huxwVPCTJ+iZFnl87nEQonkiJTsbM9F27iexphx7rrMtwaVMx2Mpcw2QLc6Qt758LyDvmQMsby/RfCuKhS+jGNX9p4zFml4l8lZbYnPetyudmXEnXofs4lcvAWyUvZ4M8bpCady00VT48alOPbU3Ch+CarDfcpfPW8WjTK3hHN8ErdXmdWtWHv4Hz+Hm/1p5Y0k15xg0JRgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens with 'Two years and it finally landed' which just restates her own words, and the news already happened so 'tomorrow's meeting' is an invented/confused detail.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 346,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 374,
+          "output_tokens_details": {
+            "thinking_tokens": 304
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "28131dc4ad5385b4",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
