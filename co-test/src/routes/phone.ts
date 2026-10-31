@@ -103,8 +103,8 @@ router.post("/:user_id/tag", requireOwnOrTeam("user_id"), async (req: Request, r
 // POST /api/phone/:user_id/call — real-call trigger (Part 1, item 3). Same
 // pattern as production's POST /co/call/:user_id (api/src/routes/co.ts):
 // Twilio dials out through api/src/services/callTrigger.ts, the leg is
-// registered with Co's ElevenLabs agent, and its tools and post-call webhook
-// come back to THIS service, writing to co-test's own DB. Gated on
+// answered by GPT-Live (api/src/routes/co.ts gptLiveAnswer), and its
+// post-call steps run in THIS service, writing to co-test's own DB. Gated on
 // identity_captured — text-in-first, then name/email, only then a real call
 // unlocks (no separate OTP step anymore, matching production).
 router.post("/:user_id/call", requireOwnOrTeam("user_id"), async (req: Request, res: Response, next: NextFunction) => {

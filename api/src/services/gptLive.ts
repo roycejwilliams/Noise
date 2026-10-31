@@ -1,11 +1,10 @@
-// GPT-Live calls (Royce, 2026-10-31): the team's calls (Royce and Jacqueline) run on OpenAI's gpt-live-1, a full-duplex voice model.
-// Every other member stays on ElevenLabs until a consent note is approved: their context would otherwise go to OpenAI.
+// GPT-Live calls (Royce, 2026-10-31): every member's calls run on OpenAI's gpt-live-1, a full-duplex voice model, with the processor
+// line in what Cue knows (services/whatCoKnows.ts). ElevenLabs is out of the call path.
 //
 // How it fits (design: ~/cue-worktrees/notes/gpt-live-trial-design.md):
-//   - The main number's Voice webhook (routes/co.ts /co/incoming-call) answers a verified team member with GPT-Live while the
-//     month's team minutes last (admitSession); everyone else gets ElevenLabs as before. The team never falls back to ElevenLabs:
-//     minutes used is busy, GPT-Live unavailable is the can't-connect line.
-//     The trial number (/co/gpt-live/incoming-call) stays as a second way in for the team. Gated on team and minutes: no switch.
+//   - The main number's Voice webhook (routes/co.ts /co/incoming-call) answers a verified member with GPT-Live while the month's
+//     minutes last (admitSession). No call falls back to ElevenLabs: minutes used is busy, GPT-Live unavailable is the can't-connect
+//     line. The trial number (/co/gpt-live/incoming-call) stays as a second way in. Gated on the minutes: no switch.
 //   - GPT-Live speaks, with a short prompt (liveInstructions: Cue's voice, the three policy headings OpenAI's prompting guide asks
 //     for, when to hand a turn over, and that nothing happens on the call). Everything detailed (what Cue knows about them, the
 //     rules, what Cue can do) is in the thinking's prompt: the ElevenLabs agent's own (promptForElevenLabs over
@@ -412,7 +411,7 @@ export function takeLiveLink(id: unknown, now = Date.now()): LiveCall | null {
 // How each GPT-Live call's stream went, by Twilio's call sid, for the <Connect> action (routes/co.ts /co/gpt-live/after-stream): a call
 // whose session never started hears the ElevenLabs path's CANT_CONNECT_LINE, has its call_status released, and is logged
 // call.gpt_live_unavailable with why OpenAI didn't start (FailClass; never the error's words).
-export type FailClass = "no_key" | "auth" | "quota" | "rate_limit" | "connect" | "timeout" | "refused" | "no_stream" | "team_unreadable";
+export type FailClass = "no_key" | "auth" | "quota" | "rate_limit" | "connect" | "timeout" | "refused" | "no_stream";
 type CallState = { userId: string; state: "pending" | "started" | "failed"; at: number; failClass?: FailClass };
 const callStates = new Map<string, CallState>();
 export function markCall(callSid: string | null | undefined, userId: string, state: "pending" | "started" | "failed", now = Date.now(), failClass?: FailClass): void {
@@ -442,11 +441,10 @@ export function failClassOf(e: { code?: unknown; type?: unknown; message?: unkno
   return "refused";
 }
 
-// ---------------------------------------------------------------- before dialing a team member (services/callTrigger.ts)
+// ---------------------------------------------------------------- before dialing (services/callTrigger.ts)
 
-// Royce, 10-31: a team member's call never goes to ElevenLabs, so an outbound call GPT-Live can't take isn't dialed at all. Checked
-// after the call gate and before the dial: on the team (else null: the ElevenLabs path, untouched), an OpenAI key and API_URL here,
-// a minute of the month's team minutes left (read, not reserved: the TwiML route reserves when they answer), no balance or key
+// Royce, 10-31: no call goes to ElevenLabs, so an outbound call GPT-Live can't take isn't dialed at all. Checked after the call gate
+// and before the dial, the same for every member: an OpenAI key and API_URL here, a minute of the month's minutes left (read, not reserved: the TwiML route reserves when they answer), no balance or key
 // refusal from OpenAI in the last GPT_LIVE.breakerMs (OpenAI only says "no balance" when a session starts), and OpenAI accepting the
 // key (GET /v1/models/gpt-live-1, free). A check that can't run fails closed.
 export type Preflight = { ok: true } | { ok: false; kind: "budget"; why: "minutes_used" | "unreadable" } | { ok: false; kind: "unavailable"; failClass: FailClass | "no_api_url"; status: number | null };
@@ -518,7 +516,7 @@ export const amdDialOptions = (apiUrl: string | undefined) => ({ machineDetectio
 
 // ---------------------------------------------------------------- the minute caps
 
-// Each session: 30 minutes. The team: GPT_LIVE.monthlyMinutes per calendar month (UTC), held while calls run, not only when they
+// Each session: 30 minutes. All calls together: GPT_LIVE.monthlyMinutes per calendar month (UTC), held while calls run, not only when they
 // start: a call is admitted with its own cap, min(30 min, what the month has left after every minute logged and every open call's
 // whole reservation), and the bridge closes it there. Minutes live in gpt_live_minutes (db/migrations.ts), one row per session,
 // written as the call starts and about every minute after, so a restart mid-call still counts. That table has no user column and
@@ -534,8 +532,8 @@ const loggedSeconds = async (db: Db): Promise<number> => {
   const { rows } = await db.query(`SELECT COALESCE(SUM(seconds), 0) AS s FROM gpt_live_minutes WHERE started_at >= date_trunc('month', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AND NOT (session_id = ANY($1::text[]))`, [running]);
   return Number(rows[0]?.s ?? 0);
 };
-// The team's minutes this month: every session logged, plus the open ones' time on the line.
-export async function teamMinutesThisMonth(db: Db = pool, now = Date.now()): Promise<number> {
+// The month's minutes so far, all calls: every session logged, plus the open ones' time on the line.
+export async function minutesThisMonth(db: Db = pool, now = Date.now()): Promise<number> {
   pruneSlots(now);
   const open = [...openSessions.values()].reduce((a, v) => a + (v.startedAt == null ? 0 : Math.max(0, now - v.startedAt) / 1000), 0);
   return ((await loggedSeconds(db)) + open) / 60;

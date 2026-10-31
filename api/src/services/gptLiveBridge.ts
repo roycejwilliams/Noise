@@ -13,7 +13,7 @@
 //
 // Per call it records: each delegated turn's latency (call.turn_latency, action gpt_live), each reply's gap after the call
 // (call.turn_latency, action gpt_live_voice), the session (call.gpt_live_session: seconds, endedBy) and its minutes as it runs
-// (gpt_live_minutes, for the team's monthly minutes), all numbers only.
+// (gpt_live_minutes, for the month's minutes), all numbers only.
 import { timingSafeEqual } from "crypto";
 import WebSocket from "ws";
 import { recordDecision, type HarnessDecision } from "../harness/core.js";
@@ -126,7 +126,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let endedBy: EndedBy | null = null;
   let failClass: FailClass | null = null; // why OpenAI didn't start, when it didn't
   // The most telling cause wins: a harmless early error event ("refused") never masks a later balance, key or timeout failure.
-  const RANK: Record<FailClass, number> = { quota: 6, auth: 6, no_key: 6, rate_limit: 5, connect: 4, timeout: 3, refused: 1, no_stream: 0, team_unreadable: 0 };
+  const RANK: Record<FailClass, number> = { quota: 6, auth: 6, no_key: 6, rate_limit: 5, connect: 4, timeout: 3, refused: 1, no_stream: 0 };
   const noteFail = (c: FailClass) => { if (!failClass || RANK[c] > RANK[failClass]) failClass = c; };
   let started = false, finished = false, closing = false;
   const t0 = d.now();
@@ -162,6 +162,9 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   // Outbound: held answers and the reason are released only on AMD's verdict (human, or unknown), or when AMD never answered by
   // amdHoldMs (review of #333: never on a reading of their words, which a custom greeting can pass).
   let amdVerdict: string | null = null;
+  // After a misfire (a machine verdict after real words) nothing is released for the rest of the call (review of #337: words after the
+  // verdict can be a greeting's tail, since AMD's speech-end threshold can fire mid-greeting). A real person given a false machine verdict
+  // loses only the thinking's answers on that call; the follow-up text still goes.
   const confirmPerson = (via: "amd_human" | "amd_unknown" | "amd_timeout") => {
     if (personAt != null || voicemailAt != null || finished || !call) return;
     personAt = d.now();
@@ -330,12 +333,12 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     if (onVoicemail) d.record({ layer: 8, decision: "call.gpt_live_answer_dropped", userId: c.userId, outcome: "skip", action: "voicemail", proposal: { provider: "gpt-live", sessionId, chars: out.text.length, heldMs } });
     // Cue's thinking ended the call: GPT-Live has said its own goodbye, so nothing is sent (no answer to repeat it, and no "no answer"
     // note, which made it answer an echoed "bye" with "I'll text you"; review of #331).
-    // An empty answer with no end_call (or a failed one) after GPT-Live already spoke this turn (its own goodbye, say): no "no answer"
-    // note, which would have it say one more line (review of #333). Spoke this turn: a line of its own that started after their turn
-    // ended, allowing goodbyeOverlapMs of overlap.
+    // An empty answer with no end_call after GPT-Live already spoke this turn (its own goodbye, say): no "no answer" note, which would
+    // have it say one more line (review of #333). Spoke this turn: a line of its own that started after their turn ended, allowing
+    // goodbyeOverlapMs of overlap. A failed answer always gets the note (review of #337: a real question still gets the fallback).
     const fromMs = Math.max(0, theirTurnEnd - GPT_LIVE.goodbyeOverlapMs);
     const spokeThisTurn = turnsFrom(frags).some((t) => t.who === "cue" && t.startMs >= fromMs);
-    const noteSkipped = !out.text && !out.endCall && spokeThisTurn;
+    const noteSkipped = !out.text && !out.endCall && !error && spokeThisTurn;
     const noAnswer = { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." };
     if (!finished && !movedNow && !onVoicemail && !out.endCall && !noteSkipped) {
       if (!streamed)
@@ -374,7 +377,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         // TwiML route); its own consent reads run again inside (mediaStreamBridge.ts admitVoiceSession). Never awaited.
         if (call.voiceOn) { try { tee = d.startTee({ userId: call.userId, callKey: call.callKey, callSid: call.callSid }); } catch { tee = null; } }
         for (const a of early.splice(0)) { send(ai, { type: "session.input_audio.append", audio: a }); tee?.push(a); }
-        // Its own cap, set at admission: 30 minutes, or less when the month's team minutes have less left (gptLive.ts admitSession).
+        // Its own cap, set at admission: 30 minutes, or less when the month's minutes have less left (gptLive.ts admitSession).
         // One activity timer (OpenAI: "use an application-controlled inactivity timeout"). With nothing playing: silenceEndMs with
         // nothing said either way ends the call (the ElevenLabs agent's silence_end_call_timeout). And Cue's own end_call (the thinking
         // decides, on a delegated goodbye): once its goodbye has been said and played and endGraceMs has passed, it hangs up if endGuard
