@@ -74,7 +74,7 @@ const reset = () => { sqls.length = 0; G.openSessions.clear(); loggedSecs = 0; r
   fetched = 0;
   check("on the team, all clear: ok (the model read is free: GET /v1/models/gpt-live-1)", (await G.outboundPreflight("u-jordan", { env, fetch: ok }))?.ok === true && fetched === 1);
   check("no OpenAI key: unavailable no_key, nothing fetched", JSON.stringify(await G.outboundPreflight("u-jordan", { env: { API_URL: env.API_URL } as any, fetch: ok })) === JSON.stringify({ ok: false, kind: "unavailable", failClass: "no_key", status: null }) && fetched === 1);
-  loggedSecs = 300 * 60;
+  loggedSecs = G.GPT_LIVE.monthlyMinutes * 60;
   check("the month's team minutes used: budget (held)", (await G.outboundPreflight("u-jordan", { env, fetch: ok }) as any)?.why === "minutes_used");
   loggedSecs = 0;
   check("minutes that can't be read: budget (fails closed)", (await G.outboundPreflight("u-jordan", { env, fetch: ok, db: { query: async () => { throw new Error("db down"); } } }) as any)?.why === "unreadable");
@@ -173,7 +173,7 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   check("...opening logged as GPT-Live's own words, outbound", decided("call.opening", "outbound").some((w) => JSON.parse(w.params[5]).mode === "own_words"));
 
   reset(); registered.length = 0;
-  loggedSecs = 300 * 60;
+  loggedSecs = G.GPT_LIVE.monthlyMinutes * 60;
   const late = await answer("u-jordan", "CA-late");
   const { CANT_CONNECT_LINE } = await import("../../src/services/elevenLabsCalls.js");
   check("on the team, minutes gone between dial and answer: the can't-connect line, never ElevenLabs", late.text.includes(CANT_CONNECT_LINE) && /<Hangup\/>/.test(late.text) && registered.length === 0 && decided("call.gpt_live_budget_reached", "minutes_used").filter((w) => JSON.parse(w.params[5]).stage === "answered").length === 1, late);
