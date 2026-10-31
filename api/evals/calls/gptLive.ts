@@ -87,7 +87,9 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const VOICE_SOURCES: Record<string, string> = { "call prompt": VOICE, CO_VOICE: (await import("../../src/services/coVoice.js")).CO_VOICE, VARIETY_GUIDE: (await import("../../src/harness/stockLines.js")).VARIETY_GUIDE, OPENING_NOTE: E.OPENING_NOTE };
   check("...each copied word for word from where it already lives (no new voice rules)", G.LIVE_VOICE_RULES.every((r) => VOICE_SOURCES[r.from].includes(r.line) || VOICE_SOURCES[r.from].includes(lc(r.line))), G.LIVE_VOICE_RULES.filter((r) => !VOICE_SOURCES[r.from].includes(r.line) && !VOICE_SOURCES[r.from].includes(lc(r.line))).map((r) => r.line));
   check("...the voice rules the trial call broke: stock empathy, narrating how Cue works, long replies", /stock lines of empathy/.test(I) && /A sentence that would fit after any answer is a stock sentence/.test(I) && /How you work behind the scenes is never news\./.test(I) && /Short sentences, one thought each/.test(I) && /Say less than you could\./.test(I));
-  check("...the honesty line: nothing can be done on this call, it happens right after", I.includes(G.NOTHING_ON_THIS_CALL));
+  check("...the honesty line: nothing can be done on this call, and GPT-Live promises nothing itself (promises are the thinking's)", I.includes(G.NOTHING_ON_THIS_CALL_LIVE) && /Never promise anything yourself/.test(G.NOTHING_ON_THIS_CALL_LIVE) && !I.includes("say you'll do it right after the call"));
+  check("...safety on GPT-Live's side: crisis resources come from the thinking, said exactly", I.includes(G.SAFETY_FROM_THINKING) && /any crisis line or number, comes from your thinking: say it exactly/.test(G.SAFETY_FROM_THINKING));
+  check("...the goodbye line is cut before \"after you've done something for them mid-call\" (nothing is done on the call)", !I.includes("after you've done something for them mid-call") && I.includes("never sign off at the end of an ordinary turn.\nSay that goodbye once."));
   check("...what GPT-Live says on its own is conversational only; facts, specifics, promises and claims about Cue come from its thinking", I.includes(G.SAY_ON_YOUR_OWN) && /say only conversational lines: acknowledging, saying back what they just said, a short warm response, or a clarifying question/.test(G.SAY_ON_YOUR_OWN) && ["any fact about their life, plans or history", "any event, place, time, person or link", "any promise or anything Cue will do", "anything about what Cue knows or has done"].every((x) => G.SAY_ON_YOUR_OWN.includes(x)));
   const genWhen = I.slice(I.indexOf("Generate <|SpawnThinking|> when:"), I.indexOf("Do not generate <|SpawnThinking|> when:"));
   check("...and the delegation policy sends those turns to the thinking", ["- You would state a fact about their life, plans or history.", "- You would name an event, place, time, person or link.", "- You would promise anything, or say what Cue will do.", "- You would say what Cue knows or has done."].every((x) => genWhen.includes(x)) && I.indexOf(G.SAY_ON_YOUR_OWN) < I.indexOf("Backchannel policy:"));
@@ -106,10 +108,9 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   check("opening: no template from the ElevenLabs path's pool is anywhere in the session config", templates.length > 0 && templateBits.length > 0 && !templateBits.some((b) => startText.includes(b)), templateBits.filter((b) => startText.includes(b)));
   check("opening: GPT-Live is told to open in its own words, with the time of day as background", I.includes(G.OPEN_IN_OWN_WORDS) && I.includes("It's Saturday afternoon for them."));
   check("opening: the opener writer's no-stock-opener rule, word for word from it", I.includes(G.OPEN_NO_STOCK) && fs.readFileSync(new URL("../../src/services/callOpening.ts", import.meta.url), "utf8").includes(`- ${G.OPEN_NO_STOCK}`));
-  const withMiddle = G.buildLiveCall({ userId: "u-jordan", callSid: null, firstName: "Jordan", direction: "inbound", team: true, voiceLayer: VOICE, contextSummary: "Where things stand now: x\n\nWhat they're in the middle of:\n- the move to Oakland in March (they said Oct 28)\n- a climbing partner", rightNow: "", findsNow: "", callReason: "Not used inbound.", timeOfDay: "Saturday afternoon" });
-  check("opening, inbound: one line of what they're in the middle of, as background never to read out; never the outbound reason", /What they're in the middle of \(background, never to read out\): the move to Oakland in March \(they said Oct 28\)\n/.test(withMiddle.instructions) && !withMiddle.instructions.includes("a climbing partner") && !withMiddle.instructions.includes("Not used inbound.") && withMiddle.opening.middleOf !== null && withMiddle.opening.reason === null);
-  check("opening, inbound with nothing in the middle of: just their name (and the time of day)", call.opening.middleOf === null && !/What they're in the middle of \(/.test(I));
-  check("opening, outbound: the call's reason as background, never to read out", /Why you called them \(background for how you open, never to read out\): Their pitch to the second fund is Thursday\./.test(longReason.instructions) && longReason.opening.middleOf === null);
+  const withMiddle = G.buildLiveCall({ userId: "u-jordan", callSid: null, firstName: "Jordan", direction: "inbound", team: true, voiceLayer: VOICE, contextSummary: "Where things stand now: x\n\nWhat they're in the middle of:\n- the move to Oakland in March (they said Oct 28)", rightNow: "", findsNow: "", callReason: "Not used inbound.", timeOfDay: "Saturday afternoon" });
+  check("opening, inbound: only their name and the time of day; what they're in the middle of stays the thinking's (in its prompt, not GPT-Live's)", !withMiddle.instructions.includes("the move to Oakland") && !withMiddle.instructions.includes("Not used inbound.") && withMiddle.backendSystem.includes("the move to Oakland") && withMiddle.opening.reason === null && Object.keys(withMiddle.opening).join() === "timeOfDay,reason");
+  check("opening, outbound: the call's reason as background, never to read out", /Why you called them \(background for how you open, never to read out\): Their pitch to the second fund is Thursday\./.test(longReason.instructions) && !("middleOf" in longReason.opening));
   check("opening: time of day in their zone", G.timeOfDay(new Date("2026-10-31T16:00:00Z"), "America/Los_Angeles") === "Saturday morning" && G.timeOfDay(new Date("2026-10-31T23:30:00Z"), "America/Los_Angeles") === "Saturday afternoon" && G.timeOfDay(new Date("2026-11-01T05:00:00Z"), "America/Los_Angeles") === "Saturday night");
   const gptPath = src("services/gptLive.ts") + src("services/gptLiveBridge.ts") + (() => { const co = src("routes/co.ts"); return co.slice(co.indexOf("// ---------- GPT-Live calls"), co.indexOf("// Root-cause guard")); })();
   const gptCode = gptPath.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
@@ -121,7 +122,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const hits = (t: string) => G.GPT_LIVE_FORBIDDEN.filter((re) => re.test(t)).map(String);
   check("honesty: GPT-Live's instructions never say to set it up, look it up now, say it's set up, or end_call", hits(call.instructions).length === 0, hits(call.instructions));
   check("honesty: nor does the brain's prompt", hits(call.backendSystem).length === 0, hits(call.backendSystem));
-  check("honesty: both say nothing can be set up, looked up, sent or scheduled on the call; it's done right after; never claim it", [call.instructions, call.backendSystem].every((t) => t.includes(G.NOTHING_ON_THIS_CALL) && /right after the call/.test(t)) && /Never say it's done, set up, started or on its way/.test(G.NOTHING_ON_THIS_CALL));
+  check("honesty: the thinking is told nothing happens on the call and it's done right after; GPT-Live that nothing happens and it promises nothing", call.backendSystem.includes(G.NOTHING_ON_THIS_CALL) && /right after the call/.test(call.backendSystem) && call.instructions.includes(G.NOTHING_ON_THIS_CALL_LIVE) && [G.NOTHING_ON_THIS_CALL, G.NOTHING_ON_THIS_CALL_LIVE].every((t) => /never say it's done, set up, started or on its way/i.test(t)));
   check("the automatic acknowledgment waits long enough to be cancelled", start.session.delegation.acknowledgement_delay_ms === 800);
 }
 
@@ -219,6 +220,20 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   await sleep(60);
   check("stale answer: the caller moved on, so the answer is dropped (and logged stale)", !moved.ai.sent.some((m: any) => m.delegation_id === "item_m" && m.type === "session.commentary.append") && moved.records.some((r) => r.decision === "call.turn_latency" && r.action === "gpt_live" && r.proposal.stale === true));
   check("...while an answer to the latest question still goes (the Jordan turn above)", jordan.records.some((r) => r.action === "gpt_live" && r.proposal.stale === false));
+  // A crisis turn on a team call: Claude's line, with 988 and 911, reaches GPT-Live un-dropped (the call brain's number check let them
+  // through: offerGuard CRISIS_NUMBERS) and as an instruction to say it exactly (never paraphrased commentary).
+  const LINE = "I'm really glad you told me. If you're thinking about ending your life, you can call or text 988 right now. If you're in danger this minute, call 911. Are you safe tonight?";
+  const crisis = bridge(callFor("Jordan", "Jordan is moving to Oakland."), { answer: () => LINE });
+  await sleep(5);
+  crisis.ai.in({ type: "session.started", session: { id: "live_crisis" } });
+  crisis.ai.in({ type: "session.input_transcript.delta", delta: "Honestly I don't want to be here anymore.", start_ms: 0, end_ms: 1500 });
+  crisis.ai.in({ type: "session.delegation.created", offset_ms: 1600, delegation: { id: "item_c", target: "client" } });
+  await sleep(40);
+  const crisisSaid = crisis.ai.sent.filter((m: any) => m.event_id === "answer_item_c");
+  check("crisis turn on a team call: Claude's whole line, 988 and 911 included, reaches GPT-Live as an instruction to say it exactly", crisisSaid.length === 1 && crisisSaid[0].type === "session.instructions.append" && crisisSaid[0].delegation_id === "item_c" && crisisSaid[0].content === G.sayExactly(LINE) && /call or text 988 right now/.test(crisisSaid[0].content) && /call 911/.test(crisisSaid[0].content), crisisSaid);
+  check("...nothing held back from it, and the turn is logged as exact", !crisis.records.some((r) => r.decision === "call.offer_unsourced") && crisis.records.some((r) => r.action === "gpt_live" && r.proposal.exact === true));
+  check("an ordinary turn still goes as commentary", jordan.ai.sent.find((m: any) => m.event_id === "answer_item_j1")?.type === "session.commentary.append");
+  crisis.tw.close();
   for (const b of [jordan, noor, broken, unsourced, moved]) b.tw.close();
 }
 
@@ -293,12 +308,12 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const a2 = await G.admitSession(db(285 * 60));
   check("285 used: admitted, capped at the 15 minutes the month has left", a2?.capMs === 15 * min && a2.budgetLimited === true, a2);
   G.openSessions.clear();
-  check("299.5 used: refused (less than a minute left)", (await G.admitSession(db(299.5 * 60))) === null);
+  check("299.5 used: refused (less than a minute left)", JSON.stringify(await G.admitSession(db(299.5 * 60))) === JSON.stringify({ refused: "minutes_used" }));
   G.openSessions.clear();
   const both = await Promise.all([G.admitSession(db(250 * 60)), G.admitSession(db(250 * 60)), G.admitSession(db(250 * 60))]);
-  check("calls at once share what's left: 30, then the 20 left after it, then none", both[0]?.capMs === 30 * min && both[1]?.capMs === 20 * min && both[2] === null, both.map((x) => x?.capMs ?? null));
+  check("calls at once share what's left: 30, then the 20 left after it, then none", both[0]?.capMs === 30 * min && both[1]?.capMs === 20 * min && JSON.stringify(both[2]) === JSON.stringify({ refused: "minutes_used" }), both.map((x: any) => x?.capMs ?? x));
   G.openSessions.clear();
-  check("a total that can't be read refuses (fails closed)", (await G.admitSession({ query: async () => { throw new Error("db down"); } })) === null);
+  check("a total that can't be read refuses (fails closed)", JSON.stringify(await G.admitSession({ query: async () => { throw new Error("db down"); } })) === JSON.stringify({ refused: "unreadable" }));
   const d0 = db(0);
   await G.admitSession(d0);
   check("minutes come from gpt_live_minutes (no user column, never pruned), this calendar month only, not harness_decisions", d0.sqls.every((q) => /FROM gpt_live_minutes WHERE started_at >= date_trunc\('month', NOW\(\) AT TIME ZONE 'UTC'\) AT TIME ZONE 'UTC'/.test(q)) && /CREATE TABLE IF NOT EXISTS gpt_live_minutes \(\s*session_id TEXT PRIMARY KEY,[^)]*\)/.test(src("db/migrations.ts")) && !/gpt_live_minutes[^`]*REFERENCES/.test(src("db/migrations.ts")) && !/DELETE FROM gpt_live_minutes/.test(src("jobs/index.ts")));
@@ -363,7 +378,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   team = true;
   logged = 300 * 60;
   const capped = await post("/co/gpt-live/incoming-call", { From: "+15550003333", To: "+15550002222", CallSid: "CA-c", StirVerstat: "TN-Validation-Passed-A" });
-  const budgetRow = writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_budget_reached");
+  const budgetRow = writes.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_budget_reached" && w.params[4] === "minutes_used");
   check("on the trial number, a team member past the month's 300 minutes is refused busy, logged call.gpt_live_budget_reached", /<Reject reason="busy"\/>/.test(capped.text) && budgetRow, capped);
   // The <Connect> action: a stream that never started plays the existing can't-connect line and releases call_status.
   const { CANT_CONNECT_LINE } = await import("../../src/services/elevenLabsCalls.js");
@@ -497,12 +512,12 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   loggedSecs = 300 * 60;
   const spent = await call("+15550000001", "CA-jordan2");
   check("main number, on the team, minutes used: refused busy, ElevenLabs never registered", /<Reject reason="busy"\/>/.test(spent.text) && registered.length === 0 && !/<Stream/.test(spent.text), spent);
-  check("...logged call.gpt_live_budget_reached, nothing of theirs loaded, no call status written", sqls.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_budget_reached") && !sqls.some((w) => /UPDATE users SET call_sid/.test(w.sql)));
+  check("...logged call.gpt_live_budget_reached, nothing of theirs loaded, no call status written", sqls.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_budget_reached" && w.params[4] === "minutes_used") && !sqls.some((w) => /UPDATE users SET call_sid/.test(w.sql)));
   reset();
   loggedSecs = 0;
   minutesBroken = true;
   const unreadable = await call("+15550000001", "CA-jordan3");
-  check("main number, on the team, minutes unreadable: refused GPT-Live (fails closed): busy, never ElevenLabs", /<Reject reason="busy"\/>/.test(unreadable.text) && registered.length === 0 && G.openSessions.size === 0);
+  check("main number, on the team, minutes unreadable: refused GPT-Live (fails closed): busy, never ElevenLabs, logged apart as unreadable", /<Reject reason="busy"\/>/.test(unreadable.text) && registered.length === 0 && G.openSessions.size === 0 && sqls.some((w) => /INSERT INTO harness_decisions/.test(w.sql) && w.params[1] === "call.gpt_live_budget_reached" && w.params[4] === "unreadable"));
   minutesBroken = false;
   // OpenAI unavailable before anything starts (no key): the can't-connect line, never ElevenLabs.
   reset();
@@ -546,6 +561,11 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   await sleep(5);
   const st = G.takeCallState("CA-Jordan");
   check("OpenAI out of balance before the session: the call is marked failed with class quota, no minutes, no post-call", st?.state === "failed" && st.failClass === "quota" && q.minutes.length === 0 && q.results.length === 0, st);
+  const early = bridge(callFor("Jordan", "x"), { startTimeoutMs: 30 });
+  await sleep(5);
+  early.ai.in({ type: "error", error: { code: "unknown_parameter", message: "Unknown parameter: session.foo" } });
+  await sleep(50);
+  check("a harmless early error doesn't mask what really happened: a session that then never starts is a timeout", G.takeCallState("CA-Jordan")?.failClass === "timeout");
   const k = bridge(callFor("Jordan", "x"), { key: undefined });
   await sleep(5);
   check("no key in the bridge: marked failed with class no_key", G.takeCallState("CA-Jordan")?.failClass === "no_key" && k.key() === "");
@@ -579,7 +599,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const at = new Date();
   const flags = DR.logFlags({ userId: "u-jordan", firstName: "Jordan", messages: [], emotions: [], issues: [], decisions: [
     { id: 1, at: at.toISOString(), decision: "call.gpt_live_unavailable", outcome: "skip", action: "quota", reason: null, proposal: { failClass: "quota", stage: "session" }, checks: [] },
-    { id: 2, at: at.toISOString(), decision: "call.gpt_live_budget_reached", outcome: "skip", action: "inbound_refused", reason: null, proposal: null, checks: [] },
+    { id: 2, at: at.toISOString(), decision: "call.gpt_live_budget_reached", outcome: "skip", action: "minutes_used", reason: null, proposal: { direction: "inbound" }, checks: [] },
   ] } as any);
   check("the morning review flags a GPT-Live call that couldn't start (with its class) and a reached budget, both high", flags.some((f: any) => f.type === "gpt_live_unavailable" && f.severity === "high" && /quota/.test(f.snippet)) && flags.some((f: any) => f.type === "gpt_live_budget_reached" && f.severity === "high"), flags);
 }

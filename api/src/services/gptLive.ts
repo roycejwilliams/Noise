@@ -3,7 +3,8 @@
 //
 // How it fits (design: ~/cue-worktrees/notes/gpt-live-trial-design.md):
 //   - The main number's Voice webhook (routes/co.ts /co/incoming-call) answers a verified team member with GPT-Live while the
-//     month's team minutes last (admitSession); everyone else, and the team once the minutes are used, get ElevenLabs as before.
+//     month's team minutes last (admitSession); everyone else gets ElevenLabs as before. The team never falls back to ElevenLabs:
+//     minutes used is busy, GPT-Live unavailable is the can't-connect line.
 //     The trial number (/co/gpt-live/incoming-call) stays as a second way in for the team. Gated on team and minutes: no switch.
 //   - GPT-Live speaks, with a short prompt (liveInstructions: Cue's voice, the three policy headings OpenAI's prompting guide asks
 //     for, when to hand a turn over, and that nothing happens on the call). Everything detailed (what Cue knows about them, the
@@ -20,7 +21,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { CALL_CRITERIA } from "./callEvals.js";
-import { runCallLlm, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
+import { runCallLlm, safetyCall, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
 import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { parseModelJson } from "./modelJson.js";
@@ -30,10 +31,10 @@ export const GPT_LIVE = {
   url: "wss://api.openai.com/v1/live/sessions",
   defaultVoice: "marin",
   maxSessionMs: 30 * 60_000, // each session
-  // The team's GPT-Live minutes per calendar month (UTC), all calls together: 300 is about $21 at ~$0.07 a minute. Royce still has
-  // to confirm the number; this is the one place it lives. Held while calls run (admitSession); used up, the team gets ElevenLabs.
+  // The team's GPT-Live minutes per calendar month (UTC), all calls together: 300 is about $21 at ~$0.07 a minute, and this is the one
+  // place the number lives. Held while calls run (admitSession); used up, a team call is refused busy (never ElevenLabs).
   teamMonthlyMinutes: 300,
-  maxInstructionChars: 6000, // GPT-Live's own prompt stays short (OpenAI's prompting guide); everything detailed is the thinking's
+  maxInstructionChars: 6500, // GPT-Live's own prompt stays short (OpenAI's prompting guide); everything detailed is the thinking's
   minAdmitMs: 60_000, // a call that would get less than this is refused
   startTimeoutMs: 10_000, // Twilio's start, then OpenAI's session.started, each within this or the call is ended cleanly
   heartbeatMs: 60_000, // a running session's minutes are written this often
@@ -90,8 +91,14 @@ export function liveCallPrompt(voiceLayer: string): string {
   for (const [from, to] of ON_CALL_REWRITES) p = p.split(from).join(to);
   return p;
 }
-// Said to both models on a GPT-Live call (review of #325).
+// Said to the thinking on a GPT-Live call (review of #325): Claude promises "right after the call", through the call brain's checks.
 export const NOTHING_ON_THIS_CALL = "Nothing can be set up, looked up, sent or scheduled on this call, and you can't end it. When they want something done, say you'll do it right after the call. Never say it's done, set up, started or on its way.";
+// GPT-Live's version: it never promises anything itself (every promise is the thinking's, so it passes the offer guard's promise
+// check), and never says something is done.
+export const NOTHING_ON_THIS_CALL_LIVE = "Nothing can be set up, looked up, sent or scheduled on this call, and you can't end it. Never promise anything yourself, and never say it's done, set up, started or on its way: what happens and when comes from your thinking.";
+// Safety on GPT-Live's own side: the crisis resources are the thinking's, said exactly (the bridge sends a safety turn as an
+// instruction to say it word for word, sayExactly).
+export const SAFETY_FROM_THINKING = "Anything about their safety, and any crisis line or number, comes from your thinking: say it exactly as it comes, in full.";
 // Pure: {{name}} filled the way ElevenLabs fills the agent's dynamic variables; an unknown name stays as it is.
 export const fillCallVars = (template: string, vars: Record<string, string>): string => template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => (k in vars ? vars[k] : m));
 
@@ -106,7 +113,7 @@ export const LIVE_WHO = "You are Cue. Cue gets to know people over time and brin
 export function identityFromVoice(voiceLayer: string): string {
   return /You are only ever "Cue":[^\n]*?don't correct them\./.exec(voiceLayer)?.[0] ?? "";
 }
-export const LIVE_VOICE_RULES: { from: "call prompt" | "CO_VOICE" | "VARIETY_GUIDE" | "OPENING_NOTE"; line: string }[] = [
+export const LIVE_VOICE_RULES: { from: "call prompt" | "CO_VOICE" | "VARIETY_GUIDE" | "OPENING_NOTE"; line: string; end?: string }[] = [
   { from: "call prompt", line: "You talk like a thoughtful person who knows them, not a service. Calm, unhurried, specific. One real thought beats three filler lines." },
   { from: "CO_VOICE", line: "You're composed and warm, and you're there for them." },
   { from: "CO_VOICE", line: "Say less than you could." },
@@ -119,7 +126,9 @@ export const LIVE_VOICE_RULES: { from: "call prompt" | "CO_VOICE" | "VARIETY_GUI
   { from: "call prompt", line: "Never state a fact you weren't given, about them, other people, events, or yourself and what you can do. If you don't know, say so." },
   { from: "call prompt", line: "If someone goes quiet: let it breathe, and say nothing just to fill it." },
   { from: "call prompt", line: "If they say \"hello?\" in the middle of the call, they think the line dropped: say you're still here and pick up where you were, never greet them like a new call." },
-  { from: "call prompt", line: "The goodbye comes only at the real end of the call, when they're done or need to go: never sign off at the end of an ordinary turn, or after you've done something for them mid-call. Say that goodbye once." },
+  // Cut where the source goes on to "or after you've done something for them mid-call" (nothing is done on a GPT-Live call).
+  { from: "call prompt", line: "The goodbye comes only at the real end of the call, when they're done or need to go: never sign off at the end of an ordinary turn", end: "." },
+  { from: "call prompt", line: "Say that goodbye once." },
 ];
 
 // What GPT-Live may say without its thinking (Royce, 10-31: the honesty gap). Its own lines are conversational only; every fact about
@@ -130,8 +139,9 @@ export const SAY_ON_YOUR_OWN = "On your own, say only conversational lines: ackn
 // GPT-Live's own headings (OpenAI's prompting guide keeps these three, in this order after role and style, and the literal
 // <|SpawnThinking|>). The extra backchannel and interruption lines are the call prompt's own.
 export const LIVE_POLICY = `# On this line
-You are speaking out loud and listening at the same time. Your thinking (what you know about them, what's true, what to say on anything that matters) runs behind you: when it answers, say that answer in your own words and keep its facts exactly. ${NOTHING_ON_THIS_CALL} They hang up when they're done.
+You are speaking out loud and listening at the same time. Your thinking (what you know about them, what's true, what to say on anything that matters) runs behind you: when it answers, say that answer in your own words and keep its facts exactly. ${NOTHING_ON_THIS_CALL_LIVE} They hang up when they're done.
 ${SAY_ON_YOUR_OWN}
+${SAFETY_FROM_THINKING}
 
 Backchannel policy: Light. A quiet "mm" or "yeah" while they work through something, never over their words when they pause to think. If their words stop mid-thought, they are likely still going: say very little and let them carry on.
 
@@ -159,20 +169,15 @@ Generate <|SpawnThinking|> before giving an answer that depends on backend work.
 Do not guess the result while waiting. Never name an event, place, time or person that your thinking didn't give you or they didn't say.`;
 
 // How GPT-Live opens (Royce, 2026-10-31: no scripted opening line on GPT-Live, no template fallback). It greets in its own words when
-// the session starts, from only what it needs to open well: their first name, the time of day for them, and why the call is happening
-// (outbound: the reason the call gate held; inbound: one line of what they're in the middle of, when the call's context has one).
-// The background is framed as background, never as words to say. The ElevenLabs path's opener (services/callOpening.ts, the
+// the session starts, from only what it needs to open well: their first name, the time of day for them, and on a call Cue placed, the
+// reason the call gate held. Nothing else about them: facts come from the thinking (SAY_ON_YOUR_OWN), so what they're in the middle
+// of is Claude's to bring up when it fits. The background is framed as background, never as words to say. The ElevenLabs path's opener (services/callOpening.ts, the
 // OPENINGS pool) is untouched and never reached from here.
-export type OpeningContext = { timeOfDay: string | null; reason: string | null; middleOf: string | null };
+export type OpeningContext = { timeOfDay: string | null; reason: string | null };
 export const OPEN_IN_OWN_WORDS = "When the call connects, you speak first: open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
 export const OPEN_NOW = "The call just connected. Open it now, in your own words.";
 // The ElevenLabs opener writer's own rule, copied word for word (the 10-31 smoke opened with "I've been thinking about you").
 export const OPEN_NO_STOCK = `No "how are you", no "good to hear your voice", no "I remember", no "I was thinking about you".`;
-// Pure: what they're in the middle of, one line, from the call's context (services/callContext.ts "What they're in the middle of:").
-export function middleOfLine(contextSummary: string): string | null {
-  const m = /What they're in the middle of:\n- ([^\n]+)/.exec(contextSummary);
-  return m ? m[1].trim().slice(0, 240) : null;
-}
 // Pure: "Saturday afternoon", in their zone.
 export function timeOfDay(now: Date, zone: string): string | null {
   const t = DateTime.fromJSDate(now).setZone(zone);
@@ -185,7 +190,6 @@ export function openingBackground(c: OpeningContext): string {
   return [
     c.timeOfDay ? `It's ${c.timeOfDay} for them.` : null,
     c.reason ? `Why you called them (background for how you open, never to read out): ${c.reason}` : null,
-    c.middleOf ? `What they're in the middle of (background, never to read out): ${c.middleOf}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -194,7 +198,7 @@ export function openingBackground(c: OpeningContext): string {
 // about them is the thinking's (BACKEND_NOTE).
 export function liveInstructions(o: { firstName: string; direction: "inbound" | "outbound"; team: boolean; opening?: OpeningContext; identity?: string }): string {
   const bg = o.opening ? openingBackground(o.opening) : "";
-  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK}${bg ? `\n${bg}` : ""}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line), o.identity ?? ""].filter(Boolean).join("\n")}\n\n${LIVE_POLICY}`;
+  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK}${bg ? `\n${bg}` : ""}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n\n${LIVE_POLICY}`;
 }
 
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms).
@@ -209,7 +213,7 @@ export type LiveCall = { userId: string; callSid: string | null; firstName: stri
 export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null }): LiveCall {
   const findsNow = o.findsNow || "Nothing to offer right now. Don't offer an event.";
   const contextSummary = withCallSituation(o.contextSummary, { direction: o.direction, team: o.team });
-  const opening: OpeningContext = { timeOfDay: o.timeOfDay, reason: o.direction === "outbound" ? o.callReason.replace(/\s+/g, " ").trim().slice(0, 400) || null : null, middleOf: o.direction === "inbound" ? middleOfLine(o.contextSummary) : null };
+  const opening: OpeningContext = { timeOfDay: o.timeOfDay, reason: o.direction === "outbound" ? o.callReason.replace(/\s+/g, " ").trim().slice(0, 300) || null : null };
   const prompt = fillCallVars(liveCallPrompt(o.voiceLayer), { first_name: o.firstName || "there", context_summary: contextSummary, direction: o.direction, right_now: o.rightNow, finds_now: findsNow, call_reason: o.callReason, user_id: "", call_token: "" });
   return {
     userId: o.userId,
@@ -288,16 +292,23 @@ export function delegationRequest(call: LiveCall, turns: LiveTurn[]): OaiRequest
 }
 export type Upstream = (req: ARequest, userId: string) => AsyncIterable<AnthropicEvent>;
 // One delegated turn through the call brain, with no tools: it can only think and answer. Its sentences are cleaned and checked
-// as on the ElevenLabs path (speakable, offer guard); what it held back is reported.
+// as on the ElevenLabs path (speakable, offer guard); what it held back is reported. safety: the turn touched their safety
+// (callLlmProxy.ts safetyCall, over the request and the answer), so the bridge has its words said exactly (sayExactly).
 export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void) {
+  const req = delegationRequest(call, turns);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
-  for await (const c of runCallLlm(delegationRequest(call, turns), { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped })) {
     const d = c.choices[0].delta as { content?: unknown };
     if (typeof d.content === "string") text += d.content;
   }
-  return { text: stripCues(text).replace(/\s+/g, " ").trim().slice(0, GPT_LIVE.commentaryMaxChars), timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null };
+  const said = stripCues(text).replace(/\s+/g, " ").trim().slice(0, GPT_LIVE.commentaryMaxChars);
+  const safety = safetyCall(req) || (!!said && safetyCall({ ...req, messages: [...req.messages, { role: "assistant", content: said }] }));
+  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety };
 }
+// A safety turn's answer goes as a trusted instruction to say it word for word (OpenAI: session.instructions.append "can be used to
+// request exact spoken wording"; commentary is paraphrased), so crisis resources like 988 are never reworded.
+export const sayExactly = (text: string): string => `Say this to them now, exactly as written and in full, before anything else: "${text}"`;
 
 // ---------------------------------------------------------------- one-time stream ids (in memory: Twilio logs TwiML)
 
@@ -374,18 +385,23 @@ export async function teamMinutesThisMonth(db: Db = pool, now = Date.now()): Pro
 }
 let admitting: Promise<unknown> = Promise.resolve();
 // Admits one call: its stream id and its own cap, or null when the month can't give it a minute. One admission at a time, so two
-// calls at once can't both take the last minutes. A total that can't be read refuses (fails closed): the call goes to ElevenLabs.
-export function admitSession(db: Db = pool, now = Date.now()): Promise<{ id: string; capMs: number; budgetLimited: boolean } | null> {
-  const run = admitting.then(async () => {
+// calls at once can't both take the last minutes. A total that can't be read refuses (fails closed), said apart from minutes used.
+export type Admitted = { id: string; capMs: number; budgetLimited: boolean };
+export type NotAdmitted = { refused: "minutes_used" | "unreadable" };
+export const admitted = (a: Admitted | NotAdmitted): a is Admitted => "id" in a;
+export function admitSession(db: Db = pool, now = Date.now()): Promise<Admitted | NotAdmitted> {
+  const run = admitting.then(async (): Promise<Admitted | NotAdmitted> => {
     pruneSlots(now);
     const reserved = [...openSessions.values()].reduce((a, v) => a + v.capMs, 0);
-    const left = GPT_LIVE.teamMonthlyMinutes * 60_000 - (await loggedSeconds(db)) * 1000 - reserved;
+    let logged: number;
+    try { logged = await loggedSeconds(db); } catch { return { refused: "unreadable" }; }
+    const left = GPT_LIVE.teamMonthlyMinutes * 60_000 - logged * 1000 - reserved;
     const capMs = Math.min(GPT_LIVE.maxSessionMs, left);
-    if (capMs < GPT_LIVE.minAdmitMs) return null;
+    if (capMs < GPT_LIVE.minAdmitMs) return { refused: "minutes_used" };
     const id = randomBytes(32).toString("base64url");
     openSessions.set(id, { capMs, admittedAt: now, startedAt: null, sessionId: null });
     return { id, capMs, budgetLimited: capMs < GPT_LIVE.maxSessionMs };
-  }).catch(() => null);
+  }).catch((): NotAdmitted => ({ refused: "unreadable" }));
   admitting = run;
   return run;
 }

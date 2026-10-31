@@ -272,7 +272,7 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     // The team's GPT-Live calls (routes/co.ts, 2026-10-31): they never fall back to ElevenLabs, so a call OpenAI couldn't start, or one
     // refused because the month's team minutes are used, is in front of Royce here (the cap is GPT_LIVE.teamMonthlyMinutes).
     if (d.decision === "call.gpt_live_unavailable") add(d, "gpt_live_unavailable", "high", `a GPT-Live call couldn't start (${p.stage ?? "?"}): ${p.failClass ?? d.action ?? "?"}`, `OpenAI failure class: ${p.failClass ?? d.action ?? "not logged"}`, !!(p.failClass ?? d.action));
-    if (d.decision === "call.gpt_live_budget_reached") add(d, "gpt_live_budget_reached", "high", `a GPT-Live call was ${d.action === "outbound_held" ? "held" : "refused"}: the team's minutes for the month are used`, "the monthly team cap (GPT_LIVE.teamMonthlyMinutes) is reached, or the minutes couldn't be read", true);
+    if (d.decision === "call.gpt_live_budget_reached") add(d, "gpt_live_budget_reached", "high", `a GPT-Live call was ${p.direction === "outbound" ? "held" : "refused"}: ${d.action === "unreadable" ? "the team's minutes couldn't be read" : "the team's minutes for the month are used"}`, d.action === "unreadable" ? "the gpt_live_minutes total couldn't be read (fails closed)" : "the monthly team cap (GPT_LIVE.teamMonthlyMinutes) is reached", true);
     // A text turn that broke after their text was read (routes/sendblue.ts tellMemberTurnFailed): the report of it, with the error's
     // class and what it said (nothing private), so a failure Cue tells the member is on record is really in front of the team.
     if (d.decision === "turn.failed") {
