@@ -106,6 +106,7 @@
     "evals/emotion/callRules.ts",
     "evals/emotion/labels.ts",
     "evals/voiceRead/rules.ts",
+    "evals/voiceRead/servers.ts",
     "evals/emotion/uncertainWording.ts",
     "evals/calls/sep23Bugs.ts",
     "evals/calls/pr46Review.ts",
