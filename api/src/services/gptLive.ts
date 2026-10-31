@@ -48,7 +48,13 @@ export const GPT_LIVE = {
   endGraceMs: 2000, // after Cue's goodbye has finished playing, this long before end_call hangs up (a last word from them keeps it open)
   endWaitMs: 15_000, // an end_call whose goodbye isn't said within this is dropped
   openWaitMs: 4000, // outbound: how long GPT-Live waits for their first words (or AMD's human verdict) before it opens anyway
-  confirmSettleMs: 800, // outbound: their words count as a person (not a greeting) only once their turn has had no new words this long
+  wordsSettleMs: 800, // outbound: a machine verdict is judged a misfire only once their words have had no new words this long
+  // Twilio AMD (docs: MachineDetectionTimeout default 30 s, set explicitly in amdDialOptions): a human verdict comes as soon as one is
+  // detected (speech under 2.4 s, then 1.2 s of silence), "unknown" after 5 s of initial silence or at the timeout, a machine verdict
+  // at the greeting's end. Held thinking answers wait for the verdict; with none by this ceiling (AMD's own window plus 2 s for the
+  // callback), they're released as unknown.
+  amdTimeoutSecs: 30,
+  amdHoldMs: 32_000,
   goodbyeOverlapMs: 500, // GPT-Live's goodbye may start this much before the end of their turn and still be the goodbye
   wrapUpMs: 60_000, // how long before a session's cap GPT-Live is asked to wrap up
   guardCacheMs: 20_000, // the live guards are read at most this often per call, as on the ElevenLabs proxy
@@ -483,7 +489,7 @@ export function onAmd(callSid: string | null | undefined, fn: (by: string) => vo
   return () => { if (amdWaiters.get(callSid) === fn) amdWaiters.delete(callSid); };
 }
 // The dial's extra settings for a GPT-Live call (services/callTrigger.ts): async AMD, waiting for the greeting to end, posted to us.
-export const amdDialOptions = (apiUrl: string | undefined) => ({ machineDetection: "DetectMessageEnd", asyncAmd: "true", asyncAmdStatusCallback: `${apiUrl}/co/gpt-live/amd`, asyncAmdStatusCallbackMethod: "POST" });
+export const amdDialOptions = (apiUrl: string | undefined) => ({ machineDetection: "DetectMessageEnd", machineDetectionTimeout: GPT_LIVE.amdTimeoutSecs, asyncAmd: "true", asyncAmdStatusCallback: `${apiUrl}/co/gpt-live/amd`, asyncAmdStatusCallbackMethod: "POST" });
 
 // ---------------------------------------------------------------- the minute caps
 

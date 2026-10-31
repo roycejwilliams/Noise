@@ -53,7 +53,8 @@ export type LiveDeps = {
   endGraceMs: number;
   endWaitMs: number;
   openWaitMs: number;
-  confirmSettleMs: number;
+  wordsSettleMs: number;
+  amdHoldMs: number;
   wrapUpMs: number;
   // The live guards for this member (services/whatCoKnows.ts forgottenRows + guardCallMessages), read at most every guardCacheMs.
   guardRows: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
@@ -79,7 +80,8 @@ const defaults = (): LiveDeps => ({
   endGraceMs: GPT_LIVE.endGraceMs,
   endWaitMs: GPT_LIVE.endWaitMs,
   openWaitMs: GPT_LIVE.openWaitMs,
-  confirmSettleMs: GPT_LIVE.confirmSettleMs,
+  wordsSettleMs: GPT_LIVE.wordsSettleMs,
+  amdHoldMs: GPT_LIVE.amdHoldMs,
   wrapUpMs: GPT_LIVE.wrapUpMs,
   guardRows: (userId) => import("./whatCoKnows.js").then((W) => W.forgottenRows(userId)).catch(() => []),
   guardMessages: (messages, rows) => guardCallMessages(messages, rows),
@@ -142,20 +144,18 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let stopWaiting: () => void = () => {};
   let guardAt = 0, guardRowsP: Promise<import("./whatCoKnows.js").ForgottenRow[]> | null = null;
   const elapsedSecs = () => Math.round((d.now() - startedAt) / 1000);
-  // A person really spoke: two words or more, not a "yeah" or "mm", and not a voicemail greeting.
+  // A person really spoke: two words or more, not a "yeah" or "mm", and not a voicemail greeting. Used only to call a machine verdict a
+  // misfire (which only holds back the voicemail message); it never releases anything private.
   const realWords = (t: LiveTurn) => t.who === "member" && !listeningSound(t.text) && !isVoicemailGreeting(t.text) && t.text.split(/\s+/).length >= 2;
-  const confirmPerson = (why: "amd_human" | "their_words") => {
+  // Outbound: held answers and the reason are released only on AMD's verdict (human, or unknown), or when AMD never answered by
+  // amdHoldMs (review of #333: never on a reading of their words, which a custom greeting can pass).
+  let amdVerdict: string | null = null;
+  const confirmPerson = (via: "amd_human" | "amd_unknown" | "amd_timeout") => {
     if (personAt != null || voicemailAt != null || finished || !call) return;
     personAt = d.now();
-    d.record({ layer: 8, decision: "call.gpt_live_person", userId: call.userId, outcome: "act", action: why, proposal: { provider: "gpt-live", sessionId } });
+    d.record({ layer: 8, decision: "call.gpt_live_person", userId: call.userId, outcome: "act", action: via, proposal: { provider: "gpt-live", sessionId, via } });
     // The reason reaches GPT-Live only now, as silent context (never in its instructions, where any line of its own could carry it).
     if (call.opening.reason) send(ai, { type: "session.thinking.append", event_id: "reason", delegation_id: null, content: reasonNote(call.opening.reason) });
-  };
-  // Their words count only once their turn has settled (no new words for confirmSettleMs): a greeting's transcript can arrive in pieces,
-  // and "Hi, it's Jordan," alone isn't yet a voicemail greeting.
-  const checkPerson = () => {
-    if (personAt != null || memberHeardAt == null || d.now() - memberHeardAt < d.confirmSettleMs) return;
-    if (turnsFrom(frags).some(realWords)) confirmPerson("their_words");
   };
 
   // Cue's audio to Twilio, never more than leadMs ahead of real time (8 bytes of mu-law per ms).
@@ -256,11 +256,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     // Outbound: the answer is held until a person is confirmed on the line; still held when the voicemail message is asked for, it's
     // dropped (below, logged).
     const heldFrom = d.now();
-    while (personAt == null && voicemailAt == null && !finished) {
-      checkPerson();
-      if (personAt != null) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    while (personAt == null && voicemailAt == null && !finished) await new Promise((r) => setTimeout(r, 50));
     const heldMs = d.now() - heldFrom;
     // The caller has moved on (said something new since this turn was handed over): the answer is to a question no longer asked.
     const stale = turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
@@ -309,9 +305,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         // allows on facts; refused, the call stays open and call.end_refused says why.
         // Outbound: the person who picks up usually speaks first ("Hello?"), so GPT-Live opens once they do (it answers them), once
         // Twilio's AMD says a human answered, or after openWaitMs if neither came; never over a voicemail greeting (review of #333).
-        // AMD heard a machine whose greeting ended: unless a person was already confirmed (a misfire, logged and ignored, as the
-        // ElevenLabs path's verdict treats it), GPT-Live is told to leave the privacy-limited message (VOICEMAIL_NOW), and from then
-        // on no thinking answer is ever spoken. Words still arriving then are let settle first (a greeting's transcript can trail).
+        // GPT-Live's own lines (the opening, which carries no reason) are instant; delegated answers and the reason wait for AMD's verdict.
+        // AMD heard a machine whose greeting ended: unless they already said real words (a misfire, logged, as the ElevenLabs path's
+        // verdict treats it: no message, and held answers stay held), GPT-Live is told to leave the privacy-limited message
+        // (VOICEMAIL_NOW), and from then on no thinking answer is ever spoken. Words still arriving then are let settle first.
         if (call.direction === "inbound") personAt = d.now();
         if (call.direction === "outbound") {
           const c = call;
@@ -323,6 +320,8 @@ export function handleGptLiveStream(twilio: SocketLike): void {
             send(ai, { type: "session.thinking.append", event_id: "open", delegation_id: null, content: `${OPEN_NOW} ${OPEN_NO_STOCK}` });
           };
           timers.push(timer(() => { if (!frags.some((f) => f.who === "member")) openNow("no_words_in_time"); }, d.openWaitMs));
+          // AMD never answered within its own window: held answers are released as unknown, logged (via amd_timeout).
+          timers.push(timer(() => { if (amdVerdict == null) confirmPerson("amd_timeout"); }, d.amdHoldMs));
           // (Declared before onAmd, which calls back at once when the verdict came before the stream.)
           const leaveMessage = () => {
             voicemailAt = d.now();
@@ -332,13 +331,15 @@ export function handleGptLiveStream(twilio: SocketLike): void {
             send(ai, { type: "session.instructions.append", event_id: "voicemail", delegation_id: null, content: VOICEMAIL_NOW });
           };
           stopWaiting = onAmd(c.callSid, (by) => {
+            amdVerdict ??= by;
             if (by === "human") { confirmPerson("amd_human"); return openNow("amd_human"); }
-            if (!/^machine_end_/.test(by)) return;
+            if (by === "unknown") return confirmPerson("amd_unknown");
+            if (!/^machine_end_/.test(by)) return void d.record({ layer: 8, decision: "call.gpt_live_amd", userId: c.userId, outcome: "skip", action: by, proposal: { provider: "gpt-live", sessionId } });
             const decide = () => {
               if (voicemailAt != null || finished) return;
-              if (memberHeardAt != null && d.now() - memberHeardAt < d.confirmSettleMs) return void timers.push(timer(decide, d.confirmSettleMs - (d.now() - memberHeardAt) + 10));
-              checkPerson();
-              const spoke = personAt != null;
+              if (memberHeardAt != null && d.now() - memberHeardAt < d.wordsSettleMs) return void timers.push(timer(decide, d.wordsSettleMs - (d.now() - memberHeardAt) + 10));
+              // A misfire holds back the voicemail message only; held answers and the reason stay held (AMD said machine).
+              const spoke = turnsFrom(frags).some(realWords);
               d.record({ layer: 8, decision: "call.gpt_live_amd", userId: c.userId, outcome: spoke ? "skip" : "act", action: spoke ? "misfire" : "leave_message", proposal: { provider: "gpt-live", sessionId } });
               if (spoke) return;
               leaveMessage();
@@ -349,7 +350,6 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         lastHeard = d.now();
         quiet = setInterval(() => {
           const now = d.now();
-          if (call?.direction === "outbound" && voicemailAt == null) checkPerson();
           if (queued || playhead > now) return;
           if (now - lastHeard >= d.silenceEndMs) return close("silence", "silence");
           // The voicemail message has been said and has finished playing: the call ends, as the ElevenLabs voicemail tool ends it.
