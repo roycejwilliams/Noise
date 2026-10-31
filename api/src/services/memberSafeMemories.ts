@@ -76,25 +76,32 @@ function personLike(s: string, at: number, hit: string, name: string): boolean {
 // case, accents folded on both sides; it returns the name as given (not as written), for the leftmost one that stands for a
 // person, or null.
 export function nameFinder(linkedNames: string[]): (s: string) => string | null {
+  const span = nameSpanFinder(linkedNames);
+  return (s: string) => span(s)?.name ?? null;
+}
+
+// Pure: the same finder, with where the leftmost hit stands in s ([at, end) in s's own characters), for a caller that rewrites it
+// (services/memberSnapshot.ts takes every linked name out of the snapshot).
+export function nameSpanFinder(linkedNames: string[]): (s: string) => { at: number; end: number; name: string } | null {
   const names = [...new Set(linkedNames.map((n) => n.trim()).filter((n) => n.length >= 2))];
   if (!names.length) return () => null;
   const res = names.map((name) => ({ name, re: new RegExp(`(?<![\\p{L}\\p{N}_])${escape(fold(name)).replace(/\s+/g, "\\s+")}(?![\\p{L}\\p{N}_])`, "giu") }));
   // Folding each character on its own also reads a decomposed form ("e" + a combining mark) as its letter, so no NFC pass is needed.
   return (s: string) => {
     const f = folded(s);
-    let best: { at: number; name: string } | null = null;
+    let best: { at: number; end: number; name: string } | null = null;
     for (const { name, re } of res) {
       for (const m of f.text.matchAll(re)) {
         const at = f.from[m.index ?? 0];
         const end = f.from[(m.index ?? 0) + m[0].length];
         if (best && at >= best.at) break;
         if (personLike(s, at, s.slice(at, end), name)) {
-          best = { at, name };
+          best = { at, end, name };
           break;
         }
       }
     }
-    return best?.name ?? null;
+    return best;
   };
 }
 
