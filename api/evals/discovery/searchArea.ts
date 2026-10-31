@@ -46,19 +46,28 @@ const SAC = { lat: 38.5781342, lng: -121.4944209 };
 // Royce's real shape on 10-31: finds pooled for his asks and goals searched in Sacramento by fallback ("home"), one for his Bay Area
 // ask at its own place.
 const find = (name: string, source: string, key: string | null, place: string) => ({ name, match: { name, searchedIn: { key, place, source } } });
-function world(o: { home?: string | null; down?: boolean; area?: string | null; backlog?: any[]; offers?: any[] } = {}) {
+// failDrop: dropping the old finds throws, inside the transaction (writes are kept only when the whole transaction commits).
+function world(o: { home?: string | null; down?: boolean; area?: string | null; backlog?: any[]; offers?: any[]; failDrop?: boolean } = {}) {
   const writes: { sql: string; args: unknown[] }[] = [];
   const backlog = [{ ask_id: "a1", items: o.backlog ?? [] }];
   const offers = o.offers ?? [];
-  const db = {
+  const on = (sink: { sql: string; args: unknown[] }[]) => ({
     query: async (sql: string, args: unknown[] = []) => {
       if (/^\s*SELECT place, source, quote/.test(sql)) return { rows: o.area ? [{ place: o.area, source: "their_words", quote: null, resolved_for: o.area, resolved_status: "resolved", resolved_label: `${o.area}, California` }] : [], rowCount: 0 };
       if (/^\s*SELECT ask_id, items FROM event_backlogs/.test(sql)) return { rows: backlog, rowCount: backlog.length };
       if (/^\s*SELECT id, summary, payload::text AS payload FROM proactive_candidates/.test(sql)) return { rows: offers.map((x, i) => ({ id: i + 1, summary: x.name, payload: JSON.stringify(x) })), rowCount: offers.length };
-      writes.push({ sql, args });
+      if (o.failDrop && /UPDATE event_backlogs/.test(sql)) throw new Error("drop failed");
+      sink.push({ sql, args });
       if (/AND place IS NOT NULL/.test(sql) && /SET place = NULL/.test(sql)) return { rows: [], rowCount: o.area ? 1 : 0 };
       return { rows: [] as any[], rowCount: 1 };
     },
+  });
+  const db = on(writes);
+  const tx = async <T,>(fn: (d: any) => Promise<T>): Promise<T> => {
+    const staged: { sql: string; args: unknown[] }[] = [];
+    const out = await fn(on(staged));
+    writes.push(...staged);
+    return out;
   };
   const stores: any[] = [];
   const resolve: import("../../src/services/placeResolve.js").ResolveDeps = {
@@ -76,7 +85,7 @@ function world(o: { home?: string | null; down?: boolean; area?: string | null; 
   const changed = () => writes.filter((x) => /INSERT INTO want_places|UPDATE want_places/.test(x.sql));
   const backlogWrite = () => writes.find((x) => /UPDATE event_backlogs/.test(x.sql));
   const cancels = () => writes.filter((x) => /UPDATE proactive_candidates SET status = 'skipped'/.test(x.sql));
-  return { writes, stores, changed, backlogWrite, cancels, deps: { db, home: async () => (o.home === undefined ? "Sacramento" : o.home), resolve } as import("../../src/services/searchArea.js").SetAreaDeps };
+  return { writes, stores, changed, backlogWrite, cancels, deps: { db, tx, home: async () => (o.home === undefined ? "Sacramento" : o.home), resolve } as import("../../src/services/searchArea.js").SetAreaDeps };
 }
 
 // ---------------------------------------------------------------- 1. Royce's message: the change is made, and its receipt backs the reply
@@ -141,6 +150,13 @@ function world(o: { home?: string | null; down?: boolean; area?: string | null; 
   const made = world();
   const invented = await A.setSearchArea("royce", { place: "Springfield, Missouri", theirWords: "yes", message: "yes", recent: "Royce: anything fun this weekend?" }, made.deps);
   check("... but a place no one said in the exchange is never kept", !invented.ok && made.writes.length === 0, invented);
+  const failing = world({ failDrop: true, backlog: [find("Sac mixer", "home", "goal:inv", "Sacramento")] });
+  const f = await A.setSearchArea("royce", { place: "San Francisco", theirWords: "switch the search to San Francisco please going forward", message: ROYCE }, failing.deps);
+  check("if dropping the old finds fails, nothing is saved (one transaction) and the result says nothing changed", !f.ok && "error" in f && /couldn't be saved/.test(f.error) && failing.changed().length === 0 && failing.writes.length === 0, { f, writes: failing.writes });
+  const failHome = world({ failDrop: true, area: "San Francisco", backlog: [find("SF thing", "area", "goal:inv", "San Francisco")] });
+  const fh = await A.setSearchArea("royce", { place: "Sacramento", theirWords: "back to Sacramento from now on", message: "ok back to Sacramento from now on" }, failHome.deps);
+  check("... the same setting it back to home", !fh.ok && failHome.writes.length === 0, { fh, writes: failHome.writes });
+  check("the real transaction is one connection: BEGIN, the writes, COMMIT, or ROLLBACK", /tx: async \(fn\) => \{\s*const client = await pool\.connect\(\);[\s\S]{0,200}BEGIN[\s\S]{0,200}COMMIT[\s\S]{0,200}ROLLBACK[\s\S]{0,120}client\.release\(\)/.test(src("services/searchArea.ts")));
   const down = world({ down: true });
   const d = await A.setSearchArea("royce", { place: "San Francisco", theirWords: "switch the search to San Francisco", message: ROYCE }, down.deps);
   check("a lookup that's down changes nothing and says so (never the bare word kept)", !d.ok && "error" in d && /couldn't be checked/.test(d.error) && down.writes.length === 0, d);
@@ -274,7 +290,20 @@ function world(o: { home?: string | null; down?: boolean; area?: string | null; 
   const id = team.facts.find((f) => f.text === fb)!.id;
   const read = G.claimChecks([{ text: said, type: "past_action", supported: true, factId: id, quote: null }], team, { message: ROYCE, recentConversation: "" });
   check("... and the team note can't back it in the claim read either, 'team' in it or not", read.length === 1 && !read[0].pass, read);
-  check("every tool that counts as changing something is a registry tool", [...CAP.CHANGES_SOMETHING].every((t) => CAP.ABILITIES.some((a) => a.tool === t)) && CAP.CHANGES_SOMETHING.has("setSearchArea") && !CAP.CHANGES_SOMETHING.has("saveFeedbackForTeam") && !CAP.CHANGES_SOMETHING.has("shareLink"));
+  const registry = CAP.ABILITIES.filter((a) => a.tool).map((a) => a.tool!);
+  const unclassified = registry.filter((t) => CAP.CHANGES_NOTHING.has(t) === CAP.CHANGES_SOMETHING.has(t));
+  check("every registry tool is classified exactly once: changes nothing, or changes something (a new tool can't go unclassified)", unclassified.length === 0, unclassified);
+  check("... and both lists name only registry tools", [...CAP.CHANGES_NOTHING, ...CAP.CHANGES_SOMETHING].every((t) => registry.includes(t)), [...CAP.CHANGES_NOTHING, ...CAP.CHANGES_SOMETHING].filter((t) => !registry.includes(t)));
+  check("the guard reads 'changes nothing', so a tool is backing by default", /if \(!failed && !CHANGES_NOTHING\.has\(name\)\) ctx\.changed\?\.\(name\)/.test(src("agent/toolGuard.ts")) && CAP.CHANGES_NOTHING.has("saveFeedbackForTeam") && CAP.CHANGES_NOTHING.has("shareLink") && CAP.CHANGES_NOTHING.has("whatCoKnows") && !CAP.CHANGES_NOTHING.has("setSearchArea"));
+  // The reviewer's true claims, each with the tool that made it this turn: never cut.
+  for (const [line, tool] of [["I just updated the deck.", "updateDeck"], ["I've set a reminder to text Maya Friday.", "followUp"], ["I've updated your notes.", "updateNotes"], ["I've moved your intro request to Thursday.", "requestEventIntro"]] as const) {
+    const f = G.baseReplyFacts();
+    f.changedBy = [tool];
+    check(`a true change with its tool behind it stands: "${line}" (${tool})`, !CAP.CHANGES_NOTHING.has(tool) && !G.codeChecks(line, f, { message: "x", recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  }
+  // Widened verbs (round 2): the same claims without a tool are cut; advice and pointing are not claims.
+  for (const bad of ["Let me change your searches to SF going forward.", "Let me move your searches to SF going forward.", "Changing your searches to SF going forward.", "Your searches move to SF from now on."]) check(`cut with no tool behind it: "${bad}"`, G.codeChecks(bad, G.baseReplyFacts(), { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  for (const ok of ["Moving forward, it might help to block Fridays.", "Going forward, it might help to change your pitch to focus on revenue.", "You could move your dinner to Thursday.", "You're all set from now on."]) check(`not a change claim: "${ok}"`, G.changeClaims(ok).length === 0, G.changeClaims(ok));
   // The guard records it: setSearchArea, run through Cue's own guarded tools (dry run), lands in the turn's changedBy.
   const changed: string[] = [];
   const { tools } = CT.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: ROYCE, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true, facts: { add: () => {}, text: () => "", changed: (t: string) => changed.push(t) } } as any);

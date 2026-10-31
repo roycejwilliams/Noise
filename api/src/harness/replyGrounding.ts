@@ -131,7 +131,7 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // keep a backed world line and to end dead air with a true one.
 // moment: what they're doing in this message, from the turn's moment read (services/connectDots.ts readMoment: "sharing", "feedback",
 // ...). The reply check reads it to tell a cut that left a sharing reply flat (repairShareCut); never rendered into a prompt.
-// changedBy: the tools that changed a setting or a record this turn (services/capabilities.ts CHANGES_SOMETHING, recorded by the guard).
+// changedBy: the tools that changed a setting or a record this turn (any not in services/capabilities.ts CHANGES_NOTHING, recorded by the guard).
 export type ReplyFacts = { changedBy?: string[]; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
@@ -1298,15 +1298,21 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
 // message). A change is one of:
 //   - Cue the one making it: "I've moved your searches to SF", "I'll move the dinner to Thursday" ("let me" is talk, not a change:
 //     "Let me switch over to your calendar question");
-//   - a bare switch onto something of theirs: "Switched your searches over to SF";
-//   - a bare switch said as lasting: "Got it, switching to SF from here on out." (the 10-31 reply).
+//   - a change onto something of theirs: "Switched your searches over to SF", "Let me move your searches to SF";
+//   - a change said as lasting: "Got it, switching to SF from here on out." (the 10-31 reply), "Your searches move to SF from now on".
 // A bare switch on its own is advice or pointing ("Swap it to this: ...", "switching to the Friday one: <link>"), never a change.
 // "From now on" with Cue as the one doing it ("From now on I'll keep it short") is something Cue says it does from now on.
 // Not advice to them ("going forward, it might help to..."), not their own move ("Moving to SF is huge").
 const GOING_FORWARD = /\b(?:from (?:here|now) on(?: out)?|going forward|moving forward|for now on|from this point(?: on)?|from today on|starting (?:now|today|tomorrow))\b/i;
 const CUE_ACTS = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|cue)\b/i;
-const SWITCH = /\b(?:switch(?:ed|ing)?|swap(?:ped|ping)?)\b(?!\s+gears)/i;
-const SWITCH_YOURS = /\b(?:switch(?:ed|ing)?|swap(?:ped|ping)?)\s+(?:over\s+)?your\b[^.?!]{0,40}?\b(?:to|over|for)\b/i;
+// The verbs of a change, and a clause that is advice or someone else's doing ("it might help to change your pitch to...", "you could
+// move it to Thursday"), never Cue's. "Moving forward" is a marker, not a move.
+const CHANGE_VERB = String.raw`(?:switch(?:es|ed|ing)?|swap(?:s|ped|ping)?|chang(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|mov(?:e|es|ed|ing)(?!\s+(?:on|forward)\b)|shift(?:s|ed|ing)?|set(?:s|ting)?(?!\s+(?:you\s+)?up\b)|redirect(?:s|ed|ing)?)\b(?!\s+gears)`;
+const NOT_CUES = String.raw`(?<!\b(?:to|could|might|should|would|can|you|you'll|you'd|you're|they|we)\s)`;
+// Onto something of theirs: "Let me move your searches to SF", "Switched your searches over to SF" (not "switch over to your question").
+const CHANGE_YOURS = new RegExp(String.raw`${NOT_CUES}\b${CHANGE_VERB}\s+(?:over\s+)?your\b[^.?!]{0,40}?\b(?:to|over|for)\b`, "i");
+// Said as lasting, with the "from now on" kin in the sentence: "switching to SF from here on out", "Your searches move to SF from now on".
+const CHANGE_ONTO = new RegExp(String.raw`${NOT_CUES}\b${CHANGE_VERB}[^.?!]{0,40}?\b(?:to|over)\b`, "i");
 const CUE_CHANGES = /\b(?:i|i'?ve|i have|i'?m|i am|i'?ll|i will|i just|cue(?:'s| is| has| will)?)\s+(?:just\s+|now\s+|already\s+|go(?:ing)? to\s+|gonna\s+)?(?:switch(?:ed|ing)?|swap(?:ped|ping)?|chang(?:e|ed|ing)|updat(?:e|ed|ing)|mov(?:e|ed|ing)(?!\s+on\b)|shift(?:ed|ing)?|set(?:ting)?(?!\s+(?:you\s+)?up\b)|redirect(?:ed|ing)?)\b(?!\s+gears)[^.?!]{0,40}?\b(?:to|over)\b/i;
 // change: a change said as made or being made. forward: something Cue says it does from now on.
 export function changeClaims(draft: string): { sentence: string; kind: "change" | "forward" }[] {
@@ -1314,11 +1320,11 @@ export function changeClaims(draft: string): { sentence: string; kind: "change" 
     .map((x) => x.trim())
     .filter((x) => x && !/\?\s*["')\]]*$/.test(x))
     .flatMap((x): { sentence: string; kind: "change" | "forward" }[] =>
-      CUE_CHANGES.test(x) || SWITCH_YOURS.test(x) || (SWITCH.test(x) && GOING_FORWARD.test(x)) ? [{ sentence: x, kind: "change" }] : GOING_FORWARD.test(x) && CUE_ACTS.test(x) ? [{ sentence: x, kind: "forward" }] : [],
+      CUE_CHANGES.test(x) || CHANGE_YOURS.test(x) || (CHANGE_ONTO.test(x) && GOING_FORWARD.test(x)) ? [{ sentence: x, kind: "change" }] : GOING_FORWARD.test(x) && CUE_ACTS.test(x) ? [{ sentence: x, kind: "forward" }] : [],
     );
 }
-// A tool that changes a setting or a record went through this turn (services/capabilities.ts CHANGES_SOMETHING, recorded by the
-// guard). Any other receipt (a search, a send, a note for the team) changed nothing, so it backs no change.
+// A tool that changes a setting or a record went through this turn (any tool not in services/capabilities.ts CHANGES_NOTHING, recorded
+// by the guard). A search, a send or a note for the team changed nothing, so it backs no change.
 export function lastingChangeThisTurn(rf: Pick<ReplyFacts, "changedBy">): boolean {
   return (rf.changedBy?.length ?? 0) > 0;
 }
