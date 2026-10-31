@@ -1490,7 +1490,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({
         what: z.string().describe("What they're looking for, in one plain sentence, in their words."),
         differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
-        place: z.string().optional().describe("Only when they said where it's for (\"I'm in Chicago\", \"in SF\"): that place, in their words. Never guessed."),
+        place: z.string().optional().describe("Only when they said where it's for (\"I'm in Chicago\", \"in SF\"): that place, in their words. Never guessed, and never a place they ruled out (\"anywhere but SF\")."),
         until: z.string().optional().describe("Only when they said how long it's for (\"til Friday\", \"through the 17th\"): the last day, YYYY-MM-DD."),
         theirWords: z.string().optional().describe("With place or until: their exact words that say it, copied from what they said."),
       }),
@@ -1807,7 +1807,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     setSearchArea: tool({
       description: toolUse("setSearchArea"),
       inputSchema: z.object({
-        place: z.string().describe("The city or area, as they said it (\"San Francisco\", \"SF\")."),
+        place: z.string().describe("The city or area, as they said it (\"San Francisco\", \"SF\"). Never a place they ruled out (\"anywhere but SF\")."),
         theirWords: z.string().describe("Their words in THIS message saying to search there from now on, copied exactly."),
       }),
       execute: async ({ place, theirWords }) => {

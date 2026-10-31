@@ -11,8 +11,9 @@
 //     their exact words as the quote;
 //   - their correction ("actually Oakland", through whatCoKnows): source "corrected".
 // A want that existed before then is read from its own text only (Royce: "reading place from existing wants never guesses... A
-// wrong guessed place is worse than a missing one"). The model only proposes; code keeps a place only when its quote is copied from
-// the want or from their own line, and the place is in that quote. Anything else is no place, and the home city stands in.
+// wrong guessed place is worse than a missing one"). The model decides what the place is (and that a place they ruled out, or a word
+// inside a longer name, is none); code keeps it only when its quote is copied from the want or from their own line, and the place is
+// in that quote. Anything else is no place, and the home city stands in.
 //
 // The first find from a place they didn't name in the want itself (source "told") carries one line saying so (PLACE_NOTE), once per
 // want (noted_at). The place shows in what Co knows (whatCoKnows.ts, ref place:<want key>), where it can be corrected or removed.
@@ -32,12 +33,12 @@ export const wantKeyForGoal = (goalHash: string) => `goal:${goalHash}`;
 // The line the first find from a place they didn't name carries (COPY: Royce approves the exact words in the PR).
 export const PLACE_NOTE = (place: string) => `These come from ${place} unless you tell me otherwise.`;
 
-// Words for a kind of thing that can follow a place without making it part of a name ("SF Tech Week", "NYC AI founders").
-const KIND_WORDS = new Set(["ai", "tech", "founder", "founders", "startup", "startups", "builder", "builders", "week", "events", "event", "meetup", "meetups", "dinner", "dinners", "community", "communities", "crypto", "web3", "design", "product", "vc", "vcs", "investor", "investors", "climate", "fintech", "health", "art", "arts", "music", "food", "run", "running", "networking", "social", "women", "creators", "creator"]);
 const squash = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ").trim();
 
-// Pure: the place a read proposed, kept only when it's backed. quote must be copied from one of the sources (the want's own text, or one
-// of their own lines), and the place must be in that quote as words. A place too long to be a place is no place.
+// Pure: the place Cue chose, kept only when it's backed by facts. quote must be copied from one of the sources (the want's own text, or
+// one of their own lines), and the place must be in that quote as words. A place too long to be a place is no place. What their words
+// mean (a place they ruled out, a name that holds a place word) is Cue's call, never read here (Royce, 2026-10-31: code never
+// regex-reads the member's intent; Cue decides, code guards facts).
 export function backedPlace(place: unknown, quote: unknown, sources: string[]): { place: string; quote: string } | null {
   const p = String(place ?? "").trim().replace(/[.,;:!?]+$/, "");
   const q = String(quote ?? "").trim();
@@ -45,14 +46,7 @@ export function backedPlace(place: unknown, quote: unknown, sources: string[]): 
   if (p.length > PLACE_LIMITS.placeChars || p.split(/\s+/).length > PLACE_LIMITS.placeWords) return null;
   if (!sources.some((s) => squash(s).includes(squash(q)))) return null;
   const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
-  const m = new RegExp(`(^|[^A-Za-z0-9])(${esc})(?=$|[^A-Za-z0-9])`, "i").exec(q);
-  if (!m) return null;
-  // Part of a longer name ("South Park Commons", "Berkeley Rep") isn't the place: a wrong place is worse than none (Royce, 2026-10-15).
-  // A kind of thing after it is still the place ("SF Tech Week", "SF AI founder events"): only a word that isn't one makes it a name.
-  const next = q.slice(m.index + m[0].length).match(/^\s+([A-Z][\w'&.-]*)/)?.[1];
-  if (next && !KIND_WORDS.has(next.toLowerCase())) return null;
-  // Said as where it isn't ("anywhere but SF", "not in SF", "outside SF"): no place.
-  if (/\b(not|but|outside|except|other than|away from|besides|instead of|leaving|left)\s+(in\s+|to\s+|from\s+|of\s+)?$/i.test(q.slice(0, m.index + m[1].length))) return null;
+  if (!new RegExp(`(^|[^A-Za-z0-9])(${esc})(?=$|[^A-Za-z0-9])`, "i").test(q)) return null;
   return { place: p, quote: q };
 }
 
@@ -67,7 +61,7 @@ export function placePrompt(w: Want, told: string[]): string {
 
 What they want: "${w.text.slice(0, 300)}"
 ${told.length ? `\nTheir own words about where things happen for them (newest first):\n${told.map((t) => `- "${t.slice(0, 240)}"`).join("\n")}\n` : ""}
-Return the place this want is for, as a city or area in their words ("SF", "Oakland", "New York"), and a quote copied exactly from the want${told.length ? " or from one of their lines" : ""} that says it. A line about where they go for this kind of thing counts ("I go to SF for all tech stuff" for a tech meetup); a line about something else doesn't. Online, remote or anywhere is no place. If nothing they wrote says where, the answer is none: never infer it from who they are, from a company or a program's location, or from anything else.
+Return the place this want is for, as a city or area in their words ("SF", "Oakland", "New York"), and a quote copied exactly from the want${told.length ? " or from one of their lines" : ""} that says it. A line about where they go for this kind of thing counts ("I go to SF for all tech stuff" for a tech meetup); a line about something else doesn't. Online, remote or anywhere is no place, and so is a place they rule out ("anywhere but SF", "not in SF") or a place word inside a longer name ("South Park" in South Park Commons). If nothing they wrote says where, the answer is none: never infer it from who they are, from a company or a program's location, or from anything else.
 
 Reply with JSON only: {"place": "SF", "quote": "..."} or {"place": null}`;
 }

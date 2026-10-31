@@ -890,16 +890,16 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
 // that says Cue changed something (harness/replyGrounding.ts no_unbacked_change). The guard reads CHANGES_NOTHING, so a new tool backs a
 // change by default (a true "I just updated the deck" is never cut for a missing list entry); every registry tool must be in exactly
 // one of the two lists (evals/discovery/searchArea.ts), so a new one is a conscious choice.
-// Nothing changed: reads, searches, sends (a link, a card, a draft, an invite, finds), the team note, the safety flag, bookkeeping.
+// Nothing changed: reads, searches, sends (a link, a card, a draft, finds), the team note, the safety flag, bookkeeping.
 export const CHANGES_NOTHING: ReadonlySet<string> = new Set([
   "sendReply", "reactInsteadOfReplying", "leaveItAtReaction", "markTopicAsked", "askedWalkin",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readReference", "readInspo", "readDocument", "openArtifact",
   "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows",
-  "sendContactCard", "shareFinds", "draftEmail", "emailPlan", "shareArtifact", "shareLink", "resendLink", "sendInvite", "sendProductUpdates",
-  "calendarConnection", "docsConnection", "googleConnection",
+  "sendContactCard", "shareFinds", "draftEmail", "emailPlan", "shareLink", "resendLink", "sendProductUpdates",
   "saveFeedbackForTeam", "flagSafetyConcern",
 ]);
-// Something changed: a setting, a record, a piece of work, an artifact.
+// Something changed: a setting, a record, a piece of work, an artifact. Also a share link made (shareArtifact), one of their invites used
+// (sendInvite), and the connection tools, each of which can disconnect an account.
 export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
   "setSearchArea", "correctWhatCoKnows", "steerAwayFrom", "saveAsk", "closeAsk", "saveKitFact", "noteRoomTaste", "noteFreeTime",
   "noteReaction", "noteMetAgain", "noteRoomMeeting", "findReaction", "updateNotes", "updateLoop",
@@ -907,6 +907,7 @@ export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
   "researchBrief", "offerDocument", "answerProposal", "answerShareAsks", "shareAskInIntros", "answerBriefName", "requestEventIntro", "markArrived",
   "voiceRead", "shareLocationYes", "stopSharing",
   "makePage", "updatePage", "takeDownPage", "keepArtifact", "makeDeck", "updateDeck", "writeDocument", "writeFromFile", "deleteImages", "deleteMyFiles", "resetLink",
+  "shareArtifact", "sendInvite", "calendarConnection", "docsConnection", "googleConnection",
 ]);
 
 // What can never run on a call, even if it were listed above.

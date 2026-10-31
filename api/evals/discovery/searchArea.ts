@@ -304,6 +304,20 @@ function world(o: { home?: string | null; down?: boolean; area?: string | null; 
   // Widened verbs (round 2): the same claims without a tool are cut; advice and pointing are not claims.
   for (const bad of ["Let me change your searches to SF going forward.", "Let me move your searches to SF going forward.", "Changing your searches to SF going forward.", "Your searches move to SF from now on."]) check(`cut with no tool behind it: "${bad}"`, G.codeChecks(bad, G.baseReplyFacts(), { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
   for (const ok of ["Moving forward, it might help to block Fridays.", "Going forward, it might help to change your pitch to focus on revenue.", "You could move your dinner to Thursday.", "You're all set from now on."]) check(`not a change claim: "${ok}"`, G.changeClaims(ok).length === 0, G.changeClaims(ok));
+  // "We" is Cue too (it speaks as "I"): with "your" or the marker, a change claim; on its own, or advice, not one.
+  for (const bad of ["We moved your searches to SF from now on.", "We've switched your searches over to SF.", "We'll move your searches to SF.", "We're switching to SF going forward."]) check(`a "we" change is a change claim, cut with no tool behind it: "${bad}"`, G.changeClaims(bad).some((c) => c.kind === "change") && G.codeChecks(bad, G.baseReplyFacts(), { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  for (const ok of ["We could move your dinner to Thursday if that helps?", "We moved on to the dinner, which is great.", "Sounds like we switched gears.", "So you and Sam moved to Oakland last year, and we changed nothing since."]) check(`not a "we" change claim: "${ok}"`, G.changeClaims(ok).length === 0, G.changeClaims(ok));
+  const weTool = G.baseReplyFacts();
+  weTool.changedBy = ["setSearchArea"];
+  check("a true \"we\" change with its tool behind it stands", !G.codeChecks("We moved your searches to SF from now on.", weTool, { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  // Reclassified (2026-10-31): a share link made, an invite used, a connection that can be disconnected each change something.
+  const moved = ["shareArtifact", "sendInvite", "calendarConnection", "docsConnection", "googleConnection"];
+  check("shareArtifact, sendInvite and the three connection tools change something (they back a change claim)", moved.every((t) => CAP.CHANGES_SOMETHING.has(t) && !CAP.CHANGES_NOTHING.has(t)), moved.filter((t) => !CAP.CHANGES_SOMETHING.has(t) || CAP.CHANGES_NOTHING.has(t)));
+  for (const [line, tool] of [["I've disconnected your calendar, so it's switched off from now on.", "calendarConnection"], ["I just changed your Google Docs connection over to off.", "docsConnection"]] as const) {
+    const f = G.baseReplyFacts();
+    f.changedBy = [tool];
+    check(`a change claim with ${tool} behind it stands: "${line}"`, !G.codeChecks(line, f, { message: "x", recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
+  }
   // The guard records it: setSearchArea, run through Cue's own guarded tools (dry run), lands in the turn's changedBy.
   const changed: string[] = [];
   const { tools } = CT.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: ROYCE, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true, facts: { add: () => {}, text: () => "", changed: (t: string) => changed.push(t) } } as any);
