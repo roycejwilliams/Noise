@@ -319,7 +319,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
@@ -328,6 +328,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // A carried line whose going out is itself a fact (the voice read's question: asked only once it reached them), run once it went.
   const laneNoteOnSent = new Map<string, () => Promise<void>>();
   const markLaneNotesSent = async (went: string) => {
+    // The processor line went out (whatCoKnows.ts withProcessorLine): never again this turn.
+    if (state.knownShown && went.includes((await import("../services/whatCoKnows.js")).CALLS_PROCESSOR_LINE)) state.processorLineSent = true;
     const said = (n: string) => went.toLowerCase().replace(/\s+/g, " ").includes(n.toLowerCase());
     // The stopped-looking line too (services/askRetire.ts): said now, never again.
     const stops = state.stopNotes.filter(said);
@@ -499,6 +501,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (state.laneNotes.length || state.laneNotesSent.length) message = carryLaneNotes(message, state.laneNotes, state.laneNotesSent).text;
         // The stopped-looking line rides in the first reply that goes, once (services/askRetire.ts); never when they may not be safe.
         if ((state.stopNotes.length || state.stopNotesSent.length) && !ctx.safetyConcern && !state.safetyFlagged) message = carryLaneNotes(message, state.stopNotes, state.stopNotesSent).text;
+        // What Cue knows was shown this turn (whatCoKnows): the processor line (approved disclosure) is its last paragraph, word for word,
+        // added here after the check, once a turn. Never on a turn that called correctWhatCoKnows (a correction or removal turn), applied or not.
+        if (state.knownShown && !state.knownChanged && !state.processorLineSent) message = (await import("../services/whatCoKnows.js")).withProcessorLine(message);
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
         // Texted in beats: each paragraph its own message (services/beats.ts).
         // A voice note stays one clip.
@@ -663,12 +668,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "Couldn't read it right now. Say so plainly and offer to try again in a bit." };
         }
         ctx.facts?.add("known", W.knownFact(got.view));
+        state.knownShown = true;
         return {
           ok: true,
           groups: got.view.groups.map((g) => ({ title: g.title, lines: g.lines.map((l) => ({ refs: l.refs, text: l.text, theirWords: l.theirWords, canCorrect: l.canCorrect })) })),
-          // Where their calls go (whatCoKnows.ts CALLS_PROCESSOR_LINE): shown with what Cue knows, in these exact words.
+          // Where their calls go (whatCoKnows.ts CALLS_PROCESSOR_LINE): code adds it to the reply (sendReply), so the model doesn't write it.
           calls: got.view.calls,
-          note: "Lines starting 'my read:' are your own read of them, so say so. canCorrect false: it can be removed, not reworded. Never show refs.",
+          note: "Lines starting 'my read:' are your own read of them, so say so. canCorrect false: it can be removed, not reworded. Never show refs. The calls line is added to your reply by code, word for word; don't write it.",
         };
       },
     }),
@@ -688,6 +694,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async (input: any) => {
         const { changes } = input as { changes: { refs: string[]; action: "correct" | "remove"; now?: string }[] };
+        // A correction or removal turn: no processor line on its reply, whether or not the change applied (review of #337).
+        state.knownChanged = true;
         if (ctx.dryRun) return { ok: true, applied: [], note: "(dry run) nothing changed." };
         const W = await import("../services/whatCoKnows.js");
         const r = await W.applyKnowledgeChanges(ctx.userId, changes, { message: ctx.resolvedContent, theirWords: String(input?.theirYes ?? ctx.resolvedContent), lastCoMessage: ctx.lastCoMessage ?? null, recent: recentOf(ctx) });

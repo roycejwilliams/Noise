@@ -363,8 +363,28 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   await sleep(60);
   G.noteAnsweredBy("CA-mis", "machine_end_other");
   await sleep(100);
-  check("misfire: no message, and the held answer and the reason stay held", mis.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "misfire") && !mis.ai.sent.some((m) => m.event_id === "voicemail" || m.event_id === "answer_m1" || m.event_id === "reason"));
+  check("misfire: no message, and the held answer and the reason stay held while nothing new is said", mis.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "misfire") && !mis.ai.sent.some((m) => m.event_id === "voicemail" || m.event_id === "answer_m1" || m.event_id === "reason") && !mis.records.some((r) => r.decision === "call.gpt_live_person"));
+  // After a misfire nothing is released for the rest of the call, even on real-sounding words after the verdict (review of #337).
+  mis.ai.in({ type: "session.input_transcript.delta", delta: "Sorry, are you still there?", start_ms: 3000, end_ms: 4500 });
+  mis.ai.in({ type: "session.delegation.created", offset_ms: 4600, delegation: { id: "m2", target: "client" } });
+  await sleep(150);
+  check("...and words after the verdict release nothing either (the rest of the call stays held)", !mis.records.some((r) => r.decision === "call.gpt_live_person") && !mis.ai.sent.some((m) => m.event_id === "reason" || m.event_id === "answer_m1" || m.event_id === "answer_m2") && !said(mis).includes("second fund"));
   mis.tw.close();
+  // The reviewer's probe (must not release): a custom greeting, a held answer, AMD's verdict fires mid-greeting (its ~1.2 s speech-end
+  // threshold), then the greeting's tail arrives. Nothing private reaches the recording.
+  const tail = run("CA-tail", { answer: "How did the pitch to the second fund go?", callReason: REASON });
+  await sleep(5);
+  tail.ai.in({ type: "session.started", session: { id: "live_tail" } });
+  tail.ai.in({ type: "session.input_transcript.delta", delta: "Hey, it's Sam.", start_ms: 0, end_ms: 1000 });
+  tail.ai.in({ type: "session.delegation.created", offset_ms: 1100, delegation: { id: "t1", target: "client" } });
+  await sleep(60);
+  G.noteAnsweredBy("CA-tail", "machine_end_silence");
+  await sleep(60);
+  tail.ai.in({ type: "session.input_transcript.delta", delta: " Out on the water today, I'll call you back.", start_ms: 2200, end_ms: 4500 });
+  tail.ai.in({ type: "session.delegation.created", offset_ms: 4600, delegation: { id: "t2", target: "client" } });
+  await sleep(200);
+  check("must not release: a greeting's tail after an early machine verdict sends neither the reason nor any answer", !tail.records.some((r) => r.decision === "call.gpt_live_person") && !tail.ai.sent.some((m) => m.event_id === "reason" || m.event_id === "answer_t1" || m.event_id === "answer_t2") && !said(tail).includes("second fund"), tail.ai.sent.map((m) => m.event_id));
+  tail.tw.close();
   // AMD finishing with no machine verdict releases: "unknown".
   const unk = run("CA-unk", { answer: "How did the pitch to the second fund go?", callReason: REASON });
   await sleep(5);

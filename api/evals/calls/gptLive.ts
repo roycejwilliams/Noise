@@ -333,7 +333,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const t = bridge(short, { id: adm!.id, heartbeatMs: 15 });
   await sleep(5);
   t.ai.in({ type: "session.started", session: { id: "live_budgetcap" } });
-  check("a running session counts while it runs, under its admission", G.openSessions.get(adm!.id)?.sessionId === "live_budgetcap" && (await G.teamMinutesThisMonth(db(0))) >= 0);
+  check("a running session counts while it runs, under its admission", G.openSessions.get(adm!.id)?.sessionId === "live_budgetcap" && (await G.minutesThisMonth(db(0))) >= 0);
   await sleep(70);
   check("heartbeat: minutes are written while the call runs", t.minutes.filter((m: any) => m.by === null).length >= 2, t.minutes);
   check("the budget cap ends the session the same way as the session cap (session.close)", t.ai.of("session.close").length === 1);
@@ -347,7 +347,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   check("each session is capped at 30 minutes: at its limit the session is closed", b.ai.of("session.close").length === 1);
   b.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 1800 } });
   check("...recorded as ended by the session cap", b.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "session_cap");
-  check("GPT-Live checks team, then the minutes, before anything of theirs is loaded; the trial number refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf("async function gptLiveAnswer"), co.indexOf('"/gpt-live/after-stream"')); return h.indexOf("isTeamMember(o.userId)") < h.indexOf("admitSession()") && h.indexOf("admitSession()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
+  check("GPT-Live reads the team flag (prompt only), then the minutes, before anything of theirs is loaded; the trial number refuses busy (no new words)", (() => { const co = src("routes/co.ts"); const h = co.slice(co.indexOf("async function gptLiveAnswer"), co.indexOf('"/gpt-live/after-stream"')); return h.indexOf("isTeamMember(o.userId)") < h.indexOf("admitSession()") && h.indexOf("admitSession()") < h.indexOf("buildCallContextSummary") && /twiml\.reject\(\{ reason: "busy" \}\)/.test(h); })());
   G.openSessions.clear();
 }
 

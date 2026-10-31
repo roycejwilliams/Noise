@@ -187,18 +187,25 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   await sleep(150);
   check("...a line that started well inside their turn isn't the goodbye: no_goodbye, nothing ends", early.ai.of("session.close").length === 0 && refusedWith(early).join() === "no_goodbye", refusedWith(early));
   early.tw.close();
-  // No "no answer" note once GPT-Live has spoken this turn (its goodbye): an empty answer with no tool, or a failed one (review of #333).
+  // No "no answer" note once GPT-Live has spoken this turn (its goodbye) and the answer came back empty with no tool (review of #333);
+  // a failed answer always gets the note (review of #337: a real question still gets the fallback when Claude errored).
   const latency = (b: ReturnType<typeof bridge>) => b.records.filter((r) => r.decision === "call.turn_latency").map((r) => r.proposal);
-  for (const [label, answer] of [["an empty answer with no end_call", () => ""], ["a failed answer", () => { throw new Error("upstream down"); }]] as const) {
-    const b = bridge({ answer: answer as any, endGraceMs: 20 });
-    await start(b, `live_nonote_${label.length}`);
-    say(b, "member", "Okay bye.", 0);
-    say(b, "cue", "Bye, Jordan.", 900);
-    b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "q1", target: "client" } });
-    await sleep(80);
-    check(`GPT-Live already said its goodbye, then ${label}: no "no answer" note (nothing sent for the turn)`, !b.ai.sent.some((m: any) => m.event_id === "answer_q1") && latency(b).some((l) => l.noteSkipped === true), latency(b));
-    b.tw.close();
-  }
+  const quietBye = bridge({ answer: () => "", endGraceMs: 20 });
+  await start(quietBye, "live_nonote");
+  say(quietBye, "member", "Okay bye.", 0);
+  say(quietBye, "cue", "Bye, Jordan.", 900);
+  quietBye.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "q1", target: "client" } });
+  await sleep(80);
+  check("GPT-Live already said its goodbye, then an empty answer with no end_call: no \"no answer\" note (nothing sent for the turn)", !quietBye.ai.sent.some((m: any) => m.event_id === "answer_q1") && latency(quietBye).some((l) => l.noteSkipped === true), latency(quietBye));
+  quietBye.tw.close();
+  const failed = bridge({ answer: () => { throw new Error("upstream down"); }, endGraceMs: 20 });
+  await start(failed, "live_failed");
+  say(failed, "member", "Wait, what was the name of that climbing gym?", 0);
+  say(failed, "cue", "Hm, let me think.", 2100); // a line of its own after their turn
+  failed.ai.in({ type: "session.delegation.created", offset_ms: 2000, delegation: { id: "q3", target: "client" } });
+  await sleep(80);
+  check("a failed answer after GPT-Live already spoke this turn: the note still goes (never skipped on an error)", failed.ai.sent.some((m: any) => m.event_id === "answer_q3" && m.type === "session.thinking.append" && /No answer came back/.test(m.content)) && latency(failed).some((l) => l.error === true && l.noteSkipped === false), latency(failed));
+  failed.tw.close();
   const note = bridge({ answer: () => "", endGraceMs: 20 });
   await start(note, "live_note");
   say(note, "member", "What was the name of that climbing gym?", 0);

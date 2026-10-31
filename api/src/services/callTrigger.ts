@@ -81,9 +81,9 @@ export async function triggerCallForUser(
     return { success: false, error: gateResult.error ?? "Call blocked." };
   }
 
-  // The team's calls run on GPT-Live and never on ElevenLabs (Royce, 2026-10-31; routes/co.ts gptLiveAnswer answers them when they
-  // pick up). A team call GPT-Live can't take isn't dialed: the month's team minutes used is held, OpenAI unavailable is a call that
-  // never started (reported like a refused dial). Everyone else: null, and the dial below is today's.
+  // Every call runs on GPT-Live and never on ElevenLabs (Royce, 2026-10-31; routes/co.ts gptLiveAnswer answers when they pick up).
+  // A call GPT-Live can't take isn't dialed: the month's minutes used is held, OpenAI unavailable is a call that never started
+  // (reported like a refused dial).
   const live = await preflight(userId).catch(() => ({ ok: false, kind: "unavailable", failClass: "refused", status: null }) as const);
   if (!live.ok) return gptLiveNotPlaced(userId, auth, live);
 
@@ -98,10 +98,8 @@ export async function triggerCallForUser(
 
   const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
 
-  // Calls run on Co's ElevenLabs agent (services/elevenLabsCalls.ts): Twilio
-  // fetches the TwiML from us once the call connects, and we register it with
-  // the agent then. No Twilio machine detection: the agent's own voicemail
-  // tool leaves the message, and the post-call webhook sends the missed-call text.
+  // Twilio fetches the TwiML from us once the call connects (/co/el/outbound-twiml, answered by GPT-Live). Twilio's async machine
+  // detection tells GPT-Live when to leave its message, and the post-call path sends the missed-call text.
   // Context built while it rings, ready the moment they answer.
   const summary = prebuildCallContext(userId, buildCallContextSummary);
   // And the opening line, written from that context while it rings (services/callOpening.ts). Not for a GPT-Live call: it opens in
@@ -123,8 +121,8 @@ export async function triggerCallForUser(
     statusCallbackEvent: ["ringing", "answered", "completed"],
     statusCallbackMethod: "POST",
     timeout: 20,
-    // A GPT-Live call (the team's) also gets Twilio's async answering-machine detection: GPT-Live has no voicemail tool, so the
-    // verdict tells it when to leave its message (services/gptLive.ts). Everyone else's dial is today's, unchanged.
+    // Twilio's async answering-machine detection: GPT-Live has no voicemail tool, so the verdict tells it when to leave its message
+    // (services/gptLive.ts), and holds Cue's thinking answers until a verdict.
     ...amdDialOptions(process.env.API_URL),
     });
   } catch (err) {
@@ -152,13 +150,13 @@ export async function triggerCallForUser(
   return { success: true, call_sid: call.sid };
 }
 
-// The GPT-Live check before a team member's dial (services/gptLive.ts outboundPreflight), swappable in layer-1 tests.
+// The GPT-Live check before every dial (services/gptLive.ts outboundPreflight), swappable in layer-1 tests.
 type PreflightFn = (userId: string) => Promise<Preflight>;
 let preflight: PreflightFn = (userId) => outboundPreflight(userId);
 export function setPreflightForTests(fn: PreflightFn | null): void {
   preflight = fn ?? ((userId) => outboundPreflight(userId));
 }
-// A team call GPT-Live can't take. Minutes used: held, logged call.gpt_live_budget_reached (the morning review shows it), and the
+// A call GPT-Live can't take. Minutes used: held, logged call.gpt_live_budget_reached (the morning review shows it), and the
 // reason the reply reads (services/callReasons.ts GPT_LIVE_MINUTES_USED). OpenAI unavailable: logged call.gpt_live_unavailable, and
 // reported exactly as a dial that never started (call.dial dial_failed, stage "link": set-up failed on Cue's side before their phone
 // rang), so the reply's honesty rules for a failed call (#302/#303) apply as they are; a refused key also raises the dead-key text.

@@ -310,9 +310,9 @@ router.post(
 // POST /co/incoming-call — Twilio's inbound Voice webhook for
 // TWILIO_PHONE_NUMBER. A user can always reach Co by calling this number
 // directly — the other half of "always lend an ear" alongside the proactive
-// check-in cron. Connects to Co's ElevenLabs agent, as outbound calls do
-// (services/elevenLabsCalls.ts). Only a recognized, carrier-verified caller
-// reaches the agent at all.
+// check-in cron. Answered by GPT-Live (gptLiveAnswer below), as outbound calls
+// are; the old ElevenLabs answer (elevenLabsInboundTwiml) is no longer called.
+// Only a recognized, carrier-verified caller reaches Cue at all.
 //
 // Fixed 2026-09-17 (security): matching on From alone trusted caller ID,
 // which is trivially spoofed — a spoofed number got that person's full
@@ -653,10 +653,10 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
 //   - GPT-Live unavailable (no OpenAI key or API_URL here, the answer couldn't be built, or OpenAI refused before the session started):
 //     the existing CANT_CONNECT_LINE, the failure noted as on the ElevenLabs path, logged call.gpt_live_unavailable with its class (a
 //     refused key also raises the existing dead-key text, services/modelKeyAlert.ts).
-// Members who aren't on the team stay on ElevenLabs, unchanged, until a consent note is approved.
+// The processor line in what Cue knows (services/whatCoKnows.ts) is the disclosure; the team flag only shapes the prompt.
 
-// The TwiML that answers a verified caller with GPT-Live, or why not. Team only, checked here on the member the route verified (their
-// context goes to OpenAI, which members haven't agreed to). Then the month's team minutes (admitSession: none left, or a total that
+// The TwiML that answers a verified caller with GPT-Live, or why not. Any verified member (the route verified them); the team flag
+// only adds the team line to the prompt. Then the month's minutes, shared by every call (admitSession: none left, or a total that
 // can't be read, is "budget_used"). Then TwiML that streams the call to the bridge (services/gptLiveBridge.ts) with a one-time id only
 // (the member's id never goes to Twilio), and a <Connect> action for when the stream ends. GPT-Live opens in its own words from the
 // opening's background (gptLive.ts OpeningContext): no written or template opening line on this path.

@@ -105,6 +105,14 @@ export type KnownView = { groups: { group: KnownGroup; title: string; lines: Kno
 // Where their calls go (Royce, 2026-10-31, approved wording, fixed; checked against OpenAI's API data docs): a processor disclosure, part
 // of what they can see about what Cue knows and where it goes. Never sent to them on its own.
 export const CALLS_PROCESSOR_LINE = "Cue's phone calls run on OpenAI's voice model, so OpenAI processes the call audio and what Cue knows to help on it. OpenAI doesn't train on it and keeps it at most 30 days for safety checks.";
+// Pure: the reply that shows what Cue knows, with the processor line as its last paragraph, word for word (review of #337: approved
+// disclosure copy is code's, never left to the model). Any copy the draft already has is taken out first, so it's said once.
+export function withProcessorLine(draft: string): string {
+  // A copy inside a paragraph goes with the spaces around it, leaving one space (no double space where it was).
+  const esc = CALLS_PROCESSOR_LINE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = draft.replace(new RegExp(`[ \\t]*${esc}[ \\t]*`, "g"), " ").replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return body ? `${body}\n\n${CALLS_PROCESSOR_LINE}` : CALLS_PROCESSOR_LINE;
+}
 
 export type Change = { refs: string[]; action: "correct" | "remove"; now?: string | null };
 export type Applied = { ref: string; source: KnownSource; was: string; now: string | null };
@@ -311,7 +319,7 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
 
 // Pure: the view as one fact line for the reply's grounding (refs left out: they're for the tool, never for a text).
 export function knownFact(v: KnownView): string {
-  const calls = v.calls ? ` Where their calls go, word for word: ${v.calls}` : "";
+  const calls = v.calls ? ` Where their calls go (code adds this line, word for word, as the last paragraph of your reply; don't write it yourself): ${v.calls}` : "";
   if (!v.groups.length) return `What Cue knows about them: nothing yet beyond their name and number.${calls}`;
   return `What Cue knows about them, the complete list (answer only from this; never add to it): ${v.groups.map((g) => `${g.title}: ${g.lines.map((l) => (l.theirWords ? `${l.text} (their words: "${l.theirWords}")` : l.text)).join("; ")}`).join(". ")}.${calls}`;
 }

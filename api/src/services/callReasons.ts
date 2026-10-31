@@ -44,7 +44,7 @@ export function failureDetail(err: unknown): { status: number | null; code: stri
   return { status, code, message };
 }
 
-// The error triggerCallForUser returns for a team call held because the month's GPT-Live minutes are used (services/callTrigger.ts).
+// The error triggerCallForUser returns for a call held because the month's GPT-Live minutes are used (services/callTrigger.ts).
 export const GPT_LIVE_MINUTES_USED = "Call held: this month's call minutes are used.";
 // The minutes couldn't be read (review of #333: saying they're used up would be false).
 export const GPT_LIVE_CANT_PLACE = "Call not placed: it couldn't be placed right now.";
