@@ -213,6 +213,8 @@ export async function ledgerFacts(userId: string, context: string, zoneIn?: stri
     .query(
       `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end, source, meta->>'provenance' AS provenance FROM co_facts
        WHERE owner_user_id = $1 AND subject = 'co' AND relation <> 'exited' AND NOT (meta ? 'ledger') AND happened_at > NOW() - INTERVAL '90 days'
+         -- A first text whose words aged out with no link left (services/ledgerWords.ts: "a text") has nothing a message can name.
+         AND NOT (relation = 'texted' AND meta ? 'words_aged' AND object_label !~ 'https?://')
        ORDER BY happened_at DESC LIMIT 400`,
       [userId],
     )
@@ -301,7 +303,7 @@ export async function privateFactLeak(text: string, aboutUserId: string): Promis
 
 // ------------------------------------------------------------ backfill
 
-// Fills Co's actions from what was already recorded (the last 90 days), so
+// Fills Co's actions from what was already recorded (the last 90 days; texts and tool calls inside the 60-day words window), so
 // the record starts complete. Idempotent: a fact's owner, relation, key and
 // time are unique, so running it on every start only adds what's missing.
 export async function backfillCoActions(): Promise<{ texted: number; sent: number; tools: number }> {
@@ -311,7 +313,9 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
        SELECT ps.user_id, 'co', 'texted', left(regexp_replace(ps.message, '\\s+', ' ', 'g'), 300), left(lower(regexp_replace(ps.message, '\\s+', ' ', 'g')), 300),
               'owner', 'proactive_sends:' || ps.id, ps.sent_at, jsonb_build_object('type', ps.type)
        FROM proactive_sends ps
-       WHERE ps.message IS NOT NULL AND ps.sent_at > NOW() - INTERVAL '90 days'
+       -- Inside the words window (services/ledgerWords.ts): a texted row whose words aged out (its key replaced) is never rebuilt
+       -- with them from the send that still holds them.
+       WHERE ps.message IS NOT NULL AND ps.sent_at > NOW() - make_interval(days => ${WORDS_DAYS})
        ON CONFLICT (owner_user_id, relation, object_key, happened_at) DO NOTHING`,
     )
     .then((r) => r.rowCount ?? 0)

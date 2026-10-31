@@ -8,7 +8,8 @@
 //   - deleting the account deletes every ledger row of theirs (ON DELETE CASCADE), and nobody else's
 //   - the daily words job (services/ledgerWords.ts): a 61-day-old label is reduced to the act, a 59-day-old one isn't, another
 //     member's rows are untouched by a run scoped to one member, a second run changes nothing, the backfill never brings the words
-//     back, and the reconcile still matches every act after the reduction
+//     back, and the reconcile still matches every act after the reduction; Cue's first texts (proactive_sends:*) and reaction
+//     catch-up quotes are reduced too, and the every-boot backfill (coFacts.ts backfillCoActions) never rebuilds a reduced text
 //   TZ=UTC node evals/runLayer1.mjs evals/ledger/ledgerSql.ts
 import fs from "node:fs";
 import os from "node:os";
@@ -35,6 +36,7 @@ const retentionBlock = retention.slice(0, retention.indexOf("co_facts word-aging
 check("words: the words job has its own try, separate from the prune and the handles delete", (retentionBlock.match(/catch \(error\)/g) ?? []).length === 3 && retentionBlock.includes("co_facts word-aging cron error"));
 const cfSrc = fs.readFileSync(new URL("../../src/services/coFacts.ts", import.meta.url), "utf8");
 check("words: the every-boot tool backfill reads decisions inside the words window only", /decision LIKE 'tool\.%' AND action = 'done' AND user_id IS NOT NULL AND created_at > NOW\(\) - make_interval\(days => \$\{WORDS_DAYS\}\)/.test(cfSrc));
+check("words: the every-boot texted backfill reads proactive_sends inside the words window only", /FROM proactive_sends ps[\s\S]{0,400}WHERE ps\.message IS NOT NULL AND ps\.sent_at > NOW\(\) - make_interval\(days => \$\{WORDS_DAYS\}\)/.test(cfSrc));
 const { WORDS_DAYS } = await import("../../src/services/ledgerWords.js");
 const { DECISION_LOG_DAYS } = await import("../../src/services/ledgerSources.js");
 check("words: the words window is the decision log's", WORDS_DAYS === 60 && DECISION_LOG_DAYS === 60);
@@ -148,13 +150,18 @@ async function wordsAge(q: (sql: string, p?: unknown[]) => Promise<{ rows: any[]
   await S.runBackfill(store, sd);
   // An offer (the event's own name, kept), and content-keyed rows: tool rows (reduced) and a proactive text (not touched here).
   await L.writeLedgerRow(store, L.offerRow({ userId: C, memoryId: "offer-1", at: daysAgo(OLD, 20 * 60_000), match: { name: "Friday Jazz Trio", url: "https://lu.ma/e/evt333" }, offerState: "pending" }));
-  const fact = (owner: string, relation: string, label: string, key: string, url: string | null, source: string, at: Date) =>
-    q(`INSERT INTO co_facts (owner_user_id, subject, relation, object_label, object_key, url, visibility, source, happened_at, meta) VALUES ($1, 'co', $2, $3, $4, $5, 'owner', $6, $7, '{}')`, [owner, relation, label, key, url, source, at]);
+  const fact = (owner: string, relation: string, label: string, key: string, url: string | null, source: string, at: Date, meta: Record<string, unknown> = {}) =>
+    q(`INSERT INTO co_facts (owner_user_id, subject, relation, object_label, object_key, url, visibility, source, happened_at, meta) VALUES ($1, 'co', $2, $3, $4, $5, 'owner', $6, $7, $8::jsonb)`, [owner, relation, label, key, url, source, at, JSON.stringify(meta)]);
+  // A reaction catch-up row as services/reactionCatchup.ts writes it: the thing's name, the reaction, and their quote.
+  const reaction = (quote: string) => `noted how "Friday Jazz Trio" landed: going (their words: "${quote}")`;
   for (const who of [C, D]) {
     await fact(who, "did", "saved an ask to keep looking for: jazz nights for a date", "saved an ask to keep looking for: jazz nights for a date", null, "tool.saveAsk", daysAgo(OLD));
     await fact(who, "sent", "A jazz trio Friday, good for a date with Sam.", "https://lu.ma/e/evt111", "https://lu.ma/e/evt111", "tool.shareFinds:backfill", daysAgo(OLD));
     await fact(who, "searched", "jazz nights for a date", "jazz nights for a date", null, "tool.searchEvents", daysAgo(YOUNG));
-    await fact(who, "texted", "Still thinking about your date with Sam?", "still thinking about your date with sam?", null, "proactive_sends:1", daysAgo(OLD));
+    await fact(who, "texted", "Still thinking about your date with Sam?", "still thinking about your date with sam?", null, "proactive_sends:1", daysAgo(OLD), { type: "checkin" });
+    await fact(who, "texted", "For your date with Sam: https://lu.ma/e/evt444", "for your date with sam: https://lu.ma/e/evt444", null, "proactive_sends:2", daysAgo(OLD, 1_000), { type: "event_offer" });
+    await fact(who, "did", reaction("going with my sister for the anniversary"), reaction("going with my sister for the anniversary").toLowerCase(), null, "reaction.catchup", daysAgo(OLD, 2_000), { provenance: "stated", quote: "going with my sister for the anniversary" });
+    await fact(who, "did", reaction("my sister and I are going"), reaction("my sister and I are going").toLowerCase(), null, "reaction.catchup", daysAgo(YOUNG, 2_000), { provenance: "stated", quote: "my sister and I are going" });
     await fact(who, "did", "reacted with a tapback", "reacted with a tapback", null, "tool.reactInsteadOfReplying", daysAgo(OLD));
     await fact(who, "searched", "jazz nights for a date with Sam", "jazz nights for a date with sam", null, "tool.searchNow:backfill", daysAgo(OLD));
   }
@@ -188,12 +195,18 @@ async function wordsAge(q: (sql: string, p?: unknown[]) => Promise<{ rows: any[]
   check("words: a tool whose label never held their words keeps its label and key (marked only)", tap?.object_label === "reacted with a tapback" && tap?.object_key === "reacted with a tapback" && !!tap?.meta?.words_aged, tap);
   const older = after.find((r) => r.source === "tool.searchNow:backfill");
   check("words: an older tool's row (searchNow) is reduced to its act", older?.object_label === "events" && older?.object_key === `aged|${older?.id}`, older);
-  check("words: a content-keyed proactive text isn't touched here (its source still holds the words; see the PR)", after.find((r) => r.source === "proactive_sends:1")?.object_label === "Still thinking about your date with Sam?");
-  const leftover = old.filter((r) => r.source !== "proactive_sends:1" && !(r.meta?.kind === "offer")).flatMap(wordsIn);
+  const ps1 = after.find((r) => r.source === "proactive_sends:1"), ps2 = after.find((r) => r.source === "proactive_sends:2");
+  check("words: a 61-day-old first text (proactive_sends) keeps that it was sent, its date and type, not its words; its key is replaced", ps1?.object_label === "a text" && ps1?.object_key === `aged|${ps1?.id}` && ps1?.meta?.type === "checkin" && !!ps1?.meta?.words_aged && new Date(ps1.happened_at).getTime() === daysAgo(OLD).getTime(), ps1);
+  check("words: a 61-day-old first text that carried a link keeps the link only", ps2?.object_label === "https://lu.ma/e/evt444" && ps2?.object_key === `aged|${ps2?.id}` && ps2?.meta?.type === "event_offer", ps2);
+  const rx = after.filter((r) => r.source === "reaction.catchup");
+  const rxOld = rx.find((r) => new Date(r.happened_at) < daysAgo(W.WORDS_DAYS)), rxYoung = rx.find((r) => new Date(r.happened_at) >= daysAgo(W.WORDS_DAYS));
+  check("words: a 61-day-old reaction catch-up keeps the thing, the reaction and its provenance; their quote goes (label and meta)", rxOld?.object_label === 'noted how "Friday Jazz Trio" landed: going' && rxOld?.object_key === `aged|${rxOld?.id}` && rxOld?.meta?.provenance === "stated" && !("quote" in (rxOld?.meta ?? {})), rxOld);
+  check("words: a 59-day-old reaction catch-up keeps their quote", rxYoung?.object_label === reaction("my sister and I are going") && rxYoung?.meta?.quote === "my sister and I are going" && !rxYoung?.meta?.words_aged, rxYoung);
+  const leftover = old.filter((r) => !(r.meta?.kind === "offer")).flatMap(wordsIn);
   check("words: no reduced row holds their words anywhere (label, key, meta)", leftover.length === 0, leftover);
-  check("words: a 59-day-old row is untouched (ledger and content-keyed)", young.length === 3 && young.every((r) => !r.meta?.words_aged) && young.some((r) => r.object_label === "jazz nights for a date") && young.some((r) => r.object_key === `L|outbound:${C}-h2` && r.object_label === "Here's the one for your date with Sam."), young.map((r) => [r.object_key, r.object_label]));
+  check("words: a 59-day-old row is untouched (ledger and content-keyed)", young.length === 4 && young.every((r) => !r.meta?.words_aged) && young.some((r) => r.object_label === "jazz nights for a date") && young.some((r) => r.object_key === `L|outbound:${C}-h2` && r.object_label === "Here's the one for your date with Sam."), young.map((r) => [r.object_key, r.object_label]));
   check("words: another member's rows are untouched by a run scoped to this one", JSON.stringify(await rowsOf(D)) === beforeD);
-  check("words: the counts say what changed (the tapback is marked, not changed)", first.rows === 10 && first.changed === 9, first);
+  check("words: the counts say what changed (the tapback is marked, not changed)", first.rows === 13 && first.changed === 12, first);
 
   // Idempotent, and the backfill never brings the words back.
   const snap = JSON.stringify(after);
@@ -206,9 +219,53 @@ async function wordsAge(q: (sql: string, p?: unknown[]) => Promise<{ rows: any[]
   // The whole job (every member), as the daily job runs it: now the other member's old rows too.
   const all = await W.ageLedgerWords(q, { now });
   const dRows = await rowsOf(D);
-  check("words: the daily job (all members) reduces the other member's old rows too, and leaves this member's alone", all.rows === 10 && dRows.filter((r) => r.meta?.words_aged).every((r) => wordsIn(r).length === 0) && JSON.stringify(await rowsOf(C)) === snap, all);
+  check("words: the daily job (all members) reduces the other member's old rows too, and leaves this member's alone", all.rows === 13 && dRows.filter((r) => r.meta?.words_aged).every((r) => wordsIn(r).length === 0) && JSON.stringify(await rowsOf(C)) === snap, all);
   const recD = S.reconcileMember(sd, await ledgerOf(D), now);
   check("words: the other member's reconcile matches after the job too", recD.unmatched.length === 0 && recD.doubles.length === 0 && recD.orphans.length === 0, recD);
+
+  // The every-boot backfill (services/coFacts.ts backfillCoActions) against this database: it reads NOW() there, so these rows are
+  // dated from the real clock, for a member of their own. A 61-day-old first text, reduced, is never rebuilt from the send that still
+  // holds its words; a 30-day-old send with no row is still filled in (the backfill works); nobody else's rows change.
+  const E = "00000000-0000-4000-8000-0000000000e5";
+  await q(`INSERT INTO users (id) VALUES ($1)`, [E]);
+  await q(`CREATE TABLE proactive_sends (id BIGSERIAL PRIMARY KEY, user_id UUID, type TEXT, message TEXT, sent_at TIMESTAMPTZ)`);
+  await q(`CREATE TABLE harness_decisions (id BIGSERIAL PRIMARY KEY, user_id UUID, decision TEXT, action TEXT, proposal JSONB, created_at TIMESTAMPTZ)`);
+  await q(`CREATE TABLE surfaced_events (user_id UUID, event_api_id TEXT, event_date DATE)`);
+  const realNow = new Date((await q(`SELECT NOW() AS n`)).rows[0].n);
+  const ago = (d: number) => new Date(realNow.getTime() - d * 86_400_000);
+  const sends = [
+    { id: 101, at: ago(61), message: "Still thinking about your date with Sam?" },
+    { id: 102, at: ago(59), message: "How did the anniversary dinner go?" },
+    { id: 103, at: ago(30), message: "A salsa night for your birthday: https://lu.ma/e/evt555" },
+    { id: 104, at: ago(62), message: "Jazz for your date with Sam: https://lu.ma/e/evt666" },
+  ];
+  for (const p of sends) await q(`INSERT INTO proactive_sends (id, user_id, type, message, sent_at) VALUES ($1, $2, 'checkin', $3, $4)`, [p.id, E, p.message, p.at]);
+  // The live writes (services/coFacts.ts recordProactiveText); the third send was never recorded.
+  for (const p of [sends[0], sends[1], sends[3]]) await fact(E, "texted", p.message, p.message.toLowerCase(), null, `proactive_sends:${p.id}`, p.at, { type: "checkin" });
+  const othersBefore = JSON.stringify([await rowsOf(C), await rowsOf(D)]);
+  const aged = await W.ageLedgerWords(q, { now: realNow, owner: E });
+  const realPool = (pool as any).query;
+  let filled: { texted: number; sent: number; tools: number } | null = null;
+  let readLines: string[] = [];
+  try {
+    (pool as any).query = (sql: string, p?: unknown[]) => q(sql, p);
+    const { backfillCoActions } = await import("../../src/services/coFacts.js");
+    filled = await backfillCoActions();
+    filled = { ...filled, texted: filled.texted + (await backfillCoActions()).texted };
+    // What a reply reads (services/coFacts.ts ledgerFacts): a reduced text with a link is still the link Cue sent; one with no link
+    // left has nothing a message can name, so "text" in their message never pulls in a line of "a text".
+    const { ledgerFacts } = await import("../../src/services/coFacts.js");
+    readLines = (await ledgerFacts(E, "did you text me that link https://lu.ma/e/evt666", "America/Los_Angeles")).lines;
+  } finally {
+    (pool as any).query = realPool;
+  }
+  const eRows = await rowsOf(E);
+  const of = (id: number) => eRows.filter((r) => r.source === `proactive_sends:${id}`);
+  check("words: the job reduces a member's 61-day-old first text and leaves the 59-day-old one", aged.rows === 2 && of(104)[0]?.object_label === "https://lu.ma/e/evt666" && of(101)[0]?.object_label === "a text" && of(102)[0]?.object_label === sends[1].message, { aged, eRows });
+  check("words: the every-boot backfill re-run doesn't bring a reduced text's words back (one row, still reduced)", of(101).length === 1 && of(101)[0]?.object_label === "a text" && of(104).length === 1 && !eRows.some((r) => /date with sam/i.test(`${r.object_label} ${r.object_key}`)), of(101));
+  check("words: the every-boot backfill still fills a missing send inside the window, once", filled?.texted === 1 && of(103).length === 1 && of(103)[0]?.object_label === sends[2].message && of(102).length === 1, { filled, eRows });
+  check("words: a reply reads a reduced text with a link as the link sent, and never reads a reduced text with none", readLines.some((l) => l.endsWith("Cue sent them this link, unprompted: https://lu.ma/e/evt666")) && !readLines.some((l) => /a text"|date with sam/i.test(l)), readLines);
+  check("words: the backfill and a run scoped to one member change no one else's rows", JSON.stringify([await rowsOf(C), await rowsOf(D)]) === othersBefore);
 }
 
 const started = await startCluster();
