@@ -66,7 +66,7 @@ const row = (kind: "fallback" | "cut" | "nohelp", who: "member" | "team" | "test
 const src = read("harness/failureCount.ts");
 const jobs = read("jobs/index.ts");
 check("Royce (4): no email at all: no report email, no daily email", !/sendReportEmail|reportEmail|RESEND/.test(src));
-check("the alert goes by text to the team number Royce sets, from Cue's number, recorded as a team text ('ops')", /sendblue\.messages\.send\(\{ number: to, content: text, from_number: process\.env\.SENDBLUE_PHONE_NUMBER! \}\)/.test(src) && /ON CONFLICT \(message_handle\) DO UPDATE SET sender = 'ops'/.test(src) && /sender = 'ops'/.test(read("services/inlineReply.ts")));
+check("the alert goes by text to the team number Royce sets, from Cue's number, recorded as a team text ('ops', passed to the wrapper, so no action-ledger row)", /sendblue\.messages\.send\(\{ number: to, content: text, from_number: process\.env\.SENDBLUE_PHONE_NUMBER!, sender: "ops" \} as any\)/.test(src) && /ON CONFLICT \(message_handle\) DO UPDATE SET sender = 'ops'/.test(src) && /sender = 'ops'/.test(read("services/inlineReply.ts")));
 check("a process that can't text (sends off or no team number) never claims", /if \(!canAlert\(\) \|\| !alertHours\(now\)\) return;/.test(src) && F.canAlert());
 check("scheduled: the daily numbers logged at 8:05 Pacific (no message), the alert check every 15 minutes", /cron\.schedule\("5 8 \* \* \*"[\s\S]{0,200}recordDailyFailures\(\)[\s\S]{0,120}America\/Los_Angeles/.test(jobs) && /cron\.schedule\("\*\/15 \* \* \* \*"[\s\S]{0,200}checkFailureAlert\(\)/.test(jobs) && !/sendDailyFailureCount/.test(jobs));
 {

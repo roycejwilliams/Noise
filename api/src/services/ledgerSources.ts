@@ -6,7 +6,7 @@
 import pg from "pg";
 import { toolAction } from "./coFacts.js";
 import {
-  ITEM_WINDOW_MS, TRIPLE_WINDOW_MS, documentLabel, documentRow, itemKeys, normName, offerRow, recommendationRow, recommendationSegmentRow, recommendationSegments,
+  ITEM_WINDOW_MS, TRIPLE_WINDOW_MS, documentLabel, groupsOf, sameThing, documentRow, itemKeys, normName, offerRow, recommendationRow, recommendationSegmentRow, recommendationSegments,
   surfacingName, surfacingRow, textedRow, textKey, toolOutcomeRow, transcriptTextRow, writeLedgerRow,
   type LedgerRow, type LedgerStore, type StoredLedgerRow, type ToolReceipt, type WriteResult,
 } from "./ledger.js";
@@ -181,25 +181,37 @@ export async function runBackfill(store: LedgerStore, src: Sources, onRow?: (ite
 // ------------------------------------------------------------ reconcile
 
 export type Unmatched = { source: string; ref: string; at: Date; text: string };
+// A ledger row with no old-store row behind it (the reverse direction).
+export type Orphan = { objectKey: string; relation: string; at: Date; label: string; why: string };
 export type ReconcileResult = {
   userId: string;
   bySource: Record<string, { total: number; matched: number }>;
   unmatched: Unmatched[];
-  // Ledger 'sent' rows for one thing within the window of each other: one act held twice.
+  // One act held twice: two 'sent' rows for the same thing (services/ledger.ts sameThing), or two 'texted' rows for one send (the
+  // same words within the window, one from its outbound row and one from a transcript line), within the window of each other.
   doubles: { a: string; b: string; key: string; at: Date }[];
+  // The same words sent twice within the window, each its own record (two handles, or two transcript lines): two sends, counted.
+  repeatedTexts: number;
+  // The reverse: ledger rows with no old-store row behind them, with contents.
+  orphans: Orphan[];
+  // Tool rows whose decision row aged out of the decision log (jobs/index.ts keeps 60 days): the act stays, counted apart.
+  agedOut: number;
   // Transcript notes ("[sent a document: ...]"): recorded by their own source, not matched as texts.
   notes: number;
   outboundOther: number;
   ledgerRows: number;
 };
+// jobs/index.ts deletes harness_decisions rows older than this (a log, not a forget).
+export const DECISION_LOG_DAYS = 60;
 
-// Pure: every old-store act of one member, matched against that member's ledger rows.
-export function reconcileMember(src: Sources, ledger: StoredLedgerRow[] = src.ledger): ReconcileResult {
+// Pure: every old-store act of one member, matched against that member's ledger rows, and every ledger row matched back.
+export function reconcileMember(src: Sources, ledger: StoredLedgerRow[] = src.ledger, now = new Date()): ReconcileResult {
   const mine = ledger.filter((l) => l.userId === src.userId);
   const byKey = new Set(mine.map((l) => l.objectKey));
   const sent = mine.filter((l) => l.relation === "sent");
   const texted = mine.filter((l) => l.relation === "texted");
-  const covered = (keys: string[], at: Date) => keys.length > 0 && sent.some((l) => near(l.at, at, ITEM_WINDOW_MS) && ((l.meta?.items as string[]) ?? []).some((k) => keys.includes(k)));
+  // The same rule the writer collapses by (services/ledger.ts sameThing).
+  const covered = (keys: string[], at: Date) => keys.length > 0 && sent.some((l) => near(l.at, at, ITEM_WINDOW_MS) && groupsOf(l.meta).some((g) => sameThing(keys, g)));
   const bySource: ReconcileResult["bySource"] = {};
   const unmatched: Unmatched[] = [];
   const tally = (source: string, ok: boolean, ref: string, at: Date, text: string) => {
@@ -249,7 +261,9 @@ export function reconcileMember(src: Sources, ledger: StoredLedgerRow[] = src.le
       tally("offer answers", ok, m.id, m.at, state);
     } else if (m.type === "recommendation_offered") {
       const name = String(payload?.name ?? "").trim();
-      tally("recommendations offered", byKey.has(`L|memory:${m.id}`) || (!!name && covered(itemKeys({ name }), m.at)), m.id, m.at, name || m.content);
+      // Its own row, or another holding the same thing by the backfill's keys (its link when known, so a same-named find at
+      // another page never stands in for it).
+      tally("recommendations offered", byKey.has(`L|memory:${m.id}`) || (!!name && covered(itemKeys({ url: linkNear(src, m.at), name }), m.at)), m.id, m.at, name || m.content);
     } else if (m.type === "recommendation") {
       recommendationSegments(m.content).forEach((segment, i) => {
         tally("recommendation lines", sent.some((l) => near(l.at, m.at, ITEM_WINDOW_MS) && prefixOf(l.label, segment)), `${m.id}:${i}`, m.at, segment);
@@ -264,9 +278,44 @@ export function reconcileMember(src: Sources, ledger: StoredLedgerRow[] = src.le
       if (!near(sent[i].at, sent[j].at, ITEM_WINDOW_MS)) continue;
       // Two deliveries of a document are two acts (services/ledger.ts documentRow).
       if (sent[i].meta?.kind === "document" && sent[j].meta?.kind === "document") continue;
-      const key = ((sent[i].meta?.items as string[]) ?? []).find((k) => ((sent[j].meta?.items as string[]) ?? []).includes(k));
-      if (key) doubles.push({ a: sent[i].objectKey, b: sent[j].objectKey, key, at: sent[i].at });
+      const g = groupsOf(sent[i].meta).find((a) => groupsOf(sent[j].meta).some((b) => sameThing(a, b)));
+      if (g) doubles.push({ a: sent[i].objectKey, b: sent[j].objectKey, key: g.join(" "), at: sent[i].at });
     }
   }
-  return { userId: src.userId, bySource, unmatched, doubles, notes, outboundOther: src.outboundOther, ledgerRows: mine.length };
+  let repeatedTexts = 0;
+  const byTime = [...texted].sort((a, b) => a.at.getTime() - b.at.getTime());
+  const tk = byTime.map((l) => textKey(l.label));
+  for (let i = 0; i < byTime.length; i++) {
+    for (let j = i + 1; j < byTime.length && byTime[j].at.getTime() - byTime[i].at.getTime() <= ITEM_WINDOW_MS; j++) {
+      if (tk[i] !== tk[j]) continue;
+      // Two rows of one kind (two handles, or two transcript lines) are two sends; one of each is one send recorded twice.
+      const kind = (k: string) => k.split(":")[0];
+      if (kind(byTime[i].objectKey) === kind(byTime[j].objectKey)) repeatedTexts++;
+      else doubles.push({ a: byTime[i].objectKey, b: byTime[j].objectKey, key: `text:${byTime[i].label.slice(0, 60)}`, at: byTime[i].at });
+    }
+  }
+
+  // The reverse: each ledger row's own anchor is a row the old stores still hold.
+  const anchors = new Set<string>([
+    ...src.outbound.map((o) => `outbound:${o.handle}`),
+    ...src.replied.map((r) => `memory:${r.id}`),
+    ...src.memories.map((m) => `memory:${m.id}`),
+    ...src.tools.map((t) => `decision:${t.id}`),
+    ...src.docs.map((d) => `document_deliveries:${d.id}`),
+  ]);
+  const orphans: Orphan[] = [];
+  let agedOut = 0;
+  for (const l of mine) {
+    const anchor = l.objectKey.replace(/^L\|/, "");
+    // A recommendation line's find (memory:<id>:<i>) is anchored on its memory row.
+    const base = /^memory:[^:]+:\d+$/.test(anchor) ? anchor.replace(/:\d+$/, "") : anchor;
+    if (anchors.has(base)) continue;
+    if (base.startsWith("decision:") && now.getTime() - l.at.getTime() > DECISION_LOG_DAYS * 86_400_000) {
+      agedOut++;
+      continue;
+    }
+    const why = /^(outbound|memory|decision|document_deliveries):/.test(base) ? "its old-store row isn't there" : "written with no old-store row (the decision row didn't land)";
+    orphans.push({ objectKey: l.objectKey, relation: l.relation, at: l.at, label: l.label.replace(/\s+/g, " ").slice(0, 160), why });
+  }
+  return { userId: src.userId, bySource, unmatched, doubles, repeatedTexts, orphans, agedOut, notes, outboundOther: src.outboundOther, ledgerRows: mine.length };
 }

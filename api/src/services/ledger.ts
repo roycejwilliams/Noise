@@ -15,9 +15,11 @@
 //     and happened_at is that row's own time, so the live write and the backfill of the same act meet on co_facts' unique key
 //     (owner_user_id, relation, object_key, happened_at) and ON CONFLICT DO NOTHING keeps one. The "L|" prefix keeps them apart
 //     from today's content-keyed rows, which a backfilled row would otherwise collide with and be dropped by.
-//   - a thing sent is identified by its keys (u:<url>, n:<name>). A second sent row for a thing already sent within ITEM_WINDOW_MS
-//     (a find recorded as a recommendation and then as the shareFinds call's outcome) is collapsed into the first: the later row
-//     keeps only the things not already there, and isn't written when nothing is left.
+//   - a thing sent is identified by its keys (u:<url>, n:<name>), and two records are the same thing (sameThing) when they share a
+//     link, or share a name with no links that disagree: two "Sunday Run Club" finds at /run-sf and /run-oakland are two things.
+//     A second sent row for a thing already sent within ITEM_WINDOW_MS (a find recorded as a recommendation and then as the
+//     shareFinds call's outcome) is collapsed into the first: the later row keeps only the things not already there, and isn't
+//     written when nothing is left. The same link sent on purpose twice within the window is one act, by design.
 //
 // A ledger write never fails or delays a send: live writes are queued per member (so a member's acts land in the order they
 // happened) and run after the caller has moved on. A write that fails is logged as a decision row (ledger.write_failed) with
@@ -27,6 +29,7 @@
 import pool from "../db/db.js";
 import { toolAction } from "./coFacts.js";
 import { recordDecision } from "../harness/core.js";
+import { onShutdown } from "./shutdown.js";
 
 export const LEDGER_VERSION = 1;
 // For today's readers of co_facts: leave the ledger's rows out until the reader switch.
@@ -79,12 +82,26 @@ export function textKey(t: string): string {
 }
 export const objectKey = (row: Pick<LedgerRow, "anchor">) => `L|${row.anchor}`;
 
+// Pure: whether two records (each one thing's keys) are the same thing. A shared link always is. A shared name is, unless both
+// carry links and none of them agree (two finds with one name at two different pages are two finds).
+export function sameThing(a: string[], b: string[]): boolean {
+  const ua = a.filter((k) => k.startsWith("u:"));
+  const ub = b.filter((k) => k.startsWith("u:"));
+  if (ua.some((k) => ub.includes(k))) return true;
+  if (ua.length && ub.length) return false;
+  return a.some((k) => k.startsWith("n:") && b.includes(k));
+}
+// The things a stored ledger row holds, one key list each (meta.groups; a row written without groups is one thing).
+export const groupsOf = (meta: Record<string, any> | null | undefined): string[][] =>
+  Array.isArray(meta?.groups) ? (meta!.groups as string[][]) : Array.isArray(meta?.items) && meta!.items.length ? [meta!.items as string[]] : [];
+
 // Pure: the row as written, from the parts left after collapsing.
 export function finalRow(row: LedgerRow, parts: LedgerPart[] = row.parts): { label: string; url: string | null; meta: Record<string, unknown> } {
   const label = parts.map((p) => p.label).filter(Boolean).join("; ").replace(/\s+/g, " ").trim().slice(0, 500) || row.kind;
   const items = [...new Set(parts.flatMap((p) => p.keys))];
+  const groups = parts.filter((p) => p.keys.length).map((p) => p.keys);
   const collapsed = row.parts.length - parts.length;
-  return { label, url: parts.length === 1 ? parts[0].url : null, meta: { ...row.meta, ledger: LEDGER_VERSION, kind: row.kind, items, ...(collapsed ? { collapsed } : {}) } };
+  return { label, url: parts.length === 1 ? parts[0].url : null, meta: { ...row.meta, ledger: LEDGER_VERSION, kind: row.kind, items, ...(groups.length ? { groups } : {}), ...(collapsed ? { collapsed } : {}) } };
 }
 
 // A text Cue sent (services/sendblue.ts). A media-only send (a voice note, a card) has no words.
@@ -197,8 +214,8 @@ export function documentRow(o: { userId: string; id: string | number; at: Date; 
 // ------------------------------------------------------------ stores
 
 export type LedgerStore = {
-  // The keys among these that a ledger 'sent' row (other than this act's own) already holds within windowMs of at.
-  covered: (userId: string, keys: string[], at: Date, windowMs: number, ownKey: string) => Promise<Set<string>>;
+  // The things (key lists) the member's ledger 'sent' rows, other than this act's own, hold within windowMs of at.
+  nearby: (userId: string, at: Date, windowMs: number, ownKey: string) => Promise<string[][]>;
   // false when the row was already there (the unique key).
   insert: (userId: string, row: LedgerRow, final: ReturnType<typeof finalRow>) => Promise<boolean>;
 };
@@ -206,16 +223,14 @@ export type LedgerStore = {
 type Query = (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>;
 export function pgLedgerStore(q: Query = (sql, p) => pool.query(sql, p)): LedgerStore {
   return {
-    covered: async (userId, keys, at, windowMs, ownKey) => {
-      if (!keys.length) return new Set();
+    nearby: async (userId, at, windowMs, ownKey) => {
       const { rows } = await q(
-        `SELECT DISTINCT k FROM co_facts f, jsonb_array_elements_text(COALESCE(f.meta->'items', '[]'::jsonb)) k
-         WHERE f.owner_user_id = $1 AND f.relation = 'sent' AND f.meta ? 'ledger' AND f.object_key <> $5
-           AND f.happened_at BETWEEN $3::timestamptz - make_interval(secs => $4) AND $3::timestamptz + make_interval(secs => $4)
-           AND k = ANY($2::text[])`,
-        [userId, keys, at, windowMs / 1000, ownKey],
+        `SELECT meta FROM co_facts
+         WHERE owner_user_id = $1 AND relation = 'sent' AND meta ? 'ledger' AND object_key <> $4
+           AND happened_at BETWEEN $2::timestamptz - make_interval(secs => $3) AND $2::timestamptz + make_interval(secs => $3)`,
+        [userId, at, windowMs / 1000, ownKey],
       );
-      return new Set(rows.map((r: any) => String(r.k)));
+      return rows.flatMap((r: any) => groupsOf(r.meta));
     },
     insert: async (userId, row, final) => {
       const { rows } = await q(
@@ -234,14 +249,8 @@ export function memoryLedgerStore(seed: StoredLedgerRow[] = []): LedgerStore & {
   const rows = [...seed];
   return {
     rows,
-    covered: async (userId, keys, at, windowMs, ownKey) => {
-      const out = new Set<string>();
-      for (const r of rows) {
-        if (r.userId !== userId || r.relation !== "sent" || r.objectKey === ownKey || Math.abs(r.at.getTime() - at.getTime()) > windowMs) continue;
-        for (const k of (r.meta?.items as string[]) ?? []) if (keys.includes(k)) out.add(k);
-      }
-      return out;
-    },
+    nearby: async (userId, at, windowMs, ownKey) =>
+      rows.filter((r) => r.userId === userId && r.relation === "sent" && r.objectKey !== ownKey && Math.abs(r.at.getTime() - at.getTime()) <= windowMs).flatMap((r) => groupsOf(r.meta)),
     insert: async (userId, row, final) => {
       const key = objectKey(row);
       if (rows.some((r) => r.userId === userId && r.relation === row.relation && r.objectKey === key && r.at.getTime() === row.at.getTime())) return false;
@@ -255,10 +264,9 @@ export function memoryLedgerStore(seed: StoredLedgerRow[] = []): LedgerStore & {
 export async function writeLedgerRow(store: LedgerStore, row: LedgerRow): Promise<WriteResult> {
   let parts = row.parts;
   if (row.relation === "sent" && row.collapses !== false) {
-    const keys = [...new Set(parts.flatMap((p) => p.keys))];
-    const have = await store.covered(row.userId, keys, row.at, ITEM_WINDOW_MS, objectKey(row));
+    const have = parts.some((p) => p.keys.length) ? await store.nearby(row.userId, row.at, ITEM_WINDOW_MS, objectKey(row)) : [];
     // A part already sent is one act with the row that holds it.
-    parts = parts.filter((p) => !p.keys.length || !p.keys.some((k) => have.has(k)));
+    parts = parts.filter((p) => !p.keys.length || !have.some((g) => sameThing(p.keys, g)));
     if (!parts.length) return "collapsed";
   }
   return (await store.insert(row.userId, row, finalRow(row, parts))) ? "written" : "conflict";
@@ -297,38 +305,72 @@ function enqueue(userId: string, work: () => Promise<unknown>, onFail: (err: unk
   });
 }
 
+// A ledger row that couldn't be written, or built: logged and recorded, never thrown.
+export function ledgerFailed(row: Pick<LedgerRow, "userId" | "relation" | "kind" | "source">, err: unknown): void {
+  console.error(`ledger: ${row.kind} row not written (non-fatal):`, (err as any)?.message ?? err);
+  void recordDecision(failureDecision(row, err)).catch(() => {});
+}
+
 // Write one ledger row in the background: never throws, never awaited by a send.
 export function ledgerWrite(row: LedgerRow | null | undefined): void {
   if (!row?.userId) return;
-  enqueue(
-    row.userId,
-    () => writeLedgerRow(liveStore, row),
-    (err) => {
-      console.error(`ledger: ${row.kind} row not written (non-fatal):`, (err as any)?.message ?? err);
-      void recordDecision(failureDecision(row, err)).catch(() => {});
-    },
-  );
+  enqueue(row.userId, () => writeLedgerRow(liveStore, row), (err) => ledgerFailed(row, err));
 }
 
-// An event offer's answer, on its one row (event_offer_resolved: interested / not_interested), in the background.
+// An event offer's answer, on its one row (event_offer_resolved: interested / not_interested), in the background. When the offer
+// collapsed into a row already holding the same thing (services/ledger.ts sameThing), the answer goes on that surviving row; when
+// there's no row at all, a decision row says so (ledger.offer_state_unmatched), never a silent no-op.
+type OfferStateQuery = (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }>;
+export async function applyOfferState(q: OfferStateQuery, userId: string, pendingMemoryId: string, state: string): Promise<"own" | "survivor" | "unmatched"> {
+  const own = await q(
+    `UPDATE co_facts SET meta = meta || jsonb_build_object('offer_state', $3::text)
+     WHERE owner_user_id = $1 AND object_key = $2 AND meta ? 'ledger' RETURNING id`,
+    [userId, `L|memory:${pendingMemoryId}`, state],
+  );
+  if (own.rows.length) return "own";
+  const { rows: pend } = await q(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND id::text = $2 AND memory_type = 'event_offer_pending'`, [userId, pendingMemoryId]);
+  if (pend[0]) {
+    let match: any = {};
+    try {
+      match = JSON.parse(String(pend[0].content))?.match ?? {};
+    } catch { /* no match: nothing to find it by */ }
+    const at = new Date(pend[0].created_at);
+    const keys = itemKeys({ url: match?.url, name: match?.name });
+    const { rows } = await q(
+      `SELECT id, happened_at, meta FROM co_facts
+       WHERE owner_user_id = $1 AND relation = 'sent' AND meta ? 'ledger'
+         AND happened_at BETWEEN $2::timestamptz - make_interval(secs => $3) AND $2::timestamptz + make_interval(secs => $3)`,
+      [userId, at, ITEM_WINDOW_MS / 1000],
+    );
+    const survivor = keys.length
+      ? rows.filter((r: any) => groupsOf(r.meta).some((g) => sameThing(keys, g))).sort((a: any, b: any) => Math.abs(new Date(a.happened_at).getTime() - at.getTime()) - Math.abs(new Date(b.happened_at).getTime() - at.getTime()))[0]
+      : null;
+    if (survivor) {
+      await q(`UPDATE co_facts SET meta = meta || jsonb_build_object('offer_state', $3::text) WHERE owner_user_id = $1 AND id = $2`, [userId, survivor.id, state]);
+      return "survivor";
+    }
+  }
+  await recordDecision({ layer: 3, decision: "ledger.offer_state_unmatched", userId, outcome: "skip", action: state, reason: "an offer's answer found no ledger row for the offer, its own or one it collapsed into", proposal: { kind: "offer" } });
+  return "unmatched";
+}
 export function ledgerOfferState(userId: string, pendingMemoryId: string, state: string): void {
   if (!userId || !pendingMemoryId) return;
-  enqueue(
-    userId,
-    () =>
-      pool.query(
-        `UPDATE co_facts SET meta = meta || jsonb_build_object('offer_state', $3::text)
-         WHERE owner_user_id = $1 AND object_key = $2 AND meta ? 'ledger'`,
-        [userId, `L|memory:${pendingMemoryId}`, state],
-      ),
-    (err) => {
-      console.error("ledger: offer state not updated (non-fatal):", (err as any)?.message ?? err);
-      void recordDecision(failureDecision({ userId, relation: "sent", kind: "offer", source: "memory" }, err)).catch(() => {});
-    },
-  );
+  enqueue(userId, () => applyOfferState((sql, p) => pool.query(sql, p as any[]), userId, pendingMemoryId, state), (err) => ledgerFailed({ userId, relation: "sent", kind: "offer", source: "memory" }, err));
 }
 
 // Tests and scripts: wait for every queued write.
 export async function ledgerSettled(): Promise<void> {
   while (chains.size) await Promise.all([...chains.values()]);
 }
+
+// On a restart (services/shutdown.ts), the queued writes get a short while to land: never longer than this, so a stuck database
+// can't hold the exit. A write cut off here is one the backfill writes later (the same row, by its anchor).
+export const SHUTDOWN_WAIT_MS = 3_000;
+export function settleWithin(ms: number): Promise<"settled" | "timed_out"> {
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<"timed_out">((r) => {
+    timer = setTimeout(() => r("timed_out"), ms);
+  });
+  return Promise.race([ledgerSettled().then(() => "settled" as const), limit]).finally(() => clearTimeout(timer));
+}
+onShutdown(() => settleWithin(SHUTDOWN_WAIT_MS));

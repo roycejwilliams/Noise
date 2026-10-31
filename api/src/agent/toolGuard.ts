@@ -14,7 +14,7 @@
 import { z } from "zod";
 import pool from "../db/db.js";
 import { recordDecisionRow } from "../harness/core.js";
-import { ledgerWrite, toolOutcomeRow } from "../services/ledger.js";
+import { ledgerFailed, ledgerWrite, toolOutcomeRow } from "../services/ledger.js";
 import { abilityForTool } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
 import { recordToolAction } from "../services/coFacts.js";
@@ -135,14 +135,19 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
                 ? { ability: ability.id, ...removal, ...(typeof detail.yesCheck === "string" ? { yesCheck: detail.yesCheck } : {}), ...("error" in detail ? { error: "not done" } : {}) }
                 : { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
             })
-              .then((d) =>
-                ledgerWrite(
-                  toolOutcomeRow({
+              .then((d) => {
+                let row;
+                try {
+                  row = toolOutcomeRow({
                     userId: ctx.userId, tool: name, receipt, input: removal ? null : (detail.recordAs ?? input), made: typeof detail.made === "string" ? detail.made : null,
                     decisionId: d.id, at: d.at ?? new Date(), background: input?.background === true,
-                  }),
-                ),
-              )
+                  });
+                } catch (err) {
+                  // A row that can't be built is a failed ledger write, logged as one, never swallowed.
+                  return ledgerFailed({ userId: ctx.userId, relation: receipt === "done" ? "did" : "not_done", kind: "tool", source: `tool.${name}` }, err);
+                }
+                ledgerWrite(row);
+              })
               .catch(() => {});
       const refuse = async (receipt: Receipt, receiptText: string, tell: string, detail: Record<string, unknown> = {}) => {
         ctx.notDone(receiptText);

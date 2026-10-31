@@ -198,8 +198,9 @@ export async function sendAlertText(text: string): Promise<boolean> {
     return false;
   }
   const { default: sendblue } = await import("../services/sendblue.js");
-  const res: any = await sendblue.messages.send({ number: to, content: text, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-  // The wrapper records it as Cue's (sender 'co'), in the background: whichever lands first, the row ends as 'ops'.
+  // sender "ops": the wrapper records it as a team text, never as an act of Cue's toward a member (no action-ledger row).
+  const res: any = await sendblue.messages.send({ number: to, content: text, from_number: process.env.SENDBLUE_PHONE_NUMBER!, sender: "ops" } as any);
+  // The wrapper records it as 'ops' already, in the background; this makes sure, whichever lands first.
   if (res?.message_handle)
     await pool
       .query(

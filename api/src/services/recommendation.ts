@@ -42,17 +42,22 @@ export async function recordRecommendationsSent(userId: string, matches: TierMat
   await pool
     .query(
       `INSERT INTO co_memories (user_id, memory_type, content)
-       SELECT $1, 'recommendation_offered', x FROM UNNEST($2::text[]) AS x RETURNING id, created_at, content`,
+       SELECT $1, 'recommendation_offered', u.x FROM UNNEST($2::text[]) WITH ORDINALITY AS u(x, n) ORDER BY u.n RETURNING id, created_at, content`,
       [userId, offered],
     )
     .then(async (r: any) => {
       // The pair (this row and the "recommendation" memory below) is one act per find in the action ledger (services/ledger.ts),
       // anchored on this row and written in the background.
       const L = await import("./ledger.js");
-      for (const row of r?.rows ?? []) {
-        const i = offered.indexOf(String(row.content));
+      // Paired by position (rows come back in the order inserted), never by content: two finds with one name and no event id have
+      // the same content, and each keeps its own link. A row out of place is matched to the first unused find with its content.
+      const used = new Set<number>();
+      for (const [pos, row] of (r?.rows ?? []).entries()) {
+        const content = String(row.content);
+        const i = offered[pos] === content && !used.has(pos) ? pos : offered.findIndex((c, k) => c === content && !used.has(k));
         const m = matches[i];
         if (!m) continue;
+        used.add(i);
         const d = itemDays(m);
         L.ledgerWrite(L.recommendationRow({ userId, memoryId: String(row.id), at: new Date(row.created_at), name: m.name, url: "url" in m ? (m.url ?? null) : null, sentAs: sentAs[i] ?? null, eventApiId: "event_api_id" in m ? m.event_api_id : null, when: d.start, whenEnd: d.end, tier: String(m.tier) }));
       }
