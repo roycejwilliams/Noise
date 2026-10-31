@@ -82,18 +82,36 @@ export const CALL_PLATFORM_SETTINGS = {
   analysis_llm: "claude-sonnet-4-6",
 };
 
-export type CriterionResult = { criteria_id?: string; result?: string; rationale?: string };
+export type CriterionResult = { criteria_id?: string; result?: string; rationale?: string; quote?: string };
 
 // Pure: the verdicts from a post-call webhook's analysis (an object keyed by id, or a list).
-export function failedCriteria(analysis: any): { id: string; name: string; rationale: string }[] {
+export function failedCriteria(analysis: any): { id: string; name: string; rationale: string; quote?: string }[] {
   const raw = analysis?.evaluation_criteria_results ?? analysis?.evaluation_criteria_results_list ?? {};
   const list: CriterionResult[] = Array.isArray(raw) ? raw : Object.entries(raw).map(([id, v]: [string, any]) => ({ criteria_id: id, ...v }));
   return list
     .filter((r) => r && r.result === "failure")
     .map((r) => {
       const id = String(r.criteria_id ?? "");
-      return { id, name: CALL_CRITERIA.find((c) => c.id === id)?.name ?? id, rationale: String(r.rationale ?? "").slice(0, 400) };
+      return { id, name: CALL_CRITERIA.find((c) => c.id === id)?.name ?? id, rationale: String(r.rationale ?? "").slice(0, 400), ...(typeof r.quote === "string" && r.quote.trim() ? { quote: r.quote.trim() } : {}) };
     });
+}
+
+// Pure: each failed criterion's short reason and the one Cue line it's about, for the review (2026-10-31: on GPT-Live calls the
+// grader's reasons were only in checks, with no quote apart, so a slip couldn't be found in the call). The quote is the grader's
+// own quote field (GPT-Live's grader) or the first quoted span in its rationale (ElevenLabs' grader), and is kept only when it
+// is in one of Cue's lines in the transcript, and then as that line's words: never a member's words. Reasons are cut short.
+export const DETAIL_REASON_MAX = 200;
+export function failureDetail(f: { id: string; rationale: string; quote?: string }, transcript: string | undefined): { id: string; reason: string; quote: string | null } {
+  const norm = (t: string) => t.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, " ").trim();
+  const cueLines = (transcript ?? "").split("\n").filter((l) => /^\s*(assistant|agent)\s*:/i.test(l)).map((l) => l.replace(/^\s*(assistant|agent)\s*:\s*/i, ""));
+  const candidates = [f.quote, ...[...f.rationale.matchAll(/["\u201c]([^"\u201d]{6,300})["\u201d]/g)].map((m) => m[1])].filter((q): q is string => !!q && q.trim().length >= 6);
+  let quote: string | null = null;
+  for (const q of candidates) {
+    const n = norm(q).replace(/^[.,;:!? ]+|[.,;:!? ]+$/g, "");
+    const line = cueLines.find((l) => norm(l).includes(n));
+    if (line) { const at = norm(line).indexOf(n); quote = line.replace(/\s+/g, " ").trim().slice(at, at + n.length).slice(0, 300); break; }
+  }
+  return { id: f.id, reason: f.rationale.replace(/\s+/g, " ").trim().slice(0, DETAIL_REASON_MAX), quote };
 }
 
 // The criteria about sources (2026-10-08): ElevenLabs' judge sees only the call, so "Jeremy Toce" read as invented when the member
@@ -197,7 +215,7 @@ export async function recordCallEvaluation(userId: string, conversationId: strin
       userId,
       outcome: failed.length ? "skip" : "act",
       action: failed.length ? failed.map((f) => f.id).join(",") : "all_passed",
-      proposal: { conversationId, failed: failed.map((f) => f.id), ...(overturned.length ? { overturned } : {}) },
+      proposal: { conversationId, failed: failed.map((f) => f.id), ...(failed.length ? { detail: failed.map((f) => failureDetail(f, ctx.transcript)) } : {}), ...(overturned.length ? { overturned } : {}) },
       checks,
       reason: failed.length ? `${failed.length} call criteria failed: ${failed.map((f) => f.name).join("; ")}` : null,
     });

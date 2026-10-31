@@ -95,6 +95,8 @@ export type FlagType =
   | "call_flagged"
   | "elevenlabs_delete_stuck"
   | "call_never_started"
+  | "gpt_live_unavailable"
+  | "gpt_live_budget_reached"
   | "turn_failed"
   | "place_not_searched"
   | "place_far_from_home";
@@ -126,6 +128,8 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   call_flagged: "Call flagged by the after-call check (held at ElevenLabs until reviewed)",
   elevenlabs_delete_stuck: "ElevenLabs delete stuck (retried once a day)",
   call_never_started: "A call never started (the phone service refused the dial, or its setup failed)",
+  gpt_live_unavailable: "A team GPT-Live call couldn't start (OpenAI unavailable: balance, key, connection)",
+  gpt_live_budget_reached: "A team GPT-Live call was refused or held: the month's team minutes are used",
   turn_failed: "A text turn broke after the member's text was read",
   place_not_searched: "An ask or goal wasn't searched because of its place (ambiguous, didn't resolve, or inferred far from home)",
   place_far_from_home: "An ask or goal was searched far from home (they named the place, or a trip window covers it)",
@@ -265,6 +269,10 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
       const cause = [p.status != null ? `HTTP ${p.status}` : null, p.code != null ? `code ${p.code}` : null, p.message || null].filter(Boolean).join(", ");
       add(d, "call_never_started", "high", `${p.requested ?? "a"} call never started (${p.stage === "link" ? "call setup failed" : "the phone service refused the dial"})`, cause || "no cause logged", !!cause);
     }
+    // The team's GPT-Live calls (routes/co.ts, 2026-10-31): they never fall back to ElevenLabs, so a call OpenAI couldn't start, or one
+    // refused because the month's team minutes are used, is in front of Royce here (the cap is GPT_LIVE.teamMonthlyMinutes).
+    if (d.decision === "call.gpt_live_unavailable") add(d, "gpt_live_unavailable", "high", `a GPT-Live call couldn't start (${p.stage ?? "?"}): ${p.failClass ?? d.action ?? "?"}`, `OpenAI failure class: ${p.failClass ?? d.action ?? "not logged"}`, !!(p.failClass ?? d.action));
+    if (d.decision === "call.gpt_live_budget_reached") add(d, "gpt_live_budget_reached", "high", `a GPT-Live call was ${d.action === "outbound_held" ? "held" : "refused"}: the team's minutes for the month are used`, "the monthly team cap (GPT_LIVE.teamMonthlyMinutes) is reached, or the minutes couldn't be read", true);
     // A text turn that broke after their text was read (routes/sendblue.ts tellMemberTurnFailed): the report of it, with the error's
     // class and what it said (nothing private), so a failure Cue tells the member is on record is really in front of the team.
     if (d.decision === "turn.failed") {

@@ -357,6 +357,12 @@ router.post(
         return res.type("text/xml").send(twiml.toString());
       }
 
+      // The team's calls answer with GPT-Live (Royce, 2026-10-31; gptLiveAnswer below), and never fall back to ElevenLabs: minutes
+      // used is busy, GPT-Live unavailable is the can't-connect line. Every other member goes on to ElevenLabs exactly as before.
+      const live = await gptLiveAnswer({ userId, callSid: callSid ?? null, direction: "inbound" });
+      if ("twiml" in live) return res.type("text/xml").send(live.twiml);
+      if (live.refused !== "not_team") return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, callSid ?? null, live));
+
       // Fixed 2026-09-17: this never set call_sid/call_status for an inbound
       // call, so the LEFTOVER state from whatever call last touched this
       // user's row (often 'completed', set by the previous call's own
@@ -621,12 +627,76 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
   }
 });
 
-// ---------- The GPT-Live trial (services/gptLive.ts, Royce 2026-10-31): a second Twilio number, read-only, side by side.
-// The trial number's Voice webhook. The same member check as /co/incoming-call (a verified member's number, else the same
-// decline). Then team only: the trial sends the caller's context to OpenAI, which members haven't agreed to, so anyone else is
-// refused busy (widening it needs consent wording first). Then the trial's minutes (admitSession: refused busy when none are
-// left; otherwise this call's own cap). Then TwiML that streams the call to the bridge (services/gptLiveBridge.ts) with a one-time
-// id only (the member's id never goes to Twilio), and a <Connect> action for when the stream ends.
+// ---------- GPT-Live calls (services/gptLive.ts, Royce 2026-10-31): the team's calls run on GPT-Live; everyone else stays on ElevenLabs.
+// Royce, 10-31: the team never falls back to ElevenLabs (the goal is to leave it; its credits run out fast). So for a team member:
+//   - the month's minutes used: refused busy, logged call.gpt_live_budget_reached (the morning review shows it, so the cap can rise);
+//   - GPT-Live unavailable (no OpenAI key or API_URL here, the answer couldn't be built, or OpenAI refused before the session started):
+//     the existing CANT_CONNECT_LINE, the failure noted as on the ElevenLabs path, logged call.gpt_live_unavailable with its class (a
+//     refused key also raises the existing dead-key text, services/modelKeyAlert.ts).
+// Members who aren't on the team stay on ElevenLabs, unchanged, until a consent note is approved.
+
+// The TwiML that answers a verified caller with GPT-Live, or why not. Team only, checked here on the member the route verified (their
+// context goes to OpenAI, which members haven't agreed to). Then the month's team minutes (admitSession: none left, or a total that
+// can't be read, is "budget_used"). Then TwiML that streams the call to the bridge (services/gptLiveBridge.ts) with a one-time id only
+// (the member's id never goes to Twilio), and a <Connect> action for when the stream ends. GPT-Live opens in its own words from the
+// opening's background (gptLive.ts OpeningContext): no written or template opening line on this path.
+type GptLiveAnswer = { twiml: string } | { refused: "not_team" } | { refused: "budget_used" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" };
+async function gptLiveAnswer(o: { userId: string; callSid: string | null; direction: "inbound" | "outbound" }): Promise<GptLiveAnswer> {
+  const team = await import("../services/extensions.js").then((m) => m.isTeamMember(o.userId)).catch(() => false);
+  if (!team) return { refused: "not_team" };
+  const G = await import("../services/gptLive.js");
+  if (!process.env.OPENAI_API_KEY?.trim()) return { refused: "unavailable", failClass: "no_key" };
+  const streamUrl = G.gptLiveStreamUrl(process.env.API_URL);
+  if (!streamUrl) return { refused: "unavailable", failClass: "no_api_url" };
+  const admitted = await G.admitSession();
+  if (!admitted) return { refused: "budget_used" };
+  try {
+    if (o.callSid && o.direction === "inbound") await pool.query(`UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [o.userId, o.callSid]);
+    const [{ rows: u }, contextSummary, briefing, voiceLayer, zone] = await Promise.all([
+      pool.query(`SELECT first_name FROM users WHERE id = $1`, [o.userId]),
+      buildCallContextSummary(o.userId).catch(() => ""),
+      takeCallBriefing(o.userId),
+      import("../services/coPersona.js").then((m) => m.getCoPersonaPrompt()),
+      import("../services/memberTime.js").then((m) => m.memberZoneOrFallback(o.userId)).catch(() => "America/Los_Angeles"),
+    ]);
+    const firstName = u[0]?.first_name ?? "";
+    const callReason = await import("../services/callReason.js").then((m) => m.callReasonVariable(o.userId, o.direction)).catch(() => "");
+    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone) });
+    const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, budgetLimited: admitted.budgetLimited }, Date.now(), admitted.id);
+    G.markCall(o.callSid, o.userId, "pending");
+    // What the opening had to go on (which pieces, never their words): GPT-Live writes the line itself.
+    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason, middleOf: !!call.opening.middleOf } } }).catch(() => {});
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.connect({ action: `${process.env.API_URL}/co/gpt-live/after-stream` }).stream({ url: streamUrl }).parameter({ name: "s", value: id });
+    return { twiml: twiml.toString() };
+  } catch (err: any) {
+    G.releaseSession(admitted.id);
+    console.error(`gpt-live: answer not built for ${o.userId.slice(0, 8)} (${String(err?.message ?? err).slice(0, 120)})`);
+    return { refused: "unavailable", failClass: "build_error" };
+  }
+}
+
+// A team member GPT-Live can't take (Royce, 10-31: never ElevenLabs for the team). Minutes used: busy. Unavailable: the existing
+// can't-connect line, the failure noted and the call's status released, as when ElevenLabs can't register a call.
+async function gptLiveRefusalTwiml(userId: string, callSid: string | null, r: Exclude<GptLiveAnswer, { twiml: string } | { refused: "not_team" }>): Promise<string> {
+  const twiml = new twilio.twiml.VoiceResponse();
+  if (r.refused === "budget_used") {
+    await recordDecision({ layer: 8, decision: "call.gpt_live_budget_reached", userId, outcome: "skip", action: "inbound_refused", reason: "the team's GPT-Live minutes for the month are used (or couldn't be read)" }).catch(() => {});
+    twiml.reject({ reason: "busy" });
+    return twiml.toString();
+  }
+  await recordDecision({ layer: 8, decision: "call.gpt_live_unavailable", userId, outcome: "skip", action: r.failClass, proposal: { direction: "inbound", failClass: r.failClass, stage: "answer" } }).catch(() => {});
+  noteCallFailure(userId, "registration");
+  // Only a call whose status this path set (the build failed after it) has one to release; scoped to this call's sid.
+  if (r.failClass === "build_error" && callSid) await releaseFailedCall(userId, callSid);
+  twiml.say(CANT_CONNECT_LINE);
+  twiml.hangup();
+  return twiml.toString();
+}
+
+// The trial number's Voice webhook, kept as a second way in for the team. The same member check as /co/incoming-call (a verified
+// member's number, else the same decline), then gptLiveAnswer. A member who isn't on the team is refused busy here, as on the trial
+// (this number has never been an ElevenLabs line); the team gets what the main number gives them.
 router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!validateTwilioSignature(req, "/co/gpt-live/incoming-call")) return res.status(401).send("Invalid Twilio signature.");
@@ -641,27 +711,11 @@ router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next:
       twiml.hangup();
       return res.type("text/xml").send(twiml.toString());
     }
-    const G = await import("../services/gptLive.js");
-    const streamUrl = G.gptLiveStreamUrl(process.env.API_URL);
-    const team = await import("../services/extensions.js").then((m) => m.isTeamMember(userId)).catch(() => false);
-    const admitted = streamUrl && team ? await G.admitSession() : null;
-    if (!admitted) {
-      await recordDecision({ layer: 8, decision: "call.gpt_live_refused", userId, outcome: "skip", action: !streamUrl ? "no_api_url" : !team ? "not_team" : "trial_minutes_used" }).catch(() => {});
-      twiml.reject({ reason: "busy" });
-      return res.type("text/xml").send(twiml.toString());
-    }
-    if (callSid) await pool.query(`UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [userId, callSid]);
-    G.markCall(callSid, userId, "pending");
-    const [{ rows: u }, contextSummary, briefing, voiceLayer] = await Promise.all([
-      pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
-      buildCallContextSummary(userId).catch(() => ""),
-      takeCallBriefing(userId),
-      import("../services/coPersona.js").then((m) => m.getCoPersonaPrompt()),
-    ]);
-    const firstName = u[0]?.first_name ?? "";
-    const call = G.buildLiveCall({ userId, callSid, firstName, voiceLayer: voiceLayer ?? "", contextSummary: withCallSituation(contextSummary, { direction: "inbound", team }), rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason: "", opening: await openingForCall(userId, firstName, "inbound", contextSummary) });
-    const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, trialLimited: admitted.trialLimited }, Date.now(), admitted.id);
-    twiml.connect({ action: `${process.env.API_URL}/co/gpt-live/after-stream` }).stream({ url: streamUrl! }).parameter({ name: "s", value: id });
+    const live = await gptLiveAnswer({ userId, callSid, direction: "inbound" });
+    if ("twiml" in live) return res.type("text/xml").send(live.twiml);
+    if (live.refused !== "not_team") return res.type("text/xml").send(await gptLiveRefusalTwiml(userId, callSid, live));
+    await recordDecision({ layer: 8, decision: "call.gpt_live_refused", userId, outcome: "skip", action: "not_team" }).catch(() => {});
+    twiml.reject({ reason: "busy" });
     return res.type("text/xml").send(twiml.toString());
   } catch (err) {
     next(err);
@@ -670,7 +724,8 @@ router.post("/gpt-live/incoming-call", async (req: Request, res: Response, next:
 
 // The <Connect> action: Twilio asks for what comes next when the stream ends. A call whose session started just hangs up (its
 // post-call steps run from the bridge). One that never got going hears the ElevenLabs path's own can't-connect line (approved
-// copy), has the failure noted the way that path notes it, and has its call_status released so the next call isn't blocked.
+// copy), has the failure noted the way that path notes it and its call_status released so the next call isn't blocked, and is
+// logged call.gpt_live_unavailable with why (a refused key also raises the existing dead-key text).
 router.post("/gpt-live/after-stream", async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!validateTwilioSignature(req, "/co/gpt-live/after-stream")) return res.status(401).send("Invalid Twilio signature.");
@@ -678,6 +733,9 @@ router.post("/gpt-live/after-stream", async (req: Request, res: Response, next: 
     const st = G.takeCallState(req.body.CallSid);
     const twiml = new twilio.twiml.VoiceResponse();
     if (st && st.state !== "started") {
+      const failClass = st.failClass ?? "no_stream";
+      await recordDecision({ layer: 8, decision: "call.gpt_live_unavailable", userId: st.userId, outcome: "skip", action: failClass, proposal: { failClass, stage: "session" } }).catch(() => {});
+      if (failClass === "auth") import("../services/modelKeyAlert.js").then((m) => m.noteModelFailure("openai", { kind: "auth", status: null })).catch(() => {});
       noteCallFailure(st.userId, "initiation");
       await releaseFailedCall(st.userId, req.body.CallSid as string | undefined);
       twiml.say(CANT_CONNECT_LINE);
@@ -689,7 +747,7 @@ router.post("/gpt-live/after-stream", async (req: Request, res: Response, next: 
   }
 });
 
-// After a GPT-Live trial call (services/gptLiveBridge.ts): the same steps as /co/el/post-call, fed from GPT-Live's transcript in
+// After a GPT-Live call (services/gptLiveBridge.ts): the same steps as /co/el/post-call, fed from GPT-Live's transcript in
 // ElevenLabs' turn shape. The conversation id is "gpt-live:<session>" so call_health and the decision rows compare the two by source.
 // ElevenLabs grades its own calls; this one is graded here against the same criteria (gptLive.ts gradeLiveCall).
 export async function runGptLivePostCall(r: import("../services/gptLiveBridge.js").LiveResult): Promise<unknown> {

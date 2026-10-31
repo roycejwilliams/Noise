@@ -1,4 +1,4 @@
-// The GPT-Live trial's audio bridge (services/gptLive.ts): Twilio's bidirectional Media Stream on one side, OpenAI's Live
+// GPT-Live's audio bridge (services/gptLive.ts): Twilio's bidirectional Media Stream on one side, OpenAI's Live
 // WebSocket on the other. Both carry G.711 mu-law at 8 kHz, so audio bytes pass through unconverted; only the framing changes
 // (Twilio: {event:"media", media:{payload}}; OpenAI: session.input_audio.append / session.output_audio.delta).
 //
@@ -11,12 +11,12 @@
 //
 // Per call it records: each delegated turn's latency (call.turn_latency, action gpt_live), each reply's gap after the call
 // (call.turn_latency, action gpt_live_voice), the session (call.gpt_live_session: seconds, endedBy) and its minutes as it runs
-// (gpt_live_minutes, for the trial's cap), all numbers only.
+// (gpt_live_minutes, for the team's monthly minutes), all numbers only.
 import { timingSafeEqual } from "crypto";
 import WebSocket from "ws";
 import { recordDecision, type HarnessDecision } from "../harness/core.js";
 import { anthropicStream } from "./callLlmProxy.js";
-import { GPT_LIVE, greetingEvent, gptLiveVoice, listeningSound, markCall, openSessions, replyGaps, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, writeMinutes, type Frag, type LiveCall, type LiveTurn, type Upstream } from "./gptLive.js";
+import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, openSessions, replyGaps, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -31,7 +31,7 @@ export function twilioStreamSignatureOk(signature: string | string[] | undefined
 }
 
 // endedBy: who or what ended the call, so the comparison can set aside endings ElevenLabs has no match for.
-export type EndedBy = "caller_hangup" | "session_cap" | "trial_cap" | "openai_closed" | "not_started";
+export type EndedBy = "caller_hangup" | "session_cap" | "budget_cap" | "openai_closed" | "not_started";
 export type LiveResult = { call: LiveCall; sessionId: string; turns: LiveTurn[]; startedAt: Date; endedAt: Date; seconds: number | null; reason: string; endedBy: EndedBy };
 export type LiveDeps = {
   connectOpenAI: (apiKey: string) => SocketLike;
@@ -74,6 +74,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let ai: SocketLike | null = null;
   let streamSid = "", slotKey = "", sessionId = "", reason = "", seconds: number | null = null;
   let endedBy: EndedBy | null = null;
+  let failClass: FailClass | null = null; // why OpenAI didn't start, when it didn't
   let started = false, finished = false, closing = false;
   const t0 = d.now();
   let startedAt = t0;
@@ -123,7 +124,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     try { if (twilio.readyState === OPEN) twilio.close(); } catch { /* gone */ }
     if (!call || !started) {
       // Never connected: the <Connect> action plays the can't-connect line and releases the call's status (routes/co.ts).
-      if (call) markCall(call.callSid, call.userId, "failed");
+      if (call) markCall(call.callSid, call.userId, "failed", Date.now(), failClass ?? "refused");
       return void d.log(`gpt-live: session ended before it started (${reason})`);
     }
     const turns = turnsFrom(frags);
@@ -190,11 +191,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         d.minutes(sessionId, 0, null);
         beat = setInterval(() => d.minutes(sessionId, Math.max(seconds ?? 0, elapsedSecs()), null), d.heartbeatMs);
         (beat as any).unref?.();
-        send(ai, greetingEvent(call));
         for (const a of early.splice(0)) send(ai, { type: "session.input_audio.append", audio: a });
-        // Its own cap, set at admission: 30 minutes, or less when the trial's total has less left (gptLive.ts admitSession).
+        // Its own cap, set at admission: 30 minutes, or less when the month's team minutes have less left (gptLive.ts admitSession).
         const capMs = Math.min(call.capMs ?? d.maxSessionMs, d.maxSessionMs);
-        timers.push(timer(() => close(call?.trialLimited ? "trial cap" : "session cap", call?.trialLimited ? "trial_cap" : "session_cap"), capMs));
+        timers.push(timer(() => close(call?.budgetLimited ? "budget cap" : "session cap", call?.budgetLimited ? "budget_cap" : "session_cap"), capMs));
         return;
       }
       case "session.output_audio.delta": {
@@ -226,17 +226,18 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         return;
       case "error":
         d.log(`gpt-live: error ${m.error?.code ?? "?"}: ${String(m.error?.message ?? "").slice(0, 160)}`);
+        if (!started) failClass ??= failClassOf(m.error);
         return;
     }
   };
 
   const openAi = (c: LiveCall) => {
     const key = d.apiKey();
-    if (!key) return finish("no OpenAI key", "not_started");
-    try { ai = d.connectOpenAI(key); } catch (err: any) { return finish(`connect: ${String(err?.message ?? err).slice(0, 80)}`, "not_started"); }
+    if (!key) { failClass = "no_key"; return finish("no OpenAI key", "not_started"); }
+    try { ai = d.connectOpenAI(key); } catch (err: any) { failClass = failClassOf(err); return finish(`connect: ${String(err?.message ?? err).slice(0, 80)}`, "not_started"); }
     ai.on("open", () => send(ai, sessionStart(c, gptLiveVoice())));
     ai.on("message", (raw: unknown) => { try { onAi(raw); } catch { /* one bad event never ends the call */ } });
-    ai.on("error", (err: any) => { reason ||= `openai: ${String(err?.message ?? err).slice(0, 80)}`; });
+    ai.on("error", (err: any) => { reason ||= `openai: ${String(err?.message ?? err).slice(0, 80)}`; if (!started) failClass ??= failClassOf(err); });
     ai.on("close", () => finish(started ? "openai closed" : reason || "openai refused", started ? "openai_closed" : "not_started"));
   };
 
@@ -251,7 +252,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       if (!call) { d.log("gpt-live: stream refused (no live stream id)"); slotKey = ""; return finish("no live stream id", "not_started"); }
       pump = setInterval(drain, 20);
       (pump as any).unref?.();
-      timers.push(timer(() => { if (!started) finish("session not started in time", "not_started"); }, d.startTimeoutMs));
+      timers.push(timer(() => { if (!started) { failClass ??= "timeout"; finish("session not started in time", "not_started"); } }, d.startTimeoutMs));
       openAi(call);
     } else if (m?.event === "media" && call && typeof m.media?.payload === "string") {
       if (m.media.track && m.media.track !== "inbound") return;

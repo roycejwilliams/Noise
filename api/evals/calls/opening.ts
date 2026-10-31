@@ -37,13 +37,13 @@ const base = [
   "Recent texts: " + "z".repeat(700),
 ].join("\n\n");
 const sum = assembleCallSummary({ now: "- Partnering with Sequin AI on a November event: in progress", lastCalls: "- Oct 7, today: they cancelled the October date and are planning November with Sequin AI.", settled: "- goal, Oct 7: partnering with Sequin AI (not \"first paying customer\")", lessons: ["keep to the cost constraint"], sentLines, threads: [{ text: "sponsors for the event" }, { text: "x", line: "an old thread (they said Sep 21; OLD, so ask whether it is still true and never state it as current)" }], base });
-// The GPT-Live trial (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
+// GPT-Live (evals/calls/gptLive.ts) is its own path: counts here skip its block. Loud if the block's markers move or it
 // ever holds ElevenLabs code, so this can't quietly hide an ElevenLabs call site.
 const coEl = (t: string) => {
-  const m = /\/\/ ---------- The GPT-Live trial[\s\S]*?(?=\/\/ After a GPT-Live trial call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
-  if (!m) throw new Error("the GPT-Live trial block's markers in routes/co.ts moved: update coEl");
+  const m = /\/\/ ---------- GPT-Live calls[\s\S]*?(?=\/\/ After a GPT-Live call)[\s\S]*?(?=\/\/ Root-cause guard)/.exec(t);
+  if (!m) throw new Error("the GPT-Live block's markers in routes/co.ts moved: update coEl");
   const el = /registerElevenLabsCall|verifyPostCallWebhook|elevenlabs-signature|takeCallContext|callKey: `el:|elTurnMetrics|forgetAfterCall/.exec(m[0]);
-  if (el) throw new Error(`ElevenLabs code inside the GPT-Live trial block: ${el[0]}`);
+  if (el) throw new Error(`ElevenLabs code inside the GPT-Live block: ${el[0]}`);
   return t.replace(m[0], "");
 };
 check("every part of the picture reaches the call, even with five long sent events", ["What you know about them right now", "What they've told you in the last two days", "Ongoing summary", "How they've been feeling", "Recent texts"].every((h) => sum.includes(h)));
