@@ -19,6 +19,10 @@ export const COMMIT_RE = new RegExp(String.raw`\b(?:i'?ll|i will|i'?m going to|i
 // Covered elsewhere or not Co's to keep.
 const MULTI_DAY = /\b(?:set (?:that|it|this) up|what i (?:find|turn up|come up with)|over the (?:next|coming) (?:few )?days|through the week)\b/i;
 const CANT = /\b(?:sponsors?|investors?|funders?|funding|grants?|donors?)\b/i;
+// After the call, research into funding is work Cue can do (10-31: Royce asked it, on a call, to research grants that fit Noise; the
+// openings search covers programs, grants and open calls). What it can't do is obtain the money: get, secure, land, bring in, raise
+// or win it, or get them investors, sponsors or funders. Researching, looking into or finding options passes.
+const OBTAIN_FUNDING = /\b(?:get(?:ting)?|secur(?:e|ing)|land(?:ing)?|bring(?:ing)? in|rais(?:e|ing)|win(?:ning)?|lock(?:ing)? in|clos(?:e|ing)|line (?:you |them )?up|find(?:ing)? (?:you|them)|introduc(?:e|ing) (?:you|them) to|connect(?:ing)? (?:you|them) (?:with|to))\b(?:\s+[\w'-]+){0,4}?\s+(?:sponsors?|sponsorships?|investors?|funders?|funding|grants?|donors?|money|capital)\b/i;
 export const COMMIT_PREFIX = "Keep your word from the call: ";
 // A call is still going when this is said: the task falls due this long after, so it is never due before they hang up.
 export const DUE_AFTER_MINUTES = 25;
@@ -51,9 +55,9 @@ export function afterCallPromise(s: string): boolean {
 // Pure: why a sentence is not a commitment a task can keep, or null when it is one.
 export function commitmentProblem(s: string): string | null {
   // Said for after the call, in Cue's own words: kept, whatever the work (a search, a task over days, a deck), unless it's something
-  // Cue can't do (call, book or contact someone; find sponsors, investors, funders or grants). The same work asked in their words
+  // Cue can't do (call, book or contact someone; get them the money itself: OBTAIN_FUNDING). Researching funding passes. The same work asked in their words
   // (services/callTasks.ts) joins this task.
-  if (afterCallPromise(s)) return CANT.test(s) || OFFERS_WHAT_CO_CANT.test(s) ? "something Cue can't do" : null;
+  if (afterCallPromise(s)) return OBTAIN_FUNDING.test(s) || OFFERS_WHAT_CO_CANT.test(s) ? "something Cue can't do" : null;
   if (!COMMIT_RE.test(s)) return "not a commitment to send something";
   if (/\?\s*$/.test(s)) return "a question";
   if (/^\s*(?:want me to|should i|would you like me to|do you want me to)\b/i.test(s)) return "an offer";
