@@ -8,7 +8,9 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
 for (const [name, path] of [["api", "../../src/server.ts"], ["co-test", "../../../co-test/src/server.ts"]] as const) {
   const src = readFileSync(new URL(path, import.meta.url), "utf8");
-  const at = src.search(/httpServer\.on\("upgrade",[^]*?if \(!isVoiceStreamPath\(req\.url\)\) return;/);
+  // The voice-stream handler itself: the last upgrade handler opened before its path check (a server can hold several, e.g. GPT-Live's).
+  const gate = src.indexOf("if (!isVoiceStreamPath(req.url)) return;");
+  const at = gate >= 0 ? src.lastIndexOf('httpServer.on("upgrade",', gate) : -1;
   const block = at >= 0 ? src.slice(at, at + 900) : "";
   check(`${name}: an upgrade handler routes /co/voice-stream`, at >= 0);
   check(`${name}: Twilio's signature is checked before the upgrade, and a bad one is refused`, block.indexOf("voiceStreamSignatureOk(") > 0 && block.indexOf("voiceStreamSignatureOk(") < block.indexOf("handleUpgrade(") && /socket\.destroy\(\)/.test(block));
