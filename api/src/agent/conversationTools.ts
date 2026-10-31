@@ -732,12 +732,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
               .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
               .catch(() => "");
         const yesToOffer = T.isYesToOffer(ctx.resolvedContent, ctx.lastCoMessage);
-        // On a call their words are what they said on it (the call's transcript of their lines, ctx.turn.message from
-        // services/callTools.ts), read without the transcript's "um"s; never their texts alone (2026-10-31: refused on a call).
-        const spoken = ctx.onCall ? `${ctx.resolvedContent}\n${String(ctx.turn?.message ?? "")}` : "";
-        // A lookout's quote stays this turn's words (callWide false), the transcript's fillers aside.
-        const taskQuoteIsTheirs = (q: string, written: string, callWide = false) => T.wordsAreTheirs(q, written) || (ctx.onCall === true && T.spokenWordsAreTheirs(q, callWide ? spoken : written));
-        if (!yesToOffer && !taskQuoteIsTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`, true)) {
+        // On a call their words are a transcript: a quote may leave out its "um"s (2026-10-31: refused on a call), read over the same
+        // words as ever (this turn and their recent texts), never the whole call (review of #327: a "yes please" from earlier passed).
+        const taskQuoteIsTheirs = (q: string, written: string) => T.wordsAreTheirs(q, written) || (ctx.onCall === true && T.spokenWordsAreTheirs(q, written));
+        if (!yesToOffer && !taskQuoteIsTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
           notDone("No task was started: the quote isn't in their words.");
           return { ok: false, error: ctx.onCall ? "theirWords must be their own words from this call, as they said them. Don't start a task they didn't ask for." : "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
         }

@@ -14,7 +14,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { callKey } from "./callKey.js";
-import { noteOnTask, openTasks, startTask, wordsAreTheirs } from "./coTasks.js";
+import { noteOnTask, openTasks, spokenWordsAreTheirs, startTask, wordsAreTheirs } from "./coTasks.js";
 import { sameCallCommitment } from "./followThrough.js";
 import { theirLinesOnly } from "../harness/proactiveSpecifics.js";
 
@@ -40,7 +40,8 @@ export function verifiedAsks(wanted: Wanted[], theirLines: string): { goal: stri
   for (const w of wanted) {
     const goal = typeof w.goal === "string" ? w.goal.trim() : "";
     const quote = typeof w.quote === "string" ? w.quote.trim() : "";
-    if (goal.length < 8 || !wordsAreTheirs(quote, theirLines)) continue;
+    // A call's lines are a transcript: a quote may leave out its "um"s (services/coTasks.ts spokenWordsAreTheirs), never a real word.
+    if (goal.length < 8 || !(wordsAreTheirs(quote, theirLines) || spokenWordsAreTheirs(quote, theirLines))) continue;
     out.push({ goal: goal.slice(0, 200), quote: quote.slice(0, 300) });
     if (out.length >= MAX_TASKS_PER_CALL) break;
   }

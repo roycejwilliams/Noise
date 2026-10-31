@@ -30,23 +30,34 @@ const itemsOf = (input: unknown): string[] => { const i = (input ?? {}) as { wha
 // model is told it isn't back yet. 3 rounds: say a line, act, maybe one follow-on (start the task after a refused document), answer.
 // The budget: a task or note write is ~50ms, a document's PDF and send a few seconds; past that the voice has waited long enough.
 export const CALL_TOOL_STEPS = 3;
-// No new round of tools starts past this (2026-10-31: was 8s, and a turn with a refused tool and its retry ran 13.7s): what's left of
-// the turn's hard cap below is for the answer.
-export const CALL_TOOL_BUDGET_MS = 6500;
 // ElevenLabs waits cascade_timeout_seconds on our endpoint, then gives up on the try and sends the turn again (at least three tries;
-// with no backup the call ends: "custom_llm generation failed", 2026-10-31). Its docs don't say whether that clock is the first
-// token, the gap between chunks or the whole reply (elevenlabs.io/docs/eleven-agents/customization/llm/llm-cascading), so a proxy
-// turn holds to all three: the agent's timeout is CALL_PROXY_CASCADE_TIMEOUT_SECS (services/elevenLabsCalls.ts buildAgentConfig),
-// every turn ends by CALL_TURN_CAP_MS (2.5s inside it), and once anything has gone out the stream is never quiet longer than
-// CALL_HEARTBEAT_MS (an empty chunk, nothing spoken).
-export const CALL_PROXY_CASCADE_TIMEOUT_SECS = 12;
-export const CALL_TURN_CAP_MS = 9500;
+// with no backup the call ends: "custom_llm generation failed", 2026-10-31). What its clock counts, measured on the 10-31 call (dev
+// harness_decisions and call.el_turn_metrics): the time to the first token (tries with none died at 3.0s on a 3s timeout) and a
+// stalled stream (a try whose first sentence went at 1.25s still died at 5.5s); not the whole reply (replies whose last sentence came
+// at 8-13s finished). Royce, 2026-10-31: what matters is silence, so silence is what's capped, not length:
+//   - CALL_FIRST_WORDS_MS from the request arriving: no words by then, the request fails before a byte goes out, and ElevenLabs'
+//     backup model (the agent's own Sonnet 4.6, services/elevenLabsCalls.ts) answers the turn in its own words. No scripted line.
+//   - CALL_SILENCE_MS after the last words: none since, the turn ends on what was said, with nothing added.
+//   - CALL_TURN_CEILING_MS: the whole turn, a backstop only.
+//   - once anything has gone out, an empty chunk every CALL_HEARTBEAT_MS (nothing spoken; it doesn't count as words). Whether
+//     ElevenLabs' clock counts it is logged per turn (call.turn_latency heartbeats) for the next test call.
+// Both deadlines sit 1.5s inside the agent's CALL_PROXY_CASCADE_TIMEOUT_SECS.
+export const CALL_PROXY_CASCADE_TIMEOUT_SECS = 5;
+export const CALL_FIRST_WORDS_MS = 3500;
+export const CALL_SILENCE_MS = 3500;
+export const CALL_TURN_CEILING_MS = 15000;
 export const CALL_HEARTBEAT_MS = 1000;
-// A held line is answered again only with this much of the cap left (a model's first sentence is ~1.2-1.8s on a call).
-export const CALL_REGEN_MIN_MS = 2000;
-// A tool started late in the turn still gets this long to come back before it's called "not back yet" (2026-10-31: startTask was
-// done in 93ms, but started past the budget it was given 0ms, told the model "not back yet", and the model tried it again).
-export const CALL_TOOL_FLOOR_MS = 750;
+// Inside the silence, from the proxy's own turns (call.turn_latency, 2026-10-31: a request's first sentence p50 1.48s; Cue's quick
+// writes 15-93ms): a tool gets what's left of the silence less CALL_ANSWER_RESERVE_MS (one p50 first sentence, for the words after
+// it), and never less than CALL_TOOL_FLOOR_MS (a 93ms startTask started late was given 0ms and called "not back yet"); no new round
+// of tools starts with less than reserve + floor (1.7s) of silence left, or past CALL_TOOL_BUDGET_MS from the request arriving
+// (the ceiling less one silence).
+export const CALL_ANSWER_RESERVE_MS = 1500;
+export const CALL_TOOL_FLOOR_MS = 200;
+export const CALL_TOOL_BUDGET_MS = CALL_TURN_CEILING_MS - CALL_SILENCE_MS;
+// A held line is answered again only when a fresh request can say its first sentence (p50 1.5s) inside what's left of the silence;
+// with less, the held sentence is only dropped.
+export const CALL_REGEN_MIN_MS = CALL_ANSWER_RESERVE_MS;
 export type CallToolset = {
   defs: { name: string; description: string; input_schema: unknown }[];
   names: Set<string>;
@@ -314,8 +325,12 @@ export type ProxyDeps = {
   tools?: CallToolset | null;
   maxToolSteps?: number;
   toolBudgetMs?: number;
-  // The turn's hard cap (capTurn ends the stream there); here it decides whether there's time to answer a held line again.
-  turnCapMs?: number;
+  // When the request arrived (routes/callLlm.ts), the clock capTurn's deadlines run on; default: when this turn started.
+  startedAt?: number;
+  // How long a silence may run (capTurn ends the turn there); here it bounds a tool's wait and whether a held line is answered again.
+  silenceMs?: number;
+  // Aborted once capTurn has ended the turn: from then on nothing here reports, logs or calls the model (review of #327).
+  signal?: AbortSignal;
   // Each of Co's tools as it comes back (or doesn't, inside the budget), and each round fed back to the model.
   onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
   // overBudget: the turn had used its whole time budget (CALL_TOOL_BUDGET_MS) when the round ended.
@@ -340,7 +355,17 @@ export function safetyCall(b: OaiRequest): boolean {
 // The stream of OpenAI chunks ElevenLabs reads. Text is cleaned and guarded sentence by sentence; a tool call passes through whole.
 export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerator<OaiChunk> {
   const now = deps.now ?? Date.now;
-  const t0 = now();
+  const t0 = deps.startedAt ?? now();
+  // The turn has been ended by capTurn: every report, the after-turn check and any further model request stop here.
+  const ended = () => deps.signal?.aborted === true;
+  const given = deps;
+  deps = {
+    ...given,
+    onSpoken: given.onSpoken && ((x) => { if (!ended()) given.onSpoken!(x); }),
+    onDropped: given.onDropped && ((x, w) => { if (!ended()) given.onDropped!(x, w); }),
+    onFirstText: given.onFirstText && ((x) => { if (!ended()) given.onFirstText!(x); }),
+    onLastResort: given.onLastResort && ((x) => { if (!ended()) given.onLastResort!(x); }),
+  };
   const id = `chatcmpl-co-${t0.toString(36)}`;
   const created = Math.floor(t0 / 1000);
   // Our model, whatever the agent's request names (2026-10-07: Haiku 5.5 without re-pushing the ElevenLabs agent).
@@ -368,6 +393,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const mk = () => new SpeakableStream({});
   let stream: SpeakableStream | null = null;
   let spokeAny = false, blanked = false, firstTokenAt = 0, firstSentenceAt = 0;
+  // When the last words went out (the request arriving, before any): the silence capTurn caps runs from here.
+  let lastSaidAt = t0;
   let toolIndex = -1;
   let finish = "stop";
   // What was said aloud this turn, and whether an event offer was among what was held back (its fallback is SAFE_LINE).
@@ -421,6 +448,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (!h) return null;
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
     spokeAny = true;
+    lastSaidAt = now();
     spokenLines.push(h.trim());
     deps.onSpoken?.(h.trim());
     return h;
@@ -523,6 +551,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (SAFETY_LINE.test(plainS) || (isQuestion && SAFETY_TURN.test(plainS))) safetyTurn = true;
     if (isQuestion && countsAsQuestion(sentence)) asked = true;
     spokeAny = true;
+    lastSaidAt = now();
     spokeSinceTools = true;
     linesSinceTools.push(line);
     if (claimKind(line, true) === "now") nowSaid = true;
@@ -556,9 +585,11 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let toolsOff = false;
   // A tool refused this turn (not run: a quote that isn't theirs, an input to fix), by name. One retry, then the model answers.
   const refusals = new Map<string, number>();
-  const capMs = deps.turnCapMs ?? CALL_TURN_CAP_MS;
-  const timeLeft = () => capMs - (now() - t0);
+  const silenceMs = deps.silenceMs ?? CALL_SILENCE_MS;
+  // What's left of the silence allowed since the last words.
+  const silenceLeft = () => silenceMs - (now() - lastSaidAt);
   for (let step = 0; ; step++) {
+    if (ended()) return;
     const blocks: ABlock[] = [];
     const runs: Promise<{ block: ABlock; raw: unknown; timedOut: boolean }>[] = [];
     let cur: { kind: "text"; text: string } | { kind: "co"; id: string; name: string; json: string } | { kind: "el"; args: boolean } | { kind: "skip" } | null = null;
@@ -595,7 +626,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
             pendingNow = [];
             for (const p of release) { const out = say(p); if (out) yield chunk({ content: out }); }
           }
-          runs.push(runTool(co!, cur.id, cur.name, input, Math.max(CALL_TOOL_FLOOR_MS, budgetMs - (now() - t0)), deps.onTool));
+          runs.push(runTool(co!, cur.id, cur.name, input, Math.max(CALL_TOOL_FLOOR_MS, Math.min(budgetMs - (now() - t0), silenceLeft() - CALL_ANSWER_RESERVE_MS)), deps.onTool));
         } else if (cur?.kind === "el" && !cur.args) {
           // A call tool with no input still sends valid JSON: ElevenLabs parses the arguments string.
           yield chunk({ tool_calls: [{ index: toolIndex, function: { arguments: "{}" } }] });
@@ -679,7 +710,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (clean) sources = callSources(b, co?.records ?? "", toolCorpus);
     // ElevenLabs' own tool in the same message (a goodbye with end_call): Co's tools have run; the call's tool goes out as it is.
     if (elCalled) break;
-    const overBudget = now() - t0 >= budgetMs;
+    const overBudget = now() - t0 >= budgetMs || silenceLeft() < CALL_ANSWER_RESERVE_MS + CALL_TOOL_FLOOR_MS;
     // A tool refused twice this turn (its one retry refused too): no third try, the model answers (2026-10-31: startTask refused on
     // three tries of one turn).
     const last = step + 1 >= maxSteps || overBudget || refusedTwice;
@@ -724,8 +755,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     blanked = true;
     spokeSinceTools = false;
   }
-  // Too little of the turn left to answer again: the held line's fallback below (or what was said) ends it, never a reply cut mid-way.
-  const roomToRegen = timeLeft() >= CALL_REGEN_MIN_MS;
+  // A fresh request can't say its first sentence inside what's left of the silence: the held sentence is only dropped (what was said
+  // ends the turn, or the fallback below), never an answer cut off by the silence deadline.
+  const roomToRegen = !ended() && silenceLeft() >= CALL_REGEN_MIN_MS;
   if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools) && roomToRegen) {
     const already = spokenLines.length ? ` You already said: "${spokenLines.join(" ")}". Carry on from it; don't repeat it.` : "";
     const note = `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${already}`;
@@ -750,7 +782,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   }
   if (heldStock && !spokeAny && !blanked && finish !== "tool_calls") { const h = sayHeld(); if (h) yield chunk({ content: h }); }
   // end_call was held and nothing else was said: Co answers them instead, once, in its own words (never a scripted line).
-  if (heldEnd && !spokeAny && finish !== "tool_calls" && timeLeft() >= CALL_REGEN_MIN_MS) {
+  if (heldEnd && !spokeAny && finish !== "tool_calls" && !ended() && silenceLeft() >= CALL_REGEN_MIN_MS) {
     const note = "You were about to end the call, but they haven't said goodbye. Don't end it and don't say goodbye: answer what they last said.";
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
     inRetry = true;
@@ -773,69 +805,89 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (heldStock && !spokeAny) { const h = sayHeld(); if (h) yield chunk({ content: h }); }
   }
   // Last resort only (the retry was held back too, or failed): one plain line, never silence.
-  if ((blanked || heldEnd) && !spokeAny && finish !== "tool_calls") {
+  if ((blanked || heldEnd) && !spokeAny && finish !== "tool_calls" && !ended()) {
     const line = heldEvent ? SAFE_LINE : HELD_LINE;
     spokenLines.push(line);
     deps.onSpoken?.(line);
     deps.onLastResort?.(line);
     yield chunk({ content: line + " " });
   }
-  if (co?.afterTurn) Promise.resolve().then(() => co.afterTurn!({ spoken: spokenLines, ran })).catch((err: any) => console.error("call: after-turn check failed (non-fatal):", err?.message ?? err));
+  if (co?.afterTurn && !ended()) Promise.resolve().then(() => co.afterTurn!({ spoken: spokenLines, ran })).catch((err: any) => console.error("call: after-turn check failed (non-fatal):", err?.message ?? err));
   yield chunk({}, finish === "length" ? "stop" : finish);
 }
 
-// The turn's hard cap and its heartbeat, around runCallLlm's stream (routes/callLlm.ts). At the cap the turn ends on what was already
-// said (the upstream is aborted, a tool still running keeps going on its own); if nothing was said, on SAFE_LINE, the approved
-// after-call line ("I'll look into that after the call and text it over."), which the caller opens as a promise like any spoken one.
-// Between chunks, once anything has gone out, an empty chunk every heartbeatMs: nothing is spoken, the stream is never quiet. Before
-// the first chunk nothing is sent, so a failure there is still a real error ElevenLabs can fall back on.
+// The turn's deadlines and its heartbeat, around runCallLlm's stream (routes/callLlm.ts); see CALL_FIRST_WORDS_MS above.
+//   - no words by firstMs: throws TurnDeadline("first_words") before anything has gone out, so the route answers with an error and
+//     ElevenLabs' backup model takes the turn in its own words
+//   - no new words for gapMs, or the whole turn past ceilingMs: ends on what was said, nothing added
+// Either way the upstream is aborted; a tool still running keeps going on its own. Once anything real has gone out, an empty chunk
+// every heartbeatMs (never counted as words). Before that nothing is sent, not even a heartbeat.
+export type TurnDeadlineKind = "first_words" | "silence" | "ceiling";
+export class TurnDeadline extends Error {
+  constructor(public readonly kind: TurnDeadlineKind) { super(`call turn deadline: ${kind}`); }
+}
 export async function* capTurn(
   gen: AsyncGenerator<OaiChunk>,
-  o: { capMs?: number; heartbeatMs?: number; startedAt?: number; abort?: () => void; onCapped?: (line: string | null) => void } = {},
+  o: { firstMs?: number; gapMs?: number; ceilingMs?: number; heartbeatMs?: number; startedAt?: number; abort?: () => void; onDeadline?: (d: { kind: TurnDeadlineKind; said: boolean; heartbeats: number }) => void; onHeartbeat?: () => void } = {},
 ): AsyncGenerator<OaiChunk> {
-  const capMs = o.capMs ?? CALL_TURN_CAP_MS;
+  const firstMs = o.firstMs ?? CALL_FIRST_WORDS_MS;
+  const gapMs = o.gapMs ?? CALL_SILENCE_MS;
+  const ceilingMs = o.ceilingMs ?? CALL_TURN_CEILING_MS;
   const beatMs = o.heartbeatMs ?? CALL_HEARTBEAT_MS;
   const startedAt = o.startedAt ?? Date.now();
-  let said = false;
-  // Something real has gone out (words or a tool call), so the route has sent its headers: only then do heartbeats go out.
-  let live = false;
+  // live: something real (words or a tool call) has gone out, so the route has sent its headers. said: words have.
+  let live = false, said = false, heartbeats = 0;
+  let lastWordsAt = startedAt, lastOutAt = startedAt;
   let last: OaiChunk | null = null;
   let pending: Promise<IteratorResult<OaiChunk>> | null = null;
+  let kind: TurnDeadlineKind;
   for (;;) {
-    const left = capMs - (Date.now() - startedAt);
-    if (left <= 0) break;
+    const t = Date.now();
+    const ceilingAt = startedAt + ceilingMs;
+    const silenceAt = live ? lastWordsAt + gapMs : startedAt + firstMs;
+    if (t >= ceilingAt) { kind = "ceiling"; break; }
+    if (t >= silenceAt) { kind = live ? "silence" : "first_words"; break; }
     pending ??= gen.next();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const wait = Math.min(left, live ? beatMs : left);
-    const tick = new Promise<"tick">((r) => { timer = setTimeout(() => r("tick"), wait); });
-    const r = await Promise.race([pending, tick]);
-    if (timer) clearTimeout(timer);
+    const wake = Math.min(ceilingAt, silenceAt, live ? lastOutAt + beatMs : Infinity) - t;
+    const tick = new Promise<"tick">((r) => { timer = setTimeout(() => r("tick"), Math.max(0, wake)); });
+    let r: IteratorResult<OaiChunk> | "tick";
+    try {
+      r = await Promise.race([pending, tick]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     if (r === "tick") {
-      if (live && last && capMs - (Date.now() - startedAt) > 0) yield { ...last, choices: [{ index: 0, delta: { content: "" }, finish_reason: null }] };
+      if (live && last && Date.now() - lastOutAt >= beatMs && Date.now() < Math.min(ceilingAt, lastWordsAt + gapMs)) {
+        heartbeats++;
+        lastOutAt = Date.now();
+        o.onHeartbeat?.();
+        yield { ...last, choices: [{ index: 0, delta: { content: "" }, finish_reason: null }] };
+      }
       continue;
     }
     pending = null;
     if (r.done) return;
     const c = r.value;
-    if (typeof c.choices[0]?.delta?.content === "string" && c.choices[0].delta.content.trim()) said = live = true;
-    if (Array.isArray(c.choices[0]?.delta?.tool_calls)) live = true;
+    const words = typeof c.choices[0]?.delta?.content === "string" && c.choices[0].delta.content.trim() !== "";
+    const toolCall = Array.isArray(c.choices[0]?.delta?.tool_calls);
+    if (words || toolCall) { live = true; lastWordsAt = lastOutAt = Date.now(); }
+    if (words) said = true;
     last = c;
     yield c;
     if (c.choices[0]?.finish_reason) return;
   }
-  // Capped: whatever the generator was waiting on is let go (its rejection after the abort is expected and swallowed).
+  // A deadline: whatever the generator was waiting on is let go (its rejection after the abort is expected and swallowed).
   pending?.catch(() => {});
   try { o.abort?.(); } catch { /* the abort itself never fails the turn */ }
   void gen.return(undefined).catch(() => {});
-  const line = said ? null : SAFE_LINE;
-  o.onCapped?.(line);
-  const base: OaiChunk = last ?? { id: `chatcmpl-co-${startedAt.toString(36)}`, object: "chat.completion.chunk", created: Math.floor(startedAt / 1000), model: CALL_LLM_MODEL, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] };
-  if (!last) yield base;
-  if (line) yield { ...base, choices: [{ index: 0, delta: { content: line + " " }, finish_reason: null }] };
-  yield { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
+  o.onDeadline?.({ kind, said, heartbeats });
+  // Nothing has gone out: an error, so ElevenLabs' backup answers. The route never wrote a byte (its first chunk waits for a second).
+  if (!live) throw new TurnDeadline(kind);
+  yield { ...(last as OaiChunk), choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
 }
 
-export const TOOL_TOO_SLOW = "Not back yet: it keeps running on its own and lands when it's done, but it couldn't finish inside this turn of the call. Don't say it's done or sent; say it'll come by text right after the call, and if it's real looking they need, take it on with startTask.";
+export const TOOL_TOO_SLOW = "Not back yet: it keeps running on its own and lands when it's done, but it couldn't finish inside this turn of the call. Don't say it's done or sent; say it'll come by text right after the call.";
 
 // One of Co's tools, inside what's left of the turn's budget. Past it, the tool is left to finish on its own (its write still lands
 // and the guard still logs it) and the model is told it isn't back yet.

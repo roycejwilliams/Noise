@@ -18,8 +18,10 @@ import { specificsTheyGave } from "../brain/index.js";
 export { avoidNote, specificsTheyGave, taskFactNote } from "../brain/index.js";
 import { callRunFor, callToolNames, toolUse, type CallRun } from "./capabilities.js";
 
-// The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step, so on a
-// call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
+// The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step. Since
+// 2026-10-31 neither are startTask, researchBrief, pages, decks or documents (their input took ~6s to write and ElevenLabs gave up
+// on the turn): a research ask opens its task after the call from their words (services/callTasks.ts), and a spoken "I'll put that
+// together" opens a promise task (services/callCommitments.ts).
 // steerAwayFrom and noteRoomTaste (2026-10-11, the call-memory gap): "stop sending me crypto stuff" or "I want rooms where I can drop
 // my guard", said on a call, was lost; nothing on the call path or after it wrote the stop-suggesting list or stated taste.
 // Decks (PR 6, 2026-10-11): a member can ask for a deck and change it during a call, by the same rules as text: the link goes to their
@@ -55,16 +57,15 @@ export type CallToolset = BaseToolset & {
 };
 
 export const CALL_TOOLS_GUIDE = `# Doing things on this call
-You can act during the call with your tools, and the result is real. Some things happen right now, while you talk: texting them a link to something you already have on file (shareLink), saving what they want found or what they think of something, starting a task or a search that runs after the call, and keeping their notes, tasks and preferences current. A page, a deck or a document is started from the call but made after it, and arrives in their texts. Introductions, anything that needs another member's yes, and anything that costs money never happen on a call: say you'll pick it up by text.
-Whenever you'd say you'll do something for them after the call (look for something, put a doc together, follow up, research venues), set it in motion now with the tool, in this same turn: startTask is what makes looking after you hang up true, writeDocument starts the doc, researchBrief starts the venue research. A promise with no tool behind it is forgotten when the call ends. This outranks any line above about waiting until after the call: the work still happens after the call, but you start it now.
+You can act during the call with your tools, and the result is real. These happen right now, while you talk: texting them a link to something you already have on file (shareLink), saving what they want found or what they think of something, and keeping their notes, tasks and preferences current.
+Work that takes looking or making (research, a task over days, a page, a deck, a document) starts right after the call, from what they said on it: say yes, tell them in your own words that you'll do it once you're off the call, and carry on with the conversation. Don't say it's already set up, and don't promise what it will find or when. Introductions, anything that needs another member's yes, and anything that costs money never happen on a call: say you'll pick it up by text.
 - While a tool runs, say a few natural words of your own so they aren't left in silence: about what you're doing, never that it's done, sent or on its way.
 - Say you did something only after the tool comes back done, and only what the result says. Before that, nothing is sent or saved yet, so never say it is.
 - If it comes back not done, or not back yet, don't say it worked. A link or anything else you were texting them: tell them plainly you'll text it right after the call; it goes the moment they hang up. Something to fix: fix it and call it once more without talking them through it; if it still isn't done, say in one plain line that it didn't go through and what you'll do instead.
 - Any question you have for them comes last, after the result, never before the tool: they can't answer while you're still talking.
 - Doing it now replaces the promise: don't also say you'll do it after the call. The call carries on after a tool; say goodbye only when they do.
-- Anything that needs real looking (web research, comparing options, finding venues) goes to startTask or researchBrief: they work after the call and text them what comes of it. Don't search the web on the call.
-- Documents and briefs arrive by text, not on the call: say they'll be in their texts.
-- A page or deck you make or change on the call goes to their texts as its link: say it'll be in their texts and don't read it out. For a deck on a call, pass makeDeck a brief (what they want, in their words) and never write the slides yourself; for a change, pass updateDeck the change and never the slides. If a deck needs their taste first, ask the one question out loud (the look they like, or one of your looks by name). A change keeps the same link.
+- Anything that needs real looking (web research, comparing options, finding venues) starts right after the call and they get what comes of it by text. Don't search the web on the call.
+- Documents, briefs, pages and decks arrive by text after the call, never on the line: say they'll be in their texts. If a deck needs their taste first, ask the one question out loud (the look they like, or one of your looks by name).
 - When they tell you something that belongs to one of your open tasks (a name, a date, a place, a number, a constraint, a change of plan), write it on that task with updateTask in this same turn, in their words. Saying it back writes nothing down, and only what's written is there when the work happens after the call. Something about them rather than a task goes in updateNotes.
 - If you don't know a name, a place or a number, say you're not sure. Never guess one, and never promise work they didn't ask for.
 - A tool that needs their yes needs their own words from what they just said. If they haven't said yes, ask.
@@ -365,7 +366,8 @@ export type CallToolsInput = {
 };
 
 // One turn of theirs, the same across every request ElevenLabs sends for it: how many lines they've said on the call and what they
-// said this turn. ElevenLabs re-sends a turn it gave up waiting on (its cascade: at least three tries of our endpoint, each with
+// said this turn. A re-prompt after a silence (Cue's line last, no new words of theirs: routes/callLlm.ts callWordsOf reads their
+// last words) is the same turn on purpose: a write already done for those words isn't done again. ElevenLabs re-sends a turn it gave up waiting on (its cascade: at least three tries of our endpoint, each with
 // whatever Cue had already said appended), and the tries overlap: 2026-10-31, three requests for one turn, each writing its own
 // startTask, and earlier on the same call updateTask ran three times for one turn.
 export function turnKeyOf(turnWords: string, callWords: string): string {
@@ -385,12 +387,6 @@ let attempts = 0;
 
 // Pure enough to test: the call's toolset for one turn, from the texting tools, guarded the same way.
 export function buildCallTools(i: CallToolsInput): CallToolset {
-  // Never an empty turn: when a request carries no words of theirs for this turn, their last line on the call stands for it (a
-  // quote or a yes is checked against what they said, never against nothing).
-  if (!i.turnWords.trim()) {
-    const last = i.callWords.split("\n").filter((l) => l.trim()).pop() ?? "";
-    i = { ...i, turnWords: last.trim() };
-  }
   const mem = memoryFor(i.callKey);
   // This request (one try of the turn), and the turn it is a try of.
   const attempt = `a${++attempts}`;
@@ -487,6 +483,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     if (!urls.length || !mem.owed?.length) return;
     mem.owed = mem.owed.filter((o) => !urls.includes(o.url));
   };
+  let afterTurnRan = false;
   const run: CallToolset["run"] = async (name, input, toolUseId) => {
     const t = picked[name];
     // The allow-list holds here too: nothing off it runs on a call, whatever the model asks for.
@@ -632,8 +629,10 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     texts: textsThem,
     // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the
     // same guarded updateTask (limits, receipt, decision log, Co's action record).
+    // Once per request: the turn cap may run it (routes/callLlm.ts) while the abandoned turn could still reach its own.
     afterTurn: async ({ spoken, ran }) => {
-      if (!picked.updateTask) return;
+      if (!picked.updateTask || afterTurnRan) return;
+      afterTurnRan = true;
       const w = taskFactBackstop({ turnWords: i.turnWords, spoken, ran, tasks: i.member.tasks });
       if (!w) return;
       const r: any = await run("updateTask", { taskId: w.taskId, note: w.note, why: `They gave ${w.specifics.join(", ")} on the call and Cue said it back without writing it down.` }, `backstop_${Date.now().toString(36)}`);

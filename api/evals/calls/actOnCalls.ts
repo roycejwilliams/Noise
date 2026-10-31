@@ -63,9 +63,10 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   const never = CAP.ABILITIES.filter((a) => a.confirm === "affects_another_member" || a.confirm === "costs_money").map((a) => a.tool!).filter(Boolean);
   check("1. nothing that needs another member's yes or costs money is on a call", never.length > 0 && never.every((t) => !names.has(t)), never);
   check("1. intros, invites, web research, page reads, email drafts and Pinterest reads stay off calls", ["requestEventIntro", "sendInvite", "webSearch", "searchPosts", "readPage", "draftEmail", "emailPlan", "readInspo", "shareFinds", "sendReply"].every((t) => !names.has(t)));
-  check("1. sending what's on file, saving an event they're into, starting a search or a task, saving an ask: now", ["shareLink", "resendLink", "noteReaction", "searchEvents", "startTask", "saveAsk", "updateTask"].every((t) => CAP.callRunFor(t)?.run === "now"));
-  check("1. decks, pages and documents: after (started on the call, made and texted after)", ["makeDeck", "updateDeck", "makePage", "updatePage", "writeDocument"].every((t) => CAP.callRunFor(t)?.run === "after"));
-  check("1. sends get 3-5 seconds, saves and starts 3", ["shareLink", "resendLink", "resetLink"].every((t) => { const r: any = CAP.callRunFor(t); return r.ms >= 3000 && r.ms <= 5000; }) && ["saveAsk", "startTask", "updateNotes"].every((t) => (CAP.callRunFor(t) as any).ms === 3000));
+  check("1. sending what's on file, saving an event they're into, starting a search, saving an ask: now", ["shareLink", "resendLink", "noteReaction", "searchEvents", "saveAsk", "updateTask"].every((t) => CAP.callRunFor(t)?.run === "now"));
+  // 2026-10-31 (Royce): a tool whose input is long to write isn't on a call at all; it opens after the call from what they said.
+  check("1. tasks, research, decks, pages and documents: not on a call (they start right after it)", ["startTask", "researchBrief", "makeDeck", "updateDeck", "makePage", "updatePage", "writeDocument"].every((t) => CAP.callRunFor(t) === null && !names.has(t)));
+  check("1. sends get 3-5 seconds, saves and starts 3", ["shareLink", "resendLink", "resetLink"].every((t) => { const r: any = CAP.callRunFor(t); return r.ms >= 3000 && r.ms <= 5000; }) && ["saveAsk", "updateNotes"].every((t) => (CAP.callRunFor(t) as any).ms === 3000));
   // A tool handed in that isn't on the list is never offered or run, whatever the model asks for.
   let ran = 0;
   const raw = { webSearch: aiTool({ description: "w", inputSchema: z.object({ q: z.string() }), execute: async () => { ran++; return { ok: true }; } }), updateNotes: aiTool({ description: "n", inputSchema: z.object({ what: z.string().optional() }), execute: async () => ({ ok: true }) }) };
@@ -201,8 +202,7 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   check("3. a quick tool past its own timeout comes back not confirmed (no stall), and keeps going on its own", Date.now() - t0 < 100 && r?.stillRunning === true && r?.ok === false && !/owed/i.test(JSON.stringify(r)), r);
   await wait(200);
   check("3. ...and its write still lands", landed);
-  const route = src("services/callTools.ts");
-  check("3. decks, pages and documents carry on in the background past a short wait, never holding the call", /plan\.run === "after" && !i\.dryRun/.test(route) && /const quick = await within\(work, plan\.waitMs\)/.test(route) && (CAP.callRunFor("makeDeck") as any).waitMs <= 3500);
+  check("3. nothing on a call runs in the background past a short wait any more (no tool is 'after')", Object.values(CAP.CALL_RUN).every((r) => r.run === "now"));
 }
 
 // ---------------------------------------------------------------- 4. right after the call: the owed link goes, nothing done twice

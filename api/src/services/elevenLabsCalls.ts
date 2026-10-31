@@ -267,7 +267,7 @@ export const CALL_GUIDE = `# Staying with them
 The call ends when they want it to. When they open up about something weighing on them, that is what the call is for: stay with it and help them think it through, with no agenda of yours in it. Let them go only when they say they need to go or say goodbye.
 # When they ask about you, or for help over days
 When they ask about you (what would make you better, how it feels), answer plainly from Cue's side of the work. No disclaimers about being an AI or about what you can't feel.
-When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes and set it up now, on the call, then say plainly that you have. Don't promise what it will find or when.
+When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes, and tell them in your own words that you'll start on it right after you hang up. Don't say it's already set up, and don't promise what it will find or when.
 # When they push back on something you said
 Lines about them carry a stamp: when they said it, and OLD when it has gone stale. When they push back on something you said about them, check its stamp first. If it is old, your own read, or you can't tell where it came from, drop it in one short sentence of your own and go back to what they are saying now. Never apologize twice, never say you got something wrong on your end, never explain the note.
 # Names the transcript gets wrong
@@ -366,7 +366,7 @@ export const AGENT_DEFAULTS = {
   cascadeTimeoutSecs: 3,
   // Behind our endpoint (2026-10-31, Royce, after Cue hung up mid-call: with backup "disabled" ElevenLabs retried our endpoint three
   // times and then ended the call): when our endpoint fails or runs past the timeout, ElevenLabs' own Sonnet 4.6, the direct path's
-  // model, answers that turn from the same prompt. What it can't do: Cue's own tools (startTask, shareLink, notes, tasks...: only
+  // model, answers that turn from the same prompt. What it can't do: Cue's own tools (shareLink, notes, task updates, saves...: only
   // ElevenLabs' end_call and voicemail tools are on the agent), the held-claim and spoken fact checks, the one-question rule, the turn
   // and voice-read notes, and per-turn dedupe. A promise it speaks is still picked up after the call from the transcript
   // (services/callFollowThrough.ts). An off-brain turn beats a hang-up.
@@ -460,7 +460,7 @@ export function buildAgentConfig(o: {
           // It was "disabled" until 2026-10-31 (an off-brain answer seemed worse than a pause); with it disabled a slow endpoint ended the call.
           backup_llm_config: { preference: "override", order: [o.proxy ? AGENT_DEFAULTS.proxyBackupLlm : AGENT_DEFAULTS.backupLlm] },
           // Behind our endpoint, ElevenLabs' wait before it tries again or falls back is CALL_PROXY_CASCADE_TIMEOUT_SECS (2-15s allowed;
-          // services/callLlmProxy.ts ends every turn 2.5s inside it). 3s, the direct path's, retried nearly every turn that used a tool.
+          // services/callLlmProxy.ts ends every turn by 4s, 1s inside it). 3s, the direct path's, retried nearly every turn that used a tool.
           cascade_timeout_seconds: o.proxy ? CALL_PROXY_CASCADE_TIMEOUT_SECS : AGENT_DEFAULTS.cascadeTimeoutSecs,
           tools: [
             // ElevenLabs' own system tools ride in the same list (type "system");

@@ -89,7 +89,8 @@ check("it uses the same task machinery as a text (so every limit holds), Sonnet 
 // 2026-10-08: "you're on it" became "Starting the plan ... once it's worth sending" live; the text now says what Co understood, that
 // they'll get it, and a when only if Co named one on the call, and never repeats a confirmation already sent (evals/calls/followThrough.ts).
 check("the after-call text never mentions promised work (#115: the delivery is its own message), and never narrates", /never mention it here, not that it's coming, not that you're on it, not that nothing turned up/.test(src("jobs/postCallFollowUp.ts")) && /Never narrate your own state/.test(src("jobs/postCallFollowUp.ts")));
-check("the call brain is told yes: it sets it up now, on the call (2026-10-08: calls run Cue's tools)", /Say yes to this on a call and set it up then and there/.test(src("services/callBriefing.ts")) && /say yes and set it up now, on the call/.test(src("services/elevenLabsCalls.ts")));
+// 2026-10-31 (Royce): a task isn't started on a call any more (writing its input stalled the call); it opens right after, from their words.
+check("the call brain is told yes: it starts right after the call, never 'already set up'", /Say yes to this on a call, and tell them in your own words that you'll start on it right after you hang up/.test(src("services/callBriefing.ts")) && /say yes, and tell them in your own words that you'll start on it right after you hang up/.test(src("services/elevenLabsCalls.ts")) && !/set it up now, on the call/.test(src("services/elevenLabsCalls.ts")));
 console.log(`call tasks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit(failed ? 1 : 0);

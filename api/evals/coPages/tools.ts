@@ -98,7 +98,8 @@ S.useCoPageDb(null);
   check("rule 1: Cue picks the format and never asks; text, page, PDF, Google Doc each have their case", !!make && /never ask \\"a page or a PDF\?\\"|never ask "a page or a PDF\?"/.test(make.use) && /one fact or a short answer is a text/.test(make.use) && /a file to download, print or attach is a PDF/.test(make.use) && /a Google Doc only when they ask for one/.test(make.use), make?.use);
   check("rule 2 in Cue's own guidance: ONE text, nothing about the contents", /ONE text, your line saying what you made plus its link, and nothing about its contents in the chat/.test(make.use));
   check("update and take-down are registered, bounded", ["updatePage", "takeDownPage"].every((t) => Cap.ABILITIES.some((a: any) => a.tool === t && a.limits)));
-  check("on calls too", ["makePage", "updatePage", "takeDownPage"].every((t) => (CT.CALL_TOOL_NAMES as readonly string[]).includes(t)));
+  // 2026-10-31: making or changing a page isn't on a call (its input stalled the call); taking one down still is.
+  check("on calls: take a page down; making or changing one starts after the call", (CT.CALL_TOOL_NAMES as readonly string[]).includes("takeDownPage") && !["makePage", "updatePage"].some((t) => (CT.CALL_TOOL_NAMES as readonly string[]).includes(t)));
   const lt = fs.readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8");
   check("grounded on the same source as a document: their words and what Cue read this turn", /const pages = pageTools\(ctx, \{ say, notDone, source: pageSource \}\);/.test(lt) && /\.\.\.pages,/.test(lt));
   const ct = fs.readFileSync(new URL("../../../co-test/src/server.ts", import.meta.url), "utf8");

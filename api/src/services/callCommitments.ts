@@ -29,8 +29,25 @@ const GRACE_MINUTES = 20;
 
 const sentencesOf = (t: string) => (t.match(/[^.!?\n]+[.!?]*/g) ?? []).map((s) => s.trim()).filter(Boolean);
 
+// Work Cue says it will do once the call is over, in its own words (2026-10-31, Royce: tasks, research, pages, decks and documents
+// aren't done on a call any more, and Cue says it'll do them right after, however it puts it): "after the call", "after we hang up",
+// "right after this", "once we're off", "as soon as we're done". Its own first-person future, with an after-the-call time.
+const AFTER_THIS = String.raw`(?:right |just |straight )?after this(?:\s+call)?\b(?!\s+(?:week|weekend|month|year|morning|afternoon|evening|meeting|event|dinner|trip|one|time|is|was)\b)`;
+export const AFTER_CALL_TIME = new RegExp(
+  String.raw`\b(?:(?:right |just |straight )?after (?:the|our|this) call|(?:right |just |straight )?after (?:we|you) (?:hang up|get off|'re off|are off|'re done|are done|wrap up)|${AFTER_THIS}|(?:once|when|as soon as|the moment|the second) (?:we|you)(?:'re| are)? (?:off|done|hang up|get off|wrap up|finish)(?: (?:the|this) (?:call|phone))?|(?:once|when|as soon as) (?:the|this|our) call (?:ends|is over|'s over|wraps up)|after we finish (?:up|talking|here))`,
+  "i",
+);
+const FIRST_PERSON_FUTURE = /\b(?:i'?ll|i will|i'?m going to|i'?m gonna|i'?m (?:gonna |going to )?(?:start|get|dig|look|work)|let me)\b/i;
+// Pure: a sentence where Cue says it'll do something once the call is over (not a question, not an offer).
+export function afterCallPromise(s: string): boolean {
+  return FIRST_PERSON_FUTURE.test(s) && AFTER_CALL_TIME.test(s) && !/\?\s*$/.test(s) && !/^\s*(?:want me to|should i|would you like me to|do you want me to)\b/i.test(s);
+}
+
 // Pure: why a sentence is not a commitment a task can keep, or null when it is one.
 export function commitmentProblem(s: string): string | null {
+  // Said for after the call, in Cue's own words: kept, whatever the work (a search, a task over days, a deck), unless it's something
+  // Cue can't do at all (call, book or contact someone). The same work asked in their words (services/callTasks.ts) joins this task.
+  if (afterCallPromise(s)) return OFFERS_WHAT_CO_CANT.test(s) ? "something Cue can't do" : null;
   if (!COMMIT_RE.test(s)) return "not a commitment to send something";
   if (/\?\s*$/.test(s)) return "a question";
   if (/^\s*(?:want me to|should i|would you like me to|do you want me to)\b/i.test(s)) return "an offer";
@@ -87,7 +104,13 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
     // The same commitment said again on this call (or answering the same words of theirs) is the task already open for it,
     // noted there, never a second task (2026-10-08: one plan, said three ways, asked for once).
     const now = (o.now ?? new Date()).getTime();
-    const candidate = { goal: commitmentGoalAbout(o.sentence, o.coBefore), theirWords: theirWordsFor(o.theirLine ?? "(said on a call)") };
+    // Work for after the call names what it's about in their words, not Cue's ("I'll dig into that right after we hang up").
+    const afterCall = afterCallPromise(o.sentence);
+    const theirAsk = (o.theirLine ?? "").replace(/\s+/g, " ").trim();
+    const candidate = {
+      goal: afterCall && theirAsk ? `${COMMIT_PREFIX}${o.sentence.replace(/\s+/g, " ").trim().slice(0, 80)} (what they asked: ${theirAsk.slice(0, 100)})`.slice(0, 200) : commitmentGoalAbout(o.sentence, o.coBefore),
+      theirWords: theirWordsFor(o.theirLine ?? "(said on a call)"),
+    };
     const recent = (t: (typeof open)[number]) => typeof t.id === "number" && (!t.createdAt || now - new Date(t.createdAt).getTime() < SAME_CALL_HOURS * 3_600_000);
     const same = open.find((t) => recent(t) && sameCommitment(candidate, t));
     if (same) {
@@ -115,10 +138,12 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
       userId: o.userId,
       goal: candidate.goal,
       theirWords: theirWordsFor(o.theirLine ?? "(said on a call)"),
-      steps: [{ text: doc ? "Write the document with writeDocument and send it (a PDF), never as a long text" : "Send what you said you would, in a text, with the links or the document itself" }],
+      steps: [{ text: doc ? "Write the document with writeDocument and send it (a PDF), never as a long text" : afterCall ? "Do what you said you'd do after the call, from what they asked, and text them what you have" : "Send what you said you would, in a text, with the links or the document itself" }],
       firstPlan: doc
         ? "You told them this on a call: write it now as a document with writeDocument (their points from their words, your plan in suggestions). If you can't, tell them plainly where it stands."
-        : "You told them this on a call: send it now by text, with what they were looking at (the links, the summary). If you can't, tell them plainly where it stands.",
+        : afterCall
+          ? `On a call you told them you'd do this right after it: "${o.sentence.slice(0, 200)}". What they asked: "${theirAsk.slice(0, 200)}". Start now: do the first useful step (look it up, make it, line up the options) and text them what you have, or plainly where it stands.`
+          : "You told them this on a call: send it now by text, with what they were looking at (the links, the summary). If you can't, tell them plainly where it stands.",
       inHours: 1,
       source: "promise",
       window,
@@ -138,11 +163,19 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
 // The post-call fallback (the direct-Haiku path says these with nothing watching): the same, from the transcript, once each.
 // skip: Cue's lines from a turn whose tool already did it on the call (services/callLedger.ts call.turn_acted): never a promise to
 // keep again after the call.
-export async function trackCommitmentsFromTranscript(userId: string, transcript: string, o: { skip?: string[] } = {}): Promise<number> {
-  const co = transcript.split("\n").filter((l) => /^assistant:/i.test(l.trim())).map((l) => l.replace(/^assistant:\s*/i, ""));
-  const theirs = transcript.split("\n").filter((l) => /^user:/i.test(l.trim())).map((l) => l.replace(/^user:\s*/i, ""));
+// Each commitment goes with the member's line just before the Cue line that made it (the request it answers), not their last line
+// of the call (2026-10-31: an after-call promise is tied to what they asked on that turn).
+export async function trackCommitmentsFromTranscript(userId: string, transcript: string, o: { skip?: string[] } = {}, track: typeof trackCallCommitment = trackCallCommitment): Promise<number> {
+  const said: { sentence: string; theirLine: string | undefined }[] = [];
+  let theirLast: string | undefined;
+  for (const raw of transcript.split("\n")) {
+    const l = raw.trim();
+    if (/^user:/i.test(l)) theirLast = l.replace(/^user:\s*/i, "");
+    else if (/^assistant:/i.test(l)) for (const s of commitmentsIn([l.replace(/^assistant:\s*/i, "")])) if (!said.some((x) => x.sentence === s)) said.push({ sentence: s, theirLine: theirLast });
+  }
+  const keep = new Set(commitmentsNotCovered(said.map((x) => x.sentence), o.skip ?? []));
   let n = 0;
-  for (const s of commitmentsNotCovered(commitmentsIn(co), o.skip ?? [])) if ((await trackCallCommitment({ userId, sentence: s, theirLine: theirs[theirs.length - 1] })).ok) n++;
+  for (const x of said.filter((y) => keep.has(y.sentence))) if ((await track({ userId, sentence: x.sentence, theirLine: x.theirLine })).ok) n++;
   return n;
 }
 

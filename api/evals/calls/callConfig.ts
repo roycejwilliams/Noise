@@ -44,7 +44,7 @@ check("end_call and voicemail detection are still there", tools.some((t) => t.na
 // 2026-10-08: the word caps made every turn the same shape; Hume's own phone section sets the rhythm.
 check("no word caps in the call prompt (under ten words, 15 words, 60 words, two to four sentences)", !/under ten words|past 15 words|60 words at most|two to four short sentences/.test(ap.prompt));
 
-check("the call guide still says: no AI disclaimer, never 'not how I work' for multi-day help, act on the call", /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Cue does look[^\n]*/g, "")));
+check("the call guide still says: no AI disclaimer, never 'not how I work' for multi-day help, which starts right after the call (2026-10-31)", /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes, and tell them in your own words that you'll start on it right after you hang up/.test(ap.prompt) && !/set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Cue does look[^\n]*/g, "")));
 
 // ---- 5. keywords
 const kw: string[] = c.asr.keywords;
@@ -55,7 +55,7 @@ check("the recognizer listens for Cue too during the alias, and isn't boosted to
 // ---- 7. capability sheet and member context
 const sheet = B.CAPABILITY_SHEET;
 check("the sheet is in the call prompt", ap.prompt.includes("# What Cue can do today"));
-check("it says Cue does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Say yes to this on a call and set it up then and there/.test(sheet) && /Never say this is "not how I work"/.test(sheet) && !/A call can't start a task live/.test(sheet));
+check("it says Cue does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Say yes to this on a call, and tell them in your own words that you'll start on it right after you hang up/.test(sheet) && !/set it up then and there/.test(sheet) && /Never say this is "not how I work"/.test(sheet) && !/A call can't start a task live/.test(sheet));
 check("it does not promise what Cue can't: no finding investors or a particular advisor, no group texts, no daily messages", /Cue can't find investors, sponsors or funders on demand/.test(sheet) && /never starts a group text/.test(sheet) && /can't promise a daily message/.test(sheet));
 check("it says a call keeps its promise to look into something after the call", /After a call, Cue does look into what you said you'd look into/.test(sheet));
 check("it stops the questions it has answers to: say what you have and ask if it's still right", /Never ask for something you already know/.test(sheet) && /ask, in your own words, whether it's still right/.test(sheet));
@@ -109,7 +109,7 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
   check("proxy on: the endpoint names the call brain (Sonnet 4.6) and the tools stay on the agent", p.custom_llm.model_id === "claude-sonnet-4-6" && p.tools.length === tools.length);
   // 2026-10-31: with the backup "disabled", ElevenLabs retried our endpoint three times and ended the call mid-sentence.
   check("proxy on: a failed or slow endpoint falls back to ElevenLabs' own Sonnet 4.6 (the direct path's model), never a hang-up", p.backup_llm_config.preference === "override" && p.backup_llm_config.order.join() === "claude-sonnet-4-6" && !/haiku/i.test(JSON.stringify(p.backup_llm_config)), p.backup_llm_config);
-  check("proxy on: ElevenLabs waits 12s on the endpoint (2-15 allowed), and every proxy turn ends 2.5s inside it", p.cascade_timeout_seconds === 12 && p.cascade_timeout_seconds >= 2 && p.cascade_timeout_seconds <= 15 && p.cascade_timeout_seconds * 1000 - CLP.CALL_TURN_CAP_MS >= 2500, p.cascade_timeout_seconds);
+  check("proxy on: ElevenLabs waits 5s on the endpoint (2-15 allowed), and the first-words and silence deadlines sit 1.5s inside it", p.cascade_timeout_seconds === 5 && p.cascade_timeout_seconds * 1000 - Math.max(CLP.CALL_FIRST_WORDS_MS, CLP.CALL_SILENCE_MS) >= 1500, p.cascade_timeout_seconds);
   check("proxy off keeps its own 3s timeout and dated Sonnet 4.5 backup", ap.cascade_timeout_seconds === 3);
   check("proxy off (the live path): the backup is pinned to the nearest Sonnet", ap.backup_llm_config.preference === "override" && ap.backup_llm_config.order[0] === "claude-sonnet-4-5@20250929");
   check("proxy off (the live path): direct Sonnet 4.6, no custom_llm at all", ap.llm === "claude-sonnet-4-6" && ap.custom_llm === null);

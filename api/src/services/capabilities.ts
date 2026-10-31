@@ -145,7 +145,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_page",
     can: "Cue can make them a page: a plan with a few parts, options side by side, or a set of places with their links, at a private link only they get. It can change it in conversation (same link) and take it down when they ask.",
-    onCall: true,
+    // Not on a call (2026-10-31): its input is long to write, so it runs after the call from what they said (services/callTasks.ts, callCommitments.ts).
     tool: "makePage",
     limits: { perTurn: 1, perDay: 4 },
     use: "You pick the format, never them (never ask \"a page or a PDF?\"): one fact or a short answer is a text; a plan with several parts, options to compare, or a set of places with links is a page (makePage); a file to download, print or attach is a PDF (writeDocument); a Google Doc only when they ask for one. A page goes as ONE text, your line saying what you made plus its link, and nothing about its contents in the chat: the page holds them. If their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link. Build it only from what they told you and what you read for them. It takes their look the way a deck does: their saved taste applies on its own, or pass taste when they describe the look now (their exact words); never ask about taste for a page. Images they sent are their image #N in what you see (the number is only for your tools; never say it to them): their logo on the cover, a picture of theirs in the section it belongs to, only their own. They name images by what they show ('the studio photo', 'take the logo off'); match that to the description and pass its number, or 0 to take one off. Art direction is yours: pass artDirection every time, the composition that fits them and what it's about (catalog, fieldguide, menu, editorial, poster); name the real place a part is about in place (only one they named or you read, with its city) so its own credited photos and a map come in by code; pass coverMood, a few words for a labelled mood photo, for when no place's photo fits. Never describe the pictures yourself: Cue's line of choices says what they are.",
@@ -153,7 +153,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_page_update",
     can: "Cue can change a page it made for them; the link stays the same.",
-    onCall: true,
+    // Not on a call (2026-10-31): its input is long to write, so it runs after the call from what they said (services/callTasks.ts, callCommitments.ts).
     tool: "updatePage",
     limits: { perTurn: 1 },
     use: "When they ask for a change to a page you made (\"swap the Friday dinner\"), write the whole new version with updatePage and say in a few words what changed. Never send the page again or summarize it.",
@@ -226,7 +226,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_deck",
     can: "Cue can make them a slide deck (a pitch deck, a talk, a plan to present): a title slide and slides of a headline and a few points, at a private link only they get, designed from their own taste. It can change it in conversation (same link) and take it down when they ask.",
-    onCall: true,
+    // Not on a call (2026-10-31): its input is long to write, so it runs after the call from what they said (services/callTasks.ts, callCommitments.ts).
     tool: "makeDeck",
     // Three a turn and eight a day: a refused line is rewritten, never the reason a deck can't be made (live, 2026-10-11: Royce's
     // "descriptive slide deck" hit the old limit of 3 after refusals and got a non-answer).
@@ -250,7 +250,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_deck_update",
     can: "Cue can change a deck it made for them; the link stays the same. A deck has one look for every slide: its colors and type change for the whole deck, never for one slide.",
-    onCall: true,
+    // Not on a call (2026-10-31): its input is long to write, so it runs after the call from what they said (services/callTasks.ts, callCommitments.ts).
     tool: "updateDeck",
     limits: { perTurn: 3 },
     use: "When they ask for a change to a deck you made (\"slide 3 is weak\", \"make it darker\"), write the whole new version with updateDeck and say in a few words what changed. Never send the deck again or summarize it. A new slide goes before the closing ask or call to action unless they say where. A deck has one look: never offer colors or a style for one slide only; if they want a board's or image's look on just one slide, say plainly the look applies to the whole deck and ask whether to change the whole deck or keep it as is. If a change does only part of what they asked, name the part it doesn't do in notDone.",
@@ -258,7 +258,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "write_document",
     can: "Cue can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Cue's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Cue's offer, and it goes only to them. Cue can't make spreadsheets or slides as a document (a slide deck is makeDeck), and can't send it to anyone else for them.",
-    onCall: true,
+    // Not on a call (2026-10-31): its input is long to write, so it runs after the call from what they said (services/callTasks.ts, callCommitments.ts).
     tool: "writeDocument",
     // 8 a day (was 3, 2026-10-08): a fourth explicit "send it again" was refused as "already done today". The receipts are the guard
     // against sending the same artifact twice (deliveryReceipts.ts); this only bounds how many new documents go in a day.
@@ -276,7 +276,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "research_brief",
     can: "When they ask Cue to find venues for an event (\"find venues for my launch\", \"what are my options for a dinner for 40\") or say yes to that offer, Cue researches them in the background and sends a venue brief as a document: each option with its rate, minimum, capacity and, for a date they gave, whether it's open, every line with its source link and when it was checked, and anything it couldn't confirm shown as unknown. Options are held to a high-end bar, built from what Cue knows about them (city, size, date, budget, and what they liked or passed on before), and ordered by what they've said yes and no to. It comes as a PDF, or as a Google Doc when they ask for one and it's open to them. Asked again, it re-checks every option before re-sending.",
-    onCall: true,
+    // Not on a call (2026-10-31): its input is long to write, so it runs after the call from what they said (services/callTasks.ts, callCommitments.ts).
     tool: "researchBrief",
     limits: { perTurn: 1, perDay: 2 },
     confirm: "their_yes",
@@ -341,7 +341,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "task_start",
     can: "When they ask for something that takes more than one reply (a venue by Friday, sponsors lined up, getting ready for a pitch, a few options compared), Cue takes it on as its own task: it writes the steps, works on it on its own over the following days, texts them when there's something real, and decides when to look again. Cue can truthfully say when it'll get back to them.",
-    onCall: true,
+    // Not on a call (2026-10-31): its input is long to write, so it runs after the call from what they said (services/callTasks.ts, callCommitments.ts).
     tool: "startTask",
     limits: { perTurn: 1, perDay: 3 },
     use: "Take on something that needs work over more than this one reply: when they ask you to do it (a goal they've stated with a date, like a venue by Friday, counts: they've asked you to get it done), or you offer and they say yes. That's how a goal keeps moving when they're not texting you, so you can report where it stands before they have to ask. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly what you'll do and when you'll get back to them, but never what you'll find or a result you can't be sure of (“I'll look through venues and text you Thursday”, not “I'll get you real options by Friday”). For a search that just needs repeating, saveAsk is enough. A question about how something is going (\"any updates on the venue?\") isn't a new task: your open tasks are in what you know, so answer from them. Explicit watch language in their message right now (\"let me know when...\", \"keep an eye out for X\", \"tell me if...\", or a yes to your offer to watch) is a look-out: startTask with lookout: true, never saveAsk; what you send for it is something they asked for.",
@@ -780,15 +780,15 @@ const MENU: MenuLine[] = [
   { group: "Finding things", main: "save_ask", text: "keep watch for what they want found and text when something fits; list it, or stop suggesting a kind of thing", byTextOnCall: "keep watch for what they want found and text when something fits, and list it" },
   { group: "Finding things", main: "steer_away", text: null, call: "stop suggesting a kind of thing they don't want" },
   { group: "Finding things", main: "list_sent", text: "recap what it sent and resend a link" },
-  { group: "Working on something over days", main: "task_start", text: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds", call: "take on something that needs more than one reply as its own task" },
-  { group: "Working on something over days", main: "research_brief", text: "research venues for an event and send a brief of the options", call: "research venues for an event and send a brief" },
+  { group: "Working on something over days", main: "task_start", text: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds", byTextOnCall: "take on something that needs more than one reply as its own task" },
+  { group: "Working on something over days", main: "research_brief", text: "research venues for an event and send a brief of the options", byTextOnCall: "research venues for an event and send a brief" },
   { group: "Working on something over days", main: "draft_email", text: "write an email for them to send themselves" },
   { group: "Working on something over days", main: "email_plan", text: "plan a day, a night or a trip as a one-page sheet" },
   { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone Cue introduced them to, or remind them to follow up" : "remind them to follow up on something"; } },
-  { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", call: "make a private page (a plan, options side by side) and change it or take it down; it arrives in their texts when it's ready, never on the line" },
-  { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", call: "make a slide deck from their taste, and change it; it arrives in their texts when it's ready, never on the line" },
+  { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", byTextOnCall: "make a private page (a plan, options side by side) and change it" },
+  { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", byTextOnCall: "make a slide deck from their taste, and change it" },
   { group: "Making things", main: "co_artifact_share", text: "share a view-only link to a page or deck, stop it, or keep it for good", call: "share a view-only link to a page or deck, stop it, or keep it for good" },
-  { group: "Making things", main: "write_document", text: "write a document (a plan, a summary, a write-up from a PDF they sent) and send it", call: "write a document (a plan or a summary); it arrives in their texts when it's ready" },
+  { group: "Making things", main: "write_document", text: "write a document (a plan, a summary, a write-up from a PDF they sent) and send it", byTextOnCall: "write a document (a plan or a summary)" },
   { group: "People", main: "co_events", text: "at Noise events, tell them who's worth meeting and why" },
   { group: "People", main: "introductions", text: "introduce them to someone by one email, after both say yes" },
   { group: "People", main: "outside_events", text: "give a heads-up when another member is going to the same outside event" },
@@ -826,8 +826,8 @@ export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; li
 //   now    quick and certain: run inside the turn, with a tight timeout of their own (ms). Sending a link, event or find already
 //          on file, saving what they want or think, starting work that runs after the call, keeping their notes and tasks
 //          current. Past its timeout a tool keeps going on its own; a send that hasn't come back is owed right after the call.
-//   after  slow or multi-step (a page, a deck, a document): started from the call, never waited on past a moment, made after
-//          it and texted when ready.
+//   after  slow or multi-step, started from the call and carried on after it. Nothing uses it since 2026-10-31: a tool whose input
+//          is long to write (a task, research, a page, a deck, a document) isn't on a call at all; it opens after the call.
 // Never on a call, whatever the registry says: anything that needs another member's yes (an intro), anything that costs money,
 // and everything not listed here (web research, reading pages, drafting email: slow or multi-step, so a task or a promise
 // picks it up right after the call).
@@ -835,8 +835,6 @@ export type CallRun = { run: "now"; kind: "send" | "save" | "start" | "read"; ms
 const SEND: CallRun = { run: "now", kind: "send", ms: 4000 };
 const SAVE: CallRun = { run: "now", kind: "save", ms: 3000 };
 const START: CallRun = { run: "now", kind: "start", ms: 3000 };
-// 3.5s: long enough for the guard's own answers (their yes is a short model read) to reach the model, as PR 6 measured for decks.
-const AFTER: CallRun = { run: "after", waitMs: 3500 };
 export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   // Send what's on file: the link goes to their texts during the call.
   shareLink: SEND,
@@ -847,10 +845,9 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   // A quick look: the event feed (no web search on a call) and what Cue knows about them.
   searchEvents: { run: "now", kind: "read", ms: 5000 },
   whatCoKnows: { run: "now", kind: "read", ms: 3000 },
-  // Start work that runs after the call.
-  startTask: START,
-  // Their yes is a short model read first (services/theirYes.ts), so these get a little longer.
-  researchBrief: { run: "now", kind: "start", ms: 5000 },
+  // Save what they want found (it runs after the call). startTask and researchBrief are not on a call (2026-10-31): writing their
+  // input took the model ~6s of silence and ElevenLabs gave up on the turn; the work opens after the call from what they said
+  // (services/callTasks.ts).
   saveAsk: START,
   // Save what they said: an event they're into, their notes, tasks, preferences, corrections and consent.
   noteReaction: SAVE,
@@ -871,12 +868,8 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   deleteImages: SAVE,
   correctWhatCoKnows: { run: "now", kind: "save", ms: 5000 },
   voiceRead: SAVE,
-  // Made after the call, delivered by text.
-  makePage: AFTER,
-  updatePage: AFTER,
-  makeDeck: AFTER,
-  updateDeck: AFTER,
-  writeDocument: AFTER,
+  // Pages, decks and documents are not on a call (2026-10-31, same reason): a spoken "I'll put that together" opens its task after
+  // the call (services/callCommitments.ts), and the link goes by text.
 };
 // What can never run on a call, even if it were listed above.
 const NEVER_ON_CALL: ReadonlySet<NonNullable<Ability["confirm"]>> = new Set(["affects_another_member", "costs_money"]);
