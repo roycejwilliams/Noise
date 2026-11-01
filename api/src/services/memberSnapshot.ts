@@ -41,7 +41,7 @@
 // that is the learning prompt's change (step 7), not this one.
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
-import type { PoolClient } from "pg";
+import { Pool, type PoolClient } from "pg";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { capabilitySheet } from "./capabilities.js";
@@ -512,6 +512,11 @@ export type ReadState = "fresh" | "rebuilt" | "built_unstored" | "blocked" | "fa
 export type SnapshotRead = { snapshot: StoredSnapshot | null; state: ReadState; waitedMs: number; buildMs: number | null };
 
 type Db = { connect: () => Promise<PoolClient>; query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
+// The store transaction holds one connection while the build's reads run on the shared pool. On the shared pool, enough builds at once
+// (LEARN for several members) would each hold a connection and wait on the others for their reads; so store transactions get their own
+// small pool, and a build that can't get one within 5s fails (its marks stay; the next read rebuilds). Made on first use.
+let storePool: Pool | null = null;
+const defaultDb = (): Db => (storePool ??= new Pool({ connectionString: process.env.DATABASE_URL, max: 4, connectionTimeoutMillis: 5_000 })) as unknown as Db;
 // The two-key advisory lock space (key 1 = "SNAP"), apart from the one-key locks the phone lock uses (db/advisoryLock.ts).
 const LOCK_NS = 0x534e4150;
 const lockKey = (userId: string) => createHash("md5").update(userId).digest().readInt32BE(0);
@@ -532,7 +537,7 @@ export type StoreResult = { state: "stored" | "blocked" | "fresh" | "locked" | "
 // commits while it reads leaves its mark and the next read rebuilds; a failed build rolls back and leaves every mark where it was.
 //   force: build even when fresh (LEARN). Otherwise a build that waited re-reads first: the build it waited for may have just stored.
 export async function storeBuild(userId: string, o: { reason: string; force?: boolean; waitMs?: number; now?: () => Date; db?: Db; deps?: Partial<SnapshotDeps> }): Promise<StoreResult> {
-  const db: Db = o.db ?? (pool as unknown as Db);
+  const db: Db = o.db ?? defaultDb();
   const d = { ...realDeps(), ...o.deps };
   const nowOf = o.now ?? (() => new Date());
   const waitMs = o.waitMs ?? READ_WAIT_MS;
@@ -615,7 +620,7 @@ export async function storeBuild(userId: string, o: { reason: string; force?: bo
 // READ_WAIT_MS for it, then builds from the database itself without storing. A blocked fence or a failed build returns no snapshot:
 // the caller runs on the tail and rules, never on an older version.
 export async function readSnapshot(userId: string, o: { now?: () => Date; waitMs?: number; db?: Db; deps?: Partial<SnapshotDeps> } = {}): Promise<SnapshotRead> {
-  const db: Db = o.db ?? (pool as unknown as Db);
+  const db: Db = o.db ?? defaultDb();
   const nowOf = o.now ?? (() => new Date());
   try {
     const cur = (await db.query(STATE_SQL, [userId])).rows[0] ?? null;
@@ -649,7 +654,7 @@ export async function rebuildSnapshot(userId: string, reason = "learn", o: { db?
 // snapshot isn't built here (LEARN makes the first one). Marks for members with no stored snapshot are dropped after an hour (absence
 // already means "build first"), and so are marks of deleted accounts.
 export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partial<SnapshotDeps> } = {}): Promise<{ rebuilt: number; skipped: number; pruned: number }> {
-  const db: Db = o.db ?? (pool as unknown as Db);
+  const db: Db = o.db ?? defaultDb();
   const due = (
     await db.query(
       `SELECT s.user_id FROM member_snapshots s
