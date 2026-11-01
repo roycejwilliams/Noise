@@ -989,7 +989,7 @@ const searchedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) =>
 // A search claim is backed by this turn's receipt only when Cue's own wording says it as done (an allowlist: review of 4e042fdb found
 // "I’m looking now", "Working on it", "Give me a minute" slipping past a list of ongoing words), and nothing in it says the work goes on.
 const SAYS_DONE = /\b(?:looked|searched|checked|dug|tried|went through|had a look|ran a search|did a search)\b/i;
-const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to|on it|give me|a (?:minute|sec(?:ond)?|moment)|more soon|hang tight|stand by)\b|\b(?:look|search|digg?|check|hunt|find|try)ing\b|\bI'(?:ll|m)\b|\bI am\b/i;
+const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to|on it|give me|a (?:minute|sec(?:ond)?|moment)|more soon|soon|hang tight|stand by|tonight|tomorrow|later|back to you|another (?:pass|look|try|round)|more to come|next)\b|\b(?:look|search|digg?|check|hunt|find|try)ing\b|\bI'(?:ll|m)\b|\bI am\b/i;
 export const saysSearchDone = (claim: string): boolean => { const t = claim.replace(/[’‘]/g, "'"); return SAYS_DONE.test(t) && !SAYS_ONGOING.test(t); };
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
   return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
