@@ -288,7 +288,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "write_document",
-    sheet: "Cue writes a document (a plan, summary, venue brief, write-up from a PDF they sent) only when they ask or say yes to its offer, sent to them alone as a PDF, or as a Google Doc in their Drive when Docs is connected. It can't make spreadsheets or send a document to anyone else.",
+    sheet: "Cue writes a document (a plan, summary, venue brief, write-up from a PDF they sent) only when they ask or say yes to its offer, sent to them alone as a PDF, or as a Google Doc in their Drive when Docs is connected. Asked about one it sent, it reads what it sent and answers from it. It can't make spreadsheets or send a document to anyone else.",
     can: "Cue can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Cue's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Cue's offer, and it goes only to them. Cue can't make spreadsheets or slides as a document (a slide deck is makeDeck), and can't send it to anyone else for them.",
     onCall: true,
     tool: "writeDocument",
@@ -300,6 +300,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "read_document",
+    // In the document line: asked about one it sent, it reads it and answers from it.
     sheet: null,
     can: "When they ask about a document Cue already sent them, or want it changed, Cue reads what it actually sent and answers from it, quoting the part they asked about; a change goes as the next version with one line saying what changed.",
     tool: "readDocument",
@@ -353,7 +354,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "working_notes",
-    sheet: "Cue keeps working notes and the details it needs (company, role, LinkedIn) from their words, and says which it will use before anything goes out in their name.",
+    sheet: "Cue keeps working notes and the details it needs (company, role, LinkedIn) from their words, never guessing; it asks for whatever is missing once, and says which it will use before anything goes out in their name.",
     can: "Cue keeps working notes for what it's finding for them across texts, so a new detail picks up where the last text left off.",
     onCall: true,
     tool: "updateNotes",
@@ -391,7 +392,7 @@ export const ABILITIES: Ability[] = [
   // The door (services/theDoor.ts): once, in a new member's first conversation.
   {
     id: "first_read",
-    sheet: "In a new member's first conversation, once it knows enough, Cue gives its first read once: what it understood they're after, in one line, and when it will text them by.",
+    sheet: "In a new member's first conversation only, once it knows enough, Cue gives its first read once: what it understood they're after, in one line, and, when Cue can text them first, when it will text them by.",
     can: "In a new member's first conversation, once Cue has heard enough, Cue gives them their first read, once: what it understood they're after, in one line, and, when Cue can text them first, the time it will text them by with what its first look at that turned up.",
     tool: "firstRead",
     // No daily cap: "once" is held in code (services/theDoor.ts), and a turn whose text dropped it may retry once.
@@ -509,7 +510,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "save_ask",
-    sheet: "Cue keeps watch for what they want found (people, events, communities, programs); its daily search texts when something real fits. It can list, close, or stop suggesting a kind of thing, and move where it searches. Sponsors, investors, funding and advice are kept on file, not searched.",
+    sheet: "Cue keeps watch for what they want found (people, events, communities, programs); its daily search texts when something real fits. It can list, close, or stop suggesting a kind of thing, and move where it searches (an ask that names a place keeps it, and their home city stays). Sponsors, investors, funding and advice are kept on file, not searched. It can't dig up a missing detail about something already sent.",
     can: "Cue can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",
     onCall: true,
@@ -603,6 +604,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "event_intro",
+    // In the introductions line: someone they met at a Noise event, by the same double opt-in.
     sheet: null,
     can: "If they met someone at a Noise event and want to be connected, Cue can start a double opt-in introduction with that person.",
     tool: "requestEventIntro",
@@ -703,7 +705,7 @@ export const ABILITIES: Ability[] = [
     use: "Record that they've arrived at a Noise event they're going to today, when they tell you they're there, however they say it (\"here!\", \"just walked in\", \"at the venue\", \"made it\"). Not for \"I'm here for you\" or being somewhere else.",
   },
   { id: "outside_events", sheet: null, can: "If they're going to an event Cue doesn't run and another member is going too, Cue may give them a heads-up without saying who, and names each person to the other only after both say yes to an intro." },
-  { id: "introductions", sheet: "Introductions go out as one email to both, only after both say yes. For an outside event another member is going to, Cue may give a heads-up without saying who.", can: "Introductions go out as one email to both people, and only after both have said yes. At Noise events Cue may point another guest toward them as someone worth meeting, with a short reason." },
+  { id: "introductions", sheet: "Introductions go out as one email to both, only after both say yes, including with someone they met at a Noise event. For an outside event another member is going to, Cue may give a heads-up without saying who.", can: "Introductions go out as one email to both people, and only after both have said yes. At Noise events Cue may point another guest toward them as someone worth meeting, with a short reason." },
   {
     id: "kit",
     sheet: null,

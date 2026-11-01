@@ -115,7 +115,8 @@ export type FactKind =
 
 // snap: an entry of the member's snapshot (services/memberSnapshot.ts), under its own id ("L4711", "Pcity"). The fact check reads it
 // like any fact; the reply reads it in its cached prefix, so it's never rendered into the reply's tail (renderReplyFacts tail).
-export type Fact = { id: string; kind: FactKind; text: string; snap?: true };
+// Its value is the entry's provenance (said, seen, did, inferred).
+export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "seen" | "did" | "inferred" };
 
 // privateNames: the other member(s) a blocked turn is about, so a reply can't name them
 // (harness/discretion.ts).
@@ -131,7 +132,9 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: true };
 // moment: what they're doing in this message, from the turn's moment read (services/connectDots.ts readMoment: "sharing", "feedback",
 // ...). The reply check reads it to tell a cut that left a sharing reply flat (repairShareCut); never rendered into a prompt.
 // changedBy: the tools that changed a setting or a record this turn (any not in services/capabilities.ts CHANGES_NOTHING, recorded by the guard).
-export type ReplyFacts = { changedBy?: string[]; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+// snapshot: the member's pinned snapshot and the lines added since (a text reply): the judge calls send the pinned text as their own
+// cached block (judgeSystem) and list "Since then" after it.
+export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -206,28 +209,40 @@ export function addInstruction(rf: ReplyFacts, text: string): void {
   if (t && !rf.instructions.includes(t)) rf.instructions.push(t);
 }
 
-// Pure: the member's snapshot entries as this reply's facts, for the fact check (snap: never in the reply's tail). What each can back:
-// Cue's read (inferred) and an act of Cue's that didn't happen (the builder's "not_done" relation or a "(receipt ...)" other than done)
-// back nothing (hints); an open item in their world is scheduled work, a closed one what Cue did; Cue's acts are what it did; what Cue
-// can do is a capability; the rest (their words, what Cue saw) is known.
+// Pure: the member's snapshot entries as this reply's facts, for the fact check (snap: never in the reply's tail). What each can back,
+// from the entry's own provenance, section, kind and receipt: Cue's read (inferred) and an act of Cue's that didn't happen (a
+// not_done act, or a receipt other than done) back nothing (hints); an open item in their world is scheduled work, a closed one what
+// Cue did; Cue's acts are what it did; what Cue can do is a capability; the rest (their words, what Cue saw) is known.
 export function addSnapshotFacts(rf: ReplyFacts, entries: SnapEntry[]): void {
   for (const e of entries) {
     if (rf.facts.some((f) => f.id === e.id)) continue;
-    const didnt = e.section === "ledger" && (/^not_done\b/.test(e.text) || /\(receipt (?!done)/.test(e.text));
+    const didnt = e.section === "ledger" && (e.kind === "not_done" || !!e.receipt);
     const kind: FactKind = e.prov === "inferred" || didnt ? "hint" : e.section === "can" ? "capability" : e.section === "world" ? (e.open ? "scheduled" : "did_before") : e.section === "ledger" ? "did_before" : "known";
-    rf.facts.push({ id: e.id, kind, text: `${e.date ? `${e.date}: ` : ""}${e.text}`, snap: true });
+    rf.facts.push({ id: e.id, kind, text: `${e.date ? `${e.date}: ` : ""}${e.text}`, snap: e.prov });
   }
 }
 
-// What Co can do and the lines it doesn't cross: one registry
-// (services/capabilities.ts), shared with the tools themselves.
+// The judge calls (the fact check, the redraft, the thread repair, the share rewrite) on a text reply: the member's pinned snapshot as
+// their own cached system block, the same bytes the reply sends, so it's read from cache after the first call. Nothing without one.
+export function judgeSystem(rf: Pick<ReplyFacts, "snapshot">): { system?: { role: "system"; content: string; providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }[] } {
+  return rf.snapshot ? { system: [{ role: "system", content: rf.snapshot.prefix, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }] } : {};
+}
+const SNAPSHOT_NOTE = "Cue's snapshot of them above is also among the facts: cite any of its lines by its [id]. A line marked inferred is Cue's own read and backs nothing; an act with a receipt (not done, limited, needs yes) didn't happen.";
+const sinceBlock = (rf: Pick<ReplyFacts, "snapshot">) => (rf.snapshot?.since.length ? `\nSince then (added after Cue's snapshot above; cite by [id]):\n${rf.snapshot.since.join("\n")}` : "");
+// The facts a judge call reads in its prompt: with the snapshot cached above, only this turn's facts and "Since then".
+export function renderJudgeFacts(rf: ReplyFacts): string {
+  return rf.snapshot ? `${SNAPSHOT_NOTE}\n${renderReplyFacts(rf, { tail: true })}${sinceBlock(rf)}` : renderReplyFacts(rf);
+}
 
 // Facts that are true for every reply, before anything about this person. What Cue can do: with the member's snapshot, its section 6
 // (identical for every member, cited by entry id) plus this turn's per-turn lines; without one (a read that failed or was fenced, or a
 // caller with none), the whole sheet, in the tail.
-export function baseReplyFacts(situation?: Situation, snapshot?: Pick<ReplySnapshot, "entries"> | null, team = false): ReplyFacts {
+export function baseReplyFacts(situation?: Situation, snapshot?: Pick<ReplySnapshot, "entries" | "prefix" | "since"> | null, team = false): ReplyFacts {
   const rf = createReplyFacts();
-  if (snapshot) addSnapshotFacts(rf, snapshot.entries);
+  if (snapshot) {
+    addSnapshotFacts(rf, snapshot.entries);
+    rf.snapshot = { prefix: snapshot.prefix, since: snapshot.since };
+  }
   for (const c of snapshot ? (situation ? perTurnSheet(situation) : []) : capabilitySheet({ team, situation })) addFact(rf, "capability", c);
   // How Co keeps a confidence, so the model chooses a discreet line itself when
   // asked to speak for another member (harness/discretion.ts).
@@ -384,6 +399,11 @@ export async function gatherReplyFacts(
   await addOngoingSearchFacts(rf, userId, opts.turn?.asks);
   for (const correction of corrections) addFact(rf, "known", correction);
   // What Cue sent, searched and did for them is the snapshot's ledger (section 5); what their message names from it is said below.
+  // Without a snapshot (its read failed or was fenced), the turn's own ledger lines stand in, so a true "I sent you X" isn't cut.
+  if (!opts.snapshot) for (const line of opts.turn?.ledger?.lines ?? []) addFact(rf, "did_before", line);
+  // Intros Cue made and the members it suggested, from its own records (co_memories: not on the ledger yet; they move there with the
+  // ledger cutover, step 8). Details-free and through the guards.
+  for (const line of await introRecordFacts(userId).catch(() => [] as string[])) addFact(rf, "did_before", line);
   // What's on file for what Co recently sent: times and places, and what isn't
   // (services/turnContext.ts), before Co ever says it doesn't have them.
   if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
@@ -536,6 +556,19 @@ export async function gatherReplyFacts(
     }
   }
   return rf;
+}
+
+// Cue's intro records for them (memberSafeMemories.ts introFacts: intro emails, guest-match nudges and opt-ins, Tier 0 picks), the
+// latest few, with anything they had removed left out (whatCoKnows.ts guardText).
+async function introRecordFacts(userId: string): Promise<string[]> {
+  const [{ introFacts }, W] = await Promise.all([import("../services/memberSafeMemories.js"), import("../services/whatCoKnows.js")]);
+  const [rows, removed] = await Promise.all([
+    pool
+      .query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('event_intro_email_sent', 'event_guest_match_nudge', 'event_guest_match_optin', 'recommendation') ORDER BY created_at DESC LIMIT 10`, [userId])
+      .then((r) => r.rows as { content: string; memory_type: string }[]),
+    W.forgottenRows(userId).then((r) => r.filter((x) => x.removed)),
+  ]);
+  return introFacts(rows).map((l) => (removed.length ? W.guardText(l, removed) : l)).filter((l): l is string => !!l);
 }
 
 // Pure: their world on this reply's facts (services/memberWorld.ts): one fact line, the check-in rule, and the world itself for the
@@ -1386,11 +1419,13 @@ export async function admissionsFor(claims: Claim[], judge?: AdmissionJudge, fac
 
 async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources, model: string = LAYER3_MODELS.grounding): Promise<{ claims: Claim[]; latencyMs: number } | null> {
   const started = Date.now();
-  const facts = rf.facts.filter((f) => f.kind !== "hint").map((f) => `[${f.id}] ${f.text}`).join("\n");
+  // With the snapshot cached above (judgeSystem), its entries aren't listed again: only this turn's facts and "Since then".
+  const facts = `${rf.snapshot ? `${SNAPSHOT_NOTE}\n` : ""}${rf.facts.filter((f) => f.kind !== "hint" && !(rf.snapshot && f.snap)).map((f) => `[${f.id}] ${f.text}`).join("\n")}${sinceBlock(rf)}`;
   const receipts = receiptsForCheck(rf);
   // Held to the claims shape at the API (services/structuredJudge.ts); every citation is still checked in code (claimChecks).
   const { judgeJson, CLAIMS_SCHEMA } = await import("../services/structuredJudge.js");
   const { text } = await judgeJson(CLAIMS_SCHEMA, {
+    ...judgeSystem(rf),
     model: anthropic(model),
     maxOutputTokens: 2000,
     // Haiku takes no effort setting (it errors, 2026-09-27).
@@ -1705,11 +1740,12 @@ async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: 
     providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
     abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
     experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.redraft" },
+    ...judgeSystem(rf),
     prompt: `${CO_VOICE}
 
 ${CO_TEXT_CHANNEL}
 
-${renderReplyFacts(rf)}
+${renderJudgeFacts(rf)}
 
 Recent conversation:
 ${tail || "(none)"}
@@ -2040,9 +2076,10 @@ const CLAIMS_ON_FILE = /\bon file\b/i;
 // redraft, which sees their own words and the facts and says the true thing
 // (2026-10-01, semanticLive cross-user). That includes a wrong "I don't have
 // the start time" when a FACT gives it.
-// What Cue knows about them: the snapshot's entries on the facts (a text reply), or the summary and memories a caller passed.
+// What they told Cue: a snapshot entry in their own words (said; never the sheet, Cue's acts or its reads), or the summary and
+// memories a caller passed.
 export function deniesWhatTheyToldCo(failed: GateCheck[], src: GroundingSources, rf?: Pick<ReplyFacts, "facts">): boolean {
-  return !!(rf?.facts.some((f) => f.snap) || src.recentMemories?.trim() || src.contextSummary?.trim()) && failed.some((c) => /^claim_(detail|member_life)$/.test(c.name) && CO_DENIES_HAVING.test(c.reason ?? ""));
+  return !!(rf?.facts.some((f) => f.snap === "said") || src.recentMemories?.trim() || src.contextSummary?.trim()) && failed.some((c) => /^claim_(detail|member_life)$/.test(c.name) && CO_DENIES_HAVING.test(c.reason ?? ""));
 }
 
 const CLAIM_SHAPED = [
@@ -2205,9 +2242,10 @@ async function repairAfterThreadCut(cut: string, rf: ReplyFacts, src: GroundingS
     providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
     abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
     experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.thread_repair" },
+    ...judgeSystem(rf),
     prompt: `${CO_TEXT_CHANNEL}
 
-${renderReplyFacts(rf)}
+${renderJudgeFacts(rf)}
 
 They just said: "${src.message}"
 
@@ -2448,7 +2486,8 @@ export async function groundReply(
               providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
               abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
               experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.share_rewrite" },
-              prompt: shareRewritePrompt({ facts: renderReplyFacts(rf), tail: src.recentConversation.split("\n").slice(-14).join("\n"), theirWords: theirOwnWords(src.recentMemories), message: src.message, draft, removed: removedClaims(o.failed), cut: o.cut, offerKeep: o.offerKeep, feedback }),
+              ...judgeSystem(rf),
+              prompt: shareRewritePrompt({ facts: renderJudgeFacts(rf), tail: src.recentConversation.split("\n").slice(-14).join("\n"), theirWords: theirOwnWords(src.recentMemories), message: src.message, draft, removed: removedClaims(o.failed), cut: o.cut, offerKeep: o.offerKeep, feedback }),
             })
           ).text,
         recheck: async (rewrite) => {

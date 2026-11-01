@@ -1011,6 +1011,8 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
       decisions.push({ layer: 3, decision: "knowledge.cancel_queued", userId, outcome: "act", action: `${c.kind}:${c.action}`, proposal: byRemoval(c) ? { id: c.id, because: c.because } : { id: c.id, what: clean(c.what).slice(0, 160), because: c.because } });
     }
     await client.query("COMMIT");
+    // The reply's pinned snapshot still says what changed: its next reply pins afresh (services/memberSnapshot.ts dropPin).
+    if (applied.length) await import("./memberSnapshot.js").then((S) => S.dropPin(userId)).catch(() => {});
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
