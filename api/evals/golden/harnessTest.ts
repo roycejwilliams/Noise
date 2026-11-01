@@ -265,7 +265,8 @@ const api = new URL("../../", import.meta.url).pathname;
     ["the call-offer gesture line", "A call offer is NOT available this turn", "Always offer a call. A call offer is NOT available this turn"],
     ["one sendReply", "One sendReply per turn.", "Call sendReply as many times as you like."],
     ["a tool description", "Flag it when what they say may mean", "Never call this tool. Flag it when what they say may mean"],
-    ["a capability fact", "can send a second text when there's a genuinely separate thought", "can send a second text when there is a genuinely separate thought"],
+    // The capability sheet sits in the snapshot's section 6 since snapshot step 3 (its trimmed `sheet` lines).
+    ["a capability fact", "a second text only for a separate thought", "a second text for any thought"],
   ] as const) {
     const after = real((s) => s.split(JSON.stringify(from).slice(1, -1)).join(JSON.stringify(to).slice(1, -1)));
     check(`mutating ${label} in the recorded reply request changes its skeleton`, JSON.stringify(rec.request.body).includes(JSON.stringify(from).slice(1, -1)) && after.hash !== base.hash);
