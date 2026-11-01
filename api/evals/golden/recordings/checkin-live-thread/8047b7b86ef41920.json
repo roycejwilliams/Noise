@@ -1,7 +1,7 @@
 {
-  "hash": "943c052c2f412a62",
+  "hash": "8047b7b86ef41920",
   "case": "checkin-live-thread",
-  "recorded_at": "2026-11-01T18:26:07.244Z",
+  "recorded_at": "2026-11-01T18:41:15.393Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -106,17 +106,12 @@
         {
           "content": [
             {
-              "signature": "EugDCs0CCBMYAipAliG4FToDFO8CkPGRO632O0wnLoe1bFNb+bCy3vTmR5iyXp70Vm6lo1ljbILtsqhqMtXMNAg3Bi5qw9u/mc0MTTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBtoie1wbCAUMIBxAAGhUBm5kB/OkBHqwCDHQDTzcFKM4EJq0gBDIEEnHPJToEDmBn0kIEjgsizUoETDZPPlBJWgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAzuZraDwHbHVJ5ibS9WsyAwdwdwM7Yw3q1e96P4PGJMiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxb3pwYWynV0L9uVnQaDHBCVKys3zDfcv2xRSIwmKj5ECXQRdZ8gIQ5PCsRp8qxTQC9ZQRxwpc5+fBQb2zp9rlNIac+xeh/FfqdjH/FKkhv/kC9pLIivnZ2KRT4593pdsQds5reNPM2ZPNOY4XR/xOlrWKG2AIuVcWGiuwDMq+FS+1LE71rv1TEIvCEdym08JfTcDXuypwYAQ==",
-              "thinking": "",
-              "type": "thinking"
-            },
-            {
               "caller": {
                 "type": "direct"
               },
-              "id": "toolu_01HSibeCrjpAwmUMuTue5RNT",
+              "id": "toolu_01YQnWezm53ih2huy9cFZqha",
               "input": {
-                "message": "Nothing back from the venue yet. I'll be watching for it."
+                "message": "All good here. Still no word from the Hayes Valley place, but you'll hear something soon enough."
               },
               "name": "sendReply",
               "type": "tool_use"
@@ -128,7 +123,7 @@
           "content": [
             {
               "content": "{\"ok\":true}",
-              "tool_use_id": "toolu_01HSibeCrjpAwmUMuTue5RNT",
+              "tool_use_id": "toolu_01YQnWezm53ih2huy9cFZqha",
               "type": "tool_result"
             }
           ],
@@ -4359,10 +4354,10 @@
       "text": "Sent.",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 101,
+        "cache_creation_input_tokens": 90,
         "cache_read_input_tokens": 57630,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 101,
+          "ephemeral_5m_input_tokens": 90,
           "ephemeral_1h_input_tokens": 0
         },
         "output_tokens": 6,
@@ -4375,7 +4370,7 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgcgJgSpEjjXwCXmj9SHQ",
+        "id": "msg_011CgchTcwbFZftu8tjGToZV",
         "type": "message",
         "role": "assistant",
         "content": [
@@ -4390,10 +4385,10 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 101,
+          "cache_creation_input_tokens": 90,
           "cache_read_input_tokens": 57630,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 101,
+            "ephemeral_5m_input_tokens": 90,
             "ephemeral_1h_input_tokens": 0
           },
           "output_tokens": 6,
@@ -4410,7 +4405,7 @@
   ],
   "structure": {
     "v": "be0153bcbe53",
-    "hash": "fcbc75417c42587c",
+    "hash": "0c34a87cba0c3e21",
     "wording": {
       "coVoice.ts:VOICE_STYLE#0": "d3c1d29d",
       "coVoice.ts:VOICE_TONE#0": "d0c8198c",

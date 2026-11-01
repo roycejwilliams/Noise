@@ -1,0 +1,102 @@
+{
+  "hash": "6ef5932817022704",
+  "case": "checkin-live-thread",
+  "recorded_at": "2026-11-01T18:41:10.378Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2108,
+    "system": "",
+    "messages": 1,
+    "last": "user: Cue, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Cue may only say where it stands when the member told Cue. What th...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2108,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Cue, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Cue may only say where it stands when the member told Cue.\nWhat they just told Cue: \"Just checking in\"\nWhat they texted Cue before that, oldest first (their own words):\n- \"Emailed the Hayes Valley place about the 14th. Fingers crossed they get back to me.\"\n- \"Will do\"\n\nSentences:\n1. \"Still no word from the Hayes Valley place, but you'll hear something soon enough.\"\n\nFor each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Cue?\nA sentence that repeats, reacts to or builds on news the member gave (just now or before) is NOT a status report. For example, after \"the venue said yes\", \"Great that the venue said yes\" is not a report; with no news from them, \"No word yet from the venue\" is a report.\n\nReturn ONLY JSON: {\"reports\": [the numbers of the sentences that state where it stands]}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "```json\n{\"reports\": [1]}\n```",
+      "usage": {
+        "input_tokens": 416,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 401,
+        "output_tokens_details": {
+          "thinking_tokens": 385
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgchT8N8LRwaqwovgxrxA",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "```json\n{\"reports\": [1]}\n```"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 416,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 401,
+          "output_tokens_details": {
+            "thinking_tokens": 385
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "6ef5932817022704",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,7 +1,7 @@
 {
-  "hash": "b8c80720c931357b",
+  "hash": "25b1b32d4ae9934b",
   "case": "feedback-cue-mistake",
-  "recorded_at": "2026-11-01T18:29:05.807Z",
+  "recorded_at": "2026-11-01T18:41:42.937Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -20,7 +20,7 @@
         {
           "content": [
             {
-              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Nothing's running on that right now. That link's dead, you're right, it 404s. Want me to keep digging for a studio in the Mission with an intro wheel class, or widen it beyond the Mission if that gets you a better shot at Saturday mornings?\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"That one's on me, the link I sent doesn't work. I've passed it along. Want me to find another wheel class in the Mission?\"\n\nReturn ONLY \"yes\" or \"no\".",
               "type": "text"
             }
           ],
@@ -37,7 +37,7 @@
       "model": "claude-haiku-5-5",
       "text": "no",
       "usage": {
-        "input_tokens": 216,
+        "input_tokens": 175,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation": {
@@ -54,7 +54,7 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgcgXra8LGqm96GgKtKkx",
+        "id": "msg_011CgchVfSCmycQu2itchDYT",
         "type": "message",
         "role": "assistant",
         "content": [
@@ -68,7 +68,7 @@
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 216,
+          "input_tokens": 175,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
@@ -89,7 +89,7 @@
   ],
   "structure": {
     "v": "be0153bcbe53",
-    "hash": "b8c80720c931357b",
+    "hash": "25b1b32d4ae9934b",
     "wording": {},
     "guard": {},
     "format": []
