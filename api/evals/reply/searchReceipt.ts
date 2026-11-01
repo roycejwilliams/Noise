@@ -36,7 +36,7 @@ const claim = (text: string, factId: string) => ({ text, type: "work_status" as 
   G.addFact(plain, "known", G.runningWorkLine([], []));
   check("without a search this turn the honest line still goes in front", /^Nothing's running on that right now\./.test(await G.withNothingRunningLine("Want me to look again?", failedWork, plain, async () => true)));
 }
-for (const t of ["I’m looking now, more soon.", "Searching for a working page now.", "Working on it.", "On it, digging for a live link.", "Looking into it now — more soon.", "Give me a minute to find a working one.", "I looked, and I’m still digging.", "I'm still searching for a working page."]) {
+for (const t of ["I’m looking now, more soon.", "Searching for a working page now.", "Working on it.", "On it, digging for a live link.", "Looking into it now — more soon.", "Give me a minute to find a working one.", "I looked, and I’m still digging.", "I'm still searching for a working page.", "Looked just now; another pass tonight.", "Searched once, back to you later today."]) {
   check(`not said as done, so not backed: ${t}`, !G.saysSearchDone(t));
 }
 for (const t of ["I looked just now for a current page and didn't find one that works.", "I searched again and nothing held up.", "Checked just now, that page is gone.", "I looked and couldn't pull up a working page for them right now."]) {
