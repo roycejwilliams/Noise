@@ -94,6 +94,26 @@ flood.ledger = Array.from({ length: 80 }, (_, i) => ({ id: String(5000 + i), rel
 const p7 = S.pinStep(p1.pin, build({ ...flood, ledger: [...flood.ledger, ...sources().ledger] }, 6), t0 + 60_000);
 check("a Since then block past its cap re-pins", p7.repinned === "since_full" && p7.since.length === 0);
 
+const renamed = sources();
+renamed.profile = { ...renamed.profile, firstName: "Ava" };
+renamed.knowledge = { ...renamed.knowledge, identity: { ...renamed.knowledge.identity, firstName: "Ava" } };
+check("a changed first name or zone in the header re-pins", S.pinStep(p1.pin, build(renamed, 7), t0 + 60_000).repinned === "changed" && S.pinStep(p1.pin, build({ ...sources(), zone: "America/New_York" }, 8), t0 + 60_000).repinned === "changed");
+
+// ---- intro records in the tail: the other person's first name, the event and the date, nothing about them beyond the name
+const d20 = new Date("2026-10-20T18:00:00Z");
+const ir = (type: string, content: string) => G.introRecordLines(type, content, d20, "Avery");
+const network = ir("event_intro_email_sent", "Sent a network intro email connecting Avery and Maya: Maya is building grid storage and left Tesla");
+const handoff = ir("event_intro_email_sent", 'Sent an intro email connecting Maya and Avery ahead of "Jazz Night".');
+const nudge = ir("event_guest_match_nudge", 'Told Avery that Maya also got to "Jazz Night" and is worth meeting: she runs a gallery and just left her job');
+const pick = ir("recommendation", "[Tier 0] Maya: building grid storage after Tesla | other text");
+check("intro records keep the name, the event and the date, and drop the match reason", JSON.stringify([...network, ...handoff, ...nudge, ...pick]) === JSON.stringify([
+  "Cue's record (2026-10-20): Cue sent one intro email connecting them with Maya, another member.",
+  'Cue\'s record (2026-10-20): Cue sent one intro email connecting them with Maya, another member, ahead of "Jazz Night".',
+  'Cue\'s record (2026-10-20): Cue told them Maya, another member, also got to "Jazz Night" and is worth meeting.',
+  "Cue's record (2026-10-20): Cue suggested Maya, another member, to them as someone worth meeting.",
+]), [...network, ...handoff, ...nudge, ...pick]);
+check("a record that named no one to them, or of an unknown shape, gives nothing", ir("event_guest_match_nudge", "Additive offer: 2 candidate(s) checked in").length === 0 && ir("event_intro_email_sent", "Something else entirely").length === 0 && G.introRecordLines("event_intro_email_sent", "Sent a network intro email connecting Sam and Maya: x", d20, "Avery").length === 0);
+
 // ---- the read: fail closed, and the pin survives turns
 S.clearPinsForTests();
 const logs: any[] = [];
