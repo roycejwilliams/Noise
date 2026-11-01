@@ -6,6 +6,7 @@
 // hook), since a live fact check can't be made to cut every claim on demand: what the agent does after that is the real behavior.
 import "../../lib/requireMeter.js";
 import { readFileSync } from "node:fs";
+import { goldenSnapshot } from "../snapshot.js";
 import type { GoldenCase, GoldenResult } from "../types.js";
 import { result } from "../types.js";
 import { noteReply } from "../replies.js";
@@ -23,8 +24,8 @@ async function reply(message: string, opts: { cutFirstReply?: boolean } = {}): P
   const G = await import("../../../src/harness/replyGrounding.js");
   const R = await import("../../../src/services/readTurn.js");
   const { LOOP_GUIDE } = await import("../../../src/agent/loop.js");
-  const facts = G.baseReplyFacts();
-  G.addFact(facts, "known", "They live in San Francisco.");
+  const snapshot = await goldenSnapshot({ ...MEMBER, city: "San Francisco", zone: ZONE });
+  const facts = G.baseReplyFacts(undefined, snapshot);
   G.addFact(facts, "known", G.todayFact(ZONE));
   const read: any = await R.readTurn({ message, recentConversation: "", openItems: [] }, null, null).catch(() => null);
   if (read?.router?.wantsRecommendation) G.addInstruction(facts, LOOP_GUIDE);
@@ -39,7 +40,7 @@ async function reply(message: string, opts: { cutFirstReply?: boolean } = {}): P
   };
   try {
     const r: any = await runConversationReplyAgent(
-      { ackSent: null, ...MEMBER, resolvedContent: message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: "", recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true },
+      { ackSent: null, ...MEMBER, resolvedContent: message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: "", snapshot, personaPrompt: null, sendCoReply: async () => true },
       { dryRun: true, record: false, stubSearch: true, stubEvents: SF.events, cutFirstReply: opts.cutFirstReply },
     );
     // The hard rules read every send: a bare find link is a find, the fallback is the fallback, the rest is Cue's reply.

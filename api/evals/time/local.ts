@@ -153,7 +153,7 @@ const NY = "America/New_York";
   check("date guard: yesterday's event is past for them at 1am ET, though it's still 'today' in Pacific", D.readDates(D.itemDays(yesterdayEvent, NY), D.localToday(NY, oneAmET)).status === "past" && D.readDates(D.itemDays(yesterdayEvent, LA), D.localToday(LA, oneAmET)).status === "today");
   const startAt = { details: { startAt: "2026-10-08T03:30:00Z" } }; // 11:30pm ET Oct 7 / 8:30pm PT Oct 7
   check("date guard: an event page's start is read as their local day", D.itemDays(startAt, NY).start === "2026-10-07" && D.itemDays(startAt, null).start === "2026-10-07");
-  check("date guard callers pass the member's zone (registry, reply grounding, reveal)", /itemDays\(p\.match, person\.timezone\), localToday\(person\.timezone\)/.test(src("harness/proactiveRegistry.ts")) && /itemDays\(match, zone\), localToday\(zone\)/.test(src("harness/replyGrounding.ts")) && /recentSearchNotes\(userId, zone\)/.test(src("harness/replyGrounding.ts")));
+  check("date guard callers pass the member's zone (registry, reply grounding, reveal)", /itemDays\(p\.match, person\.timezone\), localToday\(person\.timezone\)/.test(src("harness/proactiveRegistry.ts")) && /itemDays\(match, zone\), localToday\(zone\)/.test(src("harness/replyGrounding.ts")));
 
   const words = CL.theirWordsOf([{ content: "User said: I'm pitching investors tomorrow", created_at: oneAmET }], NY);
   check("claims: what they said at 1am ET is dated their day (Oct 8)", words[0]?.at === "2026-10-08", words);

@@ -1,6 +1,6 @@
-// The member snapshot, built in SHADOW (snapshot design 2026-10-29, ~/cue-worktrees/notes/snapshot-design-1029.md §2 and §4; rollout
-// step 2). Nothing reads it yet: no reply, read or check path imports this file (evals/snapshot/snapshotBuild.ts checks that). It is
-// built, stored and measured so step 3 can switch the reply onto it with numbers in hand.
+// The member snapshot (snapshot design 2026-10-29, ~/cue-worktrees/notes/snapshot-design-1029.md §2 and §4). Built and stored since
+// rollout step 2; since step 3 the text reply reads it (replySnapshot, below: its cached prefix and the fact check's entries). The
+// read (readTurn) and check lanes don't yet (steps 4 and 5); evals/snapshot/snapshotBuild.ts checks who reads it.
 //
 // What it is: one rendered text per member, built by CODE (no model call) from the fenced memberKnowledge assembler, the co_facts
 // ledger (rows with meta.ledger, PR 1) and the member's own tables. A cache, never a source: rebuildable from the stores at any time,
@@ -16,13 +16,13 @@
 //   5 ledger    What Cue has done: the action ledger, newest first                                              12k
 //   6 can       What Cue can do: the capability sheet (team-only lines for the team only)                       2k
 //   header      version and zone, and their first name. Never the clock: the time goes in the tail.             <0.5k
-// Not in it (they go in the uncached tail, step 3): the recent thread, this message, the time, this turn's receipts, per-turn
+// Not in it (they go in the reply's uncached tail): the recent thread, this message, the time, this turn's receipts, per-turn
 // instructions, and anything computed against the clock (restraint holds, "due" states, today's event).
 //
 // Staleness (services/memberSnapshotSchema.ts): every write to a source table leaves a mark for the member inside the writer's own
 // transaction. readSnapshot rebuilds before returning when any mark is there, when there's no row yet, or when the row is older than
 // 24h. LEARN (routes/sendblue.ts, after the turn's learning writes land) rebuilds and stores version N+1, and the upkeep job rebuilds
-// any stored snapshot that is stale, so a removal leaves the stored row within one pass even though nothing reads it yet.
+// any stored snapshot that is stale, so a removal leaves the stored row within one pass even for a member who isn't texting.
 //
 // Guarantees:
 //   - the fence: every sentence naming a linked member (any word of their full name, linkedFullNames) becomes a details-free, nameless
@@ -705,7 +705,7 @@ export async function storeBuild(userId: string, o: { reason: string; force?: bo
   }
 }
 
-// THE read (no lane calls it yet: shadow). The stored snapshot when nothing changed since it was built and it's under 24h old;
+// THE read (the text reply calls it through replySnapshot). The stored snapshot when nothing changed since it was built and it's under 24h old;
 // otherwise a rebuild first, under the member's lock. A text that arrives while another build of theirs is running waits up to
 // READ_WAIT_MS for it, then builds from the database itself without storing. A blocked fence or a failed build returns no snapshot:
 // the caller runs on the tail and rules, never on an older version.
@@ -784,4 +784,74 @@ export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partia
     )
   ).rows.length;
   return { rebuilt, skipped, pruned, retried };
+}
+
+// ---------------------------------------------------------------- the reply's read (rollout step 3)
+
+// The text reply reads the snapshot as its cached prefix (design §2, "Keeping the prefix byte-stable"). A cached prefix only pays when
+// its bytes don't move between turns, so each member's reply sends a PINNED version, plus a "Since then" block in the uncached tail:
+// the entry lines the current version has that the pinned one doesn't. The pin moves (the prefix is rewritten) when:
+//   - there's no pin yet, or the last reply was longer ago than the cache lives (PIN_TTL_MS; the cache is gone anyway);
+//   - any line of the pinned version is no longer in the current one, word for word: a removal, a correction, a changed entry, a
+//     collapse. Forgotten or corrected words never stay in a prefix Cue keeps sending, and never come back as a "removed" line;
+//   - the "Since then" block passes SINCE_MAX_TOKENS.
+// Pins live in this process only: a restart or a second process starts a fresh pin, which costs one cache write. A read that fails
+// or is fenced drops the member's pin and returns null: the turn runs on its tail and rules (fail closed), never on an older version.
+export const PIN_TTL_MS = 5 * 60_000;
+export const SINCE_MAX_TOKENS = 2_000;
+export type Pin = { body: string; lines: Set<string>; version: number; usedAt: number };
+export type SnapEntry = { id: string; prov: Prov; date: string | null; section: SectionId; text: string; open: boolean };
+export type ReplySnapshot = { prefix: string; since: string[]; entries: SnapEntry[]; version: number; pinnedVersion: number; repinned: "none" | "ttl" | "changed" | "since_full" | null };
+
+// The header without its version, so a new version alone never moves the pin.
+const pinLine = (l: string) => (l.startsWith("# ") ? l.replace(/ · v\d+ · /, " · ") : l);
+const ENTRY_LINE = /^- \[([A-Z][A-Za-z0-9]*) (said|seen|did|inferred)(?: (\d{4}-\d{2}-\d{2}))?\] (.*)$/;
+const TITLE_SECTION = new Map<string, SectionId>(SECTION_IDS.map((id) => [`## ${SECTION_TITLES[id]}`, id]));
+
+// Pure: the entries of a rendered snapshot, each with its section. An item in their world is open until the line says it's done (the
+// builder writes "(done" for a closed one). Collapsed "Earlier" lines are counts, not entries.
+export function parseEntries(body: string): SnapEntry[] {
+  const out: SnapEntry[] = [];
+  let section: SectionId | null = null;
+  for (const line of body.split("\n")) {
+    if (line.startsWith("## ")) section = TITLE_SECTION.get(line) ?? null;
+    const m = section ? line.match(ENTRY_LINE) : null;
+    if (m && section) out.push({ id: m[1], prov: m[2] as Prov, date: m[3] ?? null, section, text: m[4], open: section === "world" && !/^[^:]*\(done\b/.test(m[4]) });
+  }
+  return out;
+}
+
+// Pure: this reply's pin, and the lines added since it.
+export function pinStep(prev: Pin | null, current: { body: string; version: number }, now: number): { pin: Pin; since: string[]; repinned: ReplySnapshot["repinned"] } {
+  const lines = current.body.split("\n");
+  const fresh = (why: ReplySnapshot["repinned"]) => ({ pin: { body: current.body, lines: new Set(lines.map(pinLine)), version: current.version, usedAt: now }, since: [] as string[], repinned: why });
+  if (!prev) return fresh("none");
+  if (now - prev.usedAt > PIN_TTL_MS) return fresh("ttl");
+  const have = new Set(lines.map(pinLine));
+  for (const l of prev.lines) if (l && !have.has(l)) return fresh("changed");
+  const since = lines.filter((l) => l.startsWith("- [") && !prev.lines.has(l));
+  if (estTokens(since.join("\n")) > SINCE_MAX_TOKENS) return fresh("since_full");
+  return { pin: { ...prev, usedAt: now }, since, repinned: null };
+}
+
+const pins = new Map<string, Pin>();
+// Tests only: forget every pin.
+export const clearPinsForTests = () => pins.clear();
+
+// THE read for a text reply: the pinned prefix, what's been added since, and every current entry (for the reply's fact check). Null
+// when there's no snapshot to serve (failed, fenced): the caller runs on its tail and rules. Logged once a turn, counts only.
+export async function replySnapshot(userId: string, o: { read?: (userId: string) => Promise<SnapshotRead>; now?: () => number; log?: SnapshotDeps["log"] } = {}): Promise<ReplySnapshot | null> {
+  const log = o.log ?? realDeps().log;
+  const now = (o.now ?? Date.now)();
+  const r = await (o.read ?? ((u: string) => readSnapshot(u)))(userId).catch((): SnapshotRead => ({ snapshot: null, state: "failed", waitedMs: 0, buildMs: null }));
+  if (!r.snapshot?.body) {
+    pins.delete(userId);
+    void log({ layer: 4, decision: "snapshot.reply", userId, outcome: "skip", action: r.state, proposal: { waitedMs: r.waitedMs, buildMs: r.buildMs } });
+    return null;
+  }
+  if (pins.size > 1_000) for (const [u, p] of pins) if (now - p.usedAt > PIN_TTL_MS) pins.delete(u);
+  const step = pinStep(pins.get(userId) ?? null, r.snapshot, now);
+  pins.set(userId, step.pin);
+  void log({ layer: 4, decision: "snapshot.reply", userId, outcome: "act", action: step.repinned ? `pinned:${step.repinned}` : "pin_kept", proposal: { state: r.state, version: r.snapshot.version, pinnedVersion: step.pin.version, since: step.since.length, prefixTokens: estTokens(step.pin.body), waitedMs: r.waitedMs, buildMs: r.buildMs } });
+  return { prefix: step.pin.body, since: step.since, entries: parseEntries(r.snapshot.body), version: r.snapshot.version, pinnedVersion: step.pin.version, repinned: step.repinned };
 }

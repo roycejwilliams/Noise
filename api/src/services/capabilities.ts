@@ -2,7 +2,7 @@ import { CRISIS_RESOURCES } from "./safetyText.js";
 // Everything Co can do, in one place (Royce, 2026-09-25: "Co value is in
 // it's intelligence"; "me having to code it to send a vcard is something
 // that it should already know how to do"). Co reads this about itself on
-// every reply (replyGrounding.ts baseReplyFacts), the fact check holds its
+// every reply (the snapshot's section 6, services/memberSnapshot.ts; its `sheet` lines), the fact check holds its
 // claims to it, and each tool's description comes from its entry here
 // (agent/conversationTools.ts), so what Co can do, what Co thinks it can
 // do, and what Co may say it can do never drift apart.
@@ -13,8 +13,14 @@ import { CRISIS_RESOURCES } from "./safetyText.js";
 
 export type Ability = {
   id: string;
-  // What Co can do, plainly, in its own frame. Shown to Co as a fact.
+  // What Co can do, plainly, in its own frame. The call audit (harness/callGrounding.ts) and the member's list read it.
   can: string;
+  // The line Co reads about itself in the capability sheet (capabilitySheet: the snapshot's section 6, or the reply's facts when there's
+  // no snapshot), trimmed so the sheet says what Cue can do and its limits without restating each tool's how-to (that lives in `use`;
+  // capability-sheet trim, 2026-10-31). One line can cover a group: it sits on the group's first ability that is never left out by a
+  // situation, and the others carry null. Every member ability has one or the other (evals/capabilities/rules.ts), so a new ability
+  // can't be left out of the sheet by accident. Team-only abilities fall back to `can`.
+  sheet?: string | null;
   // The reply tool that does it.
   tool?: string;
   // How to use that tool; becomes the tool's description.
@@ -65,12 +71,14 @@ export function callLine(): string {
 export const ABILITIES: Ability[] = [
   {
     id: "reply",
+    sheet: "Cue texts back (a second text only for a separate thought) or reacts with a tapback when a thread is winding down.",
     can: "Cue texts them back, and can send a second text when there's a genuinely separate thought.",
     tool: "sendReply",
     use: "Send one text message to the user, and log it. Call this once for your reply. If you genuinely have two distinct thoughts that would read more naturally as two separate texts sent one after another, the way a person might send a quick reaction, then a follow-up, you may call it a second time. Most replies are a single call, because each paragraph in it already goes out as its own text; a second call is for a thought you only had after the first went out, never to split one thought into pieces.",
   },
   {
     id: "react",
+    sheet: null,
     can: "When a thread is winding down (\"cool\", \"thanks!\", \"haha\"), Cue can react to their message with a tapback instead of writing a reply that keeps it going.",
     tool: "reactInsteadOfReplying",
     limits: { perTurn: 1 },
@@ -78,6 +86,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "reaction_says_it",
+    sheet: null,
     can: "When Cue's reaction to their text already says everything (they landed, a thanks, good news that needs no words), Cue can leave it at that and not text.",
     tool: "leaveItAtReaction",
     limits: { perTurn: 1 },
@@ -85,6 +94,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "contact_card",
+    sheet: "Cue sends its contact card on request, a link on file as its own text, a recap of what it sent, and what's new in Cue.",
     can: "Cue can send its contact card (a vCard) so they can save Cue, whenever they want its card, number or contact, however they word it.",
     tool: "sendContactCard",
     limits: { perTurn: 1, perDay: 1, resendIfMissing: true },
@@ -93,6 +103,7 @@ export const ABILITIES: Ability[] = [
   // Co's own loop (agent/loop.ts): general tools it chains itself to find things.
   {
     id: "search_events",
+    sheet: "Cue looks up events (Noise's own first, then the public feed), searches the web (venues, vendors, people, programs, events), reads pages, and searches the last week of X posts. Results are checked against their pages. It sends finds as links, each with a short caption, best first.",
     can: "Cue can look up events itself: Noise's own events and the public event feed for a city, for the days they asked about, then judge which fit.",
     onCall: true,
     tool: "searchEvents",
@@ -101,6 +112,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "web_search",
+    sheet: null,
     can: "Cue can search the web for venues to book, vendors (DJs, caterers, photographers), people, places, programs, and events the feed doesn't have; every result is checked against its own page.",
     tool: "webSearch",
     limits: { perTurn: 3 },
@@ -108,6 +120,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "search_posts",
+    sheet: null,
     can: "Cue can look through recent posts on X (the last week) for fresh announcements: open calls, programs taking applications, people building or hiring for what they're after.",
     tool: "searchPosts",
     limits: { perTurn: 2, perDay: 10 },
@@ -115,6 +128,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "read_page",
+    sheet: null,
     can: "Cue can read a web page, including ones that only load in a real browser, to confirm a detail or find who to contact.",
     tool: "readPage",
     limits: { perTurn: 6 },
@@ -122,6 +136,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "share_finds",
+    sheet: null,
     can: "Cue sends what it found as links, each with a short caption, best first.",
     tool: "shareFinds",
     limits: { perTurn: 3 },
@@ -129,6 +144,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "draft_email",
+    sheet: "Cue writes an email for them to send (a tap-to-send link; nothing is sent unless they send it) and plans a day, night or trip as a one-page PDF (or email with calendar holds), to them only.",
     can: "Cue can write an email for them to send (to a venue, a vendor, a host); it gives them a tap-to-send link that opens their own mail app, and nothing is sent unless they send it.",
     tool: "draftEmail",
     limits: { perTurn: 2 },
@@ -136,6 +152,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "email_plan",
+    sheet: null,
     can: "When they ask Cue to plan something with more than one step or time (a day out, a night, a trip, a few stops), Cue can send them the plan as a one-page sheet (a PDF), by text in this conversation, or by email with a calendar hold for each time when they ask for email, to the email they gave Cue. It goes only to them, never to anyone else; Cue can't send things to other people for them.",
     tool: "emailPlan",
     // Raised from 2 (2026-10-08): the receipts already refuse the same plan twice unless they ask for it again, so this only bounds new plans.
@@ -144,6 +161,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_page",
+    sheet: "Cue makes a private page (a plan, options, places with links) or a slide deck (from their taste, or a logo, screenshot or public Pinterest board they send; a login-only board can't be opened), changes it at the same link, and takes it down. Both last 90 days from the last change; \"keep this\" keeps one for good. It can make a view-only link to send someone, and stop it.",
     can: "Cue can make them a page: a plan with a few parts, options side by side, or a set of places with their links, at a private link only they get. It can change it in conversation (same link) and take it down when they ask.",
     onCall: true,
     tool: "makePage",
@@ -152,6 +170,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_page_update",
+    sheet: null,
     can: "Cue can change a page it made for them; the link stays the same.",
     onCall: true,
     tool: "updatePage",
@@ -160,6 +179,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_page_take_down",
+    sheet: null,
     can: "Cue can take down a page it made for them; the link stops opening and what was on it is deleted.",
     onCall: true,
     tool: "takeDownPage",
@@ -169,6 +189,7 @@ export const ABILITIES: Ability[] = [
   // Keep, renew and share, for any page or deck (agent/artifactTools.ts, 2026-10-11).
   {
     id: "co_artifact_open",
+    sheet: null,
     can: "Cue can open a page or deck it made for them to see what's on it now.",
     tool: "openArtifact",
     limits: { perTurn: 2 },
@@ -176,6 +197,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_artifact_keep",
+    sheet: null,
     can: "Cue can keep a page or deck it made for them: for good when they say \"keep this\", or 90 more days when they say \"renew\". Otherwise they last 90 days from their last change, and Cue tells them before one they've been using expires.",
     onCall: true,
     tool: "keepArtifact",
@@ -184,6 +206,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_artifact_share",
+    sheet: null,
     can: "When they ask, Cue can make a separate view-only link to a page or deck they can send to someone (an investor, a cofounder), and stop it any time they say; their own link stays theirs.",
     onCall: true,
     tool: "shareArtifact",
@@ -192,6 +215,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_images_delete",
+    sheet: "Cue keeps photos and PDFs they send for them alone and deletes them on ask, all or by number. Cue doesn't read or discuss what a file says in conversation.",
     can: "Cue keeps the photos they text (for their decks and pages) and deletes them whenever they ask: all of them or by number.",
     onCall: true,
     tool: "deleteImages",
@@ -200,6 +224,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_artifact_reset_link",
+    sheet: null,
     can: "If they forwarded their own link to a page or deck and want it back, Cue can give them a fresh link; the old one and any share links stop opening.",
     onCall: true,
     tool: "resetLink",
@@ -208,6 +233,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_artifact_resend_link",
+    sheet: null,
     can: "If a link to a page or deck Cue made doesn't reach them, Cue can send it again; they can also ask for the link to one of theirs any time.",
     onCall: true,
     tool: "resendLink",
@@ -216,6 +242,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_artifact_stop_sharing",
+    sheet: null,
     can: "Cue can stop a share link from opening, any time they ask; their own link keeps working.",
     onCall: true,
     tool: "stopSharing",
@@ -225,6 +252,7 @@ export const ABILITIES: Ability[] = [
   // Decks (agent/deckTools.ts, 2026-10-11): an artifact on the same pipeline as pages, styled from the member's own taste.
   {
     id: "co_deck",
+    sheet: null,
     can: "Cue can make them a slide deck (a pitch deck, a talk, a plan to present): a title slide and slides of a headline and a few points, at a private link only they get, designed from their own taste. It can change it in conversation (same link) and take it down when they ask.",
     onCall: true,
     tool: "makeDeck",
@@ -235,6 +263,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_design_read",
+    sheet: null,
     can: "Cue can read a logo, a screenshot or an inspiration image they sent for its look (its exact colors, a gradient, the kind of type) and design their deck from it, after checking the read with them in one line.",
     tool: "readReference",
     limits: { perTurn: 3, perDay: 12 },
@@ -242,6 +271,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_inspo_pinterest",
+    sheet: null,
     can: "Cue can read a public Pinterest board they send for the look of a deck or page (its pins and colors). A board that needs a Pinterest login, Cue can't open, and says so.",
     tool: "readInspo",
     limits: { perTurn: 2, perDay: 10 },
@@ -249,6 +279,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_deck_update",
+    sheet: null,
     can: "Cue can change a deck it made for them; the link stays the same. A deck has one look for every slide: its colors and type change for the whole deck, never for one slide.",
     onCall: true,
     tool: "updateDeck",
@@ -257,6 +288,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "write_document",
+    sheet: "Cue writes a document (a plan, summary, venue brief, write-up from a PDF they sent) only when they ask or say yes to its offer, sent to them alone as a PDF, or as a Google Doc in their Drive when Docs is connected. It can't make spreadsheets or send a document to anyone else.",
     can: "Cue can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Cue's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Cue's offer, and it goes only to them. Cue can't make spreadsheets or slides as a document (a slide deck is makeDeck), and can't send it to anyone else for them.",
     onCall: true,
     tool: "writeDocument",
@@ -268,6 +300,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "read_document",
+    sheet: null,
     can: "When they ask about a document Cue already sent them, or want it changed, Cue reads what it actually sent and answers from it, quoting the part they asked about; a change goes as the next version with one line saying what changed.",
     tool: "readDocument",
     limits: { perTurn: 3, perDay: 40 },
@@ -275,15 +308,17 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "research_brief",
+    sheet: "Cue researches venues for an event in the background and sends a brief: rate, capacity and availability, every line sourced and dated, anything unconfirmed marked unknown.",
     can: "When they ask Cue to find venues for an event (\"find venues for my launch\", \"what are my options for a dinner for 40\") or say yes to that offer, Cue researches them in the background and sends a venue brief as a document: each option with its rate, minimum, capacity and, for a date they gave, whether it's open, every line with its source link and when it was checked, and anything it couldn't confirm shown as unknown. Options are held to a high-end bar, built from what Cue knows about them (city, size, date, budget, and what they liked or passed on before), and ordered by what they've said yes and no to. It comes as a PDF, or as a Google Doc when they ask for one and it's open to them. Asked again, it re-checks every option before re-sending.",
     onCall: true,
     tool: "researchBrief",
     limits: { perTurn: 1, perDay: 2 },
     confirm: "their_yes",
-    use: "They asked you to find venues or options for an event, or said yes to your offer to. Call this once with what they're looking for in their words (the kind of event and space, how many people), the date and start time if they gave them (YYYY-MM-DD and like \"6:00 pm\"; never guess one), the headcount, budget, neighborhood and city if they said (never guess one), and up to six short lines of what they told you that matters, in their words. If it comes back with askThem, nothing started: ask them that in one line and call it again with their answer. When they want the same brief again or updated, set again. It runs in the background and sends the brief when it's ready: tell them in one line you're on it and it'll come as a document. Don't promise options, prices or availability before it arrives.",
+    use: "They asked you to find venues or options for an event, or said yes to your offer to. Call this once with what they're looking for in their words (the kind of event and space, how many people), the date and start time if they gave them (YYYY-MM-DD and like \"6:00 pm\"; never guess one), the headcount, budget, neighborhood and city if they said (never guess one), and up to six short lines of what they told you that matters, in their words. If it comes back with askThem, nothing started: ask them that in one line and call it again with their answer. When they want the same brief again or updated, set again. It runs in the background and sends the brief when it's ready: tell them in one line you're on it and it'll come as a document. Don't promise options, prices or availability before it arrives. Options come ordered by what they've liked or passed on before.",
   },
   {
     id: "find_reaction",
+    sheet: null,
     can: "When they react to an option from a brief Cue sent (\"the second one looks great\", \"not that one\", \"nothing like that please\"), Cue notes it, and it shapes which options Cue puts first next time.",
     onCall: true,
     tool: "findReaction",
@@ -292,6 +327,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "write_from_file",
+    sheet: null,
     can: "When they've sent Cue a PDF, Cue keeps it for them alone, by number, and can write them a document from it (a venue brief, a partnership plan, a readout, or a write-up for themselves) when they ask, from what the file and they say, sent the same way as any document. Cue doesn't read or discuss what a file says in conversation, and a file is never used for anyone else.",
     tool: "writeFromFile",
     limits: { perTurn: 1, perDay: 3 },
@@ -300,6 +336,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "delete_files",
+    sheet: null,
     can: "Cue deletes the files they've sent it whenever they ask, one by number or all of them, and they're gone completely.",
     tool: "deleteMyFiles",
     limits: { perTurn: 1 },
@@ -307,6 +344,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "offer_document",
+    sheet: null,
     can: "When someone is stuck, vague or circling on their team or a goal, Cue can offer, once, to put it together as a document for them.",
     onCall: true,
     tool: "offerDocument",
@@ -315,6 +353,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "working_notes",
+    sheet: "Cue keeps working notes and the details it needs (company, role, LinkedIn) from their words, and says which it will use before anything goes out in their name.",
     can: "Cue keeps working notes for what it's finding for them across texts, so a new detail picks up where the last text left off.",
     onCall: true,
     tool: "updateNotes",
@@ -323,6 +362,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "open_loops",
+    sheet: null,
     can: "Cue tracks everything it's carrying for them as an open loop with where it stands (waiting on a reply, something unconfirmed, a decision that's theirs), and comes back when one of them moves.",
     onCall: true,
     tool: "updateLoop",
@@ -331,6 +371,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "share_link",
+    sheet: null,
     can: "Cue can send a link that's on file, each as its own text so it previews.",
     onCall: true,
     tool: "shareLink",
@@ -340,6 +381,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "task_start",
+    sheet: "Cue takes on what needs more than one reply as its own task: works over days, texts when there's something real, and can say when it'll get back. For a goal it owns only the pieces they said yes to and holds a check-in only at a time it can schedule. It keeps tasks, goals and open loops current, and moves one between task, lookout and goal only on their yes.",
     can: "When they ask for something that takes more than one reply (a venue by Friday, sponsors lined up, getting ready for a pitch, a few options compared), Cue takes it on as its own task: it writes the steps, works on it on its own over the following days, texts them when there's something real, and decides when to look again. Cue can truthfully say when it'll get back to them.",
     onCall: true,
     tool: "startTask",
@@ -349,6 +391,7 @@ export const ABILITIES: Ability[] = [
   // The door (services/theDoor.ts): once, in a new member's first conversation.
   {
     id: "first_read",
+    sheet: "In a new member's first conversation, once it knows enough, Cue gives its first read once: what it understood they're after, in one line, and when it will text them by.",
     can: "In a new member's first conversation, once Cue has heard enough, Cue gives them their first read, once: what it understood they're after, in one line, and, when Cue can text them first, the time it will text them by with what its first look at that turned up.",
     tool: "firstRead",
     // No daily cap: "once" is held in code (services/theDoor.ts), and a turn whose text dropped it may retry once.
@@ -358,6 +401,7 @@ export const ABILITIES: Ability[] = [
   // Goal ownership (services/goalOwnership.ts, 2026-10-13): a goal, a checklist or a plan they hand Co.
   {
     id: "goal_take_on",
+    sheet: null,
     can: "When they hand Cue a goal, a checklist or a plan, Cue can own the pieces it can do itself (research, drafts, watching for things, a reminder), then check back in at a time they agree to with what it actually did.",
     tool: "takeOnGoal",
     limits: { perTurn: 1, perDay: 3 },
@@ -365,6 +409,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "goal_pick",
+    sheet: null,
     can: "Cue works only the pieces of a goal they said yes to, and holds a check-in or reminder only at a time it can actually schedule.",
     tool: "pickGoalItems",
     limits: { perTurn: 1 },
@@ -373,6 +418,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "task_update",
+    sheet: null,
     can: "Cue keeps its tasks current as they tell it things: a step done, a new detail, a change of plan or timing.",
     onCall: true,
     tool: "updateTask",
@@ -381,6 +427,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "task_close",
+    sheet: null,
     can: "Cue closes a task when it's done or they don't need it anymore.",
     onCall: true,
     tool: "closeTask",
@@ -389,6 +436,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "location_share",
+    sheet: null,
     can: "On the day of a Noise event they're going to, Cue can use the location they share with it in Messages, only for that event, only to know when they've arrived so it can point them to the right people, and only after they say yes.",
     tool: "shareLocationYes",
     limits: { perTurn: 1 },
@@ -399,6 +447,10 @@ export const ABILITIES: Ability[] = [
     // one question about it. Listed only where the read can run at all (voiceReadPrereqs: never in production), so every other
     // reply's sheet and tools are unchanged.
     id: "voice_read",
+    // Said as it is (per turn only, or kept verbatim).
+    get sheet() {
+      return this.can;
+    },
     can: "On calls, Cue can listen to how they sound (tone, not just words) to notice when something sits heavier than they say, but only after they said yes to Cue's one question about it, which says what it is and what it keeps. Without that yes it's off. Cue never keeps the audio, and they can have it turned off anytime, which deletes what it noted.",
     tool: "voiceRead",
     onCall: true,
@@ -407,6 +459,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "ask_shareable",
+    sheet: "Each ask is private; Cue mentions one in an introduction only once they say it's okay, and they can take it back. Before a Noise event it asks which asks it may share and whether it may use their name in the brief (no answer, no name).",
     can: "Every ask they give Cue is private. Cue can mention one of their asks, in their own words, when it introduces them to someone (in the room or in the network) only once they say that ask is okay to share, and they can take it back any time.",
     tool: "shareAskInIntros",
     limits: { perTurn: 2 },
@@ -414,6 +467,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "ask_shareable_rsvp",
+    sheet: null,
     can: "When they RSVP to a Noise event, beside the brief question, Cue asks which of their asks it may tell a good match in the room; a guest with nothing shareable is asked once more before the event. Each ask is private unless they pick it.",
     tool: "answerShareAsks",
     limits: { perTurn: 1 },
@@ -421,6 +475,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "brief_name",
+    sheet: null,
     can: "Before a Noise event they're going to, Cue asks once whether it may mention them by name in the member brief the day before. Cue records their yes or no. No answer means no name, and a no or a later change of mind is honored at once.",
     tool: "answerBriefName",
     limits: { perTurn: 1 },
@@ -428,6 +483,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "event_going",
+    sheet: null,
     can: "Cue keeps track of whether they're still going to today's Noise event, from what they tell it.",
     tool: "updateGoing",
     limits: { perTurn: 1 },
@@ -435,6 +491,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "mark_goal",
+    sheet: null,
     can: "Cue keeps their goals current: one they reached or closed is done, one that no longer applies (its date passed, plans changed) is set aside, and one they still want stays active. Goals that are done or set aside stay on file and stop shaping Cue's daily search.",
     tool: "markGoal",
     limits: { perTurn: 3, perDay: 10 },
@@ -443,6 +500,7 @@ export const ABILITIES: Ability[] = [
   // Lane moves (services/laneMoves.ts, Royce 2026-10-13): Co proposes, their yes moves it, and the reply carries one line saying so.
   {
     id: "lane_move",
+    sheet: null,
     can: "Cue keeps what it's carrying for them as tasks, lookouts and goals. When one belongs somewhere else (a task that's really a goal, a goal they'd rather Cue watch for, a lookout that's really where they're headed), Cue can offer to move it, and moves it only on their yes. A task becomes a lookout only when they ask Cue to keep watching.",
     tool: "moveLane",
     limits: { perTurn: 2, perDay: 6 },
@@ -451,6 +509,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "save_ask",
+    sheet: "Cue keeps watch for what they want found (people, events, communities, programs); its daily search texts when something real fits. It can list, close, or stop suggesting a kind of thing, and move where it searches. Sponsors, investors, funding and advice are kept on file, not searched.",
     can: "Cue can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",
     onCall: true,
@@ -459,6 +518,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "plan_answer",
+    sheet: null,
     can: "When Cue has proposed one plan for their free time, Cue notes their yes or no. Nothing is booked or held yet when they say yes.",
     onCall: true,
     tool: "answerProposal",
@@ -467,6 +527,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "free_time",
+    sheet: "Cue remembers when they're free (never held), their yes or no to a plan (nothing is booked), what rooms they want, how what it sent landed, and whether introductions became connections.",
     can: "Cue remembers when they've said they're free (a day and times, in their words) and can suggest one thing for that time. It never books or holds it.",
     onCall: true,
     tool: "noteFreeTime",
@@ -475,6 +536,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "room_taste",
+    sheet: null,
     can: "Cue remembers what kind of room they've said they want, or don't, and ranks what it picks for them by it.",
     onCall: true,
     tool: "noteRoomTaste",
@@ -483,6 +545,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "reactions",
+    sheet: null,
     can: "Cue remembers how the things it sent landed (interested, went, loved it, not for them) and leans that way next time.",
     onCall: true,
     tool: "noteReaction",
@@ -491,6 +554,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "second_contact",
+    sheet: null,
     can: "Cue remembers whether people it introduced them to became real connections: whether they saw or talked with each other again.",
     onCall: true,
     tool: "noteMetAgain",
@@ -499,6 +563,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "close_ask",
+    sheet: null,
     can: "Cue can close something it's been looking for once they're done with it, found it, no longer want it, or have moved on to something newer.",
     tool: "closeAsk",
     limits: { perTurn: 3 },
@@ -506,12 +571,14 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "list_open_asks",
+    sheet: null,
     can: "Cue can list what it's keeping an eye out for them.",
     tool: "listOpenAsks",
     use: "When they ask what you're keeping an eye out for them, what you're tracking or watching for, or what's still open/pending on their asks — call this and answer from the real list. Never guess or reconstruct this from the conversation alone; asks can be older than what's visible in recent messages, or already resolved.",
   },
   {
     id: "steer_away",
+    sheet: null,
     can: "Cue can stop suggesting a whole kind of thing they don't want, and start again when they change their mind.",
     onCall: true,
     tool: "steerAwayFrom",
@@ -521,6 +588,7 @@ export const ABILITIES: Ability[] = [
   // Where Cue searches for them from now on (services/searchArea.ts, 2026-10-31).
   {
     id: "search_area",
+    sheet: null,
     can: "When they tell Cue where to search for them from now on (\"switch my searches to SF going forward\"), Cue changes it right away: asks and goals that name no place of their own, and their daily search, look there. Asks and goals that name a place keep it, and their home city stays as it is.",
     tool: "setSearchArea",
     limits: { perTurn: 1, perDay: 10 },
@@ -528,12 +596,14 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "list_sent",
+    sheet: null,
     can: "Cue can recap what it has sent or recommended them, and resend a link from it.",
     tool: "listSentOffers",
     use: "When they ask what you've sent them, what you recommended, or want a recap of the events/opportunities you shared — call this and answer from the real list. Never reconstruct it from the conversation alone. You can share a link from it again with shareLink.",
   },
   {
     id: "event_intro",
+    sheet: null,
     can: "If they met someone at a Noise event and want to be connected, Cue can start a double opt-in introduction with that person.",
     tool: "requestEventIntro",
     limits: { perTurn: 1, perDay: 3, oncePerPerson: true },
@@ -542,6 +612,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "room_meeting",
+    sheet: null,
     can: "Cue remembers whether they met the people it pointed them to at a Noise event, and how it went for them, and uses that to choose better introductions next time.",
     tool: "noteRoomMeeting",
     limits: { perTurn: 3 },
@@ -549,6 +620,10 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "walkin_ask",
+    // Said as it is (per turn only, or kept verbatim).
+    get sheet() {
+      return this.can;
+    },
     can: "When someone checks in at a Noise event with no ask on file, Cue asks them once what they're hoping to find there, and keeps track that it asked.",
     tool: "askedWalkin",
     limits: { perTurn: 1 },
@@ -556,21 +631,24 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "rapport_topic",
+    sheet: null,
     can: "Cue keeps track of which getting-to-know-you questions it has already asked.",
     tool: "markTopicAsked",
     use: "Record that you actually asked about a rapport topic in the reply you sent. Only call this if you used the suggested topic in the message you sent via sendReply.",
   },
   {
     id: "product_updates",
+    sheet: null,
     can: "Cue can send the latest list of what's new in Cue.",
     tool: "sendProductUpdates",
     limits: { perTurn: 1 },
     use: "Send the latest list of what's new in Cue (new features, changes), when they ask what's new with Cue, what changed, or for updates on Cue itself. The list changes as the team ships, so you can't know what's on it without sending it: check it rather than saying nothing's new. Not for news about their own life or an event. It goes out verbatim as its own text.",
   },
   // Handled by their own steps for now.
-  { id: "calls", confirm: "irreversible", surfaces: ["text", "call"], can: `Cue can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Cue: ${callLine()} What Cue can't do is call other people for them. So when listing what Cue can't do, say it can't call other people for them; calling them is something it does.` },
+  { id: "calls", confirm: "irreversible", surfaces: ["text", "call"], sheet: `Cue can call them now or at a set time; ${callLine()} Cue can't call other people for them.`, can: `Cue can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Cue: ${callLine()} What Cue can't do is call other people for them. So when listing what Cue can't do, say it can't call other people for them; calling them is something it does.` },
   {
     id: "invites",
+    sheet: "Invites: 5 each, one counts once the friend joins; Cue texts a link to forward and says how many are left.",
     can: "Members can invite friends to Noise: 5 invites each, and one only counts once the friend joins. Cue can text them an invite link to forward.",
     tool: "sendInvite",
     limits: { perTurn: 1, perDay: 5 },
@@ -578,16 +656,18 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "invites_left",
+    sheet: null,
     can: "Cue can look up exactly how many invites they have left.",
     tool: "checkInvitesLeft",
     limits: { perTurn: 1 },
     use: "Look up how many invites they have left. Call this before saying any number of invites, whenever they ask how many they have, whether they have any left, or how many they've used.",
   },
-  { id: "media", can: "Cue can read photos and screenshots they send, and listens to voice memos." },
-  { id: "corrections", can: 'When something Cue has about them is wrong, they can just say so ("I moved to Oakland", "I\'m not a founder"). Cue updates it and remembers what changed and when.' },
+  { id: "media", sheet: "Cue reads photos and screenshots, listens to voice memos, and passes feedback to the team.", can: "Cue can read photos and screenshots they send, and listens to voice memos." },
+  { id: "corrections", sheet: null, can: 'When something Cue has about them is wrong, they can just say so ("I moved to Oakland", "I\'m not a founder"). Cue updates it and remembers what changed and when.' },
   // What Co knows about them, shown and correctable (services/whatCoKnows.ts, 2026-10-12).
   {
     id: "what_co_knows",
+    sheet: "Cue says what it knows about them in plain words whenever asked; anything wrong or unwanted it corrects or removes right away, everywhere it uses it.",
     can: "Cue can tell them what it knows about them, in plain words, whenever they ask, and they can correct or remove any of it.",
     onCall: true,
     tool: "whatCoKnows",
@@ -596,6 +676,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "correct_what_co_knows",
+    sheet: null,
     can: "When something Cue knows about them is wrong, or they want it gone, Cue corrects or removes it right away, everywhere Cue uses it: texts, calls, what it looks for and picks, and their pages and decks.",
     onCall: true,
     tool: "correctWhatCoKnows",
@@ -605,23 +686,27 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "check_ins",
+    sheet: "Cue texts first: a check-in every few days about what they're in the middle of, \"how did it go\" after a dated plan, a debrief after an event, follow-ups on what it's looking for. If asked whether it checks in, yes.",
     can: 'Cue texts first, not only when they text: a check-in every few days about what they\'re in the middle of (and something it\'s still getting to know about them, when their words lead there), "how did it go" after a plan with a date has happened, a debrief after an event they went to, and follow-ups on things it\'s looking for. So when they ask whether Cue notices or checks in, the answer is yes, and Cue can say how.',
   },
   {
     id: "co_events",
+    sheet: "At Noise events Cue knows who's coming and what each guest told it, and points guests to each other, never telling one guest what another said. The day of, with their yes to sharing location (optional, only for that event, only to notice arrival and leave) or an \"I'm here\", it says who's worth meeting.",
     can: 'At Noise events: Cue knows who\'s coming (the guest list) and what each guest has told Cue they\'re looking for or who they hope to meet, and uses that to point people toward each other in the room, never telling one guest what another told it. The day of, Cue may ask them to share their location until the end of the day or text "I\'m here" when they arrive, then tells them who\'s worth meeting in the room. Sharing location is optional and only used to notice when they arrive and leave.',
   },
   {
     id: "arrival",
+    sheet: null,
     can: "When they tell Cue they've arrived at a Noise event, Cue records it and points them to who's worth meeting.",
     tool: "markArrived",
     limits: { perTurn: 1 },
     use: "Record that they've arrived at a Noise event they're going to today, when they tell you they're there, however they say it (\"here!\", \"just walked in\", \"at the venue\", \"made it\"). Not for \"I'm here for you\" or being somewhere else.",
   },
-  { id: "outside_events", can: "If they're going to an event Cue doesn't run and another member is going too, Cue may give them a heads-up without saying who, and names each person to the other only after both say yes to an intro." },
-  { id: "introductions", can: "Introductions go out as one email to both people, and only after both have said yes. At Noise events Cue may point another guest toward them as someone worth meeting, with a short reason." },
+  { id: "outside_events", sheet: null, can: "If they're going to an event Cue doesn't run and another member is going too, Cue may give them a heads-up without saying who, and names each person to the other only after both say yes to an intro." },
+  { id: "introductions", sheet: "Introductions go out as one email to both, only after both say yes. For an outside event another member is going to, Cue may give a heads-up without saying who.", can: "Introductions go out as one email to both people, and only after both have said yes. At Noise events Cue may point another guest toward them as someone worth meeting, with a short reason." },
   {
     id: "kit",
+    sheet: null,
     can: "Cue keeps the details it needs to do things for them (company, role, LinkedIn link) from their own words, and asks for whatever is missing once, at the moment it's needed, never guessing. Before anything goes out under their name, it says which of their details it will use.",
     tool: "saveKitFact",
     limits: { perTurn: 3 },
@@ -629,6 +714,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "team_feedback",
+    sheet: null,
     can: "When they give feedback about how Cue works, or ask Cue to pass something to the team, Cue can save it for the team.",
     tool: "saveFeedbackForTeam",
     limits: { perTurn: 3 },
@@ -636,17 +722,26 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "safety",
+    // Said as it is (per turn only, or kept verbatim).
+    get sheet() {
+      return this.can;
+    },
     can: `When someone may be thinking about hurting themselves or may not be safe, Cue stays with them, asks plainly whether they're safe, and shares crisis support: ${CRISIS_RESOURCES} Cue may check in on them the next day.`,
     tool: "flagSafetyConcern",
     limits: { perTurn: 1 },
     use: "Flag it when what they say may mean they're thinking about hurting or killing themselves, or aren't safe right now, however it's worded (including hints like wanting to disappear or everyone being better off without them). Not for ordinary stress, venting, or figures of speech (\"this week is killing me\"). It holds offers, lines up a gentle check-in tomorrow, and lets the team know. Then reply yourself with sendReply: stay with them, ask if they're safe, share 988 once.",
   },
-  { id: "account", can: "They can change their phone number by texting Cue, and can text STOP at any time to stop all texts." },
+  { id: "account", sheet: "They can change their phone number by texting Cue, and text STOP any time to stop all texts.", can: "They can change their phone number by texting Cue, and can text STOP at any time to stop all texts." },
   // Passing a message to someone they're connected to, and reminders to
   // follow up (services/relay.ts, 2026-09-28). Off unless CO_RELAY=on, and
   // what Co says it can do follows the switch.
   {
     id: "relay",
+    get sheet() {
+      return process.env.CO_RELAY === "on"
+        ? "Cue passes a message in their words to someone connected through Cue (after both said yes), once a day per person; replies come only if they ask. It can remind them at a set time to follow up. It never contacts anyone on its own, can't reach people they aren't connected to, never says whether someone is a member."
+        : this.can;
+    },
     get can() {
       return process.env.CO_RELAY === "on"
         ? "Cue can pass a message, in their own words, to someone they're already connected to through Cue (introduced after both said yes), at most once a day per person. Anything that person sends back comes only if they ask Cue to send it. Cue can also remind them at a set time to follow up on something they promised someone. Cue never contacts anyone on its own, can't reach people they aren't connected to, never says whether someone is a member, and never starts a group text."
@@ -660,6 +755,11 @@ export const ABILITIES: Ability[] = [
   // and what Co says it can do follows that.
   {
     id: "calendar",
+    get sheet() {
+      return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
+        ? "Connected calendar (free/busy only): Cue sees busy and free and nothing else, never shares or changes it, never holds or books a time. They can disconnect any time."
+        : this.can;
+    },
     get can() {
       return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
         ? "If they connect their calendar (Cue texts a one-time link; free/busy only), Cue sees when they're busy or free and nothing else: never what an event is, where, or with whom. It's never shared with anyone, including other members, and Cue never changes their calendar. With it, Cue can keep an eye on a plan they said yes to against their real calendar; without it, against a free time they told Cue. Cue never holds, books or reserves a time. They can disconnect any time."
@@ -673,6 +773,11 @@ export const ABILITIES: Ability[] = [
   // Google Docs, its own grant on Cue's published project (services/cueGrants.ts, Royce 2026-10-15): Drive files only.
   {
     id: "docs",
+    get sheet() {
+      return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
+        ? "Connected Google Docs (Drive files only): Cue saves a document there and sees only the files it creates. They can disconnect any time."
+        : this.can;
+    },
     get can() {
       return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
         ? "If they connect Google Docs (Cue texts a one-time link; Drive files only), Cue can save a document it makes for them as a Google Doc in their Drive, and sees only the files it creates there, never anything else in their Drive. Cue never shares a Doc; it's theirs until they share it. They can disconnect any time, and the Docs stay theirs."
@@ -741,9 +846,15 @@ export function situationFor(o: { kitFields: number; message: string; openTasks:
 // the other way round: listed only on a turn known to have it due (one turn of one night; every other reply's sheet is unchanged).
 const ONLY_WHEN_KNOWN = new Set<keyof Situation>(["walkin", "voiceRead"]);
 const outOf = (s: Situation | undefined, key: keyof Situation) => (ONLY_WHEN_KNOWN.has(key) ? s?.[key] !== true : !!s && s[key] === false);
+const sheetLine = (a: Ability): string | null => (a.sheet === undefined ? a.can : a.sheet);
 export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
   const active = (a: Ability) => !SITUATIONAL[a.id] || !outOf(opts.situation, SITUATIONAL[a.id]);
-  return [...ABILITIES.filter((a) => (opts.team || !a.teamOnly) && active(a)).map((a) => a.can), ...LIMITS];
+  return [...ABILITIES.filter((a) => (opts.team || !a.teamOnly) && active(a)).map(sheetLine).filter((l): l is string => l !== null), ...LIMITS];
+}
+// The sheet's per-turn lines: abilities listed only on a turn known to have them (the walk-in ask, the voice read). The snapshot's sheet
+// is built with no situation, so these are never in it; a turn that has one says it in its uncached tail.
+export function perTurnSheet(situation: Situation): string[] {
+  return ABILITIES.filter((a) => !a.teamOnly && SITUATIONAL[a.id] && ONLY_WHEN_KNOWN.has(SITUATIONAL[a.id]) && !outOf(situation, SITUATIONAL[a.id])).map(sheetLine).filter((l): l is string => l !== null);
 }
 // The tools to leave out for a situation, so Co isn't offered what can't apply.
 export function toolsOutOfSituation(s: Situation): string[] {

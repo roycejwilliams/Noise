@@ -48,7 +48,7 @@ check("learning runs in the background after each message", /learnFromTextTurn\(
 // ---- outcomes
 check("Cue records how things landed, only for things it really sent", /noteReaction: tool\(\{[\s\S]{0,2200}ctx\.turn\?\.sent \?\? \(await sentItems\(ctx\.userId\)\)[\s\S]{0,900}isn't something Cue sent them recently/.test(tools) && /memory_type = 'recommendation_offered'/.test(readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8")) && /FROM revealed_offers/.test(readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8")) && /return loadSentItems\(userId\)/.test(readFileSync(new URL("../../src/services/reactionCatchup.ts", import.meta.url), "utf8")));
 check("reactions map to outcomes the search already learns from", /interested: "interested", going: "acted", went_liked: "helped", went_disliked: "didnt_help", not_for_me: "declined"/.test(readFileSync(new URL("../../src/services/reactionCatchup.ts", import.meta.url), "utf8")) && /REACTION_RESULT\[reaction\]/.test(tools));
-check("what's landed feeds replies and Cue's choice of what to send first", /tasteSummary\(userId\)/.test(src("src/harness/replyGrounding.ts")) && /What's landed with them before: \$\{about\.taste/.test(src("src/harness/proactive.ts")));
+check("what's landed feeds replies and Cue's choice of what to send first", /How finds landed: \$\{x\.text\}/.test(src("src/services/memberSnapshot.ts")) && /What's landed with them before: \$\{about\.taste/.test(src("src/harness/proactive.ts")));
 
 // ---- registry
 for (const t of ["closeAsk", "noteReaction", "checkInvitesLeft"]) check(`${t} is in Cue's registry`, ABILITIES.some((a) => a.tool === t));

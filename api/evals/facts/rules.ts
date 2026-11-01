@@ -83,8 +83,8 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   check("a find ask is, and only it", both.some((f) => f.kind === "ongoing" && /run club/.test(f.text) && !/sponsors/.test(f.text)));
   const sheet = capabilitySheet().join(" ");
   // (2026-10-01) The old event-only search couldn't find sponsors or investors; Co's web search can find sponsor programs and funds, checked on their own pages.
-  check("Cue knows its web search covers venues, vendors, people and programs", /search the web for venues to book, vendors \(DJs, caterers, photographers\), people, places, programs/.test(sheet));
-  check("saving an ask says what isn't searched", /Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched/.test(sheet));
+  check("Cue knows its web search covers venues, vendors, people and programs", /searches the web \(venues, vendors, people, programs, events\)/.test(sheet));
+  check("saving an ask says what isn't searched", /Sponsors, investors, funding and advice are kept on file, not searched/.test(sheet));
   const rg = src("harness/replyGrounding.ts");
   check("every 'I can' is a capability claim, held to that exact thing", (/every "I can…" is one/.test(rg) && /A capability needs a capability FACT covering that exact thing/.test(rg)));
   check("background work is a promise too", /or is already doing in the background/.test(rg));
@@ -193,7 +193,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   check("an older send isn't loaded as a recent detail", T.sentDetailLines({ sent: [{ ...grok, sentAt: new Date(now - 9 * 86_400_000) }] }).length === 0);
   check("a first offer is found by the name Cue's tool uses", T.findSent([grok, dayt], "daytonaio AI Builders demo night")?.key === "name:daytonaio ai builders demo night" && T.findSent([grok, dayt], "Grok Bot x Notion")?.key === "event:evt-1" && T.findSent([grok], "pottery") === undefined);
   const rg = src("harness/replyGrounding.ts");
-  check("reply facts come from the turn's picture: sends with details, asks, record; the summary is a hint", /if \(opts\.turn\) for \(const line of sentDetailLines\(opts\.turn\)\) addFact\(rf, "known", line\);/.test(rg) && /addOngoingSearchFacts\(rf, userId, opts\.turn\?\.asks\)/.test(rg) && /addHint\(rf, `Cue's summary of what they've told it: \$\{line\}`\)/.test(rg));
+  check("reply facts come from the turn's picture: sends with details, asks; no model-written summary of them", /if \(opts\.turn\) for \(const line of sentDetailLines\(opts\.turn\)\) addFact\(rf, "known", line\);/.test(rg) && /addOngoingSearchFacts\(rf, userId, opts\.turn\?\.asks\)/.test(rg) && !/Cue's summary of what they've told it/.test(rg));
   const sb = src("routes/sendblue.ts");
   check("no separate partial loads left in the text route", !/sentDetailFacts|lessonsFor\(|gatherDots\(/.test(sb) && /lessons = turn\?\.lessons \?\? \[\]/.test(sb) && /turn,\n/.test(sb));
 }
@@ -202,7 +202,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
 check("every tool Cue uses goes on the record (the part it did, when it did only part), and the backfill reads the same", /await recordToolAction\(ctx\.userId, name, recordAs\)/.test(src("agent/toolGuard.ts")) && /const recordAs = partial \?\? input;/.test(src("agent/toolGuard.ts")) && /partial \? \{ recordAs: partial \}/.test(src("agent/toolGuard.ts")) && /COALESCE\(proposal->'recordAs', proposal->'input'\)/.test(src("services/coFacts.ts")));
 check("every find Cue sends goes on the record", /await recordSentItems\(/.test(src("services/recommendation.ts")));
 check("every unprompted text goes on the record", (src("harness/proactive.ts").match(/recordProactiveText\(/g) ?? []).length >= 3);
-check("Cue's replies read the record, including older things they name", /const ledger = opts\.turn\?\.ledger \?\? \(await ledgerFacts\(userId, opts\.context \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /ledgerFacts\(userId, `\$\{message\}\\n\$\{opts\.ledgerContext \?\? ""\}`, zone\)/.test(src("services/turnContext.ts")) && /turnP = assembleContext\(user\.id, resolvedContent, \{\s*inlineTarget,\s*ledgerContext:/.test(src("routes/sendblue.ts")) && /turn: turn \?\? undefined,/.test(src("routes/sendblue.ts")));
+check("Cue's replies read the record, including older things they name", /const named = opts\.turn\?\.ledger\?\.named \?\? \[\]/.test(src("harness/replyGrounding.ts")) && /meta \? 'ledger'/.test(src("services/memberSnapshot.ts")) && /ledgerFacts\(userId, `\$\{message\}\\n\$\{opts\.ledgerContext \?\? ""\}`, zone\)/.test(src("services/turnContext.ts")) && /turnP = assembleContext\(user\.id, resolvedContent, \{\s*inlineTarget,\s*ledgerContext:/.test(src("routes/sendblue.ts")) && /turn: turn \?\? undefined,/.test(src("routes/sendblue.ts")));
 check("the record starts filled from what was already logged", /backfillCoActions\(\)/.test(src("db/migrations.ts")));
 
 // 2026-09-30: replies promised results ("I'll get you real options before Friday") that no search had found.
@@ -236,14 +236,14 @@ check("the record starts filled from what was already logged", /backfillCoAction
   const [startup] = RG2.claimChecks([claim("member_life", "your startup ZEBRA-VAULT-941", "my confidential startup is called ZEBRA-VAULT-941")], rf, { ...s, recentMemories: "User said: My mentor is Ravi and my confidential startup is called ZEBRA-VAULT-941. I live in Miami." });
   check("their own startup's name, from their memories, backs the reply", startup.pass);
   check("saying nothing's on file gets the claim check; a plain reply still skips it", RG2.needsClaimCheck("I don't actually have anything like that on file for you, no mentor or startup name saved. Want to tell me about it?") && RG2.needsClaimCheck("Honestly, this is the first I'm hearing of it.") && !RG2.needsClaimCheck("That sounds hard. What's been the toughest part?"));
-  check("the reply is told their memories are theirs to answer from", /It's theirs: when they ask about their own people, plans or history, answer from it\./.test(src("agent/conversationReply.ts")));
+  check("the reply is told what it knows about them is its snapshot, and not to treat them as new without it", /What you already know about \$\{input\.firstName\} is Cue's snapshot of them above/.test(src("agent/conversationReply.ts")) && /don't treat them as new/.test(src("agent/conversationReply.ts")));
   const [absent] = RG2.claimChecks([claim("detail", "I don't have either of those on file yet", null)], rf, { ...s, recentMemories: "" });
   check("a true 'nothing on file' needs no citation", absent.pass);
   const [falseDenial] = RG2.claimChecks([{ ...claim("member_life", "I don't have a mentor on file for you", null), supported: false }], rf, s);
   check("a denial the reader found false is still cut", !falseDenial.pass);
   const denial = [{ name: "claim_member_life", pass: false, reason: 'member_life: "I don\'t have a mentor or startup name saved for you"' }] as any;
   check("a false 'nothing on file' about their life goes to the redraft, not a bare cut", RG2.deniesWhatTheyToldCo(denial, s) && !RG2.deniesWhatTheyToldCo(denial, { ...s, recentMemories: "" }) && !RG2.deniesWhatTheyToldCo([{ name: "claim_time", pass: false, reason: 'time: "I don\'t have the start time"' }] as any, s));
-  check("the redraft may use their own words from memories, and its recheck still holds each detail to a source", /text\), theirOwnWords\(src\.recentMemories\)\]\.join/.test(src("harness/replyGrounding.ts")) && /!deniesWhatTheyToldCo\(effectiveFailed1, src\)/.test(src("harness/replyGrounding.ts")));
+  check("the redraft may use their own words from memories, and its recheck still holds each detail to a source", /text\), theirOwnWords\(src\.recentMemories\)\]\.join/.test(src("harness/replyGrounding.ts")) && /!deniesWhatTheyToldCo\(effectiveFailed1, src, rf\)/.test(src("harness/replyGrounding.ts")));
   const g = src("harness/replyGrounding.ts");
   check("the claim reader sees their own words from memories and knows member_life", /What they've told Cue before \(their own words from older conversations\)/.test(g) && /- member_life: something about the member's own life/.test(g) && /nothing they've told Cue before, gives X/.test(g) && /someone who's another member of Noise is never part of their own life/.test(g));
   check("the redraft sees their own words and may not deny what they hold", /What they've told you before \(their own words about their own life\)/.test(g) && /never say you don't have something that what they've told you before gives/.test(g));
@@ -304,8 +304,8 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("the names to strip come from their matches and Cue's own records", JSON.stringify(MS.namesInRecords([{ content: rec, memory_type: "recommendation" }, { content: offer, memory_type: "network_intro_offer_pending" }]).sort()) === JSON.stringify(["Celine", "Maya"]));
   check("Cue's intro records and Tier 0 picks become facts, details-free, so it can say what it did", JSON.stringify(MS.introFacts([{ content: intro, memory_type: "event_intro_email_sent" }, { content: rec, memory_type: "recommendation" }])) === JSON.stringify([`Cue's record: ${intro}`, "Cue's record: Cue suggested Maya, another member, to them as someone worth meeting."]));
   const sb = src("routes/sendblue.ts");
-  check("reply retrieval strips before the relevance filter ever sees it", /SELECT content, memory_type FROM co_memories\s+WHERE user_id = \$1 AND content_embedding IS NOT NULL/.test(sb) && /const candidates = await memberSafe\(user\.id, memoriesResult\.rows/.test(sb) && /filterRelevantMemories\(resolvedContent, candidates\)/.test(sb) && (sb.match(/SELECT content, memory_type FROM co_memories WHERE user_id = \$1 AND memory_type NOT IN \('intent', 'research_find'\) ORDER BY created_at DESC LIMIT 5/g) ?? []).length === 2);
-  check("intro records reach the fact check as what Cue did", /introRecordFacts\.forEach\(\(f\) => addFact\(replyFacts, "did_before", f\)\)/.test(sb));
+  // Snapshot step 3: the reply no longer retrieves memories; what Cue knows reaches it through the snapshot, fenced at its build.
+  check("the text reply retrieves no memories (the snapshot is fenced where it's built)", !/content_embedding <=>/.test(sb) && !/filterRelevantMemories/.test(sb) && /fenceCheck\(built, src\.names/.test(src("services/memberSnapshot.ts")));
   // Call summaries and the person model (#49 review items 1 and 2).
   const call = MS.safeMemory("text_exchange", "[Call] Avery said they met Maya at the mixer. Maya is leaving Tesla and raising for her grid storage startup. Avery wants a technical cofounder.", ["Maya"]) ?? "";
   check("a call summary describing another member is stripped, the member's own part kept", !MAYA.test(call) && /Cue introduced them to Maya, another member\.|Maya, another member/.test(call) && /Avery wants a technical cofounder\./.test(call), call as any);

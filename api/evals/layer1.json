@@ -269,6 +269,7 @@
     "evals/ledger/ledgerSql.ts",
     "evals/ledger/shareFindsRecord.ts",
     "evals/snapshot/snapshotBuild.ts",
+    "evals/snapshot/replyRead.ts",
     "evals/snapshot/snapshotSql.ts",
     "evals/review/introTrace.ts",
     "evals/review/introClose.ts",

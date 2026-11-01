@@ -23,5 +23,6 @@
   "evals/golden/replies.ts",
   "evals/golden/wording.ts",
   "evals/golden/estimate.ts",
-  "evals/golden/ledger.ts"
+  "evals/golden/ledger.ts",
+  "evals/golden/snapshot.ts"
 ]

@@ -9,6 +9,7 @@ import "../../lib/requireMeter.js";
 import { DateTime } from "luxon";
 import type { GoldenCase, GoldenResult } from "../types.js";
 import { result } from "../types.js";
+import { goldenSnapshot } from "../snapshot.js";
 import { captureSends, linesOf, noteReply } from "../replies.js";
 import { turnKind, type TurnKind } from "../../lib/hardRules.js";
 
@@ -67,8 +68,8 @@ export async function reply(s: Scene): Promise<Reply> {
   const M = await import("../../../src/services/memberWorld.js");
   const T = await import("../../../src/services/timeline.js");
   const searching = s.searching ?? NONE;
-  const facts = G.baseReplyFacts();
-  G.addFact(facts, "known", "They live in San Francisco.");
+  const snapshot = await goldenSnapshot({ ...member(s.firstName), city: "San Francisco", zone: ZONE });
+  const facts = G.baseReplyFacts(undefined, snapshot);
   G.addFact(facts, "known", G.todayFact(ZONE, s.now));
   G.addFact(facts, "known", T.renderTimeline(DateTime.fromJSDate(s.now).setZone(ZONE), []));
   for (const f of G.ongoingFactsFor(searching.asks.map((text) => ({ text, kind: "find" as const })))) G.addFact(facts, f.kind, f.text);
@@ -91,7 +92,7 @@ export async function reply(s: Scene): Promise<Reply> {
     if (m) G.addInstruction(facts, m);
   }
   const { value: r, sends } = await captureSends<any>(() => runConversationReplyAgent(
-    { ackSent: null, ...member(s.firstName), resolvedContent: s.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: recent, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true },
+    { ackSent: null, ...member(s.firstName), resolvedContent: s.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: recent, snapshot, personaPrompt: null, sendCoReply: async () => true },
     { dryRun: true, record: false, stubSearch: true },
   ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] })));
   const thread = linesOf(recent);

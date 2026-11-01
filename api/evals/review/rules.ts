@@ -212,7 +212,7 @@ check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev
   check("earlier: what they told Cue", /accelerator or in touch with VCs/.test(rec));
   const pr = modelReviewPrompt(d);
   check("prompt: the week before is in, and counts as backing", /The 7 days before today/.test(pr) && /neither today's decision log nor the earlier record backs up/.test(pr));
-  check("prompt: Cue's own rules are in, so stating them isn't flagged", /What Cue can do and its standing rules/.test(pr) && /5 invites each/.test(pr));
+  check("prompt: Cue's own rules are in, so stating them isn't flagged", /What Cue can do and its standing rules/.test(pr) && /5 each/.test(pr));
   check("review has room to answer after thinking", /maxOutputTokens: 16_000/.test(readFileSync(new URL("../../src/harness/devReview.ts", import.meta.url), "utf8")));
 }
 

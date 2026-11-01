@@ -114,7 +114,8 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   check("rules: discretion is the shared constant, said once (deduped against the base facts)", rf.instructions.filter((i) => i === rules.discretion).length === 1);
   check("rules: delivery shape and quiet hours in their zone are attached", rf.instructions.includes(rules.deliveryShape) && rf.instructions.some((i) => i.startsWith(rules.quietHours) && /America\/Los_Angeles/.test(i)));
   check("rules: no restraint line when nothing is on", !rf.instructions.some((i) => /^Restraint:/.test(i)) && rf.instructions.length === before + 2);
-  check("knowledge: taste and corrections as facts", rf.facts.some((f) => f.text === "Rooftop dinners landed; big mixers didn't.") && rf.facts.some((f) => /city was "Oakland", now "San Francisco"/.test(f.text) && /only the new version is true/.test(f.text)));
+  // Snapshot step 3: taste and corrections reach the reply in its snapshot (section 1), never again as tail facts.
+  check("knowledge: taste and corrections aren't repeated as tail facts (the snapshot carries them)", !rf.facts.some((f) => /Rooftop dinners/.test(f.text) || /city was "Oakland"/.test(f.text)) && /Corrected \$\{c\.field\}/.test(readFileSync(new URL("../../src/services/memberSnapshot.ts", import.meta.url), "utf8")));
   const muted = knowledge({ restraint: { ...calm, suppressedKinds: ["event_offer"] } });
   const rf2 = RG.createReplyFacts();
   RG.addMemberKnowledge(rf2, muted, MK.memberRules(muted));

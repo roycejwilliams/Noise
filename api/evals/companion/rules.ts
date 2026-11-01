@@ -156,7 +156,8 @@ check("the one-incident kit instruction is gone (the replay showed it changed no
   const plain = C.capabilitySheet({ situation: C.situationFor({ kitFields: 0, message: "anything fun this weekend?", openTasks: 0, eventToday: false }) }).join("\n").length;
   const busy = C.capabilitySheet({ situation: C.situationFor({ kitFields: 2, message: "hi", openTasks: 1, eventToday: true }) }).join("\n").length;
   console.log(`  capability sheet: ${Math.round(full / 4)} tokens in full, ${Math.round(plain / 4)} on a plain turn`);
-  check("situational entries are left out of a plain turn and kept when they apply", plain < full && busy === full);
+  // Since the trim (2026-10-31) the sheet is the same for every turn: situational abilities share their group's line (or are per-turn only).
+  check("the sheet is identical on a plain turn and a busy one", plain === full && busy === full);
   check("a plain turn isn't offered task, location, going, kit, walk-in or voice-read tools", JSON.stringify(C.toolsOutOfSituation({ kit: false, tasks: false, eventToday: false }).sort()) === JSON.stringify(["askedWalkin", "closeTask", "saveKitFact", "shareLocationYes", "updateGoing", "updateTask", "voiceRead"]));
   check("a message about applying brings the kit back even with nothing saved", C.situationFor({ kitFields: 0, message: "help me apply to this fellowship", openTasks: 0, eventToday: false }).kit);
 }

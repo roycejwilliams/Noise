@@ -1,5 +1,6 @@
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import type { TurnContext } from "../services/turnContext.js";
+import type { ReplySnapshot } from "../services/memberSnapshot.js";
 import { generateText, stepCountIs } from "ai";
 import { LOOP_BUDGET } from "./loop.js";
 import { createConversationTools, type SendCoReply } from "./conversationTools.js";
@@ -119,19 +120,10 @@ export type ConversationReplyInput = {
   seekingModeContext: string;
   styleHint: string;
   recentConversation: string;
-  recentMemories: string;
-  // Same buildContextSummary() output baked into personaPrompt's
-  // {{context_summary}} slot (see coPersona.ts) — but that slot only gets
-  // read by the model as an instruction for OPENING a call ("Phase 1 —
-  // Rapport... open by picking up from something specific"). Over text, the
-  // system prompt below tells the model to disregard the call's phase
-  // structure, which left this genuinely unclear to be weighted the same
-  // way on turn 40 of an ongoing thread. Surfaced again here, explicitly and
-  // unconditionally, so what Co already knows about this person carries the
-  // same weight as something they just said in this conversation — not
-  // background trivia contingent on a call-opening instruction that no
-  // longer applies.
-  contextSummary: string;
+  // What Cue knows about them: the member's snapshot (services/memberSnapshot.ts replySnapshot), its pinned version sent whole as a
+  // cached prefix and what's been added since in the tail. Null when it couldn't be read (failed or fenced): the reply runs on its tail
+  // and rules, and never treats them as new because of it.
+  snapshot: ReplySnapshot | null;
   // No longer used for texts (2026-09-24): texts get TEXT_LISTENING instead
   // of the full call guide. Kept so existing callers and evals compile.
   personaPrompt: string | null;
@@ -203,16 +195,6 @@ Return ONLY "yes" or "no".`,
   return true;
 }
 
-// Resolves whether each topically-retrieved memory actually applies to what
-// was just said, before it's handed to the reply agent as foreground
-// context — see the Step 5 comment in sendblue.ts for the bug this guards
-// against: vector similarity search has no sense of recency or real
-// relevance, and unfiltered this produced a reply referencing an unrelated
-// "3pm" proposal from a different conversation entirely. Cheap/fast model,
-// same tradeoff as verifyAndRecordCallOffer below: a yes/no-shaped
-// classification, not a creative task. Fails closed (drops the memories)
-// rather than open, since passing through unverified content is exactly
-// the failure mode this exists to prevent.
 // Per model call, not per reply: a search inside the reply can take up to
 // 45s on its own, while a drafting call normally takes under 20s.
 // Seconds past the loop's budget for Co to write its answer before the reply stops.
@@ -241,35 +223,6 @@ export function isTimeout(err: any, depth = 0): boolean {
   if (!err || depth > 5) return false;
   if (err.name === "TimeoutError" || err.name === "AbortError" || /timed? ?out|aborted/i.test(String(err.message ?? ""))) return true;
   return isTimeout(err.cause, depth + 1) || isTimeout(err.lastError, depth + 1) || (Array.isArray(err.errors) && err.errors.some((e: any) => isTimeout(e, depth + 1)));
-}
-
-export async function filterRelevantMemories(resolvedContent: string, candidates: string[]): Promise<string> {
-  if (!candidates.length) return "";
-  try {
-    const { text } = await generateText({
-      model: anthropic(LAYER3_MODELS.narrow),
-      experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.filterRelevantMemories" },
-      prompt: `A user just said: "${resolvedContent}"
-
-Here are memories retrieved by topic similarity — they may or may not actually be about what the user just said (similarity search has no sense of recency or real relevance):
-${candidates.map((c, i) => `${i + 1}. ${c}`).join("\n")}
-
-Return ONLY the numbers of the memories that are genuinely relevant to what the user just said, comma-separated (e.g. "1,3"). Return "none" if none of them actually apply.`,
-    });
-    const trimmed = text.trim().toLowerCase();
-    if (trimmed.startsWith("none")) return "";
-    const indices = trimmed
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10) - 1)
-      .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
-    return indices.map((i) => candidates[i]).join("\n");
-  } catch (err: any) {
-    console.error(
-      "conversationReply: filterRelevantMemories failed (non-fatal, dropping retrieved memories this turn):",
-      err?.message ?? err,
-    );
-    return "";
-  }
 }
 
 // The brain said wait (brain/index.ts): hold the send, logged, and retried once as an answer on the turn's resume path. The retry
@@ -375,8 +328,6 @@ export async function runConversationReplyAgent(
         {
           message: input.resolvedContent,
           recentConversation: input.recentConversation,
-          contextSummary: input.contextSummary,
-          recentMemories: input.recentMemories,
           sentThisTurn,
           answeredThisTurn,
           findsWaiting,
@@ -429,6 +380,9 @@ export async function runConversationReplyAgent(
   if (noFirstRead) withdrawDoorMoment(input.facts, noFirstRead.why);
 
   const lastCoMessage = lastCoLine(input.recentConversation);
+  // Real context on them: anything in their snapshot's first four sections (what they said, what they're in the middle of, how they
+  // feel, their world). The other two (what Cue did, what it can do) are there for everyone.
+  const hasContext = !!input.snapshot?.entries.some((e) => e.section === "words" || e.section === "middle" || e.section === "feelings" || e.section === "world");
 
   // Split so the part that never changes (Co's voice and how it listens) is
   // cached on its own; the rest is this member and this moment (2026-09-23,
@@ -456,8 +410,7 @@ ${COACHING}`;
 
 ${input.firstName} is texting you. You already have their number, so never ask for it.
 
-What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
-${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
+What you already know about ${input.firstName} is Cue's snapshot of them above${input.snapshot ? "" : " (not available this turn: work from this thread and the facts below, and don't treat them as new)"}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation. Lines marked inferred are your own read, never something they said.${input.snapshot?.since.length ? `\nSince then (added after that snapshot):\n${input.snapshot.since.join("\n")}` : ""}
 
 How ${input.firstName} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them.
 ${input.toneContext || "(nothing notable)"}
@@ -470,16 +423,13 @@ Decide what they most need right now: to feel heard, real help with something, o
 - When you don't have something they asked for, say so the first time, plainly and once, and name what you don't have.
 - Never name or diagnose the feeling ("you sound stressed"). Show you get it by how you respond.
 
-${renderReplyFacts(input.facts)}
+${renderReplyFacts(input.facts, { tail: true })}
 
 ${input.seekingModeContext}
 ${input.styleHint}
-${input.isFirstContact ? `\nThis is the start of your first real conversation with ${input.firstName}. They just finished the intro: greeting, what Cue is, saving your contact, verification. What they just said may only be a greeting.${input.contextSummary ? ` You already have real context on them (see "What you already know" above). Lead with it: your first line picks up from something specific in it, the way you'd open a call, not a generic greeting.` : ""} If it IS something real, pick up from it. If it's just a greeting or blank, don't treat it as substance. Open the real conversation yourself${input.contextSummary ? ", grounded in what you already know" : ""}: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
+${input.isFirstContact ? `\nThis is the start of your first real conversation with ${input.firstName}. They just finished the intro: greeting, what Cue is, saving your contact, verification. What they just said may only be a greeting.${hasContext ? ` You already have real context on them (see "What you already know" above). Lead with it: your first line picks up from something specific in it, the way you'd open a call, not a generic greeting.` : ""} If it IS something real, pick up from it. If it's just a greeting or blank, don't treat it as substance. Open the real conversation yourself${hasContext ? ", grounded in what you already know" : ""}: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
 Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
 ${input.recentConversation || "(this is the start of the conversation)"}
-
-What Cue knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread. It's theirs: when they ask about their own people, plans or history, answer from it.
-${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
 
 ${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.lastReaction ? `Your last reaction to them was ${input.lastReaction}; if you react this time, use a different one.\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
 
@@ -562,8 +512,11 @@ ${TOOL_TURN_RULES(input.isVoice)}
         effort: REPLY_EFFORT,
       },
     },
+    // Three blocks: Cue's core (the same for every member), this member's pinned snapshot (byte-stable across their turns, so it's
+    // read from cache after the first), then this turn.
     system: [
       { role: "system" as const, content: sharedSystem, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
+      ...(input.snapshot ? [{ role: "system" as const, content: input.snapshot.prefix, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" as const } } } }] : []),
       { role: "system" as const, content: system },
     ],
     tools,

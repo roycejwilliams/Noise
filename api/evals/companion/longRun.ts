@@ -95,7 +95,7 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 check("the weekly job marks a moment before checking in", /queueMilestone\(r\.id\)/.test(src("harness/memberReflection.ts")) && /!marked\.has\(r\.id\)/.test(src("harness/memberReflection.ts")));
 check("a moment is marked only once it's actually sent", /markMilestone\(c\.userId, c\.payload\.story\.key\)/.test(src("harness/proactiveRegistry.ts")));
 check("the story is drafted from the record only", /Use only what_happened and their words/.test(src("agent/companionCheckin.ts")));
-check("replies know the story", /storyLines\(m, 4\)/.test(src("harness/replyGrounding.ts")) && /storyLines\(m, 4\)/.test(src("services/turnContext.ts")));
+check("replies know the story", /opts\.turn\?\.story \?\? \[\]/.test(src("harness/replyGrounding.ts")) && /storyLines\(m, 4\)/.test(src("services/turnContext.ts")));
 
 console.log(`long-run rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

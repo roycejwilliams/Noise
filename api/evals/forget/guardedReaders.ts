@@ -48,7 +48,7 @@ const texts = [
   corrections = [];
   check("guardRows, no removals: the same rows, untouched", (await W.guardRows(U, texts)) === texts);
   corrections = [REMOVAL];
-  check("wiring: the reply's thread and memory search read through the guards", /W\.guardRows\(user\.id, chronological\)/.test(src("routes/sendblue.ts")) && /removedRows\.W\.guardText\(c, removedRows\.rows\)/.test(src("routes/sendblue.ts")));
+  check("wiring: the reply's thread and its snapshot read through the guards", /W\.guardRows\(user\.id, chronological\)/.test(src("routes/sendblue.ts")) && /text = guardText\(text, s\.forgotten\)/.test(src("services/memberSnapshot.ts")));
 }
 
 // 2. memberKnowledge exchanges (calls' last two days, tasks, follow-ups, dispatch, the sweep)
