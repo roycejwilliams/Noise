@@ -30,7 +30,7 @@ check("the extraction takes direction as entries too, and treats the corrected p
 
 // ---- DAILY LIFE: goals stay silent (the lens)
 check("the lens rule: judge against goals, almost never say them, never ask about them in passing", /LENS, not the conversation/.test(J.LENS_RULE) && /almost never say it back/.test(J.LENS_RULE) && /never ask about it in passing/.test(J.LENS_RULE));
-check("replies get goals as an unspoken hint plus the rule (never as a fact to recite)", /addHint\(replyFacts, `Where they say they are headed:/.test(src("routes/sendblue.ts")) && /addInstruction\(replyFacts, lens\.rule\)/.test(src("routes/sendblue.ts")));
+check("replies get goals from their snapshot plus the rule (never as a fact to recite)", /Goal \(\$\{g\.state\}/.test(src("services/memberSnapshot.ts")) && /addInstruction\(replyFacts, lens\.rule\)/.test(src("routes/sendblue.ts")));
 check("the call context carries their closed goals as an arc line, orientation only", /arcLine\(profile\?\.intent\)/.test(src("services/callContext.ts")));
 const intent = [
   { id: "g1", kind: "goal", status: "active", text: "Raise a pre-seed round", created_at: day(80), confirmed_at: day(80) },

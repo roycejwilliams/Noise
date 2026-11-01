@@ -4,7 +4,7 @@
 //   - the build: every line has its id, provenance and date; their linked members' names are out of every line; what they removed is
 //     out, what they corrected carries the correction; the header carries no clock
 //   - the fence: a planted linked name or another member's user id in the body is a block; the header's own first name isn't
-//   - shadow: nothing in the reply, read or check paths reads the snapshot (source shape)
+//   - who reads it: only the text reply (step 3, through replySnapshot); the read and check lanes don't yet (source shape)
 //   TZ=UTC node evals/runLayer1.mjs evals/snapshot/snapshotBuild.ts
 import fs from "node:fs";
 import path from "node:path";
@@ -136,12 +136,15 @@ const walk = (d: string) => { for (const f of fs.readdirSync(d, { withFileTypes:
 walk(root);
 const rel = (p: string) => path.relative(root, p);
 const readers = files.filter((f) => !/services\/memberSnapshot\.ts$/.test(f) && /\breadSnapshot\b/.test(fs.readFileSync(f, "utf8")));
-check("nothing in src calls readSnapshot (shadow: no lane reads the snapshot)", readers.length === 0, readers.map(rel));
-const importers = files.filter((f) => !/services\/memberSnapshot(Schema)?\.ts$/.test(f) && /memberSnapshot\.js/.test(fs.readFileSync(f, "utf8"))).map(rel).sort();
-check("only LEARN's rebuild, the upkeep job and the shadow script load the builder", JSON.stringify(importers) === JSON.stringify(["jobs/index.ts", "routes/sendblue.ts", "scripts/snapshotShadow.ts"]), importers);
+check("nothing in src calls readSnapshot directly (a reply reads it through replySnapshot)", readers.length === 0, readers.map(rel));
+// Type-only imports (the reply's input, the facts) load nothing.
+const importers = files.filter((f) => !/services\/memberSnapshot(Schema)?\.ts$/.test(f) && fs.readFileSync(f, "utf8").split("\n").some((l) => /memberSnapshot\.js/.test(l) && !/^import type /.test(l))).map(rel).sort();
+check("only the text reply and LEARN's rebuild (sendblue), the upkeep job and the shadow script load the builder", JSON.stringify(importers) === JSON.stringify(["jobs/index.ts", "routes/sendblue.ts", "scripts/snapshotShadow.ts"]), importers);
+const replyReaders = files.filter((f) => /\breplySnapshot\(/.test(fs.readFileSync(f, "utf8")) && !/services\/memberSnapshot\.ts$/.test(f)).map(rel);
+check("only the text reply reads it; the read and check lanes don't yet (steps 4 and 5)", JSON.stringify(replyReaders) === JSON.stringify(["routes/sendblue.ts"]), replyReaders);
 const sb = fs.readFileSync(path.join(root, "routes/sendblue.ts"), "utf8");
 const uses = [...sb.matchAll(/memberSnapshot\.js"\)\.then\(\(S\) => S\.(\w+)\(/g)].map((m) => m[1]);
-check("the reply path's one use is LEARN's rebuild, chained after the turn's learning writes", uses.join() === "rebuildSnapshot" && /learnFromTextTurn\(\{[\s\S]{0,400}\}\)\.catch\([^\n]*\n[\s\S]{0,300}\.then\(\(\) => import\("\.\.\/services\/memberSnapshot\.js"\)\.then\(\(S\) => S\.rebuildSnapshot\(user\.id, "learn"\)\)\)\s*\.catch\(\(\) => \{\}\);/.test(sb), uses);
+check("the reply path's two uses: the reply's read, and LEARN's rebuild chained after the turn's learning writes", uses.join() === "replySnapshot,rebuildSnapshot" && /learnFromTextTurn\(\{[\s\S]{0,400}\}\)\.catch\([^\n]*\n[\s\S]{0,300}\.then\(\(\) => import\("\.\.\/services\/memberSnapshot\.js"\)\.then\(\(S\) => S\.rebuildSnapshot\(user\.id, "learn"\)\)\)\s*\.catch\(\(\) => \{\}\);/.test(sb), uses);
 const jobs = fs.readFileSync(path.join(root, "jobs/index.ts"), "utf8");
 check("the job only runs the upkeep", [...jobs.matchAll(/\{ (\w+) \} = await import\("\.\.\/services\/memberSnapshot\.js"\)/g)].map((m) => m[1]).join() === "snapshotUpkeep");
 const sql = files.filter((f) => !/services\/memberSnapshot(Schema)?\.ts$|scripts\/forgetResidueAudit\.ts$/.test(f) && /member_snapshots?\b/.test(fs.readFileSync(f, "utf8"))).map(rel);

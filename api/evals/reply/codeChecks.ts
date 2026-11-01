@@ -14,7 +14,7 @@ import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/as
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, countOf, onlyCuts, sentencesToRecheck, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, countOf, onlyCuts, sentencesToRecheck, renderReplyFacts, needsClaimCheck, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
 import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
 import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
@@ -416,17 +416,6 @@ onboardingCaseCases.push(
   [needsClaimCheck("Trying again, should come through as a separate contact card, not a text bubble."), "a retry/resend claim is now recognized as claim-shaped and gets checked, not skipped"],
   [needsClaimCheck("Yeah, feedback like that goes straight to the team, not just logged and forgotten."), "saying feedback reached the team gets checked (2026-09-18, sent with nothing saved)"],
   [needsClaimCheck("Noted, I passed that along."), "passing something along gets checked"],
-  // What Co sent, for the claim check: every link with its caption (2026-09-18).
-  [(() => {
-    const t = (m: number) => new Date(Date.UTC(2026, 8, 17, 4, m));
-    const p = pairSentLinks([
-      { at: t(21), text: "https://lu.ma/love-potion" },
-      { at: t(21.5), text: "Sunday 3-6pm at The Love Potion Library, this low-key one has coffee, tarot, and massages." },
-      { at: t(40), text: "Looking now, give me a minute." },
-      { at: t(41), text: "https://lu.ma/other" },
-    ]);
-    return p.length === 2 && p[0].caption?.includes("Love Potion") === true && p[1].caption === null;
-  })(), "each sent link keeps the description sent right after it; a lone link has none"],
   [needsClaimCheck("Cue keeps an eye on that for you."), "a claim about how Cue works gets checked"],
   [needsClaimCheck("Already ran that search, those two were the results."), "a spelled-out count of Cue's own results gets checked (2026-09-25: went out unchecked when there were 4)"],
   [countOf(4, "result") === "4 results" && countOf(1, "thing") === "1 thing", "search notes lead with the count in words"],
@@ -434,16 +423,16 @@ onboardingCaseCases.push(
   [/A number must match its source exactly/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "the claim check compares numbers, not just topics"],
   // 2026-09-26 quality fixes
   [/debounceWaitMs = Math\.max\(0, burstWaitMs\(resolvedContent \?\? ""\) - \(Date\.now\(\) - new Date\(myInboundAt\)\.getTime\(\)\)\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: the debounce runs from when their text arrived, not after the router"],
-  [/Promise\.all\(\[recentMemoriesP, coverageP, buildContextSummary\(user\.id\)\]\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: memories, coverage and context summary run together"],
+  [/const snapshotP = import\("\.\.\/services\/memberSnapshot\.js"\)\.then\(\(S\) => S\.replySnapshot\(user\.id\)\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: the snapshot read starts before the router, alongside the rapport topic"],
   [/firstSentMs: firsts\.firstSentMs, firstAnswerMs: firsts\.firstAnswerMs/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: time to Cue's first text and first real answer are recorded, whichever path sent them"],
   [(() => { const t0 = new Date("2026-09-27T00:31:47Z"); const r = firstSendTimes([{ text: "https://lu.ma/full-moon", at: new Date("2026-09-27T00:32:11Z") }, { text: "Let me look, one sec.", at: new Date("2026-09-27T00:31:56Z") }], t0, ["Let me look, one sec."]); return r.firstSentMs === 9000 && r.firstAnswerMs === 24000; })(), "latency: a hold line counts as the first text, not as the answer"],
   [firstSendTimes([], new Date(), []).firstSentMs === null, "latency: nothing sent, nothing recorded"],
   [/\?\? "medium";/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "latency: replies draft at medium effort (won blind 22-16, faster)"],
   [/Never a heading or a label with a colon/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")) && !/labeled part \("Arrival:"\)/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "voice: walkthroughs read as spoken steps, not labeled sections"],
   [/including a yes or no to whether it did \("Still no", "Yep, I did"\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a yes or no about what Cue did is a claim"],
-  [/What they're asking about is in Cue's record as sent: \$\{ledger\.named\.join\(" "\)\} Answer from that record\./.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "record: when they ask about something Cue sent, the record answers, over earlier messages"],
+  [/What they're asking about is in Cue's record as sent: \$\{named\.join\(" "\)\} Answer from that record\./.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "record: when they ask about something Cue sent, the record answers, over earlier messages"],
   // Remove-only (2026-09-28): the unsupported sentences are cut first; one rewrite only when too little is left, kept only if it adds nothing.
-  [/let cut = stripUnsupported\(draft, effectiveFailed1, allowArrival\);/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /const cutStands = enoughLeft\(cut, draft\) && !apologyOnly\(cut\) && !inviteCut && !deniesWhatTheyToldCo\(effectiveFailed1, src\) && !silent && !lostSupported;[\s\S]{0,4000}?const stub = shareCutStub\([\s\S]{0,300}?if \(cutStands && !threadCut && shareTurn && stub\)[\s\S]{0,900}?\} else if \(cutStands && !threadCut\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /const guard = cleaned \? rewriteAddsNothing\(draft, cleaned, allowed\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: cut first; a rewrite only when too little is left (or a false \"nothing on file\" about their own life, or dead air while their world has a true line, or a cut thread report, evals/checkins/rules.ts, or a sharing turn's cut left a stub, or the narration rule cut a supported answer, evals/reply/shareCut.ts), and only if it adds nothing"],
+  [/let cut = stripUnsupported\(draft, effectiveFailed1, allowArrival\);/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /const cutStands = enoughLeft\(cut, draft\) && !apologyOnly\(cut\) && !inviteCut && !deniesWhatTheyToldCo\(effectiveFailed1, src, rf\) && !silent && !lostSupported;[\s\S]{0,4000}?const stub = shareCutStub\([\s\S]{0,300}?if \(cutStands && !threadCut && shareTurn && stub\)[\s\S]{0,900}?\} else if \(cutStands && !threadCut\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /const guard = cleaned \? rewriteAddsNothing\(draft, cleaned, allowed\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: cut first; a rewrite only when too little is left (or a false \"nothing on file\" about their own life, or dead air while their world has a true line, or a cut thread report, evals/checkins/rules.ts, or a sharing turn's cut left a stub, or the narration rule cut a supported answer, evals/reply/shareCut.ts), and only if it adds nothing"],
   [(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8").match(/abortSignal: AbortSignal\.timeout\(GROUNDING_CALL_TIMEOUT_MS\)/g) ?? []).length === 4, "grounding: the check, the rewrite, the share rewrite and the thread repair can't stall a reply"],
   [onlyCuts("Still just Mahjong After Dark from what I sent earlier, nothing new has turned up since.", "Still just Mahjong After Dark from what I sent earlier."), "grounding: a rewrite that only drops a clause skips the second read"],
   [!onlyCuts("I did not send it yet.", "I did send it."), "grounding: dropping a word from the middle of a sentence still gets re-checked"],

@@ -15,7 +15,6 @@ import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { getEmotionalContext, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
-import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
 import { countRecentGateReplies, decideGateReply } from "../services/gateGuard.js";
@@ -66,10 +65,9 @@ import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
-import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS, firstArrival } from "../agent/conversationReply.js";
+import { runConversationReplyAgent, CALL_OFFER_EXPIRY_DAYS, firstArrival } from "../agent/conversationReply.js";
 import { callLine } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts, failureDetail, parseDialFailure } from "../services/callReasons.js";
-import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
 import { FAILURE_RECORD_WINDOW_MINUTES, failureRecordFacts, OWED_AFTER, owedFromRows, readFailureRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
@@ -1579,40 +1577,11 @@ export function sendblueRouter(io: Server): Router {
         const hasProfile = !!profile?.life_chapters?.length;
         const isFirstRealMessage = parseInt(activityCountResult.rows[0].count, 10) <= 1;
 
-        // Context the reply needs (relevant memories, the rapport topic to
-        // raise), started now so it's ready by the time the reply drafts
-        // instead of running one after another after the debounce
-        // (2026-09-26: ~3.7s of every reply was these, in series).
+        // What Cue knows about them: the member's snapshot (services/memberSnapshot.ts replySnapshot), started now so it's ready by the
+        // time the facts are gathered (a stale one rebuilds first, code only). Null when it can't be read or is fenced: the turn then
+        // runs on its tail and rules.
         const replyContextStarted = Date.now();
-        let introRecordFacts: string[] = [];
-        const recentMemoriesP = (async () => {
-          const memoriesResult = queryEmbedding
-            ? await pool
-                .query(
-                  `SELECT content, memory_type FROM co_memories
-               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type NOT IN ('intent', 'research_find')
-               ORDER BY content_embedding <=> $2::vector
-               LIMIT 5`,
-                  [user.id, `[${queryEmbedding.join(",")}]`],
-                )
-                .catch((vecErr: any) => {
-                  console.error("Vector search failed, falling back to recency:", vecErr);
-                  return pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type NOT IN ('intent', 'research_find') ORDER BY created_at DESC LIMIT 5`, [user.id]);
-                })
-            : await pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type NOT IN ('intent', 'research_find') ORDER BY created_at DESC LIMIT 5`, [user.id]);
-          // Filtered for genuine relevance to what they just said before the
-          // reply agent ever sees it (filterRelevantMemories in
-          // conversationReply.ts): similarity alone isn't a relevance signal.
-          // Another member's details are stripped here, before anything reads
-          // them; their intro history stays (services/memberSafeMemories.ts).
-          const candidates = await memberSafe(user.id, memoriesResult.rows.filter((m: any) => m.content));
-          introRecordFacts = introFacts(memoriesResult.rows);
-          // A memory that says something they had removed (services/whatCoKnows.ts) is left out too.
-          const removedRows = await import("../services/whatCoKnows.js").then(async (W) => ({ W, rows: (await W.forgottenRows(user.id)).filter((r) => r.removed) })).catch(() => null);
-          // guardText: only the parts that say it go, and a line with a safety signal is always kept whole.
-          if (removedRows?.rows.length) candidates.splice(0, candidates.length, ...candidates.map((c) => removedRows.W.guardText(c, removedRows.rows)).filter((c): c is string => c !== null));
-          return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
-        })().catch(() => "");
+        const snapshotP = import("../services/memberSnapshot.js").then((S) => S.replySnapshot(user.id)).catch(() => null);
         const routeInput = {
           // Which text they replied to, so "I'm in" under an offer resolves to it.
           message: inlineTarget ? `${resolvedContent} ${inlineNote(inlineTarget)}` : resolvedContent,
@@ -1749,10 +1718,12 @@ export function sendblueRouter(io: Server): Router {
         if (inlineTarget) {
           recordDecision({ layer: 2, decision: "turn.inlineReply", userId: user.id, outcome: "act", action: inlineTarget.fromCo ? "to_co" : "to_self", proposal: { repliedTo: inlineTarget.text.slice(0, 200) } }).catch(() => {});
         }
+        const replySnapshot = await snapshotP;
         turn = turnP ? await turnP.catch(() => null) : null;
         // This message's feeling was just recorded; the context read the ones before it.
         if (turn) turn.emotional = emotional;
         const replyFacts = await gatherReplyFacts(user.id, {
+          snapshot: replySnapshot,
           turn: turn ?? undefined,
           context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
@@ -1789,10 +1760,10 @@ export function sendblueRouter(io: Server): Router {
         // they want something found, and its working notes from earlier texts.
         if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, LOOP_GUIDE);
         if (hasText) {
-          // What they have told Co that still holds, each with when they said it (claims), and goals as the LENS with their state:
-          // both from member knowledge (services/memberKnowledge.ts, read once in the turn's context). Claims are the only thing that
-          // can answer "what do you mean?" or "I never said that": Co's own earlier texts are not evidence of what they said. Goals
-          // are handed over as an unspoken hint with the rule, never as a fact to recite; only active ones are where they're headed.
+          // What they have told Cue that still holds (claims) and where they're headed (active goals) are in their snapshot; here only
+          // the rules for using them, from member knowledge (services/memberKnowledge.ts, read once in the turn's context). Claims are
+          // the only thing that can answer "what do you mean?" or "I never said that": Cue's own earlier texts are not evidence of what
+          // they said. Goals are the lens, never a fact to recite; only active ones are where they're headed.
           const said = heldClaimsFrom(turn?.knowledge);
           const lens = goalLens(turn?.knowledge, turn?.profile?.intent);
           // A goal their text names shows life: its recheck clock moves, and an idle one comes back (services/goalRecheck.ts).
@@ -1808,11 +1779,10 @@ export function sendblueRouter(io: Server): Router {
             import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
           ]);
           if (lens?.texts.length) {
-            addHint(replyFacts, `Where they say they are headed: ${lens.texts.slice(0, 5).join("; ")}.${lens.arc ? ` ${lens.arc}.` : ""}`);
+            if (lens.arc) addHint(replyFacts, `${lens.arc}.`);
             addInstruction(replyFacts, lens.rule);
           }
           if (said && (said.enduring.length || said.theySaid.length)) {
-            addFact(replyFacts, "known", `What they have told Cue that still holds (each with when they said it): ${[...said.enduring, ...said.theySaid].join("; ")}.`);
             addInstruction(replyFacts, "If they ask what you meant, or say they never said something, answer only from what they have told you (with when they said it) or say you have nothing from them on it and own the slip. Your own earlier texts are never the source of what they said; never defend one.");
           } else if (said) {
             addInstruction(replyFacts, "You have nothing current from them on any plan, deadline or event. If they ask what you meant by something you said about one, say you don't have that from them and own the slip; your own earlier text is not a source.");
@@ -2613,17 +2583,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           }
         }
 
-        // Step 5 — Two separate context sources, since they answer different
-        // questions. Topical similarity search answers "what's relevant to
-        // what they just said" but has no sense of recency or conversation
-        // flow (confirmed: it once surfaced an unrelated "3pm" proposal). The
-        // chronological block (recentConversation) answers "what did we just
-        // say." Both were started before the router (recentMemoriesP,
-        // coverageP); the context summary reads state this turn may have
-        // changed, so it's read now, alongside them.
-        const [recentMemories, { missingTopic, refresh: staleTopic }, contextSummary] = await Promise.all([recentMemoriesP, coverageP, buildContextSummary(user.id)]);
-        // Intros Co made, from its own records (not co_facts): what it did.
-        introRecordFacts.forEach((f) => addFact(replyFacts, "did_before", f));
+        // Step 5: the rapport topic, started before the router. What Cue knows about them is the snapshot, read above.
+        const { missingTopic, refresh: staleTopic } = await coverageP;
         const replyContextWaitMs = Date.now() - replyContextStarted;
 
         const toneContext = renderEmotionalContext(emotional);
@@ -2637,13 +2598,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
 
         let coReply: string;
         {
-          // Same persona the real call uses, not a separate thinner one —
-          // Co should be the same entity whether someone's talking by voice
-          // or text. contextSummary reuses buildContextSummary (the exact
-          // same "what Co knows about this person" builder the call channel
-          // uses for its own {{context_summary}} fill), so both channels
-          // stay genuinely in sync rather than each maintaining their own
-          // summary of the same underlying profile. (Read in Step 5 above.)
           // Texts no longer carry the call guide (agent/conversationReply.ts,
           // 2026-09-24), so it isn't fetched from Hume on every text.
           const personaPrompt = null;
@@ -2728,8 +2682,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 seekingModeContext,
                 styleHint,
                 recentConversation,
-                recentMemories,
-                contextSummary,
+                snapshot: replySnapshot,
                 personaPrompt,
                 sendCoReply: threadedSend,
                 walkinAsk: walkinAskReceipt,
@@ -2799,8 +2752,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           coReply,
           coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
         }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err))
-          // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts). Shadow:
-          // nothing reads it yet. Code only, no model call; it never throws.
+          // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts), so the next
+          // reply reads it without a rebuild. Code only, no model call; it never throws.
           .then(() => import("../services/memberSnapshot.js").then((S) => S.rebuildSnapshot(user.id, "learn")))
           .catch(() => {});
         // Keep the current picture of them fresh (harness/personSnapshot.ts);

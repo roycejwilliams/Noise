@@ -30,24 +30,21 @@ import type { Doc } from "../services/documentSheet.js";
 import type { EmotionalContext } from "./emotion.js";
 import { GENTLE_AFTER_HARD, MOOD_HOLD_CAP_HOURS, OKAY_AFTER_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
-import { loadMilestones, storyLines } from "../services/milestones.js";
-import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
+import { capabilitySheet, perTurnSheet } from "../services/capabilities.js";
+import type { ReplySnapshot, SnapEntry } from "../services/memberSnapshot.js";
 import { voiceReadPrereqs } from "../services/voiceRead.js";
 import { kitLines } from "../services/memberKit.js";
 import { situationFor, type Situation } from "../services/capabilities.js";
 import { carryingBlock, sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
-import { tasteSummary } from "../services/outcomes.js";
 import { TEAM_BUILDER_LINE, isTeamMember } from "../services/extensions.js";
-import { ledgerFacts } from "../services/coFacts.js";
 import { NO_COVERAGE, type SearchCoverage } from "../services/searchCoverage.js";
 import { CHECKIN_RULE, CHECKIN_RULE_AT_NIGHT, LATE_NIGHT_CARE, lateNight, deadAir, keepsEverySentence, workClaimsNameThread, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
 import { SAFETY_INSTRUCTION } from "../services/safetyText.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
 import { memberZone, validZone, wordsZone } from "../services/memberTime.js";
 import { sourceOf } from "../services/messageFormat.js";
-import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -116,7 +113,9 @@ export type FactKind =
   // (2026-09-28: a search's "this is their people" became "that's your crowd").
   | "hint";
 
-export type Fact = { id: string; kind: FactKind; text: string };
+// snap: an entry of the member's snapshot (services/memberSnapshot.ts), under its own id ("L4711", "Pcity"). The fact check reads it
+// like any fact; the reply reads it in its cached prefix, so it's never rendered into the reply's tail (renderReplyFacts tail).
+export type Fact = { id: string; kind: FactKind; text: string; snap?: true };
 
 // privateNames: the other member(s) a blocked turn is about, so a reply can't name them
 // (harness/discretion.ts).
@@ -194,7 +193,7 @@ export function createReplyFacts(): ReplyFacts {
 export function addFact(rf: ReplyFacts, kind: FactKind, text: string): void {
   const t = text.trim();
   if (!t || rf.facts.some((f) => f.text === t)) return;
-  rf.facts.push({ id: `F${rf.facts.length + 1}`, kind, text: t });
+  rf.facts.push({ id: `F${rf.facts.filter((f) => !f.snap).length + 1}`, kind, text: t });
 }
 
 // A model-written read for drafting, never a source (FactKind "hint").
@@ -207,13 +206,29 @@ export function addInstruction(rf: ReplyFacts, text: string): void {
   if (t && !rf.instructions.includes(t)) rf.instructions.push(t);
 }
 
+// Pure: the member's snapshot entries as this reply's facts, for the fact check (snap: never in the reply's tail). What each can back:
+// Cue's read (inferred) and an act of Cue's that didn't happen (the builder's "not_done" relation or a "(receipt ...)" other than done)
+// back nothing (hints); an open item in their world is scheduled work, a closed one what Cue did; Cue's acts are what it did; what Cue
+// can do is a capability; the rest (their words, what Cue saw) is known.
+export function addSnapshotFacts(rf: ReplyFacts, entries: SnapEntry[]): void {
+  for (const e of entries) {
+    if (rf.facts.some((f) => f.id === e.id)) continue;
+    const didnt = e.section === "ledger" && (/^not_done\b/.test(e.text) || /\(receipt (?!done)/.test(e.text));
+    const kind: FactKind = e.prov === "inferred" || didnt ? "hint" : e.section === "can" ? "capability" : e.section === "world" ? (e.open ? "scheduled" : "did_before") : e.section === "ledger" ? "did_before" : "known";
+    rf.facts.push({ id: e.id, kind, text: `${e.date ? `${e.date}: ` : ""}${e.text}`, snap: true });
+  }
+}
+
 // What Co can do and the lines it doesn't cross: one registry
 // (services/capabilities.ts), shared with the tools themselves.
 
-// Facts that are true for every reply, before anything about this person.
-export function baseReplyFacts(situation?: Situation): ReplyFacts {
+// Facts that are true for every reply, before anything about this person. What Cue can do: with the member's snapshot, its section 6
+// (identical for every member, cited by entry id) plus this turn's per-turn lines; without one (a read that failed or was fenced, or a
+// caller with none), the whole sheet, in the tail.
+export function baseReplyFacts(situation?: Situation, snapshot?: Pick<ReplySnapshot, "entries"> | null, team = false): ReplyFacts {
   const rf = createReplyFacts();
-  for (const c of capabilitySheet({ situation })) addFact(rf, "capability", c);
+  if (snapshot) addSnapshotFacts(rf, snapshot.entries);
+  for (const c of snapshot ? (situation ? perTurnSheet(situation) : []) : capabilitySheet({ team, situation })) addFact(rf, "capability", c);
   // How Co keeps a confidence, so the model chooses a discreet line itself when
   // asked to speak for another member (harness/discretion.ts).
   addInstruction(rf, DISCRETION_GUIDE);
@@ -238,19 +253,17 @@ export async function gatherReplyFacts(
   // turn: the one picture of this turn (services/turnContext.ts). When given,
   // the snapshot, the record, open asks and what Co sent come from it instead
   // of separate loads.
-  opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext; walkinDue?: boolean } = {},
+  // snapshot: the member's snapshot (services/memberSnapshot.ts replySnapshot). What Cue knows about them comes from it, read whole
+  // in the reply's cached prefix; this builds only what's per turn. Null when it couldn't be read: the turn runs on its tail and rules.
+  opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext; walkinDue?: boolean; snapshot?: ReplySnapshot | null } = {},
 ): Promise<ReplyFacts> {
   const t = opts.turn;
-  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false, walkinDue: !!opts.walkinDue, voiceRead: voiceReadPrereqs() }) : undefined);
+  const team = await isTeamMember(userId).catch(() => false);
+  const rf = baseReplyFacts(situationFor({ kitFields: Object.keys(t?.kit ?? {}).length, message: t?.message ?? "", openTasks: t?.tasks?.length ?? 0, eventToday: !!t?.todayEvent, doorOpen: t?.door ? doorOpen(t.door).open : false, walkinDue: !!opts.walkinDue, voiceRead: voiceReadPrereqs() }), opts.snapshot, team);
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
-  // What Co knows about them from the one member-knowledge layer, with the member-level rules (addMemberKnowledge): their taste
-  // (what's landed with them), what they corrected, restraint, quiet hours, delivery shape. Without the layer (no turn), taste is read
-  // on its own as before.
-  if (t?.knowledge !== undefined || t?.rules !== undefined) addMemberKnowledge(rf, t?.knowledge, t?.rules);
-  else {
-    const taste = await tasteSummary(userId).catch(() => null);
-    if (taste) addFact(rf, "known", taste);
-  }
+  // The member-level rules from the one member-knowledge layer (addMemberKnowledge): restraint, quiet hours, delivery shape. What
+  // they told Cue, corrected and liked is in the snapshot.
+  addMemberKnowledge(rf, t?.knowledge, t?.rules);
   // "Do research on X" (Royce, 2026-10-11: Co offered a positioning line "from" Jeremy Toce without ever searching): search first,
   // and say nothing about X until it's back; nothing found is said plainly, with no lines built on it.
   // Only the member's own message: the rest of the context carries Co's lines too ("want me to look into it?"), so without a turn
@@ -291,11 +304,8 @@ export async function gatherReplyFacts(
   // Titles only, never links (a link goes out only through the tools).
   const live = await import("../services/coPages/store.js").then((m) => m.livePagesFor(userId)).catch(() => [] as { title: string; kind: string }[]);
   if (live.length) addFact(rf, "known", `Pages and decks you made them that are still live: ${live.slice(0, 8).map((p) => `the ${p.kind} "${p.title}"`).join("; ")}. When they ask to change one ("tighten the traction slide", "move dinner to 8"), open it (openArtifact) and change it from what's there; never ask them to paste or resend it.`);
-  // The team only: that they build Co, and the team-only abilities. Everyone else gets nothing about them.
-  if (await isTeamMember(userId).catch(() => false)) {
-    addInstruction(rf, TEAM_BUILDER_LINE);
-    for (const a of ABILITIES.filter((x) => x.teamOnly)) addFact(rf, "capability", a.can);
-  }
+  // The team only: that they build Co (their team-only abilities are in the sheet). Everyone else gets nothing about them.
+  if (team) addInstruction(rf, TEAM_BUILDER_LINE);
   // Abilities switched off right now (services/abilitySwitches.ts).
   for (const id of (await switchedOff().catch(() => new Map<string, string>())).keys()) {
     addFact(rf, "capability", `Cue's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);
@@ -311,11 +321,8 @@ export async function gatherReplyFacts(
   // was six round trips before the reply could even start drafting.
   // Their zone (services/memberTime.ts): "today" in the date notes is their day.
   const zone = await memberZone(userId);
-  const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure, sendHeld] = await Promise.all([
+  const [corrections, scheduled, reveal, preference, callFailure, sendHeld] = await Promise.all([
     recentCallCorrections(userId),
-    opts.turn ? Promise.resolve(opts.turn.snapshot) : getPersonSnapshot(userId).catch(() => null),
-    recentlySent(userId),
-    recentSearchNotes(userId, zone),
     pool
       .query(
         `SELECT scheduled_for, timezone FROM scheduled_calls WHERE user_id = $1 AND status = 'pending' AND scheduled_for > NOW() ORDER BY scheduled_for LIMIT 3`,
@@ -376,25 +383,7 @@ export async function gatherReplyFacts(
   }
   await addOngoingSearchFacts(rf, userId, opts.turn?.asks);
   for (const correction of corrections) addFact(rf, "known", correction);
-  // What Co knows about them, so "what do you know about me?" can be
-  // answered from it (2026-09-15: the claim check had no copy of the person
-  // summary and cut "designer by Friday" and "Series A" as unsupported).
-  // A model-written summary of them: drafted from, never a source (2026-09-28).
-  for (const line of renderSnapshot(snapshot).split("\n").filter(Boolean)) addHint(rf, `Cue's summary of what they've told it: ${line}`);
-  // What Co already sent them, and what its searches turned up, so "which
-  // one?" and "are you actually searching?" are answerable (2026-09-16).
-  for (const line of sent) addFact(rf, "did_before", line);
-  for (const note of notes) addFact(rf, "did_before", note);
-  // What Co's recent follow-ups were about, with the original send
-  // (proactiveRegistry.ts debrief onSent). 2026-09-26: asked "you never sent
-  // that", Co couldn't see a five-day-old send and agreed.
-  const { rows: followups } = await pool
-    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'followup_context' AND created_at > NOW() - INTERVAL '4 days' ORDER BY created_at DESC LIMIT 3`, [userId])
-    .catch(() => ({ rows: [] as any[] }));
-  for (const r of followups) addFact(rf, "did_before", String(r.content));
-  // Co's own record of what it sent and did for them (services/coFacts.ts):
-  // the last two weeks of sends, and anything older their message names.
-  const ledger = opts.turn?.ledger ?? (await ledgerFacts(userId, opts.context ?? "").catch(() => ({ lines: [] as string[], named: [] as string[] })));
+  // What Cue sent, searched and did for them is the snapshot's ledger (section 5); what their message names from it is said below.
   // What's on file for what Co recently sent: times and places, and what isn't
   // (services/turnContext.ts), before Co ever says it doesn't have them.
   if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
@@ -411,9 +400,8 @@ export async function gatherReplyFacts(
   if (opts.turn?.kit) for (const line of kitLines(opts.turn.kit)) addFact(rf, "known", line);
   // Where they've been with Co, from the record (services/milestones.ts): the
   // arc Co can look back on, in their own words.
-  const story = opts.turn?.story ?? (opts.turn ? [] : await loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]));
-  for (const line of story) addFact(rf, "known", line);
-  // What Co told them lately, so it doesn't contradict itself and can ask how it went.
+  for (const line of opts.turn?.story ?? []) addFact(rf, "known", line);
+  // What Co advised them lately (services/advice.ts), so it doesn't contradict itself and can ask how it went.
   for (const line of opts.turn?.advice ?? []) addFact(rf, "did_before", line);
   // On the way to a Co event today (services/preArrival.ts).
   const today = opts.turn ? opts.turn.todayEvent ?? null : await import("../services/eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null);
@@ -524,12 +512,12 @@ export async function gatherReplyFacts(
     // Released (they're okay again, or the cap): what waited goes gently (model-facing tone guidance, never a line of its own).
     if ((heavy.state === "released_okay" || heavy.state === "released_cap") && (rf.door?.offered || rf.coldStart?.offered || docOffered)) addInstruction(rf, GENTLE_AFTER_HARD);
   }
-  for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
   // answers, whatever earlier messages said (2026-09-27: after two earlier
   // wrong denials in the thread, Co said "Still no, same as I said before").
-  if (ledger.named.length) {
-    addInstruction(rf, `What they're asking about is in Cue's record as sent: ${ledger.named.join(" ")} Answer from that record. If an earlier message in this conversation said otherwise, say plainly that it was wrong.`);
+  const named = opts.turn?.ledger?.named ?? [];
+  if (named.length) {
+    addInstruction(rf, `What they're asking about is in Cue's record as sent: ${named.join(" ")} Answer from that record. If an earlier message in this conversation said otherwise, say plainly that it was wrong.`);
   }
 
   if (!scheduled.rows.length) addFact(rf, "scheduled", "No calls are scheduled with them.");
@@ -577,11 +565,6 @@ export function addMemberKnowledge(rf: ReplyFacts, k: MemberKnowledge | null | u
   if (!k) return;
   // What they had removed is never named here (services/whatCoKnows.ts); the older texts in the thread may still say it.
   if (k.removedCount) addInstruction(rf, "They've asked you to forget some things they told you, and those are gone from what you know. If an earlier message in this conversation says something they asked you to forget, leave it out: never bring it up, use it or hint at it.");
-  for (const p of k.preferences) if (p.text.trim()) addFact(rf, "known", p.text);
-  const corrections = k.corrections.filter((c) => c.field.trim() && (c.was.trim() || c.now?.trim()));
-  if (corrections.length) {
-    addFact(rf, "known", `What they corrected (only the new version is true; never bring back the old one): ${corrections.slice(0, 6).map((c) => `${c.field.replace(/_/g, " ")} was "${c.was.slice(0, 80)}", now ${c.now ? `"${c.now.slice(0, 80)}"` : "removed"}`).join("; ")}.`);
-  }
 }
 
 // Pure: whether any restraint is on for them right now (otherwise its rule is only "nothing is on", and left out).
@@ -710,59 +693,9 @@ export function countOf(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-async function recentSearchNotes(userId: string, zone: string | null): Promise<string[]> {
-  const { rows } = await pool
-    .query(
-      `SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content LIKE '[search]%' AND created_at > NOW() - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 5`,
-      [userId],
-    )
-    .catch(() => ({ rows: [] as any[] }));
-  // Dated, so an earlier search is never taken as the answer to a new ask.
-  return rows.map((r: any) => searchNoteLine(String(r.content), new Date(r.created_at), localToday(zone), zone));
-}
-
 export function searchNoteLine(content: string, at: Date, today: string, zone: string | null = DEFAULT_ZONE): string {
   const d = localToday(zone, at);
   return `${d === today ? "Earlier today" : `On ${DateTime.fromISO(d).toFormat("cccc, LLLL d")}`}, ${content.replace("[search] ", "")}${d === today ? "" : " That was an earlier search: a new ask needs a new one."}`;
-}
-
-// What Co has actually sent them lately, from every path (answers to their
-// texts, the daily pick's offers, late results): each link with the message
-// that went out right after it, in Co's own words, so its day and time are
-// there too. Was the last 3 search results from 3 days, which dropped a
-// Sunday event sent two days earlier; the claim check then called Co's true
-// "Still that one at The Love Potion Library, 3-6pm" unsupported and sent
-// "nothing on my end about it" instead (2026-09-18).
-export const SENT_LOOKBACK_DAYS = 7;
-const SENT_MAX = 10;
-
-export function pairSentLinks(messages: { at: Date; text: string }[]): { at: Date; url: string; caption: string | null }[] {
-  const sorted = [...messages].sort((a, b) => a.at.getTime() - b.at.getTime());
-  const out: { at: Date; url: string; caption: string | null }[] = [];
-  sorted.forEach((m, i) => {
-    const url = m.text.trim();
-    if (!/^https?:\/\/\S+$/.test(url)) return;
-    const next = sorted[i + 1];
-    const caption = next && !/^https?:\/\//.test(next.text.trim()) && next.at.getTime() - m.at.getTime() < 2 * 60 * 1000 ? next.text.trim() : null;
-    out.push({ at: m.at, url, caption });
-  });
-  return out;
-}
-
-export async function recentlySent(userId: string): Promise<string[]> {
-  const { rows } = await pool
-    .query(
-      `SELECT created_at, content FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%'
-         AND created_at > NOW() - ($2 || ' days')::interval
-       ORDER BY created_at DESC LIMIT 200`,
-      [userId, SENT_LOOKBACK_DAYS],
-    )
-    .catch(() => ({ rows: [] as any[] }));
-  const pairs = pairSentLinks(rows.map((r: any) => ({ at: new Date(r.created_at), text: String(r.content).replace(/^Co replied:\s*/, "") })));
-  return pairs
-    .slice(-SENT_MAX)
-    .map((p) => `Cue sent them ${DateTime.fromJSDate(p.at).toRelative()} (${DateTime.fromJSDate(p.at).toFormat("ccc LLL d")}): ${p.caption ? `"${p.caption}"` : "(no description on file)"} (link ${p.url})`);
 }
 
 // What Co is really still looking for, from open asks. Only these make
@@ -829,10 +762,12 @@ export function addEventFacts(
   }
 }
 
-export function renderReplyFacts(rf: ReplyFacts): string {
+// tail: the reply's own tail, which leaves out the snapshot's entries (the reply reads those in its cached prefix). Every other reader
+// (the redraft, the share rewrite, the tools) gets them all.
+export function renderReplyFacts(rf: ReplyFacts, o: { tail?: boolean } = {}): string {
   // Receipts (2026-09-25): what Co tried and didn't manage, marked so it's
   // never read as done.
-  const facts = rf.facts.map((f) => `[${f.id}] ${f.kind === "not_done" ? `NOT DONE: ${f.text}` : f.kind === "hint" ? `YOUR READ, NOT A FACT (use for how you say it, never state it as fact): ${f.text}` : f.text}`).join("\n");
+  const facts = (o.tail ? rf.facts.filter((f) => !f.snap) : rf.facts).map((f) => `[${f.id}] ${f.kind === "not_done" ? `NOT DONE: ${f.text}` : f.kind === "hint" ? `YOUR READ, NOT A FACT (use for how you say it, never state it as fact): ${f.text}` : f.text}`).join("\n");
   const instr = rf.instructions.length ? `\n\nFor this reply:\n${rf.instructions.map((i) => `- ${i}`).join("\n")}` : "";
   return `What's true right now. These, plus what's actually in the conversation, are the only actions, plans, links, times, places, numbers, and things about other people you can mention. If a detail isn't here, you don't have it: say so plainly, and don't promise to get it later.
 ${facts}${instr}`;
@@ -2105,8 +2040,9 @@ const CLAIMS_ON_FILE = /\bon file\b/i;
 // redraft, which sees their own words and the facts and says the true thing
 // (2026-10-01, semanticLive cross-user). That includes a wrong "I don't have
 // the start time" when a FACT gives it.
-export function deniesWhatTheyToldCo(failed: GateCheck[], src: GroundingSources): boolean {
-  return !!(src.recentMemories?.trim() || src.contextSummary?.trim()) && failed.some((c) => /^claim_(detail|member_life)$/.test(c.name) && CO_DENIES_HAVING.test(c.reason ?? ""));
+// What Cue knows about them: the snapshot's entries on the facts (a text reply), or the summary and memories a caller passed.
+export function deniesWhatTheyToldCo(failed: GateCheck[], src: GroundingSources, rf?: Pick<ReplyFacts, "facts">): boolean {
+  return !!(rf?.facts.some((f) => f.snap) || src.recentMemories?.trim() || src.contextSummary?.trim()) && failed.some((c) => /^claim_(detail|member_life)$/.test(c.name) && CO_DENIES_HAVING.test(c.reason ?? ""));
 }
 
 const CLAIM_SHAPED = [
@@ -2286,7 +2222,7 @@ ${THREAD_REPAIR_NOTE} Return ONLY the message.`,
 export const THREAD_REDRAFT_NOTE = "A sentence saying where their own thread stands was cut: only they know that. Don't say where it stands; ask about it, or leave it out, and make sure nothing left points back at what was cut.";
 export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts; src: GroundingSources }): boolean {
   if (redraftHeldBack(o.rf, o.failed)) return false;
-  if (deniesWhatTheyToldCo(o.failed, o.src)) return false;
+  if (deniesWhatTheyToldCo(o.failed, o.src, o.rf)) return false;
   if (nothingRunningLineApplies(o)) return false;
   return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.answeredThisTurn ?? o.src.sentThisTurn });
 }
@@ -2556,11 +2492,11 @@ export async function groundReply(
     // question after it was sent): cut too far, so the one redraft says that answer without the machinery talk, rechecked. If it can't
     // be kept, the cut goes, as before. Never a trim by code: a clause cut from a sentence can change what it means.
     const lostSupported = narrationCutSupported({ draft, cut, checks: first.checks });
-    const cutStands = enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent && !lostSupported;
+    const cutStands = enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src, rf) && !silent && !lostSupported;
     // A sharing (or feedback) turn whose cut left too little, or left a stub (shareCutStub), gets the one share rewrite (repairShareCut)
     // instead of the smallest-true-reply redraft. Every other path that says something truer keeps its turn: a safety or discreet turn,
     // a cut thread report, dead air, an invite, a false "I don't have that", the nothing-running line.
-    const shareTurn = shareMoment && !redraftHeldBack(rf, effectiveFailed1) && !threadCut && !silent && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf });
+    const shareTurn = shareMoment && !redraftHeldBack(rf, effectiveFailed1) && !threadCut && !silent && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src, rf) && !nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf });
     const stub = shareCutStub({ moment: rf.moment, draft, cut, message: src.message });
     if (cutStands && !threadCut && shareTurn && stub) {
       // The cut left a stub (none of their words left, so the call must write the reply): one rewrite, rechecked; what's left goes out if

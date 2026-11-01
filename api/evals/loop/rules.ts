@@ -21,7 +21,7 @@ const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta
 const ct = src("agent/conversationTools.ts");
 check("the loop's tools are always there, and searchNow is gone", /turnLoop = newLoopState\(ctx\.turnStartedAt\);\s*Object\.assign\(tools, loopTools\(ctx, state, turnLoop, notDone\)\);/.test(ct) && !/searchNow: tool\(/.test(ct));
 check("no switch left behind", !/CO_LOOP|loopOn|loopMode/.test(src("agent/loop.ts") + src("routes/sendblue.ts") + ct));
-check("the capability sheet describes the loop's tools", C.capabilitySheet().some((l) => /look up events itself/.test(l)) && !C.capabilitySheet().some((l) => /search right now for events/.test(l)));
+check("the capability sheet describes the loop's tools", C.capabilitySheet().some((l) => /looks up events/.test(l)) && !C.capabilitySheet().some((l) => /search right now for events/.test(l)));
 
 // Lab guidance in the tool descriptions: the why, no over-broad triggers.
 for (const t of ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes", "updateLoop"]) {

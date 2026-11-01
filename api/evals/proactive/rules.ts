@@ -265,7 +265,7 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("a follow-up before its day is deferred, not sent or dropped", /if \(end\.getTime\(\) > Date\.now\(\)\) return \{ defer: nextLocalHour\(end, tz, 10\)/.test(reg));
   check("no record of sending it, no follow-up about it", /if \(onlyAboutASend && !sent\) return skip\("no record of Cue sending it to them"\);/.test(reg));
   check("the draft knows when Cue sent it and what it said", /co_sent_it_on: sent\?\.date/.test(reg) && /what_co_said_when_it_sent_it/.test(reg) && !/"a few days ago"/.test(reg));
-  check("the send is remembered for Cue's next replies", /writeMemory\(c\.userId, "followup_context"/.test(reg) && /memory_type = 'followup_context'/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
+  check("the send is remembered for Cue's next replies", /writeMemory\(c\.userId, "followup_context"/.test(reg) && /recordProactiveText\(/.test(readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8")));
   const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
   check("a deferred candidate moves, it isn't dropped", /if \("defer" in draft\) \{[\s\S]{0,200}?if \(!opts\.dryRun\) await pool\.query\(\s*`UPDATE proactive_candidates SET due_at = \$2/.test(pr));
 }

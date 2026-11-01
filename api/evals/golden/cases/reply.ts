@@ -13,6 +13,7 @@ import "../../lib/requireMeter.js";
 import { DateTime } from "luxon";
 import type { GoldenCase, GoldenResult } from "../types.js";
 import { result } from "../types.js";
+import { goldenSnapshot } from "../snapshot.js";
 import { captureSends, linesOf, noteReply } from "../replies.js";
 import { turnKind } from "../../lib/hardRules.js";
 
@@ -29,8 +30,8 @@ async function reply(t: Turn): Promise<Reply> {
   const G = await import("../../../src/harness/replyGrounding.js");
   const R = await import("../../../src/services/readTurn.js");
   const { LOOP_GUIDE } = await import("../../../src/agent/loop.js");
-  const facts = G.baseReplyFacts();
-  G.addFact(facts, "known", "They live in San Francisco.");
+  const snapshot = await goldenSnapshot({ ...MEMBER, city: "San Francisco", zone: ZONE });
+  const facts = G.baseReplyFacts(undefined, snapshot);
   G.addFact(facts, "known", G.todayFact(ZONE));
   for (const [kind, text] of t.facts) G.addFact(facts, kind as any, text);
   for (const i of t.instructions ?? []) G.addInstruction(facts, i);
@@ -40,7 +41,7 @@ async function reply(t: Turn): Promise<Reply> {
   const note = R.feedbackInstruction(read?.feedback ?? []);
   if (note) G.addInstruction(facts, note);
   const { value: r, sends } = await captureSends<any>(() => runConversationReplyAgent(
-    { ackSent: null, ...MEMBER, resolvedContent: t.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: t.recent, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true },
+    { ackSent: null, ...MEMBER, resolvedContent: t.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: t.recent, snapshot, personaPrompt: null, sendCoReply: async () => true },
     { dryRun: true, record: false, stubSearch: true },
   ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] })));
   const thread = linesOf(t.recent);

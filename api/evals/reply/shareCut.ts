@@ -263,8 +263,13 @@ reset();
 {
   const CLAIMY = "Happy belated birthday. Hope the dinner on Friday at 8 was a good one.";
   script = { claims: (t) => [...gymClaim(t), ...(t.includes("Friday") ? [{ text: "Hope the dinner on Friday at 8 was a good one.", type: "member_life", supported: false, factId: null, quote: null }] : [])], rewrite: JSON.stringify({ engages: false, reply: CLAIMY }) };
-  const r = await ground(DRAFT, "sharing");
-  const i = readSends.findIndex((t) => t.includes("Friday"));
+  // "Friday" is on file (the old capability sheet carried the word by chance), so the rewrite's day passes the code check and reaches
+  // the claim read, which is what this pins.
+  const rf = G.baseReplyFacts();
+  rf.moment = "sharing";
+  G.addFact(rf, "known", "They have plans on Friday.");
+  const r = await G.groundReply(DRAFT, rf, { message: MESSAGE, recentConversation: "" }, { record: false });
+  const i = readSends.findIndex((t) => t.includes("Hope the dinner on Friday"));
   check("through groundReply: a claim-shaped rewrite is read on the full model, and its invented dinner never goes out", i >= 0 && !/haiku/i.test(readModels[i] ?? "") && !/Friday/.test(r.final), { readModels, final: r.final });
 }
 {

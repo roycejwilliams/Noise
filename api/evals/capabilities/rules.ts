@@ -3,6 +3,7 @@
 //
 //   npx tsx evals/capabilities/rules.ts
 import { readFileSync } from "fs";
+import { createHash } from "node:crypto";
 
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
@@ -12,11 +13,11 @@ const { baseReplyFacts } = await import("../../src/harness/replyGrounding.js");
 
 let failed = 0;
 let total = 0;
-const check = (label: string, ok: boolean) => {
+const check = (label: string, ok: boolean, detail?: unknown) => {
   total++;
   if (!ok) {
     failed++;
-    console.log(`FAIL ${label}`);
+    console.log(`FAIL ${label}`, detail === undefined ? "" : JSON.stringify(detail).slice(0, 400));
   }
 };
 const src = (p: string) => readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
@@ -58,8 +59,18 @@ check("ability ids are unique", new Set(ABILITIES.map((a) => a.id)).size === ABI
 check("every ability says what Cue can do", ABILITIES.every((a) => a.can.trim().length > 20));
 
 const facts = baseReplyFacts().facts.filter((f) => f.kind === "capability").map((f) => f.text);
+// The sheet (capability-sheet trim, 2026-10-31): each member ability carries its own `sheet` line, or null when another line covers it.
 // The walk-in ask is listed only on a turn known to have it due, the voice read only where it can run (services/capabilities.ts ONLY_WHEN_KNOWN).
-check("Cue reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly && a.tool !== "askedWalkin" && a.tool !== "voiceRead").length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
+const members = ABILITIES.filter((a) => !a.teamOnly);
+check("every member ability carries a sheet line or null (a new ability can't be left out of the sheet by accident)", members.every((a) => "sheet" in a && (a.sheet === null || (typeof a.sheet === "string" && a.sheet.trim().length > 20))), members.filter((a) => !("sheet" in a) || (a.sheet !== null && typeof a.sheet !== "string")).map((a) => a.id));
+check("Cue reads every sheet line and limit about itself (a member never reads the team-only ones)", facts.length === members.filter((a) => a.sheet !== null && a.tool !== "askedWalkin" && a.tool !== "voiceRead").length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
+// Fixed: the safety line (988) and the 11 limits are word for word what they were before the trim (the call audit numbers the limits).
+const SAFETY_988 = "When someone may be thinking about hurting themselves or may not be safe, Cue stays with them, asks plainly whether they're safe, and shares crisis support: In the US, the 988 Suicide & Crisis Lifeline is free and open 24/7: call or text 988, or chat at 988lifeline.org. Anyone in immediate danger should call 911. Cue may check in on them the next day.";
+check("the 988 line in the sheet is byte-identical", capabilitySheet().includes(SAFETY_988) && ABILITIES.find((a) => a.id === "safety")?.can === SAFETY_988);
+check("the 11 limits are byte-identical, in order, at the end of the sheet", LIMITS.length === 11 && createHash("sha256").update(LIMITS.join("\n")).digest("hex") === "169b0d577a32f72328b9c7adee5a5ce99ae14b02f476b204012fb2142aa78091" && JSON.stringify(capabilitySheet().slice(-11)) === JSON.stringify(LIMITS));
+// The trim's borderline items 1 and 2 stay: the location line's privacy limits and the file line.
+check("the location line keeps its limits, and the file line keeps that Cue doesn't discuss what a file says", capabilitySheet().some((c) => /only for that event, only to notice arrival and leave/.test(c)) && capabilitySheet().some((c) => /Cue doesn't read or discuss what a file says in conversation/.test(c)));
+check("the trimmed sheet is under 2,300 tokens (estimate: 3.5 characters a token)", Math.ceil(capabilitySheet().join("\n").length / 3.5) < 2300, Math.ceil(capabilitySheet().join("\n").length / 3.5));
 check("Cue knows it can send its card", facts.some((f) => /contact card/.test(f)));
 check("Cue knows it can't start a group text", facts.some((f) => /never starts a group text/.test(f)));
 check("Cue knows it never writes a phone number", facts.some((f) => /never writes a phone number/.test(f)));
