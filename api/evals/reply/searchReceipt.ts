@@ -36,6 +36,12 @@ const claim = (text: string, factId: string) => ({ text, type: "work_status" as 
   G.addFact(plain, "known", G.runningWorkLine([], []));
   check("without a search this turn the honest line still goes in front", /^Nothing's running on that right now\./.test(await G.withNothingRunningLine("Want me to look again?", failedWork, plain, async () => true)));
 }
+for (const t of ["I’m looking now, more soon.", "Searching for a working page now.", "Working on it.", "On it, digging for a live link.", "Looking into it now — more soon.", "Give me a minute to find a working one.", "I looked, and I’m still digging.", "I'm still searching for a working page."]) {
+  check(`not said as done, so not backed: ${t}`, !G.saysSearchDone(t));
+}
+for (const t of ["I looked just now for a current page and didn't find one that works.", "I searched again and nothing held up.", "Checked just now, that page is gone.", "I looked and couldn't pull up a working page for them right now."]) {
+  check(`said as done, so backed: ${t}`, G.saysSearchDone(t));
+}
 check("the receipt shape is the one the tools write (agent/loopTools.ts)", G.SEARCHED_THIS_TURN.test('Searched the web just now ("a"): 2 held up on their own pages.') && G.SEARCHED_THIS_TURN.test('Looked up events for "jazz", Friday just now: nothing came back.') && !G.SEARCHED_THIS_TURN.test("They said they searched the web just now."));
 
 console.log(`search receipt: ${total - failed}/${total} passed`);

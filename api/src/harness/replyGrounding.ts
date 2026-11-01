@@ -986,8 +986,11 @@ const startedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => 
 // what Cue just did ("I looked just now and found nothing that works"), never that a search is still running.
 export const SEARCHED_THIS_TURN = /^(?:Searched the web just now \(|Looked up events for "[^"]*"[^:]* just now:)/;
 const searchedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kind === "did_this_turn" && SEARCHED_THIS_TURN.test(f.text));
-// Work said as still going on, in Cue's own draft: only running work backs that.
-const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to)\b|\b(?:I'?m|I am|am)\s+\w+ing\b|\bI['’]ll\b/i;
+// A search claim is backed by this turn's receipt only when Cue's own wording says it as done (an allowlist: review of 4e042fdb found
+// "I’m looking now", "Working on it", "Give me a minute" slipping past a list of ongoing words), and nothing in it says the work goes on.
+const SAYS_DONE = /\b(?:looked|searched|checked|dug|tried|went through|had a look|ran a search|did a search)\b/i;
+const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to|on it|give me|a (?:minute|sec(?:ond)?|moment)|more soon|hang tight|stand by)\b|\b(?:look|search|digg?|check|hunt|find|try)ing\b|\bI'(?:ll|m)\b|\bI am\b/i;
+export const saysSearchDone = (claim: string): boolean => { const t = claim.replace(/[’‘]/g, "'"); return SAYS_DONE.test(t) && !SAYS_ONGOING.test(t); };
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
   return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
 }
@@ -1661,7 +1664,7 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       // one of them (two or more shared meaning words), and "nothing is running" when it lists none.
       const fromWorld = !!cited && cited.kind === "known" && WORLD_FACT.test(cited.text) && !!rf.world && (rf.world.running.length > 0 ? !!namesRunningItem(rf.world, c.text) : SAYS_NOT_RUNNING.test(c.text));
       // A search done this turn, said as done: its receipt backs it (it says what Cue did, not that anything is running).
-      const fromReceipt = !!cited && cited.kind === "did_this_turn" && SEARCHED_THIS_TURN.test(cited.text) && !SAYS_ONGOING.test(c.text);
+      const fromReceipt = !!cited && cited.kind === "did_this_turn" && SEARCHED_THIS_TURN.test(cited.text) && saysSearchDone(c.text);
       if (!cited || (!workBacksPromise(cited) && !fromState && !fromSearch && !fromWorld && !fromReceipt)) {
         pass = false;
         reason += nothingRunsAt(rf) ? ` (${NOTHING_RUNNING_REASON})` : " (that work isn't among what the running-work line lists for them)";
