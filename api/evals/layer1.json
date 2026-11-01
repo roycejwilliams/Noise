@@ -145,6 +145,7 @@
     "evals/memory/loopLifecycle.ts",
     "evals/reply/doubleDown.ts",
     "evals/reply/shareCut.ts",
+    "evals/reply/searchReceipt.ts",
     "evals/calls/callConfig.ts",
     "evals/calls/callTasks.ts",
     "evals/calls/callEvals.ts",
