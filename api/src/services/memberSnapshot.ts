@@ -47,7 +47,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { capabilitySheet } from "./capabilities.js";
 import type { MemberKnowledge, KnowledgeSection } from "./memberKnowledge.js";
-import { namelessHistoryLine, WORD_NAMES } from "./memberSafeMemories.js";
+import { nameFinder, namelessHistoryLine, WORD_NAMES } from "./memberSafeMemories.js";
 import { wordsZone } from "./memberTime.js";
 import { forgets, guardText, type ForgottenRow, type Guarded } from "./whatCoKnows.js";
 
@@ -261,6 +261,17 @@ export function strictNameMatcher(tokens: string[]): (text: string) => boolean {
     const f = foldMarks(text);
     return res.some((re) => re.test(f));
   };
+}
+
+// Pure: whether a text names a linked member: the strict match above, OR the live finder (memberSafeMemories nameFinder) on the same
+// name words. The strict match takes an everyday-word name only with its capital; the live finder also takes a lowercase one where
+// it stands for a person ("coffee with rose", "may is moving", "max said"). Either is a hit, so the fence is never looser than the
+// strip every other path uses. It over-blocks some everyday words ("in May" with a linked May): the safe side.
+export function linkedNameMatcher(names: string[]): (text: string) => boolean {
+  const tokens = nameTokens(names);
+  const strict = strictNameMatcher(tokens);
+  const live = nameFinder(tokens);
+  return (text: string) => strict(text) || live(text) !== null;
 }
 
 // Pure: one line with every sentence that names a linked member made a details-free history line, the same policy as safeMemory
@@ -482,7 +493,7 @@ export function fitSection(id: SectionId, entries: Entry[], budget = SECTION_BUD
 export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built {
   const raw = entriesOf(s);
   let forgotten = 0, namesRedacted = 0;
-  const hits = strictNameMatcher(nameTokens(s.names));
+  const hits = linkedNameMatcher(s.names);
   const sections = SECTION_IDS.map((id) => {
     const entries: Entry[] = [];
     for (const r of raw[id]) {
@@ -526,7 +537,7 @@ export type FenceResult = { ok: true } | { ok: false; kind: "name" | "user_id"; 
 // Pure: the body's linked-name hits, every word of every linked name, strictly (the header's own first name aside: it's theirs, even when a linked member shares it) and the
 // user ids written in it other than their own.
 export function fenceScan(b: Pick<Built, "header" | "body">, names: string[], userId: string): { nameHits: number; ids: string[] } {
-  const hits = strictNameMatcher(nameTokens(names));
+  const hits = linkedNameMatcher(names);
   const rest = b.body.slice(b.header.length);
   let nameHits = 0;
   for (const line of rest.split("\n")) if (hits(line)) nameHits++;
@@ -598,7 +609,7 @@ async function noteFailure(db: Db, d: SnapshotDeps, userId: string, state: strin
   try {
     const r = (
       await db.query(
-        `UPDATE member_snapshots SET fail_count = fail_count + 1,
+        `UPDATE member_snapshots SET fail_count = fail_count + 1, last_failed_at = NOW(),
            next_attempt_at = NOW() + LEAST(make_interval(mins => ${BACKOFF_BASE_MIN}) * power(2, LEAST(fail_count, 10)), INTERVAL '24 hours')
          WHERE user_id = $1 RETURNING fail_count, next_attempt_at`,
         [userId],
@@ -730,13 +741,25 @@ export async function rebuildSnapshot(userId: string, reason = "learn", o: { db?
 
 // The upkeep pass (jobs/index.ts): every stored snapshot that is stale (a write since it was built) or older than 24h is rebuilt, a
 // bounded batch at a time, so a removal leaves the stored copy within a pass even while nothing reads it. A member without a stored
-// snapshot isn't built here (LEARN makes the first one). A member backing off after failed builds waits for their next attempt.
+// snapshot isn't built here (LEARN makes the first one). A member backing off after failed builds waits for their next attempt,
+// unless they removed or corrected something since.
 // Marks: those of members with no stored snapshot are dropped after an hour (absence already means "build first", and deleted accounts
 // go this way); every mark is dropped after MARK_MAX_HOURS whoever it's for. That can't hide a change: a mark that old means the
 // stored snapshot (built before it, or the mark would be gone) is already past 24h, which rebuilds it on its own.
 export const MARK_MAX_HOURS = 48;
-export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partial<SnapshotDeps> } = {}): Promise<{ rebuilt: number; skipped: number; pruned: number }> {
+export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partial<SnapshotDeps> } = {}): Promise<{ rebuilt: number; skipped: number; pruned: number; retried: number }> {
   const db: Db = o.db ?? defaultDb();
+  // A removal or correction since a member's last failed build (a profile_corrections mark) ends their wait: this pass tries them
+  // again, so something they had Cue forget doesn't sit in the stored copy until the backoff runs out. The count keeps growing, so a
+  // build that still fails waits longer next time.
+  const retried = (
+    await db.query(
+      `UPDATE member_snapshots s SET next_attempt_at = NULL
+       WHERE s.next_attempt_at > NOW() AND EXISTS (
+         SELECT 1 FROM member_snapshot_dirty d WHERE d.user_id = s.user_id AND d.source = 'profile_corrections' AND d.dirty_at > COALESCE(s.last_failed_at, '-infinity'))
+       RETURNING s.user_id`,
+    )
+  ).rows.length;
   const due = (
     await db.query(
       `SELECT s.user_id FROM member_snapshots s
@@ -760,5 +783,5 @@ export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partia
        RETURNING d.id`,
     )
   ).rows.length;
-  return { rebuilt, skipped, pruned };
+  return { rebuilt, skipped, pruned, retried };
 }

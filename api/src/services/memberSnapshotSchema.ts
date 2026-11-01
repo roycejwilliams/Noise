@@ -73,6 +73,7 @@ export const SNAPSHOT_TABLES_SQL: { name: string; sql: string }[] = [
     pinned_at TIMESTAMPTZ,
     fail_count INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TIMESTAMPTZ,
+    last_failed_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )` },
   { name: "member_snapshot_dirty", sql: `CREATE TABLE IF NOT EXISTS member_snapshot_dirty (
