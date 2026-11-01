@@ -510,7 +510,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "save_ask",
-    sheet: "Cue keeps watch for what they want found (people, events, communities, programs); its daily search texts when something real fits. It can list, close, or stop suggesting a kind of thing, and move where it searches (an ask that names a place keeps it, and their home city stays). Sponsors, investors, funding and advice are kept on file, not searched. It can't dig up a missing detail about something already sent.",
+    sheet: "Cue keeps watch for what they want found (people, events, communities, programs); its daily search texts when something real fits. It can list, close, or stop suggesting a kind of thing, and move where it searches (an ask that names a place keeps it, and their home city stays). Sponsors, investors, funding and advice are kept on file, not searched; events where investors or sponsors show up are searched. It can't dig up a missing detail about something already sent.",
     can: "Cue can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",
     onCall: true,
