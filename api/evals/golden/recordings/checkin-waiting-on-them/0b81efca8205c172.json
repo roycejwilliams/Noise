@@ -1,0 +1,102 @@
+{
+  "hash": "0b81efca8205c172",
+  "case": "checkin-waiting-on-them",
+  "recorded_at": "2026-11-01T18:25:16.099Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop venue. The member texted \"Just checking in\".\n\nCue's text:\n\"\"\"Good to hear from you. The Harbor Light fellowship is still sitting there if funding timing's on your mind.\"\"\"\n\nDoes the text give presence AND bring up the Harbor Light Fellowship as the one item, as something there for them to pick up if they want, WITHOUT implying they owe Cue an answer or that Cue is waiting on them (no \"still waiting to hear what you think\", no \"get back to me\"), and without a status report? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Good to hear from you... still sitting there if funding timing's on your mind\\\" is presence plus one item, no demand for a reply.\"}",
+      "usage": {
+        "input_tokens": 376,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 369,
+        "output_tokens_details": {
+          "thinking_tokens": 308
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgcgEeugYRmVVhEvwA6XU",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErMKCsQCCBMYAipABNjMM0ClNofEVMv6+Jvvjyevnmmgb0ff9o6JOh3D37BF6n7JfT5K8J4k8hAPHQJRJvN5ekp1p5WfOakiyby/STIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBi4ie1wbCAToIBBAAGgwC2ooDTzcFZzQEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCzy9aeIoEBwjyP1wdPqQ84pjQFksBfav17i03Chho2ESIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzYCpMyFsNPe9/nB2YaDImAkBxhWAUzecRowiIwQHUer9yp3yY7SQo4Nb0lFjL//s87pVlMJVeU2r+SW3DfJJedrvBYkzJJNiHAmxUQKpsHRpkAgOSJqTo91DeyAQXaArfna/hiPvsPr4KB6ZCDnRbYAYZ+h79YkyzC/2b9Hqe6DfY5pTh1WzJH/8y8QMHyDbNv6yMSNEQwjrmRp6lSNp6EEdeCYF11tlEAGwJzW7HYtLveXwUBnFflxb+1jyCvcQN37ff0roKge4gfhoohUEjnAQiePU60D8I0z6oc9R4P4i5VUk00izar4RasGTSb7gzwyR80AJ9qm6kGVqp7lhjg3rSZaiyLFOERue/FJ66nOoAqXCz51835aPeHz7ECwxLKjcM3Z0jnZJDCf/ijCZ6lwt/Jgg9M/I+TkBrUOeHiFjXIsDP+xVL0B3Zgt5F6HNN9isyAlpqQ3Vgh+p5BlJpHobnOe1j+YGDPtvfKrOCAaGsojIfBW1oODod5gfIWHLgSVhcDZBZVtmbelOuWw5lU4xqJjpIuID8iH17/2URtx+ve8s3v4RbQ+tRGO0+cByHvOsO4OZfHJPngiXj21/aJqYT7PrTgumDf7r6HO1oWlOJjfGvsP8WnV/qC7I6FtD0eqaH6mW9To+FRVOzf3Yn6ZIlPiph2tqEdw6b7zxFtfL0E3OJ49/8dz/DmFBwWakMFvCNWUA7bDTIBOqmEQNcNIAnsI+GuNhDSwHR1WUcTZipUr/qTLyt2/CqXmkvYyMKcwkVl2kKrHgrLOunQsw+FxgwOm2XtHBnOfTNvEP/0/pdRTGVsAi+VgboE94RwS95KCgS++Xi68bprt4t3H+Hno8szdUUw+7Mg6oASotuZ8/phkj4RCJ9dFWxd15Q1k3D9Tc5+e+vvAVnoErqf5mVkPstYEl8k0tmlRuWQbXwpqYjelB0L4JhWkbYMQaYLg7Ghepmh1RxEwXAzFbQgMlHetdwTrqbIjTA5RD8mYQ+Ex3nBh3PR0YyHBdNn/TiEewrfFaVLG9t/Ojmfzhk/XmVTibInhIGSq1jWrTDs6vfkfiMKrEy/HXtX9QbFH5vEXragSGXVs704rEx8X/EDHB+iOZddWgSj8OgockHQGxEViDZrhnPw+wp5fkMWZxExuRFxv2/gTqV1B13ex5BNREqoHDcZW1c9T/nuOj1nsb8EdNV74Pk7+p0YpfV79he8B3g7RaVBCng2IWGvwzKojmyqD9PHPFPpiiSEw1Et6upbYW805IQh4BcBjFfYdmuP3tOReEJFga02rkqY9yuADVfmCvXO3w/8S2GlWztFgl9mZAiY2blnl5pIEbgYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Good to hear from you... still sitting there if funding timing's on your mind\\\" is presence plus one item, no demand for a reply.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 376,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 369,
+          "output_tokens_details": {
+            "thinking_tokens": 308
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "0b81efca8205c172",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "hash": "994677720da30749",
+  "case": "status-check",
+  "recorded_at": "2026-11-01T18:24:50.751Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you dr...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you draft the planning docs for Sequin?\".\n\nCue's text:\n\"\"\"Already on it. I outlined the launch timeline, venue walk-through Nov 3, invites out Nov 10.\n\nNext up is the partner section, then I'll send you the full draft.\"\"\"\n\nDoes the text tell them Cue is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"\\\"Already on it... Next up is the partner section\\\" confirms work and status without offering/pausing/new task\"}",
+      "usage": {
+        "input_tokens": 361,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 147,
+        "output_tokens_details": {
+          "thinking_tokens": 90
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgcgCxQL21LMQrErFeBFs",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EsAFCsQCCBMYAipA2SO5Ym8QMVi/ibSLwkIoPnf7pRZIV1m9wcaQ/f1UVCps8eJ5wDdqA24K2jsCgRxj2cdbjRnLhQcy6/lxSePOuTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB8oee1wbCAToIBBAAGgwC2ooDTzcFEX0EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiD2B7qgZer/z5GkB6TboBhmXkrL6FcbqEhRShU2Hs0E0iIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzV+yybob7bJdUueSoaDCISddWaqPzYA9tGDyIwxHrd9OswW+eYREsu8u14H8KWYMevcma0ASgu8WfbjERV8X+8EbSS01c3SF1pMOsEKqgCPMF0v/+YXGbqKVVzjZgRqSaJaCqSMqdNHz30iHYjNrjM+X+IC5rwLdPVd0Nb9oH1ldkRlxgjFfEjn7KnKbv5BypnwVEC49GBuwE8pKyKODcz0NsoDkNmvHosfYokJb9ZZOOaAqBi7rcP83ayCYjhuvdu4vnhM+ytuQzfncUZKl1OF1/I43fEZuIB9QnuPVJI6P8MhWhdtmMA9IpjJlBzw5vRc/w/SznnqJZkLC/4KVUotg3/AUAs+3IZI//LL7BXsZTnDjR8S6+9C47YI2fshXJyZZHBn6xGT8vrfia5N1tDVjRKxocAanz3vdnTpqA3bZKOF3+bIolqp2bPcJfOf/WMBZ96Ggp8l5avJiPbAfSXGMobJKyKwi6STzabaDuLahulayIJAAEYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"\\\"Already on it... Next up is the partner section\\\" confirms work and status without offering/pausing/new task\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 361,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 147,
+          "output_tokens_details": {
+            "thinking_tokens": 90
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "994677720da30749",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

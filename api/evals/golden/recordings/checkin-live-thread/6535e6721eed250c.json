@@ -1,0 +1,102 @@
+{
+  "hash": "6535e6721eed250c",
+  "case": "checkin-live-thread",
+  "recorded_at": "2026-11-01T18:26:00.509Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2108,
+    "system": "",
+    "messages": 1,
+    "last": "user: Cue, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Cue may only say where it stands when the member told Cue. What th...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2108,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Cue, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Cue may only say where it stands when the member told Cue.\nWhat they just told Cue: \"Just checking in\"\nWhat they texted Cue before that, oldest first (their own words):\n- \"Emailed the Hayes Valley place about the 14th. Fingers crossed they get back to me.\"\n- \"Will do\"\n\nSentences:\n1. \"Nothing back from the venue yet.\"\n\nFor each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Cue?\nA sentence that repeats, reacts to or builds on news the member gave (just now or before) is NOT a status report. For example, after \"the venue said yes\", \"Great that the venue said yes\" is not a report; with no news from them, \"No word yet from the venue\" is a report.\n\nReturn ONLY JSON: {\"reports\": [the numbers of the sentences that state where it stands]}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"reports\": [1]}",
+      "usage": {
+        "input_tokens": 401,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 296,
+        "output_tokens_details": {
+          "thinking_tokens": 285
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgcgJ7zgjeZZw2A1tB6Mu",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSsAsKEAgTGAI4AUIIdGhpbmtpbmcSDF679A2S0EpmfgPZ/BoMM9O/jXFj4Synr1mdIjDj5ruKtlwTKiL45SIvMjfx9da10K567z5U37/+qKKQnBPaWgbzKVZq+dRS8NTgSqAqzQq8G0QDdGWDgEaYTLCqxAe5MEzNeVxKbykYGzcx6kyb3u1KIAuCGXC1fSU6AlbdRGrK/EWDVvJCT03BZpUC0DyT02E8titi81fri71nLcMZcQsla+n4bV5vZlFUUnOjMrAqOMnuXn4fzDxG0h7WpHVCpggv/WCFuaew5T2XFJD4LKxhFvTZ5chQkaBk2xsf7fzC7ajA2TBornhlJjQFqJCBD91gOV1IrlX3DuzTXIkHEljDAc2RIG/wGv0gwx7FKr63pRwUjlImFtGob6eB7RbElja7lnGpaIV2TCgUJmV2YBr3pAMjPK9HuOhAW5A5AwJ/w0k+LYvRKULI5RBlZHA8K6ecKtu61oEwh5od5E9In4scQqI5PuVuHMnbBPbhxi28t/7h7Qil28ZQ9PnEBiipmL4nF225bJaKmIqZiFDlEbeIjEZD50vUA+jD22FM48w/kBYSD88P4DnbQ9bUC3CyHLcZ3ALyH0ta/Mf2SIodZFMJl6ZH/c8UKpV+ixobLFotFEj0VW3RHOqSv3MqV+SvucFpkb6kiTT87IS4gXVfV4dUH2I3Lm4pS5XyTSMaoeW+YPLi/89jJZT1sRCQnf8RSnzrMple9J/+yFkDdbXbzsM6/qID2T2eGZbLjg2UKnctsx9GOn6HlS6bH+AM2R73h8rnzL4sYw72VpeawloeIKUg2rI0ssA7+3qiojKo/EZOjluPNahQ9/FJpeH7avpmZeWr2Hr+JumP5BY2vQplJz+hIj7zik0mj/xA5ErFOalyPr9Fzkyrt6t+2aVqfcC2AnDIZ1iKMsB96LkDXofO4xnPeyMPsipmEoa6mkVFqx57WaNqmhpY4VrtHKbT7YqCaMcNe0Ol5MhMbndGodyxwSrsYjmrnYXcTAw2JiBrSCLHLx7DMp/jOyVStCfdKiGMOLj3dcTsv8hxzqP/8WQXXarV9riiv0aD59V6kOCYCtLJ1JlG74YiQYdVTVvr3fF78OdYFm93dXm9JKP/rqbMnvPHhuXds/SH552e2fOBeW/6wOWEE1Ogjc1KBCWhaX8zEDCVoyNiZeuYxj4lmAmUS8iooXtbmaQ2Z0vQ49196XXoVuR2bVoxYZ8rlGvyjnUpkgXJkO4vNupjFat6viYh1Q+J7UN435gPAD1n7Qii8Jx6YTZ6rm09NjWfWe98eAi606QKbkzyhYAmL1kIHe1h35x7FAHW7SmJM5kQMhhI8FE60TT6j/n5vTNwB3LXqCxKXFGsA/JhlCjHw5UzRx8zPAInaZndVLhWIgWy4TRWSaj4pVlS6k0F3xXiifIKi94d00fM2tVsV+AFOx+qqlvdyOgBxprXpEc7XMFPu8cMtnSL0IYB8IEqolUjm3Lb0Ud2vUWD0wBz/VF3AKb0W5QA6bvt0Ed5BNjPUbRxBXxe20XRbeR4wZf9pvB1Eal69oae3ROb1yRulUTxX5Zu9K1y0I1MzlZLnRJudiZu6HM+FzRY1BgS1rpunQsjQiZ+suvAOiNYwYBAOF74rnAzYnJ+DAJZrWqVEL6R9DE0TFAmb9SO6LmWZqd7RlhTvaBno9FtOdRB1uzvi1GtjUZxg3s07j/WQnDmIQLNQEVxqKGJIFNVitbARHVl1iVpgfgcR49lRWQvErbMgzta5G/samrSVK3PknYYgeoq5liTQva8PdqeUJFeAzqXJlrRW/51vQcRRNZSZL8j+abe0for4UvPvjq7ZUREq/x7M0g/JZ+K1VpBPJr/uHALZ4NyLWDlOyhNz9AvqqCRWFDx+OZu+I2KzNyr++kKaPGURpq65JuYu3HHn9YOABzZb8QNDdqeGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"reports\": [1]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 401,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 296,
+          "output_tokens_details": {
+            "thinking_tokens": 285
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "6535e6721eed250c",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

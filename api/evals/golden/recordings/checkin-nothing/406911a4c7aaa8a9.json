@@ -1,0 +1,97 @@
+{
+  "hash": "406911a4c7aaa8a9",
+  "case": "checkin-nothing",
+  "recorded_at": "2026-11-01T18:25:24.187Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Nothing is running for the member and nothing from Cue is waiting on them. They texted \"Hey cue, just checking in\". Cue's text: \"\"\"Hey. What's on your mind?\"\"\" Is the text ONLY warm presence plus an open questi...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Nothing is running for the member and nothing from Cue is waiting on them. They texted \"Hey cue, just checking in\".\n\nCue's text:\n\"\"\"Hey. What's on your mind?\"\"\"\n\nIs the text ONLY warm presence plus an open question inviting them to share what's on their mind? Answer no if it mentions that nothing is waiting or running, gives any status, lists or names things on their plate (plans, dinners, events), or invents anything about their plans.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"What's on your mind?\\\" is only warm presence plus an open question, with no status or invented plans.\"}",
+      "usage": {
+        "input_tokens": 222,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 49,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgcgFUg3VTtP7VosugHCj",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"What's on your mind?\\\" is only warm presence plus an open question, with no status or invented plans.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 222,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 49,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "406911a4c7aaa8a9",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
