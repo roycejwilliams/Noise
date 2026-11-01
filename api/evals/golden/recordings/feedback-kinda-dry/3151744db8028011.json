@@ -1,0 +1,102 @@
+{
+  "hash": "3151744db8028011",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-01T19:21:55.473Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That moment deserved better than that.\n\nAlmost walking off and then sitting down and nailing the whole thing, that's a real thing to watch your kid do. First recitals are brutal, the nerves are so visible at that age. The fact that she pushed through it herself says something.\n\nHow are you feeling about it, still replaying it?\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Fair. That moment deserved better than that.' owns it briefly, then adds Cue's own take ('that's a real thing to watch your kid do... says something') without explaining tone or quoting the prior line.\"}",
+      "usage": {
+        "input_tokens": 376,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 295,
+        "output_tokens_details": {
+          "thinking_tokens": 211
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgckZHeFLVTh2dP1smuHm",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqgICsQCCBMYAipAZTaVjqihCjx33VwmmV/PX2S5v8xPocm+SBPTdih93llVaYAFsjuWLs7sFtzJUuM8ZxsD6fwFMUO8siIC/E0FCDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB0qKe1wbCAToIBBAAGgwC2ooDTzcFJn8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDzaHc3lWhxmWUcVRtxP7vFUtXaJGb/AAQMG6BL8bSxkyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwCT6M1l0drenmXITIaDCOkdraeufpCAAlLryIweUUUrA+mZ9aUM2OFMTxcejRHQDAQMGjavmi+HAjMkZ6htQbe6fdAR47BBqtRc8mHKpAFmV9rMHCS2P2zBkON+WEkpHjU42t3lB5ngJiQn6EmeHbOObyXkWgM4ua7u8+MnduPOJGfDUeybSziOyv+S7grSPHujl2vSCHpF67fzQdDSUIFdqUgRYIh9ZNpvYPXC25Zp+CMPycaKNdZUBSi1FmN3gXg1k53z8EzKWFaKMKZ2qpFURlGlN1rcqkUJ+bd3PT92o1mR6LsUqfBkiPjbbm8S1TxPtmvWitwy0mFWV79CdKmyoO+bHNhl6YMvtQ2DcwsKtWBmkzRtiPK/56qayrY52DIrTwOCBTryjjSO9v6dkh8vpFiof4wKE+F3lHCoX7Dx97Qzxy64k3tuGoQpnVd4J89OZ3R3d/mUaLKvRINtEA7V0r1xY1/TB9jTYs1pLu/sD004SkLBVTn72prlijmEDrQR5IR+C2bnKHkRM2cBjOpIaULEbTN17NfLTwda1ruIhUeuPQywwS8BF17YNDXgFBwzztRiLB0gS+3EV+7ditG7EogLEPn0j7G4BHhx5+hB01h3JfWNZOlgvGIL0b8OLARoiWaZRE2K89ip4bCztzTnlvMACJAtf7AXUtmmylSQVpHhxznl3vrhNUQYWMmtKeWpN/jxK5yknP8eEK4ZMxdFgZF57jH+YLCXcPQBVyy9Zk1TtaErkqXOsNOS89uZh0CCasVk7Toema6eyJHAvWm0YCbGpfFA5Ku2qY/Cv4y41g1OPHX/wCtm+8tsgv+/qXSig2y55BZScwh684cXdsJOybuQWdncY0rnwrSVZndWFyzlGQaFteaPjLOXRD+WjoanXkLskZtpqDlJC6WzqBEeKviOE/UW0NXIIxQdymyJopVNA3Gw7XFawYdrw1Tj8MZ0AvZVMqHOHiCeEeFXFwYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Fair. That moment deserved better than that.' owns it briefly, then adds Cue's own take ('that's a real thing to watch your kid do... says something') without explaining tone or quoting the prior line.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 376,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 295,
+          "output_tokens_details": {
+            "thinking_tokens": 211
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "3151744db8028011",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

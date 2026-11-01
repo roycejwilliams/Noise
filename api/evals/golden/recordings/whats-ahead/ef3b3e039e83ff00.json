@@ -1,0 +1,102 @@
+{
+  "hash": "ef3b3e039e83ff00",
+  "case": "whats-ahead",
+  "recorded_at": "2026-11-01T18:54:40.601Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Cue has a branding accountability check-in with the member set for Thursday. They asked \"Anything I should look forward to this week?\" Cue's text: \"\"\"Thursday morning, I'll check in on how the branding work went.\"\"\" Does the tex...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Cue has a branding accountability check-in with the member set for Thursday. They asked \"Anything I should look forward to this week?\"\n\nCue's text:\n\"\"\"Thursday morning, I'll check in on how the branding work went.\"\"\"\n\nDoes the text tell them about the branding check-in that is set for them (in any words: coming up, on the books, on the calendar, scheduled), without saying nothing is planned, confirmed or scheduled? Answer yes if it names that check-in at all.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Thursday morning, I'll check in on how the branding work went\\\" names the scheduled check-in\"}",
+      "usage": {
+        "input_tokens": 237,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 95,
+        "output_tokens_details": {
+          "thinking_tokens": 44
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgciUvaswkGvL8Xhuq7TG",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Eq4ECsQCCBMYAipA9HUNKyhIZ2hNsB83ibpN9EVGBiyFXdHrqgIhP2qiP8DIEPWvxMTtNd6DcCokcFMlWlfmM9lzEKQeCzlINYHr+TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB8JWe1wbCAToIBBAAGgwC2ooDTzcFA2YEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCzpqhAE3mhbTN68Nm9hf3PDaCK8Ursm9TiUyriTlJzhiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxDxlDpuGYX2mVQp6EaDEuAB3xf+mRzJZfDwSIwWU1nlnqR9N9LL6usiADjb2nuDqzqXJBeSYBs5t8A7eC0zDv1suzhk3geTGCJEOgiKpYBPDqdn9Iq+1XhOuryM3V7sBlA/8t0qPk+U4hLfASU1gV1ouFwF9mh1qfXRYFHgc7zKBpkUGnni3EGj6m1IKWwQl/0GI0V8e3gtK0ijjwFLx4e87sof3ULnNrDRNX8PbIcTpkzhnniQ50NQPi8MKVsdGX2rzvPJAaulyfZd8zoDE0kvJQn3QR/aCMK9vAewOXmI+pJL2CmGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Thursday morning, I'll check in on how the branding work went\\\" names the scheduled check-in\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 237,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 95,
+          "output_tokens_details": {
+            "thinking_tokens": 44
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "ef3b3e039e83ff00",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

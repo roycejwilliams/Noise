@@ -1,7 +1,7 @@
 {
   "hash": "d9e97b1e0a274095",
   "case": "complete-moment",
-  "recorded_at": "2026-11-01T18:29:12.013Z",
+  "recorded_at": "2026-11-01T19:22:21.400Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They're sharing a positive outcome from the board meeting and that they're going to rest.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"The pricing slide they worked on paid off; affirming that reinforces their prep approach.\", \"why\": \"pricing slide concern\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approved the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "```json\n{\"reason\": \"They're sharing a great outcome from the board meeting and that they're about to sleep\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"The reworked pricing slide paid off with full budget approval\", \"why\": \"ties to their earlier worry about the pricing slide\"}], \"emotion\": {\"emotion\": \"relieved/excited\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approving the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```",
       "usage": {
         "input_tokens": 4488,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 382,
+        "output_tokens": 387,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgcgY6wKYdVbCdRYx2oJY",
+        "id": "msg_011CgckbBcejHy2zVvwJSdfw",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\": \"They're sharing a positive outcome from the board meeting and that they're going to rest.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"The pricing slide they worked on paid off; affirming that reinforces their prep approach.\", \"why\": \"pricing slide concern\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approved the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "```json\n{\"reason\": \"They're sharing a great outcome from the board meeting and that they're about to sleep\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"The reworked pricing slide paid off with full budget approval\", \"why\": \"ties to their earlier worry about the pricing slide\"}], \"emotion\": {\"emotion\": \"relieved/excited\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approving the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 382,
+          "output_tokens": 387,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

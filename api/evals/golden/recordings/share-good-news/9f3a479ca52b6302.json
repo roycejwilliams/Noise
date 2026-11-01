@@ -1,0 +1,102 @@
+{
+  "hash": "9f3a479ca52b6302",
+  "case": "share-good-news",
+  "recorded_at": "2026-11-01T19:17:48.363Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"This is the one. Two years of no's and today it's done, that's not a small thing to sit with.\n\nHow are you feeling right now, now that it's actually real.\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their words: 'Two years of no's and today it's done' mirrors 'Two years of no's and it finally happened.'\"}",
+      "usage": {
+        "input_tokens": 331,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 134,
+        "output_tokens_details": {
+          "thinking_tokens": 73
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgckFCVvVjLEGq5fEEJn4",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Ep4FCsQCCBMYAipARBrVYm3F76lHoCs/hiBgz6te+iz5x0wOhgpyosTeq4s2hJchW+w88yBKxH2Y1D8/didDfVPsqqzBWN+adAvNMjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB26Ce1wbCAToIBBAAGgwC2ooDTzcFCOYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiB0k+oQC4nwyFZTUDr5yxR65eTNhTgi6YNGRTMINJfw0yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwcQSBb4sUEtBdV8dcaDDQ9moJyfw4O2xstzSIwu4ypy0CE4isjtiTdgonZ4vS860vbf9vLVtHnfx6oL3ZiafHcad0BUAz+qHI/MQFVKoYCDWp9Rf13OYfTaAHBpgBzEK/0RBjGSCxIDfsh0/ytcXPOguq996k2tU1Htoff8eQ+K6xdZp2BWjHmezeFNLZQm4l232LX2/g0Vl8ZpA9UNxNqqnELThpOp4N0nEj5f6XTc8g3mpy7oV2ZL9SCEpD1R+x8UrdN3XlK8MlJnWDBRBR9xJcTs112wHCgVqMlIoZTckSgM+AtFe2YPTST5T3dzOleNPgL76F6F7AXGCxwNwrbMkZxoDb98YQ6Kl6ma5gbZm5LooOF5rBp4/+u9e4qEyTF1bcXqZKPo+zLrqk2vM7wvQO63cfrvYmjw+4122PhHtvxsAao0gkeXR/MXF/mulVczvNQ6BgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their words: 'Two years of no's and today it's done' mirrors 'Two years of no's and it finally happened.'\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 331,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 134,
+          "output_tokens_details": {
+            "thinking_tokens": 73
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "9f3a479ca52b6302",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

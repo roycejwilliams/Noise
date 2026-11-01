@@ -1,0 +1,102 @@
+{
+  "hash": "01b7fd7a506fdbb7",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-11-01T19:21:39.028Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"This is scary news to sit with alone in a waiting room.\n\nHow's your dad doing right now, has the doctor told you anything yet.\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"asks 'has the doctor told you anything yet' despite member still waiting for doctor\"}",
+      "usage": {
+        "input_tokens": 295,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 109,
+        "output_tokens_details": {
+          "thinking_tokens": 64
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgckYEE5ksy6pXSQeX4A7",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvUECsQCCBMYAipAcrgrr2UN2bVKbkZSJ/TGFCyp+2K5pS8s68L9BowA2ZX1rfqw7eemAkEPMOQR8YvHjekksQhC0CQiUX7hwY58aTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBwqKe1wbCAToIBBAAGgwC2ooDTzcFRWYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBi2rPwFw32Vrv7IDe4HRbwoTPgCGPX5x1aJpV/+V2vnSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxAvGfbIeJwzCHSEKUaDMCqOn239/tg6TiEdyIwluYIxYGAULJG1b+n9bqzFzbYWb3hPzgLd9Z9Ok0XTukQMmVXEhmwCwPQdxDUtNVzKt0Br0LAtf/JbY4GROQwP9f1Ti3EfLhJhpRjrVkxdsaWBzrGoXgalRL+Zpo1TpAx0QyibC1hJLqkJH2kAXaH8b8wLBB7KWlGOZiHL0Jc2GRaLPZpmzLvay95klehav5vDmGGkUWF1Mn9vcVsOP+4zI2aS5bQ//ggStLn+wKvvJ279zLHsMwk2OfeSkQwLVHPa9Cg3MMvCP8oJzfn85fVYo+dmaAfcuzX001xaonMHvOVxOrjzeRUltvHBlxUMIDOE9AhWbZpJ4eUKjy2UItFmBwv9yjTXRarLNQMd+5bIR8YAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"asks 'has the doctor told you anything yet' despite member still waiting for doctor\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 295,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 109,
+          "output_tokens_details": {
+            "thinking_tokens": 64
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "01b7fd7a506fdbb7",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
