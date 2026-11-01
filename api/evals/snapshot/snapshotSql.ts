@@ -33,6 +33,8 @@ if ("skip" in started) {
   const cluster = started.ok;
   const { default: pg } = await import("pg");
   const db = new pg.Pool({ host: cluster.sock, user: "postgres", database: "postgres", max: 12 });
+  // An idle connection the cluster's own shutdown ends is not a test failure.
+  db.on("error", () => {});
   // Every read the builder makes through the shared pool goes to the throwaway database.
   (pool as any).query = (sql: string, p?: unknown[]) => db.query(sql, p as any[]);
   (pool as any).connect = () => db.connect();
