@@ -1,0 +1,102 @@
+{
+  "hash": "eff6e76fe46a23af",
+  "case": "feedback-cue-mistake",
+  "recorded_at": "2026-11-01T18:29:08.478Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it. Cue's text: \"\"...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it.\n\nCue's text:\n\"\"\"Nothing's running on that right now. That link's dead, you're right, it 404s. Want me to keep digging for a studio in the Mission with an intro wheel class, or widen it beyond the Mission if that gets you a better shot at Saturday mornings?\"\"\"\n\nDoes the text own the bad link plainly in a few words AND say what Cue can do now (it may offer to find the right page), WITHOUT inventing a new link or details, blaming their browser, or explaining how Cue works? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Nothing's running on that right now\\\" invents an unconfirmed detail about the class status\"}",
+      "usage": {
+        "input_tokens": 323,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 218,
+        "output_tokens_details": {
+          "thinking_tokens": 171
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgcgXuU1UQT1EuKgwaYP2",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErYHCsQCCBMYAipAI0dkgSpypt5iHUrWXenzsV+XSPpORGdXG5uShGnls9UdcPPWydbwzmH8FqmGzJ72JzrvsiAfVWWNV8IzofstCzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB9Ime1wbCAToIBBAAGgwC2ooDTzcFBJcEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBQALbNV7eGj3YAQatzB09clK/D1o4xq0ULaM1bNiaYvCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgz4VJE1zJ7c2U6CJs0aDOKW79Rbg7F0ibNqeiIwggWE2foiVYZgoySTPw8Ttn5VFH2VruGT46Gp7Fzu9109D9u/nnCD6cVMeLR5IwvJKp4EvU7C/SW2CnwbiR7lJlqm53ehIq0ZdplBEVSNtK/kYNX2led8rkSW5PzHJ+vwA/hnKDYN4DQ/Zfev7duzQ8LNRnMFhqXF7RNXsAi/6uOoCfMfxLqzae0wmeDiRnfrqg/7cqy75gMX4TUhFt4qL55UrYWZW8KGmRjWzLVFLyd0BVyAvkeg9QhjZyo7TfFf3ytLPzqmhNi0mX+CpzeIwr9WnW3DbStjLOFVvE8A3RB76MEZub7WXKRDrJMwcggwLlWKrmrzJ3+SSjaBQ973WnoV35XykKEXoO+qfoJzZPc77PX0XRhNgWluzS9Dofy3psRu1NJpJd/Yd1uk/7OiyuVnwmyMJpBn/IAS9X+my/24IdeS2DQ5MniGBxwYWE/e76V1YzYVckVTDdKqhU9BaxH/eltDehWPr1V/QswjKk8ykvNIK3E4aGiSnS01miaZi2v7+BlujnjegiHZG83d6p1XT2h1bWAAFX0vHoyCgYu/jknPSv160D8luNJFp6lo4ER/sZyngEIdAKjyxmZGxxCMySYu4q9CdU9tZFURtgJ57v3/+viOGLLA83LMzkwVUOuSrIE9PrpVqyf2XZZztD7majdAyflfM5Z+DdKKUKYXhoDn1BZoFZ/t97ZZLwMJNubqpLCrXEe6L5NCVaOZrhX4IvWFytlP5BXDyWDWrNMctMa0dNRlMJ1HcVjiJ+bqdO8jwFqLuWzj3M2gFmPHT7IYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Nothing's running on that right now\\\" invents an unconfirmed detail about the class status\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 323,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 218,
+          "output_tokens_details": {
+            "thinking_tokens": 171
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "eff6e76fe46a23af",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
