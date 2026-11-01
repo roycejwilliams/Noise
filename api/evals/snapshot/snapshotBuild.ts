@@ -107,7 +107,14 @@ check("history kinds follow safeMemory's: an intro, a suggestion", f("I introduc
 check("a list item naming them goes on its own; a lead-in label without a name stays", f("Wants: a cofounder; coffee with marisol; jazz") === "Wants: a cofounder; Another member came up here; their details aren't kept.; jazz" || f("Wants: a cofounder; coffee with marisol; jazz").startsWith("Wants: a cofounder; Another member came up here"), f("Wants: a cofounder; coffee with marisol; jazz"));
 check("strict match: any case, accents folded, whole words; an everyday-word name only with its capital", hits(["Zoë Young"])("coffee with zoe") && hits(["Zoë Young"])("met Young") && !hits(["Zoë Young"])("a young crowd") && hits(["May Lin"])("see May") && !hits(["May Lin"])("you may like it") && !hits(["Marisol"])("Marisolville"));
 
-// ---- the fence
+// The live finder too (memberSafeMemories nameFinder): an everyday-word name written lowercase where it stands for a person.
+const everyday = ["Rose Park", "May Chen", "Max Ortiz"];
+const lower = ["coffee with rose about her divorce", "rose said she's leaving her job", "may is moving to Austin after her breakup", "max said he can't make it"];
+check("lowercase everyday names that stand for a person are caught by the rewrite (details-free lines)", lower.every((t) => S.fenceLine(t, S.linkedNameMatcher(everyday)).text === "Another member came up here; their details aren't kept."), lower.map((t) => S.fenceLine(t, S.linkedNameMatcher(everyday)).text));
+check("and by the fence's check", lower.every((t) => S.fenceScan({ header: "", body: `\n- [L1 did 2026-10-20] texted: ${t}` }, everyday, A).nameHits === 1));
+check("known limit, on the safe side: an everyday word that isn't the person still counts (\"in May\" with a linked May)", S.linkedNameMatcher(["May Chen"])("training for the half in May") && !S.linkedNameMatcher(["May Chen"])("you may like it"));
+
+
 const lookupNone = async () => [] as string[];
 const planted = { header: built.header, body: `${built.body}\n- [L9 did 2026-10-20] texted: "say hi to Marisol"` };
 check("the fence blocks a planted linked name", (await S.fenceCheck(planted, ["Marisol Vega"], A, lookupNone)).ok === false && S.fenceScan(planted, ["Marisol Vega"], A).nameHits === 1);

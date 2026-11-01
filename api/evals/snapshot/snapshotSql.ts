@@ -267,6 +267,16 @@ if ("skip" in started) {
     await q(`UPDATE member_snapshots SET next_attempt_at = NULL WHERE user_id = $1`, [C]);
     await S.rebuildSnapshot(C, "learn", { db });
     check("a stored build resets the backoff", (await q(`SELECT fail_count, next_attempt_at FROM member_snapshots WHERE user_id = $1`, [C])).rows[0].fail_count === 0);
+    // A removal while a member is backing off: the next upkeep pass tries them again, not up to 24h later.
+    await q(`INSERT INTO co_goals (user_id, title, their_words) VALUES ($1, 'x', 'y')`, [C]);
+    await S.storeBuild(C, { reason: "upkeep", db, deps: failing });
+    await S.storeBuild(C, { reason: "upkeep", db, deps: failing });
+    const beforeRemoval = await S.snapshotUpkeep({ db });
+    check("(backing off before the removal: the pass leaves them alone)", beforeRemoval.retried === 0 && beforeRemoval.rebuilt === 0, beforeRemoval);
+    await q(`INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote, item_ref, removed) VALUES ($1, 'claim', 'Learning salsa', NULL, 'forget the salsa thing', 'claim:x', true)`, [C]);
+    const retry = await S.snapshotUpkeep({ db });
+    const cRow = (await q(`SELECT fail_count, next_attempt_at FROM member_snapshots WHERE user_id = $1`, [C])).rows[0];
+    check("a removal or correction ends the member's backoff: the next pass rebuilds them", retry.retried === 1 && retry.rebuilt === 1 && cRow.fail_count === 0 && cRow.next_attempt_at === null && (await marks(C)) === 0, { retry, cRow });
 
     // ---- the trigger never fails the member's write
     const notices: string[] = [];
