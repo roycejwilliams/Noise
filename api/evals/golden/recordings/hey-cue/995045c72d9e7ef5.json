@@ -1,7 +1,7 @@
 {
   "hash": "995045c72d9e7ef5",
   "case": "hey-cue",
-  "recorded_at": "2026-11-01T18:26:33.717Z",
+  "recorded_at": "2026-11-01T19:07:38.556Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 288,
+        "output_tokens": 273,
         "output_tokens_details": {
-          "thinking_tokens": 15
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,15 +57,10 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgcgLVUJtXegaoamU48ja",
+        "id": "msg_011CgcjUBvx1okKUGjNhmTyE",
         "type": "message",
         "role": "assistant",
         "content": [
-          {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EsgDCsQCCBMYAipAkzhVsiP6GFveEhpq6hnEkzHlH5i562DnEUOoxvP38+tYsDKhRguvfLR/c9yF5Vp4cdop/dpV/OCVAPi9UGb7azIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB14ie1wbCAToIBBAAGgwC2ooDTzcFPXwEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBAzx8KmmZ3sGFBbYR+rkpgwLq5b7EFEQ/tiGwJt2y0aiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgx/eZAcaBWquYBL898aDPkZAn3JPXPyY/FczyIwS2/7EGOuOK4RSCXZatJqmGyqag38UlEoS5adDot+x7VCpk39tietCachudMivweeKjE6TgMe0TeYPx9nVnESF8bqQQJOeIac4NNDdNdtagdMuasy7tSCP3Fz39A8+9f4aig8GAE="
-          },
           {
             "type": "text",
             "text": "{\"reason\": \"They're just greeting Cue, not answering anything or asking for anything specific.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"small_talk\", \"topic\": \"greeting\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
@@ -83,9 +78,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 288,
+          "output_tokens": 273,
           "output_tokens_details": {
-            "thinking_tokens": 15
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

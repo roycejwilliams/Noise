@@ -1,7 +1,7 @@
 {
   "hash": "e77bab620e13a1ca",
   "case": "cut-everything-redrafts",
-  "recorded_at": "2026-11-01T18:27:21.445Z",
+  "recorded_at": "2026-11-01T19:17:21.828Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\":\"They're asking Cue to find them something happening in SF.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"asked_for\":[],\"in_middle_of\":null,\"mode\":\"asking\",\"topic\":\"looking for things to do/recommendations in SF\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"location_availability\"],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"boundaries_preferences\",\"long_term_direction\"]}",
+      "text": "{\"reason\":\"They're asking Cue to find them something happening or available in SF.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"asking for SF recommendations\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"seeking\":\"none\",\"feedback\":[],\"ack\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"location_availability\"],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"boundaries_preferences\",\"long_term_direction\"]}",
       "usage": {
         "input_tokens": 4386,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 278,
+        "output_tokens": 256,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgcgQ1EoP1dLmBBZ7AqQd",
+        "id": "msg_011CgckDCMwNrZGecGRotWeS",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\":\"They're asking Cue to find them something happening in SF.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"asked_for\":[],\"in_middle_of\":null,\"mode\":\"asking\",\"topic\":\"looking for things to do/recommendations in SF\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"location_availability\"],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"boundaries_preferences\",\"long_term_direction\"]}"
+            "text": "{\"reason\":\"They're asking Cue to find them something happening or available in SF.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"asking for SF recommendations\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"seeking\":\"none\",\"feedback\":[],\"ack\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"location_availability\"],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"boundaries_preferences\",\"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 278,
+          "output_tokens": 256,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

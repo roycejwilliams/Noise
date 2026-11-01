@@ -1,0 +1,102 @@
+{
+  "hash": "1fc920a0f527043f",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-01T19:21:51.881Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Fair. That moment deserved better than that.\n\nAlmost walking off and then sitting down and nailing the whole thing, that's a real thing to watch your kid do. First recitals are brutal, the nerves are so visible at that age. The fact that she pushed through it herself says something.\n\nHow are you feeling about it, still replaying it?\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 238,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 71,
+        "output_tokens_details": {
+          "thinking_tokens": 68
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgckZDzxrGmAs5FuKu8sR",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSkgYKEAgTGAI4AUIIdGhpbmtpbmcSDHK2JKD2jyoi1QvvDxoM8isvpp3tqJd41gIJIjASUq/Ih3PBmwdxkjhXUdnfAyKdrXCiweFVbyLlpMPpwv7CObtFv8Sh2lt8yhNuk6oqrwUdMe05N73YOsjIxUT9HuEW3fAlvxceh3Moc4UFfibjZwyrQfdjtr/CTojjLux9Zr5HcmnUqJ4qSOOEZREOpV4niklV0WNpR4Q5at5wYsZcMnq06qaNFTrcL/3G80udbdsJD8KczxanNt0fN0+MQSBqYtlAnPzqYeliHKuEC2kVxMMEzwNPYkFsQJssOrEPFxfjbVDdGGB9SCX0yk6kNf0LE7dIAIRGrPKckJ7fLHoVl9/GaS8JoAygvOs8paT1oCQUdmpurdoYWvaKi/V1+Pa09C0ljsykjLefqha5thAMwkCzyuW5OrV5c9t68ojvfgXgT0nDt5m/Oyryd7/4u7hjB2a5Kt5e2AflikaKNUZrFHx4hb6RAlhrc8Ti3g423bPzwjP4i2A9MOs9rVmUf1/KLnYc/CQezFQR1rv7kZRfucC9ZpJwVGLIQnV5+3PTEo2kMs7OSveAJjWO5X43NwRFIaKy/jXk8fual00FY+7MSuB8bZzkiYutwsxjL630stfpExqb/f9vtiKr7XdiBcc+yIfmnEJPxftTa1r0m7toopgIwQF2CWGYwrKmGzlVIj6+5s1ne9NfB58f5YmKyFpTNkZJDjXviJzMhXBilkST5oYeBYUEr2UY1/sEGSSDmavP1pZncEGACwgOiLE1sqQbOB1YLkYA9kttxUaqeWOfZpv6A/InWQL9IPu8vm1o0vQXcA07Rn6d49MKKxSwxXNMbNTqxQuewXYicp3RHf8cxAq6rWJMrBVzP2BKE14aOECd+1NPMTgP7q5Wy5gBabDnKXyGnfPR6CC8hjm6aAKDV0m1doU9lTySqkzIy16jnNDIqu2ocGvCn3NpnqXK+z66aT3eJIvoaZYMkVXRGMpoOOgPIajaMNfsATW20vbo6L8KRowFVAz5+wMZlkHrGXgYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 238,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 71,
+          "output_tokens_details": {
+            "thinking_tokens": 68
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "1fc920a0f527043f",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
