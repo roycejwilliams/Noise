@@ -38,6 +38,8 @@ export async function archiveAccount(userId: string): Promise<{ archived: boolea
       [userId],
     );
     await client.query("COMMIT");
+    // No pinned snapshot of theirs stays in this process (services/memberSnapshot.ts dropPin).
+    await import("./memberSnapshot.js").then((S) => S.dropPin(userId)).catch(() => {});
     // Their model prompt/answer text goes too (services/llmTraceText.ts). After the commit, best-effort: never undoes the archive.
     await import("./llmTraceText.js").then((T) => T.forgetTraceText(userId, "archived")).catch(() => 0);
     return { archived: true };

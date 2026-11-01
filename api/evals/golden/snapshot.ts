@@ -11,5 +11,5 @@ export async function goldenSnapshot(o: { userId: string; firstName: string; cit
     { userId: o.userId, zone: o.zone, team: false, profile: { firstName: o.firstName, city: o.city, lifeChapters: [], direction: null, activities: [], blockers: [], availability: null, style: [], updatedAt: null }, knowledge, threads: [], coGoals: [], emotions: [], scheduled: [], ledger: [], forgotten: [], names: [], capabilities: capabilitySheet({}) },
     { version: 1 },
   );
-  return { prefix: built.body, since: [], entries: S.parseEntries(built.body), version: 1, pinnedVersion: 1, repinned: "none" };
+  return { prefix: built.body, since: [], entries: S.parseEntries(built.body, S.storedSections(built)), version: 1, pinnedVersion: 1, repinned: "none" };
 }

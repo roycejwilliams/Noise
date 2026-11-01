@@ -79,8 +79,11 @@ export const READ_WAIT_MS = 2_000;
 export const LEARN_WAIT_MS = 10_000;
 
 // One line. id: what a citation names (section letter + source id). src: the source row ("co_facts:4711", "member_claims:<uuid>").
-export type Entry = { id: string; src: string; date: string | null; prov: Prov; text: string; open: boolean; kind: string };
-export type Collapsed = { from: string | null; to: string | null; count: number; counts: Record<string, number>; ids: string[]; line: string; tokens: number };
+// receipt: a ledger act's receipt when it isn't done (not_done, limited, needs_yes, off): what didn't happen.
+export type Entry = { id: string; src: string; date: string | null; prov: Prov; text: string; open: boolean; kind: string; receipt?: string | null };
+// entryIds and hashes: the collapsed entries' own ids and a hash of each one's words, so a reader can tell an entry that moved into
+// the collapse (unchanged) from one that was removed or changed.
+export type Collapsed = { from: string | null; to: string | null; count: number; counts: Record<string, number>; ids: string[]; entryIds: string[]; hashes: string[]; line: string; tokens: number };
 export type BuiltSection = { id: SectionId; title: string; budget: number; entries: Entry[]; collapsed: Collapsed[]; tokens: number; fullTokens: number; chars: number; overBudget: boolean; sourceCount: number };
 export type Compaction = { section: SectionId; count: number; idRange: [string, string] | null; tokensBefore: number; tokensAfter: number };
 export type Built = {
@@ -414,6 +417,7 @@ function entriesOf(s: SnapshotSources): Record<SectionId, Raw[]> {
       // A promise is open until kept (no promised rows yet: the ledger's promise kind comes with the cutover).
       open: r.relation === "promised" && !m.kept,
       kind: r.relation,
+      receipt: m.receipt && m.receipt !== "done" ? String(m.receipt) : null,
       guard: "words",
     });
   }
@@ -446,7 +450,7 @@ function collapse(entries: Entry[]): Collapsed[] {
       const ids = es.map((e) => e.id);
       const span = from ? (from === to ? from : `${from}–${to}`) : "undated";
       const line = `- [Earlier ${span}] ${Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, n]) => `${n} ${kind}`).join(", ")} [${ids[ids.length - 1]}…${ids[0]}, ${ids.length} entries]`;
-      return { from, to, count: es.length, counts, ids: es.map((e) => e.src), line, tokens: estTokens(line) };
+      return { from, to, count: es.length, counts, ids: es.map((e) => e.src), entryIds: ids, hashes: es.map((e) => hash8(e.text)), line, tokens: estTokens(line) };
     });
 }
 
@@ -597,8 +601,13 @@ const STATE_SQL = `SELECT s.user_id, s.version, s.built_at, s.body, s.sections, 
   FROM member_snapshots s WHERE s.user_id = $1`;
 const toStored = (r: any): StoredSnapshot => ({ userId: String(r.user_id), version: Number(r.version), builtAt: new Date(r.built_at), body: String(r.body ?? ""), sections: r.sections ?? [], tokens: r.tokens ?? {}, blocked: r.blocked ?? null, dirtyAt: r.dirty_at ? new Date(r.dirty_at) : null });
 // Pure: whether a stored row can be served as it is.
-export function isFresh(r: { dirty: boolean; built_at: Date | string } | null | undefined, now: Date): boolean {
-  return !!r && !r.dirty && now.getTime() - new Date(r.built_at).getTime() < STALE_AFTER_MS;
+// A row stored before entries carried their hash (h) is rebuilt once, so the reply's pin can tell moved entries from changed ones.
+export function isFresh(r: { dirty: boolean; built_at: Date | string; sections?: any[] } | null | undefined, now: Date): boolean {
+  return !!r && !r.dirty && now.getTime() - new Date(r.built_at).getTime() < STALE_AFTER_MS && (r.sections ?? []).every((x: any) => (x.entries ?? []).every((e: any) => typeof e.h === "string"));
+}
+// Pure: the sections as stored: each entry without its words but with a hash of them, each collapse without its line.
+export function storedSections(built: Pick<Built, "sections">): any[] {
+  return built.sections.map((x) => ({ id: x.id, tokens: x.tokens, budget: x.budget, overBudget: x.overBudget, entries: x.entries.map(({ text, ...e }) => ({ ...e, h: hash8(text) })), collapsed: x.collapsed.map(({ line: _l, ...c }) => c) }));
 }
 
 // A member whose builds keep failing doesn't take every upkeep slot: each failure doubles the wait before the upkeep tries them again
@@ -672,7 +681,7 @@ export async function storeBuild(userId: string, o: { reason: string; force?: bo
       return { state: "mismatch", snapshot: null, waitedMs, buildMs, consumed: 0 };
     }
     const blocked = fence.ok ? null : fence.kind;
-    const sections = blocked ? [] : built.sections.map((x) => ({ id: x.id, tokens: x.tokens, budget: x.budget, overBudget: x.overBudget, entries: x.entries.map(({ text: _t, ...e }) => e), collapsed: x.collapsed.map(({ line: _l, ...c }) => c) }));
+    const sections = blocked ? [] : storedSections(built);
     const row = (
       await client.query(
         `INSERT INTO member_snapshots (user_id, version, built_at, build_ms, sections, body, tokens, chars, compactions, over_budget, blocked, updated_at)
@@ -727,7 +736,7 @@ export async function readSnapshot(userId: string, o: { now?: () => Date; waitMs
   const m = await buildInMemory(userId, { now: nowOf(), deps: { ...o.deps, rows: o.deps?.rows ?? ((sql, args) => db.query(sql, args).then((x) => x.rows)) } });
   if (!m.built || !m.fence) return { snapshot: null, state: "failed", waitedMs: r.waitedMs, buildMs: m.ms };
   if (!m.fence.ok) return { snapshot: null, state: "blocked", waitedMs: r.waitedMs, buildMs: m.ms };
-  return { snapshot: { userId, version: 0, builtAt: nowOf(), body: m.built.body, sections: [], tokens: m.built.tokens, blocked: null, dirtyAt: null }, state: "built_unstored", waitedMs: r.waitedMs, buildMs: m.ms };
+  return { snapshot: { userId, version: 0, builtAt: nowOf(), body: m.built.body, sections: storedSections(m.built), tokens: m.built.tokens, blocked: null, dirtyAt: null }, state: "built_unstored", waitedMs: r.waitedMs, buildMs: m.ms };
 }
 
 // LEARN: after a turn's learning writes land, version N+1. Never throws; a lock it can't get leaves the marks for the next read.
@@ -790,56 +799,67 @@ export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partia
 
 // The text reply reads the snapshot as its cached prefix (design §2, "Keeping the prefix byte-stable"). A cached prefix only pays when
 // its bytes don't move between turns, so each member's reply sends a PINNED version, plus a "Since then" block in the uncached tail:
-// the entry lines the current version has that the pinned one doesn't. The pin moves (the prefix is rewritten) when:
+// the entries the current version has that the pinned one doesn't. Entries are matched by id and a hash of their words. The pin moves
+// (the prefix is rewritten) when:
 //   - there's no pin yet, or the last reply was longer ago than the cache lives (PIN_TTL_MS; the cache is gone anyway);
-//   - any line of the pinned version is no longer in the current one, word for word: a removal, a correction, a changed entry, a
-//     collapse. Forgotten or corrected words never stay in a prefix Cue keeps sending, and never come back as a "removed" line;
+//   - any pinned entry is gone from the current version (kept or collapsed), or its words changed: a removal or a correction.
+//     Forgotten or corrected words never stay in a prefix Cue keeps sending, and never come back as a "removed" line. An entry that
+//     only moved into an "Earlier" collapse, unchanged, doesn't move it (a heavy member's ledger collapses one line per new row);
 //   - the "Since then" block passes SINCE_MAX_TOKENS.
 // Pins live in this process only: a restart or a second process starts a fresh pin, which costs one cache write. A read that fails
-// or is fenced drops the member's pin and returns null: the turn runs on its tail and rules (fail closed), never on an older version.
+// or is fenced drops the member's pin and returns null: the turn runs on its tail and rules, never on an older version. A removal,
+// a correction through what Cue knows, and an archive drop the pin too (dropPin).
 export const PIN_TTL_MS = 5 * 60_000;
 export const SINCE_MAX_TOKENS = 2_000;
-export type Pin = { body: string; lines: Set<string>; version: number; usedAt: number };
-export type SnapEntry = { id: string; prov: Prov; date: string | null; section: SectionId; text: string; open: boolean };
+// kind: the source's kind (a ledger act's relation, a world item's kind); receipt: a ledger act's receipt when it didn't happen.
+export type SnapEntry = { id: string; prov: Prov; date: string | null; section: SectionId; text: string; line: string; open: boolean; kind: string; receipt: string | null; h: string };
+export type Pin = { body: string; version: number; usedAt: number; entries: SnapEntry[] };
+// entries: what the reply may cite: the pinned prefix's entries and the "Since then" ones (the check reads both).
 export type ReplySnapshot = { prefix: string; since: string[]; entries: SnapEntry[]; version: number; pinnedVersion: number; repinned: "none" | "ttl" | "changed" | "since_full" | null };
 
-// The header without its version, so a new version alone never moves the pin.
-const pinLine = (l: string) => (l.startsWith("# ") ? l.replace(/ · v\d+ · /, " · ") : l);
 const ENTRY_LINE = /^- \[([A-Z][A-Za-z0-9]*) (said|seen|did|inferred)(?: (\d{4}-\d{2}-\d{2}))?\] (.*)$/;
 const TITLE_SECTION = new Map<string, SectionId>(SECTION_IDS.map((id) => [`## ${SECTION_TITLES[id]}`, id]));
 
-// Pure: the entries of a rendered snapshot, each with its section. An item in their world is open until the line says it's done (the
-// builder writes "(done" for a closed one). Collapsed "Earlier" lines are counts, not entries.
-export function parseEntries(body: string): SnapEntry[] {
+// Pure: the entries of a rendered snapshot, each with its section and what the stored sections say about it (open, kind, receipt).
+// Collapsed "Earlier" lines are counts, not entries.
+export function parseEntries(body: string, sections: any[]): SnapEntry[] {
+  const meta = new Map<string, any>(sections.flatMap((x: any) => (x.entries ?? []).map((e: any) => [e.id, e] as const)));
   const out: SnapEntry[] = [];
   let section: SectionId | null = null;
   for (const line of body.split("\n")) {
     if (line.startsWith("## ")) section = TITLE_SECTION.get(line) ?? null;
     const m = section ? line.match(ENTRY_LINE) : null;
-    if (m && section) out.push({ id: m[1], prov: m[2] as Prov, date: m[3] ?? null, section, text: m[4], open: section === "world" && !/^[^:]*\(done\b/.test(m[4]) });
+    if (!m || !section) continue;
+    const e = meta.get(m[1]);
+    out.push({ id: m[1], prov: m[2] as Prov, date: m[3] ?? null, section, text: m[4], line, open: !!e?.open, kind: String(e?.kind ?? ""), receipt: e?.receipt ?? null, h: e?.h ?? hash8(m[4]) });
   }
   return out;
 }
 
-// Pure: this reply's pin, and the lines added since it.
-export function pinStep(prev: Pin | null, current: { body: string; version: number }, now: number): { pin: Pin; since: string[]; repinned: ReplySnapshot["repinned"] } {
-  const lines = current.body.split("\n");
-  const fresh = (why: ReplySnapshot["repinned"]) => ({ pin: { body: current.body, lines: new Set(lines.map(pinLine)), version: current.version, usedAt: now }, since: [] as string[], repinned: why });
+// Pure: this reply's pin, and the entries added since it.
+export function pinStep(prev: Pin | null, current: { body: string; version: number; sections: any[] }, now: number): { pin: Pin; since: SnapEntry[]; repinned: ReplySnapshot["repinned"] } {
+  const entries = parseEntries(current.body, current.sections);
+  const fresh = (why: ReplySnapshot["repinned"]) => ({ pin: { body: current.body, version: current.version, usedAt: now, entries }, since: [] as SnapEntry[], repinned: why });
   if (!prev) return fresh("none");
   if (now - prev.usedAt > PIN_TTL_MS) return fresh("ttl");
-  const have = new Set(lines.map(pinLine));
-  for (const l of prev.lines) if (l && !have.has(l)) return fresh("changed");
-  const since = lines.filter((l) => l.startsWith("- [") && !prev.lines.has(l));
-  if (estTokens(since.join("\n")) > SINCE_MAX_TOKENS) return fresh("since_full");
+  const have = new Map<string, string>(entries.map((e) => [e.id, e.h]));
+  for (const x of current.sections) for (const c of x.collapsed ?? []) (c.entryIds ?? []).forEach((id: string, i: number) => have.set(id, c.hashes?.[i] ?? ""));
+  if (prev.entries.some((e) => have.get(e.id) !== e.h)) return fresh("changed");
+  const pinned = new Set(prev.entries.map((e) => e.id));
+  const since = entries.filter((e) => !pinned.has(e.id));
+  if (estTokens(since.map((e) => e.line).join("\n")) > SINCE_MAX_TOKENS) return fresh("since_full");
   return { pin: { ...prev, usedAt: now }, since, repinned: null };
 }
 
 const pins = new Map<string, Pin>();
+// A removal, a correction or an archive: the member's next reply pins afresh (the next read would see the change anyway; this doesn't
+// wait for it).
+export const dropPin = (userId: string) => void pins.delete(userId);
 // Tests only: forget every pin.
 export const clearPinsForTests = () => pins.clear();
 
-// THE read for a text reply: the pinned prefix, what's been added since, and every current entry (for the reply's fact check). Null
-// when there's no snapshot to serve (failed, fenced): the caller runs on its tail and rules. Logged once a turn, counts only.
+// THE read for a text reply: the pinned prefix, what's been added since, and the entries the reply may cite. Null when there's no
+// snapshot to serve (failed, fenced): the caller runs on its tail and rules. Logged once a turn, counts only.
 export async function replySnapshot(userId: string, o: { read?: (userId: string) => Promise<SnapshotRead>; now?: () => number; log?: SnapshotDeps["log"] } = {}): Promise<ReplySnapshot | null> {
   const log = o.log ?? realDeps().log;
   const now = (o.now ?? Date.now)();
@@ -853,5 +873,5 @@ export async function replySnapshot(userId: string, o: { read?: (userId: string)
   const step = pinStep(pins.get(userId) ?? null, r.snapshot, now);
   pins.set(userId, step.pin);
   void log({ layer: 4, decision: "snapshot.reply", userId, outcome: "act", action: step.repinned ? `pinned:${step.repinned}` : "pin_kept", proposal: { state: r.state, version: r.snapshot.version, pinnedVersion: step.pin.version, since: step.since.length, prefixTokens: estTokens(step.pin.body), waitedMs: r.waitedMs, buildMs: r.buildMs } });
-  return { prefix: step.pin.body, since: step.since, entries: parseEntries(r.snapshot.body), version: r.snapshot.version, pinnedVersion: step.pin.version, repinned: step.repinned };
+  return { prefix: step.pin.body, since: step.since.map((e) => e.line), entries: [...step.pin.entries, ...step.since], version: r.snapshot.version, pinnedVersion: step.pin.version, repinned: step.repinned };
 }

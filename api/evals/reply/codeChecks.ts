@@ -563,7 +563,7 @@ for (const [draft, expected, label] of ongoingCases) {
   G.addHint(rf, "Why it fits: this is their people");
   check2(/YOUR READ, NOT A FACT/.test(G.renderReplyFacts(rf)), "grounding: hints are shown to Cue as its read, not as facts");
   const src2 = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
-  check2(/rf\.facts\.filter\(\(f\) => f\.kind !== "hint"\)\.map\(\(f\) => `\[\$\{f\.id\}\] \$\{f\.text\}`\)/.test(src2) && /that came from a model's read, which is a hint, not a source/.test(src2), "grounding: a hint is never listed or accepted as a source");
+  check2(/rf\.facts\.filter\(\(f\) => f\.kind !== "hint" && !\(rf\.snapshot && f\.snap\)\)\.map\(\(f\) => `\[\$\{f\.id\}\] \$\{f\.text\}`\)/.test(src2) && /that came from a model's read, which is a hint, not a source/.test(src2), "grounding: a hint is never listed or accepted as a source");
   check2(/addHint\(rf, `Why "\$\{match\.name\}" may fit them/.test(src2), "grounding: a search's fit reason is a hint, not a fact");
   check2(/const summaries = claimType && WORLD_CLAIMS\.has\(claimType\) \? \[\] :/.test(src2), "grounding: summaries never back a claim about an event, a count, a link or another person");
   check2(G.crowdClaim("go find the llama_index people, that's your crowd") && G.crowdClaim("Room full of your people") && !G.crowdClaim("Could be a solid place to find the dependable builder people you're after") && !G.crowdClaim("demo nights tend to draw builders"), "grounding: 'your crowd' is caught; where it could lead isn't");
