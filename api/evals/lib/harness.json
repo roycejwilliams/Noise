@@ -1,4 +1,5 @@
 [
+  "evals/snapshot/cluster.ts",
   "evals/.next-live-1001/boot.ts",
   "evals/.next-live-1001/db.ts",
   "evals/.next-live-1001/fixtures.ts",

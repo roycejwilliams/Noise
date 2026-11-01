@@ -63,15 +63,15 @@ const src: any = {
   userId: A, zone: "America/Los_Angeles", team: false,
   profile: { firstName: "Avery", city: "Oakland", lifeChapters: ["new to the Bay"], direction: "start a company", activities: ["running"], blockers: [], availability: null, style: ["short, lowercase texts"], updatedAt: new Date(at) },
   knowledge,
-  threads: [{ id: "11111111-2222-4333-8444-555555555555", text: "Learning salsa for my birthday", quote: "learning salsa for my birthday", status: "open", openedAt: new Date(at), dueDate: null, kind: "thread", feeling: null, touchedAt: new Date(at) },
-    { id: "22222222-2222-4333-8444-555555555555", text: "Training for the Oakland half", quote: "doing the half in March", status: "open", openedAt: new Date(at), dueDate: "2027-03-14", kind: "thread", feeling: "excited", touchedAt: new Date(at) }],
+  threads: [{ id: "11111111-2222-4333-8444-555555555555", text: "Learning salsa for my birthday", quote: "learning salsa for my birthday", status: "open", openedAt: new Date(at), dueDate: null, kind: "thread", tone: null, touchedAt: new Date(at) },
+    { id: "22222222-2222-4333-8444-555555555555", text: "Training for the Oakland half", quote: "doing the half in March", status: "open", openedAt: new Date(at), dueDate: "2027-03-14", kind: "thread", tone: "excited", touchedAt: new Date(at) }],
   coGoals: [],
-  emotions: [{ id: "77", emotion: "nervous", intensity: "medium", about: "the pitch", quote: "so nervous about Thursday", source: "text", at: new Date(at) }],
+  emotions: [{ id: "77", felt: "nervous", strength: "medium", about: "the pitch", quote: "so nervous about Thursday", source: "text", at: new Date(at) }],
   scheduled: [{ id: "99999999-2222-4333-8444-555555555555", text: "call me Friday", at: new Date("2026-10-24T17:00:00Z"), status: "pending" }],
   ledger: [
-    { id: "4711", relation: "texted", label: "I introduced you to Marisol, she runs a gallery", url: null, at: new Date(at), source: "outbound:h1", meta: { ledger: 1, kind: "text" } },
-    { id: "4712", relation: "not_done", label: "used writeDocument", url: null, at: new Date(at), source: "tool.writeDocument", meta: { ledger: 1, kind: "tool", receipt: "not_done" } },
-    { id: "4713", relation: "sent", label: "Friday Jazz Trio", url: "https://lu.ma/jazz", at: new Date(at), source: "memory:x", meta: { ledger: 1, kind: "offer", offer_state: "interested" } },
+    { id: "4711", relation: "texted", said: "I introduced you to Marisol, she runs a gallery", url: null, at: new Date(at), source: "outbound:h1", meta: { ledger: 1, kind: "text" } },
+    { id: "4712", relation: "not_done", said: "used writeDocument", url: null, at: new Date(at), source: "tool.writeDocument", meta: { ledger: 1, kind: "tool", receipt: "not_done" } },
+    { id: "4713", relation: "sent", said: "Friday Jazz Trio", url: "https://lu.ma/jazz", at: new Date(at), source: "memory:x", meta: { ledger: 1, kind: "offer", offer_state: "interested" } },
   ],
   forgotten: [
     { field: "claim", old: "Learning salsa for my birthday", now: null, ref: "claim:k1", removed: true },
@@ -128,7 +128,7 @@ const importers = files.filter((f) => !/services\/memberSnapshot(Schema)?\.ts$/.
 check("only LEARN's rebuild, the upkeep job and the shadow script load the builder", JSON.stringify(importers) === JSON.stringify(["jobs/index.ts", "routes/sendblue.ts", "scripts/snapshotShadow.ts"]), importers);
 const sb = fs.readFileSync(path.join(root, "routes/sendblue.ts"), "utf8");
 const uses = [...sb.matchAll(/memberSnapshot\.js"\)\.then\(\(S\) => S\.(\w+)\(/g)].map((m) => m[1]);
-check("the reply path's one use is LEARN's rebuild, chained after the turn's learning writes", uses.join() === "rebuildSnapshot" && /learnFromTextTurn\(\{[\s\S]{0,400}\}\)\s*\.catch\([^\n]*\n[\s\S]{0,300}\.then\(\(\) => import\("\.\.\/services\/memberSnapshot\.js"\)\.then\(\(S\) => S\.rebuildSnapshot\(user\.id, "learn"\)\)\)\s*\.catch\(\(\) => \{\}\);/.test(sb), uses);
+check("the reply path's one use is LEARN's rebuild, chained after the turn's learning writes", uses.join() === "rebuildSnapshot" && /learnFromTextTurn\(\{[\s\S]{0,400}\}\)\.catch\([^\n]*\n[\s\S]{0,300}\.then\(\(\) => import\("\.\.\/services\/memberSnapshot\.js"\)\.then\(\(S\) => S\.rebuildSnapshot\(user\.id, "learn"\)\)\)\s*\.catch\(\(\) => \{\}\);/.test(sb), uses);
 const jobs = fs.readFileSync(path.join(root, "jobs/index.ts"), "utf8");
 check("the job only runs the upkeep", [...jobs.matchAll(/\{ (\w+) \} = await import\("\.\.\/services\/memberSnapshot\.js"\)/g)].map((m) => m[1]).join() === "snapshotUpkeep");
 const sql = files.filter((f) => !/services\/memberSnapshot(Schema)?\.ts$|scripts\/forgetResidueAudit\.ts$/.test(f) && /member_snapshots?\b/.test(fs.readFileSync(f, "utf8"))).map(rel);

@@ -42,7 +42,7 @@ const load = async (userId: string, now: Date) => {
   const store = L.memoryLedgerStore(old.ledger);
   const before = store.rows.length;
   await LS.runBackfill(store, old);
-  const added = store.rows.slice(before).map((r, i) => ({ id: `p${i + 1}`, relation: r.relation, label: r.label, url: r.url, at: r.at, source: r.source, meta: r.meta }));
+  const added = store.rows.slice(before).map((r, i) => ({ id: `p${i + 1}`, relation: r.relation, said: r.label, url: r.url, at: r.at, source: r.source, meta: r.meta }));
   src.ledger = [...src.ledger, ...added].sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, 4000);
   return src;
 };
