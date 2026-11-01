@@ -3105,11 +3105,12 @@ export async function runMigrations(): Promise<void> {
     .catch((err: Error) => console.error("intro_requests init failed:", err));
   // The member snapshot, built in shadow (services/memberSnapshot.ts, snapshot design 2026-10-29 step 2): its table, the marks table,
   // and a staleness trigger on every source table that exists (services/memberSnapshotSchema.ts). Additive; last, so every source
-  // table above is there first. Each table's trigger is its own step and never blocks startup.
+  // table above is there first. Anything already in place is skipped, so a boot runs no DDL once it's all there; what does run waits
+  // at most a moment for a lock and is otherwise left for the next boot. Never blocks startup.
   await import("../services/memberSnapshotSchema.js")
     .then((S) => S.snapshotMigrations(pool))
     .then((r) => {
-      if (r.missing.length || r.failed.length) console.error(`member snapshot triggers: ${r.triggers.length} on, missing tables ${r.missing.join(", ") || "none"}, failed ${r.failed.join(", ") || "none"}`);
+      if (r.missing.length || r.failed.length || r.deferred.length) console.error(`member snapshot triggers: ${r.triggers.length} on, missing tables ${r.missing.join(", ") || "none"}, failed ${r.failed.join(", ") || "none"}, deferred to the next boot ${r.deferred.length}`);
     })
     .catch((err: Error) => console.error("member snapshot init failed:", err));
   await concurrencyMigrations();

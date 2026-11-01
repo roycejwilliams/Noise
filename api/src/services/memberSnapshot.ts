@@ -25,7 +25,8 @@
 // any stored snapshot that is stale, so a removal leaves the stored row within one pass even though nothing reads it yet.
 //
 // Guarantees:
-//   - the fence: every linked member's name (memberNamesStrict) is taken out of every line (their own words included), and the build
+//   - the fence: every sentence naming a linked member (any word of their full name, linkedFullNames) becomes a details-free, nameless
+//     history line (safeMemory's policy), their own words included, and the build
 //     then asserts that no linked name and no other member's user id is left anywhere in the body. A hit fails closed: nothing is
 //     served (no older version either), the row is stored blocked with no body, and snapshot.fence_block is logged (counts only).
 //     A name read that fails fails the build the same way. Another member's details may later enter only on a line backed by a share
@@ -46,7 +47,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { capabilitySheet } from "./capabilities.js";
 import type { MemberKnowledge, KnowledgeSection } from "./memberKnowledge.js";
-import { nameFinder, nameSpanFinder } from "./memberSafeMemories.js";
+import { namelessHistoryLine, WORD_NAMES } from "./memberSafeMemories.js";
 import { wordsZone } from "./memberTime.js";
 import { forgets, guardText, type ForgottenRow, type Guarded } from "./whatCoKnows.js";
 
@@ -127,7 +128,7 @@ export type SnapshotSources = {
   scheduled: ScheduledRow[];
   ledger: LedgerRowIn[];
   forgotten: ForgottenRow[];
-  // The members this one is linked with (memberNamesStrict): stripped from every line, and the fence.
+  // The members this one is linked with, full names where known (linkedFullNames): every word of each is fenced.
   names: string[];
   capabilities: string[];
 };
@@ -142,18 +143,35 @@ type Rows = (sql: string, args: unknown[]) => Promise<any[]>;
 const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).map((x: string) => x.trim()) : []);
 const day = (d: unknown) => (d == null ? null : d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
 
+// The members this one is linked with, by full name: the same set as memberNamesStrict (services/memberSafeMemories.ts: the members
+// Cue told them about or introduced them to, their own side only), with the last name read too, plus the first names Cue's own
+// records give. Throws when it can't read them (the build then fails closed).
+export async function linkedFullNames(userId: string, rows: Rows): Promise<string[]> {
+  const M = await import("./memberSafeMemories.js");
+  const full = (sql: string, from: string) => {
+    if (!sql.includes(from)) throw new Error("linkedFullNames: the names query changed shape");
+    return sql.replace(from, from.replace("u.first_name", "u.first_name, u.last_name"));
+  };
+  const [linked, network, records] = await Promise.all([
+    rows(full(M.MEMBER_NAMES_SQL, "SELECT DISTINCT u.first_name FROM users u"), [userId]),
+    rows(full(M.NETWORK_NAMES_SQL, "SELECT DISTINCT u.first_name FROM"), [userId]),
+    rows(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('network_intro_offer_pending', 'recommendation') ORDER BY created_at DESC LIMIT 200`, [userId]),
+  ]);
+  const name = (r: any) => [r.first_name, r.last_name].filter((x) => typeof x === "string" && x.trim()).join(" ");
+  return [...new Set([...linked.map(name), ...network.map(name), ...M.namesInRecords(records)].filter(Boolean))];
+}
+
 export async function loadSources(userId: string, now: Date, rows: Rows = (sql, args) => pool.query(sql, args).then((r) => r.rows)): Promise<SnapshotSources> {
-  const [{ memberKnowledge }, { memberNamesStrict }, W, { isTeamMember }] = await Promise.all([
+  const [{ memberKnowledge }, W, { isTeamMember }] = await Promise.all([
     import("./memberKnowledge.js"),
-    import("./memberSafeMemories.js"),
     import("./whatCoKnows.js"),
     import("./extensions.js"),
   ]);
   const [knowledge, names, forgotten, team, profile, threads, coGoals, emotions, scheduled, ledger] = await Promise.all([
     // Rejects when the linked names can't be read (memberKnowledge fails closed): the build fails, nothing is served.
     memberKnowledge(userId, { now, include: SNAPSHOT_KNOWLEDGE, corrections: { limit: 200, days: null } }),
-    // The fence's own read; a failure fails the build.
-    memberNamesStrict(userId),
+    // The fence's own read (full names); a failure fails the build.
+    linkedFullNames(userId, rows),
     // The guards' own read; a failure fails the build (a snapshot built without them could say something they had removed).
     W.forgottenRows(userId),
     isTeamMember(userId),
@@ -217,20 +235,60 @@ export async function loadSources(userId: string, now: Date, rows: Rows = (sql, 
 
 // ---------------------------------------------------------------- pure: names out, guards on
 
-// Pure: the text with every linked name taken out ("another member"; a strip line's ", another member" doesn't double it).
-export function redactNames(text: string, names: string[]): { text: string; n: number } {
-  const span = nameSpanFinder(names);
-  let out = text;
+// The fence's name matcher: plain and strict, independent of memberSafeMemories' person-like heuristic. Every word of every linked
+// member's name (first and last) is a hit as a whole word, accents folded, in any case; a name that is also an everyday word ("May",
+// "Young") only with its capital, so "in may" and "a young crowd" stay. A full name is two hits, so "Marisol Vega" can't become
+// "another member Vega".
+const WORD_SURNAMES = new Set("young king white brown green black gray grey long short rich hill wood stone small hall bell page wise good love fox bird bishop baker cook walker little bush lane park ford rivers banks price person case early day may".split(" "));
+const foldMarks = (t: string) => t.normalize("NFD").replace(/\p{M}/gu, "");
+const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Pure: the name words to fence, from full names ("Marisol Vega") and first names.
+export function nameTokens(names: string[]): string[] {
+  const out = new Set<string>();
+  for (const n of names) for (const w of foldMarks(String(n ?? "")).split(/[\s,]+/)) if (/^\p{L}[\p{L}'’-]+$/u.test(w)) out.add(w);
+  return [...out];
+}
+// Pure: whether a text names any of the tokens (strict, see above).
+export function strictNameMatcher(tokens: string[]): (text: string) => boolean {
+  const res = tokens.map((t) => {
+    const lower = t.toLowerCase();
+    const everyday = WORD_NAMES.has(lower) || WORD_SURNAMES.has(lower);
+    const body = everyday ? `${esc(t[0].toUpperCase())}${[...t.slice(1)].map((c) => `[${esc(c.toLowerCase())}${esc(c.toUpperCase())}]`).join("")}` : esc(t);
+    return new RegExp(`(?<![\\p{L}\\p{N}_])${body}(?![\\p{L}\\p{N}_])`, everyday ? "u" : "iu");
+  });
+  return (text: string) => {
+    if (!res.length) return false;
+    const f = foldMarks(text);
+    return res.some((re) => re.test(f));
+  };
+}
+
+// Pure: one line with every sentence that names a linked member made a details-free history line, the same policy as safeMemory
+// (services/memberSafeMemories.ts: "Maya is building grid storage and left Tesla" is Maya's and goes; that Cue introduced them stays),
+// except that the snapshot holds no other member's name at all, so the history line is nameless too. A list item ("; ") is one
+// sentence. A lead-in label without a name ("Thread (open): ") is kept.
+export function fenceLine(text: string, hits: (t: string) => boolean): { text: string; n: number } {
+  if (!hits(text)) return { text, n: 0 };
   let n = 0;
-  // Bounded: a linked name that is itself "another" or "member" would match its own replacement; the fence then blocks the build.
-  for (let i = 0; i < 100; i++) {
-    const hit = span(out);
-    if (!hit) break;
-    const m = out.slice(hit.end).match(/^(['’]s\b)?(,\s*another member\b,?)?/i);
-    out = `${out.slice(0, hit.at)}another member${m?.[1] ? "'s" : ""}${out.slice(hit.end + (m?.[0].length ?? 0))}`;
+  const lead = text.match(/^([^:\n]{1,60}:\s)/)?.[1] ?? "";
+  const keepLead = lead && !hits(lead) ? lead : "";
+  const rest = text.slice(keepLead.length);
+  const seen = new Set<string>();
+  const one = (piece: string) => {
+    if (!hits(piece)) return piece;
     n++;
-  }
-  return { text: out, n };
+    const h = namelessHistoryLine(piece);
+    if (seen.has(h)) return "";
+    seen.add(h);
+    return h;
+  };
+  const out = rest
+    .split(/(?<=[.!?])\s+/)
+    // A history line memberKnowledge's strip already wrote ("Marisol, another member, came up here; ...") is one sentence, whole.
+    .map((sentence) => (sentence.includes("; ") && hits(sentence) && !/\banother member\b/i.test(sentence) ? sentence.split("; ").map(one).filter(Boolean).join("; ") : one(sentence)))
+    .filter(Boolean)
+    .join(" ");
+  return { text: `${keepLead}${out}`.trim(), n };
 }
 
 const DATE = (d: Date | string | null | undefined, zone: string | null): string | null => {
@@ -424,6 +482,7 @@ export function fitSection(id: SectionId, entries: Entry[], budget = SECTION_BUD
 export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built {
   const raw = entriesOf(s);
   let forgotten = 0, namesRedacted = 0;
+  const hits = strictNameMatcher(nameTokens(s.names));
   const sections = SECTION_IDS.map((id) => {
     const entries: Entry[] = [];
     for (const r of raw[id]) {
@@ -436,7 +495,7 @@ export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built
         forgotten++;
         continue;
       }
-      const red = redactNames(text, s.names);
+      const red = fenceLine(text, hits);
       namesRedacted += red.n;
       const { guard: _g, ...e } = r;
       entries.push({ ...e, text: red.text });
@@ -464,13 +523,13 @@ export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 export type FenceResult = { ok: true } | { ok: false; kind: "name" | "user_id"; hits: number };
 
-// Pure: the body's linked-name hits (the header's own first name aside: it's theirs, even when a linked member shares it) and the
+// Pure: the body's linked-name hits, every word of every linked name, strictly (the header's own first name aside: it's theirs, even when a linked member shares it) and the
 // user ids written in it other than their own.
 export function fenceScan(b: Pick<Built, "header" | "body">, names: string[], userId: string): { nameHits: number; ids: string[] } {
-  const find = nameFinder(names);
+  const hits = strictNameMatcher(nameTokens(names));
   const rest = b.body.slice(b.header.length);
   let nameHits = 0;
-  for (const line of rest.split("\n")) if (find(line)) nameHits++;
+  for (const line of rest.split("\n")) if (hits(line)) nameHits++;
   const ids = [...new Set((b.body.match(UUID) ?? []).map((x) => x.toLowerCase()))].filter((x) => x !== userId.toLowerCase());
   return { nameHits, ids };
 }
@@ -531,6 +590,24 @@ export function isFresh(r: { dirty: boolean; built_at: Date | string } | null | 
   return !!r && !r.dirty && now.getTime() - new Date(r.built_at).getTime() < STALE_AFTER_MS;
 }
 
+// A member whose builds keep failing doesn't take every upkeep slot: each failure doubles the wait before the upkeep tries them again
+// (15 minutes, 30, 1h... at most 24h), and it's logged with the count. A stored build resets it. Only a member with a stored row has
+// one (the upkeep only rebuilds those). Never throws.
+export const BACKOFF_BASE_MIN = 15;
+async function noteFailure(db: Db, d: SnapshotDeps, userId: string, state: string): Promise<void> {
+  try {
+    const r = (
+      await db.query(
+        `UPDATE member_snapshots SET fail_count = fail_count + 1,
+           next_attempt_at = NOW() + LEAST(make_interval(mins => ${BACKOFF_BASE_MIN}) * power(2, LEAST(fail_count, 10)), INTERVAL '24 hours')
+         WHERE user_id = $1 RETURNING fail_count, next_attempt_at`,
+        [userId],
+      )
+    ).rows[0];
+    await d.log({ layer: 4, decision: "snapshot.build_failed", userId, outcome: "skip", action: state, proposal: { failCount: r ? Number(r.fail_count) : null, nextAttemptAt: r?.next_attempt_at ?? null } });
+  } catch {}
+}
+
 export type StoreResult = { state: "stored" | "blocked" | "fresh" | "locked" | "failed" | "mismatch"; snapshot: StoredSnapshot | null; waitedMs: number; buildMs: number | null; consumed: number };
 
 // Build and store under the member's lock, in one transaction: the marks the build saw are deleted with the store, so a write that
@@ -580,6 +657,7 @@ export async function storeBuild(userId: string, o: { reason: string; force?: bo
       await client.query("ROLLBACK");
       open = false;
       await d.log({ layer: 4, decision: "snapshot.count_mismatch", userId, outcome: "skip", action: "kept_previous", proposal: { version, sections: built.sections.map((x) => ({ id: x.id, in: x.sourceCount, kept: x.entries.length, collapsed: x.collapsed.reduce((n, c) => n + c.count, 0) })) } });
+      await noteFailure(db, d, userId, "mismatch");
       return { state: "mismatch", snapshot: null, waitedMs, buildMs, consumed: 0 };
     }
     const blocked = fence.ok ? null : fence.kind;
@@ -590,7 +668,7 @@ export async function storeBuild(userId: string, o: { reason: string; force?: bo
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
          ON CONFLICT (user_id) DO UPDATE SET version = EXCLUDED.version, built_at = EXCLUDED.built_at, build_ms = EXCLUDED.build_ms, sections = EXCLUDED.sections,
            body = EXCLUDED.body, tokens = EXCLUDED.tokens, chars = EXCLUDED.chars, compactions = EXCLUDED.compactions, over_budget = EXCLUDED.over_budget,
-           blocked = EXCLUDED.blocked, updated_at = NOW()
+           blocked = EXCLUDED.blocked, fail_count = 0, next_attempt_at = NULL, updated_at = NOW()
          RETURNING user_id, version, built_at, body, sections, tokens, blocked`,
         [userId, version, builtAt, buildMs, JSON.stringify(sections), blocked ? "" : built.body, JSON.stringify(blocked ? {} : built.tokens), JSON.stringify(blocked ? {} : built.chars), JSON.stringify(blocked ? [] : built.compactions), blocked ? [] : built.overBudget, blocked],
       )
@@ -609,6 +687,7 @@ export async function storeBuild(userId: string, o: { reason: string; force?: bo
   } catch (err: any) {
     if (open) await client.query("ROLLBACK").catch(() => {});
     console.error("memberSnapshot: build failed (non-fatal; the marks stay):", err?.constructor?.name ?? "Error");
+    await noteFailure(db, d, userId, "failed");
     return { state: "failed", snapshot: null, waitedMs, buildMs: null, consumed: 0 };
   } finally {
     client.release();
@@ -651,14 +730,18 @@ export async function rebuildSnapshot(userId: string, reason = "learn", o: { db?
 
 // The upkeep pass (jobs/index.ts): every stored snapshot that is stale (a write since it was built) or older than 24h is rebuilt, a
 // bounded batch at a time, so a removal leaves the stored copy within a pass even while nothing reads it. A member without a stored
-// snapshot isn't built here (LEARN makes the first one). Marks for members with no stored snapshot are dropped after an hour (absence
-// already means "build first"), and so are marks of deleted accounts.
+// snapshot isn't built here (LEARN makes the first one). A member backing off after failed builds waits for their next attempt.
+// Marks: those of members with no stored snapshot are dropped after an hour (absence already means "build first", and deleted accounts
+// go this way); every mark is dropped after MARK_MAX_HOURS whoever it's for. That can't hide a change: a mark that old means the
+// stored snapshot (built before it, or the mark would be gone) is already past 24h, which rebuilds it on its own.
+export const MARK_MAX_HOURS = 48;
 export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partial<SnapshotDeps> } = {}): Promise<{ rebuilt: number; skipped: number; pruned: number }> {
   const db: Db = o.db ?? defaultDb();
   const due = (
     await db.query(
       `SELECT s.user_id FROM member_snapshots s
-       WHERE EXISTS (SELECT 1 FROM member_snapshot_dirty d WHERE d.user_id = s.user_id) OR s.built_at < NOW() - INTERVAL '24 hours'
+       WHERE (EXISTS (SELECT 1 FROM member_snapshot_dirty d WHERE d.user_id = s.user_id) OR s.built_at < NOW() - INTERVAL '24 hours')
+         AND (s.next_attempt_at IS NULL OR s.next_attempt_at <= NOW())
        ORDER BY s.built_at LIMIT $1`,
       [o.limit ?? 20],
     )
@@ -671,7 +754,10 @@ export async function snapshotUpkeep(o: { limit?: number; db?: Db; deps?: Partia
   }
   const pruned = (
     await db.query(
-      `DELETE FROM member_snapshot_dirty d WHERE d.dirty_at < NOW() - INTERVAL '1 hour' AND NOT EXISTS (SELECT 1 FROM member_snapshots s WHERE s.user_id = d.user_id) RETURNING d.id`,
+      `DELETE FROM member_snapshot_dirty d
+       WHERE d.dirty_at < NOW() - make_interval(hours => ${MARK_MAX_HOURS})
+          OR (d.dirty_at < NOW() - INTERVAL '1 hour' AND NOT EXISTS (SELECT 1 FROM member_snapshots s WHERE s.user_id = d.user_id))
+       RETURNING d.id`,
     )
   ).rows.length;
   return { rebuilt, skipped, pruned };
