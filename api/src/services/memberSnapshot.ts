@@ -110,11 +110,11 @@ export type ProfileRow = {
   style: string[];
   updatedAt: Date | null;
 };
-export type ThreadRow = { id: string; text: string; quote: string | null; status: string; openedAt: Date; dueDate: string | null; kind: string; feeling: string | null; touchedAt: Date };
+export type ThreadRow = { id: string; text: string; quote: string | null; status: string; openedAt: Date; dueDate: string | null; kind: string; tone: string | null; touchedAt: Date };
 export type CoGoalRow = { id: string; title: string; theirWords: string | null; status: string; at: Date; closedAt: Date | null };
-export type EmotionRow = { id: string; emotion: string; intensity: string; about: string | null; quote: string | null; source: string; at: Date };
+export type SignalRow = { id: string; felt: string; strength: string; about: string | null; quote: string | null; source: string; at: Date };
 export type ScheduledRow = { id: string; text: string; at: Date; status: string };
-export type LedgerRowIn = { id: string; relation: string; label: string; url: string | null; at: Date; source: string; meta: Record<string, any> };
+export type LedgerRowIn = { id: string; relation: string; said: string; url: string | null; at: Date; source: string; meta: Record<string, any> };
 export type SnapshotSources = {
   userId: string;
   zone: string | null;
@@ -123,7 +123,7 @@ export type SnapshotSources = {
   knowledge: MemberKnowledge;
   threads: ThreadRow[];
   coGoals: CoGoalRow[];
-  emotions: EmotionRow[];
+  emotions: SignalRow[];
   scheduled: ScheduledRow[];
   ledger: LedgerRowIn[];
   forgotten: ForgottenRow[];
@@ -177,18 +177,18 @@ export async function loadSources(userId: string, now: Date, rows: Rows = (sql, 
         : null,
     ),
     rows(
-      `SELECT id, text, opened_quote, status, opened_at, due_date, kind, feeling, last_touched_at FROM member_threads
+      `SELECT id, text, opened_quote, status, opened_at, due_date, kind, feeling AS tone, last_touched_at FROM member_threads
        WHERE user_id = $1 AND (status IN ('open', 'waiting') OR closed_at > $2::timestamptz - INTERVAL '90 days') ORDER BY last_touched_at DESC LIMIT 60`,
       [userId, now],
-    ).then((r) => r.map((x) => ({ id: String(x.id), text: String(x.text ?? ""), quote: x.opened_quote ?? null, status: String(x.status), openedAt: new Date(x.opened_at), dueDate: day(x.due_date), kind: String(x.kind ?? "thread"), feeling: x.feeling ?? null, touchedAt: new Date(x.last_touched_at) }))),
+    ).then((r) => r.map((x) => ({ id: String(x.id), text: String(x.text ?? ""), quote: x.opened_quote ?? null, status: String(x.status), openedAt: new Date(x.opened_at), dueDate: day(x.due_date), kind: String(x.kind ?? "thread"), tone: x.tone ?? null, touchedAt: new Date(x.last_touched_at) }))),
     rows(
       `SELECT id, title, their_words, status, offered_at, closed_at FROM co_goals WHERE user_id = $1 AND (closed_at IS NULL OR closed_at > $2::timestamptz - INTERVAL '90 days') ORDER BY offered_at DESC LIMIT 20`,
       [userId, now],
     ).then((r) => r.map((x) => ({ id: String(x.id), title: String(x.title ?? ""), theirWords: x.their_words ?? null, status: String(x.status), at: new Date(x.offered_at), closedAt: x.closed_at ? new Date(x.closed_at) : null }))),
     rows(
-      `SELECT id, emotion, intensity, about, quote, source, created_at FROM emotion_signals WHERE user_id = $1 AND created_at > $2::timestamptz - INTERVAL '60 days' ORDER BY created_at DESC LIMIT 40`,
+      `SELECT id, emotion AS felt, intensity AS strength, about, quote, source, created_at FROM emotion_signals WHERE user_id = $1 AND created_at > $2::timestamptz - INTERVAL '60 days' ORDER BY created_at DESC LIMIT 40`,
       [userId, now],
-    ).then((r) => r.map((x) => ({ id: String(x.id), emotion: String(x.emotion), intensity: String(x.intensity), about: x.about ?? null, quote: x.quote ?? null, source: String(x.source), at: new Date(x.created_at) }))),
+    ).then((r) => r.map((x) => ({ id: String(x.id), felt: String(x.felt), strength: String(x.strength), about: x.about ?? null, quote: x.quote ?? null, source: String(x.source), at: new Date(x.created_at) }))),
     rows(`SELECT id, requested_text, scheduled_for, status FROM scheduled_calls WHERE user_id = $1 AND status IN ('pending', 'processing') ORDER BY scheduled_for LIMIT 10`, [userId]).then((r) =>
       r.map((x) => ({ id: String(x.id), text: String(x.requested_text ?? ""), at: new Date(x.scheduled_for), status: String(x.status) })),
     ),
@@ -196,7 +196,7 @@ export async function loadSources(userId: string, now: Date, rows: Rows = (sql, 
       `SELECT id, relation, object_label, url, happened_at, source, meta FROM co_facts
        WHERE owner_user_id = $1 AND subject = 'co' AND retired_at IS NULL AND meta ? 'ledger' ORDER BY happened_at DESC, id DESC LIMIT 4000`,
       [userId],
-    ).then((r) => r.map((x) => ({ id: String(x.id), relation: String(x.relation), label: String(x.object_label ?? ""), url: x.url ?? null, at: new Date(x.happened_at), source: String(x.source ?? ""), meta: x.meta ?? {} }))),
+    ).then((r) => r.map((x) => ({ id: String(x.id), relation: String(x.relation), said: String(x.object_label ?? ""), url: x.url ?? null, at: new Date(x.happened_at), source: String(x.source ?? ""), meta: x.meta ?? {} }))),
   ]);
   return {
     userId,
@@ -292,7 +292,7 @@ function entriesOf(s: SnapshotSources): Record<SectionId, Raw[]> {
       src: `member_threads:${t.id}`,
       date: DATE(open ? t.openedAt : t.touchedAt, z),
       prov: "said",
-      text: `${t.kind === "commitment" ? "Commitment" : "Thread"} (${t.status}${t.dueDate ? `, by ${t.dueDate}` : ""}${t.feeling ? `, feeling ${t.feeling}` : ""}): ${t.text}${t.quote ? ` (their words: ${q(t.quote)})` : ""}`,
+      text: `${t.kind === "commitment" ? "Commitment" : "Thread"} (${t.status}${t.dueDate ? `, by ${t.dueDate}` : ""}${t.tone ? `, feeling ${t.tone}` : ""}): ${t.text}${t.quote ? ` (their words: ${q(t.quote)})` : ""}`,
       open,
       kind: "thread",
       guard: "thread",
@@ -310,7 +310,7 @@ function entriesOf(s: SnapshotSources): Record<SectionId, Raw[]> {
 
   // 3. Feelings and how they text
   for (const e of s.emotions)
-    add("feelings", { id: `E${e.id}`, src: `emotion_signals:${e.id}`, date: DATE(e.at, z), prov: "inferred", text: `Felt ${e.emotion} (${e.intensity}${e.about ? `, about ${e.about}` : ""}, read from a ${e.source})${e.quote ? `: ${q(e.quote)}` : ""}`, open: false, kind: "feeling", guard: "words" });
+    add("feelings", { id: `E${e.id}`, src: `emotion_signals:${e.id}`, date: DATE(e.at, z), prov: "inferred", text: `Felt ${e.felt} (${e.strength}${e.about ? `, about ${e.about}` : ""}, read from a ${e.source})${e.quote ? `: ${q(e.quote)}` : ""}`, open: false, kind: "feeling", guard: "words" });
   for (const l of k.lessons) add("feelings", { id: `N${hash8(l.text)}`, src: "co_memories:co_lesson", date: DATE(l.verifiedAt, z), prov: "inferred", text: `Lesson from their pushback: ${l.text}`, open: false, kind: "lesson", guard: "words" });
   p?.style.forEach((x, i) => add("feelings", { id: `S${i + 1}`, src: `co_profiles:texting_style:${i}`, date: pDate, prov: "inferred", text: `How they text: ${x}`, open: false, kind: "style", guard: "words" }));
 
@@ -335,13 +335,13 @@ function entriesOf(s: SnapshotSources): Record<SectionId, Raw[]> {
   for (const r of s.ledger) {
     const m = r.meta ?? {};
     const notes = [m.receipt && m.receipt !== "done" ? `receipt ${m.receipt}` : null, m.offer_state ? `offer ${m.offer_state}` : null, m.outcome ? `outcome ${m.outcome}` : null, m.reaction ? `reaction ${m.reaction}` : null, m.version ? `v${m.version}` : null].filter(Boolean);
-    const label = r.relation === "texted" ? q(clip(r.label, LEDGER_TEXT_MAX)) : clip(one(r.label), LEDGER_TEXT_MAX);
+    const words = r.relation === "texted" ? q(clip(r.said, LEDGER_TEXT_MAX)) : clip(one(r.said), LEDGER_TEXT_MAX);
     add("ledger", {
       id: `L${r.id}`,
       src: `co_facts:${r.id}`,
       date: DATE(r.at, z),
       prov: "did",
-      text: `${r.relation}${m.kind && m.kind !== "text" ? ` ${m.kind}` : ""}: ${label}${r.url ? ` <${r.url}>` : ""}${notes.length ? ` (${notes.join(", ")})` : ""}`,
+      text: `${r.relation}${m.kind && m.kind !== "text" ? ` ${m.kind}` : ""}: ${words}${r.url ? ` <${r.url}>` : ""}${notes.length ? ` (${notes.join(", ")})` : ""}`,
       // A promise is open until kept (no promised rows yet: the ledger's promise kind comes with the cutover).
       open: r.relation === "promised" && !m.kept,
       kind: r.relation,
