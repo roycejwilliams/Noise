@@ -51,7 +51,7 @@ const knowledge: any = {
   corrections: [{ field: "city", was: "Berkeley", now: "Oakland", verifiedAt: at }],
   preferences: [{ text: "small rooms over big mixers", source: "stated", verifiedAt: at }],
   claims: [
-    { text: "Had coffee with Marisol about her gallery", provenance: "user_said", kind: "event", quote: "coffee with Marisol was great", expiresOn: null, saidOn: "2026-10-19", verifiedAt: at },
+    { text: "Had coffee with Marisol Vega about her gallery", provenance: "user_said", kind: "event", quote: "coffee with Marisol Vega was great", expiresOn: null, saidOn: "2026-10-19", verifiedAt: at },
     { text: "Learning salsa for my birthday", provenance: "user_said", kind: "plan", quote: null, expiresOn: null, saidOn: "2026-10-18", verifiedAt: at },
     { text: "Wants to live in Berkeley near the lab", provenance: "user_said", kind: "plan", quote: null, expiresOn: null, saidOn: "2026-10-17", verifiedAt: at },
     { text: "Probably burned out at work", provenance: "co_inferred", kind: "mood", quote: null, expiresOn: null, saidOn: "2026-10-18", verifiedAt: at },
@@ -77,7 +77,7 @@ const src: any = {
     { field: "claim", old: "Learning salsa for my birthday", now: null, ref: "claim:k1", removed: true },
     { field: "city", old: "Berkeley", now: "Oakland", ref: "profile:city", removed: false },
   ],
-  names: ["Marisol"],
+  names: ["Marisol Vega"],
   capabilities: ["Cue can search for events near them.", "Cue never shares what they've told it with other members."],
 };
 const built = S.buildSnapshot(src, { version: 7 });
@@ -86,7 +86,8 @@ const lines = body.split("\n").filter((l) => l.startsWith("- ["));
 check("every line carries its id, provenance and date (capabilities: no date)", lines.every((l) => /^- \[[A-Z][A-Za-z0-9]+ (said|seen|did|inferred)( \d{4}-\d{2}-\d{2})?\] \S/.test(l)), lines.filter((l) => !/^- \[[A-Z][A-Za-z0-9]+ (said|seen|did|inferred)( \d{4}-\d{2}-\d{2})?\] /.test(l)));
 check("ids name their source row: a ledger row is L + its co_facts id; a thread, H + its id", /\[L4711 did 2026-10-20\] texted: /.test(body) && /\[H22222222 said 2026-10-20\] Thread \(open, by 2027-03-14, feeling excited\): Training for the Oakland half \(their words: "doing the half in March"\)/.test(body) && /\[Q99999999 did 2026-10-24\]/.test(body) && /\[Wtask12 did/.test(body) && /\[O31 said/.test(body));
 check("the header has the version and zone, and no clock", built.header === "# Cue's snapshot of Avery · v7 · zone America/Los_Angeles" && !/\d{1,2}:\d{2}/.test(built.header));
-check("a linked member's name is out of every line (their own quote and Cue's ledger)", !/marisol/i.test(body) && /Had coffee with another member about her gallery/.test(body) && /introduced you to another member,/.test(body) && built.namesRedacted >= 3, lines.filter((l) => /coffee|introduced/.test(l)));
+check("a linked member's full name is out of every line (their own quote and Cue's ledger): neither first nor last name is left", !/marisol|vega/i.test(body) && built.namesRedacted >= 2, lines.filter((l) => /another member/i.test(l)));
+check("a sentence naming them becomes a details-free history line; Cue's intro stays as nameless history", /\] event: Another member came up here; their details aren't kept\./.test(body) && /texted: Cue introduced them to another member\./.test(body) && !/gallery/.test(body), lines.filter((l) => /another member/i.test(l)));
 check("what they removed is out (claim and thread), counted", !/salsa/i.test(body) && built.forgotten === 2, built.forgotten);
 check("what they corrected carries the correction inline; the correction itself stays as said", /live in Berkeley near the lab \[since corrected: Oakland\]/.test(body) && /Corrected city: was "Berkeley", now "Oakland"/.test(body), lines.filter((l) => /Berkeley/.test(l)));
 check("Cue's read is marked inferred, never said", /\[K[0-9a-f]{8} inferred 2026-10-18\] mood: Probably burned out/.test(body) && /\[K[0-9a-f]{8} said 2026-10-19\] event:/.test(body));
@@ -98,18 +99,23 @@ check("the sections render in order 1 to 6", S.SECTION_IDS.map((id) => body.inde
 check("the build is deterministic", S.buildSnapshot(src, { version: 7 }).body === body);
 
 // ---- names out
-const r = (t: string, n = ["Sarah"]) => S.redactNames(t, n).text;
-check("names out: a strip line's \", another member\" isn't doubled", r("Cue introduced them to Sarah, another member.") === "Cue introduced them to another member." && r("Sarah, another member, came up here; their details aren't kept.") === "another member came up here; their details aren't kept.");
-check("names out: possessive, any case, accents folded", r("Sarah's gallery opens Friday") === "another member's gallery opens Friday" && r("met SARAH and sarah again") === "met another member and another member again" && r("coffee with Zoë", ["Zoe"]) === "coffee with another member");
-check("names out: a name inside another word is left (Sarahville)", r("drove to Sarahville") === "drove to Sarahville");
+const hits = (n: string[]) => S.strictNameMatcher(S.nameTokens(n));
+const f = (t: string, n = ["Marisol Vega"]) => S.fenceLine(t, hits(n)).text;
+check("a full-name line: the whole sentence goes, never \"another member Vega\"", f("Had coffee with Marisol Vega about her gallery.") === "Another member came up here; their details aren't kept." && f("Marisol, another member, came up here; their details aren't kept for this conversation.") === "Another member came up here; their details aren't kept.");
+check("a details line by the last name alone: details-free, the other sentences kept", f("Vega is building grid storage and left Tesla. They want a cofounder.") === "Another member came up here; their details aren't kept. They want a cofounder.");
+check("history kinds follow safeMemory's: an intro, a suggestion", f("I introduced you to Marisol at the dinner.") === "Cue introduced them to another member." && f("Suggested Marisol as worth meeting.") === "Cue suggested another member as someone to meet.");
+check("a list item naming them goes on its own; a lead-in label without a name stays", f("Wants: a cofounder; coffee with marisol; jazz") === "Wants: a cofounder; Another member came up here; their details aren't kept.; jazz" || f("Wants: a cofounder; coffee with marisol; jazz").startsWith("Wants: a cofounder; Another member came up here"), f("Wants: a cofounder; coffee with marisol; jazz"));
+check("strict match: any case, accents folded, whole words; an everyday-word name only with its capital", hits(["Zoë Young"])("coffee with zoe") && hits(["Zoë Young"])("met Young") && !hits(["Zoë Young"])("a young crowd") && hits(["May Lin"])("see May") && !hits(["May Lin"])("you may like it") && !hits(["Marisol"])("Marisolville"));
 
 // ---- the fence
 const lookupNone = async () => [] as string[];
 const planted = { header: built.header, body: `${built.body}\n- [L9 did 2026-10-20] texted: "say hi to Marisol"` };
-check("the fence blocks a planted linked name", (await S.fenceCheck(planted, ["Marisol"], A, lookupNone)).ok === false && S.fenceScan(planted, ["Marisol"], A).nameHits === 1);
-const res = await S.fenceCheck(planted, ["Marisol"], A, lookupNone);
+check("the fence blocks a planted linked name", (await S.fenceCheck(planted, ["Marisol Vega"], A, lookupNone)).ok === false && S.fenceScan(planted, ["Marisol Vega"], A).nameHits === 1);
+const lastOnly = { header: built.header, body: `${built.body}\n- [L9 did 2026-10-20] texted: "another member Vega"` };
+check("the fence blocks a planted last name alone (checked on every word of the full name, apart from how lines were made)", S.fenceScan(lastOnly, ["Marisol Vega"], A).nameHits === 1);
+const res = await S.fenceCheck(planted, ["Marisol Vega"], A, lookupNone);
 check("a name block says what kind and how many, never the name", !res.ok && res.kind === "name" && res.hits === 1 && !JSON.stringify(res).includes("Marisol"));
-check("the clean build passes the fence", (await S.fenceCheck(built, ["Marisol"], A, lookupNone)).ok === true);
+check("the clean build passes the fence", (await S.fenceCheck(built, ["Marisol Vega"], A, lookupNone)).ok === true);
 const own = { header: "# Cue's snapshot of Sarah · v1 · zone x", body: "# Cue's snapshot of Sarah · v1 · zone x\n\n## 1. In their own words\n- [P1 said 2026-10-20] Lives in: Oakland" };
 check("the header's own first name isn't a hit, even when a linked member shares it", (await S.fenceCheck(own, ["Sarah"], A, lookupNone)).ok === true);
 const withId = { header: built.header, body: `${built.body}\n- [L10 did 2026-10-20] did: matched with ${B}` };

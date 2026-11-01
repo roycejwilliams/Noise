@@ -41,7 +41,7 @@ if ("skip" in started) {
   const q = (sql: string, p?: unknown[]) => db.query(sql, p as any[]);
   try {
     const A = "00000000-0000-4000-8000-0000000000a1", B = "00000000-0000-4000-8000-0000000000b2", C = "00000000-0000-4000-8000-0000000000c3";
-    await q(`CREATE TABLE users (id UUID PRIMARY KEY, first_name TEXT, mo_approver BOOLEAN NOT NULL DEFAULT false)`);
+    await q(`CREATE TABLE users (id UUID PRIMARY KEY, first_name TEXT, last_name TEXT, mo_approver BOOLEAN NOT NULL DEFAULT false)`);
     await q(`CREATE TABLE co_profiles (user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, city TEXT, goals JSONB, intent JSONB, life_chapters JSONB, long_term_direction TEXT,
       activity_preferences JSONB, blockers JSONB, availability_pattern TEXT, texting_style JSONB, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
     await q(`CREATE TABLE co_memories (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID REFERENCES users(id) ON DELETE CASCADE, memory_type TEXT, content TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
@@ -57,9 +57,23 @@ if ("skip" in started) {
     check("every source table is made from the migrations' own DDL", made.length === Schema.SNAPSHOT_SOURCES.length - 2, { made });
     const m = await Schema.snapshotMigrations(db);
     check("the migration makes both tables and a trigger on every source table", m.tables && m.triggers.length === Schema.SNAPSHOT_SOURCES.length && !m.missing.length && !m.failed.length, m);
+    check("the first boot ran the DDL (2 tables, the index, and a function and 3 triggers per source table)", m.ran.length === 3 + Schema.SNAPSHOT_SOURCES.length * 4, m.ran.length);
     const again = await Schema.snapshotMigrations(db);
-    check("the migration runs again cleanly (boot every deploy)", again.tables && again.triggers.length === Schema.SNAPSHOT_SOURCES.length && !again.failed.length, again);
-    await q(`INSERT INTO users (id, first_name) VALUES ($1, 'Avery'), ($2, 'Marisol'), ($3, 'Theo')`, [A, B, C]);
+    check("a second boot runs no DDL at all (everything is already in place, so no table lock is taken)", again.tables && again.triggers.length === Schema.SNAPSHOT_SOURCES.length && again.ran.length === 0 && !again.failed.length && !again.deferred.length, again);
+    // A trigger missing while a writer holds its table: the boot waits at most the lock timeout, leaves it for the next boot, goes on.
+    await q(`DROP TRIGGER co_goals_snapshot_upd ON co_goals`);
+    const lockHolder = await db.connect();
+    await lockHolder.query("BEGIN");
+    await lockHolder.query("LOCK TABLE co_goals IN ROW EXCLUSIVE MODE");
+    const t0 = Date.now();
+    const blockedBoot = await Schema.snapshotMigrations(db);
+    const bootMs = Date.now() - t0;
+    await lockHolder.query("ROLLBACK");
+    lockHolder.release();
+    check("a DDL statement stuck behind a writer's lock gives up after the lock timeout; the boot goes on and logs it", blockedBoot.tables && blockedBoot.deferred.includes("co_goals_snapshot_upd") && !blockedBoot.failed.length && bootMs < Schema.DDL_LOCK_TIMEOUT_MS + 3000, { deferred: blockedBoot.deferred, bootMs });
+    const nextBoot = await Schema.snapshotMigrations(db);
+    check("the next boot puts it back, and only it", nextBoot.ran.join() === "co_goals_snapshot_upd" && nextBoot.triggers.length === Schema.SNAPSHOT_SOURCES.length, nextBoot.ran);
+    await q(`INSERT INTO users (id, first_name, last_name) VALUES ($1, 'Avery', 'Stone'), ($2, 'Marisol', 'Vega'), ($3, 'Theo', 'Lind')`, [A, B, C]);
 
     // ---- every source write marks the member stale, in the writer's own transaction
     const marks = async (who = A, source?: string) => Number((await q(`SELECT count(*)::int AS n FROM member_snapshot_dirty WHERE user_id = $1 ${source ? "AND source = $2" : ""}`, source ? [who, source] : [who])).rows[0].n);
@@ -173,10 +187,14 @@ if ("skip" in started) {
     // ---- the fence
     // Marisol (B) is linked to Avery: the intro email went to both (memberSafeMemories MEMBER_NAMES_SQL).
     await q(`UPDATE co_pairs SET intro_sent_at = NOW() WHERE a_id = $1 AND b_id = $2`, [A, B]);
-    await q(`INSERT INTO member_claims (user_id, text, provenance, kind, quote, said_on, confirmed_on) VALUES ($1, 'Had coffee with Marisol about her gallery', 'user_said', 'event', 'coffee with Marisol was great', CURRENT_DATE, CURRENT_DATE)`, [A]);
+    await q(`INSERT INTO member_claims (user_id, text, provenance, kind, quote, said_on, confirmed_on) VALUES ($1, 'Had coffee with Marisol Vega about her gallery', 'user_said', 'event', 'coffee with Marisol Vega was great', CURRENT_DATE, CURRENT_DATE)`, [A]);
+    await q(`INSERT INTO member_threads (user_id, text, opened_quote, opened_at) VALUES ($1, 'Vega is building grid storage and left Tesla', 'vega left tesla to build grid storage', NOW())`, [A]);
     await q(`INSERT INTO co_facts (owner_user_id, subject, relation, object_label, object_key, visibility, source, meta) VALUES ($1, 'co', 'texted', 'I introduced you to Marisol, she runs a gallery', 'L|m1', 'owner', 'outbound:h1', '{"ledger": 1, "kind": "text"}')`, [A]);
     const f1 = await S.readSnapshot(A, { db });
-    check("a linked member's name is out of every line, their own words and Cue's ledger included", f1.state === "rebuilt" && !!f1.snapshot && !/marisol/i.test(f1.snapshot.body) && /coffee with another member/.test(f1.snapshot.body) && /introduced you to another member/.test(f1.snapshot.body), f1.snapshot?.body.split("\n").filter((l) => /coffee|introduced/.test(l)));
+    const f1body = f1.snapshot?.body ?? "";
+    check("a full name is out whole: neither the first nor the last name is left (never \"another member Vega\")", f1.state === "rebuilt" && !!f1.snapshot && !/marisol|vega/i.test(f1body), f1body.split("\n").filter((l) => /marisol|vega|another member/i.test(l)));
+    check("a line with another member's details becomes a details-free line (safeMemory's policy), not the same sentence without the name", !/grid storage|tesla|gallery/i.test(f1body.split("## 5.")[0]) && /Another member came up here; their details aren't kept\./.test(f1body), f1body.split("\n").filter((l) => /another member/i.test(l)));
+    check("Cue's own intro stays as history, nameless", /Cue introduced them to another member\./.test(f1body) && !/runs a gallery/.test(f1body));
     await q(`INSERT INTO co_facts (owner_user_id, subject, relation, object_label, object_key, visibility, source, meta) VALUES ($1, 'co', 'did', $2, 'L|m2', 'owner', 'tool.x', '{"ledger": 1, "kind": "tool"}')`, [A, `matched with ${B}`]);
     const f2 = await S.readSnapshot(A, { db });
     const stored = (await q(`SELECT version, body, blocked, sections FROM member_snapshots WHERE user_id = $1`, [A])).rows[0];
@@ -227,11 +245,45 @@ if ("skip" in started) {
     const comp = await decisions("snapshot.compacted");
     check("the collapse is logged: section, count, id range, tokens before and after", comp.length >= 1 && comp[comp.length - 1].proposal.sections.some((c: any) => c.section === "ledger" && c.count === collapsedN && c.tokensBefore > c.tokensAfter && c.idRange?.length === 2), comp[comp.length - 1]?.proposal);
 
-    // ---- upkeep, deletion
+    // ---- upkeep, backoff, marks
     await q(`UPDATE member_snapshots SET built_at = NOW() - INTERVAL '25 hours' WHERE user_id = $1`, [A]);
     await q(`INSERT INTO member_snapshot_dirty (user_id, source, dirty_at) VALUES ($1, 'test', NOW() - INTERVAL '2 hours')`, [C]);
     const up = await S.snapshotUpkeep({ db });
     check("upkeep rebuilds a stored snapshot past 24h, and prunes marks of members with none stored after an hour", up.rebuilt === 1 && up.pruned === 1 && (await marks(C)) === 0, up);
+    // C gets a stored snapshot, then its builds start failing.
+    await S.rebuildSnapshot(C, "learn", { db });
+    await q(`INSERT INTO co_goals (user_id, title, their_words) VALUES ($1, 'x', 'y')`, [C]);
+    const fail1 = await S.storeBuild(C, { reason: "upkeep", db, deps: failing });
+    const st1 = (await q(`SELECT fail_count, EXTRACT(EPOCH FROM next_attempt_at - NOW())::int AS wait FROM member_snapshots WHERE user_id = $1`, [C])).rows[0];
+    const fail2 = await S.storeBuild(C, { reason: "upkeep", db, deps: failing });
+    const st2 = (await q(`SELECT fail_count, EXTRACT(EPOCH FROM next_attempt_at - NOW())::int AS wait FROM member_snapshots WHERE user_id = $1`, [C])).rows[0];
+    check("a failing member backs off: 15 minutes, then 30 (each failure doubles it)", fail1.state === "failed" && fail2.state === "failed" && st1.fail_count === 1 && Math.abs(st1.wait - 900) < 30 && st2.fail_count === 2 && Math.abs(st2.wait - 1800) < 30, { st1, st2 });
+    check("each failure is logged with its count", (await decisions("snapshot.build_failed", C)).map((r) => r.proposal.failCount).join() === "1,2");
+    const up2 = await S.snapshotUpkeep({ db, deps: failing });
+    check("the upkeep skips a member until their next attempt (no slot taken)", up2.rebuilt === 0 && up2.skipped === 0 && (await decisions("snapshot.build_failed", C)).length === 2, up2);
+    await q(`UPDATE member_snapshot_dirty SET dirty_at = NOW() - INTERVAL '49 hours' WHERE user_id = $1`, [C]);
+    const up3 = await S.snapshotUpkeep({ db });
+    check("every mark older than 48h is dropped, whoever it's for (a snapshot that old is past 24h anyway)", up3.pruned >= 1 && (await marks(C)) === 0, up3);
+    await q(`UPDATE member_snapshots SET next_attempt_at = NULL WHERE user_id = $1`, [C]);
+    await S.rebuildSnapshot(C, "learn", { db });
+    check("a stored build resets the backoff", (await q(`SELECT fail_count, next_attempt_at FROM member_snapshots WHERE user_id = $1`, [C])).rows[0].fail_count === 0);
+
+    // ---- the trigger never fails the member's write
+    const notices: string[] = [];
+    const w = await db.connect();
+    w.on("notice", (n: any) => notices.push(String(n.message)));
+    await q(`ALTER TABLE member_snapshot_dirty RENAME TO member_snapshot_dirty_away`);
+    let wrote = false;
+    try {
+      await w.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'co_lesson', 'keep it short')`, [C]);
+      wrote = Number((await w.query(`SELECT count(*)::int AS n FROM co_memories WHERE user_id = $1 AND content = 'keep it short'`, [C])).rows[0].n) === 1;
+    } catch (e: any) {
+      notices.push(`ERROR ${e.message}`);
+    }
+    await q(`ALTER TABLE member_snapshot_dirty_away RENAME TO member_snapshot_dirty`);
+    w.release();
+    check("with the marks table gone, the member's write still lands, with only a warning", wrote && notices.some((n) => /member snapshot mark on co_memories failed; the write goes on/.test(n)) && !notices.some((n) => n.startsWith("ERROR")), notices);
+
     await q(`DELETE FROM users WHERE id = $1`, [A]);
     check("deleting the account deletes the snapshot (cascade) and never fails on the marks the cascade leaves", Number((await q(`SELECT count(*)::int AS n FROM member_snapshots WHERE user_id = $1`, [A])).rows[0].n) === 0);
 

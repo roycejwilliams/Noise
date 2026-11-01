@@ -36,7 +36,7 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // one of these anywhere else ("saw rose at the opening") is kept, one in a person-like place that isn't the person is stripped
 // ("a cake with rose petals"), and so is a capitalized one ("Rose gold", "in May"). Every other name is matched in any case
 // wherever it stands, so a place or thing that shares it is stripped too ("Jordan River trip" with a member named Jordan): safety over context, since "Jordan Rivers" is the person.
-const WORD_NAMES = new Set(
+export const WORD_NAMES = new Set(
   "will may june april august rose grace hope faith joy mark bill pat art frank rich drew grant chase hunter dawn summer autumn sky ray max miles lane dean reed brook ivy iris lily daisy ruby amber jade pearl olive hazel holly penny robin sunny sandy rusty crystal heather violet rocky cliff gene jack ash eve sage river rain storm wren star melody harmony destiny bob sue rob don carol bud buck dot kit nick peg"
     .split(" "),
 );
@@ -107,9 +107,23 @@ export function nameSpanFinder(linkedNames: string[]): (s: string) => { at: numb
 
 // Pure: what one history sentence about a member says, from the sentence that named them.
 export function historyLine(sentence: string, name: string): string {
-  if (/\bintro(duc\w*)?\b|\bconnect(ed|ing)?\b/i.test(sentence)) return `Cue introduced them to ${name}, another member.`;
-  if (/\bmatch\w*|\bsuggest\w*|\bnudg\w*|\bworth meeting\b|\bpoint\w* (them|you) (to|toward)/i.test(sentence)) return `Cue suggested ${name}, another member, as someone to meet.`;
+  const kind = historyKind(sentence);
+  if (kind === "intro") return `Cue introduced them to ${name}, another member.`;
+  if (kind === "suggested") return `Cue suggested ${name}, another member, as someone to meet.`;
   return `${name}, another member, came up here; their details aren't kept for this conversation.`;
+}
+// Pure: which history a sentence about another member is (the one classification historyLine and namelessHistoryLine share).
+export function historyKind(sentence: string): "intro" | "suggested" | "came_up" {
+  if (/\bintro(duc\w*)?\b|\bconnect(ed|ing)?\b/i.test(sentence)) return "intro";
+  if (/\bmatch\w*|\bsuggest\w*|\bnudg\w*|\bworth meeting\b|\bpoint\w* (them|you) (to|toward)/i.test(sentence)) return "suggested";
+  return "came_up";
+}
+// Pure: the same history line without the name, for a store that holds no other member's name at all (services/memberSnapshot.ts).
+export function namelessHistoryLine(sentence: string): string {
+  const kind = historyKind(sentence);
+  if (kind === "intro") return "Cue introduced them to another member.";
+  if (kind === "suggested") return "Cue suggested another member as someone to meet.";
+  return "Another member came up here; their details aren't kept.";
 }
 
 // Pure: one memory made safe, or null when nothing safe is left in it.
