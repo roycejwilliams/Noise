@@ -982,6 +982,12 @@ export function nothingRunsAt(rf: Pick<ReplyFacts, "facts">): boolean {
 // runs (item 3, live check: the narration rule cut it for "on my end", leaving only the offer). Never a claim that work is running.
 // Work started this turn (a task or research) means something is running now: neither the allowance nor the line applies.
 const startedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kind === "did_this_turn" && STARTED_WORK.test(f.text));
+// A search Cue ran in this turn, from the receipt its own tool wrote (agent/loopTools.ts: webSearch, searchEvents). It backs saying
+// what Cue just did ("I looked just now and found nothing that works"), never that a search is still running.
+export const SEARCHED_THIS_TURN = /^(?:Searched the web just now \(|Looked up events for "[^"]*"[^:]* just now:)/;
+const searchedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kind === "did_this_turn" && SEARCHED_THIS_TURN.test(f.text));
+// Work said as still going on, in Cue's own draft: only running work backs that.
+const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to)\b|\b(?:I'?m|I am|am)\s+\w+ing\b|\bI['’]ll\b/i;
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
   return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
 }
@@ -993,7 +999,8 @@ export const NOTHING_RUNNING_LINE = "Nothing's running on that right now. Want m
 // whatever its wording (offersAlready): the old word list missed "Want me to turn it back on?" and the offer went out twice.
 export async function withNothingRunningLine(final: string, failed: GateCheck[], rf?: Pick<ReplyFacts, "facts">, offers: (text: string) => Promise<boolean> = offersAlready): Promise<string> {
   if (!failed.some((c) => c.name === "claim_work_status")) return final;
-  if (!rf || !nothingRunsAt(rf) || startedThisTurn(rf)) return final;
+  // Cue searched in this turn: "nothing's running" would deny it (the receipt is what Cue did, the line would contradict it).
+  if (!rf || !nothingRunsAt(rf) || startedThisTurn(rf) || searchedThisTurn(rf)) return final;
   if (/\bnothing(?:'s| is)\s+(?:actively\s+)?(?:running|being worked|in motion)\b/i.test(final)) return final;
   const [honest] = NOTHING_RUNNING_LINE.split(". ");
   // What's left already offers or asks something: the honest part goes first, and no second offer.
@@ -1653,7 +1660,9 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       // Their world line (services/memberWorld.ts) lists the same running items: it backs work said as running only when the claim names
       // one of them (two or more shared meaning words), and "nothing is running" when it lists none.
       const fromWorld = !!cited && cited.kind === "known" && WORLD_FACT.test(cited.text) && !!rf.world && (rf.world.running.length > 0 ? !!namesRunningItem(rf.world, c.text) : SAYS_NOT_RUNNING.test(c.text));
-      if (!cited || (!workBacksPromise(cited) && !fromState && !fromSearch && !fromWorld)) {
+      // A search done this turn, said as done: its receipt backs it (it says what Cue did, not that anything is running).
+      const fromReceipt = !!cited && cited.kind === "did_this_turn" && SEARCHED_THIS_TURN.test(cited.text) && !SAYS_ONGOING.test(c.text);
+      if (!cited || (!workBacksPromise(cited) && !fromState && !fromSearch && !fromWorld && !fromReceipt)) {
         pass = false;
         reason += nothingRunsAt(rf) ? ` (${NOTHING_RUNNING_REASON})` : " (that work isn't among what the running-work line lists for them)";
       }
@@ -2246,7 +2255,7 @@ async function bindThisReply(draft: string, rf: ReplyFacts, src: GroundingSource
 // over something only they own (case 30, 2026-10-14). #190 is unchanged for Co's own work.
 export function nothingRunningLineApplies(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts }): boolean {
   const workClaims = o.failed.filter((c) => c.name === "claim_work_status");
-  return workClaims.length > 0 && nothingRunsAt(o.rf) && !startedThisTurn(o.rf) && !workClaimsNameThread(o.rf.world, workClaims.map((c) => claimWords(c) ?? ""));
+  return workClaims.length > 0 && nothingRunsAt(o.rf) && !startedThisTurn(o.rf) && !searchedThisTurn(o.rf) && !workClaimsNameThread(o.rf.world, workClaims.map((c) => claimWords(c) ?? ""));
 }
 // Pure: a turn no redraft of these two kinds runs on (dead air, a cut thread report): a safety turn, a discreet turn, an invite cut.
 export function redraftHeldBack(rf: ReplyFacts, failed: GateCheck[]): boolean {
