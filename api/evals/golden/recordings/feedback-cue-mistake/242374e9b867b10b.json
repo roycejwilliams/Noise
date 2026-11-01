@@ -1,0 +1,102 @@
+{
+  "hash": "242374e9b867b10b",
+  "case": "feedback-cue-mistake",
+  "recorded_at": "2026-11-01T18:41:46.010Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it. Cue's text: \"\"...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it.\n\nCue's text:\n\"\"\"That one's on me, the link I sent doesn't work. I've passed it along. Want me to find another wheel class in the Mission?\"\"\"\n\nDoes the text own the bad link plainly in a few words AND say what Cue can do now (it may offer to find the right page), WITHOUT inventing a new link or details, blaming their browser, or explaining how Cue works? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"That one's on me, the link I sent doesn't work\\\" owns it plainly, then offers \\\"Want me to find another wheel class in the Mission?\\\" with no invented link or blame.\"}",
+      "usage": {
+        "input_tokens": 282,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 257,
+        "output_tokens_details": {
+          "thinking_tokens": 180
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgchViWkeH2GZRWwvN7ZK",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErMHCsQCCBMYAipAWJ+sgzdMlXe5YoOpZ0fqjigwdNl3DL3EVvnjtAV++tX52KvEtxFm/V4Za0ub13YTfAuHGQwDOcijfcc6JtVXcjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB6Y+e1wbCAToIBBAAGgwC2ooDTzcF5LUEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBnunE4P7t/rEVvT73BbcBGmgAyAgMF2KFoBKKJXrNKdSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyvlfZ6cgHouJhHNG0aDMuqUhxuaK4mqVUCPiIw16+6haPobSeqVgAwvdY2StVfZ7JM8nffvhBvj+m77wi+slJC2Popcj6QN4lQxTjyKpsE2lqvbx9ZML3IbDposUlhOGbUqJvOgEB9tKJ8fOG8nZA1nOJTkV2eMEyVNO2TS7uks5HjsZHHe0kl2JEwAkqpMMTLgTapKmF6mRbTqkJy1J0/kKMnp289E9MRCdUIdFqIrryQMgqpLTSoDytGrHeOwAM+aXt27q8M1L1OdDzC0Q7WGN2t1+EC8tZp5ntUQDT81hoy4HmrBo2tGU+8BvyBFNwTLsxJzcfc2kVdpus9sG1aBer7mMtmJ55dSBuoK37uhrhilK+XSr8G3MdTkeqno7CTZov4tNOAXlqAfab2qyVYoH3aoQSgXswIw0wvsHa0DdvwUB8GO+rCO61nSfIy1jnj5e1HW/6NElYRHaKdB0jZ+cqXscW38wYM3rH+9BYYIAohNZg/4vlkPTTalZbImeufgKtWk1M2sUbkMrGYJGGvnuiF+uI/BDT0RA9gPEyM4xkC9hvdRzIFjw/pN+VZHmBlUOx9eI2zHCN3PyVg2RaUE9qpdPV6X6OwRV1R02xHo1VYkvu5MMftUdKDBFlPAXTEyAbQOMPxza9aLz5J5SUatfkU1nzFBi2c2l6CnNJ35wNUC8J2Ad/CqPpknbAy99NLTowPXf6oPkUGX+acqRPR3hs2KchqS039CrsKFR/i4CcrPIEwyLEOwDAoQmR/0mZw4VC8/vJ+7BvVUTye1hxQBMW9OCtoHfcVXUpmliCIQk1fSYtGGhVfAQQYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"That one's on me, the link I sent doesn't work\\\" owns it plainly, then offers \\\"Want me to find another wheel class in the Mission?\\\" with no invented link or blame.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 282,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 257,
+          "output_tokens_details": {
+            "thinking_tokens": 180
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "242374e9b867b10b",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

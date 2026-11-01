@@ -1,7 +1,7 @@
 {
   "hash": "604f918b1ae8673c",
   "case": "feedback-cue-mistake",
-  "recorded_at": "2026-11-01T18:28:53.631Z",
+  "recorded_at": "2026-11-01T18:41:21.655Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\":\"They're reporting that the link Cue sent is broken, a tech/feedback issue not answering any waiting item\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"feedback\",\"topic\":\"broken workshop link\",\"pushback\":\"the link Cue sent returns a 404\",\"lesson\":\"when sending links, verify they resolve, and be ready to fix or resend broken ones\",\"dots\":[],\"emotion\":{\"emotion\":\"annoyed\",\"intensity\":\"low\",\"valence\":\"negative\",\"about\":\"broken link to ceramics studio\",\"target\":\"co\"},\"seeking\":\"solving\",\"feedback\":[\"Cue sent a broken/dead link for the ceramics studio workshop that should be fixed or replaced.\"],\"ack\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":\"https://emberclaystudio.example/workshops/wheel-intro\",\"covered_now\":[],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}",
+      "text": "{\"reason\":\"They're reporting that the link Cue sent is broken, flagging a bug for Cue to fix\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"feedback\", \"topic\": \"broken workshop link\", \"pushback\": \"the link Cue sent is a dead 404\", \"lesson\": \"Verify links work before sending them, and resend a working one if flagged as dead.\", \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [\"Links sent to users should be checked for validity before sending; this one 404s.\"], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": \"https://emberclaystudio.example/workshops/wheel-intro\", \"covered_now\": [], \"missing\": [\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}",
       "usage": {
         "input_tokens": 4484,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 405,
+        "output_tokens": 356,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgcgWi6rfyHCzwTyLKnKX",
+        "id": "msg_011CgchTr86NqjnS4ieDs7Ss",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\":\"They're reporting that the link Cue sent is broken, a tech/feedback issue not answering any waiting item\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"feedback\",\"topic\":\"broken workshop link\",\"pushback\":\"the link Cue sent returns a 404\",\"lesson\":\"when sending links, verify they resolve, and be ready to fix or resend broken ones\",\"dots\":[],\"emotion\":{\"emotion\":\"annoyed\",\"intensity\":\"low\",\"valence\":\"negative\",\"about\":\"broken link to ceramics studio\",\"target\":\"co\"},\"seeking\":\"solving\",\"feedback\":[\"Cue sent a broken/dead link for the ceramics studio workshop that should be fixed or replaced.\"],\"ack\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":\"https://emberclaystudio.example/workshops/wheel-intro\",\"covered_now\":[],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}"
+            "text": "{\"reason\":\"They're reporting that the link Cue sent is broken, flagging a bug for Cue to fix\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"feedback\", \"topic\": \"broken workshop link\", \"pushback\": \"the link Cue sent is a dead 404\", \"lesson\": \"Verify links work before sending them, and resend a working one if flagged as dead.\", \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [\"Links sent to users should be checked for validity before sending; this one 404s.\"], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": \"https://emberclaystudio.example/workshops/wheel-intro\", \"covered_now\": [], \"missing\": [\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 405,
+          "output_tokens": 356,
           "output_tokens_details": {
             "thinking_tokens": 0
           },
