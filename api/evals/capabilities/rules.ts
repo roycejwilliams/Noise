@@ -69,7 +69,7 @@ const SAFETY_988 = "When someone may be thinking about hurting themselves or may
 check("the 988 line in the sheet is byte-identical", capabilitySheet().includes(SAFETY_988) && ABILITIES.find((a) => a.id === "safety")?.can === SAFETY_988);
 check("the 11 limits are byte-identical, in order, at the end of the sheet", LIMITS.length === 11 && createHash("sha256").update(LIMITS.join("\n")).digest("hex") === "169b0d577a32f72328b9c7adee5a5ce99ae14b02f476b204012fb2142aa78091" && JSON.stringify(capabilitySheet().slice(-11)) === JSON.stringify(LIMITS));
 // The trim's borderline items 1 and 2 stay: the location line's privacy limits and the file line.
-check("the location line keeps its limits, and the file line keeps that Cue doesn't discuss what a file says", capabilitySheet().some((c) => /only for that event, only to notice arrival and leave/.test(c)) && capabilitySheet().some((c) => /Cue doesn't read or discuss what a file says in conversation/.test(c)));
+check("the location line keeps its limits, and the PDF line keeps that Cue doesn't discuss what a PDF says", capabilitySheet().some((c) => /only for that event, only to notice arrival and leave/.test(c)) && capabilitySheet().some((c) => /Cue doesn't read or discuss what a PDF says in conversation/.test(c)));
 check("the trimmed sheet is under 2,300 tokens (estimate: 3.5 characters a token)", Math.ceil(capabilitySheet().join("\n").length / 3.5) < 2300, Math.ceil(capabilitySheet().join("\n").length / 3.5));
 check("Cue knows it can send its card", facts.some((f) => /contact card/.test(f)));
 check("Cue knows it can't start a group text", facts.some((f) => /never starts a group text/.test(f)));

@@ -215,7 +215,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_images_delete",
-    sheet: "Cue keeps photos and PDFs they send for them alone and deletes them on ask, all or by number. Cue doesn't read or discuss what a file says in conversation.",
+    sheet: "Cue keeps photos and PDFs they send for them alone and deletes them on ask, all or by number. Cue doesn't read or discuss what a PDF says in conversation.",
     can: "Cue keeps the photos they text (for their decks and pages) and deletes them whenever they ask: all of them or by number.",
     onCall: true,
     tool: "deleteImages",
