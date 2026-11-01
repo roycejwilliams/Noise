@@ -844,7 +844,9 @@ export function pinStep(prev: Pin | null, current: { body: string; version: numb
   if (now - prev.usedAt > PIN_TTL_MS) return fresh("ttl");
   const have = new Map<string, string>(entries.map((e) => [e.id, e.h]));
   for (const x of current.sections) for (const c of x.collapsed ?? []) (c.entryIds ?? []).forEach((id: string, i: number) => have.set(id, c.hashes?.[i] ?? ""));
-  if (prev.entries.some((e) => have.get(e.id) !== e.h)) return fresh("changed");
+  // The header (their first name, their zone) without its version: a changed name or zone re-pins.
+  const header = (body: string) => (body.split("\n")[0] ?? "").replace(/ · v\d+ · /, " · ");
+  if (header(prev.body) !== header(current.body) || prev.entries.some((e) => have.get(e.id) !== e.h)) return fresh("changed");
   const pinned = new Set(prev.entries.map((e) => e.id));
   const since = entries.filter((e) => !pinned.has(e.id));
   if (estTokens(since.map((e) => e.line).join("\n")) > SINCE_MAX_TOKENS) return fresh("since_full");

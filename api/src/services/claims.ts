@@ -249,6 +249,7 @@ export async function retireCorrectedClaims(userId: string, corrections: { field
       );
     }
     await client.query("COMMIT");
+    if (gone.length) await import("./memberSnapshot.js").then((S) => S.dropPin(userId)).catch(() => {});
     return gone.length;
   } catch (err: any) {
     await client.query("ROLLBACK").catch(() => {});

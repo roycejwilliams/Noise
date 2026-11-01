@@ -558,17 +558,42 @@ export async function gatherReplyFacts(
   return rf;
 }
 
-// Cue's intro records for them (memberSafeMemories.ts introFacts: intro emails, guest-match nudges and opt-ins, Tier 0 picks), the
-// latest few, with anything they had removed left out (whatCoKnows.ts guardText).
+// Cue's intro records for them, the latest few, each reduced to the other person's first name, the event and the date: nothing about
+// that person beyond their name (the stored row can carry the match's reason, which describes them). A row whose shape isn't one of
+// these, or that named no one to them, is left out. Through the removal guards (whatCoKnows.ts guardText).
 async function introRecordFacts(userId: string): Promise<string[]> {
-  const [{ introFacts }, W] = await Promise.all([import("../services/memberSafeMemories.js"), import("../services/whatCoKnows.js")]);
+  const W = await import("../services/whatCoKnows.js");
   const [rows, removed] = await Promise.all([
     pool
-      .query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('event_intro_email_sent', 'event_guest_match_nudge', 'event_guest_match_optin', 'recommendation') ORDER BY created_at DESC LIMIT 10`, [userId])
-      .then((r) => r.rows as { content: string; memory_type: string }[]),
+      .query(
+        `SELECT m.content, m.memory_type, m.created_at, u.first_name FROM co_memories m JOIN users u ON u.id = m.user_id
+         WHERE m.user_id = $1 AND m.memory_type IN ('event_intro_email_sent', 'event_guest_match_nudge', 'recommendation') ORDER BY m.created_at DESC LIMIT 10`,
+        [userId],
+      )
+      .then((r) => r.rows as { content: string; memory_type: string; created_at: Date; first_name: string | null }[]),
     W.forgottenRows(userId).then((r) => r.filter((x) => x.removed)),
   ]);
-  return introFacts(rows).map((l) => (removed.length ? W.guardText(l, removed) : l)).filter((l): l is string => !!l);
+  return rows.flatMap((r) => introRecordLines(r.memory_type, String(r.content ?? ""), new Date(r.created_at), r.first_name)).map((l) => (removed.length ? W.guardText(l, removed) : l)).filter((l): l is string => !!l);
+}
+
+// Pure: one intro record as the lines a reply may cite: who (first name only), the event, the date.
+const FIRST = "([\\p{Lu}][\\p{L}'’-]{0,30})";
+export function introRecordLines(type: string, content: string, at: Date, ownFirstName: string | null): string[] {
+  const day = Number.isNaN(at.getTime()) ? "" : ` (${at.toISOString().slice(0, 10)})`;
+  if (type === "recommendation") return [...content.matchAll(/\[Tier 0\]\s*([^:|]+?)\s*:/g)].map((m) => m[1].trim()).filter((n) => new RegExp(`^${FIRST}$`, "u").test(n)).map((n) => `Cue's record${day}: Cue suggested ${n}, another member, to them as someone worth meeting.`);
+  if (type === "event_guest_match_nudge") {
+    const m = content.match(new RegExp(`^Told \\S+ that ${FIRST} also got to "([^"]{1,120})"`, "u"));
+    return m ? [`Cue's record${day}: Cue told them ${m[1]}, another member, also got to "${m[2]}" and is worth meeting.`] : [];
+  }
+  if (type === "event_intro_email_sent") {
+    const m = content.match(new RegExp(`^Sent an? (?:network )?intro email connecting ${FIRST} and ${FIRST}`, "u"));
+    if (!m) return [];
+    const other = ownFirstName && m[1] === ownFirstName ? m[2] : ownFirstName && m[2] === ownFirstName ? m[1] : null;
+    if (!other) return [];
+    const event = content.match(/ ahead of "([^"]{1,120})"\.?$/)?.[1];
+    return [`Cue's record${day}: Cue sent one intro email connecting them with ${other}, another member${event ? `, ahead of "${event}"` : ""}.`];
+  }
+  return [];
 }
 
 // Pure: their world on this reply's facts (services/memberWorld.ts): one fact line, the check-in rule, and the world itself for the

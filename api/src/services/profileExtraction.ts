@@ -1013,6 +1013,8 @@ export async function storeProfile(
         [user_id, corrections.map((c) => c.field), corrections.map((c) => c.old), corrections.map((c) => c.new), corrections.map((c) => c.quote)],
       )
       .catch((err: any) => console.error("profile_corrections write failed (non-fatal):", err?.message ?? err));
+    // Their reply's pinned snapshot still says the old value: the next reply pins afresh (services/memberSnapshot.ts dropPin).
+    await import("./memberSnapshot.js").then((S) => S.dropPin(user_id)).catch(() => {});
     // And the claims that still say what they corrected, now, not at the nightly refresh (services/claims.ts).
     await import("./claims.js").then((C) => C.retireCorrectedClaims(user_id, corrections)).catch(() => 0);
     // A correction deletes the old value everywhere we keep it, so all of their model prompt/answer text goes too

@@ -135,6 +135,8 @@ export function createUsersRouter(authenticateToken: RequestHandler): Router {
           `DELETE FROM users WHERE id = $1 RETURNING *`,
           [req.params.id],
         );
+        // No pinned snapshot of theirs stays in this process (services/memberSnapshot.ts dropPin).
+        await import("../services/memberSnapshot.js").then((S) => S.dropPin(String(req.params.id))).catch(() => {});
 
         const deleteUser: UserProp = userDeletion.rows[0];
 
