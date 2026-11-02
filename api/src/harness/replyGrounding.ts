@@ -380,6 +380,16 @@ export async function gatherReplyFacts(
   addFact(rf, "known", todayFact(zone));
   if (preference === "text") addFact(rf, "known", "They told Cue they'd rather text. Only bring up a call if they ask for one.");
   if (preference === "call") addFact(rf, "known", "They told Cue they like talking on the phone. Offering a call when there's a lot to talk through is welcome.");
+  // The rules they set (services/memberPreferences.ts): what's in force, and whether any path applies it, so the reply never says a rule
+  // is applied when it isn't; the one ask for a vague "less", marked asked as this reply is handed it. A failed read adds nothing.
+  {
+    const P = await import("../services/memberPreferences.js");
+    const prefs = await P.activePreferences(userId).catch(() => [] as import("../services/memberPreferences.js").Preference[]);
+    const pf = P.replyPreferenceFacts(prefs, new Date());
+    for (const line of pf.known) addFact(rf, "known", line);
+    for (const line of pf.instructions) addInstruction(rf, line);
+    if (pf.askIds.length) await P.markLessAsked(userId, pf.askIds).catch(() => {});
+  }
   if (callFailure) {
     addFact(rf, "did_before", callFailure);
     addInstruction(rf, "If calls come up, say plainly the problem is on your side, not their phone. Don't guess at more detail than that, and don't promise when it'll be fixed.");

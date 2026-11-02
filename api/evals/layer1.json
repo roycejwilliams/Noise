@@ -16,6 +16,7 @@
     "evals/proactive/run.ts",
     "evals/proactive/rules.ts",
     "evals/proactive/cadence.ts",
+    "evals/preferences/capture.ts",
     "evals/proactive/durableSends.ts",
     "evals/proactive/nameChange.ts",
     "evals/proactive/moodHolds.ts",

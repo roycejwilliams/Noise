@@ -1,4 +1,5 @@
 import { arcLine } from "./goalJourney.js";
+import { replyPreferenceFacts } from "./memberPreferences.js";
 import * as memberSafeModule from "./memberSafeMemories.js";
 import { renderCorrections } from "../harness/profileWrite.js";
 import { generateText } from "ai";
@@ -98,6 +99,9 @@ export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" |
   const held = renderClaims({ ...k, claims: newest });
   const said = held ? [...held.theySaid, ...held.enduring].slice(0, CALL_CLAIMS_LIMIT) : [];
   const read = held ? held.coInferred.slice(0, 3) : [];
+  // Their rules (services/memberPreferences.ts replyPreferenceFacts): the text reply's own lines, so a call and a text say the same.
+  const ruleFacts = k.limits?.rules?.length ? replyPreferenceFacts(k.limits.rules, new Date()) : null;
+  const rules = ruleFacts && (ruleFacts.known.length || ruleFacts.instructions.length) ? ruleFacts : null;
   return [
     stated.length ? `Their room taste, newest first (when you suggest anything, lean this way, and never pitch what clashes with it):\n${stated.map((t) => `- ${t}`).join("\n")}` : null,
     observed ? `How what you've sent them has landed: ${observed}` : null,
@@ -105,6 +109,7 @@ export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" |
     availability ? `When they're free, in their words: "${availability}" (${isLimit(availability) ? "a limit: don't suggest things outside it" : "a leaning, not a limit"}).` : null,
     said.length ? `What they've told you that still holds (with when they said it):\n${said.map((l) => `- ${l}`).join("\n")}` : null,
     read.length ? `Cue's own reads of them (guesses, not things they told you: never say they said these):\n${read.map((l) => `- ${l}`).join("\n")}` : null,
+    rules ? `The rules they set for how you treat them (the same lines a text reply gets; keep to them on this call):\n${[...rules.known, ...rules.instructions].map((l) => `- ${l}`).join("\n")}` : null,
   ].filter((x): x is string => !!x);
 }
 // The recent texts (20) and their own words of the last 48 hours (25) both come from one exchange read.

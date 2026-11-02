@@ -1204,7 +1204,7 @@ async function processEndedCallInScope(o: {
         await storeProfile(user_id, extracted, cleanTranscript);
         extractPlannedEventMention(user_id, cleanTranscript).catch(() => {});
       } else {
-        await learnFromCall({ userId: user_id, transcript: cleanTranscript });
+        await learnFromCall({ userId: user_id, transcript: cleanTranscript, callRef: transcriptMemoryId ? `call_transcript:${transcriptMemoryId}` : null });
       }
 
       await emotionDone;
