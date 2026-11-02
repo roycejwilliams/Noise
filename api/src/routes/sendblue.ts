@@ -1,4 +1,5 @@
 import { notToTeammate } from "../services/teamLines.js";
+import { threadWindow, WINDOW_MAX_ROWS } from "../services/threadWindow.js";
 import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -1489,16 +1490,17 @@ export function sendblueRouter(io: Server): Router {
         // gap buildContextSummary had. Raised to 10 turns' worth; safe for
         // deriveStyleHint below too, which only gets more representative
         // (not worse) with a bigger sample of someone's normal texting style.
+        // 2026-11-02: counted in their texts, since each of Cue's bubbles is its own row (services/threadWindow.ts).
         const chronologicalResult = await pool.query(
           `SELECT content, created_at FROM co_memories
            WHERE user_id = $1 AND memory_type = 'text_exchange'
            ORDER BY created_at DESC
-           LIMIT 20`,
-          [user.id],
+           LIMIT $2`,
+          [user.id, WINDOW_MAX_ROWS],
         );
         // Through the live guards (services/whatCoKnows.ts guardRows): a text saying something they had removed is left out, and one
         // still saying what they corrected away carries the correction inline.
-        const chronological = chronologicalResult.rows.reverse();
+        const chronological = threadWindow(chronologicalResult.rows);
         const chronologicalRows = await import("../services/whatCoKnows.js").then((W) => W.guardRows(user.id, chronological)).catch(() => chronological);
         const recentConversation = annotateConversationGaps(chronologicalRows);
         if (hasText) {
