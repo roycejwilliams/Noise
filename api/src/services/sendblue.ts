@@ -266,7 +266,9 @@ export async function outboundSentSince(q: { number: string; since: Date; conten
   const digits = (n: unknown) => String(n ?? "").replace(/\D/g, "").slice(-10);
   const words = (t: unknown) => String(t ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   try {
-    const res: any = await (sendblue.messages as any).list({ is_outbound: "true", created_at_gte: q.since.toISOString(), order_by: "createdAt", order_direction: "desc", limit: 100, offset: 0 });
+    // The SDK client itself, as listInboundMessages reads it: the send wrapper above spreads client.messages, which copies only its
+    // _client field, never the prototype's methods, so the wrapper has no list (round 2 review of #352).
+    const res: any = await client.messages.list({ is_outbound: "true", created_at_gte: q.since.toISOString(), order_by: "createdAt", order_direction: "desc", limit: 100, offset: 0 });
     if (!Array.isArray(res?.data)) return null;
     const want = words(cleanCoMessage(q.content));
     return res.data.some((d: any) => digits(d?.number ?? d?.to_number) === digits(q.number) && words(d?.content) === want);

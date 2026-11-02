@@ -89,6 +89,23 @@ export function reminderPromise(t: { source?: string | null; goal: string }): bo
 export function bringsItUp(sentence: string): boolean {
   return BRINGS_IT_UP.test(goalBody(sentence));
 }
+// Pure: whether a reminder they asked for (member_reminders.what) is the one a bring-up promise is about. Tied by a fact, never any
+// reminder due by then (round 2 review of #352: "bring up the lease" must not be kept by "pay rent"):
+//   - set in the same turn, the promise is Cue's own "I'll remind you / bring it up", and the promise names no other subject (only its
+//     verb and its time: "I'll remind you tomorrow at 3"), or shares one with the reminder; or
+//   - about the same thing: most of the promise's words are in the reminder.
+// One rule for the promise binding (promiseBinding.ts reminderKeeping) and the task's backstop (taskTurn.ts reminderCoversTask).
+const NOT_A_SUBJECT = new Set(significant("remind reminder reminding bring bringing nudge nudging back again today tonight tomorrow tmrw morning afternoon evening night noon week weekend next later soon monday tuesday wednesday thursday friday saturday sunday mon tue tues wed thu thurs fri sat sun"));
+export function subjectWords(sentence: string): string[] {
+  return significant(goalBody(sentence)).filter((w) => !NOT_A_SUBJECT.has(w) && !/^\d/.test(w) && !/^(?:am|pm)$/.test(w));
+}
+export function reminderTiedTo(sentence: string, what: string, o: { sameTurn: boolean; about?: string }): boolean {
+  if (overlap(o.about ?? goalBody(sentence), what) >= 0.5) return true;
+  if (!o.sameTurn || !bringsItUp(sentence)) return false;
+  const subject = subjectWords(sentence);
+  return !subject.length || subject.some((w) => significant(what).includes(w));
+}
+
 // Pure: a text that says something, not only asks: at least one sentence that isn't a question. A question alone ("what time works?")
 // asks; it doesn't bring anything up.
 export function saysSomething(text: string): boolean {
@@ -99,7 +116,11 @@ export function saysSomething(text: string): boolean {
 // makes the promise, and the rest of that same reply, are sent in the seconds after the task row (dev, 2026-11-02: every promise
 // task whose sentence went out did so 1 to 10 s after its row). Those sends are the promise being made, never it being kept (closure
 // audit 11-02: task 1089's own "I'll bring it back up tomorrow afternoon", sent 2 s after its row, closed it as kept; task 1096's
-// acknowledgment did the same). A call's promise is made on the call, which ended before its task was written: nothing to skip.
+// acknowledgment did the same).
+// Calls: a timed promise spoken on a call is bound after the call (promiseBinding.ts bindCallPromises) into a "Keep your promise:" task
+// too, so it gets the same window: texts in the first minute after its row (the after-call confirmation that says the promise again)
+// don't keep it; a link or document does. A call's "I'll text you X" (callCommitments.ts, "Keep your word from the call:") gets none:
+// its call ended before its task was written, and the owed send right after the call is the thing itself.
 export const PROMISE_TURN_MS = 60_000;
 export function promiseTurnEnd(goal: string, at: Date): Date {
   return /^Keep your promise:/i.test(String(goal ?? "").trim()) ? new Date(at.getTime() + PROMISE_TURN_MS) : at;

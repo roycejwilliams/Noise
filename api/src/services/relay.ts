@@ -272,9 +272,17 @@ export async function sendDueReminders(): Promise<number> {
 // Pure: a send failure that happened before anything reached Sendblue's delivery: Sendblue refused it (4xx: bad credentials, a bad
 // number, a rate limit), our own send layer refused it, outreach is paused, or it was never queued. Safe to try again. Anything else (a
 // timeout, a 5xx, a dropped connection, no reason) may have gone, and is checked first (reminderDelivered).
+// The deferred queue words a thrown send as "error: <message>" (services/deferredSends.ts), and the SDK's message starts with the HTTP
+// status ("401 Invalid Credentials"), so the status is read past that prefix (round 2 review of #352: a night-time 401 read as unknown).
+export function sendFailureStatus(reason: string | null | undefined): number | null {
+  const m = String(reason ?? "").trim().match(/^(?:error:\s*)?(?:[A-Za-z]*Error:\s*)?(\d{3})\b/);
+  return m ? Number(m[1]) : null;
+}
 export function failedBeforeDelivery(reason: string | null | undefined): boolean {
-  const r = String(reason ?? "").trim();
-  return /^4\d\d\b/.test(r) || /^sendblue: /.test(r) || /proactive outreach is paused|send failed before anything delivered|^queue failed|^already (?:failed|skipped)/.test(r);
+  const r = String(reason ?? "").trim().replace(/^error:\s*/, "");
+  const status = sendFailureStatus(reason);
+  if (status !== null) return status >= 400 && status < 500;
+  return /^sendblue: /.test(r) || /proactive outreach is paused|send failed before anything delivered|^queue failed|^already (?:failed|skipped)/.test(r);
 }
 
 // A failed reminder send tries again, spaced out: 5 minutes, then 20, 80, 320; after the fifth failure it stays claimed and isn't
