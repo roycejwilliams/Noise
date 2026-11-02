@@ -2183,6 +2183,12 @@ export function sendblueRouter(io: Server): Router {
             await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
             await recordSuggestionOutcome(user.id, "event", `event:${pendingCheckin.event_api_id}`, pendingCheckin.event_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160), { provenance: "stated", quote: resolvedContent.slice(0, 200) });
             addFact(replyFacts, "did_this_turn", `Recorded what they said about "${pendingCheckin.event_name}".`);
+            // The same answer on the pair record (services/roomMatching.ts, the outcome record): someone Cue told them about at this
+            // event, named in a warm answer, is "met" (inferred). Cue's own noteRoomMeeting, from their words, records what they said.
+            const named = await (await import("../services/roomMatching.js")).notePairsFromCheckin(user.id, pendingCheckin.event_api_id, resolvedContent, outcome === "named_positive").catch(() => []);
+            if (named.length) {
+              addInstruction(replyFacts, `They mentioned ${named.map((n) => n.firstName).join(" and ")}, who you pointed them to at "${pendingCheckin.event_name}". If their words say whether they met and how it went, record it with noteRoomMeeting. Don't ask about it now, and never say anything about the other person's side.`);
+            }
             // They named someone they met: Co follows through with notes they can send (services/eventFollowThrough.ts).
             // Built from this message only, sent to them alone, a little after this reply.
             if (outcome === "named_positive") {

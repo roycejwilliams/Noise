@@ -18,7 +18,9 @@ import { NO_MEMBER } from "./llmUsage.js";
 // minRoom: a readout for fewer members than this would let the host work out who is behind any number.
 // minOfferCoverage: "thin on" is a claim that nobody there offered something, so it needs Cue to know what most of the room can
 // offer; below this share of members with a known offer it says nothing (silence over false signal, Royce 2026-10-14).
-export const READOUT = { smallCell: 3, minForThemes: 8, minRoom: 6, minPeopleForConversations: 3, minOfferCoverage: 0.8 };
+// minPairsForRates: a rate about introductions (met, useful, kept talking) is only said when at least this many pairs (or, for
+// useful, this many people's own answers) stand behind it, so no one answer can be worked out from it.
+export const READOUT = { smallCell: 3, minForThemes: 8, minRoom: 6, minPeopleForConversations: 3, minOfferCoverage: 0.8, minPairsForRates: 5 };
 
 export const THEMES = ["Investors or funding", "Hiring or talent", "Cofounders or partners", "Customers or clients", "Advice or mentors", "Community or friends", "Venues or events", "Something else"] as const;
 export type Theme = (typeof THEMES)[number];
@@ -90,7 +92,50 @@ export type Stats = {
   offerThemes?: Partial<Record<Theme, number>>;
   offerKnown?: number;
   offerPool?: number;
+  // What happened after the intros (co_pairs, the outcome record), room level only: counts across pairs, never a pair.
+  pairOutcomes?: PairRates;
 };
+
+// Counts across the event's introduced pairs. metKnown: pairs where either side said (or their no-show said) whether they met.
+// usefulKnown: people (each side counted on its own) who said how it was. keptKnown: pairs where either side said whether they kept
+// talking. Unknown is never counted as a no.
+export type PairRates = { introduced: number; metKnown: number; met: number; usefulKnown: number; useful: number; keptKnown: number; kept: number };
+
+// Pure: the counts, from each pair's two sides.
+export function pairRates(rows: { a: any; b: any }[], outcomeOf: (a: any, b: any) => { met: string; usefulA: string; usefulB: string; keptTalking: string }): PairRates {
+  const r: PairRates = { introduced: rows.length, metKnown: 0, met: 0, usefulKnown: 0, useful: 0, keptKnown: 0, kept: 0 };
+  for (const row of rows) {
+    const o = outcomeOf(row.a ?? {}, row.b ?? {});
+    if (o.met !== "unknown") r.metKnown++;
+    if (o.met === "yes") r.met++;
+    for (const u of [o.usefulA, o.usefulB]) {
+      if (u === "unknown") continue;
+      r.usefulKnown++;
+      if (u === "yes") r.useful++;
+    }
+    if (o.keptTalking !== "unknown") r.keptKnown++;
+    if (o.keptTalking === "yes") r.kept++;
+  }
+  return r;
+}
+
+// Pure: "about 6 in 10", or null when fewer than READOUT.minPairsForRates stand behind it.
+export function rateLine(n: number, of: number): string | null {
+  if (of < READOUT.minPairsForRates) return null;
+  return `about ${Math.round((n / of) * 10)} in 10`;
+}
+
+export function pairOutcomeLines(p: PairRates | undefined): string[] {
+  if (!p || p.introduced < READOUT.minPairsForRates) return [];
+  const out: string[] = [];
+  const met = rateLine(p.met, p.metKnown);
+  if (met) out.push(`Of the introductions where Cue heard whether the two people met, ${met} met.`);
+  const useful = rateLine(p.useful, p.usefulKnown);
+  if (useful) out.push(`Of the members who told Cue how meeting their introduction went, ${useful} found it useful.`);
+  const kept = rateLine(p.kept, p.keptKnown);
+  if (kept) out.push(`Of the introductions Cue heard back about later, ${kept} kept talking.`);
+  return out;
+}
 
 export function describe(s: Stats): { headline: string; lines: string[]; note: string } {
   const note = "This is the room in aggregate. It carries nothing any member told Cue, and nothing about who talked to whom. Small counts are shown as a few, and headcounts are rounded.";
@@ -102,6 +147,7 @@ export function describe(s: Stats): { headline: string; lines: string[]; note: s
   if (s.nudged) lines.push(`Cue pointed ${cell(s.nudged)} members to someone to meet, and ${cell(s.interested)} said they wanted the connection.`);
   if (s.debriefReplies) lines.push(`Of the members who told Cue how it went, ${cell(s.metSomeone)} said they met someone worth knowing${s.followThroughMembers >= READOUT.minPeopleForConversations ? `, and ${cell(s.conversationsTold)} people were named across what members told Cue` : ""}.`);
   if (s.intros) lines.push(`${cell(s.intros)} introductions went out after both people said yes.`);
+  lines.push(...pairOutcomeLines(s.pairOutcomes));
   const themes = s.askCount >= READOUT.minForThemes ? foldThemes(s.themes) : [];
   if (themes.length) lines.push(`What the room was looking for, by category: ${themes.map((t) => `${t.theme.toLowerCase()} (${t.n})`).join(", ")}.`);
   else lines.push(`Too few members shared what they were looking for to show a pattern without pointing at anyone.`);
@@ -195,6 +241,10 @@ export async function gatherStats(eventId: string, eventName: string, classify: 
     }
     for (const g of graph.rows) if (g.owner_user_id && g.object_label) addOffer(String(g.owner_user_id), String(g.object_label));
   }
+  // What happened after the intros at this event: each pair's two sides, read only to count (no names, no pair leaves this step).
+  const { pairOutcome } = await import("./roomMatching.js");
+  const pairs = await pool.query(`SELECT a_evidence, b_evidence FROM co_pairs WHERE event_id = $1 AND intro_sent_at IS NOT NULL`, [eventId]);
+  const pairOutcomes = pairRates(pairs.rows.map((r: any) => ({ a: r.a_evidence, b: r.b_evidence })), pairOutcome);
   const themes = asks.length >= READOUT.minForThemes ? await classifyAsks(asks, classify) : {};
   // People per offered category (one person offering two investor things counts once). Only labelled when the line could be said.
   const offerKnown = offersBy.size;
@@ -205,5 +255,5 @@ export async function gatherStats(eventId: string, eventName: string, classify: 
       for (const t of mine) offerThemes[t] = (offerThemes[t] ?? 0) + 1;
     }
   }
-  return { eventName, registered: members.length, arrived, walkins, briefs, nudged, interested, intros, debriefReplies, metSomeone, conversationsTold, followThroughMembers, themes, askCount: asks.length, offerThemes, offerKnown, offerPool: ids.length };
+  return { eventName, registered: members.length, arrived, walkins, briefs, nudged, interested, intros, debriefReplies, metSomeone, conversationsTold, followThroughMembers, themes, askCount: asks.length, offerThemes, offerKnown, offerPool: ids.length, pairOutcomes };
 }

@@ -2970,6 +2970,11 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("co_pairs intro columns / decline backfill failed:", err));
+  // The outcome record (services/roomMatching.ts, 2026-11-02): each side's own evidence of what happened after the intro (met,
+  // useful, kept talking), each with its source, time and whether it was said or inferred. Empty is unknown. Nothing existing changes.
+  await pool
+    .query(`ALTER TABLE co_pairs ADD COLUMN IF NOT EXISTS a_evidence JSONB NOT NULL DEFAULT '{}'::jsonb, ADD COLUMN IF NOT EXISTS b_evidence JSONB NOT NULL DEFAULT '{}'::jsonb`)
+    .catch((err: Error) => console.error("co_pairs evidence columns failed:", err));
   // Network intro emails held by the matching pause (services/networkIntroNudge.ts retryHeldNetworkIntros).
   await pool
     .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_held_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_attempts INTEGER NOT NULL DEFAULT 0`)

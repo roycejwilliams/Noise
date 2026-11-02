@@ -275,6 +275,9 @@ export async function runNoShowNotes(now = new Date(), opts: { approved?: boolea
         });
         if (q.queued) queued++;
       }
+      // They said they didn't make it: on their side of any pair Cue told them about there, "didn't meet" (inferred). Silence or an
+      // unclear reply records nothing (the outcome record keeps unknown as unknown).
+      if (v === "said_no") await RM.notePairsNoShow(eventId, userId).catch(() => 0);
       await settle(due ? `${v}:queued` : v);
       log(eventId, userId, `settled: ${v}${due ? ", note queued" : ""}`);
       await recordDecision({ layer: 6, decision: "event.noshow", userId, outcome: due ? "act" : "skip", action: v, proposal: { eventId, doorTracked: !!d?.tracked } }).catch(() => {});

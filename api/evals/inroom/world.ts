@@ -664,6 +664,8 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
   if (has("UPDATE co_pairs SET intro_held_at") || has("UPDATE co_pairs SET intro_attempts")) return R([]);
   if (has("FROM co_pairs p JOIN users u")) return R([]);
+  // The member's own outcome signals (roomMatching.ts ownOutcomeSignals): their side of each introduced pair, never the other's.
+  if (has("SELECT CASE WHEN a_id = $1 THEN a_evidence ELSE b_evidence END AS ev")) return R(W.pairs.filter((r: any) => (r.a_id === p[0] || r.b_id === p[0]) && r.intro_sent_at).map((r: any) => ({ ev: (r.a_id === p[0] ? r.a_evidence : r.b_evidence) ?? {}, line: r.a_id === p[0] ? r.value_line_a : r.value_line_b })));
   if (has("SELECT status FROM event_guest_match_opt_ins WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3")) {
     return R(W.optIns.filter((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_id === p[2]).map((o) => ({ status: o.status })));
   }
