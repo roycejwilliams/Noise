@@ -16,7 +16,7 @@ import type { CallToolset as BaseToolset } from "./callLlmProxy.js";
 import { specificsTheyGave } from "../brain/index.js";
 // What a call turn is told (the stop list, a fact to write down) is the brain's (brain/index.ts judgeCallTurn); kept here for callers.
 export { avoidNote, specificsTheyGave, taskFactNote } from "../brain/index.js";
-import { callRunFor, callToolNames, toolUse, type CallRun } from "./capabilities.js";
+import { callRunFor, callToolNames, startsWork, toolUse, type CallRun } from "./capabilities.js";
 
 // The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step, so on a
 // call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
@@ -158,8 +158,10 @@ export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCal
 }
 
 // Co's records for the member, without the guide: what a spoken line may stand on (callLlmProxy.ts callSources).
-export function callRecords(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {
+// found: what a search on this call returned (its name, when and where, from the listing), so a later turn may name it again.
+export function callRecords(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[], found: { name: string; when?: string | null; venue?: string | null }[] = []): string {
   return [
+    found.length ? `Found by your search earlier on this call (true as listed): ${found.slice(-8).map((f) => [f.name, f.when, f.venue].filter(Boolean).join(" | ")).join("; ")}.` : "",
     m.tasks.length ? `Your open tasks for them (the #N is for updateTask and closeTask, never to say): ${m.tasks.map((t) => `#${t.id} "${t.goal}"`).join("; ")}.` : "You have no open tasks for them yet.",
     m.loops ?? "",
     didOnCall.length ? `Done earlier on this call (already true; don't do it again): ${didOnCall.slice(-8).join(" ")}` : "",
@@ -360,6 +362,12 @@ export type CallToolsInput = {
   done?: (tool: string, kind: string, input: unknown, urls: string[], found?: { name: string; url: string; when?: string | null; venue?: string | null }[]) => Promise<void>;
   // Tests: the text to them during the call, in place of the real send.
   sendText?: (text: string) => Promise<boolean>;
+  // GPT-Live (services/gptLive.ts liveCallTools): the names this call may use (services/capabilities.ts liveCallToolNames), and the
+  // guide its thinking reads in place of CALL_TOOLS_GUIDE.
+  only?: readonly string[];
+  guide?: string;
+  // Tests: what a stubbed event search returns (agent/loopTools.ts stubEvents, with stubSearch).
+  stubEvents?: import("../agent/loopTools.js").StubEvent[];
 };
 
 // Pure enough to test: the call's toolset for one turn, from the texting tools, guarded the same way.
@@ -391,6 +399,9 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     recentOfferBurstActive: false,
     dryRun: !!i.dryRun,
     stubSearch: !!i.stubSearch,
+    ...(i.stubEvents ? { stubEvents: i.stubEvents } : {}),
+    // A job started on this call carries the call's key, so the same need started again on it is the same job (coTasks.ts dispatchKeyFor).
+    callKey: i.callKey,
     // A call has no text thread to post into mid-call: a tool's "looking" line or reply is not sent (documents and briefs still
     // go by their own delivery). Returning false means "not sent", and the tool says so.
     sendCoReply: async () => false,
@@ -412,7 +423,9 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   // wrapped by the same guard as every tool (limits, receipts, decision log, Co's action record of the links that went).
   if (!i.tools?.shareLink) all.shareLink = guardTools({ shareLink: callShareLink(i, mem, did, textThem) }, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {}, recentExchange: i.recentExchange ?? null }).shareLink;
   const picked: Record<string, any> = {};
-  for (const n of CALL_TOOL_NAMES) if (all[n]) picked[n] = all[n];
+  for (const n of i.only ?? CALL_TOOL_NAMES) if (all[n] && CALL_TOOL_NAMES.includes(n)) picked[n] = all[n];
+  // GPT-Live: a member with texts off isn't offered a send at all (nothing could go, now or after), so no "texting it now" is ever said.
+  if (i.only && i.member.noTexts) for (const n of Object.keys(picked)) if (textsThem(n, { action: "connect" })) delete picked[n];
   // On a call a deck is never written into the tool's input (PR 6: told to pass a brief, the model still wrote every slide, and the
   // caller sat through 30 seconds of silence): makeDeck takes a brief, updateDeck the change, and the slides are written after.
   for (const n of ["makeDeck", "updateDeck"]) {
@@ -445,12 +458,14 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   const recordOwed = i.owe ?? (async (items: OnFile[], why: "failed" | "timeout", tool: string) => { if (!i.dryRun) await oweAfterCall(i, items, why, tool); });
   // A send that didn't reach them on the call: owed right after it, once per link, and said so to every later turn of the call.
   const writes: Promise<unknown>[] = [];
+  // Whether every owed record this call wrote landed (a send promised for after the call is only said once it's queued).
+  let owedWriteFailed = false;
   const owe = (items: OnFile[], why: "failed" | "timeout", tool: string) => {
     const fresh = items.filter((x) => !(mem.owed ?? []).some((o) => o.url === x.url));
     if (!fresh.length) return;
     mem.owed = [...(mem.owed ?? []), ...fresh];
     mem.did.push(`Owed right after the call: ${fresh.map((x) => x.name).join(", ")} (the text didn't reach them on the call). Don't send it again on the call; it goes the moment they hang up.`);
-    writes.push(recordOwed(fresh, why, tool).catch((err: any) => console.error("call: recording what's owed after the call failed (non-fatal):", err?.message ?? err)));
+    writes.push(recordOwed(fresh, why, tool).catch((err: any) => { owedWriteFailed = true; console.error("call: recording what's owed after the call failed (non-fatal):", err?.message ?? err); }));
   };
   // A send that came back done (on time or late): no longer owed.
   const settleSent = (urls: string[]) => {
@@ -570,14 +585,18 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   return {
     defs,
     names: new Set(Object.keys(picked)),
-    note: callToolsNote(i.member, mem.did, { voiceReadOff: mem.voiceReadOff }),
-    records: callRecords(i.member, mem.did),
+    note: i.guide ? [i.guide, callRecords(i.member, mem.did, mem.found as any), mem.voiceReadOff ? VOICE_READ_OFF_ON_CALL_NOTE : ""].filter(Boolean).join("\n") : callToolsNote(i.member, mem.did, { voiceReadOff: mem.voiceReadOff }),
+    // GPT-Live (guide given): what a search found earlier on the call is a source too (2026-11-02: "Rooftop Jazz Night" from turn one
+    // was held on turn two as unbacked).
+    records: i.guide ? callRecords(i.member, mem.did, mem.found as any) : callRecords(i.member, mem.did),
     // This turn's facts; the brain writes the turn's note from them (brain/index.ts judgeCallTurn).
     turnFacts: { turnWords: i.turnWords, tasks: i.member.tasks, avoid: i.member.avoid, canWriteTasks: !!picked.updateTask },
     did,
     run,
     pending: async () => { await Promise.allSettled(writes); },
     texts: textsThem,
+    starts: startsWork,
+    owedDurable: async () => { await Promise.allSettled(writes); return !owedWriteFailed; },
     // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the
     // same guarded updateTask (limits, receipt, decision log, Co's action record).
     afterTurn: async ({ spoken, ran }) => {

@@ -10,6 +10,7 @@
 // A send claim stands only when a send that really texted them came back done this turn, and only for what went: a claim naming an
 // item that didn't go, or "both" after one send, is held. Questions, negations, future or conditional words and earlier sends
 // ("yesterday") are never claims.
+import { promiseTopic, promisesLaterWork } from "./offerGuard.js";
 const QUESTION = /\?\s*["')\]]*\s*$/;
 const NEGATED = /\b(?:not|never|haven'?t|hasn'?t|didn'?t|wasn'?t|isn'?t|aren'?t|won'?t|couldn'?t|can'?t|no longer)\b|n't\b/i;
 const FUTURE = /\b(?:will|'ll|shall|going to|gonna|about to|once|when|whenever|if|as soon as|after|afterwards|later|soon|shortly|in a (?:minute|sec|second|bit|moment|few)|in (?:a couple|a few|\d+) (?:minutes|mins|seconds)|tonight|tomorrow|next)\b/i;
@@ -25,7 +26,7 @@ const ARRIVAL = /\byou should (?:have|see|get|be (?:seeing|getting)) (?:it|that|
 const THERE_NOW = /\byou'?ll (?:see|find|have) (?:it|that|them|the \w+)\b[^.!?]*\bnow\b/i;
 // Said as happening: "I'm texting it to you now", "sending it over", "I'll text it right now".
 const NOW = /\b(?:sending|texting|shooting|dropping|firing|popping|messaging|forwarding|pushing)\b(?:[^.!?]{0,30}\b(?:now|right now|as we speak|over|across|through|your way)\b|\s+(?:it|that|them|this|those)\s+(?:to you|your way)\b)|\bi'?ll (?:send|text|shoot|drop|fire|pop)\b[^.!?]{0,30}\b(?:now|right now|right away|this second)\b/i;
-const SAVED = /\b(?:i(?:'ve| have)? (?:just |already )?(?:saved|set (?:it|that|this) up|added (?:it|that|this)|started (?:a task|on (?:it|that|this))|noted (?:it|that|this) down)\b|(?:it'?s|that'?s) (?:saved|set up|noted)\b)/i;
+const SAVED = /\b(?:i(?:'ve| have)? (?:just |already )?(?:saved|changed (?:it|that|this)|updated (?:it|that|this)|switched (?:it|that|this)|set (?:it|that|this) up|added (?:it|that|this)|started (?:a task|on (?:it|that|this))|noted (?:it|that|this) down)\b|(?:it'?s|that'?s) (?:saved|set up|noted)\b)/i;
 // More than one thing, said as sent.
 const PLURAL = /\b(?:both|all (?:of them|three|two|of those|the links)|each (?:of them|one)|the links|both links|everything|them all|all of it)\b/i;
 const PRONOUN_PLURAL = /\b(?:them|those|these|they)\b/i;
@@ -101,3 +102,44 @@ export function claimHeld(sentence: string, st: ClaimState): string | null {
   if (PRONOUN_PLURAL.test(sentence) && st.deliveredCount < 2 && st.undelivered.length) return "says more went than did";
   return null;
 }
+
+// ---------- Work Cue says it started or will deliver (Royce, 2026-11-02: "Work must have a durable record and owner before Cue says it
+// has started or promises delivery"). On a GPT-Live call (services/callLlmProxy.ts jobClaims), two more families, read the same way
+// (Cue's own words, clause by clause; a question, a negation or an offer is never one):
+//   started  the work said as begun ("I've started on that", "I'm on it", "it's in motion", "I've set that up", "I've kicked it off")
+//   promise  a first-person promise of later work or delivery ("I'll text you what I find", "I'll look into venues": offerGuard.ts
+//            promisesLaterWork, the same read the source check uses)
+// Each stands only on a job: a tool that starts durable work (services/capabilities.ts startsWork: a co_tasks row or a saved ask) came
+// back done this turn, or a send that didn't go was queued as owed (a co_tasks row and its ledger row), or Cue's records name one (its
+// open tasks, what it started earlier on this call). A promise with a subject ("venues") stands only on a job about that subject.
+const STARTED = /\b(?:i'?ve|i have|i just|just|i'?ve just|i already|i'?ve already)\s+(?:started|kicked (?:it |that |this )?off|queued|got (?:it|that|this|that search|the search|things?) (?:going|started|moving)|set (?:it|that|this|something|that search|the search) (?:up|going|in motion)|put (?:it|that|this) in motion)\b|\b(?:i'?m|i am) (?:already )?on (?:it|that|this)\b|\b(?:it'?s|that'?s|this is|it is|that is) (?:started|queued|underway|in motion|in the works|set up and running)\b|\b(?:i'?m|i am) (?:starting|kicking off) (?:on )?(?:it|that|this|the|a)\b/i;
+// booked: a booking, a purchase, a sign-up, a reservation, or something made public, said as done. Nothing on a GPT-Live call books,
+// pays, signs anyone up or shares publicly (those wait for the member, by text), so it's never backed.
+const BOOKED = /\b(?:i(?:'ve| have)?|i just|just) (?:booked|reserved|rsvp'?d|bought|paid|purchased|signed you up|registered you|got you (?:a |the )?(?:table|ticket|tickets|spot|seat|reservation))\b|\b(?:you'?re|you are|it'?s|it is|that'?s) (?:all )?(?:booked|reserved|registered|signed up|paid for)\b|\b(?:anyone|everyone|people)(?: with the link)? can (?:now )?(?:see|open|view|access) (?:it|that|this|them)\b|\b(?:it'?s|that'?s|it is|that is) (?:now )?(?:public|published)\b/i;
+export type JobClaim = "started" | "promise" | "booked";
+export function jobClaimKind(sentence: string): JobClaim | null {
+  const s = sentence.replace(/[’‘]/g, "'").replace(/\[[a-z][a-z ]*\]\s*/gi, "").trim();
+  if (!s || QUESTION.test(s)) return null;
+  for (const c of s.split(CLAUSES).map((x) => x.trim()).filter(Boolean)) {
+    if (NEGATED.test(c)) continue;
+    if (BOOKED.test(c) && !FUTURE.test(c)) return "booked";
+    if (STARTED.test(c)) return "started";
+  }
+  return promisesLaterWork(s) ? "promise" : null;
+}
+// thisTurn: jobs that came back done (or were queued as owed) in this turn; corpus: what they and Cue's records say (goals, their
+// words, steps, the owed items' names); onCall: a job was started or queued earlier on this call.
+export type JobState = { thisTurn: number; corpus: string; onCall: boolean };
+// Words a claim about work uses whatever the work is: never its subject.
+const JOB_PLAIN = new Set("started starting kicked queued underway motion works running going already working task tasks search searching looking moving setting same still again yet one ones while soon nothing anything something everything around".split(" "));
+const stemsOf = (w: string) => [w, w.replace(/'s$/, ""), w.replace(/ies$/, "y"), w.replace(/es$/, ""), w.replace(/s$/, ""), w.replace(/ing$/, ""), w.replace(/ed$/, "")].filter((x) => x.length >= 3);
+// Pure: whether a job backs this claim.
+export function jobBacked(sentence: string, j: JobState): boolean {
+  if (jobClaimKind(sentence) === "booked") return false;
+  const topic = promiseTopic(sentence).filter((w) => !JOB_PLAIN.has(w) && !w.includes("'"));
+  if (!topic.length) return j.thisTurn > 0 || j.onCall;
+  const hay = ` ${j.corpus.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ")} `;
+  return topic.every((w) => stemsOf(w).some((x) => hay.includes(` ${x}`)));
+}
+// Pure: Cue's records name a job it started or queued earlier on this call (services/callTools.ts callRecords "Done earlier on this call").
+export const jobOnRecord = (records: string): boolean => /\bStarted task #\d+|\bAlready started on this call|\bOwed right after the call\b|\bStarted researching\b|\bsaved an ask\b/i.test(records);

@@ -110,8 +110,10 @@ export function alsoSaid(notes: { text: string }[]): string[] {
   return notes.map((n) => String(n?.text ?? "").match(/^Also said on the call: "([^"]+)"/)?.[1]).filter((x): x is string => !!x);
 }
 
-export async function promiseCloseCheck(task: Pick<CoTask, "goal" | "theirWords" | "createdAt" | "source"> & { notes?: { text: string }[] }, sentThisTurn: string[], deps: Pick<TaskTurnDeps, "sentSince" | "now">, docsThisTurn: string[] = []): Promise<{ ok: boolean; why: string }> {
-  if (task.source !== "promise") return { ok: true, why: "not a promise" };
+// A job dispatched during a call (dispatchKey, services/coTasks.ts) closes as done the same way (Royce, 2026-11-02: "Don't call a helper
+// job completed until its result is verified and its delivery status is known"): only once a send about it went out after it started.
+export async function promiseCloseCheck(task: Pick<CoTask, "goal" | "theirWords" | "createdAt" | "source"> & { dispatchKey?: string | null; notes?: { text: string }[] }, sentThisTurn: string[], deps: Pick<TaskTurnDeps, "sentSince" | "now">, docsThisTurn: string[] = []): Promise<{ ok: boolean; why: string }> {
+  if (task.source !== "promise" && !task.dispatchKey) return { ok: true, why: "not a promise" };
   const at = new Date(task.createdAt);
   // A few days back too, so the refusal can say plainly that an earlier send doesn't count.
   const sends: Sent[] = [

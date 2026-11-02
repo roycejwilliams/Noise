@@ -1036,6 +1036,28 @@ export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
 const NEVER_ON_CALL: ReadonlySet<NonNullable<Ability["confirm"]>> = new Set(["affects_another_member", "costs_money"]);
 export const callRunFor = (tool: string): CallRun | null => CALL_RUN[tool] ?? null;
 
+// GPT-Live calls (Royce, 2026-11-02: "Wire the existing helpers into the current GPT-Live call path"): the call's thinking gets the
+// allow-list above, less what doesn't fit a GPT-Live call. Left out, with why:
+//   - every "after" tool (a page, a deck, a document): on a call it carried on in this process past a short wait, so a restart or a
+//     redeploy lost it, and nothing durable said it was owed. On GPT-Live that work is a task (startTask: a co_tasks row, written
+//     before Cue says it started, whose own turn writes the document and texts it).
+//   - what shares publicly, grants access, or deletes what can't come back (below): private, reversible work only.
+//   - web search and page reads were never on the list: webSearch is an Exa search (12 s timeout) plus a Sonnet pick plus a read of each
+//     result's page, too slow to wait on mid-turn, so on a call that work is a task too.
+export const LIVE_CALL_LEFT_OUT: Readonly<Record<string, string>> = {
+  shareArtifact: "makes a link anyone can open",
+  resetLink: "changes who can open a link",
+  calendarConnection: "grants access to their calendar",
+  takeDownPage: "deletes a page for good",
+  deleteImages: "deletes their photos for good",
+};
+export function liveCallToolNames(): string[] {
+  return callToolNames().filter((t) => CALL_RUN[t]?.run === "now" && !LIVE_CALL_LEFT_OUT[t]);
+}
+// Tools whose done result is durable work that texts them later (a co_tasks row or a saved ask): only these back a spoken "I'll text
+// you what I find" or "I've started on it" (services/callClaims.ts jobBacked).
+export const startsWork = (tool: string): boolean => { const r = CALL_RUN[tool]; return !!r && r.run === "now" && r.kind === "start"; };
+
 // The tools that run on a call: registry entries marked onCall that are on the allow-list above, never one that affects another
 // member or costs money, never a team-only one (services/callTools.ts).
 export function callToolNames(): string[] {

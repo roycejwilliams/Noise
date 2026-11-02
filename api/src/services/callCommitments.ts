@@ -8,6 +8,7 @@
 // and "I'll set that up and text you what I find": that is multi-day work the call-task read opens (services/callTasks.ts).
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
+import { promiseTopic } from "./offerGuard.js";
 import { OFFERS_WHAT_CO_CANT } from "./taskWeb.js";
 import { MAX_OPEN_PROMISES, promiseGoal, theirWordsFor } from "./promises.js";
 import { noteOnTask, openTasks, startTask, type CoTask } from "./coTasks.js";
@@ -138,16 +139,29 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
 // The post-call fallback (the direct-Haiku path says these with nothing watching): the same, from the transcript, once each.
 // skip: Cue's lines from a turn whose tool already did it on the call (services/callLedger.ts call.turn_acted): never a promise to
 // keep again after the call.
-export async function trackCommitmentsFromTranscript(userId: string, transcript: string, o: { skip?: string[] } = {}): Promise<number> {
+export async function trackCommitmentsFromTranscript(userId: string, transcript: string, o: { skip?: string[]; jobs?: string[] } = {}): Promise<number> {
   const co = transcript.split("\n").filter((l) => /^assistant:/i.test(l.trim())).map((l) => l.replace(/^assistant:\s*/i, ""));
   const theirs = transcript.split("\n").filter((l) => /^user:/i.test(l.trim())).map((l) => l.replace(/^user:\s*/i, ""));
   let n = 0;
-  for (const s of commitmentsNotCovered(commitmentsIn(co), o.skip ?? [])) if ((await trackCallCommitment({ userId, sentence: s, theirLine: theirs[theirs.length - 1] })).ok) n++;
+  for (const s of coveredByJobs(commitmentsNotCovered(commitmentsIn(co), o.skip ?? []), o.jobs ?? [])) if ((await trackCallCommitment({ userId, sentence: s, theirLine: theirs[theirs.length - 1] })).ok) n++;
   return n;
 }
 
 // Pure: the commitments not already kept by a tool on the call (the same sentence, compared as plain words).
 const plainWords = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+// Pure: the commitments no job started on the call is about (2026-11-02, GPT-Live: the voice says the thinking's words in its own, so
+// "I'll text you what I find on venues" reaches the transcript reworded and never matches the sentence the turn recorded). A commitment
+// whose subject words all appear in what a job started on the call was for (callLedger.ts done rows of kind "start": "took on a task
+// for them: venues for 40 in the Mission") is that job's, never a second task. One with no subject is left as it was.
+export function coveredByJobs(found: string[], jobs: string[]): string[] {
+  if (!jobs.length) return found;
+  const hay = ` ${plainWords(jobs.join(" "))} `;
+  const stem = (w: string) => [w, w.replace(/ies$/, "y"), w.replace(/es$/, ""), w.replace(/s$/, "")].filter((x) => x.length >= 3);
+  return found.filter((s) => {
+    const topic = promiseTopic(s);
+    return !topic.length || !topic.every((w) => stem(w).some((x) => hay.includes(` ${x}`)));
+  });
+}
 export function commitmentsNotCovered(found: string[], covered: string[]): string[] {
   const done = covered.map(plainWords).filter(Boolean);
   return found.filter((s) => { const w = plainWords(s); return !done.some((d) => d === w || (d.length >= 20 && (d.includes(w) || w.includes(d)))); });

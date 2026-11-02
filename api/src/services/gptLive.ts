@@ -9,9 +9,11 @@
 //     for, when to hand a turn over, and that nothing happens on the call). Everything detailed (what Cue knows about them, the
 //     rules, what Cue can do) is in the thinking's prompt: the ElevenLabs agent's own (promptForElevenLabs over
 //     prompts/co-system-prompt.md, filled with this member's values).
-//   - Thinking is Claude through the call brain (services/callLlmProxy.ts runCallLlm) with no tools: read-only. GPT-Live hands
-//     a turn over (client delegation), the brain answers from the caller's own prompt and this call's transcript, and GPT-Live
-//     says the answer. Nothing is sent or written mid-call; promises are picked up after it (services/callFollowThrough.ts).
+//   - Thinking is Claude through the call brain (services/callLlmProxy.ts runCallLlm). GPT-Live hands a turn over (client
+//     delegation), the brain answers from the caller's own prompt and this call's transcript, and GPT-Live says the answer. Since
+//     2026-11-02 the brain has Cue's helpers on the call (LIVE_TOOLS_GUIDE, liveCallTools: the call allow-list under the texting tools'
+//     guard): a quick read answers live, longer work is a task written before Cue says it started, and what Cue says about it is held
+//     to it in code. A safety turn has none. What's still owed after the call is picked up then (services/callFollowThrough.ts).
 //   - After the call the transcript runs the same post-call steps as ElevenLabs' webhook (routes/co.ts runGptLivePostCall).
 import { randomBytes } from "crypto";
 import { DateTime } from "luxon";
@@ -20,7 +22,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { CALL_CRITERIA } from "./callEvals.js";
-import { callClosing, runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
+import { callClosing, runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type AnthropicEvent, type CallToolset, type OaiRequest } from "./callLlmProxy.js";
 import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation, withVoiceReadRule } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { parseModelJson } from "./modelJson.js";
@@ -107,11 +109,13 @@ export function liveCallPrompt(voiceLayer: string): string {
   for (const [from, to] of ON_CALL_REWRITES) p = p.split(from).join(to);
   return p;
 }
-// Said to the thinking on a GPT-Live call (review of #325): Claude promises "right after the call", through the call brain's checks.
-export const NOTHING_ON_THIS_CALL = "Nothing can be set up, looked up, sent or scheduled on this call. When they want something done, say you'll do it right after the call. Never say it's done, set up, started or on its way.";
+// Said to the thinking on a GPT-Live turn that has no tools (a safety turn, or the tools couldn't be read): nothing is started, so nothing
+// is promised (2026-11-02: a promise needs a job behind it before it's said; the after-call transcript read is a backstop, not a job).
+export const NOTHING_ON_THIS_CALL = "Nothing can be set up, looked up, sent or scheduled on this turn. Don't promise to do anything later, and never say it's done, set up, started or on its way. If they want something done, say plainly you can't start it right this moment.";
 // GPT-Live's version: it never promises anything itself (every promise is the thinking's, so it passes the offer guard's promise
 // check), and never says something is done.
-export const NOTHING_ON_THIS_CALL_LIVE = "Nothing can be set up, looked up, sent or scheduled on this call, and you can't end it. Never promise anything yourself, and never say it's done, set up, started or on its way: what happens and when comes from your thinking.";
+// (2026-11-02: the thinking can now act on the call, so this says what's true of the voice itself.)
+export const NOTHING_ON_THIS_CALL_LIVE = "You can't set up, look up, send or schedule anything yourself, and you can't end the call: only your thinking can. Never promise anything yourself, and never say it's done, set up, started or on its way: what happens and when comes from your thinking.";
 // Safety on GPT-Live's own side: the crisis resources are the thinking's, said exactly (the bridge sends a safety turn as an
 // instruction to say it word for word, sayExactly).
 export const SAFETY_FROM_THINKING = "Anything about their safety, and any crisis line or number, comes from your thinking: say it exactly as it comes, in full.";
@@ -238,7 +242,7 @@ export function liveInstructions(o: { firstName: string; direction: "inbound" | 
 // 10-31 delegated answers ran p50 ~400 characters, ~70 words, ~25 s spoken; 2 of 3 GPT-Live calls failed short_spoken_replies) follows
 // OpenAI's delegation guide ("Keep answers concise ... Avoid long explanations"): guidance, never a cap in code.
 export const BACKEND_NOTE = `# How this call runs
-This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. ${NOTHING_ON_THIS_CALL} Anything they want goes out by text right after it. When they're wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual.`;
+This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. When it takes several steps, say the first few as short complete steps and stop there so they can say go on; never leave a step, a condition or a safety instruction half said. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. What you can do on this call, if anything, is in the note that comes with each turn. When they're wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual.`;
 
 // Everything one GPT-Live call needs, built by the TwiML route for the verified caller only.
 export type LiveCall = { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; callKey: string; voiceOn: boolean; instructions: string; backendSystem: string; opening: OpeningContext; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; budgetLimited?: boolean };
@@ -336,11 +340,61 @@ export function delegationRequest(call: LiveCall, turns: LiveTurn[]): OaiRequest
   return { messages: [{ role: "system", content: call.backendSystem }, ...turns.map((t) => ({ role: t.who === "member" ? "user" : "assistant", content: t.text }))], tools: [END_CALL_TOOL], stream: true, temperature: AGENT_DEFAULTS.temperature };
 }
 export type Upstream = (req: ARequest, userId: string) => AsyncIterable<AnthropicEvent>;
-// One delegated turn through the call brain, with no tools: it can only think and answer. Its sentences are cleaned and checked
+// One delegated turn through the call brain, with Cue's helpers when it isn't a safety turn (ThinkOptions.tools). Its sentences are cleaned and checked
 // as on the ElevenLabs path (speakable, offer guard); what it held back is reported. guard: the live guards (services/whatCoKnows.ts
 // guardCallMessages), so a correction or removal made by text during the call reaches the very next turn. safety: the turn touched
 // their safety (callLlmProxy.ts safetyCall, over the request and the answer), so its words are said exactly (SAY_EXACTLY).
 export type MessageGuard = (messages: OaiRequest["messages"]) => Promise<OaiRequest["messages"]>;
+
+// ---------------------------------------------------------------- Cue's helpers on a GPT-Live call (Royce, 2026-11-02)
+// GPT-Live itself can't call a function (OpenAI rejects session.tools), so the helpers are the thinking's: Claude, behind each delegated
+// turn, gets the call allow-list (services/capabilities.ts liveCallToolNames) built by services/callTools.ts buildCallTools from the
+// texting tools, under the same guard (agent/toolGuard.ts: a direct ask is a yes, consequence gating, a receipt on every outcome, no
+// free retry for a send or a change). runCallLlm runs them mid-answer: a quick read (the event feed, what Cue knows) inside its own
+// timeout, and longer work as a task (a co_tasks row with an owner, written before Cue says it started) that runs after and texts them.
+// What Cue says about it is held to it in code (services/callClaims.ts jobBacked). A safety turn gets no tools at all.
+export const LIVE_TOOLS_GUIDE = `# Doing things on this call
+Your tools here are real, and their results are what you may say.
+- Act when the need is clear, even if they didn't name a helper: something they want found, followed up, put together or kept track of. A feeling or a vent is received first, not turned into work; a simple question gets a simple answer from what you know. Never start work just to recap the call.
+- Quick: searchEvents looks at the event feed now, and what it returns can be said. That's the only looking-up done mid-call: for anything on the web, prices, hours, people or longer research, start a task.
+- Longer: startTask (or researchBrief for venues) starts the work now; it runs after and texts them what comes of it, and a document they need is written by that task and texted. Carry their own words, the facts that matter and any correction into it.
+- Say you started something only after its tool comes back done, and say you'll text them something only when a task for it came back done. If it didn't, say plainly it didn't go through; don't promise it later.
+- While a tool runs, a few natural words of your own are fine: about what you're doing, never that it's done or on its way.
+- A change to work you started on this call goes on that same task with updateTask, in their words. If they want it stopped, close it with closeTask and say what the result says already happened; never say something was undone that wasn't.
+- Never send anything as them, share anything of theirs, spend, sign, book, or give anyone access, and never say anything about another member's conversations. Those wait for them, by text.
+- Any question for them comes last, after the result.`;
+// What a turn without tools is told, and the note that carries a capped answer to the next turn.
+export const capNote = (unsaid: string[]): string => `(Cue's note, not their words: your last answer stopped at the length one phone turn allows, before: "${unsaid.join(" ").replace(/\s+/g, " ").slice(0, 700)}". If they want the rest, go on from there in a few short complete steps.)`;
+export type LiveToolsFor = (call: LiveCall, req: OaiRequest) => Promise<CallToolset | null>;
+// The real builder: the call's member read fresh (their open tasks, the stop list), what they said this turn and on the whole call.
+export const liveCallTools: LiveToolsFor = async (call, req) => {
+  const [T, C, Y] = await Promise.all([import("./callTools.js"), import("./capabilities.js"), import("./theirYes.js")]);
+  const member = await T.loadMemberOnCall(call.userId);
+  T.warmCallOnFile(call.callKey, call.userId);
+  return T.buildCallTools({ userId: call.userId, callKey: call.callKey, member, ...liveCallWords(req, Y.exchangeText), only: C.liveCallToolNames(), guide: LIVE_TOOLS_GUIDE });
+};
+// Pure: what they said this turn (their lines since Cue last spoke: where a yes must be), everything they said on the call, Cue's last
+// line, and the turns before this one (what a yes answers).
+export function liveCallWords(req: OaiRequest, exchange: (x: { side: "member" | "co"; text: string }[]) => string): { turnWords: string; callWords: string; lastCoLine: string | null; recentExchange: string } {
+  const txt = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
+  const msgs = req.messages.filter((m) => m.role === "user" || (m.role === "assistant" && txt(m).trim()));
+  let i = msgs.length;
+  while (i > 0 && msgs[i - 1].role === "user") i--;
+  return {
+    turnWords: msgs.slice(i).map(txt).join(" ").trim(),
+    callWords: msgs.filter((m) => m.role === "user").map(txt).join("\n"),
+    lastCoLine: i > 0 ? txt(msgs[i - 1]).trim() || null : null,
+    recentExchange: exchange(msgs.slice(0, i).map((m) => ({ side: m.role === "user" ? ("member" as const) : ("co" as const), text: txt(m) }))),
+  };
+}
+export type ThinkOptions = {
+  // This turn's tools (liveCallTools), built only when it isn't a safety turn.
+  tools?: LiveToolsFor | null;
+  // What the word cap kept from the last answer (capNote), and where this answer's capped rest goes.
+  carry?: string[] | null;
+  onCapped?: (unsaid: string[]) => void;
+  onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
+};
 // voiceLine: the live voice read's line for this turn (services/mediaStreamBridge.ts voiceReadLineFor, through routes/callLlm.ts
 // voiceLineForTurn), to Claude only, never to GPT-Live; runCallLlm puts it after their words and drops it on a safety call.
 // onSentence (2026-11-02, voice latency): each sentence the call brain lets through, as it comes, so the bridge can hand it to GPT-Live
@@ -350,15 +404,21 @@ export type MessageGuard = (messages: OaiRequest["messages"]) => Promise<OaiRequ
 // whole answer is read first, as before, so a crisis line goes out word for word (sayExactly). Never on a closing turn either (their
 // goodbye, or their reply to Cue's: callClosing, the read that lets end_call through), where Claude may end the call and its words then
 // go unsaid (review of #345: in a real stream the text comes hundreds of ms before end_call). streamed says which way this turn went.
-export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard, voiceLine?: (callKey: string, req: OaiRequest) => Promise<string | null>, onSentence?: (text: string) => boolean) {
+export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard, voiceLine?: (callKey: string, req: OaiRequest) => Promise<string | null>, onSentence?: (text: string) => boolean, o: ThinkOptions = {}) {
   const req = delegationRequest(call, turns);
   if (guard) req.messages = await guard(req.messages).catch(() => req.messages);
+  const safety0 = safetyCall(req);
   const voiceRead = call.voiceOn && voiceLine ? await voiceLine(call.callKey, req).catch(() => null) : null;
-  const streamed = !!onSentence && !safetyCall(req) && !callClosing(req);
+  // A safety turn runs no helpers: nothing is built, so nothing can slow or fail it.
+  const tools = !safety0 && o.tools ? await o.tools(call, req).catch(() => null) : null;
+  if (!tools) req.messages.splice(1, 0, { role: "system", content: NOTHING_ON_THIS_CALL });
+  if (o.carry?.length) req.messages.splice(1, 0, { role: "system", content: capNote(o.carry) });
+  const streamed = !!onSentence && !safety0 && !callClosing(req);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
+  const ran: string[] = [];
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") {
       text += d.content;
@@ -372,7 +432,7 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   // one safety mention every later answer went out word for word, "what's on for Friday?" included).
   const exact = !!said && SAFETY_LINE.test(said);
   // Even an answer longer than one append: a crisis line anywhere in it makes this a safety turn (voiceCap keeps the line).
-  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact, endCall, streamed, stopped };
+  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact, endCall, streamed, stopped, ran, tools: !!tools };
 }
 // Pure: an answer cut to one append (GPT_LIVE.commentaryMaxChars, under OpenAI's 500 tokens). A crisis or safety line past the cut is
 // never lost (review of #345): the answer then starts at the sentence that carries it.

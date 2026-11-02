@@ -49,6 +49,9 @@ export type CoTask = {
   kind?: "work" | "followup" | "research_brief";
   followup?: any;
   targetKey?: string | null;
+  // A job dispatched during a call (services/callTools.ts): the call and the need, so the same need asked again on the same call is
+  // this job, never a second one (dispatchKeyFor). Null for every other task.
+  dispatchKey?: string | null;
   // Where it came from: what they asked for, a promise Co made in a reply (services/promises.ts), or a look-out Co said on a call
   // it would keep (harness/callGrounding.ts openPromiseThread): its own kind, outside the send-promise cap and checks.
   source?: "ask" | "promise" | "lookout";
@@ -262,6 +265,7 @@ function rowTo(r: any): CoTask {
     kind: r.kind === "followup" ? "followup" : r.kind === "research_brief" ? "research_brief" : "work",
     followup: r.followup ?? null,
     targetKey: r.target_key ?? null,
+    dispatchKey: r.dispatch_key ?? null,
     source: r.source === "promise" ? "promise" : r.source === "lookout" ? "lookout" : "ask",
     window: r.kind === "followup" || r.kind === "research_brief" ? null : windowOf(r.followup),
     lookoutOrigin: lookoutOriginOf(r.source, r.followup),
@@ -313,16 +317,38 @@ async function underTaskLock<T>(userId: string, fn: (db: TaskDb) => Promise<T>):
 }
 
 // exactAt: a check-in Co agreed to at a set moment (goalOwnership.ts), kept to that moment rather than rounded to hours.
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+// Pure: a call job's key (Royce, 2026-11-02: "A dispatched job must survive disconnects, session end and retries without duplicate
+// work"): the call, and the need as its goal's own words (lowercased, sorted, once each), so the same need started again on the same
+// call, in the same words in any order, is the same job. Reworded, it's caught by the open-task check (agent/conversationTools.ts
+// statusCandidate), which Cue decides on.
+const KEY_PLAIN = new Set("that this those these with what when where them they their your from have just also about into over then than some more find look looking research send text them help find".split(" "));
+export function dispatchKeyFor(callKey: string, goal: string): string {
+  const need = [...new Set(goal.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).map((w) => w.replace(/^'+|'+$/g, "").replace(/'s$/, "").replace(/(?<=\w{3})s$/, "")).filter((w) => w.length >= 3 && !KEY_PLAIN.has(w)))].sort().join(" ");
+  return `call:${callKey}:${need}`.slice(0, 300);
+}
+
+// The open job this call already started for this need, if any (read before any other check, so a repeat is the same job).
+export async function openCallJob(userId: string, dispatchKey: string, db: TaskDb = pool): Promise<CoTask | null> {
+  const { rows } = await db.query(`SELECT * FROM co_tasks WHERE user_id = $1 AND dispatch_key = $2 AND status = 'open' ORDER BY id LIMIT 1`, [userId, dispatchKey]);
+  return rows[0] ? rowTo(rows[0]) : null;
+}
+
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null; dispatchKey?: string | null }): Promise<{ ok: true; task: CoTask; existing?: boolean } | { ok: false; why: string }> {
   const r = await underTaskLock(input.userId, (db) => startTaskLocked(input, db));
   // The commitment ledger (services/commitmentLog.ts): a promise, a call look-out or a goal's piece is logged with its fire time.
-  if (r.ok) {
+  if (r.ok && !r.existing) {
     const L = await import("./commitmentLog.js");
     if (L.isCommitment(r.task)) await L.logCommitment("created", { userId: r.task.userId, taskId: r.task.id, goalId: r.task.followup?.goalId ?? null, fireAt: r.task.nextCheckAt, what: r.task.goal, source: r.task.source ?? null });
   }
   return r;
 }
-async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskDb): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskDb): Promise<{ ok: true; task: CoTask; existing?: boolean } | { ok: false; why: string }> {
+  // The same need already started on this call (a retry, a repeat, a turn run again): that job, as it is. Read under the lock, so two
+  // starts at once never both insert; the unique index (db/migrations.ts) is the backstop.
+  if (input.dispatchKey) {
+    const same = await openCallJob(input.userId, input.dispatchKey, db);
+    if (same) return { ok: true, task: same, existing: true };
+  }
   const open = await openTasks(input.userId, db);
   if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
   const goal = input.goal.trim().slice(0, 200);
@@ -333,9 +359,9 @@ async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskD
   const exact = input.exactAt && input.exactAt.getTime() > Date.now() && input.exactAt.getTime() - Date.now() <= TASK_LIMITS.maxHours * HOUR ? input.exactAt : null;
   const next = exact ?? firstCheckInWindow(capToFinal(new Date(Date.now() + clampNextHours(input.inHours) * HOUR), { finalCheckAt: dl?.finalCheckAt ?? null, finalTold: false }).at, input.window, new Date());
   const { rows } = await db.query(
-    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, source, followup)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11::jsonb) RETURNING *`,
-    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.source ?? "ask", followupJson(input)],
+    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, source, followup, dispatch_key)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11::jsonb, $12) RETURNING *`,
+    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.source ?? "ask", followupJson(input), input.dispatchKey ?? null],
   );
   return { ok: true, task: rowTo(rows[0]) };
 }

@@ -100,6 +100,8 @@ export type ConversationToolContext = {
   findUseRead?: import("./findGuards.js").FindUseRead;
   // A live call (services/callTools.ts): nothing but a link is texted mid-call.
   onCall?: boolean;
+  // The live call's key: a task started on it is that call's job for that need (services/coTasks.ts dispatchKeyFor).
+  callKey?: string | null;
   // Whether the reply loop has a step and the seconds left for a redraft (agent/conversationReply.ts); unset means it has.
   redraftLeft?: () => boolean;
   // The reaction already put on their text this turn (routes/sendblue.ts ack),
@@ -737,6 +739,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom }) => {
         const T = await import("../services/coTasks.js");
+        // On a call, the same need started again on the same call (a repeat, a retry) is the job already running: nothing new starts.
+        const dispatchKey = ctx.onCall && ctx.callKey ? T.dispatchKeyFor(ctx.callKey, goal) : null;
+        const sameJob = dispatchKey && !ctx.dryRun ? await T.openCallJob(ctx.userId, dispatchKey).catch(() => null) : null;
+        if (sameJob) {
+          ctx.facts?.add("did_this_turn", `Already started on this call: task #${sameJob.id} "${sameJob.goal}" is this same job; nothing new was started.`);
+          return { ok: true, taskId: sameJob.id, state: "queued", alreadyStarted: true, nextCheckAt: sameJob.nextCheckAt, note: "This is the job you already started on this call, not a new one. If they changed something about it, write it on it with updateTask." };
+        }
         const recent = ctx.dryRun
           ? ""
           : await pool
@@ -795,13 +804,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const offer = lookout ? T.watchOfferIn(String(ctx.lastCoMessage ?? "")) : null;
         const offerLogged = offer ? await import("../harness/proactive.js").then((P) => P.replyWatchOfferLogged(ctx.userId, String(ctx.lastCoMessage ?? ""))).catch(() => false) : false;
         const origin = lookout ? T.lookoutOriginAt({ message: ctx.resolvedContent, quote: theirWords, lastCoMessage: ctx.lastCoMessage, offerLogged }) : null;
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Cue's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}) });
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Cue's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}), ...(dispatchKey ? { dispatchKey } : {}) });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };
         }
+        if (r.existing) {
+          ctx.facts?.add("did_this_turn", `Already started on this call: task #${r.task.id} "${r.task.goal}" is this same job; nothing new was started.`);
+          return { ok: true, taskId: r.task.id, state: "queued", alreadyStarted: true, nextCheckAt: r.task.nextCheckAt, note: "This is the job you already started on this call, not a new one. If they changed something about it, write it on it with updateTask." };
+        }
         ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Cue will work on it first around ${r.task.nextCheckAt ? localStamp(r.task.nextCheckAt, zone) : "soon"}: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Cue's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt ? localStamp(r.task.finalCheckAt, zone) : "the day before"}.` : ""}`);
-        return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt, ...(alsoOpen ? { note: alsoOpen } : {}) };
+        // state: queued (the row exists and nothing has run yet). It runs at nextCheckAt and texts them what comes of it.
+        return { ok: true, taskId: r.task.id, state: "queued", nextCheckAt: r.task.nextCheckAt, ...(alsoOpen ? { note: alsoOpen } : {}) };
       },
     }),
     // The door (services/theDoor.ts): a new member's first read, once. Code holds the facts (once, new members, their own words,
@@ -862,7 +876,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         if (closing && closing.source !== "lookout") state.closedTaskGoals.push(closing.goal);
         ctx.facts?.add("did_this_turn", `Closed task #${taskId} (${status}): ${outcome}`);
-        return { ok: true };
+        // A stop can't take back what already went (2026-11-02: "if something already happened, state that accurately"): what it
+        // already texted them and how many times it ran, from the row as it was before the close.
+        const already = closing && (closing.textsSent > 0 || closing.wakes > 0) ? `Stopped now; nothing more runs for it. Before the stop it had already ${closing.textsSent > 0 ? `texted them ${closing.textsSent} time${closing.textsSent === 1 ? "" : "s"}` : "run"}${closing.textsSent > 0 && closing.wakes > 0 ? ` over ${closing.wakes} run${closing.wakes === 1 ? "" : "s"}` : closing.textsSent === 0 && closing.wakes > 0 ? ` ${closing.wakes} time${closing.wakes === 1 ? "" : "s"}, with nothing texted` : ""}: that can't be taken back, so don't say it was undone.` : "Stopped before it ran: nothing from it went out.";
+        return { ok: true, ...(status === "dropped" ? { already } : {}) };
       },
     }),
 
