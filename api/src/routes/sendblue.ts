@@ -1,5 +1,5 @@
 import { notToTeammate } from "../services/teamLines.js";
-import { threadWindow, WINDOW_MAX_ROWS } from "../services/threadWindow.js";
+import { OLD_WINDOW_ROWS, threadWindow, WINDOW_MAX_ROWS } from "../services/threadWindow.js";
 import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -1501,7 +1501,8 @@ export function sendblueRouter(io: Server): Router {
         // Through the live guards (services/whatCoKnows.ts guardRows): a text saying something they had removed is left out, and one
         // still saying what they corrected away carries the correction inline.
         const chronological = threadWindow(chronologicalResult.rows);
-        const chronologicalRows = await import("../services/whatCoKnows.js").then((W) => W.guardRows(user.id, chronological)).catch(() => chronological);
+        // A failed guard read sends the old, shorter window unguarded, never the longer one.
+        const chronologicalRows = await import("../services/whatCoKnows.js").then((W) => W.guardRows(user.id, chronological)).catch(() => chronological.slice(-OLD_WINDOW_ROWS));
         const recentConversation = annotateConversationGaps(chronologicalRows);
         if (hasText) {
           turnP = assembleContext(user.id, resolvedContent, {
