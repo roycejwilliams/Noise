@@ -29,8 +29,7 @@ import {
   type OpenItem,
 } from "./profileExtraction.js";
 import { applyStyleUpdate, MAX_NOTES } from "./textingStyle.js";
-import { activePreferences, learnPreferences, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
-import { localDay, memberZone } from "./memberTime.js";
+import { markCadenceTwin } from "./memberPreferences.js";
 
 export type TurnLearningInput = {
   userId: string;
@@ -41,6 +40,8 @@ export type TurnLearningInput = {
   coSaidBefore: string | null; // Co's line right before their message, for style
   // The message's own id (its Sendblue handle), the source a preference records (services/memberPreferences.ts).
   sourceRef?: string | null;
+  // The rules the read before the reply stored from this message (capturePreferencesNow): their twins are marked here.
+  preferenceIds?: string[];
 };
 
 type OnFileProfile = {
@@ -61,8 +62,6 @@ export function turnLearningPrompt(o: {
   openAsks: OpenItem[];
   styleNotes: string[];
   coSaidBefore: string | null;
-  // Their rules on file and their local date (services/memberPreferences.ts): item 10 reads new ones and changes to these.
-  preferences?: { onFile: Parameters<typeof preferencePromptItem>[0]["onFile"]; localToday: string };
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -89,7 +88,7 @@ ${openItemsBlock(o.openAsks)}
   - goals: things they are working toward.
   - goals and activity_preferences come only from what they say about themselves or want for themselves, never from the subject of a one-off request (research, a document, advice, a single search): "find me venues for my launch party" alone is not a goal or an interest; "I'm launching in November, find me venues" gives the goal "launch in November".
   - blockers: challenges or struggles in their life they mentioned (never frustrations with Cue itself).
-  - availability_pattern: how often and when they want to connect (e.g. "weekday evenings").
+  - availability_pattern: how often and when they want to connect (e.g. "weekday evenings"): when they're free for things, never how often or when Cue may text or call them (that's a rule of theirs, read elsewhere).
   - city: ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target ("roles in NYC", "investors in NYC", "events in Miami"). Empty string if they didn't say.
   - emotional_state: one word for their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout).
   - long_term_direction: a sentence capturing their longer-term personal and career direction, distinct from immediate goals. Empty string if not discussed.
@@ -112,13 +111,11 @@ ${openItemsBlock(o.openAsks)}
 Current notes:
 ${o.styleNotes.length ? o.styleNotes.map((n) => `- ${n}`).join("\n") : "(none)"}
 Cue's message right before theirs: "${(o.coSaidBefore ?? "").slice(0, 600)}"
-Only change the notes if what they just said makes clear how they want Cue to text them: length, directness, detail, questions, tone, emoji, timing, what to lead with ("just tell me", "shorter please", "stop asking so many questions", "more detail", "that's not what I need, focus on X"). A normal reply is not a preference. Never note anything about their life or plans here, only how Cue should text them. If something changes, return the full updated list (at most ${MAX_NOTES}, each a short instruction to Cue, newest last; drop any older note the new one contradicts).
+Only change the notes if what they just said makes clear how they want Cue to text them: length, directness, detail, questions, tone, emoji, what to lead with ("just tell me", "shorter please", "stop asking so many questions", "more detail", "that's not what I need, focus on X"). A normal reply is not a preference. Never note anything about their life or plans here, only how Cue should text them; how often or when Cue reaches out is never a style note (it's a rule of theirs, read elsewhere). If something changes, return the full updated list (at most ${MAX_NOTES}, each a short instruction to Cue, newest last; drop any older note the new one contradicts).
 
 8. advice: this one is about Cue's own LAST line (the final "assistant" line), not the person's words and not earlier lines. Does that last line tell the person what to do about something specific in their life: how to handle a decision, a pitch, a hard conversation, or steps for a plan? Advice is any suggestion of an approach or a set of steps ("start by...", "I'd...", "bring a number", "say it early"), even when it ends with a question. It is not advice when the line only gives facts or event details, names events, answers a yes/no fact question, makes small talk, or only asks a question. If it is advice: {"topic": "a few words", "gist": "what Cue advised, in one sentence"}. Otherwise null.
 
 9. met_someone: did the person say, in their own words in their LAST message, that they met someone at an event (a person they talked to, got a contact from, hit it off with)? If yes, a short quote of exactly their words saying it. Otherwise null. Not for people they already knew, and not for plans to meet someone.
-
-${preferencePromptItem({ n: 10, onFile: o.preferences?.onFile ?? [], localToday: o.preferences?.localToday ?? o.today })}
 
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
@@ -129,8 +126,7 @@ Return ONLY valid JSON, no preamble:
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
  "advice": null or {"topic": "...", "gist": "..."},
- "met_someone": null or "their exact words",
- ${PREFERENCE_JSON_SHAPE}}`;
+ "met_someone": null or "their exact words"}`;
 }
 
 export type TurnLearning = {
@@ -145,7 +141,8 @@ export type TurnLearning = {
   advice: { topic: string; gist: string } | null;
   // Their words saying they met someone at an event (the morning report counts it).
   metSomeone: string | null;
-  // Standing instructions in what they just said, unvalidated (services/memberPreferences.ts parsePreferenceReads checks them).
+  // Standing instructions, unvalidated (services/memberPreferences.ts parsePreferenceReads checks them): the call's read returns them;
+  // a text turn's are read before the reply instead (capturePreferencesNow).
   preferences: unknown[];
 };
 
@@ -182,16 +179,13 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
   // The same transcript the separate calls read before.
   const transcript = turnTranscript(withoutTeammateLines(input.recentConversation), input.message, input.coReply);
   try {
-    const [{ rows: profileRows }, { rows: askRows }, prefs, zone] = await Promise.all([
+    const [{ rows: profileRows }, { rows: askRows }] = await Promise.all([
       pool.query(
         `SELECT city, life_chapters, goals, blockers, activity_preferences, long_term_direction, availability_pattern, texting_style
          FROM co_profiles WHERE user_id = $1`,
         [input.userId],
       ),
       import("./goalJourney.js").then((m) => m.openErrandsAndGoals(input.userId)).then((rows) => ({ rows })),
-      // A failed read: no rules listed, so a change can't name one; a new rule is still read and stored.
-      activePreferences(input.userId).catch(() => [] as Preference[]),
-      memberZone(input.userId).catch(() => null),
     ]);
     const row = profileRows[0] ?? null;
     const onFile: OnFileProfile | null = row
@@ -226,7 +220,6 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
         openAsks,
         styleNotes,
         coSaidBefore: input.coSaidBefore,
-        preferences: { onFile: prefs, localToday: localDay(new Date(), zone) },
       }),
     });
     const learned = parseTurnLearning(text);
@@ -271,12 +264,9 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
       // The advice Co gave in this reply, so it can ask how it went later.
       // The only place advice is recorded (the noteAdvice tool fired 1 time in 8 and was removed, 2026-09-30); a repeat topic is skipped.
       learned.advice ? recordAdvice(input.userId, learned.advice.topic, learned.advice.gist).catch(() => false) : Promise.resolve(false),
-      // Standing instructions (services/memberPreferences.ts): only quotes from this message, resolved against the rules listed above.
-      learned.preferences.length
-        ? learnPreferences(input.userId, learned.preferences, { message: input.message, zone, onFile: prefs, source: { via: "text", ref: input.sourceRef ?? null } }).catch((err: any) =>
-            console.error("turnLearning: preference write failed (non-fatal):", err?.message ?? err),
-          )
-        : Promise.resolve(null),
+      // The rules this message set were read before the reply (memberPreferences.ts capturePreferencesNow). A call cadence this same
+      // read took from those words is their twin: withdrawing the rule clears it too.
+      input.preferenceIds?.length && learned.cadence !== "unstated" ? markCadenceTwin(input.userId, input.preferenceIds).catch(() => {}) : Promise.resolve(null),
       // They said they met someone: on their most recent Co event, only if the quote is theirs.
       learned.metSomeone && metQuoteIsTheirs(learned.metSomeone, input.message) ? recordMetSomeone(input.userId, learned.metSomeone).catch(() => null) : Promise.resolve(null),
     ]);

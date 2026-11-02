@@ -28,7 +28,7 @@ import { LIFE_CHAPTERS_RULE, mightBeCorrection, PROFILE_JUDGMENT_MODEL } from ".
 import { parseModelJson } from "./modelJson.js";
 import { extractPsychographicProfile, openItemsBlock, RELATED_DROP_JSON, RELATED_DROP_RULE, storePlannedEventMention, storeProfile, type OpenItem } from "./profileExtraction.js";
 import { parseTurnLearning, type TurnLearning } from "./turnLearning.js";
-import { activePreferences, learnPreferences, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
+import { activePreferences, learnPreferences, markCadenceTwin, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
 import { localDay, memberZone } from "./memberTime.js";
 
 type OnFile = {
@@ -72,7 +72,7 @@ ${openItemsBlock(o.openAsks)}
   - goals: things they are working toward.
   - goals and activity_preferences come only from what they say about themselves or want for themselves, never from the subject of a one-off request (research, a document, advice, a single search): "find me venues for my launch party" alone is not a goal or an interest; "I'm launching in November, find me venues" gives the goal "launch in November".
   - blockers: challenges or struggles in their life they mentioned (never frustrations with Cue itself).
-  - availability_pattern: how often and when they want to connect (e.g. "weekday evenings").
+  - availability_pattern: how often and when they want to connect (e.g. "weekday evenings"): when they're free for things, never how often or when Cue may text or call them (that's item 7).
   - city: ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target ("roles in NYC", "investors in NYC", "events in Miami"). Empty string if they didn't say.
   - emotional_state: one word for their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout), from what the conversation showed, never one voice moment.
   - long_term_direction: a sentence capturing their longer-term personal and career direction, distinct from immediate goals. Empty string if not discussed.
@@ -262,9 +262,12 @@ export async function learnFromCall(input: {
   // Standing instructions said on the call (services/memberPreferences.ts): the same resolve and store as a text turn's, quotes checked
   // against their own lines on the call.
   if (learned.preferences.length) {
-    await learnPreferences(input.userId, learned.preferences, { message: theirLines(input.transcript), zone, onFile: prefs, source: { via: "call", ref: input.callRef ?? null } }).catch((err: any) =>
-      console.error("callLearning: preference write failed (non-fatal):", err?.message ?? err),
-    );
+    const stored = await learnPreferences(input.userId, learned.preferences, { message: theirLines(input.transcript), zone, onFile: prefs, source: { via: "call", ref: input.callRef ?? null } }).catch((err: any) => {
+      console.error("callLearning: preference write failed (non-fatal):", err?.message ?? err);
+      return null;
+    });
+    // A call cadence from the same read is the rule's twin: withdrawing the rule clears it too.
+    if (stored?.added.length && learned.cadence !== "unstated") await markCadenceTwin(input.userId, stored.added).catch(() => {});
   }
   saveCallLessons(input.userId, lessons).catch((err: any) => console.error("callLearning: lesson write failed (non-fatal):", err?.message ?? err));
   await recordDecision({
