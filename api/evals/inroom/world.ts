@@ -396,6 +396,10 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R([]);
   }
 
+  // The member's own rules and what's been sent (harness/notifyGate.ts): this world's members set none.
+  if (has("FROM co_facts WHERE owner_user_id = $1 AND relation = 'prefers'")) return R([]);
+  if (has("SELECT type, sent_at, notify_class FROM proactive_sends WHERE user_id = $1")) return R(W.proactiveSends.filter((s) => s.user_id === p[0]).map((s) => ({ type: s.type, sent_at: new Date(), notify_class: null })));
+  if (has("SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript'")) return R([]);
   // in-room sends cap / ledger
   if (has("SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'")) {
     return R(W.proactiveSends.filter((s) => s.user_id === p[0] && s.type === "in_room" && String(s.target_key).startsWith("in_room:")).map((s) => ({ target_key: s.target_key })));
@@ -404,11 +408,11 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     const re = new RegExp("^" + String(p[1]).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".") + "$");
     return R([{ n: W.proactiveSends.filter((s) => s.user_id === p[0] && s.type === "in_room" && re.test(s.target_key)).length }]);
   }
-  if (has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt) VALUES ($1, 'in_room'")) {
+  if (has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt) VALUES ($1, 'in_room'") || has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, notify_class) VALUES ($1, 'in_room'")) {
     if (!W.proactiveSends.some((s) => s.user_id === p[0] && s.target_key === p[1])) W.proactiveSends.push({ user_id: p[0], type: "in_room", target_key: p[1], message: p[2] });
     return R([]);
   }
-  if (has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind) VALUES ($1, $2, $3, $3, $4, true, $5)")) {
+  if (has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind) VALUES ($1, $2, $3, $3, $4, true, $5)") || has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, notify_class) VALUES ($1, $2, $3, $3, $4, true, $5, $6)")) {
     if (W.proactiveSends.some((s) => s.user_id === p[0] && s.target_key === p[2])) return R([]);
     W.proactiveSends.push({ user_id: p[0], type: p[1], target_key: p[2], message: p[3], id: W.proactiveSends.length + 1 });
     return R([{ id: W.proactiveSends.length }]);
