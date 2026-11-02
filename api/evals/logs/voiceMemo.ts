@@ -1,7 +1,7 @@
 // Railway logs never get a voice memo's words or a phone number
 // (routes/sendblue.ts voiceMemoText, 2026-10-18: the log line was
 // `Transcribed voice memo from +1…: "<the whole transcript>"`). Zero tokens:
-// the audio download and ElevenLabs are answered by a local fake fetch.
+// the audio download and OpenAI's transcription are answered by a local fake fetch (the CAF memo's conversion by a fake converter).
 //
 //   npx tsx --import ./evals/lib/modelGuard.mjs evals/logs/voiceMemo.ts
 import { readFileSync } from "fs";
@@ -32,16 +32,20 @@ const digits = PHONE.replace(/\D/g, "");
 const leaks = (lines: string[]) => lines.some((l) => l.includes(SECRET) || l.includes("Lisbon") || l.replace(/\D/g, "").includes(digits.slice(1)));
 
 const { voiceMemoText, phoneTail } = await import("../../src/routes/sendblue.js");
+// No ffmpeg in layer 1: the CAF memo's conversion to mp3 is answered locally.
+(await import("../../src/services/openaiAudio.js")).setConverterForTests(async () => Buffer.from([0x49, 0x44, 0x33]));
 
 // ---------------------------------------------------------------- the real transcription path
-// The audio download and ElevenLabs Scribe answered locally, so the code runs as it does live.
+// The audio download and OpenAI's transcription answered locally, so the code runs as it does live.
 const guardFetch = globalThis.fetch;
 const sawUrls: string[] = [];
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === "string" ? input : input?.url ?? String(input);
+  // The OpenAI SDK's one-time FormData check fetches "data:,"; answered here so the guard doesn't log it as an outside call.
+  if (url.startsWith("data:")) return new Response("");
   sawUrls.push(url);
   if (url === AUDIO_URL) return new Response(new Uint8Array([0x63, 0x61, 0x66, 0x66, 1, 2, 3, 4]), { status: 200, headers: { "content-type": "audio/x-caf" } });
-  if (/elevenlabs\.io/.test(url)) return new Response(JSON.stringify({ language_code: "en", language_probability: 1, text: SECRET, words: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  if (/api\.openai\.com\/v1\/audio\/transcriptions$/.test(url)) return new Response(JSON.stringify({ text: SECRET, languages: [{ code: "en" }] }), { status: 200, headers: { "content-type": "application/json" } });
   return guardFetch(input, init);
 }) as typeof fetch;
 
@@ -49,7 +53,7 @@ logged.length = 0;
 capture();
 const real = await voiceMemoText(AUDIO_URL, USER);
 release();
-check("the real path reached ElevenLabs (not the failure fallback)", sawUrls.some((u) => /elevenlabs\.io/.test(u)) && real === SECRET);
+check("the real path reached OpenAI (not the failure fallback), never ElevenLabs", sawUrls.some((u) => /api\.openai\.com/.test(u)) && !sawUrls.some((u) => /elevenlabs/.test(u)) && real === SECRET);
 check("real path: the transcript is returned for the reply", real === SECRET);
 check("real path: a log line says a memo was transcribed", logged.some((l) => /voice memo transcribed/.test(l)));
 check("real path: the log names the user id and the length", logged.some((l) => l.includes(USER) && l.includes(`${SECRET.length} chars`)));

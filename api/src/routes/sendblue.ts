@@ -13,7 +13,7 @@ import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { LockWaitTimeout, withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
-import elevenlabs from "../services/elevenlabs.js";
+import { transcribeAudio } from "../services/openaiAudio.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { getEmotionalContext, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
 import { findOrCreateUserByPhone, splitFullName } from "../services/identity.js";
@@ -234,38 +234,15 @@ async function isAudioUrl(url: string): Promise<boolean> {
   }
 }
 
-// iMessage voice memos are real-world always audio/x-caf (Apple's Core
-// Audio Format) — this previously hardcoded audio/mp4 + a .m4a filename
-// regardless of the actual format, so ElevenLabs tried to decode CAF bytes
-// as MP4 and every real iMessage voice memo failed transcription (confirmed
-// with a real voice memo: content-type was genuinely audio/x-caf).
-const AUDIO_EXTENSIONS: Record<string, string> = {
-  "audio/x-caf": "caf",
-  "audio/mp4": "m4a",
-  "audio/m4a": "m4a",
-  "audio/mpeg": "mp3",
-  "audio/mp3": "mp3",
-  "audio/wav": "wav",
-  "audio/x-wav": "wav",
-  "audio/aac": "aac",
-  "audio/ogg": "ogg",
-};
-
-// Transcribe a voice memo by downloading it first, then sending to ElevenLabs Scribe
-// Download-first ensures ElevenLabs can access the audio regardless of Sendblue URL auth
+// Transcribe a voice memo by downloading it first (Sendblue's URL may need auth OpenAI doesn't have), then OpenAI
+// (services/openaiAudio.ts transcribeAudio). The content type is the real one: iMessage voice memos are audio/x-caf (Apple's
+// Core Audio Format; a hardcoded audio/mp4 once made every real memo fail), which OpenAI doesn't take, so it is converted to
+// mp3 there first.
 async function transcribeVoiceMemo(audioUrl: string): Promise<string> {
   const audioRes = await fetch(audioUrl, { signal: AbortSignal.timeout(10000) });
   if (!audioRes.ok) throw new Error(`Audio fetch failed: ${audioRes.status}`);
   const contentType = audioRes.headers.get("content-type")?.split(";")[0].trim() ?? "audio/mp4";
-  const extension = AUDIO_EXTENSIONS[contentType] ?? "m4a";
-  const arrayBuffer = await audioRes.arrayBuffer();
-  const file = new File([arrayBuffer], `voice_memo.${extension}`, { type: contentType });
-
-  const result = await elevenlabs.speechToText.convert({
-    modelId: "scribe_v2",
-    file,
-  });
-  return (result as { text: string }).text ?? "";
+  return transcribeAudio(Buffer.from(await audioRes.arrayBuffer()), contentType);
 }
 
 // A phone number as the logs may show it: the last four digits only.

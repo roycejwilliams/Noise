@@ -42,6 +42,7 @@
     "evals/adaptable/rules.ts",
     "evals/llmUsage/rules.ts",
     "evals/logs/voiceMemo.ts",
+    "evals/voice/openaiAudio.ts",
     "evals/langfuse/noText.ts",
     "evals/langfuse/traceText.ts",
     "evals/langfuse/roomTrace.ts",

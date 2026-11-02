@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import elevenlabs from "./elevenlabs.js";
+import { speak } from "./openaiAudio.js";
 
 interface AudioEntry {
   buffer: Buffer;
@@ -21,24 +21,13 @@ setInterval(() => {
   }
 }, AUDIO_TTL_MS);
 
+// Cue's words as a voice note: OpenAI speech (services/openaiAudio.ts) in the calls' voice (GPT-Live's, services/gptLive.ts
+// gptLiveVoice: marin unless GPT_LIVE_VOICE says otherwise), so Cue sounds the same on a call and in a note. mp3, served at
+// /audio/:id as audio/mpeg, as the ElevenLabs note was. Throws on any failure; callers send the words as a text instead.
 export async function generateVoiceNote(text: string): Promise<string> {
-  const stream = await elevenlabs.textToSpeech.convert(
-    process.env.ELEVENLABS_VOICE_ID!,
-    {
-      text,
-      // Eleven v4 (2026-10-03): #1 on quality, and a voice note isn't live, so
-      // its speed doesn't matter. Same ELEVENLABS_VOICE_ID as Co's call agent,
-      // so Co sounds the same on a call and in a note. eleven_turbo_v2_5 was deprecated.
-      modelId: process.env.VOICE_NOTE_MODEL || "eleven_v4",
-      outputFormat: "mp3_44100_128",
-    },
-  );
-
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return cacheAudioBuffer(Buffer.concat(chunks));
+  // Loaded here, not at the top: gptLive.ts pulls in the whole call stack, and this file is imported by the routes it imports.
+  const { gptLiveVoice } = await import("./gptLive.js");
+  return cacheAudioBuffer(await speak(text, gptLiveVoice()));
 }
 
 export function getAudioEntry(id: string): AudioEntry | undefined {
