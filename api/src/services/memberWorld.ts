@@ -56,8 +56,10 @@ export type MemberWorld = {
   // line Co can't know from one that says back their own news from an earlier turn.
   theirWords: string[];
 };
-// How many of their recent texts the thread read sees.
+// How many of their recent texts the thread read sees, and how much of each (2026-11-02: at 240 characters a member's long text lost
+// its last two paragraphs, and with them the news the read was meant to recognize as theirs).
 export const THEIR_WORDS_MAX = 12;
+export const THEIR_WORDS_CHARS = 600;
 // A thing Co sent them (services/turnContext.ts SentItem): when, its date or deadline if on file, and any reaction to it.
 export type SentRef = { name: string; sentAt: Date; endsOn?: string | null; reaction?: string | null };
 
@@ -266,7 +268,7 @@ export function buildMemberWorld(o: WorldInput): MemberWorld {
   const thread: WorldItem | null = threadText && threadLine ? { kind: "thread", name: threadText, fact: threadLine } : null;
   const lead = waiting[0] ?? running[0] ?? null;
   // Already fenced (sourceFence.ts fenceExchange: stripped, teammate lines dropped); only theirs, only from the window read.
-  const theirWords = (o.exchange ?? []).filter((l) => l.from === "member").slice(-THEIR_WORDS_MAX).map((l) => l.text.slice(0, 240));
+  const theirWords = (o.exchange ?? []).filter((l) => l.from === "member").slice(-THEIR_WORDS_MAX).map((l) => l.text.slice(0, THEIR_WORDS_CHARS));
   return { clock, waiting, running, next, thread, lead, withheld, theirWords };
 }
 
