@@ -28,7 +28,7 @@ check("asks are classified and profiles synced before each sweep", /await classi
 const pe = src("src/services/profileExtraction.ts");
 check("a new ask is classified and marked mentioned", /INSERT INTO ask_checkins \(user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at\)/.test(pe) && /classifyAsk\(ask\.text\)/.test(pe));
 check("restating an ask marks it mentioned again", /expires_at = COALESCE\(\$4::timestamptz, expires_at\), last_mentioned_at = NOW\(\)/.test(pe));
-check("an ask resolved from what they said closes in the profile too", /markIntentResolved\(user_id, resolvedAskIds\)/.test(pe));
+check("an ask resolved from what they said closes in the profile too", /markIntentResolved\(userId, asks\)/.test(pe));
 const ak = src("src/services/askKind.ts");
 check("closing an ask updates both places and retires its matches", /UPDATE ask_checkins SET resolved_at[\s\S]{0,500}markIntentResolved\(userId, \[askId\]\)[\s\S]{0,300}UPDATE relevance_edges SET status = 'retired'/.test(ak));
 check("unsure asks keep being searched", /return "find";\s*\}\s*\}/.test(ak));

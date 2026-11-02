@@ -167,6 +167,31 @@ export type RecheckStep = { goalHash: string; goal: string; action: RecheckActio
 
 export const isRecheckIdle = (r: Pick<RecheckRow, "state" | "source" | "reason">) => r.state === "stale" && r.source === "context" && r.reason === RECHECK_IDLE_REASON;
 
+// Unsure (closure audit, 2026-11-02; Royce: "when unsure, keep it, and ask once"): they dropped something, and the resolution read
+// couldn't tell whether this goal went with it (services/profileExtraction.ts applyRetirements). It stays active and searched, and its
+// recheck is due now instead of after RECHECK_AFTER_DAYS: the same one question (the next natural reply, or the one paced text), the
+// same answer handling (markGoal), the same idle when a searched goal gets no answer. The mark lives on the row's reason (with the
+// words they said) and goes the moment the question goes out (markRecheckAsked), or when they bring the goal up or act on it after it.
+export const UNSURE_PREFIX = "unsure: ";
+export const unsureReason = (quote: string) => `${UNSURE_PREFIX}they said "${String(quote ?? "").replace(/\s+/g, " ").trim().slice(0, 160)}", and it may go with that`;
+// The words they said, for the reply's question; null when the row isn't unsure.
+export const unsureQuote = (reason: string | null | undefined): string | null => (String(reason ?? "").startsWith(UNSURE_PREFIX) ? (String(reason).match(/they said "(.*)", and it may go with that$/)?.[1] ?? null) : null);
+export const isUnsure = (r: { state: GoalState; reason?: string | null; recheckAskedAt?: Date | null }): boolean =>
+  r.state === "active" && !r.recheckAskedAt && String(r.reason ?? "").startsWith(UNSURE_PREFIX);
+// Kept active and marked; a goal with a recheck already out, or one that isn't active, is left as it is (it was already asked, or it's
+// already settled).
+export async function markUnsure(userId: string, goal: string, quote: string): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `INSERT INTO goal_states (user_id, goal_hash, goal_text, state, reason, source, changed_at, told_at, hints, last_signal_at)
+     VALUES ($1, $2, $3, 'active', $4, 'context', NOW(), NOW(), 0, NOW())
+     ON CONFLICT (user_id, goal_hash) DO UPDATE SET reason = EXCLUDED.reason, changed_at = NOW(), hints = 0
+     WHERE goal_states.state = 'active' AND goal_states.recheck_asked_at IS NULL`,
+    [userId, goalHash(goal), goal.slice(0, 500), unsureReason(quote)],
+  );
+  if (rowCount) await realRecheckDeps.log({ userId, decision: "goal.recheck_due", outcome: "act", action: "unsure_after_drop", reason: "they dropped something this goal may go with: kept, asked once", proposal: { goal: goal.slice(0, 200), goalHash: goalHash(goal) } }).catch(() => {});
+  return !!rowCount;
+}
+
 // Pure: every recheck decision for one member's goals. At most one text per member per run (the goal due longest), none while held
 // or while one is already waiting. A recheck asked once is never asked again for the same quiet stretch: a signal after it clears it
 // (answered), no signal for RECHECK_ANSWER_DAYS idles the goal for good unless they bring it up.
@@ -195,6 +220,11 @@ export function recheckDecide(input: RecheckInput): RecheckStep[] {
       if (!r.searched) return { ...base, action: newer ? "signal" : "none", why: "asked, but no longer searched" };
       if (now.getTime() - r.recheckAskedAt.getTime() >= RECHECK_ANSWER_DAYS * DAY) return { ...base, action: "idle", why: `no signal in ${RECHECK_ANSWER_DAYS} days since the recheck` };
       return { ...base, action: "asked", why: "asked; waiting on them" };
+    }
+    // Unsure whether it went with something they dropped: due now, searched or not. They named it or acted on it since: it stays.
+    if (isUnsure(r)) {
+      if (last > r.changedAt) return { ...base, signalAt: last, action: "signal", why: "unsure, but they brought it up since: it stays" };
+      return { ...base, dueAt: r.changedAt, action: "due", why: "unsure whether it went with something they dropped" };
     }
     const dueAt = new Date(last.getTime() + RECHECK_AFTER_DAYS * DAY);
     if (now < dueAt || !r.searched) return { ...base, action: newer ? "signal" : "none", why: now < dueAt ? "a recent signal" : "not searched, nothing to recheck" };
@@ -310,7 +340,7 @@ export async function runGoalRecheck(userId: string, goals: string[], now = new 
     ...reactions.flatMap((x) => { const h = findGoalOf(x.askText, plans); return h ? [{ goalHash: h, at: x.at, kind: "reaction" as const }] : []; }),
   ];
   const lastExchangeAt = texts.reduce<Date | null>((m, t) => (!m || t.at > m ? t.at : m), null);
-  const anyTextable = rows.some((r) => r.state === "active" && !r.recheckAskedAt && r.searched && now.getTime() - r.lastSignalAt.getTime() >= (RECHECK_AFTER_DAYS + RECHECK_TEXT_AFTER_DAYS) * DAY);
+  const anyTextable = rows.some((r) => (r.state === "active" && !r.recheckAskedAt && r.searched && now.getTime() - r.lastSignalAt.getTime() >= (RECHECK_AFTER_DAYS + RECHECK_TEXT_AFTER_DAYS) * DAY) || isUnsure(r));
   const [held, pendingText] = anyTextable ? await Promise.all([deps.held(userId).catch(() => ["their send gates couldn't be read"]), deps.pendingText(userId).catch(() => ["unreadable"])]) : [[], []];
   const steps = recheckDecide({ rows, now, signals, lastExchangeAt, held, pendingText, lastAskAt });
   await applySteps(userId, steps, rows, deps);
@@ -339,7 +369,7 @@ export async function noteTextSignals(userId: string, text: string, now = new Da
 // A goal action (markGoal on that goal, pickGoalItems on a goal it names) is a signal, and answers a recheck.
 export async function noteGoalAction(userId: string, goals: string[]): Promise<void> {
   const hashes = [...new Set(goals.map((g) => goalHash(g)))];
-  if (hashes.length) await pool.query(`UPDATE goal_states SET last_signal_at = NOW(), recheck_asked_at = NULL, hints = CASE WHEN state = 'active' THEN 0 ELSE hints END WHERE user_id = $1 AND goal_hash = ANY($2::text[])`, [userId, hashes]);
+  if (hashes.length) await pool.query(`UPDATE goal_states SET last_signal_at = NOW(), recheck_asked_at = NULL, hints = CASE WHEN state = 'active' THEN 0 ELSE hints END, reason = CASE WHEN reason LIKE '${UNSURE_PREFIX}%' THEN '' ELSE reason END WHERE user_id = $1 AND goal_hash = ANY($2::text[])`, [userId, hashes]);
 }
 // The goals on file a piece of their goal work names (pickGoalItems: the handed-over goal's title and their words).
 export async function noteGoalActionText(userId: string, text: string): Promise<void> {
@@ -357,7 +387,7 @@ export async function recheckForTurn(userId: string, message: string, fence: imp
   if (!fence || fence.failed) return [];
   const stored = await deps.rows(userId);
   // One read on a normal turn: only a goal quiet long enough, or one already asked, goes further.
-  const near = stored.filter((r) => r.state === "active" && (r.recheckAskedAt || (r.lastSignalAt && now.getTime() - r.lastSignalAt.getTime() >= RECHECK_AFTER_DAYS * DAY)));
+  const near = stored.filter((r) => r.state === "active" && (r.recheckAskedAt || isUnsure(r) || (r.lastSignalAt && now.getTime() - r.lastSignalAt.getTime() >= RECHECK_AFTER_DAYS * DAY)));
   if (!near.length) return [];
   const F = await import("./sourceFence.js");
   // A last-ask read that fails holds the ask (now): never a second question on a guess.
@@ -388,7 +418,7 @@ export async function recheckForTurn(userId: string, message: string, fence: imp
 // was answered, not asked. A goal_nudge or goal_checkin that went out about it is the same question (one covers both).
 export async function markRecheckAsked(userId: string, hash: string, goal: string, via: "reply" | "text" | "goal_nudge" | "goal_checkin", o: { signalBefore?: Date | null } = {}): Promise<boolean> {
   const { rowCount } = await pool.query(
-    `UPDATE goal_states SET recheck_asked_at = NOW() WHERE user_id = $1 AND goal_hash = $2 AND state = 'active' AND recheck_asked_at IS NULL AND ($3::timestamptz IS NULL OR last_signal_at <= $3::timestamptz)`,
+    `UPDATE goal_states SET recheck_asked_at = NOW(), reason = CASE WHEN reason LIKE '${UNSURE_PREFIX}%' THEN '' ELSE reason END WHERE user_id = $1 AND goal_hash = $2 AND state = 'active' AND recheck_asked_at IS NULL AND ($3::timestamptz IS NULL OR last_signal_at <= $3::timestamptz)`,
     [userId, hash, o.signalBefore ?? null],
   );
   if (rowCount) await realRecheckDeps.log({ userId, decision: "goal.recheck_asked", outcome: "act", action: via, proposal: { goal: goal.slice(0, 200), goalHash: hash } }).catch(() => {});
@@ -482,7 +512,8 @@ export const realRecheckDeps: RecheckDeps = {
   pendingText: async (userId) => (await pool.query(`SELECT payload->>'goalHash' AS h FROM proactive_candidates WHERE user_id = $1 AND type = 'goal_recheck' AND status = 'pending'`, [userId])).rows.map((r: any) => String(r.h)),
   signal: async (userId, hash, at, clearAsk) => {
     await pool.query(
-      `UPDATE goal_states SET hints = CASE WHEN $3 > last_signal_at THEN 0 ELSE hints END, last_signal_at = GREATEST(last_signal_at, $3), recheck_asked_at = CASE WHEN $4::boolean THEN NULL ELSE recheck_asked_at END WHERE user_id = $1 AND goal_hash = $2 AND state = 'active'`,
+      `UPDATE goal_states SET hints = CASE WHEN $3 > last_signal_at THEN 0 ELSE hints END, last_signal_at = GREATEST(last_signal_at, $3), recheck_asked_at = CASE WHEN $4::boolean THEN NULL ELSE recheck_asked_at END,
+         reason = CASE WHEN reason LIKE '${UNSURE_PREFIX}%' AND $3 > changed_at THEN '' ELSE reason END WHERE user_id = $1 AND goal_hash = $2 AND state = 'active'`,
       [userId, hash, at, clearAsk],
     );
   },
