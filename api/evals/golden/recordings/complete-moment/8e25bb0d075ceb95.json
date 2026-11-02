@@ -1,0 +1,102 @@
+{
+  "hash": "8e25bb0d075ceb95",
+  "case": "complete-moment",
+  "recorded_at": "2026-11-02T19:19:13.396Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\" Cue's text: \"\"\"That pricing slide earned its keep. G...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\"\n\nCue's text:\n\"\"\"That pricing slide earned its keep.\n\nGo sleep. You've earned all twelve hours of it.\"\"\"\n\nIs the text a short, warm close that fits this exact moment (the budget, the pricing slide or the sleep), with no question and nothing asked of him? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Go sleep. You've earned all twelve hours of it.' is a short, warm close with no question or request.\"}",
+      "usage": {
+        "input_tokens": 229,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 234,
+        "output_tokens_details": {
+          "thinking_tokens": 182
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgeeAJRYn4oaMG6BN6frc",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EuwHCsQCCBMYAipAY8LAvcRetLAaYMUMkbjXwNRlYoB0AQAAnVsrI10lsCaLBU+o/pRpUZTsDHIu8si80Ihn3WD8eUFCye7Rpk+rbTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBsMSj1wbCAToIBBAAGgwC2ooDTzcF0YYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDNzDY42/bWRwqsp9Mx/PMbjunkXqWJaSjtnjp6Nh+J0CIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxBa5qsGhD3n5kE8CgaDAzj+tRUMEmxtx0FgiIwHV1Jj4U3Pzx/9Tr/kA0T38pX20C3bMK5lQ5h92wZd4sBmDrk7p5hXzC5AryjQowwKtQE4vOqFOkxe9JGKOMvqUQd80xWbfoGSIcFEjz3gNWQ6OG6kEXyGpheMEunE2dY2OHSDgEaCunXunreZnJKAkgFaYrC7j/Pzm2SQMYcl0h0Jr3Tzrrjcjf0G9xiWZdMmbxYZmM39Ooi4oCJB8/tHmYIiY6LmgUNzZVlvcimGwlODgBF/i45gXcWD0PCW6Evo2crHFZBmL7qo2BFSddlV6gCwzEyR9X2bzgL5/gT/TFplh4BqMS0av+tHnUVCV2BH88NRgIXSx6BZTgHcGS7A89Vv2ihWdgpRr3pxVGDgY2Y2/WiUyBoa/xnlSfh44TQZCUVDr7K+0EEIW+s8HmMr7RO+jW44W8nt96xMlSt4AJC4dngqS5jTTl4DGWM1TTzrRv1Ml+K9U0VM7fQyyygCmBrxbLnqPuTKhPL5Q/BjIy+naFbjIm2OZAWsYJ7fBE2fOCLR7nqKVwcKFBqCsVxGz8zXOb6GDHjK9RT7b2qIVu0mwBDkkehqdQqEZQDwcJH3wirP50RlXyAGILviRpw06P8d7wxQKJ7tx+u8CtkVJ1qdGqHUkhJfKHGxC1G9k44auJWObP2vjBp8tv97YNvFsbfNPh6iiJpPKdzbvxXFvCYmMw1GlHZ9bFFs5SdEiy98/WX/HmfkBTkX9dQuzFiy6nO3BEyg+SCC305X1aDxNZGtPmxrcjydumvBYLVzqTO+AKwOeIYf+37hJDyh99soLYrhbRKlSAEMClnL4aQcj5yQpsaEG3McnqtyIVmRF2JLHdoxiFDeqYsqlQ3FjYXxG2OsX/JM/IYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Go sleep. You've earned all twelve hours of it.' is a short, warm close with no question or request.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 229,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 234,
+          "output_tokens_details": {
+            "thinking_tokens": 182
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "8e25bb0d075ceb95",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

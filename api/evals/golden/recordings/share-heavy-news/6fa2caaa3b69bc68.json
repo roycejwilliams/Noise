@@ -1,0 +1,102 @@
+{
+  "hash": "6fa2caaa3b69bc68",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-11-02T19:18:25.770Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"This stops everything else. I'm sorry, that's frightening to sit with.\n\nHow are you holding up waiting there.\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"This stops everything else\\\" sets aside the dinner ask, and \\\"How are you holding up\\\" asks rather than presumes, with no request for news.\"}",
+      "usage": {
+        "input_tokens": 290,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 173,
+        "output_tokens_details": {
+          "thinking_tokens": 108
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgee6r9A8xicHviHxZahP",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EuEFCsQCCBMYAipAKX8gY/n4LQ0grFirFvz++RvT52zCf7m2gW/NHeBfp33GOhArpx6OJNucExFpeQWoZ27mQuqHPFTprjvtWtEO8jIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBgcSj1wbCAToIBBAAGgwC2ooDTzcFL1QEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDSWUqtHN81GUVmDVkeiY7Gf/wpi4W8g7MH6h5pFj/74iIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzXJcIfWSRJGnEoHOwaDCwqlznEz9B31Fg4yyIwYfveib5vHW/hsJF6So67ho2+qJJxk7hj4Wgdq18iHi64FyrCQCVVisRP+dv392DmKskCkYGkRY0wDe0a58G2yLwY3zm7xyah7cYhqmJdFkq6RzY1Y6B1dlERnPXPQX9g7hTpzEodaJSp7CWUX+Pjzf+FGsG8cnq6v58B04oC/VyWl2JXxL6UOCSavYmmpPUJ3mcsbsqgFfIY2d11jdFAuQSXR/G/AzbPQGoPXJPSN05k97jK0O0hRiLaWSFr2J6BpP5d5vIxPNyvOQth8wDfO2RebtmNgTajCf3qE3RLGggIMawbiQuIslfoOLxHVbWBeVVqiyUgJrdiJLv0R+o6UUoBaWjuvZ0iJsNDK2tjMlY+csKb9EoisalCyEbH3/Mx9tIT/DDinhAwsNrM1wDRh2ijeKLybQzt+leH3hZ7r+oJMTGMvVAurjSoC29rHal+pvPu/tyfyw5Xic4gfelCmf2SBWdLYvAI6HQaQ2VP1ORenZxVP5qB/wGa+CQYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"This stops everything else\\\" sets aside the dinner ask, and \\\"How are you holding up\\\" asks rather than presumes, with no request for news.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 290,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 173,
+          "output_tokens_details": {
+            "thinking_tokens": 108
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "6fa2caaa3b69bc68",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
