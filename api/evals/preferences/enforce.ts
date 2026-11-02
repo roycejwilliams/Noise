@@ -169,6 +169,17 @@ check("so the missed-call text is held by their cap, like any send", mc.ok === f
   check("the call gate passes the booking time, and a held booked call is moved (pending, new time, reminder reset), never failed", /rulesAfter: kind === "scheduled_call" \? await bookedAt/.test(src("harness/callGate.ts")) && /heldUntil: callState\.memberRule!\.retryAt/.test(src("services/callTrigger.ts")) && /SET status = 'pending', scheduled_for = \$2, reminder_sent_at = NULL/.test(src("jobs/scheduledCall.ts")));
   check("a queued call reminder whose call is no longer pending and ahead is dropped", /row\.type === "call_reminder" && !\(await callStillAhead/.test(src("services/deferredSends.ts")) && /status = 'pending' AND scheduled_for > \$2/.test(src("services/deferredSends.ts")));
 }
+// A booked call that was moved: its reminder is a new one (keyed by the call's time) and says the new time.
+{
+  const SC = await import("../../src/jobs/scheduledCall.js");
+  const k1 = SC.callReminderKey(7, new Date("2026-11-04T18:00:00Z")), k2 = SC.callReminderKey(7, new Date("2026-11-05T18:00:00Z"));
+  reset();
+  const first = await exempt(A, { type: "call_reminder", targetKey: k1 });
+  const second = await exempt(A, { type: "call_reminder", targetKey: k2 });
+  check("a moved call's reminder isn't 'already sent' from the first time", k1 !== k2 && first.sent && second.sent);
+  check("it tells them the new time, in their zone", SC.movedReminderText(new Date("2026-11-05T18:30:00Z"), NY) === "Our call is now at 1:30pm your time. I'll call you then.");
+  check("the job keys by time, marks a move, and says the new time when it was moved", /targetKey: callReminderKey\(row\.id, new Date\(row\.scheduled_for\)\)/.test(src("jobs/scheduledCall.ts")) && /moved_at = NOW\(\)/.test(src("jobs/scheduledCall.ts")) && /row\.moved_at \? movedReminderText/.test(src("jobs/scheduledCall.ts")) && /\.split\(":"\)\[0\]/.test(src("services/deferredSends.ts")));
+}
 // Placed calls count by their kind.
 check("a placed call counts by its kind: asked for now isn't counted, booked is requested, check-in a check-in, intake Cue's own", G.callClassOf("router_decision") === "reply" && G.callClassOf("inferred scheduled_call") === "requested" && G.callClassOf("checkin_cadence") === "checkin" && G.callClassOf("auto_intake") === "unsolicited");
 // Owed work never loses its wakes to a hold, and nothing held is lost.

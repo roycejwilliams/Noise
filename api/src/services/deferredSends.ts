@@ -291,7 +291,8 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
 
 // The booked call a queued reminder is for (call_reminder:<id>) is still pending and ahead. Unreadable: not ahead (never a late reminder).
 export async function callStillAhead(targetKey: string, now: Date): Promise<boolean> {
-  const id = targetKey.replace(/^call_reminder:/, "");
+  // call_reminder:<id>:<the call's time>, or call_reminder:<id> from before the time was in the key.
+  const id = targetKey.replace(/^call_reminder:/, "").split(":")[0];
   const { rows } = await pool.query(`SELECT 1 FROM scheduled_calls WHERE id::text = $1 AND status = 'pending' AND scheduled_for > $2`, [id, now]).catch(() => ({ rows: [] as any[] }));
   return rows.length > 0;
 }

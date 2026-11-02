@@ -1081,6 +1081,8 @@ export async function runMigrations(): Promise<void> {
   // can tell "already reminded" from "not due yet" without touching status.
   await pool
     .query(`ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`)
+    // When a call they booked was moved by a rule they set later (jobs/scheduledCall.ts): its reminder then says the new time.
+    .then(() => pool.query(`ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS moved_at TIMESTAMPTZ`))
     .catch((err: Error) => console.error("scheduled_calls.reminder_sent_at migration failed:", err));
 
   // Event Curation — "Standing profile scored against full Luma guest list."

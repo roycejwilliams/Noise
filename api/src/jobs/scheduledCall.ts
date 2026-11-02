@@ -5,6 +5,9 @@ import { cleanCoMessage } from "../services/sendblue.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendExempt } from "../harness/proactive.js";
 import { recordDecision } from "../harness/core.js";
+import { DateTime } from "luxon";
+import { hoursZone } from "../services/localHours.js";
+import { memberZone } from "../services/memberTime.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { MODELS } from "../models.js";
 import { withMember } from "../services/llmUsage.js";
@@ -48,7 +51,7 @@ export async function placeDueCalls(io: import("socket.io").Server | null): Prom
         );
       } else if ("heldUntil" in result && result.heldUntil) {
         // Held by a rule they set after booking (harness/callGate.ts): moved to when it may go, its reminder with it, never failed.
-        await pool.query(`UPDATE scheduled_calls SET status = 'pending', scheduled_for = $2, reminder_sent_at = NULL WHERE id = $1`, [row.id, result.heldUntil]);
+        await pool.query(`UPDATE scheduled_calls SET status = 'pending', scheduled_for = $2, reminder_sent_at = NULL, moved_at = NOW() WHERE id = $1`, [row.id, result.heldUntil]);
         await recordDecision({ layer: 8, decision: "call.scheduled_held", userId: row.user_id, outcome: "skip", action: "moved", proposal: { scheduledCallId: row.id, to: result.heldUntil.toISOString() } }).catch(() => {});
       } else {
         console.error(`scheduledCall: triggerCallForUser failed for scheduled call ${row.id}:`, result.error);
@@ -59,6 +62,15 @@ export async function placeDueCalls(io: import("socket.io").Server | null): Prom
       await pool.query(`UPDATE scheduled_calls SET status = 'failed' WHERE id = $1`, [row.id]).catch(() => {});
     }
   }
+}
+
+// The reminder's ledger key: the call and its time, so a call moved to a new time gets its own reminder.
+export function callReminderKey(id: string | number, at: Date): string {
+  return `call_reminder:${id}:${at.toISOString()}`;
+}
+// The reminder for a call a rule they set moved: the new time, plainly (copy for Royce's approval, PR #356).
+export function movedReminderText(at: Date, zone: string | null): string {
+  return `Our call is now at ${DateTime.fromJSDate(at).setZone(hoursZone(zone)).toFormat("h:mma").toLowerCase()} your time. I'll call you then.`;
 }
 
 // A reminder only makes sense for a call that's still pending and still
@@ -76,7 +88,7 @@ export function reminderStillDue(call: { status: string; scheduled_for: Date | s
 // window itself.
 export async function sendDueReminders(): Promise<void> {
   const due = await pool.query(
-    `SELECT sc.id, sc.scheduled_for, u.id AS user_id, u.first_name, u.phone_number
+    `SELECT sc.id, sc.scheduled_for, sc.moved_at, u.id AS user_id, u.first_name, u.phone_number
      FROM scheduled_calls sc
      JOIN users u ON u.id = sc.user_id
      WHERE sc.status = 'pending'
@@ -138,8 +150,10 @@ export async function sendDueReminders(): Promise<void> {
         userId: row.user_id,
         phoneNumber: row.phone_number,
         type: "call_reminder",
-        targetKey: `call_reminder:${row.id}`,
-        messages: [cleanCoMessage(reminderMessage)],
+        // Keyed by the call's time: a moved call's reminder is a new one, never "already sent" from the first time.
+        targetKey: callReminderKey(row.id, new Date(row.scheduled_for)),
+        // A moved call's reminder says the new time (the member never chose it), in their zone.
+        messages: [cleanCoMessage(row.moved_at ? movedReminderText(new Date(row.scheduled_for), await memberZone(row.user_id).catch(() => null)) : reminderMessage)],
         // About a call minutes away: it gets through a held rule rather than arriving late (R2). Anything else holding it queues it,
         // and the queue drops it once the call is no longer pending and ahead (services/deferredSends.ts).
         soonAt: new Date(row.scheduled_for),
