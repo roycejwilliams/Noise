@@ -566,7 +566,12 @@ export const OUTCOME_ADJUST = { notUseful: -12, notMet: -5, useful: 6, maxDown: 
 
 // Words that say nothing about which ask a pairing served: they'd tie one outcome to most of the room.
 const GENERIC = new Set(["founder", "founders", "founding", "building", "build", "builder", "raising", "raise", "startup", "startups", "company", "companies", "business", "work", "working", "people", "person", "help", "helping", "great", "good", "meet", "meeting", "talk", "connect", "connection", "network", "networking", "intro", "introduction", "someone", "anyone", "new", "early", "stage", "space", "industry", "tech", "team", "things", "really", "also", "just", "would", "could", "might", "worth", "value", "useful"]);
-const distinct = (s: string) => new Set(contentWords(s).map(stem).filter((w) => !GENERIC.has(w) && !GENERIC.has(`${w}s`) && w.length > 2));
+// Compared after stemming, so the list is stemmed too ("raising" -> "rais", "companies" -> "compan"; review of #358).
+let genericStems: Set<string> | null = null;
+const distinct = (s: string) => {
+  genericStems ??= new Set([...GENERIC].map(stem));
+  return new Set(contentWords(s).map(stem).filter((w) => !genericStems!.has(w) && w.length > 2));
+};
 
 // Pure: which of their own asks this text rests on (index), or null when none clearly does: at least two distinctive words of the ask,
 // and strictly more than any other ask.
