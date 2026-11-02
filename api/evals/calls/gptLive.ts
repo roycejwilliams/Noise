@@ -128,7 +128,9 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const hits = (t: string) => G.GPT_LIVE_FORBIDDEN.filter((re) => re.test(t)).map(String);
   check("honesty: GPT-Live's instructions never say to set it up, look it up now, say it's set up, or end_call", hits(call.instructions).length === 0, hits(call.instructions));
   check("honesty: nor does the brain's prompt", hits(call.backendSystem).length === 0, hits(call.backendSystem));
-  check("honesty: the thinking is told nothing happens on the call and it's done right after; GPT-Live that nothing happens and it promises nothing", call.backendSystem.includes(G.NOTHING_ON_THIS_CALL) && /right after the call/.test(call.backendSystem) && call.instructions.includes(G.NOTHING_ON_THIS_CALL_LIVE) && [G.NOTHING_ON_THIS_CALL, G.NOTHING_ON_THIS_CALL_LIVE].every((t) => /never say it's done, set up, started or on its way/i.test(t)));
+  // 2026-11-02 (helpers on GPT-Live): what can be done is said per turn (the tools' guide, or NOTHING_ON_THIS_CALL on a turn without
+  // tools: evals/calls/gptLiveHelpers.ts), never as a fixed "nothing happens" in the call's prompt; GPT-Live itself still does nothing.
+  check("honesty: the call's prompt no longer says nothing happens; a turn without tools is told it can't start or promise anything; GPT-Live that it does nothing itself and promises nothing", !call.backendSystem.includes(G.NOTHING_ON_THIS_CALL) && /Don't promise to do anything later/.test(G.NOTHING_ON_THIS_CALL) && call.instructions.includes(G.NOTHING_ON_THIS_CALL_LIVE) && /only your thinking can/.test(G.NOTHING_ON_THIS_CALL_LIVE) && [G.NOTHING_ON_THIS_CALL, G.NOTHING_ON_THIS_CALL_LIVE].every((t) => /never say it's done, set up, started or on its way/i.test(t)));
   check("the automatic acknowledgment waits long enough to be cancelled", start.session.delegation.acknowledgement_delay_ms === 800);
 }
 

@@ -168,7 +168,9 @@ export class SpeakableStream {
   private first = true;
   private capNext = false;
   private sentences = 0;
-  constructor(private o: { maxSentenceWords?: number; maxReplyWords?: number; maxSentences?: number } = {}) {}
+  private dropped: string[] = [];
+  // keep: a sentence the word cap never holds (a safety line: 2026-11-02, a crisis instruction past the cap was dropped like any other).
+  constructor(private o: { maxSentenceWords?: number; maxReplyWords?: number; maxSentences?: number; keep?: (s: string) => boolean } = {}) {}
 
   private get maxS() { return this.o.maxSentenceWords ?? MAX_SENTENCE_WORDS; }
   private get maxR() { return this.o.maxReplyWords ?? MAX_REPLY_WORDS; }
@@ -180,7 +182,7 @@ export class SpeakableStream {
       const n = wordCount(s);
       // A hard limit on sentences (a drained member gets two): the rest is dropped, with no closing question kept either.
       if (this.o.maxSentences !== undefined && this.sentences >= this.o.maxSentences) continue;
-      if (this.emitted >= this.maxR) { this.held.push(s); continue; }
+      if (this.emitted >= this.maxR && !this.o.keep?.(s)) { this.held.push(s); continue; }
       this.sentences++;
       this.emitted += n;
       out.push(s + " ");
@@ -248,9 +250,17 @@ export class SpeakableStream {
     this.drain(true, out);
     if (this.buf.trim()) { const rest = this.buf; this.buf = ""; this.finish(rest, false, out); }
     const last = this.o.maxSentences !== undefined ? undefined : this.held[this.held.length - 1];
-    if (last && /\?$/.test(last) && this.emitted + wordCount(last) <= this.maxR + CLOSING_QUESTION_EXTRA_WORDS) out.push(last + " ");
+    const kept = !!last && /\?$/.test(last) && this.emitted + wordCount(last) <= this.maxR + CLOSING_QUESTION_EXTRA_WORDS;
+    if (kept) out.push(last + " ");
+    this.dropped.push(...(kept ? this.held.slice(0, -1) : this.held));
     this.held = [];
     return out;
+  }
+
+  // What the word cap kept from the voice (whole sentences, in order), once the stream has ended: never lost silently, so the next turn
+  // can carry on from it (a walkthrough said in short complete chunks, not cut off mid-step).
+  unsaid(): string[] {
+    return [...this.dropped];
   }
 }
 

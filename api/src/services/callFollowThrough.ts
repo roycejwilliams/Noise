@@ -94,7 +94,7 @@ export function confirmationTask(): string {
 export type FollowThroughDeps = {
   now: () => Date;
   // skip: Cue's lines from a turn whose tool already did it on the call (services/callLedger.ts).
-  track: (userId: string, transcript: string, o?: { skip?: string[] }) => Promise<unknown>;
+  track: (userId: string, transcript: string, o?: { skip?: string[]; jobs?: string[] }) => Promise<unknown>;
   // What the call did and still owes (services/callLedger.ts), what went out since it started (services/followThrough.ts
   // sendsSince), the owed send itself (each link as its own text, then its name), and closing a promise already kept. Left out
   // (older tests), the follow-through runs as before.
@@ -141,7 +141,8 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
     const ledger = deps.ledger ? await deps.ledger(o.userId, since, new Date((o.endedAt ?? t0).getTime() + 2 * 60_000)).catch(() => empty) : empty;
     // A commitment said on the direct path has no task yet: open it (the same words never open twice), unless a tool already kept
     // it on the call.
-    await deps.track(o.userId, o.transcript, { skip: ledger.covered }).catch(() => null);
+    // Nor one a job started on the call carries (a task or a saved ask, by what it was for).
+    await deps.track(o.userId, o.transcript, { skip: ledger.covered, jobs: ledger.done.filter((d) => d.kind === "start").flatMap((d) => d.labels) }).catch(() => null);
     // Bind or admit: each timed promise Co spoke is on the ledger now, or it's taken back in one text. Before anything else, so a
     // call with no send commitments still has its promises held to.
     if (deps.bind) {

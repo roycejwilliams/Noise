@@ -23,7 +23,7 @@ import type { OaiRequest } from "./callLlmProxy.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
 import { anthropicStream, SAFETY_LINE, safetyCall } from "./callLlmProxy.js";
 import { stripCues } from "./voiceCues.js";
-import { delegationRequest, failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
+import { delegationRequest, failClassOf, liveCallTools, type LiveToolsFor, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -73,6 +73,9 @@ export type LiveDeps = {
   voiceLine: (callKey: string, req: OaiRequest) => Promise<string | null>;
   // Rules said on this call, read beside each delegated turn and applied to the rest of it (services/callPreferences.ts). Never awaited.
   readRules: (o: { callKey: string; userId: string; turns: LiveTurn[]; safety: boolean }) => void;
+  // Cue's helpers for a delegated turn (gptLive.ts liveCallTools): the call allow-list under the texting tools' guard. Given only once a
+  // person is confirmed on the line and never while the voicemail message is being left: nothing acts on what a recording said.
+  callTools: LiveToolsFor;
 };
 const defaults = (): LiveDeps => ({
   connectOpenAI: (key) => new WebSocket(GPT_LIVE.url, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: GPT_LIVE.startTimeoutMs, perMessageDeflate: false }) as unknown as SocketLike,
@@ -99,6 +102,7 @@ const defaults = (): LiveDeps => ({
   startTee: (o) => startVoiceTee(o),
   voiceLine: (callKey, req) => import("../routes/callLlm.js").then((m) => m.voiceLineForTurn(callKey, req)),
   readRules: (o) => void import("./callPreferences.js").then((m) => m.readCallTurn(o)).catch(() => {}),
+  callTools: liveCallTools,
   safetyCut: async (call) => {
     const S = await import("./safety.js");
     await S.recordSafetyConcern(call.userId, call.firstName || null, "co", "a GPT-Live call was cut by OpenAI's safety filter during a safety moment");
@@ -157,6 +161,8 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let opened = false; // outbound: whether the opening has happened (their first words, AMD's human verdict, or the wait ran out)
   let stopWaiting: () => void = () => {};
   let tee: VoiceTee | null = null; // the voice read, while it runs
+  // What the word cap kept from the last answer: the next delegated turn is told, so a walkthrough goes on from where it stopped.
+  let carry: string[] = [];
   let guardAt = 0, guardRowsP: Promise<import("./whatCoKnows.js").ForgottenRow[]> | null = null;
   const elapsedSecs = () => Math.round((d.now() - startedAt) / 1000);
   // A person really spoke: two words or more, not a "yeah" or "mm", and not a voicemail greeting. Used only to call a machine verdict a
@@ -269,6 +275,8 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const theirTurnEnd = turns.filter((t) => t.who === "member").reduce((m, t) => Math.max(m, t.endMs), 0);
     const seenUpTo = Math.max(offsetMs, ...turns.filter((t) => t.who === "member").map((t) => t.startMs));
     let dropped = 0, error = false;
+    // Each of Cue's tools this turn: its name, time and how it came back (no words), for the latency record.
+    const toolRuns: { name: string; ms: number; outcome: "done" | "not_done" | "still_running" }[] = [];
     const c = call;
     // Rules in what they've said since the last read (services/callPreferences.ts): read beside this turn, never before it, and never
     // on a turn that touches their safety (the crisis path is as it was).
@@ -321,7 +329,12 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
-    }, guard, d.voiceLine, personAt != null ? onSentence : undefined).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false, streamed: false, stopped: false }; });
+    }, guard, d.voiceLine, personAt != null ? onSentence : undefined, {
+      tools: personAt != null && voicemailAt == null ? d.callTools : null,
+      carry: carry.splice(0),
+      onCapped: (unsaid) => { carry = unsaid; },
+      onTool: (t) => { toolRuns.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" }); },
+    }).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false, streamed: false, stopped: false, ran: [] as string[], tools: false }; });
     const streamed = out.streamed || appends > 0 || !!exactRest;
     // The last sentences, written together at the end: sent now, unless the thinking ended the call (its goodbye is GPT-Live's own).
     if (burst) { clearImmediate(burst); burst = null; if (out.endCall) pending = ""; else flush(); }
@@ -348,7 +361,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const fromMs = Math.max(0, theirTurnEnd - GPT_LIVE.goodbyeOverlapMs);
     const spokeThisTurn = turnsFrom(frags).some((t) => t.who === "cue" && t.startMs >= fromMs);
     const noteSkipped = !out.text && !out.endCall && !error && spokeThisTurn;
-    const noAnswer = { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." };
+    const noAnswer = { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess, and don't promise to do anything: ask them to say a bit more." };
     if (!finished && !movedNow && !onVoicemail && !out.endCall && !noteSkipped) {
       if (!streamed)
         send(ai, out.text
@@ -365,7 +378,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     if (out.endCall && !finished && !movedNow && !onVoicemail) pendingEnd = { at: d.now(), fromMs };
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
     // firstSendMs: from the handover to the first words of the answer reaching GPT-Live (streamed), the number the caller waits on.
-    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, lagMs, waitAddedWords, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, firstSendMs, totalMs: d.now() - at, chars: out.text.length, streamed, appends, dropped, stale, error, exact: !!out.exact, heldMs, noteSkipped, endAfterText: out.endCall && appends > 0 } });
+    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, lagMs, waitAddedWords, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, firstSendMs, totalMs: d.now() - at, chars: out.text.length, streamed, appends, dropped, stale, error, exact: !!out.exact, heldMs, noteSkipped, endAfterText: out.endCall && appends > 0, toolsOffered: !!out.tools, tools: toolRuns, toolMs: toolRuns.reduce((a, x) => a + x.ms, 0) } });
   };
 
   const onAi = (raw: unknown) => {

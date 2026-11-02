@@ -16,7 +16,7 @@ import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.j
 import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
 import { classifyModelFailure, failureLabel, noteModelFailure } from "./modelKeyAlert.js";
 import { plainPunctuation } from "./safetyText.js";
-import { claimHeld, claimKind, emptyClaimState, SEND_TALK, type ClaimState } from "./callClaims.js";
+import { claimHeld, claimKind, emptyClaimState, jobBacked, jobClaimKind, jobOnRecord, SEND_TALK, type ClaimState, type JobState } from "./callClaims.js";
 // After "texting it to you now" and a send that didn't go: approved copy (Royce, 2026-10-29), spoken by code so it's never missing.
 export const FAILED_SEND_LINE = "That didn't go through, so I'll text it to you right after the call.";
 // Said as coming right after the call.
@@ -55,6 +55,12 @@ export type CallToolset = {
   // Whether a tool with this input texts them (a send): its "texting it now" line may be said while it runs, and only what it
   // delivered may be called sent (services/callClaims.ts).
   texts?: (name: string, input: unknown) => boolean;
+  // Whether a tool starts durable work that texts them later (services/capabilities.ts startsWork): its done result backs a spoken
+  // "I've started on it" or "I'll text you what I find" (services/callClaims.ts jobBacked).
+  starts?: (name: string) => boolean;
+  // Resolves once every send that didn't go is queued for after the call (its co_tasks row and ledger row written): true when all of
+  // them were, false when one couldn't be. Only a queued one is promised aloud.
+  owedDurable?: () => Promise<boolean>;
 };
 
 // Hume's brain (2026-10-08, Royce chose it over Haiku 5.5 for depth: ~1.4s to first words vs ~0.7s): Sonnet 4.6, temperature from the
@@ -306,6 +312,11 @@ export type ProxyDeps = {
   // The live voice read's line for this turn (services/voiceRead.ts voiceLine, read by routes/callLlm.ts without waiting on
   // Hume): how they sound when it adds to their words, never a feeling's name. Absent when there is nothing strong.
   voiceRead?: string | null;
+  // Calls whose voice says the thinking's words in its own (2026-11-02): a line that says work started, or promises later work or delivery, is said only once a job backs it
+  // (services/callClaims.ts jobClaimKind, jobBacked). Never on a safety turn: nothing holds a safety answer back.
+  jobClaims?: boolean;
+  // The sentences the word cap kept from the voice (services/speakable.ts unsaid), so the next turn can carry on from them.
+  onCapped?: (unsaid: string[]) => void;
 };
 
 // What the member last said, for the safety check on the question rule.
@@ -358,7 +369,11 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const sameTurn = lastAt >= 0 && b.messages.slice(lastAt + 1).every((m) => m.role === "tool" || (m.role === "assistant" && !textOf(m.content).trim()));
   const drained = clean && !voiceOnly && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
   if (drained) deps.onState?.();
-  const mk = () => new SpeakableStream({});
+  // A safety line is never held by the word cap (2026-11-02: a crisis instruction past 90 words was dropped like any sentence).
+  const mk = () => new SpeakableStream({ keep: (x) => SAFETY_LINE.test(plainPunctuation(x)) });
+  // What the word cap kept from the voice this turn: said to the caller (onCapped), never lost silently.
+  const capped: string[] = [];
+  const endStream = (st: SpeakableStream): string[] => { const out = st.end(); capped.push(...st.unsaid()); return out; };
   let stream: SpeakableStream | null = null;
   let spokeAny = false, blanked = false, firstTokenAt = 0, firstSentenceAt = 0;
   let toolIndex = -1;
@@ -390,6 +405,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // one is in flight, whether any tool came back done, and whether the turn is about sending at all.
   // About sending: their last words, Cue's line before them ("Want me to text you the link?" / "Yes please"), or a send this turn.
   const claims: ClaimState = { ...emptyClaimState(), sendContext: SEND_TALK.test(theirLast) || SEND_TALK.test(textOf(coBefore?.content ?? "")) };
+  // Work Cue may say it started or will deliver (jobClaims): the jobs that back it, from Cue's records (its open tasks, what
+  // it started earlier on the call) and, as tools come back, what they started this turn.
+  const jobCheck = clean && !voiceOnly && !!deps.jobClaims;
+  const jobs: JobState = { thisTurn: 0, corpus: co?.records ?? "", onCall: jobOnRecord(co?.records ?? "") };
+  // A job line said before the tool that starts it, in this same reply: held until that tool comes back, then said if the job is real.
+  let pendingJob: string[] = [];
+  // A send that didn't go couldn't be queued for after the call: nothing may promise it later.
+  let owedFailed = false;
+  // Past the last round of tools (tool_choice none): nothing more can start this turn.
+  let toolsOff = false;
   // The retries below are the model's last word: a held "texting it now" there has no send coming.
   let inRetry = false;
   // A "texting it to you now" line said before its send is called: held until the send is in flight in this same reply, else dropped.
@@ -452,6 +477,17 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (clean && insistsAfterPushback(theirLast, sentence)) {
       deps.onDropped?.(sentence, "insists they said something they say they didn't");
       return null;
+    }
+    if (jobCheck && !safetyTurn && !SAFETY_LINE.test(plainS)) {
+      const jk = jobClaimKind(sentence);
+      if (jk && !jobBacked(sentence, jobs)) {
+        if (!inRetry && co && !toolsOff && jk !== "booked") { pendingJob.push(s); return null; }
+        const why = `claim held: ${jk === "booked" ? "says something was booked, bought, reserved or made public, and nothing on a call does that" : jk === "started" ? "says work started with no job behind it" : "promises later work with no job behind it"}`;
+        deps.onDropped?.(sentence, why);
+        heldWhy.push(why);
+        blanked = true;
+        return null;
+      }
     }
     if (clean) {
       const held = claimHeld(sentence, claims);
@@ -532,6 +568,21 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let req = toAnthropic(b, undefined, decision.systemNote);
   // The sends started this turn, by tool call, with what each was for.
   const sendIds = new Map<string, string[]>();
+  // Each of Cue's tools this turn, by tool call: its name and input (what a job it started was for).
+  const runMeta = new Map<string, { name: string; input: unknown }>();
+  const dropPendingJob = (why: string) => {
+    for (const p of pendingJob) { deps.onDropped?.(p.trim(), `claim held: ${why}`); heldWhy.push(`claim held: ${why}`); blanked = true; }
+    pendingJob = [];
+  };
+  // The held job lines, once this round's tools are back: said when a job now backs them, else kept from the voice.
+  function* releasePending(): Generator<OaiChunk> {
+    const held = pendingJob;
+    pendingJob = [];
+    for (const p of held) {
+      if (jobBacked(p.trim(), jobs)) { const out = say(p); if (out) yield chunk({ content: out }); }
+      else { const why = "claim held: says work started or promises it, and no job came back behind it"; deps.onDropped?.(p.trim(), why); heldWhy.push(why); blanked = true; }
+    }
+  }
   if (co) {
     // Co's own tools can take a longer input than a spoken line (a page; PR 6: at 500 a deck's input was cut off mid-write,
     // stop_reason max_tokens). Decks pass a brief on a call, so a little room is enough; spoken lines stay short by the call's rules.
@@ -546,7 +597,6 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   if (deps.voiceRead && !voiceOnly && !safetyCall(b)) req.messages[req.messages.length - 1].content.push({ type: "text", text: deps.voiceRead });
   // What Co's tools returned this turn also backs what Co says (an event searchEvents found can be named).
   let toolCorpus = "";
-  let toolsOff = false;
   for (let step = 0; ; step++) {
     const blocks: ABlock[] = [];
     const runs: Promise<{ block: ABlock; raw: unknown; timedOut: boolean }>[] = [];
@@ -564,7 +614,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         for (const s of stream.push(ev.delta.text)) { const out = say(s); if (out) yield chunk({ content: out }); }
       } else if (ev.type === "content_block_stop") {
         if (stream) {
-          if (clean) for (const s of stream.end()) { const out = say(s); if (out) yield chunk({ content: out }); }
+          if (clean) for (const s of endStream(stream)) { const out = say(s); if (out) yield chunk({ content: out }); }
           stream = null;
         }
         if (cur?.kind === "text" && cur.text.trim()) blocks.push({ type: "text", text: cur.text });
@@ -574,9 +624,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           try { input = cur.json.trim() ? JSON.parse(cur.json) : {}; } catch { input = {}; }
           blocks.push({ type: "tool_use", id: cur.id, name: cur.name, input });
           ran.push(cur.name);
+          runMeta.set(cur.id, { name: cur.name, input });
           // A send that texts them starts now: the turn is about sending, what it's for is tried, and a "texting it now" line held
           // for it is true and goes out.
-          if (co!.texts?.(cur.name, input)) {
+          if (co!.names.has(cur.name) && co!.texts?.(cur.name, input)) {
             claims.sendContext = true;
             claims.inFlight = true;
             sendIds.set(cur.id, itemsOf(input));
@@ -592,7 +643,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         cur = null;
       } else if (ev.type === "content_block_start" && ev.content_block?.type === "tool_use") {
         const name = String(ev.content_block.name ?? "");
-        if (co?.names.has(name)) {
+        // With jobClaims (the thinking behind a voice that has no tools of its own), every tool but end_call is Cue's: one off this call's
+        // list is refused by the toolset's own run ("No tool named ... on a call") and the model hears it, never passed on as the voice's.
+        if (co?.names.has(name) || (jobCheck && co && name !== "end_call")) {
           // Past the cap a Co tool is never run, whatever the model sends (the request already said none).
           cur = toolsOff ? { kind: "skip" } : { kind: "co", id: String(ev.content_block.id ?? `co_${step}_${runs.length}`), name, json: "" };
           continue;
@@ -622,7 +675,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         if (ev.delta.stop_reason === "max_tokens") finish = "length";
       }
     }
-    if (stream && clean) for (const s of stream.end()) { const out = say(s); if (out) yield chunk({ content: out }); }
+    if (stream && clean) for (const s of endStream(stream)) { const out = say(s); if (out) yield chunk({ content: out }); }
     stream = null;
     // A "texting it now" with no send behind it in this reply: never said.
     for (const p of pendingNow) {
@@ -631,13 +684,14 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       if (!voiceOnly) { heldWhy.push(why); blanked = true; }
     }
     pendingNow = [];
-    if (!runs.length) break;
+    if (!runs.length) { if (pendingJob.length) dropPendingJob("says work started or promises it, and nothing was started"); break; }
     const settled = await Promise.all(runs);
     const results = settled.map((x) => x.block);
     for (const r of results) if (r.type === "tool_result") toolCorpus += `\n${r.content}`;
     // What came back done: only now may the turn's words say it went (services/callTools.ts marks a send that reached them delivered).
     claims.inFlight = false;
     let roundTried = 0, roundWent = 0;
+    const owedThisRound: string[] = [];
     for (const x of settled) {
       const raw = x.raw as { ok?: unknown; delivered?: unknown; pending?: unknown; items?: { name?: unknown; url?: unknown; delivered?: unknown }[] } | null;
       const id = (x.block as { tool_use_id?: string }).tool_use_id ?? "";
@@ -654,13 +708,24 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         const missed = items.length ? items.filter((i) => !went.includes(i)).map((i) => String(i?.name ?? "")).filter(Boolean) : went.length || raw?.delivered === true ? [] : tried;
         claims.undelivered.push(...(x.timedOut || !raw || raw.ok === false ? (missed.length ? missed : tried.length ? tried : ["it"]) : missed));
       }
+      // A job that started (durable work that texts them later) backs what Cue says about it.
+      const meta = runMeta.get(id);
+      if (meta && !x.timedOut && raw && raw.ok !== false && co?.starts?.(meta.name)) { jobs.thisTurn++; jobs.corpus += `\n${JSON.stringify(meta.input ?? {})}\n${JSON.stringify(raw).slice(0, 2000)}`; }
+      if (tried && (raw as { owedAfterCall?: unknown } | null)?.owedAfterCall === true) owedThisRound.push(...(tried.length ? tried : ["it"]));
       if (x.timedOut || !raw || raw.ok === false) continue;
       if (raw.pending !== true) claims.acted = true;
+    }
+    // A send that didn't go is a job only once it's queued for after the call (its task and ledger rows written).
+    let owedOk = true;
+    if (owedThisRound.length && jobCheck) {
+      owedOk = co?.owedDurable ? await co.owedDurable().catch(() => false) : false;
+      if (!owedOk) owedFailed = true;
+      if (owedOk) { jobs.thisTurn++; jobs.corpus += `\nOwed right after the call: ${owedThisRound.join(", ")}`; }
     }
     // What the tools returned backs what Co says next (an event searchEvents found can be named, a task it started can be promised).
     if (clean) sources = callSources(b, co?.records ?? "", toolCorpus);
     // ElevenLabs' own tool in the same message (a goodbye with end_call): Co's tools have run; the call's tool goes out as it is.
-    if (elCalled) break;
+    if (elCalled) { yield* releasePending(); break; }
     const overBudget = now() - t0 >= budgetMs;
     const last = step + 1 >= maxSteps || overBudget;
     toolsOff = last;
@@ -675,6 +740,12 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     linesSinceTools = [];
     // They just heard it was being texted and nothing went: the next thing they hear is that it comes right after the call, before
     // anything else the model says (a question included), in these approved words. The model is told it was said.
+    // With jobClaims, only once it's really queued for after the call; if it couldn't be, the next words say plainly it didn't go.
+    if (nowSaid && roundTried && !roundWent && !owedLineSaid && jobCheck && (!owedOk || !owedThisRound.length)) {
+      owedLineSaid = true;
+      heldWhy.push("the text you said was going didn't go through and couldn't be queued for later: say plainly it didn't go through, and don't promise it later");
+      blanked = true;
+    }
     if (nowSaid && roundTried && !roundWent && !owedLineSaid) {
       owedLineSaid = true;
       spokeAny = true;
@@ -686,6 +757,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       const lastMsg = req.messages[req.messages.length - 1];
       lastMsg.content = [...lastMsg.content, { type: "text", text: `(You just told them: "${FAILED_SEND_LINE}" Don't say it again or say it went; carry on.)` }];
     }
+    yield* releasePending();
   }
   // Everything this turn was going to say was kept back: say the one safe thing, never silence.
   // An event offer held back gets the safe line (as before); anything else held back, a plain acknowledgement, never a new promise.
@@ -699,7 +771,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // Co answers again, once, in its own words, without what it couldn't back. Never a line written for it.
   const heldAnswer = askedForSpecific && heldWhy.some((w) => /^names what nothing backs/.test(w));
   // They heard it was being texted, and it didn't go: the next words must say it comes right after the call.
-  if (clean && !voiceOnly && nowSaid && claims.undelivered.length && !claims.deliveredCount && finish !== "tool_calls" && !linesSinceTools.some((l) => AFTER_CALL.test(l))) {
+  if (clean && !voiceOnly && nowSaid && claims.undelivered.length && !claims.deliveredCount && finish !== "tool_calls" && !owedFailed && !linesSinceTools.some((l) => AFTER_CALL.test(l))) {
     heldWhy.push("the text you said was going didn't go through: say plainly you'll text it right after the call, and don't say it went");
     blanked = true;
     spokeSinceTools = false;
@@ -718,7 +790,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
           for (const x of rs.push(ev.delta.text)) { const out = say(x); if (out) yield chunk({ content: out }); }
         } else if (ev.type === "content_block_stop" && rs) {
-          if (clean) for (const x of rs.end()) { const out = say(x); if (out) yield chunk({ content: out }); }
+          if (clean) for (const x of endStream(rs)) { const out = say(x); if (out) yield chunk({ content: out }); }
           rs = null;
         }
       }
@@ -741,7 +813,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
           for (const x of rs.push(ev.delta.text)) { const out = say(x); if (out) yield chunk({ content: out }); }
         } else if (ev.type === "content_block_stop" && rs) {
-          if (clean) for (const x of rs.end()) { const out = say(x); if (out) yield chunk({ content: out }); }
+          if (clean) for (const x of endStream(rs)) { const out = say(x); if (out) yield chunk({ content: out }); }
           rs = null;
         }
       }
@@ -758,6 +830,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     deps.onLastResort?.(line);
     yield chunk({ content: line + " " });
   }
+  if (capped.length) deps.onCapped?.(capped);
   if (co?.afterTurn) Promise.resolve().then(() => co.afterTurn!({ spoken: spokenLines, ran })).catch((err: any) => console.error("call: after-turn check failed (non-fatal):", err?.message ?? err));
   yield chunk({}, finish === "length" ? "stop" : finish);
 }

@@ -2157,6 +2157,9 @@ export async function runMigrations(): Promise<void> {
     // Where a task came from (2026-10-04): 'promise' for one Co opened to keep a promise it made in a reply (services/promises.ts).
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ask'`))
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS deadline DATE, ADD COLUMN IF NOT EXISTS final_check_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS final_told BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS awaiting_reply BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS their_reply_at TIMESTAMPTZ`))
+    // A job dispatched during a call (2026-11-02, services/coTasks.ts dispatchKeyFor): one open job per call and need, never two.
+    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS dispatch_key TEXT`))
+    .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_co_tasks_dispatch_open ON co_tasks (user_id, dispatch_key) WHERE dispatch_key IS NOT NULL AND status = 'open'`))
     .catch((err: Error) => console.error("co_tasks table init failed:", err));
   // Goals a member handed Co (services/goalOwnership.ts, 2026-10-13): the items, which Co offered to take and which they picked, the
   // club-world read, and the check-in on the ledger. Co's pieces and the check-in are ordinary co_tasks rows carrying followup.goalId.

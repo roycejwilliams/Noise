@@ -53,15 +53,21 @@ export type CallTaskDeps = {
   alreadyDone: (userId: string, key: string) => Promise<boolean>;
   record: (userId: string, key: string, content: string) => Promise<void>;
   // Open tasks from this call already (a promise Co made live opens one the moment it's said), and a note on one.
-  existing?: (userId: string) => Promise<{ id: number; goal: string; theirWords: string; notes?: { text: string }[] }[]>;
+  // status: a job they had stopped on this call (dropped) is never opened again from the transcript.
+  existing?: (userId: string) => Promise<{ id: number; goal: string; theirWords: string; notes?: { text: string }[]; status?: string }[]>;
   note?: (userId: string, taskId: number, text: string) => Promise<unknown>;
 };
 
 // Tasks opened in the last few hours that are still open: a call's live promises, and anything else from this call.
 export const CALL_WINDOW_HOURS = 3;
-async function recentOpen(userId: string): Promise<{ id: number; goal: string; theirWords: string }[]> {
+async function recentOpen(userId: string): Promise<{ id: number; goal: string; theirWords: string; status?: string }[]> {
   const since = Date.now() - CALL_WINDOW_HOURS * 3_600_000;
-  return (await openTasks(userId)).filter((t) => new Date(t.createdAt).getTime() > since);
+  // And the work they stopped on the call (2026-11-02: a job started mid-call and dropped on their word stays stopped after it).
+  const stopped = await pool
+    .query(`SELECT id, goal, their_words FROM co_tasks WHERE user_id = $1 AND status = 'dropped' AND kind = 'work' AND created_at > $2 ORDER BY id DESC LIMIT 10`, [userId, new Date(since)])
+    .then((r) => r.rows.map((x: any) => ({ id: Number(x.id), goal: String(x.goal), theirWords: String(x.their_words ?? ""), status: "dropped" })))
+    .catch(() => []);
+  return [...(await openTasks(userId)).filter((t) => new Date(t.createdAt).getTime() > since), ...stopped];
 }
 
 export async function readWanted(prompt: string): Promise<Wanted[]> {
@@ -95,6 +101,7 @@ export async function tasksFromCall(userId: string, transcript: string, deps: Ca
       // (Royce's call, 2026-10-08: "whatever you could really find, just send it my way" was a send Co had already promised).
       const quoteKey = a.quote.trim().toLowerCase().slice(0, 60);
       const same = open.find((t) => sameCallCommitment({ goal: a.goal, theirWords: a.quote }, t) || (quoteKey.length >= 20 && [t.theirWords, ...(t.notes ?? []).map((n) => n.text)].some((x) => String(x ?? "").toLowerCase().includes(quoteKey))));
+      if (same?.status === "dropped") continue;
       if (same) {
         await deps.note?.(userId, same.id, `They asked for this on the call: "${a.goal}" (their words: "${a.quote.slice(0, 160)}"). This task carries it.`)?.catch(() => null);
         started.push(a.goal);
