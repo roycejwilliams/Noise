@@ -18,11 +18,15 @@ import { LIFE_CHAPTERS_RULE, mightBeCorrection, PROFILE_JUDGMENT_MODEL } from ".
 import { parseModelJson } from "./modelJson.js";
 import {
   ANSWERED_INTEREST_RULE,
+  openItemsBlock,
   persistIntentFrom,
+  RELATED_DROP_JSON,
+  RELATED_DROP_RULE,
   storePlannedEventMention,
   storeProfile,
   type CapturedEventMentionData,
   type CapturedIntentData,
+  type OpenItem,
 } from "./profileExtraction.js";
 import { applyStyleUpdate, MAX_NOTES } from "./textingStyle.js";
 
@@ -50,7 +54,7 @@ export function turnLearningPrompt(o: {
   message: string;
   today: string;
   onFile: OnFileProfile | null;
-  openAsks: { id: string; text: string }[];
+  openAsks: OpenItem[];
   styleNotes: string[];
   coSaidBefore: string | null;
 }): string {
@@ -70,7 +74,7 @@ Today's date: ${o.today}
 
 What Cue already has on file about them:
 ${fileLines || "(nothing yet)"}
-${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}. ${a.text}`).join("\n")}\n` : ""}
+${openItemsBlock(o.openAsks)}
 1. profile: psychographic fields from the whole transcript.
   - ${LIFE_CHAPTERS_RULE}
   - social_energy: a number 0-100 (0 = very introverted, 100 = very extroverted), or null if their own words gave no real signal; never guess a number.
@@ -84,7 +88,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
   - emotional_state: one word for their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout).
   - long_term_direction: a sentence capturing their longer-term personal and career direction, distinct from immediate goals. Empty string if not discussed.
 
-2. resolved: which of the EXACT on-file goals or blockers has the person said is now achieved, resolved, or no longer relevant, and which numbered open asks they said are now resolved, no longer needed, or no longer true. Only when the person clearly says so; restating it, still wanting it, or Cue mentioning it does not count. For each, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Cue's). Reuse the exact on-file text for goals and blockers and the number for asks.
+2. resolved: which of the EXACT on-file goals or blockers has the person said is now achieved, resolved, or no longer relevant, and which numbered items they said are now resolved, no longer needed, or no longer true. Only when the person clearly says so; restating it, still wanting it, or Cue mentioning it does not count. ${RELATED_DROP_RULE} For each, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Cue's). Reuse the exact on-file text for goals and blockers and the number for numbered items.
 
 3. corrections: in what they just said, do they correct or contradict something on file? Only a real correction: they say an item is wrong, no longer true, or has changed ("I'm not a founder", "I moved to Oakland", "I don't run anymore"). A new detail that doesn't contradict anything isn't a correction; a goal they achieved isn't a correction either. Don't guess from tone. For each: the field, the EXACT on-file text it replaces (for a list, the one item), what's true now if they said it (otherwise null), and their exact words from what they just said (at least a few words).
 
@@ -110,7 +114,7 @@ Only change the notes if what they just said makes clear how they want Cue to te
 
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
- "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}]},
+ "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
  "intent": {"asks": [{"text": "...", "type": "seeking"}], "concrete_preferences": [], "wants": [], "availability": null},
@@ -186,7 +190,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
           availability_pattern: row.availability_pattern ?? null,
         }
       : null;
-    const openAsks = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text) }));
+    const openAsks: OpenItem[] = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind }));
     const styleNotes: string[] = Array.isArray(row?.texting_style) ? row.texting_style : [];
 
     const { text } = await generateText({

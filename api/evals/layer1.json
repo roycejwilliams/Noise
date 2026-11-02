@@ -286,6 +286,8 @@
     "evals/review/memberNamesOwnSide.ts",
     "evals/review/voiceReadConsent.ts",
     "evals/review/healthDb.ts",
-    "evals/review/lumaLogPrivacy.ts"
+    "evals/review/lumaLogPrivacy.ts",
+    "evals/corrections/dropRelated.ts",
+    "evals/loop/offerDue.ts"
   ]
 }

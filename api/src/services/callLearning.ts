@@ -26,7 +26,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { LIFE_CHAPTERS_RULE, mightBeCorrection, PROFILE_JUDGMENT_MODEL } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
-import { extractPsychographicProfile, storePlannedEventMention, storeProfile } from "./profileExtraction.js";
+import { extractPsychographicProfile, openItemsBlock, RELATED_DROP_JSON, RELATED_DROP_RULE, storePlannedEventMention, storeProfile, type OpenItem } from "./profileExtraction.js";
 import { parseTurnLearning, type TurnLearning } from "./turnLearning.js";
 
 type OnFile = {
@@ -43,7 +43,7 @@ export function callLearningPrompt(o: {
   transcript: string;
   today: string;
   onFile: OnFile | null;
-  openAsks: { id: string; text: string }[];
+  openAsks: OpenItem[];
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -59,7 +59,7 @@ Today's date: ${o.today}
 
 What Cue already has on file about them:
 ${fileLines || "(nothing yet)"}
-${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}. ${a.text}`).join("\n")}\n` : ""}
+${openItemsBlock(o.openAsks)}
 1. profile: psychographic fields from the whole call.
   - ${LIFE_CHAPTERS_RULE}
   - social_energy: a number 0-100 (0 = very introverted, 100 = very extroverted), or null if their own words gave no real signal this call; never guess a number.
@@ -74,7 +74,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
   - long_term_direction: a sentence capturing their longer-term personal and career direction, distinct from immediate goals. Empty string if not discussed.
   Write about them as "they", never "he" or "she", unless they said their pronouns on the call.
 
-2. resolved: which of the EXACT on-file goals or blockers has the person said is now achieved, resolved, or no longer relevant, and which numbered open asks they said are now resolved, no longer needed, or no longer true. Only when the person clearly says so; restating it, still wanting it, or Cue mentioning it does not count. For each, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Cue's). Reuse the exact on-file text for goals and blockers and the number for asks.
+2. resolved: which of the EXACT on-file goals or blockers has the person said is now achieved, resolved, or no longer relevant, and which numbered items they said are now resolved, no longer needed, or no longer true. Only when the person clearly says so; restating it, still wanting it, or Cue mentioning it does not count. ${RELATED_DROP_RULE} For each, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Cue's). Reuse the exact on-file text for goals and blockers and the number for numbered items.
 
 3. corrections: anywhere in the call, did they correct or contradict something on file? Only a real correction: they say an item is wrong, no longer true, or has changed ("I'm not a founder", "I moved to Oakland", "I don't run anymore"). A new detail that doesn't contradict anything isn't a correction; a goal they achieved isn't a correction either. Don't guess from tone. For each: the field, the EXACT on-file text it replaces (for a list, the one item), what's true now if they said it (otherwise null), and their exact words (at least a few words, from their line).
 
@@ -86,7 +86,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
 
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
- "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}]},
+ "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
@@ -198,7 +198,7 @@ export async function learnFromCall(input: {
         availability_pattern: row.availability_pattern ?? null,
       }
     : null;
-  const openAsks = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text) }));
+  const openAsks: OpenItem[] = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind }));
 
   // No catch: a failed read fails the call's processing, which is retried.
   const { text } = await generateText({

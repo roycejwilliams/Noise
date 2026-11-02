@@ -13,6 +13,7 @@ import { recordDecision } from "../harness/core.js";
 import { DateTime } from "luxon";
 import { decayAction, isDraftable, stateOf, type LifecycleRow } from "./loopLifecycle.js";
 import { endOfLocalDay, localDay as memberLocalDay, memberZone } from "./memberTime.js";
+import { itemDays } from "./dateGuard.js";
 
 // Days are the member's (services/memberTime.ts): each reader passes their zone; with none, the fallback (Pacific).
 const localDay = (d: Date, zone: string | null = null) => memberLocalDay(d, zone);
@@ -42,7 +43,8 @@ export function deriveLoops(src: {
   tasks: { id: number; goal: string; deadline: string | null; awaitingReply: boolean; latest: string | null; theirReplyAt?: Date | null }[];
   notes: { what: string; when: string | null; shortlist: { name: string; note?: string }[]; picked: string | null; next: string | null } | null;
   asks: { askId: string; text: string; waiting?: boolean; lastMentionedAt?: Date | null }[];
-  offers: { key: string; name: string }[];
+  // date: the offer's event day (its last day, in their zone: services/dateGuard.ts itemDays), when it's tied to a dated thing.
+  offers: { key: string; name: string; date?: string | null }[];
 }): DerivedLoop[] {
   const out: DerivedLoop[] = [];
   for (const t of src.tasks) {
@@ -58,7 +60,9 @@ export function deriveLoops(src: {
   }
   // An ask is dated by the last time they said it, and is waiting once a check-in went out (services/askLifecycle.ts).
   for (const a of src.asks) out.push({ source: "ask", sourceRef: a.askId, title: a.text.slice(0, 120), status: a.waiting ? "waiting_on_reply" : "open", detail: null, dueDate: null, taskId: null, signalAt: a.lastMentionedAt ?? null });
-  for (const o of src.offers) out.push({ source: "offer", sourceRef: o.key, title: `Sent them ${o.name}`.slice(0, 120), status: "waiting_on_reply", detail: "waiting on how it landed", dueDate: null, taskId: null });
+  // An offer tied to an event carries its day (closure audit, 2026-11-02: offers had no due date): once that day is over, the daily
+  // pass closes the loop quietly as date_passed (loopLifecycle.ts decayAction), and no reply reads it as still waiting.
+  for (const o of src.offers) out.push({ source: "offer", sourceRef: o.key, title: `Sent them ${o.name}`.slice(0, 120), status: "waiting_on_reply", detail: "waiting on how it landed", dueDate: o.date ?? null, taskId: null });
   return out;
 }
 
@@ -79,6 +83,15 @@ export function describeLoops(rows: (Pick<LoopRow, "title" | "status" | "detail"
     return `${ids && r.id != null ? `[loop ${r.id}] ` : ""}${r.title}: ${r.source === "ask" && r.status === "open" ? ASK_ON_FILE : STATUS_WORDS[r.status]}${r.detail ? ` (${r.detail})` : ""}${r.dueDate ? `, due ${r.dueDate}` : ""}${fresh ? "" : " [not confirmed lately: check before saying it is current]"}`;
   });
   return `What you're carrying for them right now, and where each stands (this is what to report when they ask what you're doing or how it's going, and what to move forward${ids ? "; the [loop N] ids are for updateLoop, never for your texts" : ""}): ${lines.join("; ")}.`;
+}
+
+// Pure: the day an offer's event is over by (its last day, in their zone), or null when it carries no date. Every date source an
+// offer can carry (services/dateGuard.ts itemDays: the event page's start and end, the event date, the dates a post states, an
+// application deadline).
+export function offerDay(match: unknown, zone: string | null): string | null {
+  if (!match || typeof match !== "object") return null;
+  const d = itemDays(match, zone);
+  return d.end ?? d.start ?? null;
 }
 
 // A read is either the whole list or nothing to reason from (2026-10-01 code
@@ -102,8 +115,10 @@ async function sources(userId: string, now: Date): Promise<LoopSources> {
     q(`SELECT id, goal, deadline, awaiting_reply, their_reply_at, notes FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind IN ('work', 'research_brief') ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
     q(`SELECT brief, updated_at FROM search_briefs WHERE user_id = $1`, [userId]),
     q(`SELECT ask_id, ask_text, awaiting_response_since, last_mentioned_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
-    q(`SELECT target_key, payload->'match'->>'name' AS name FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND decided_at > NOW() - interval '2 days' ORDER BY decided_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
+    q(`SELECT target_key, payload->'match'->>'name' AS name, payload->'match' AS match FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND decided_at > NOW() - interval '2 days' ORDER BY decided_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
   ]);
+  // The offer's day is theirs; a zone that can't be read falls back (memberTime.ts), as every loop day does.
+  const zone = offers.rows.length ? await memberZone(userId).catch(() => null) : null;
   const briefRow = brief.rows[0] ?? null;
   const briefUpdatedAt = briefRow?.updated_at ? new Date(briefRow.updated_at) : null;
   const briefStale = !!briefUpdatedAt && now.getTime() - briefUpdatedAt.getTime() > NOTES_FRESH_HOURS * 3_600_000;
@@ -112,7 +127,7 @@ async function sources(userId: string, now: Date): Promise<LoopSources> {
     tasks: tasks.rows.map((t: any) => ({ id: Number(t.id), goal: String(t.goal), deadline: t.deadline ? String(t.deadline instanceof Date ? t.deadline.toISOString() : t.deadline).slice(0, 10) : null, awaitingReply: !!t.awaiting_reply, theirReplyAt: t.their_reply_at ? new Date(t.their_reply_at) : null, latest: Array.isArray(t.notes) && t.notes.length ? String(t.notes[t.notes.length - 1]?.text ?? "") : null })),
     notes: b ? { what: String(b.what ?? b.summary ?? ""), when: b.when ?? null, shortlist: Array.isArray(b.shortlist) ? b.shortlist : [], picked: b.picked ?? null, next: b.next ?? null } : null,
     asks: asks.rows.map((a: any) => ({ askId: String(a.ask_id), text: String(a.ask_text), waiting: !!a.awaiting_response_since, lastMentionedAt: a.last_mentioned_at ? new Date(a.last_mentioned_at) : null })),
-    offers: offers.rows.filter((o: any) => o.name).map((o: any) => ({ key: String(o.target_key), name: String(o.name) })),
+    offers: offers.rows.filter((o: any) => o.name).map((o: any) => ({ key: String(o.target_key), name: String(o.name), date: offerDay(o.match, zone) })),
     complete: { task: tasks.complete, notes: brief.complete, ask: asks.complete, offer: offers.complete },
     briefUpdatedAt,
     briefStale,

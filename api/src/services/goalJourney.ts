@@ -69,17 +69,32 @@ export function arcLine(intent: unknown): string | null {
 }
 
 // ---- the same open list the resolution pass reads: errands AND goals, so a goal can close at their word
-export async function openErrandsAndGoals(userId: string): Promise<{ ask_id: string; ask_text: string }[]> {
-  const [asks, prof] = await Promise.all([
-    pool.query(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [userId]),
+// And Cue's open tasks for them (closure audit, 2026-11-02: "the Sequin AI launch party is off, so drop that" retired one goal and one
+// ask; a task carried for the launch could never close there, since the read never saw it). A task's id is "task:<id>", so it never
+// collides with an ask's or a goal's. kind labels each line for the read: an ask, a look-out (an ask they asked Cue to watch for), a
+// goal, or Cue's task.
+export type OpenItemKind = "ask" | "lookout" | "goal" | "task";
+export const TASK_ITEM = "task:";
+export async function openErrandsAndGoals(userId: string): Promise<{ ask_id: string; ask_text: string; kind: OpenItemKind }[]> {
+  const [asks, prof, tasks] = await Promise.all([
+    pool.query(`SELECT ask_id, ask_text, intent FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [userId]),
     pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]),
+    // A task read that fails leaves tasks out of this read (nothing closes from a list it didn't see); asks and goals still read.
+    pool
+      .query(`SELECT id, goal FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind IN ('work', 'followup', 'research_brief') ORDER BY created_at DESC LIMIT 20`, [userId])
+      .catch(() => ({ rows: [] as any[] })),
   ]);
-  const goals = goalEntries(prof.rows[0]?.intent).map((g) => ({ ask_id: String(g.id), ask_text: String(g.text) }));
-  return [...asks.rows, ...goals];
+  const goals = goalEntries(prof.rows[0]?.intent).map((g) => ({ ask_id: String(g.id), ask_text: String(g.text), kind: "goal" as const }));
+  const open = asks.rows.map((a: any) => ({ ask_id: String(a.ask_id), ask_text: String(a.ask_text), kind: (a.intent === "lookout" ? "lookout" : "ask") as OpenItemKind }));
+  const work = (tasks.rows ?? []).map((t: any) => ({ ask_id: `${TASK_ITEM}${t.id}`, ask_text: String(t.goal ?? ""), kind: "task" as const })).filter((t: { ask_text: string }) => t.ask_text.trim());
+  return [...open, ...goals, ...work];
 }
 
 // ---- closing a goal: only at the member's word, and a companion moment
-export async function closeGoal(userId: string, goalId: string, quote: string | null): Promise<boolean> {
+// quiet: a goal that closed only because it went with something they dropped (profileExtraction.ts, the related read). It closes the
+// same way, set aside rather than done, and no goal_closed moment goes: they said the thing it served is off, and Cue already answered
+// that in the reply; a second message about a goal they didn't name would be noise.
+export async function closeGoal(userId: string, goalId: string, quote: string | null, o: { quiet?: boolean } = {}): Promise<boolean> {
   try {
     const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]);
     const intent: any[] = Array.isArray(rows[0]?.intent) ? rows[0].intent : [];
@@ -89,6 +104,10 @@ export async function closeGoal(userId: string, goalId: string, quote: string | 
     const next = intent.map((e) => (e === goal ? { ...e, status: "resolved", resolved_at: now, closed_by: "member", closed_quote: quote ? String(quote).slice(0, 240) : null } : e));
     await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(next)]);
     // The goal's state (services/goalEdges.ts): done at their word, so it stops generating searches and stays on file.
+    if (o.quiet) {
+      await import("./goalEdges.js").then((m) => m.setGoalState(userId, String(goal.text), "stale", quote ? `went with what they dropped: "${String(quote).slice(0, 160)}"` : "went with what they dropped", "member")).catch(() => {});
+      return true;
+    }
     await import("./goalEdges.js").then((m) => m.setGoalState(userId, String(goal.text), "done", quote ? `they said: "${String(quote).slice(0, 160)}"` : "they closed it", "member")).catch(() => {});
     const { enqueueCandidate } = await import("../harness/proactive.js");
     await enqueueCandidate({
@@ -106,6 +125,27 @@ export async function closeGoal(userId: string, goalId: string, quote: string | 
     console.error("goalJourney: closing a goal failed (non-fatal):", err?.message ?? err);
     return false;
   }
+}
+
+// A profile goal that came off their list at their word (profileExtraction.ts applyRetirements) takes its goal state with it, so it
+// never reads as an active goal "no longer on file" (services/memberKnowledge.ts goalsOf): done when they said it's over, set aside
+// when it only went with something they dropped. Only a row that's there and still active moves; none is made for a goal that never
+// had one. No moment: a profile goal is direction they mentioned, not one they set with Cue.
+export async function retireGoalStates(userId: string, goals: { goal: string; related: boolean; quote: string | null }[]): Promise<string[]> {
+  if (!goals.length) return [];
+  const G = await import("./goalEdges.js");
+  const { rows } = await pool
+    .query(`SELECT goal_hash FROM goal_states WHERE user_id = $1 AND state = 'active' AND goal_hash = ANY($2::text[])`, [userId, goals.map((x) => G.goalHash(x.goal))])
+    .catch(() => ({ rows: [] as any[] }));
+  const live = new Set(rows.map((x: any) => String(x.goal_hash)));
+  const done: string[] = [];
+  for (const g of goals) {
+    if (!live.has(G.goalHash(g.goal))) continue;
+    const q = String(g.quote ?? "").slice(0, 160);
+    const ok = await G.setGoalState(userId, g.goal, g.related ? "stale" : "done", g.related ? `went with what they dropped: "${q}"` : `they said: "${q}"`, "member").catch(() => false);
+    if (ok) done.push(g.goal);
+  }
+  return done;
 }
 
 // ---- the seasonal check-in cron (daily): at most one candidate per member per season

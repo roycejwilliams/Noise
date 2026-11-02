@@ -372,21 +372,48 @@ export function coverageNudgeFrom(
 }
 
 
+// What the resolution read hands back, gated: what they said is over (resolved*), what goes with something they dropped (related*: closed
+// quietly the same turn), and what might (unsure: kept, and Cue asks them once). quoteOf: each item's quote, by goal text or item id.
+export type ResolutionResult = {
+  resolvedGoals: string[];
+  resolvedBlockers: string[];
+  resolvedAskIds: string[];
+  relatedGoals: string[];
+  relatedAskIds: string[];
+  unsure: { kind: "goal" | "ask"; item: string; quote: string }[];
+  quoteOf: Record<string, string>;
+};
+export const NO_RESOLUTION: ResolutionResult = { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [], relatedGoals: [], relatedAskIds: [], unsure: [], quoteOf: {} };
+
+// The numbered list every resolution read sees (here, services/turnLearning.ts, services/callLearning.ts): their open asks and look-outs,
+// their goals, and Cue's open tasks for them, each labelled so the read knows what each one is.
+export type OpenItem = { id: string; text: string; kind?: import("./goalJourney.js").OpenItemKind };
+const ITEM_LABEL: Record<string, string> = { ask: "ask", lookout: "look-out", goal: "goal", task: "Cue's task" };
+export function openItemsBlock(items: OpenItem[]): string {
+  return items.length ? `\nOpen asks, look-outs, goals and Cue's tasks for them (numbered):\n${items.map((a, i) => `${i}. ${a.kind ? `(${ITEM_LABEL[a.kind] ?? a.kind}) ` : ""}${a.text}`).join("\n")}\n` : "";
+}
+
+// Closure audit, 2026-11-02: "The Sequin AI launch party is off, so drop that" retired the one goal that named it and one ask; two goal
+// entries, two profile goals and an ask for the same launch stayed active, because the read only retired an item the person named
+// as over. A drop covers what exists only for it; whether an item does is the model's read of their words and what the item is for,
+// never a word match, and when it can't tell the item stays and Cue asks once (Royce, 2026-11-02).
+export const RELATED_DROP_RULE =
+  "When they say they're no longer pursuing something (it's off, cancelled, dropped, they're not doing it anymore), that also covers every on-file goal and numbered item that exists only for that thing, even one that doesn't repeat their words: put each in related, with the same quote. Judge it from what each item is for, never from shared words alone; an item that also serves something they still want stays out. When you can't tell whether an item exists only for what they dropped, put it in unsure instead: it stays, and Cue asks them once. Only for something they dropped; nothing goes in related or unsure otherwise.";
+export const RELATED_DROP_JSON = `"related": [{"goal": "exact on-file goal text, or null", "index": null, "quote": "..."}], "unsure": [{"goal": null, "index": 0, "quote": "..."}]`;
+
 async function assessResolvedItems(
   transcript: string,
   existingGoals: string[],
   existingBlockers: string[],
-  openAsks: { id: string; text: string }[] = [],
+  openAsks: OpenItem[] = [],
   userId: string | null = null,
-): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[]; resolvedAskIds: string[] }> {
+): Promise<ResolutionResult> {
   if (existingGoals.length === 0 && existingBlockers.length === 0 && openAsks.length === 0) {
-    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
+    return NO_RESOLUTION;
   }
 
   try {
-    const askListBlock = openAsks.length
-      ? `\nOpen asks (numbered):\n${openAsks.map((a, i) => `${i}. ${a.text}`).join("\n")}\n`
-      : "";
+    const askListBlock = openItemsBlock(openAsks);
 
     // Retiring something is a judgment with a side effect (it stops check-ins
     // and retires matches), so Sonnet 5, and every retirement must quote the
@@ -401,7 +428,7 @@ async function assessResolvedItems(
     return await applyResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks, userId);
   } catch (err) {
     console.error("assessResolvedItems failed (non-fatal):", err);
-    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
+    return NO_RESOLUTION;
   }
 }
 
@@ -412,9 +439,9 @@ export async function applyResolutionOutput(
   transcript: string,
   existingGoals: string[],
   existingBlockers: string[],
-  openAsks: { id: string; text: string }[],
+  openAsks: OpenItem[],
   userId: string | null,
-): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[]; resolvedAskIds: string[] }> {
+): Promise<ResolutionResult> {
   try {
     const gated = gateResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks);
     if (gated.proposals.length) {
@@ -429,15 +456,36 @@ export async function applyResolutionOutput(
         reason: `${gated.accepted.length} of ${gated.proposals.length} retirements supported by a quote`,
       });
     }
+    // What went with something they dropped, and what might have (kept, asked once): logged as one decision with what it named.
+    if (gated.related.proposals.length || gated.unsure.proposals.length) {
+      await recordDecision({
+        layer: 4,
+        decision: "profile.write",
+        userId,
+        outcome: gated.related.accepted.length || gated.unsure.accepted.length ? "act" : "skip",
+        action: "retire_related",
+        proposal: { related: gated.related.proposals, unsure: gated.unsure.proposals },
+        checks: [...gated.related.checks, ...gated.unsure.checks],
+        reason: `${gated.related.accepted.length} of ${gated.related.proposals.length} went with what they dropped; ${gated.unsure.accepted.length} of ${gated.unsure.proposals.length} kept to ask once`,
+      });
+    }
 
+    const quoteOf: Record<string, string> = {};
+    for (const p of [...gated.accepted, ...gated.related.accepted]) quoteOf[p.item] ??= p.quote;
+    // An item they named as over is never also asked about.
+    const closing = new Set([...gated.accepted, ...gated.related.accepted].map((p) => p.item));
     return {
       resolvedGoals: gated.accepted.filter((p) => p.kind === "goal").map((p) => p.item),
       resolvedBlockers: gated.accepted.filter((p) => p.kind === "blocker").map((p) => p.item),
       resolvedAskIds: gated.accepted.filter((p) => p.kind === "ask").map((p) => p.item),
+      relatedGoals: gated.related.accepted.filter((p) => p.kind === "goal" && !gated.accepted.some((a) => a.item === p.item)).map((p) => p.item),
+      relatedAskIds: gated.related.accepted.filter((p) => p.kind === "ask" && !gated.accepted.some((a) => a.item === p.item)).map((p) => p.item),
+      unsure: gated.unsure.accepted.filter((p) => !closing.has(p.item)).map((p) => ({ kind: p.kind === "goal" ? ("goal" as const) : ("ask" as const), item: p.item, quote: p.quote })),
+      quoteOf,
     };
   } catch (err) {
     console.error("assessResolvedItems failed (non-fatal):", err);
-    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
+    return NO_RESOLUTION;
   }
 }
 
@@ -452,15 +500,17 @@ export function buildResolutionPrompt(
 Goals: ${JSON.stringify(existingGoals)}
 Blockers: ${JSON.stringify(existingBlockers)}
 ${askListBlock}
-Based on this new transcript, which of the EXACT goals/blockers above (if any) has the person said is now achieved, resolved, or no longer relevant? Separately, which numbered open asks (if any) has the person said are now resolved, no longer needed, or no longer true? Only include something when the person clearly says so. Restating it, still wanting it, or Cue mentioning it does not count. Leave it out if unclear.
+Based on this new transcript, which of the EXACT goals/blockers above (if any) has the person said is now achieved, resolved, or no longer relevant? Separately, which numbered items (if any) has the person said are now resolved, no longer needed, or no longer true? Only include something when the person clearly says so. Restating it, still wanting it, or Cue mentioning it does not count. Leave it out if unclear.
+
+${RELATED_DROP_RULE}
 
 For every item you include, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Cue's).
 
 Transcript:
 "${transcript}"
 
-Return ONLY valid JSON, reusing the exact original text for goals/blockers and the number for asks:
-{"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}]}`;
+Return ONLY valid JSON, reusing the exact original text for goals/blockers and the number for numbered items:
+{"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}}`;
 }
 
 export function gateResolutionOutput(
@@ -468,13 +518,24 @@ export function gateResolutionOutput(
   transcript: string,
   existingGoals: string[],
   existingBlockers: string[],
-  openAsks: { id: string; text: string }[],
+  openAsks: OpenItem[],
 ) {
   // Real gap found live, 2026-09-10: despite "Return ONLY valid JSON", the
   // model sometimes appends a "**Reasoning:**" section after the fenced
   // block. Extract the balanced {...} object instead of trusting fences.
   const clean = raw.trim();
   const parsed = parseModelJson(clean);
+  // related / unsure: an on-file goal by its exact text, or a numbered item by its number; each held to the same quote gate.
+  const pointed = (list: unknown): ProposedResolution[] =>
+    (Array.isArray(list) ? list : []).flatMap((x: any): ProposedResolution[] => {
+      const quote = String(x?.quote ?? "");
+      if (Number.isInteger(x?.index) && x.index >= 0 && x.index < openAsks.length) return [{ kind: "ask", item: openAsks[x.index].id, quote }];
+      if (typeof x?.goal === "string" && x.goal.trim()) return [{ kind: "goal", item: x.goal, quote }];
+      return [];
+    });
+  const onFile = { goals: existingGoals, blockers: existingBlockers, asks: openAsks };
+  const relatedProposals = pointed(parsed?.related);
+  const unsureProposals = pointed(parsed?.unsure);
   const proposals: ProposedResolution[] = [
     ...(Array.isArray(parsed.resolved_goals) ? parsed.resolved_goals : []).map((g: any) => ({
       kind: "goal" as const,
@@ -490,7 +551,12 @@ export function gateResolutionOutput(
       .filter((a: any) => Number.isInteger(a?.index) && a.index >= 0 && a.index < openAsks.length)
       .map((a: any) => ({ kind: "ask" as const, item: openAsks[a.index].id, quote: String(a?.quote ?? "") })),
   ];
-  return { proposals, ...gateResolutions(proposals, { goals: existingGoals, blockers: existingBlockers, asks: openAsks }, transcript) };
+  return {
+    proposals,
+    ...gateResolutions(proposals, onFile, transcript),
+    related: { proposals: relatedProposals, ...gateResolutions(relatedProposals, onFile, transcript) },
+    unsure: { proposals: unsureProposals, ...gateResolutions(unsureProposals, onFile, transcript) },
+  };
 }
 
 // Proactive check-in call cadence — Hume's own voice prompt (Phase 4, Next
@@ -851,7 +917,7 @@ export async function storeProfile(
     // The merged turn read's output (services/turnLearning.ts): the same
     // judgments, already made, run through the same gates below instead of
     // three more model calls. openAsks is the numbered list that read saw.
-    precomputed?: { resolutionRaw: string; openAsks: { id: string; text: string }[]; correctionsRaw: string; cadence: unknown };
+    precomputed?: { resolutionRaw: string; openAsks: OpenItem[]; correctionsRaw: string; cadence: unknown };
     // This turn's ask as the lanes read it (laneMoves.ts turnAskLane). A one-off ask never adds a goal or an interest (heldAsOneOff).
     turnAsk?: import("./laneMoves.js").TurnAsk | null;
   } = {},
@@ -874,7 +940,7 @@ export async function storeProfile(
   // already resolved.
   // Errands AND goals, so a goal can close at their word (services/goalJourney.ts); only the member's own quoted words close either.
   const openAskRows = await (await import("./goalJourney.js")).openErrandsAndGoals(user_id);
-  const openAsks = opts.precomputed?.openAsks ?? openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
+  const openAsks: OpenItem[] = opts.precomputed?.openAsks ?? openAskRows.map((r) => ({ id: r.ask_id, text: r.ask_text, kind: r.kind }));
   const pre = opts.precomputed;
 
   const onFile: OnFile = {
@@ -886,7 +952,7 @@ export async function storeProfile(
     long_term_direction: existing?.long_term_direction ?? null,
     availability_pattern: existing?.availability_pattern ?? null,
   };
-  let [{ resolvedGoals, resolvedBlockers, resolvedAskIds }, corrections, pastCorrections] = await Promise.all([
+  let [resolution, corrections, pastCorrections] = await Promise.all([
     pre
       ? applyResolutionOutput(pre.resolutionRaw, transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id)
       : assessResolvedItems(transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id),
@@ -897,6 +963,9 @@ export async function storeProfile(
       : Promise.resolve([] as Correction[]),
     recentlyCorrected(user_id),
   ]);
+  // A goal that went with something they dropped comes off their goals the same as one they said is over (applyRetirements closes it).
+  const resolvedGoals = [...resolution.resolvedGoals, ...resolution.relatedGoals];
+  const { resolvedBlockers } = resolution;
   // What they corrected or removed through Co itself (services/whatCoKnows.ts): a profile item stays corrected for good, not 90
   // days, and a specific thing they had removed from anywhere (a claim, the snapshot) can't come back as a profile item either.
   const W = await import("./whatCoKnows.js");
@@ -1090,31 +1159,7 @@ export async function storeProfile(
   // Their stored zone follows the city (services/memberTime.ts): re-derived now when it changed, a no-op when it didn't.
   await (await import("./memberTime.js")).refreshMemberZone(user_id);
 
-  // Co Loop Stage 6 — close the loop back to Stages 3 and 5. A resolved ask
-  // retires its relevance_edges rows (proof that Stage 3's call didn't need
-  // to be acted on to be right) and stops further Stage 5 check-ins on it.
-  if (resolvedAskIds.length) {
-    // A goal closes only at their word, and when it does it is a companion moment, not a status flip (services/goalJourney.ts).
-    const { rows: prof } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]);
-    const goalIds = new Set<string>((Array.isArray(prof[0]?.intent) ? prof[0].intent : []).filter((e: any) => e?.kind === "goal" && e?.status === "active").map((e: any) => String(e.id)));
-    const closedGoals = resolvedAskIds.filter((id) => goalIds.has(id));
-    for (const id of closedGoals) await (await import("./goalJourney.js")).closeGoal(user_id, id, null);
-    resolvedAskIds = resolvedAskIds.filter((id) => !goalIds.has(id));
-  }
-  if (resolvedAskIds.length) {
-    await pool.query(
-      `UPDATE ask_checkins SET resolved_at = NOW(), closed_reason = COALESCE(closed_reason, 'member') WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
-      [user_id, resolvedAskIds],
-    );
-    // And in the profile, so it stops being listed as open (askKind.ts).
-    await markIntentResolved(user_id, resolvedAskIds).catch(() => {});
-    await pool.query(
-      `UPDATE relevance_edges SET status = 'retired', retired_at = NOW(),
-        retired_reason = 'ask resolved independently, no intro made'
-       WHERE person_id = $1 AND ask_id = ANY($2::text[]) AND status = 'open'`,
-      [user_id, resolvedAskIds],
-    );
-  }
+  await applyRetirements(user_id, resolution);
 
   // Separate conditional write, same reasoning as resolvedAskIds above —
   // most calls never touch this subject, and a null/unstated result here
@@ -1130,6 +1175,84 @@ export async function storeProfile(
   }
 
   return { safeChapters, safeStyle };
+}
+
+// Co Loop Stage 6 — close the loop back to Stages 3 and 5, after the profile write. In one place, so every read that retires things
+// (a text turn, a call, the standalone read) closes the same way:
+//   - an intent goal they said is over closes at their word, a companion moment (services/goalJourney.ts closeGoal); one that only went
+//     with something they dropped closes quietly (set aside, no moment);
+//   - a profile goal that came off their list takes its goal_states row with it (done, or set aside when it went with a drop), so it
+//     never reads as an active goal "no longer on file" (services/memberKnowledge.ts goalsOf). Only a row that's there and active moves;
+//     none is made for a goal that never had one;
+//   - an ask or look-out is resolved (ask_checkins, the profile entry, its relevance_edges retired), and stops check-ins and searches;
+//   - Cue's task for it closes as dropped, with their words (services/coTasks.ts closeTask; its loop follows on the next sync);
+//   - unsure: kept as it is. A goal gets its one question through the goal recheck (services/goalRecheck.ts markUnsure: the next natural
+//     reply asks once whether it's still on). An ask or task that might go with it stays open, logged in the read's decision.
+// Nothing here sends anything.
+export async function applyRetirements(userId: string, r: ResolutionResult): Promise<{ goalsClosed: string[]; asksClosed: string[]; tasksClosed: number[]; unsureGoals: string[] }> {
+  const out = { goalsClosed: [] as string[], asksClosed: [] as string[], tasksClosed: [] as number[], unsureGoals: [] as string[] };
+  const ids = [...r.resolvedAskIds, ...r.relatedAskIds];
+  const unsureIds = r.unsure.filter((u) => u.kind === "ask").map((u) => u.item);
+  const { TASK_ITEM, closeGoal } = await import("./goalJourney.js");
+  let entries: any[] = [];
+  if (ids.length || unsureIds.length) {
+    const { rows: prof } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]);
+    entries = Array.isArray(prof[0]?.intent) ? prof[0].intent : [];
+  }
+  const activeGoal = new Map<string, string>(entries.filter((e: any) => e?.kind === "goal" && e?.status === "active").map((e: any) => [String(e.id), String(e.text ?? "")]));
+  const related = new Set(r.relatedAskIds);
+  const quote = (id: string) => r.quoteOf[id] ?? null;
+
+  // A goal closes only at their word, and when it does it is a companion moment, not a status flip (services/goalJourney.ts).
+  for (const id of r.resolvedAskIds.filter((x) => activeGoal.has(x))) if (await closeGoal(userId, id, null)) out.goalsClosed.push(activeGoal.get(id)!);
+  for (const id of r.relatedAskIds.filter((x) => activeGoal.has(x))) if (await closeGoal(userId, id, quote(id), { quiet: true })) out.goalsClosed.push(activeGoal.get(id)!);
+
+  // Their profile goals that came off the list: the goal_states row that's still active follows (services/goalJourney.ts).
+  const profileGoals = [...r.resolvedGoals.map((g) => ({ goal: g, related: false, quote: quote(g) })), ...r.relatedGoals.map((g) => ({ goal: g, related: true, quote: quote(g) }))];
+  if (profileGoals.length) out.goalsClosed.push(...(await (await import("./goalJourney.js")).retireGoalStates(userId, profileGoals)));
+
+  // Cue's tasks for it.
+  const tasks = ids.filter((x) => x.startsWith(TASK_ITEM));
+  if (tasks.length) {
+    const { closeTask } = await import("./coTasks.js");
+    for (const t of tasks) {
+      const n = Number(t.slice(TASK_ITEM.length));
+      if (!Number.isInteger(n)) continue;
+      const q = String(quote(t) ?? "").slice(0, 160);
+      const outcome = related.has(t) ? `Dropped with what they said is off: "${q}"` : `They said it's no longer needed: "${q}"`;
+      if (await closeTask(userId, n, "dropped", outcome, { theirWord: q || null }).catch(() => false)) out.tasksClosed.push(n);
+    }
+  }
+
+  // Their asks and look-outs. A resolved ask retires its relevance_edges rows (proof that Stage 3's call didn't need to be acted on to be
+  // right) and stops further Stage 5 check-ins on it.
+  const asks = ids.filter((x) => !activeGoal.has(x) && !x.startsWith(TASK_ITEM));
+  if (asks.length) {
+    await pool.query(
+      `UPDATE ask_checkins SET resolved_at = NOW(), closed_reason = COALESCE(closed_reason, 'member') WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
+      [userId, asks],
+    );
+    // And in the profile, so it stops being listed as open (askKind.ts).
+    await markIntentResolved(userId, asks).catch(() => {});
+    await pool.query(
+      `UPDATE relevance_edges SET status = 'retired', retired_at = NOW(),
+        retired_reason = 'ask resolved independently, no intro made'
+       WHERE person_id = $1 AND ask_id = ANY($2::text[]) AND status = 'open'`,
+      [userId, asks],
+    );
+    out.asksClosed.push(...asks);
+  }
+
+  // Unsure: kept. A goal (on their profile list, or a goal entry) is asked about once through the goal recheck.
+  const unsureGoals = [
+    ...r.unsure.filter((u) => u.kind === "goal").map((u) => ({ goal: u.item, quote: u.quote })),
+    ...r.unsure.filter((u) => u.kind === "ask" && activeGoal.has(u.item)).map((u) => ({ goal: activeGoal.get(u.item)!, quote: u.quote })),
+  ];
+  if (unsureGoals.length) {
+    const R = await import("./goalRecheck.js");
+    for (const u of unsureGoals) if (await R.markUnsure(userId, u.goal, u.quote).catch(() => false)) out.unsureGoals.push(u.goal);
+  }
+  return out;
 }
 
 // Stores the raw transcript as a co_memories row, same shape used by both the

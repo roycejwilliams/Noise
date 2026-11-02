@@ -18,6 +18,7 @@
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
 import type { GoalStateRow } from "../services/goalEdges.js";
+import { unsureQuote } from "../services/goalRecheck.js";
 import type { MemberKnowledge, MemberRules, Restraint } from "../services/memberKnowledge.js";
 import { dateSpan, KINDS, renderLive, type Kind } from "../services/factLabels.js";
 import { arcLine, LENS_RULE } from "../services/goalJourney.js";
@@ -488,7 +489,10 @@ export async function gatherReplyFacts(
   const aside = asides.find((a) => a.recheck !== "asked");
   if (aside) {
     rf.goalSetAside = aside;
-    if (aside.recheck === "ask") addHint(rf, `Their goal "${aside.goal.slice(0, 140)}" has had nothing new from them in a while. If it fits naturally in this reply and they aren't in a hard moment, ask once, in your own words and naming it plainly, whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement, never an offer to keep looking, and never say how long it's been.`);
+    // Unsure whether it went with something they just dropped (services/goalRecheck.ts markUnsure): the same one question, about that.
+    const dropped = aside.recheck === "ask" ? unsureQuote(aside.reason) : null;
+    if (dropped) addHint(rf, `When they said "${dropped.slice(0, 160)}", it wasn't clear whether their goal "${aside.goal.slice(0, 140)}" goes with it, so it's still on file. If it fits naturally in this reply and they aren't in a hard moment, ask once, in your own words and naming it plainly, whether that's still on; if yes, markGoal active, if it's off too, markGoal stale. Never as a list or an announcement, and never an offer.`);
+    else if (aside.recheck === "ask") addHint(rf, `Their goal "${aside.goal.slice(0, 140)}" has had nothing new from them in a while. If it fits naturally in this reply and they aren't in a hard moment, ask once, in your own words and naming it plainly, whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement, never an offer to keep looking, and never say how long it's been.`);
     else addHint(rf, `Cue stopped looking for things for their goal "${aside.goal.slice(0, 140)}" (${aside.reason}). If it fits naturally in this reply and they aren't in a hard moment, ask in your own words whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement.`);
   }
   for (const a of asides.filter((x) => x.recheck === "asked")) addHint(rf, `You asked them whether they still want things for their goal "${a.goal.slice(0, 140)}". If this message answers that, markGoal active for a yes or done if it's over. Don't ask it again.`);

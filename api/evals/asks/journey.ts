@@ -101,7 +101,7 @@ check("the brief is goals as frame, asks as bullets: it hands the writer both, a
   check("the closing moment acknowledges the arc in a few lines, with no question, offer or next step", !r.skip && /chasing this back in July/.test(r.text) && r.rules.maxSentences === 3 && /No question, no offer, no next step/.test(src("harness/proactiveRegistry.ts")));
   P.setProactiveModelForTests(null);
 }
-check("nothing closes a goal on its own: the only code that resolves a goal entry is closeGoal, reached only from the member-quoted resolution pass", ["services/askLifecycle.ts", "services/askExpiry.ts", "services/loopLifecycle.ts", "jobs/index.ts", "services/goalSweep.ts"].every((f) => !/closeGoal|kind === "goal"[^\n]*resolved/.test(src(f))) && /closeGoal\(user_id, id, null\)/.test(src("services/profileExtraction.ts")));
+check("nothing closes a goal on its own: the only code that resolves a goal entry is closeGoal, reached only from the member-quoted resolution pass", ["services/askLifecycle.ts", "services/askExpiry.ts", "services/loopLifecycle.ts", "jobs/index.ts", "services/goalSweep.ts"].every((f) => !/closeGoal|kind === "goal"[^\n]*resolved/.test(src(f))) && /closeGoal\(userId, id, null\)/.test(src("services/profileExtraction.ts")));
 check("the resolution pass reads errands AND goals, so a goal can close at their word (three sites share one list)", ["services/profileExtraction.ts", "services/turnLearning.ts", "services/callLearning.ts"].every((f) => /openErrandsAndGoals/.test(src(f))));
 check("asks are disposable, goals are not: the lifecycle (expiry, evidence closes, check-ins) only ever reads ask_checkins, which a goal has no row in", !/goalEntries|isActiveGoal|kind === "goal"/.test(src("services/askLifecycle.ts") + src("services/askExpiry.ts")));
 
