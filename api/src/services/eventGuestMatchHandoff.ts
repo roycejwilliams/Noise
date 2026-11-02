@@ -217,14 +217,15 @@ async function maybeAskCandidateDirectly(
   askerFirstName: string,
   candidate: MatchNudgeCandidate,
   asker: MatchNudgeCandidate,
-): Promise<void> {
+): Promise<boolean | void> {
   const O = await import("./inRoomOffers.js");
   const RM = await import("./roomMatching.js");
   // Already asked (or already answered) about this person, from either path.
   if ((await hasPendingOrAnsweredNudge(eventId, candidate.user_id, asker.user_id)) || (await O.offeredAbout(eventId, candidate.user_id, asker.user_id))) return;
   // The pair record: never asked twice, never after a decline at any event, never once the room's asks expired. The asker
   // is never told why (their answer from Co is the same either way).
-  if (await RM.mayAsk(eventId, candidate.user_id, asker.user_id, "eventGuestMatchHandoff.directAsk")) return;
+  // false: refused, so a member's own request is never reported as asked (review of #359).
+  if (await RM.mayAsk(eventId, candidate.user_id, asker.user_id, "eventGuestMatchHandoff.directAsk")) return false;
   // The emergency pause: the asker was already told Co would check, so the ask isn't dropped. It waits in deferred_sends
   // (which holds it while the pause is on) and goes once the pause lifts, if the event and the pair are still valid then.
   const paused = await RM.matchingPause(eventId);
@@ -400,7 +401,9 @@ async function sendIntroEmail(eventId: string, _callerEventName: string, a: Matc
   const onceCheck = sentBefore ? { name: "intro_once", pass: false, reason: "already introduced" } : { name: "intro_once", pass: true };
   // They already know each other another way (introduced elsewhere, one of them said so, a personal invite): no intro email between
   // them (services/knownConnections.ts). Checked right before the send, so a connection added while it waited stops it.
-  const connected = sentBefore ? null : await (await import("./knownConnections.js")).alreadyConnected(a.user_id, b.user_id);
+  // Not for an intro a member asked for by name (a reconnection they chose; both still said yes).
+  const memberAsked = RM.memberAsked(await RM.pairRows(a.user_id, b.user_id), eventId);
+  const connected = sentBefore || memberAsked ? null : await (await import("./knownConnections.js")).alreadyConnected(a.user_id, b.user_id);
   if (connected?.known) {
     await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [{ name: "not_already_connected", pass: false, reason: connected.why }], { eventId, b: b.user_id });
     // Final: a held email is never retried for a pair that already knows each other.
@@ -538,8 +541,8 @@ export async function requestIntroToNamedGuest(
   if (await hasReciprocalOptIn(eventId, requester.user_id, target.user_id)) {
     return sendIntroEmail(eventId, eventName, requester, target);
   }
-  await maybeAskCandidateDirectly(eventId, eventName, requester.first_name, target, requester);
-  return true;
+  // A refused ask (the pair record said no) is never reported as requested.
+  return (await maybeAskCandidateDirectly(eventId, eventName, requester.first_name, target, requester)) !== false;
 }
 
 // Entry point called from routes/sendblue.ts once a reply to a pending

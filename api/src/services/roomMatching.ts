@@ -285,6 +285,11 @@ export function pairBlockReason(rows: PairRow[], eventId: string, x: string, y: 
   return null;
 }
 
+// Pure: did a member ask for this intro by name at this event (requestEventIntro, origin 'member')?
+export function memberAsked(rows: Pick<PairRow, "event_id" | "origin">[], eventId: string): boolean {
+  return rows.some((r) => r.event_id === eventId && r.origin === "member");
+}
+
 export async function pairRows(x: string, y: string): Promise<PairRow[]> {
   const { a, b } = orderPair(x, y);
   const { rows } = await pool.query(`SELECT * FROM co_pairs WHERE a_id = $1 AND b_id = $2 ORDER BY created_at DESC`, [a, b]).catch(() => ({ rows: [] as any[] }));
@@ -297,11 +302,13 @@ export async function pairRow(eventId: string, x: string, y: string): Promise<Pa
 
 // May Co ask x about y at this event? Logged when not.
 export async function mayAsk(eventId: string, x: string, y: string, action: string): Promise<string | null> {
+  const rows = await pairRows(x, y);
   // Two people who already know each other are never introduced as strangers (services/knownConnections.ts): checked before the
-  // tease, the nudge, the additive offer, the direct ask, and again when a deferred ask goes.
-  const known = await (await import("./knownConnections.js")).knownReason(x, y, action);
+  // tease, the nudge, the additive offer, the direct ask, and again when a deferred ask goes. Not for an intro a member asked for by
+  // name (origin 'member'): that's a reconnection they chose, and the other side's yes is still asked for.
+  const known = memberAsked(rows, eventId) ? null : await (await import("./knownConnections.js")).knownReason(x, y, action);
   if (known) return known;
-  const why = pairBlockReason(await pairRows(x, y), eventId, x, y);
+  const why = pairBlockReason(rows, eventId, x, y);
   if (why) {
     await recordDecision({ layer: 6, decision: "match.pair", userId: x, outcome: "skip", action, proposal: { eventId, other: y }, checks: [{ name: "pair_may_ask", pass: false, reason: why }] }).catch(() => {});
   }
@@ -313,10 +320,12 @@ export async function mayAsk(eventId: string, x: string, y: string, action: stri
 // answer (eventGuestMatchHandoff.ts recordOptIn). Concurrency audit finding 8: both said yes at once, and the side whose
 // turn saw "not both" still asked the other "X is up for an intro, open to it?".
 export async function directAskStale(eventId: string, x: string, y: string): Promise<string | null> {
-  // Right before the send: a connection added while it was queued (an intro elsewhere, "we already know each other") stops it.
-  const known = await (await import("./knownConnections.js")).knownReason(x, y, "roomMatching.directAskStale");
+  const pairs = await pairRows(x, y);
+  // Right before the send: a connection added while it was queued (an intro elsewhere, "we already know each other") stops it,
+  // except on an intro a member asked for by name (a reconnection they chose).
+  const known = memberAsked(pairs, eventId) ? null : await (await import("./knownConnections.js")).knownReason(x, y, "roomMatching.directAskStale");
   if (known) return known;
-  const why = pairBlockReason(await pairRows(x, y), eventId, x, y);
+  const why = pairBlockReason(pairs, eventId, x, y);
   if (why) return why;
   const { rows } = await pool
     .query(`SELECT status FROM event_guest_match_opt_ins WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3`, [eventId, x, y])

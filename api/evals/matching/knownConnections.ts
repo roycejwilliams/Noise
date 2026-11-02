@@ -41,6 +41,7 @@ const world = {
     [NOOR, { first_name: "Noor", last_name: "Haddad" }],
   ]),
   decisions: [] as any[],
+  pairs: [] as any[],
 };
 const { default: pool } = await import("../../src/db/db.js");
 (pool as any).query = async (sql: string, p: any[] = []) => {
@@ -54,6 +55,7 @@ const { default: pool } = await import("../../src/db/db.js");
     return { rows: hit ? [{ x: 1 }] : [] };
   }
   if (/FROM co_pairs p JOIN users u ON u\.id = CASE WHEN p\.a_id = \$1/.test(sql)) return { rows: world.told };
+  if (/^SELECT \* FROM co_pairs WHERE a_id = \$1 AND b_id = \$2/.test(sql)) return { rows: world.pairs.filter((r) => r.a_id === p[0] && r.b_id === p[1]) };
   if (/SELECT id, first_name, last_name FROM users WHERE id = ANY/.test(sql)) return { rows: (p[0] as string[]).filter((id) => world.users.has(id)).map((id) => ({ id, ...world.users.get(id) })) };
   if (/INSERT INTO decisions|recordDecision/i.test(sql)) return { rows: [] };
   return { rows: [] };
@@ -124,25 +126,72 @@ const CL = await import("../../src/services/callLearning.js");
   ];
   check("two Ellises Cue named: 'Ellis' alone is nobody", K.resolveNamed(named, "Ellis") === null);
   check("with a last name: the one Ellis", K.resolveNamed(named, "Ellis", "Grant")?.otherId === ELLIS2);
-  check("one Noor: resolved", K.resolveNamed(named, "Noor")?.otherId === NOOR);
-  // Cue told Jordan about Ellis Park only; Jordan says he works with "Ellis": resolved to the Ellis Cue named.
+  // Cue named exactly one Ellis (Ellis Park) to Jordan; "Ellis and I work together" still ties to nobody: a first name alone never does.
   world.told = [{ id: 1, event_id: "ev-3", other_id: ELLIS, first_name: "Ellis" }];
   await K.noteAlreadyKnow(JORDAN, { name: "Ellis", theirWords: "Ellis and I work together", source: "text" });
-  check("said about someone Cue named to them: resolved to that member", world.facts.at(-1)?.meta.otherId === ELLIS && world.facts.at(-1)?.relation === "already_knows");
-  // A first name Cue never named to them: kept as said, blocks nobody (the read matches a name only with a last name, and only one member).
+  check("a first name alone ties to nobody, even when Cue named exactly one Ellis", world.facts.at(-1)?.meta.otherId === null && world.facts.at(-1)?.meta.name === "Ellis", world.facts.at(-1));
+  await K.noteAlreadyKnow(JORDAN, { name: "Ellis", lastName: "Park", theirWords: "Ellis Park and I work together", source: "text" });
+  check("the full name of someone Cue named: tied to that member", world.facts.at(-1)?.meta.otherId === ELLIS);
+  await K.noteAlreadyKnow(NOOR, { name: "Jordan", theirWords: "yes! Jordan and I already work together", source: "text", otherId: JORDAN });
+  check("explicit context (their reply to Cue's question about that person): tied to that member", world.facts.at(-1)?.meta.otherId === JORDAN);
   world.told = [];
   await K.noteAlreadyKnow(JORDAN, { name: "Sam", theirWords: "Sam and I go way back", source: "text" });
   check("a first name Cue never named: kept by name, no member", world.facts.at(-1)?.meta.otherId === null && world.facts.at(-1)?.meta.name === "Sam");
   const sql = K.CONNECTION_SQL;
-  check("a name-only statement blocks only with a last name, and only the one member with that full name", /COALESCE\(f\.meta->>'lastName', ''\) <> ''/.test(sql) && /d\.archived_at IS NULL\) = 1\) AS said_by_name/.test(sql));
-  const n = world.facts.length;
-  await K.noteAlreadyKnow(JORDAN, { name: "Ellis", theirWords: "yeah I know Ellis", source: "call" });
-  world.told = [{ id: 1, event_id: "ev-3", other_id: ELLIS, first_name: "Ellis" }];
+  check("at check time a name-only statement blocks only with a last name, and only the one active member with that full name", /COALESCE\(f\.meta->>'lastName', ''\) <> ''/.test(sql) && /d\.archived_at IS NULL\) = 1\) AS said_by_name/.test(sql));
   const before = world.facts.length;
-  await K.noteAlreadyKnow(JORDAN, { name: "Ellis", theirWords: "yeah I know Ellis", source: "call" });
-  check("said twice (the live call tool and the call's read): kept once", world.facts.length === before && n <= before);
-  check("the answer is the same whether or not the person is a member (no 'not a member' path)", !/not a member|isn't a member|no such member/i.test(src("src/services/knownConnections.ts") + src("src/agent/conversationTools.ts").match(/noteAlreadyKnow: tool\([\s\S]*?\n    \}\),/)?.[0]));
-  world.told = [];
+  await K.noteAlreadyKnow(JORDAN, { name: "Sam", theirWords: "Sam and I go way back", source: "call" });
+  check("said twice (the post-turn read and the call's read): kept once", world.facts.length === before);
+  check("the answer is the same whether or not the person is a member (no 'not a member' path)", !/not a member|isn't a member|no such member/i.test(src("src/services/knownConnections.ts")));
+}
+
+// ---------------------------------------------------------------- 5b. "yes! Maya and I already work together" (the race)
+{
+  check("the reply read: a yes that says they already know them", (await K.saysAlreadyKnow("Maya", "yes! Maya and I already work together", async () => "yes")) === true);
+  check("the reply read: a plain yes is no", (await K.saysAlreadyKnow("Maya", "yes please, I'd love to meet her", async () => "no")) === false);
+  check("the reply read fails: no (the yes goes on as before; the post-turn read still keeps what they said)", (await K.saysAlreadyKnow("Maya", "yes", async () => { throw new Error("down"); })) === false);
+  check("the read's prompt: wanting to meet or saying yes is not knowing", /Wanting to meet Maya, being curious about them, or saying yes to the intro is not knowing them/.test(K.alreadyKnowReplyPrompt("Maya", "yes")));
+  const sb = src("src/routes/sendblue.ts");
+  const read = sb.indexOf("saysAlreadyKnow(pendingMatchNudge.candidate_first_name, resolvedContent)");
+  const act = sb.indexOf("await handleMatchNudgeReply(");
+  check("room: read BEFORE the yes is acted on (handleMatchNudgeReply, the direct ask, the email)", read > 0 && act > read);
+  check("room: a yes that already knows them becomes a decline, kept against that person", /if \(alreadyKnew\) \{\s*classification = "not_interested";/.test(sb) && /source: "text", otherId: pendingMatchNudge\.candidate_id/.test(sb));
+  check("room: only for a named intro (never an anonymous heads-up or an additive offer)", /pendingMatchNudge\.kind !== "additive" && !pendingMatchNudge\.anonymous/.test(sb));
+  const nRead = sb.indexOf("saysAlreadyKnow(introCandidate.first_name, resolvedContent)");
+  check("network: read before resolveNetworkIntroReply, declined, kept", nRead > 0 && sb.indexOf("const context = await resolveNetworkIntroReply(", nRead) > nRead && /if \(alreadyKnewIntro\) \{\s*classification = "not_interested";/.test(sb));
+  check("the reply says nothing about the other side", /Don't say anything about \$\{other\}'s side\./.test(sb));
+}
+
+// ---------------------------------------------------------------- 5c. an intro the member asked for by name (a reconnection)
+{
+  const [a, b] = JORDAN < NOOR ? [JORDAN, NOOR] : [NOOR, JORDAN];
+  world.rows.set(key(JORDAN, NOOR), { said: true });
+  world.pairs = [{ event_id: "ev-5", a_id: a, b_id: b, origin: "member", state: "asked", declined_at: null, intro_sent_at: null, a_answer: null, b_answer: null, value_verdict: null, blocked_reason: null, created_at: new Date() }];
+  check("member-requested: known, still asked of the other side (double opt-in applies)", (await RM.mayAsk("ev-5", NOOR, JORDAN, "test")) === null && (await RM.directAskStale("ev-5", NOOR, JORDAN)) === null);
+  world.pairs[0].origin = "co";
+  check("Cue's own suggestion for the same known pair: refused", /already connected/.test(String(await RM.mayAsk("ev-5", NOOR, JORDAN, "test"))));
+  check("memberAsked is per event", RM.memberAsked([{ event_id: "ev-5", origin: "member" }], "ev-6") === false);
+  const h = src("src/services/eventGuestMatchHandoff.ts");
+  check("a refused ask is never reported as requested", /if \(await RM\.mayAsk\(eventId, candidate\.user_id, asker\.user_id, "eventGuestMatchHandoff\.directAsk"\)\) return false;/.test(h) && /return \(await maybeAskCandidateDirectly\(eventId, eventName, requester\.first_name, target, requester\)\) !== false;/.test(h));
+  check("the intro email exempts a member's own request too", /const connected = sentBefore \|\| memberAsked \? null/.test(h));
+  world.pairs = [];
+  world.rows.clear();
+}
+
+// ---------------------------------------------------------------- 5d. visible knowledge: shown (no name), removable, really removed
+{
+  const W = await import("../../src/services/whatCoKnows.js");
+  const raw: any = { profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], alreadyKnows: [{ id: "7", on: "2026-11-02", quote: "Noor and I work together" }] };
+  const items = W.knownItems(raw).filter((i: any) => i.source === "knows");
+  check("what Cue knows shows it, their words with it, no name in Cue's line", items.length === 1 && /someone you told me you already know \(2026-11-02\)/.test(items[0].text) && !/Noor/.test(items[0].text) && items[0].theirWords === "Noor and I work together");
+  check("removable only", items[0].canCorrect === false && W.fieldFor("knows:7") === "someone they already know");
+  const sqls: string[] = [];
+  const db = { query: async (sql: string) => (sqls.push(sql), { rows: [], rowCount: 1 }) };
+  const r: any = await W.applyOne(db as any, JORDAN, raw, items[0], "remove", null, "forget that I know her");
+  check("removing retires it at its source, theirs only", r.source === "knows" && /UPDATE co_facts SET retired_at = NOW\(\) WHERE id = \$2 AND owner_user_id = \$1 AND relation = 'already_knows' AND retired_at IS NULL/.test(sqls[0]));
+  check("...and the check reads only facts not retired (so matching can introduce them again)", (K.CONNECTION_SQL.match(/f\.relation = 'already_knows' AND f\.retired_at IS NULL/g) ?? []).length === 2);
+  // The real SQL is not run in layer 1 (no local Postgres): it was run read-only against dev's schema by hand (see the PR).
+  console.log("SKIP CONNECTION_SQL against a real Postgres: no local database in layer 1; run read-only on dev's schema by hand (PR #359)");
 }
 
 // ---------------------------------------------------------------- 6. a connection added while a match is queued

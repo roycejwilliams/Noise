@@ -84,7 +84,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref" | "pair";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -195,6 +195,9 @@ export type RawKnown = {
   // How an introduction Cue made went, as THEY told it (services/roomMatching.ts, the outcome record): their side of the pair only,
   // never the other person's answers, never a name (ruling 10-14: your side only). Removable; removing it clears their side.
   pairOutcomes?: { id: string; side: "a" | "b"; eventName: string | null; evidence: Record<string, { value: string; how: string }>; note: string | null }[];
+  // People they told Cue they already know (services/knownConnections.ts): no name shown (your side only), their words; removable, and
+  // removing it means matching can introduce them again.
+  alreadyKnows?: { id: string; on: string; quote: string | null }[];
 };
 
 const CONTEXT_WORDS = { professional: "work", personal: "personal" } as const;
@@ -300,6 +303,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
+  for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
   for (const x of r.pairOutcomes ?? []) {
     const line = pairOutcomeLine(x.evidence);
     if (line) add(`pair:${x.id}:${x.side}`, "pair", "said", `how an introduction I made${x.eventName ? ` at ${x.eventName}` : ""} went for you: ${line}`, x.note, false);
@@ -622,6 +626,10 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
      ORDER BY p.updated_at DESC LIMIT 10`,
     [userId],
   ).catch(() => [] as any[]);
+  const knowsRows = await q(
+    `SELECT id, happened_at, meta->>'quote' AS quote FROM co_facts WHERE owner_user_id = $1 AND relation = 'already_knows' AND retired_at IS NULL ORDER BY happened_at DESC LIMIT 10`,
+    [userId],
+  ).catch(() => [] as any[]);
   const freeRows = await import("./wantWhen.js").then(async (WW) => {
     const { localDay } = await import("./memberTime.js");
     return (await WW.freeTimesOf(userId, localDay(new Date(), zone ?? null), db as any)).map((f) => ({ id: f.id, text: WW.describeFreeTime(f), quote: f.quote }));
@@ -661,6 +669,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     prefs: await import("./memberPreferences.js").then(async (P) => (await P.activePreferences(userId, new Date(), db as any)).map((x) => ({ id: x.id, text: P.describePreference(x), quote: x.words[x.words.length - 1] ?? null }))),
     files,
     ...designKnown(signals),
+    alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
 }
@@ -966,6 +975,12 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       await db.query(`UPDATE co_facts SET retired_at = NOW() WHERE owner_user_id = $1 AND relation = 'second_contact' AND meta->>'otherId' = $2 AND retired_at IS NULL`, [userId, String(r.rows[0]?.other ?? "")]);
       return { ref: item.ref, source: "pair", was, now: null };
     }
+    case "knows": {
+      // That they already know someone: retired at its source, so every matching path can introduce them again.
+      if (!/^\d+$/.test(a)) return { why: "not something Cue can change" };
+      await must(`UPDATE co_facts SET retired_at = NOW() WHERE id = $2 AND owner_user_id = $1 AND relation = 'already_knows' AND retired_at IS NULL`, [userId, Number(a)]);
+      return { ref: item.ref, source: "knows", was, now: null };
+    }
     case "avoid": {
       const list = raw.profile?.avoid ?? [];
       const old = list.find((x) => hashOf(x) === a);
@@ -998,7 +1013,7 @@ export function fieldFor(ref: string): string {
   if (kind === "free") return "when they said they're free";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "docs" ? "their Google Docs connection" : a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested", pair: "how an introduction went for them" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested", pair: "how an introduction went for them", knows: "someone they already know" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -1177,7 +1192,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file", "pair"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file", "pair", "knows"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";

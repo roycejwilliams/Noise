@@ -2230,7 +2230,19 @@ export function sendblueRouter(io: Server): Router {
         if (resolvedMatchNudge?.item.ref?.kind === "match_nudge") {
           try {
             const pendingMatchNudge = resolvedMatchNudge.item.ref.pending;
-            const classification = resolvedMatchNudge.value === "yes" ? "interested" : "not_interested";
+            let classification: "interested" | "not_interested" = resolvedMatchNudge.value === "yes" ? "interested" : "not_interested";
+            // A yes that says they already know the person they were named ("yes! Maya and I work together") is no intro: read before
+            // the yes is acted on (services/knownConnections.ts), declined silently, kept against that person.
+            const alreadyKnew =
+              classification === "interested" && pendingMatchNudge.kind !== "additive" && !pendingMatchNudge.anonymous
+                ? await (await import("../services/knownConnections.js")).saysAlreadyKnow(pendingMatchNudge.candidate_first_name, resolvedContent).catch(() => false)
+                : false;
+            if (alreadyKnew) {
+              classification = "not_interested";
+              await (await import("../services/knownConnections.js"))
+                .noteAlreadyKnow(user.id, { name: pendingMatchNudge.candidate_first_name, theirWords: resolvedContent.slice(0, 200), source: "text", otherId: pendingMatchNudge.candidate_id })
+                .catch(() => {});
+            }
             if (pendingMatchNudge.kind === "additive") {
               // "Want to hear who?": the yes names at most one person, through the share gate, never from Co's notes.
               const { revealed } = await handleAdditiveReply(pendingMatchNudge.event_id, pendingMatchNudge.event_name, classification, { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email }, pendingMatchNudge.candidate_ids ?? []);
@@ -2261,7 +2273,10 @@ export function sendblueRouter(io: Server): Router {
             if (pendingMatchNudge.anonymous) {
               addInstruction(replyFacts, "They were never told who the other member is. Don't name them, describe them, or hint at who it is, even if asked; say you'll share once you've checked with them.");
             }
-            if (classification === "interested") {
+            if (alreadyKnew) {
+              addFact(replyFacts, "did_this_turn", `Noted that they already know ${other}, so Cue won't make an intro between them.`);
+              addInstruction(replyFacts, `They already know ${other}, so there's no intro to make. Acknowledge it naturally and briefly. Don't say anything about ${other}'s side.`);
+            } else if (classification === "interested") {
               addFact(replyFacts, "did_this_turn", `Recorded that they want to be connected with ${other}. No introduction has been made yet; it depends on ${other} saying yes too.`);
               addInstruction(replyFacts, `They just said yes to being connected with ${other}. Acknowledge it warmly and briefly. You may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${other} to answer. Don't promise a specific thing is happening, and don't say what ${other} thinks or wants.`);
             } else {
@@ -2309,15 +2324,27 @@ export function sendblueRouter(io: Server): Router {
         const resolvedIntro = resolvedAs("network_intro");
         if (resolvedIntro?.item.ref?.kind === "network_intro") {
           try {
-            const classification = resolvedIntro.value === "yes" ? "interested" : "not_interested";
+            let classification: "interested" | "not_interested" = resolvedIntro.value === "yes" ? "interested" : "not_interested";
             const introCandidate = resolvedIntro.item.ref.pending.candidate;
+            // The same read as the room's (services/knownConnections.ts): a yes that says they already know them is no intro.
+            const alreadyKnewIntro = classification === "interested" ? await (await import("../services/knownConnections.js")).saysAlreadyKnow(introCandidate.first_name, resolvedContent).catch(() => false) : false;
+            if (alreadyKnewIntro) {
+              classification = "not_interested";
+              await (await import("../services/knownConnections.js"))
+                .noteAlreadyKnow(user.id, { name: introCandidate.first_name, theirWords: resolvedContent.slice(0, 200), source: "text", otherId: introCandidate.candidate_id })
+                .catch(() => {});
+            }
             await recordSuggestionOutcome(user.id, "intro", `intro:${introCandidate.candidate_id}`, `an intro to ${introCandidate.first_name}`, classification === "interested" ? "interested" : "declined");
             const context = await resolveNetworkIntroReply(
               { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
               resolvedIntro.item.ref.pending,
               classification,
             );
-            if (context) {
+            if (alreadyKnewIntro) {
+              const other = introCandidate.first_name;
+              addFact(replyFacts, "did_this_turn", `Noted that they already know ${other}, so Cue won't make an intro between them.`);
+              addInstruction(replyFacts, `They already know ${other}, so there's no intro to make. Acknowledge it naturally and briefly. Don't say anything about ${other}'s side.`);
+            } else if (context) {
               addInstruction(replyFacts, context);
               const other = resolvedIntro.item.ref.pending.candidate.first_name;
               if (classification === "not_interested") addFact(replyFacts, "did_this_turn", `Recorded that they passed on an intro to ${other}.`);
