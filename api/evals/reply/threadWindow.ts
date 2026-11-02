@@ -1,12 +1,12 @@
-// The reply keeps the whole thread (2026-11-02, a founder's thread on dev, replayed here with invented names and paraphrased texts):
-//   1. the window counts their texts, not rows: one long answer of Cue's in bubbles no longer pushes out what they said three texts ago,
-//      so news and feedback they already gave reach the reply (it asked for the feedback again when it didn't);
+// The reply keeps the whole thread (2026-11-02, a member's thread on dev; the scenario here is made up, with the same shape):
+//   1. the window counts their texts, not rows, within a character budget: one long answer of Cue's in bubbles no longer pushes out what
+//      they said three texts ago, so news and feedback they already gave reach the reply (Cue asked for the feedback again when it didn't);
 //   2. replaying the thread turn by turn, nothing they say later reaches an earlier turn's prompt;
-//   3. a text of theirs in paragraphs is their words in full, so a claim quoting its second paragraph isn't cut as unsupported;
-//   4. asked "what's going on with him", Cue's answer from their own news is never cut as a report on their thread (it was cut three
-//      turns running, leaving a fragment each time, and the corrections never reached them); a status they never gave still is.
+//   3. a text of theirs in paragraphs is their words in full, and nothing that isn't theirs (a call's follow-up, an old Mo row) is;
+//   4. the thread read sees each of their texts whole enough to tell their own news from a status report, and its yes still cuts:
+//      a clause Cue added about their thread is never let through because the rest of the sentence quotes them.
 // Layer 1: zero tokens, no database. The model is a fake fetch answering by what each request is for; where a real reply matters, the
-// fake gives the reply Cue actually sent before this change, so the checks are about what code feeds and keeps, never about wording.
+// fake gives the shape of reply Cue sent before this change, so the checks are about what code feeds and keeps, never about wording.
 //   npx tsx evals/reply/threadWindow.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
@@ -18,6 +18,7 @@ let threadReports: number[] = [];
 let claims: unknown[] = [];
 let replyText = "";
 const systems: string[] = [];
+const threadPrompts: string[] = [];
 const kinds: string[] = [];
 const prior = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -28,7 +29,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   try { body = JSON.parse(raw); } catch {}
   const sys = Array.isArray(body.system) ? body.system.map((b: any) => b?.text ?? "").join("\n") : String(body.system ?? "");
   let text = "{}";
-  if (/Only the member knows where it stands/.test(raw)) (kinds.push("thread_read"), (text = JSON.stringify({ reports: threadReports })));
+  if (/Only the member knows where it stands/.test(raw)) (kinds.push("thread_read"), threadPrompts.push(JSON.stringify(body.messages ?? raw)), (text = JSON.stringify({ reports: threadReports })));
   else if (/You check a text message Cue is about to send/.test(raw)) (kinds.push("claims"), (text = JSON.stringify({ claims })));
   else if (/You are replying by iMessage/.test(sys + raw)) (kinds.push("reply"), systems.push(sys + raw), (text = replyText));
   else kinds.push("other");
@@ -38,7 +39,9 @@ globalThis.fetch = (async (input: any, init?: any) => {
 const W = await import("../../src/services/threadWindow.js");
 const G = await import("../../src/harness/replyGrounding.js");
 const M = await import("../../src/services/memberWorld.js");
+const SF = await import("../../src/services/sourceFence.js");
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");
+const { readFileSync } = await import("node:fs");
 
 let total = 0;
 let failed = 0;
@@ -54,71 +57,81 @@ const quietErr = console.error;
 const hush = () => { console.log = () => {}; console.error = () => {}; };
 const loud = () => { console.log = quietLog; console.error = quietErr; };
 
-// ---- the thread: an invented member (Jordan) and the person they met (Theo). Paraphrased; one row per text or bubble, as logged.
+// ---- the thread: an invented member (Jordan, who makes candles) and a shop owner (Priya). One row per text or bubble, as logged.
 type Row = { content: string; created_at: Date };
 let clock = Date.parse("2026-11-02T16:28:00Z");
 const log: Row[] = [];
-const them = (t: string) => log.push({ content: `User said: ${t}`, created_at: new Date((clock += 20_000)) });
+const them = (t: string) => log.push({ content: `User said: ${t}`, created_at: new Date((clock += 20_000)) }) - 1;
 const cue = (...bubbles: string[]) => bubbles.forEach((b) => log.push({ content: `Co replied: ${b}`, created_at: new Date((clock += 2_000)) }));
-const FIRST = "Coffee with Theo went well. We might co-host a small night to see if the matching holds up, that's what he cares about first. He's curious about my repo but I'm not sure yet.\n\nThinking about an NDA before anything.\n\nHe had two notes:\n1) the voice replies feel slow\n2) the intro call feels a lot like a rival app's";
+const FIRST = "Met Priya at her shop, it went well. We might do a weekend pop-up together to see if the candles actually sell, that's what she cares about first. She asked about my scent recipes but I'm not sure I want to share them.\n\nMaybe a simple written agreement first.\n\nShe had two notes:\n1) checkout on my site is slow\n2) my labels look a lot like a big brand's";
 them(FIRST);
-cue("Him wanting to see the matching first is a good sign.", "Hesitating on the repo is fair.", "Both notes land somewhere real. I've passed both to the team.", "Does the repo ask feel early to you?");
-them("Let's talk about Theo for a sec");
-cue("Sure, what's on your mind with him?");
+cue("Her wanting to see them sell first is a good sign.", "Holding back on the recipes is fair.", "Both notes are worth acting on. I've passed both to the team.", "Does the recipe question feel early to you?");
+them("Let's talk about Priya for a sec");
+cue("Sure, what's on your mind with her?");
 them("What should I do? Give me the steps");
-cue("Settle roles and equity before he sees code.", "Ask what he needs to see to believe the matching works.", "If he still wants the code, scope the agreement to what he'd see.", "Bring your cofounder in before anything moves.", "Test the matching together at the night you're planning.", "Which part feels least settled?");
-them("I told him matching already works with groups. How do I work with other engineers without giving away my IP?");
-cue("The split is between showing what it does and handing over what it's made of.", "Bring engineers in on scoped, paid work first.", "Keep the matching core in its own module they never see.", "A real cofounder is an equity conversation first.", "For Theo, a walkthrough may be enough.", "Which way is this pointing?");
-const TRIAL = them("I set him up with a trial login so he can poke at it himself") - 1;
-cue("Smart move.", "Has he said anything about it yet?");
-them("I already sent you his notes");
-cue("You're right. The slow voice and the intro call, that's what he sent.");
-const SUMMARY = them("ok sum up my issue") - 1;
-cue("Matching works and that's your leverage; settle structure before code access.");
-const CORRECTION = them("No, I mean the problem with Theo") - 1;
+cue("Agree on the split before the pop-up.", "Ask what she needs to see to believe they'll sell.", "If she still wants recipes, put it in writing first.", "Bring your sister in before anything moves.", "Run the pop-up as the test.", "Which part feels least settled?");
+them("I told her the candles already sell out at markets. How do I work with shops without giving my recipes away?");
+cue("The split is between showing what sells and handing over how it's made.", "Wholesale first, no recipes involved.", "Keep the blends written down only at the studio.", "A partner is a bigger conversation.", "For Priya, the pop-up may be enough.", "Which way is this pointing?");
+const SAMPLE = them("I dropped off a sample box so she can try them at home");
+cue("Smart move.", "Has she said anything about them yet?");
+them("I already sent you her notes");
+cue("You're right. The slow checkout and the labels, that's what she sent.");
+const SUMMARY = them("ok sum up my issue");
+cue("The candles sell and that's your leverage; agree terms before recipes.");
+const CORRECTION = them("No, I mean the problem with Priya");
 cue("That's the part worth slowing down on.");
 // Later in the thread they add two things Cue must not know before they say them.
-const COFOUNDER = them("Also I'm weighing Theo as a possible cofounder") - 1;
-cue("That changes the repo question.");
-const RELEASE = them("And the IP release from my old employer back to me still isn't signed") - 1;
-cue("Then that comes before any agreement with him.");
-const LATER_FACTS = [/possible cofounder/, /IP release from my old employer/];
+const LATER1 = them("Also her shop closes for a renovation in March");
+cue("Then the pop-up wants to be before that.");
+const LATER2 = them("And my wax supplier just raised prices");
+cue("That changes the wholesale math.");
+const LATER_FACTS = [/renovation in March/, /wax supplier just raised prices/];
 
 // What the database holds at the moment a turn's text arrives: every row up to and including it, newest first (the query's order).
 const asOf = (i: number) => log.slice(0, i + 1).reverse();
 const text = (rows: Row[]) => rows.map((r) => r.content).join("\n");
 const oldWindow = (i: number) => asOf(i).slice(0, 20).reverse();
 
-// ------------------------------------------------------------------ 1. the window counts their texts
+// ------------------------------------------------------------------ 1. the window counts their texts, within a budget
 {
-  const before = text(oldWindow(TRIAL));
-  const after = text(W.threadWindow(asOf(TRIAL)));
-  check("before: at the trial-login turn the 20-row window had already lost their first text (the two notes)", !before.includes("the voice replies feel slow") && log.slice(0, TRIAL + 1).length > 20, log.slice(0, TRIAL + 1).length);
-  check("after: their first text, notes and all, is in the window", after.includes("the voice replies feel slow") && after.includes("Thinking about an NDA before anything."));
-  check("the window ends on their latest text and runs oldest first", after.endsWith("User said: I set him up with a trial login so he can poke at it himself") && after.indexOf("Coffee with Theo") < after.indexOf("trial login"));
+  const before = text(oldWindow(SAMPLE));
+  const after = text(W.threadWindow(asOf(SAMPLE)));
+  check("before: at the sample-box turn the 20-row window had already lost their first text (the two notes)", !before.includes("checkout on my site is slow") && log.slice(0, SAMPLE + 1).length > 20, log.slice(0, SAMPLE + 1).length);
+  check("after: their first text, notes and all, is in the window", after.includes("checkout on my site is slow") && after.includes("Maybe a simple written agreement first."));
+  check("the window ends on their latest text and runs oldest first", after.endsWith("User said: I dropped off a sample box so she can try them at home") && after.indexOf("Met Priya") < after.indexOf("sample box"));
   const many: Row[] = Array.from({ length: 30 }, (_, i) => ({ content: i % 2 ? `Co replied: line ${i}` : `User said: text ${i}`, created_at: new Date(i * 1000) }));
   const w = W.threadWindow([...many].reverse());
   check(`at most ${W.WINDOW_THEIR_TEXTS} of their texts, plus the line of Cue's the oldest one answered`, w.filter((r) => r.content.startsWith("User said:")).length === W.WINDOW_THEIR_TEXTS && w[0].content === "Co replied: line 9" && w[w.length - 1].content === "Co replied: line 29", w.map((r) => r.content));
-  const bubbles: Row[] = [{ content: "User said: hi", created_at: new Date(0) }, ...Array.from({ length: 90 }, (_, i) => ({ content: `Co replied: bubble ${i}`, created_at: new Date(i + 1) }))];
+  const bubbles: Row[] = [{ content: "User said: hi", created_at: new Date(0) }, ...Array.from({ length: 90 }, (_, i) => ({ content: `Co replied: b${i}`, created_at: new Date(i + 1) }))];
   check(`never more than ${W.WINDOW_MAX_ROWS} rows`, W.threadWindow([...bubbles].reverse()).length === W.WINDOW_MAX_ROWS);
   check("a short thread is all of it", W.threadWindow(asOf(2)).length === 3 && W.threadWindow([]).length === 0);
-  const route = (await import("node:fs")).readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
-  check("the reply's window is this one: the query reads up to the row cap and threadWindow cuts it", /ORDER BY created_at DESC\s+LIMIT \$2`,\s+\[user\.id, WINDOW_MAX_ROWS\],/.test(route) && /const chronological = threadWindow\(chronologicalResult\.rows\);/.test(route) && !/LIMIT 20`,\s+\[user\.id\],\s+\);\s+\/\/ Through the live guards/.test(route));
+  // The budget: long rows (an email draft pasted back) are cut with a marker, and the window stops at the budget, newest first.
+  const draft = `Co replied: Here's the email draft: ${"word ".repeat(600)}`;
+  const heavy: Row[] = [{ content: "User said: old news", created_at: new Date(0) }, ...Array.from({ length: 8 }, (_, i) => ({ content: draft, created_at: new Date(i + 1) })), { content: "User said: so what now", created_at: new Date(99) }];
+  const hw = W.threadWindow([...heavy].reverse());
+  const chars = hw.reduce((a, r) => a + r.content.length, 0);
+  check(`the window stays within ${W.WINDOW_CHARS} characters`, chars <= W.WINDOW_CHARS, chars);
+  check("a long row is cut with a marker, never dropped whole for being long", hw.some((r) => r.content.endsWith(W.TRIMMED) && r.content.length === W.WINDOW_ROW_CHARS + W.TRIMMED.length));
+  check("the newest rows are the ones kept, ending on their latest text", hw[hw.length - 1].content === "User said: so what now" && !hw.some((r) => r.content === "User said: old news"));
+  check("the input rows are never changed", heavy.every((r) => !r.content.endsWith(W.TRIMMED)));
+  const one = W.threadWindow([{ content: `User said: ${"x".repeat(9000)}`, created_at: new Date(0) }]);
+  check("their latest text always stays, cut to the row size if it's huge", one.length === 1 && one[0].content.endsWith(W.TRIMMED));
+  const route = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  check("the reply's window is this one: the query reads up to the row cap and threadWindow cuts it", /ORDER BY created_at DESC\s+LIMIT \$2`,\s+\[user\.id, WINDOW_MAX_ROWS\],/.test(route) && /const chronological = threadWindow\(chronologicalResult\.rows\);/.test(route));
+  check("a failed guard read falls back to the old 20-row window, never the longer one unguarded", /W\.guardRows\(user\.id, chronological\)\)\.catch\(\(\) => chronological\.slice\(-OLD_WINDOW_ROWS\)\)/.test(route) && W.OLD_WINDOW_ROWS === 20);
 }
 
 // ------------------------------------------------------------------ 2. answered feedback reaches the reply
-// The reply the fake model gives is the one Cue sent before: it asked for the feedback again. What code controls is whether the notes
-// were in front of it; with them, the sharing guide's "use what they've already told you rather than asking again" has something to
-// use. The reply's own behavior is unverified until a paid run.
-const facts = () => G.createReplyFacts();
+// The fake model gives the shape of reply Cue sent before: it asked for the feedback again. What code controls is whether the notes
+// were in front of it. The reply's own behavior is unverified until a paid run.
 const replyInput = (message: string, recentConversation: string) => ({
   userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan", resolvedContent: message, isVoice: false, imageForVision: null,
   hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null,
-  facts: facts(), toneContext: "", seekingModeContext: "", styleHint: "", recentConversation, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true,
+  facts: G.createReplyFacts(), toneContext: "", seekingModeContext: "", styleHint: "", recentConversation, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true,
 }) as any;
 const promptFor = async (i: number, window: Row[]) => {
   systems.length = 0;
-  replyText = "Smart move.\n\nHas he said anything about it yet?";
+  replyText = "Smart move.\n\nHas she said anything about them yet?";
   claims = [];
   threadReports = [];
   hush();
@@ -130,11 +143,11 @@ const promptFor = async (i: number, window: Row[]) => {
   return systems.join("\n");
 };
 {
-  const before = await promptFor(TRIAL, oldWindow(TRIAL));
-  const after = await promptFor(TRIAL, W.threadWindow(asOf(TRIAL)));
+  const before = await promptFor(SAMPLE, oldWindow(SAMPLE));
+  const after = await promptFor(SAMPLE, W.threadWindow(asOf(SAMPLE)));
   check("the reply ran on the fake model", systems.length > 0);
-  check("before: the reply prompt had no trace of the notes they'd already given", !/voice replies feel slow/.test(before) && !/rival app/.test(before));
-  check("after: the notes they already gave are in the reply prompt, in their words", /the voice replies feel slow/.test(after) && /the intro call feels a lot like a rival app's/.test(after));
+  check("before: the reply prompt had no trace of the notes they'd already given", !/checkout on my site is slow/.test(before) && !/big brand's/.test(before));
+  check("after: the notes they already gave are in the reply prompt, in their words", /checkout on my site is slow/.test(after) && /my labels look a lot like a big brand's/.test(after));
   check("after: so is what Cue said back (that both went to the team)", /I've passed both to the team\./.test(after));
 }
 
@@ -146,77 +159,76 @@ const promptFor = async (i: number, window: Row[]) => {
     if (!log[i].content.startsWith("User said:")) continue;
     const window = text(W.threadWindow(asOf(i)));
     LATER_FACTS.forEach((re, k) => {
-      const givenAt = k === 0 ? COFOUNDER : RELEASE;
+      const givenAt = k === 0 ? LATER1 : LATER2;
       if (i < givenAt && re.test(window)) leaks.push(`turn ${i}: ${re}`);
       if (i >= givenAt && !re.test(window)) present.push(`turn ${i}: ${re} missing`);
     });
   }
-  check("no turn's window carries what they only said later (a possible cofounder, an unsigned IP release)", leaks.length === 0, leaks);
+  check("no turn's window carries what they only said later", leaks.length === 0, leaks);
   check("from the turn they say it, it's there", present.length === 0, present);
   const summaryPrompt = await promptFor(SUMMARY, W.threadWindow(asOf(SUMMARY)));
   check("the summary turn's reply prompt has neither later fact", LATER_FACTS.every((re) => !re.test(summaryPrompt)));
-  const releasePrompt = await promptFor(RELEASE, W.threadWindow(asOf(RELEASE)));
-  check("the turn they give the second one has both", LATER_FACTS.every((re) => re.test(releasePrompt)));
+  const laterPrompt = await promptFor(LATER2, W.threadWindow(asOf(LATER2)));
+  check("the turn they give the second one has both", LATER_FACTS.every((re) => re.test(laterPrompt)));
   const world = M.buildMemberWorld({ now: log[SUMMARY].created_at, zone: "America/Los_Angeles", keep: (s: string) => s, tasks: [], briefs: [], searching: { asks: [], goals: [], held: [] }, ahead: null, offeredGoals: [], docOffer: null, threads: [], exchange: asOf(SUMMARY).reverse().map((r) => ({ at: r.created_at, from: r.content.startsWith("User said:") ? ("member" as const) : ("co" as const), text: r.content.replace(/^(User said|Co replied): /, "") })), sent: [], activity: [], safetyHold: false, letPass: [] } as any);
   check("their recent words for the thread read, at the summary turn: nothing said later", world.theirWords.every((w) => LATER_FACTS.every((re) => !re.test(w))));
-  check("the thread read sees a long text of theirs whole enough to find its last paragraph", world.theirWords.some((w) => /rival app/.test(w)) && M.THEIR_WORDS_CHARS >= FIRST.length, M.THEIR_WORDS_CHARS);
 }
 
-// ------------------------------------------------------------------ 4. a text in paragraphs is their words in full
+// ------------------------------------------------------------------ 4. their words: a text in paragraphs, and nothing that isn't theirs
 {
-  const recent = text(W.threadWindow(asOf(TRIAL)));
+  const recent = text(W.threadWindow(asOf(SAMPLE)));
   const words = G.theirOwnWords(recent);
-  check("their words keep a text's later paragraphs", words.includes("Thinking about an NDA before anything.") && words.includes("2) the intro call feels a lot like a rival app's"));
-  check("…and never take Cue's lines, or the paragraphs of Cue's own replies", !words.includes("Smart move") && !G.theirOwnWords("Co replied: First line.\n\nSecond paragraph of Cue's.\nUser said: mine").includes("Second paragraph"));
-  check("a gap marker or a call line ends their text", !G.theirOwnWords("User said: one\n[— 2 days later —]\nloose line").includes("loose line") && !G.theirOwnWords("User said: one\nCue replied: two\nloose").includes("loose"));
+  check("their words keep a text's later paragraphs", words.includes("Maybe a simple written agreement first.") && words.includes("2) my labels look a lot like a big brand's"));
+  check("…and never Cue's lines, or the paragraphs of Cue's own replies", !words.includes("Smart move") && !G.theirOwnWords("Co replied: First line.\n\nSecond paragraph of Cue's.\nUser said: mine").includes("Second paragraph"));
+  // The #49 rule: a call's follow-up row (routes/co.ts: its colon is past the first 60 characters) and an old Mo row are never theirs.
+  const called = 'User said: ok\nCo called Jordan — no-answer (CA0000000000000000000000000000000). Followed up via iMessage: "Ellis said yes to the intro"\nloose line after it';
+  check("a call's follow-up row ends their text, and nothing in it or after it is theirs", G.theirOwnWords(called) === "ok", G.theirOwnWords(called));
+  const mo = "User said: thanks\nMo replied: Ellis runs a ceramics studio in Oakland\nand takes walk-ins";
+  check("an old \"Mo replied:\" row ends their text, its later lines too", G.theirOwnWords(mo) === "thanks", G.theirOwnWords(mo));
+  check("a gap marker or a [Call] note ends their text", G.theirOwnWords("User said: one\n[— 2 days later —]\nloose line") === "one" && G.theirOwnWords("User said: one\n[Call] Jordan said the venue fell through\nloose") === "one");
+  check("every header the exchange reads starts a row for theirOwnWords too (one list)", SF.EXCHANGE_ROW.source.match(/\^\(([^)]*)\)/)![1].split("|").every((h) => SF.ROW_START.test(`${h}: x`)) && ["Co called Jordan — busy", "Mo replied: x", "[Call] x", "Cue replied: x", "Co tagged x"].every((h) => SF.ROW_START.test(h)));
   check("the dated and voice-memo forms still read", G.theirOwnWords("User said on September 29, 2026: hello there\nUser sent a voice memo: and this").split("\n").length === 2);
-  const rf = G.createReplyFacts();
-  const quoted = G.claimChecks([{ text: "you're thinking about an NDA first", type: "member_life", supported: true, factId: null, quote: "Thinking about an NDA before anything." }], rf, { message: "ok", recentConversation: recent });
+  const quoted = G.claimChecks([{ text: "you're thinking about a written agreement first", type: "member_life", supported: true, factId: null, quote: "Maybe a simple written agreement first." }], G.createReplyFacts(), { message: "ok", recentConversation: recent });
   check("before this, a member_life claim quoting their second paragraph was cut as \"cited support not found\"; now it stands", quoted[0].pass, quoted);
-  const invented = G.claimChecks([{ text: "you already signed the NDA", type: "member_life", supported: true, factId: null, quote: "I already signed the NDA" }], G.createReplyFacts(), { message: "ok", recentConversation: recent });
+  const callQuote = G.claimChecks([{ text: "Ellis said yes", type: "member_life", supported: true, factId: null, quote: "Ellis said yes to the intro" }], G.createReplyFacts(), { message: "ok", recentConversation: called });
+  check("a member_life claim quoting a call's follow-up row fails (not their words)", !callQuote[0].pass, callQuote);
+  const invented = G.claimChecks([{ text: "you already signed it", type: "member_life", supported: true, factId: null, quote: "I already signed the agreement" }], G.createReplyFacts(), { message: "ok", recentConversation: recent });
   check("a quote that isn't in their texts still fails", !invented[0].pass);
 }
 
-// ------------------------------------------------------------------ 5. a summary of their own news is never cut as a thread report
+// ------------------------------------------------------------------ 5. the thread read sees their texts whole, and its yes cuts
 {
-  const THREAD = { text: "deciding whether to share the repo with Theo", line: "deciding whether to share the repo with Theo (said Mon Nov 2)" };
-  const world = M.buildMemberWorld({ now: log[CORRECTION].created_at, zone: "America/Los_Angeles", keep: (s: string) => s, tasks: [], briefs: [], searching: { asks: [], goals: [], held: [] }, ahead: null, offeredGoals: [], docOffer: null, threads: [THREAD], exchange: [], sent: [], activity: [], safetyHold: false, letPass: [] } as any);
-  const recent = text(W.threadWindow(asOf(CORRECTION)));
-  const src = { message: "No, I mean the problem with Theo", recentConversation: recent };
-  const ANSWER = "The problem with Theo specifically: he's curious about your repo before you two have settled roles or equity.";
-  const draft = `${ANSWER} That's the part worth slowing down on.`;
-  const run = async (o: { reports: number[]; claims: unknown[]; src?: typeof src }) => {
+  const THREAD = { text: "deciding whether to share scent recipes with Priya", line: "deciding whether to share scent recipes with Priya (said Mon Nov 2)" };
+  const exchange = asOf(CORRECTION).reverse().map((r) => ({ at: r.created_at, from: r.content.startsWith("User said:") ? ("member" as const) : ("co" as const), text: r.content.replace(/^(User said|Co replied): /, "") }));
+  const world = M.buildMemberWorld({ now: log[CORRECTION].created_at, zone: "America/Los_Angeles", keep: (s: string) => s, tasks: [], briefs: [], searching: { asks: [], goals: [], held: [] }, ahead: null, offeredGoals: [], docOffer: null, threads: [THREAD], exchange, sent: [], activity: [], safetyHold: false, letPass: [] } as any);
+  check("the thread read gets their long first text whole, last paragraph included (600 characters, was 240)", world.theirWords.includes(FIRST) && FIRST.length > 240 && FIRST.length <= M.THEIR_WORDS_CHARS, FIRST.length);
+  const src = { message: "No, I mean the problem with Priya", recentConversation: text(W.threadWindow(asOf(CORRECTION))) };
+  const SAID_BACK = "The problem with Priya specifically: she asked about your scent recipes and you're not sure you want to share them.";
+  const ADDED = "The problem with Priya specifically: she asked about your scent recipes before you two have agreed on terms.";
+  const run = async (draft: string, o: { reports: number[]; claims: unknown[] }) => {
     const rf = G.createReplyFacts();
     G.addMemberWorld(rf, world);
     threadReports = o.reports;
     claims = o.claims;
     kinds.length = 0;
+    threadPrompts.length = 0;
     hush();
     try {
-      return await G.groundReply(draft, rf, o.src ?? src, { userId: null, record: false });
+      return await G.groundReply(`${draft} That's the part worth slowing down on.`, rf, src, { userId: null, record: false });
     } finally {
       loud();
     }
   };
-  check("the answer names their thread, so the thread read is asked about it", M.threadCandidates(world, draft).includes(ANSWER));
-  // The fake thread read answers the way the real one did on 11-02: the answer is a "report".
-  const theirs = { text: "he's curious about your repo before you two have settled roles or equity", type: "other_person", supported: true, factId: null, quote: "He's curious about my repo but I'm not sure yet." };
-  const kept = await run({ reports: [1], claims: [theirs] });
-  check("after: backed by their own words this conversation, the answer goes out whole, though the read called it a report", kept.final === draft && kept.outcome === "as_drafted" && !kept.checks.some((c) => c.name === "no_thread_report" && !c.pass), kept);
-  check("both reads ran", kinds.includes("thread_read") && kinds.includes("claims"), kinds);
-  const unbacked = await run({ reports: [1], claims: [{ ...theirs, supported: false, quote: null }] });
-  check("a status they never gave is still cut", !unbacked.final.includes("curious about your repo"), unbacked);
-  const fromCue = await run({ reports: [1], claims: [{ ...theirs, quote: "Hesitating on the repo is fair." }] });
-  check("a quote of Cue's own line isn't their words: still cut as a report", fromCue.checks.some((c) => c.name === "no_thread_report" && !c.pass), fromCue.checks);
-  const old = `User said: He's curious about my repo but I'm not sure yet.\n[— 2 days later —]\nUser said: No, I mean the problem with Theo`;
-  const stale = await run({ reports: [1], claims: [theirs], src: { message: "No, I mean the problem with Theo", recentConversation: old } });
-  check("their words from before a gap don't make a status current: still cut", stale.checks.some((c) => c.name === "no_thread_report" && !c.pass), stale.checks);
-  const part = { text: "before you two have settled roles or equity", type: "other_person", supported: true, factId: null, quote: "Settle roles and equity before he sees code." };
-  const mixed = await run({ reports: [1], claims: [{ ...theirs, text: "he's curious about your repo" }, part] });
-  check("one claim in the sentence resting on anything but their words and the exemption is off", mixed.checks.some((c) => c.name === "no_thread_report" && !c.pass) && !mixed.final.includes("curious about your repo"), mixed.checks);
-  const asked = await run({ reports: [], claims: [] });
-  check("a read that says it's no report keeps it, as before", asked.final === draft);
-  check("thisConversation: only what follows the last gap marker", G.thisConversation("a\n[— 3 hours later —]\nb\n[— 2 days later —]\nc\nd") === "c\nd" && G.thisConversation("a\nb") === "a\nb");
+  check("the answer names their thread, so the thread read is asked about it", M.threadCandidates(world, SAID_BACK).includes(SAID_BACK));
+  const kept = await run(SAID_BACK, { reports: [], claims: [{ text: "she asked about your scent recipes", type: "other_person", supported: true, factId: null, quote: "She asked about my scent recipes" }] });
+  check("a read that hears it as their own news said back keeps it whole", kept.final.startsWith(SAID_BACK) && kept.outcome === "as_drafted", kept);
+  check("…and that read was shown their whole first text, notes included", kinds.includes("thread_read") && threadPrompts.some((p) => p.includes("my labels look a lot like a big brand")), threadPrompts.map((p) => p.slice(0, 200)));
+  // The reviewer's case: the rest of the sentence quotes them, but "before you two have agreed on terms" is Cue's own advice said as
+  // where things stand. The read says report, and the cut stands even though the claim read backed the part it quoted.
+  const added = await run(ADDED, { reports: [1], claims: [{ text: "she asked about your scent recipes", type: "other_person", supported: true, factId: null, quote: "She asked about my scent recipes" }] });
+  check("a clause Cue added about where it stands is cut, though the rest quotes them", !added.final.includes("before you two have agreed on terms") && added.checks.some((c) => c.name === "no_thread_report" && !c.pass), added);
+  const route = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
+  check("no bypass of the thread read on their words: only the read's yes decides", /if \(rf\.thread\?\.judged\.get\(threadKey\(s\)\) === true\) checks\.push\(\{ name: "no_thread_report"/.test(route) && !/saidBackSentence/.test(route));
 }
 
 console.log(`thread window: ${total - failed}/${total} passed`);

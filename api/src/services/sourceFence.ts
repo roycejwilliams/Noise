@@ -109,12 +109,19 @@ export function redactCuts(draft: string, failed: FailedCheck[]): string | null 
 // Pure: their recent exchange with Co, both sides, fenced. Lines to or from a teammate go first (in SQL and here), then other members'
 // details; a line the strip blanks is dropped, never sent on as a hole. Only Co's own texts (a reply, a hold text) and theirs count.
 export type ExchangeLine = { at: Date; from: "member" | "co"; text: string };
+// The row headers the exchange takes: theirs, then Cue's.
+export const EXCHANGE_ROW = /^(User said|User sent a voice memo|Co replied|Co is looking|Cue replied|Cue is looking):\s*([\s\S]*)$/;
+// How any text_exchange row starts, these and every other (a call's follow-up "Co called Jordan — …", an old "Mo replied:", a
+// "[Call] …" note): a speaker word or a bracket. Read on a joined thread, a line like this starts someone else's row, never more of
+// theirs (replyGrounding.ts theirOwnWords). Errs toward ending their text: a paragraph of theirs that opens "Co-…" is dropped, never
+// someone else's line taken as theirs.
+export const ROW_START = /^\s*(?:\[|(?:User|Co|Cue|Mo|Assistant)\b)/;
 export function fenceExchange(f: Pick<Fence, "strip">, rows: { at: Date; content: string }[]): ExchangeLine[] {
   return rows.flatMap((r) => {
     const c = String(r.content ?? "");
     const own = withoutTeammateLines(c).trim();
     if (!own || own !== c.trim()) return [];
-    const m = own.match(/^(User said|User sent a voice memo|Co replied|Co is looking|Cue replied|Cue is looking):\s*([\s\S]*)$/);
+    const m = own.match(EXCHANGE_ROW);
     if (!m || !m[2].trim()) return [];
     const kept = f.strip(m[2].trim());
     return kept ? [{ at: r.at, from: m[1].startsWith("User") ? ("member" as const) : ("co" as const), text: kept }] : [];
