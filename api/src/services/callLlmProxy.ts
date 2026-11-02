@@ -795,10 +795,11 @@ export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHR
   let buf = "";
   let usage: Record<string, any> | null = null;
   let model = req.model;
+  let ended = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) { ended = true; break; }
       buf += dec.decode(value, { stream: true });
       let i: number;
       while ((i = buf.indexOf("\n\n")) >= 0) {
@@ -814,6 +815,9 @@ export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHR
       }
     }
   } finally {
+    // The reader stopped early (an answer the caller moved on from, 2026-11-02): the connection is closed, so the rest isn't
+    // generated.
+    if (!ended) void reader.cancel().catch(() => {});
     if (usage) recordAnthropicUsage("call.turn", model, usage, userId);
   }
 }

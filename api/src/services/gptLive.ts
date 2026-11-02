@@ -341,16 +341,25 @@ export type Upstream = (req: ARequest, userId: string) => AsyncIterable<Anthropi
 export type MessageGuard = (messages: OaiRequest["messages"]) => Promise<OaiRequest["messages"]>;
 // voiceLine: the live voice read's line for this turn (services/mediaStreamBridge.ts voiceReadLineFor, through routes/callLlm.ts
 // voiceLineForTurn), to Claude only, never to GPT-Live; runCallLlm puts it after their words and drops it on a safety call.
-export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard, voiceLine?: (callKey: string, req: OaiRequest) => Promise<string | null>) {
+// onSentence (2026-11-02, voice latency): each sentence the call brain lets through, as it comes, so the bridge can hand it to GPT-Live
+// before the rest is written (OpenAI's delegation guide: "Stream useful results ... Send each result as soon as you have enough text to
+// understand it on its own"; several commentary appends may share one delegation id). Returning false stops the answer there (the
+// caller moved on): the rest isn't generated. Never on a call that has touched their safety (safetyCall over the request): there the
+// whole answer is read first, as before, so a crisis line goes out word for word (sayExactly). streamed says which way this turn went.
+export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard, voiceLine?: (callKey: string, req: OaiRequest) => Promise<string | null>, onSentence?: (text: string) => boolean) {
   const req = delegationRequest(call, turns);
   if (guard) req.messages = await guard(req.messages).catch(() => req.messages);
   const voiceRead = call.voiceOn && voiceLine ? await voiceLine(call.callKey, req).catch(() => null) : null;
+  const streamed = !!onSentence && !safetyCall(req);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
-  let endCall = false;
+  let endCall = false, stopped = false;
   for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools: null, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
-    if (typeof d.content === "string") text += d.content;
+    if (typeof d.content === "string") {
+      text += d.content;
+      if (streamed && d.content.trim() && !onSentence!(d.content)) { stopped = true; break; }
+    }
     if (d.tool_calls?.some((t) => t.function?.name === "end_call")) endCall = true;
   }
   const said = stripCues(text).replace(/\s+/g, " ").trim().slice(0, GPT_LIVE.commentaryMaxChars);
@@ -358,7 +367,7 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   // Said exactly only when this answer itself carries a crisis or safety line (review of #330: safetyCall reads the whole call, so after
   // one safety mention every later answer went out word for word, "what's on for Friday?" included).
   const exact = !!said && SAFETY_LINE.test(said);
-  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact, endCall };
+  return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact, endCall, streamed, stopped };
 }
 // A safety turn's answer goes as a trusted instruction to say it word for word (OpenAI: session.instructions.append "can be used to
 // request exact spoken wording"; commentary is paraphrased), so crisis resources like 988 are never reworded.

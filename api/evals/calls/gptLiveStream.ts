@@ -1,0 +1,206 @@
+// GPT-Live delegated answers go out as they're written (2026-11-02, "Cue's voice feels too slow"): on the 10-31 GPT-Live calls the
+// bridge waited for Claude's whole answer before handing any of it to GPT-Live (p50 3.9 s, p90 5.6 s from the handover, n=8), while the
+// first sentence was ready at ~1.5 s. OpenAI's delegation guide: "Stream useful results ... Send each result as soon as you have enough
+// text to understand it on its own"; several commentary appends may share one delegation id.
+// Covered here: the first sentence reaches GPT-Live before the rest is written; sentences written together go in one append; a caller
+// cutting in stops the rest (not sent, not written) while a "yeah" doesn't; a crisis line mid-answer and everything after it goes word
+// for word; a call that has touched their safety is never streamed; text written together with end_call isn't said; the handover's
+// transcript lag is measured. The thinking's copy on answer length (BACKEND_NOTE) is checked in gptLive.ts.
+// Layer 1: OpenAI, Twilio and Claude are fakes; no network, no tokens. Invented member (Jordan).
+//   TZ=UTC node evals/runLayer1.mjs evals/calls/gptLiveStream.ts
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+import fs from "node:fs";
+import { EventEmitter } from "node:events";
+
+const G = await import("../../src/services/gptLive.js");
+const B = await import("../../src/services/gptLiveBridge.js");
+let total = 0, failed = 0;
+const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail === undefined ? "" : JSON.stringify(detail).slice(0, 500)); } };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const VOICE = fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
+const callFor = () => G.buildLiveCall({ userId: "u-jordan", callSid: "CA-str", firstName: "Jordan", direction: "inbound", team: true, voiceLayer: VOICE, contextSummary: "Jordan is moving to Oakland in March and looking for a climbing partner.", rightNow: "", findsNow: "", callReason: "", timeOfDay: null });
+
+class FakeSocket extends EventEmitter {
+  readyState = 1;
+  sent: any[] = [];
+  send(d: unknown) { this.sent.push(JSON.parse(String(d))); }
+  close() { if (this.readyState === 3) return; this.readyState = 3; this.emit("close"); }
+  in(m: unknown) { this.emit("message", JSON.stringify(m)); }
+}
+// Claude's answer as timed pieces: each piece is one text delta, written gapMs after the one before (a real stream, not one burst).
+// "|END" as a piece is an end_call tool use. written: how many pieces the fake model actually produced (a stopped answer stops early).
+const endEvents = [{ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_end", name: "end_call" } }, { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } }, { type: "content_block_stop", index: 1 }, { type: "message_delta", delta: { stop_reason: "tool_use" } }];
+function bridge(pieces: string[], gapMs: number) {
+  const tw = new FakeSocket(), ai = new FakeSocket();
+  const records: any[] = [];
+  const state = { written: 0, done: false };
+  B.setLiveDeps({
+    connectOpenAI: () => { setImmediate(() => ai.emit("open")); return ai as any; },
+    apiKey: () => "sk-test",
+    upstream: () => (async function* () {
+      yield { type: "content_block_start", index: 0, content_block: { type: "text" } } as any;
+      for (const [i, p] of pieces.entries()) {
+        if (i && gapMs) await sleep(gapMs);
+        if (p === "|END") { yield { type: "content_block_stop", index: 0 } as any; for (const e of endEvents) yield e as any; state.written++; continue; }
+        yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: p } } as any;
+        state.written++;
+      }
+      if (pieces.at(-1) !== "|END") yield { type: "content_block_stop", index: 0 } as any;
+      state.done = true;
+    })(),
+    record: (d) => records.push(d),
+    postCall: async () => {},
+    minutes: () => {},
+    log: () => {},
+    now: Date.now,
+    maxSessionMs: 60_000,
+    startTimeoutMs: 60_000,
+    heartbeatMs: 60_000,
+    silenceEndMs: 60_000,
+    endGraceMs: 60_000,
+    endWaitMs: 60_000,
+    guardRows: async () => [],
+    safetyCut: async () => {},
+  });
+  B.handleGptLiveStream(tw as any);
+  B.setLiveDeps(null);
+  tw.in({ event: "start", streamSid: "MZ1", start: { customParameters: { s: G.issueLiveLink(callFor()) } } });
+  const forD = (id: string) => ai.sent.filter((m: any) => m.delegation_id === id && m.event_id !== `quiet_${id}`);
+  const lat = () => records.find((r) => r.decision === "call.turn_latency" && r.action === "gpt_live")?.proposal;
+  return { tw, ai, records, state, forD, lat };
+}
+const start = async (b: ReturnType<typeof bridge>) => { await sleep(5); b.ai.in({ type: "session.started", session: { id: "live_str" } }); };
+const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, s: number) => b.ai.in({ type: who === "member" ? "session.input_transcript.delta" : "session.output_transcript.delta", delta: text, start_ms: s, end_ms: s + 800 });
+const until = async (ok: () => boolean, ms = 1500) => { for (let t = 0; t < ms && !ok(); t += 10) await sleep(10); };
+
+// ---------------------------------------------------------------- 1. the first sentence goes before the rest is written
+{
+  const b = bridge(["Bouldering gyms fill up after work. ", "Mornings are quieter. ", "Do you climb before work or after?"], 120);
+  await start(b);
+  say(b, "member", "Any climbing gyms near the new place?", 0);
+  b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "d1", target: "client" } });
+  await until(() => b.forD("d1").length >= 1);
+  const first = b.forD("d1");
+  check("the answer's first sentence reaches GPT-Live as commentary while the rest is still being written", first.length === 1 && first[0].type === "session.commentary.append" && first[0].event_id === "answer_d1" && first[0].content === "Bouldering gyms fill up after work." && b.state.written < 3, { first, written: b.state.written });
+  await until(() => !!b.lat());
+  const all = b.forD("d1");
+  check("...then each later sentence in its own append under the same delegation id, in order", all.map((m: any) => m.event_id).join() === "answer_d1,answer_d1_2,answer_d1_3" && all.every((m: any) => m.type === "session.commentary.append") && all.map((m: any) => m.content).join(" ") === "Bouldering gyms fill up after work. Mornings are quieter. Do you climb before work or after?", all);
+  const p = b.lat();
+  check("...logged: streamed, three appends, and the first send well before the whole answer was done", p?.streamed === true && p.appends === 3 && typeof p.firstSendMs === "number" && p.firstSendMs < p.totalMs - 150 && p.stale === false, p);
+  check("...and no 'no answer' note alongside a streamed answer", !b.ai.sent.some((m: any) => m.type === "session.thinking.append" && m.delegation_id === "d1" && m.content));
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 2. sentences written together go together (one append, not a stutter)
+{
+  const b = bridge(["Mornings are quieter. Do you climb before work?"], 0);
+  await start(b);
+  say(b, "member", "When's the gym least busy?", 0);
+  b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "d2", target: "client" } });
+  await until(() => !!b.lat());
+  const all = b.forD("d2");
+  check("two sentences that arrive in one burst go in one commentary append", all.length === 1 && all[0].event_id === "answer_d2" && all[0].content === "Mornings are quieter. Do you climb before work?", all);
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 3. the caller cuts in: the rest is neither sent nor written
+{
+  const b = bridge(["Early is a good call. ", "The walls are empty before work. ", "You'd have most of it to yourself. ", "Which side of town is the new place?"], 120);
+  await start(b);
+  say(b, "member", "Is the gym open early?", 0);
+  b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "d3", target: "client" } });
+  await until(() => b.forD("d3").length >= 1);
+  say(b, "cue", "Early is a good call.", 1200);
+  say(b, "member", "Actually wait, what about Sunday?", 1900);
+  await until(() => !!b.lat());
+  const all = b.forD("d3");
+  check("barge-in mid-answer: what was already said stays, nothing after their new words is sent", all.length === 1 && all[0].content === "Early is a good call.", all);
+  check("...the rest of the answer isn't written (the stream stops; no tokens for an answer nobody asked for)", b.state.written < 4 && !b.state.done, b.state);
+  check("...logged stale, so the morning numbers count cut answers", b.lat()?.stale === true && b.lat()?.streamed === true);
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 4. a "yeah" while Cue answers is listening, not cutting in
+{
+  const b = bridge(["Early is a good call. ", "The walls are empty before work."], 120);
+  await start(b);
+  say(b, "member", "Is the gym open early?", 0);
+  b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "d4", target: "client" } });
+  await until(() => b.forD("d4").length >= 1);
+  say(b, "member", "yeah", 1800);
+  await until(() => !!b.lat());
+  check("a backchannel ('yeah') mid-answer doesn't cut it: both sentences go", b.forD("d4").length === 2 && b.lat()?.stale === false, b.forD("d4"));
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 5. a crisis line mid-answer, and everything after it, goes word for word
+{
+  const b = bridge(["That sounds like a brutal week. ", "If it ever gets to where you're thinking of ending your life, you can call or text 988 any time. ", "Are you safe tonight?"], 60);
+  await start(b);
+  say(b, "member", "This week has been a lot, the move and work.", 0);
+  b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "d5", target: "client" } });
+  await until(() => !!b.lat());
+  const all = b.forD("d5");
+  const exact = all.find((m: any) => m.type === "session.instructions.append");
+  check("the ordinary first sentence streams as commentary", all[0]?.type === "session.commentary.append" && all[0].content === "That sounds like a brutal week.", all);
+  check("...the crisis line and the rest go once, as an instruction to say them exactly and in full (988 kept)", all.length === 2 && exact?.content === G.sayExactly("If it ever gets to where you're thinking of ending your life, you can call or text 988 any time. Are you safe tonight?") && exact.event_id === "answer_d5_2", all);
+  check("...and the turn is logged exact (a safety moment for the safety-cut path)", b.lat()?.exact === true);
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 6. a call that has touched their safety isn't streamed
+{
+  const LINE = ["I'm really glad you told me. ", "You can call or text 988 right now. ", "Are you safe tonight?"];
+  const b = bridge(LINE, 60);
+  await start(b);
+  say(b, "member", "Honestly I'd rather not be here anymore.", 0);
+  b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "d6", target: "client" } });
+  await until(() => !!b.lat());
+  const all = b.forD("d6");
+  check("their words raise safety: the whole answer is read first and goes once, word for word, as before", all.length === 1 && all[0].type === "session.instructions.append" && all[0].content === G.sayExactly(LINE.join("").trim()) && b.lat()?.streamed === false, all);
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 7. text written together with end_call isn't said
+{
+  const b = bridge(["Talk soon, Jordan.", "|END"], 0);
+  await start(b);
+  say(b, "member", "Okay I have to run, bye!", 0);
+  say(b, "cue", "Bye Jordan, good luck with the move.", 900);
+  b.ai.in({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "d7", target: "client" } });
+  await until(() => !!b.lat());
+  check("Claude's goodbye text written with end_call in one burst isn't handed to GPT-Live (its own goodbye is the last word)", b.forD("d7").length === 0 && b.lat()?.endAfterText === false, b.forD("d7"));
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 8. the handover's transcript lag is measured
+{
+  const b = bridge(["Mornings are quieter."], 0);
+  await start(b);
+  say(b, "member", "When's the gym least busy?", 0); // ends at 800
+  b.ai.in({ type: "session.delegation.created", offset_ms: 1700, delegation: { id: "d8", target: "client" } });
+  await until(() => !!b.lat());
+  const p = b.lat();
+  check("each delegated turn logs how far the transcript trailed the handover, and whether the wait brought in their words", p?.lagMs === 900 && p.waitAddedWords === false && p.waitMs >= G.GPT_LIVE.catchUpMs - 20, p);
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 9. the real upstream closes its connection when the answer is stopped
+{
+  const P = await import("../../src/services/callLlmProxy.js");
+  let cancelled = false;
+  const sse = (ev: unknown) => new TextEncoder().encode(`event: x\ndata: ${JSON.stringify(ev)}\n\n`);
+  const body = new ReadableStream<Uint8Array>({
+    start(c) { c.enqueue(sse({ type: "content_block_start", index: 0, content_block: { type: "text" } })); c.enqueue(sse({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Early is a good call. " } })); },
+    cancel() { cancelled = true; },
+  });
+  const fakeFetch = (async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
+  let seen = 0;
+  for await (const _ of P.anthropicStream({ model: "claude-sonnet-4-6", max_tokens: 10, messages: [] } as any, "sk-test", fakeFetch, null)) { seen++; if (seen === 2) break; }
+  await sleep(5);
+  check("anthropicStream: stopping early cancels the response body (the model stops writing an answer nobody will hear)", cancelled && seen === 2, { cancelled, seen });
+}
+
+console.log(`gpt-live streaming: ${total - failed}/${total} passed`);
+process.exit(failed ? 1 : 0);

@@ -166,6 +166,7 @@
     "evals/calls/gptLiveParity.ts",
     "evals/calls/gptLiveOutbound.ts",
     "evals/calls/gptLiveHume.ts",
+    "evals/calls/gptLiveStream.ts",
     "evals/calls/provenance.ts",
     "evals/calls/spokenGrounding.ts",
     "evals/docs/document.ts",
