@@ -55,6 +55,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   task_window: "companion",
   in_room: "offer",
   product_update: "ops",
+  // Cue's contact card, once per version, to members holding an older one (services/cardReissue.ts): how to reach Cue.
+  contact_card: "ops",
   artifact_expiry: "ops",
   bounce_proposal: "offer",
   bounce_watch: "companion",

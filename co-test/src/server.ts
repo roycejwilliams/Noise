@@ -11,7 +11,7 @@ import { Server } from "socket.io";
 import pool from "../../api/src/db/db.js";
 import { Client as PgClient } from "pg";
 import { runMigrations } from "../../api/src/db/migrations.js";
-import { buildCoVCard } from "../../api/src/utils/vcard.js";
+import { serveCoVCard, serveVersionedVCard } from "../../api/src/routes/contactCard.js";
 import { getAudioEntry } from "../../api/src/services/voiceNote.js";
 import { servePlanFile } from "../../api/src/services/planFile.js";
 import { runTestMigrations } from "./db/testMigrations.js";
@@ -178,14 +178,8 @@ async function main() {
   // conditionally attaches media_url only when CO_VCARD_URL is set, which
   // needs to point here). Mirrors production's identical route in
   // api/src/server.ts.
-  app.get("/co.vcf", (_req, res) => {
-    const phone = process.env.SENDBLUE_PHONE_NUMBER ?? "";
-    const vcard = buildCoVCard(phone);
-    res.setHeader("Content-Type", "text/vcard");
-    res.setHeader("Content-Disposition", "attachment; filename=Cue.vcf");
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    return res.send(vcard);
-  });
+  app.get("/co.vcf", serveCoVCard);
+  app.get("/cards/:version/Cue.vcf", serveVersionedVCard);
 
   // A member's invite link: mirrors production's identical route in
   // api/src/server.ts (api/src/routes/invitePage.ts).

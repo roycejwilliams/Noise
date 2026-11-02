@@ -179,7 +179,8 @@ export type ProactiveType =
 // task_update: Co's own report on work it is doing for them over days (services/taskTurn.ts).
 // call_confirm: the text right after a call that confirms what Co said it would send (services/callFollowThrough.ts).
 // task_window: the one line that tells them a commitment will miss its window, and the new time, before it passes (services/taskTurn.ts).
-export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update" | "call_confirm" | "task_window";
+// contact_card: Cue's contact card pushed once per version to members holding an older one (services/cardReissue.ts).
+export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update" | "call_confirm" | "task_window" | "contact_card";
 
 // What each proactive message is for (companion / offer / ops) lives in
 // ./proactivePurpose.ts, dependency-free so model-free checks can read it.
@@ -2300,6 +2301,9 @@ export async function sendExempt(opts: {
   // answers their latest message, it's about something within hours, or the caller marks it time-sensitive), it's queued as a
   // candidate and goes with Cue's next message, under the pick's ranking, gathering window and the same gates (door: true back).
   door?: DoorSpec;
+  // A file attached to the first message (Sendblue media_url): Cue's contact card (services/cardReissue.ts). Public, ends in its
+  // extension, as Sendblue requires.
+  mediaUrl?: string;
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date; queued?: boolean; door?: boolean }> {
   if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
@@ -2393,7 +2397,7 @@ export async function sendExempt(opts: {
       await client.query("ROLLBACK");
       return { sent: false, reason: "already sent" }; // idempotent no-op, not worth a decision row
     }
-    const first = { number: opts.phoneNumber, content: opts.messages[0], from_number: process.env.SENDBLUE_PHONE_NUMBER! };
+    const first = { number: opts.phoneNumber, content: opts.messages[0], from_number: process.env.SENDBLUE_PHONE_NUMBER!, ...(opts.mediaUrl ? { media_url: opts.mediaUrl } : {}) };
     if (opts.replyTo) {
       await sendblue.messages.send({ ...first, reply_to: { message_handle: opts.replyTo } } as typeof first).catch(() => sendblue.messages.send(first));
     } else {
