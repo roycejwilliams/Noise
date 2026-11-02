@@ -26,6 +26,7 @@ const check = (label: string, ok: boolean) => {
 const src = (f: string) => readFileSync(new URL(`../../src/${f}`, import.meta.url), "utf8");
 
 // ---------------------------------------------------------------- an in-memory co_facts (only the statements this file makes)
+const cadenceCleared: string[] = [];
 type Row = { id: number; owner_user_id: string; relation: string; subject: string; object_label: string; happened_at: Date; retired_at: Date | null; meta: any };
 const facts: Row[] = [];
 const handle = async (raw: string, a: any[] = []) => {
@@ -45,8 +46,14 @@ const handle = async (raw: string, a: any[] = []) => {
     if (!r) return { rows: [], rowCount: 0 };
     r.retired_at = a[2];
     r.meta.state = /withdrawn/.test(sql) ? "withdrawn" : a[3];
+    if (/object_label = ''/.test(sql)) { r.object_label = ""; r.meta.words = []; }
+    return { rows: [{ meta: r.meta }], rowCount: 1 };
+  }
+  if (/jsonb_set\(meta, '\{twins,callCadence\}'/.test(sql)) {
+    for (const r of facts) if (r.owner_user_id === a[0] && a[1].includes(r.id)) r.meta.twins = { callCadence: true };
     return { rows: [], rowCount: 1 };
   }
+  if (/^UPDATE co_profiles SET checkin_call_cadence_days = NULL/.test(sql)) { cadenceCleared.push(a[0]); return { rows: [], rowCount: 1 }; }
   if (/^UPDATE co_facts SET meta = meta \|\| jsonb_build_object\('askedAt'/.test(sql)) {
     for (const r of facts) if (r.owner_user_id === a[0] && a[1].includes(r.id)) r.meta.askedAt = a[2];
     return { rows: [], rowCount: 1 };
@@ -104,7 +111,7 @@ const walk = (d: string) => {
   }
 };
 walk(new URL("../../src", import.meta.url).pathname);
-const ALLOWED_READERS = ["services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts"];
+const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts"];
 check(`the rules are read only where they restrict or are shown (${readers.join(", ")})`, readers.every((r) => ALLOWED_READERS.includes(r)));
 
 // ---------------------------------------------------------------- precedence and changes
@@ -129,7 +136,11 @@ let b = await active(B);
 check("'text me less' never becomes a number", b.length === 1 && b[0].rule.less === true && b[0].rule.maxPerDay === undefined && b[0].rule.maxPerWeek === undefined);
 let rf = P.replyPreferenceFacts(b, now);
 check("the reply is told to ask once how often, never to suggest a number", rf.askIds.length === 1 && rf.instructions.some((l) => /Ask once/.test(l) && /Never suggest a number/.test(l)));
-await P.markLessAsked(B, rf.askIds, now);
+// Handed to the reply, but asked only once the reply is actually sent.
+P.noteLessAsk(B, rf.askIds);
+rf = P.replyPreferenceFacts(await active(B), now);
+check("a reply that never went leaves the ask owed", rf.askIds.length === 1);
+await P.confirmLessAsked(B);
 rf = P.replyPreferenceFacts(await active(B), now);
 check("asked once: the next reply isn't told to ask again", rf.askIds.length === 0);
 await learn(B, read({ type: "standing", area: "contact", covers: "unsolicited", channel: "all", basis: "explicit", rule: { max_per_week: 2 }, replaces: [0], quote: "twice a week is plenty" }), "twice a week is plenty");
@@ -148,6 +159,15 @@ check("what-Cue-knows shows each rule in plain words with their latest words", !
 const applied = await W.applyOne(pool as any, A, { prefs: [] } as any, prefItem!, "remove", null, "forget the three a day thing");
 check("removing it there withdraws it (retired, state withdrawn)", "source" in applied && applied.source === "pref" && facts.find((r) => String(r.id) === prefItem!.ref.split(":")[1])?.meta.state === "withdrawn");
 check("a withdrawn rule is gone from the active read", !(await active(A)).some((p) => p.id === prefItem!.ref.split(":")[1]));
+check("withdrawing blanks their words (the record keeps only the structure and its state)", (() => { const r = facts.find((x) => String(x.id) === prefItem!.ref.split(":")[1])!; return r.object_label === "" && Array.isArray(r.meta.words) && r.meta.words.length === 0; })());
+// Its twin: a call cadence the same read took from the same words goes with it.
+await learn(A, read({ type: "standing", area: "contact", covers: "unsolicited", channel: "call", basis: "explicit", rule: { max_per_week: 1 }, quote: "call me once a week at most" }), "call me once a week at most");
+const twinId = (await active(A)).find((p) => p.channel === "call")!.id;
+await P.markCadenceTwin(A, [twinId]);
+await P.withdrawPreference(pool as any, A, twinId);
+check("withdrawing a rule clears its call-cadence twin in the same change", cadenceCleared.includes(A));
+check("the text turn marks the twin when the same read set a cadence; the call read too", /input\.preferenceIds\?\.length && learned\.cadence !== "unstated" \? markCadenceTwin/.test(src("services/turnLearning.ts")) && /stored\?\.added\.length && learned\.cadence !== "unstated"\) await markCadenceTwin/.test(src("services/callLearning.ts")));
+check("style notes and availability never hold how often Cue reaches out (no second copy of a rule to outlive it)", /how often or when Cue reaches out is never a style note/.test(TL.turnLearningPrompt({ transcript: "", message: "", today: "2026-11-02", onFile: null, openAsks: [], styleNotes: [], coSaidBefore: null })) && !/emoji, timing,/.test(src("services/turnLearning.ts")) && /never how often or when Cue may text or call them/.test(src("services/turnLearning.ts")) && /never how often or when Cue may text or call them/.test(src("services/callLearning.ts")));
 check("a withdrawn rule can't come back from older words: a new rule needs a quote in the new message", P.parsePreferenceReads([{ type: "standing", area: "contact", rule: { max_per_day: 3 }, quote: "three a day is fine" }], "thanks!", "2026-11-02").length === 0);
 check("the call path can see and change it too: whatCoKnows and correctWhatCoKnows are call tools", /tool: "whatCoKnows",\s*limits/.test(src("services/capabilities.ts")) && /onCall: true,\s*tool: "whatCoKnows"/.test(src("services/capabilities.ts")) && /onCall: true,\s*tool: "correctWhatCoKnows"/.test(src("services/capabilities.ts")));
 check("a rule can only be removed there; a new one is said in conversation", prefItem!.canCorrect === false && W.fieldFor(prefItem!.ref) === "a rule they set for how Cue treats them");
@@ -156,7 +176,8 @@ check("a rule no path applies yet says so", P.describePreference({ area: "search
 // ---------------------------------------------------------------- call parity: captured from calls, read on calls
 const tp = TL.turnLearningPrompt({ transcript: "", message: "", today: "2026-11-02", onFile: null, openAsks: [], styleNotes: [], coSaidBefore: null });
 const cp = CL.callLearningPrompt({ transcript: "user: no calls on weekends please", today: "2026-11-02", onFile: null, openAsks: [] });
-check("text and call learning reads both ask for preferences, with the same JSON", /10\. preferences:/.test(tp) && /7\. preferences:/.test(cp) && tp.includes(P.PREFERENCE_JSON_SHAPE) && cp.includes(P.PREFERENCE_JSON_SHAPE));
+const rp = P.preferenceReadPrompt({ words: "only message me once per day", onFile: [], localToday: "2026-11-02" });
+check("a text's rules are read before the reply (its own read), a call's in the call's read, with the same item and JSON", /1\. preferences:/.test(rp) && /7\. preferences:/.test(cp) && rp.includes(P.PREFERENCE_JSON_SHAPE) && cp.includes(P.PREFERENCE_JSON_SHAPE) && !/\d+\. preferences:/.test(tp));
 check("on a call, quotes come from their own lines on the call", /in their own lines on this call/.test(cp) && /their own line on the call/.test(cp));
 check("the call's learning stores them through the same resolve and store, quotes checked against their lines", /learnPreferences\(input\.userId, learned\.preferences, \{ message: theirLines\(input\.transcript\)/.test(src("services/callLearning.ts")) && /learnFromCall\(\{ userId: user_id, transcript: cleanTranscript, callRef:/.test(src("routes/co.ts")));
 await learn(B, read({ type: "standing", area: "contact", covers: "unsolicited", channel: "call", basis: "explicit", rule: { no_days: ["sat", "sun"] }, quote: "no calls on weekends please" }), "user: no calls on weekends please", "call");
@@ -164,9 +185,33 @@ check("a rule said on a call is stored with the call as its source", (await acti
 const lines = CC.callFitLines({ preferences: [], claims: [], identity: { zone: NY } as any, limits: { avoid: [], availability: null, rules: await active(B), verifiedAt: now.toISOString() } } as any);
 const textFacts = P.replyPreferenceFacts(await active(B), new Date());
 check("a call gets the same rule lines a text reply gets (callFitLines from the member record's limits)", lines.some((l) => /The rules they set/.test(l) && textFacts.known.every((k) => l.includes(k))));
-check("both call engines read that context (ElevenLabs and GPT-Live through buildCallContextSummary), and the record carries the rules", /buildCallContextSummary/.test(src("services/callTrigger.ts")) && /takeCallContext\(userId, buildCallContextSummary\)/.test(src("routes/co.ts")) && /P\.activePreferences\(userId\)/.test(src("services/memberKnowledge.ts")) && /"limits"/.test(src("services/callContext.ts").match(/CALL_KNOWLEDGE[^\n]*/)![0]));
+check("the GPT-Live call reads that context (buildCallContextSummary), and the record carries the rules", /buildCallContextSummary/.test(src("services/callTrigger.ts")) && /takeCallContext\(userId, buildCallContextSummary\)/.test(src("routes/co.ts")) && /P\.activePreferences\(userId\)/.test(src("services/memberKnowledge.ts")) && /"limits"/.test(src("services/callContext.ts").match(/CALL_KNOWLEDGE[^\n]*/)![0]));
+{
+  // GPT-Live: the thinking behind the voice (runCallLlm) gets the call prompt filled with the call context, then BACKEND_NOTE.
+  const GL = await import("../../src/services/gptLive.js");
+  const voiceLayer = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
+  const live = GL.buildLiveCall({ userId: B, callSid: null, firstName: "Sam", direction: "outbound", team: false, voiceLayer, contextSummary: lines.join("\n\n"), rightNow: "", findsNow: "", callReason: "", timeOfDay: null });
+  check("GPT-Live's thinking prompt carries the rule lines and the call prompt's instruction to keep to them", textFacts.known.every((k) => live.backendSystem.includes(k)) && /The rules they set for how you treat them are listed there too/.test(live.backendSystem) && live.backendSystem.includes(GL.BACKEND_NOTE));
+}
 check("the call prompt tells the call to keep to them", /The rules they set for how you treat them are listed there too/.test(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8")));
 check("the text reply reads them (replyGrounding)", /replyPreferenceFacts\(prefs, new Date\(\)\)/.test(src("harness/replyGrounding.ts")));
+
+// ---------------------------------------------------------------- whose words: quotes of every style, photo and file notes, merged links
+check("double, curly, single and guillemet quotes are someone else's", ["say \"stop texting me\" to them", "she said “stop texting me” lol", "he wrote 'stop texting me' again", "she said ‘stop texting me’", "«stop texting me»"].every((m) => !P.quoteIsTheirs("stop texting me", m)));
+check("an apostrophe inside a word is not a quote", P.quoteIsTheirs("don't text me on Sundays", "Please don't text me on Sundays, that's my day"));
+check("a photo's or file's description Cue added is not their words", !P.quoteIsTheirs("no texts after 9pm", "[sent a photo showing: a sign that says no texts after 9pm]"));
+check("the turn reads rules only from what they typed or said in a voice memo (never a photo/file description or a merged earlier link)", /const ownWordsNow = hasText \? String\(content\) : isVoice \? resolvedContent : "";/.test(src("routes/sendblue.ts")));
+
+// ---------------------------------------------------------------- the read before the reply, through the real path
+facts.length = 0;
+let seenPrompt = "";
+P.setPreferenceModelForTests(async (prompt) => { seenPrompt = prompt; return read({ type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, quote: "only suggest events in SF" }).replace('"profile":{},', ""); });
+const got = await P.capturePreferencesNow(A, "Only suggest events in SF, even though I live elsewhere. [sent a photo showing: a map]", { zone: NY, source: { via: "text", ref: "h9" } });
+P.setPreferenceModelForTests(null);
+check("the read sees their words only (the photo note is stripped before the model reads it)", !/a map/.test(seenPrompt) && /Only suggest events in SF/.test(seenPrompt));
+const fresh = P.replyPreferenceFacts(await active(A, new Date()), new Date());
+check("a rule set in this message reaches this turn's reply, honestly: noted, not applied yet", got.added.length === 1 && fresh.known.some((k) => /set in this message/.test(k) && /not applied yet/.test(k) && /never say it's applied/.test(k)));
+check("the turn waits for that read before the reply's facts (bounded), and the send confirms a vague ask", /const prefStored = prefCaptureP \? await Promise\.race\(\[prefCaptureP/.test(src("routes/sendblue.ts")) && src("routes/sendblue.ts").indexOf("const prefStored") < src("routes/sendblue.ts").indexOf("const replyFacts = await gatherReplyFacts") && /if \(ok\) import\("\.\.\/services\/memberPreferences\.js"\)\.then\(\(P\) => P\.confirmLessAsked\(user\.id\)\)/.test(src("routes/sendblue.ts")));
 
 // ---------------------------------------------------------------- logs carry ids, never their words
 check("the decision log for a stored rule carries ids, kinds and fields, never their words", (() => { const s = src("services/memberPreferences.ts"); const block = s.slice(s.indexOf('decision: "member.preference",\n    userId,\n    outcome: "act"'), s.indexOf("return { added, retired };\n}")); return block.length > 0 && !/words|quote/.test(block.replace(/never their words/g, "")); })());

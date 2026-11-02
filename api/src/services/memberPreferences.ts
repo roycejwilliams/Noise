@@ -112,11 +112,18 @@ export type PreferenceRead = {
 const squash = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 // Pure: the quote is theirs, from this message (a fact check, not a reading of intent). Words that sit only inside quotation marks in
 // their message are someone else's, quoted (spec: "quoted messages aren't automatically the member's instructions").
+// Also out: single-quoted spans ('...' or ‘...’, never an apostrophe inside a word) and bracketed notes Cue added to their message
+// ("[sent a photo showing: ...]", a file's note).
+export function ownWords(message: string): string {
+  return message
+    .replace(/\[[^\]\n]*\]/g, " ")
+    .replace(/"[^"\n]*"|“[^”\n]*”|«[^»\n]*»|‘[^’\n]*’/g, " ")
+    .replace(/(^|[\s(\[:])'[^'\n]+'(?=$|[\s.,!?;:)\]])/g, "$1 ");
+}
 export function quoteIsTheirs(quote: string, message: string): boolean {
   const q = squash(quote);
   if (q.length < 4 || !squash(message).includes(q)) return false;
-  const outside = message.replace(/"[^"\n]*"|“[^”\n]*”|«[^»\n]*»/g, " ");
-  return squash(outside).includes(q);
+  return squash(ownWords(message)).includes(q);
 }
 const int = (v: unknown, max: number): number | undefined => {
   const n = typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v) : NaN;
@@ -255,7 +262,9 @@ export function resolveReads(onFile: Preference[], reads: PreferenceRead[], ctx:
   return out;
 }
 
-// Pure: in force now (not retired, started, not past its expiry). Expiry is in their zone, stored as the instant it ends.
+// Pure: in force now (not retired, started, not past its expiry). Expiry is the instant the named day ended in the zone they were in
+// when they said it (a "this week" said in New York ends there); day and hour rules are read in their current zone at send time
+// (harness/notifyGate.ts), so a member who moves keeps "not before 10" at 10 where they are.
 export function inForce(p: Pick<Preference, "state" | "startsAt" | "expiresAt">, now: Date): boolean {
   if (p.state !== "active") return false;
   if (p.startsAt && Date.parse(p.startsAt) > now.getTime()) return false;
@@ -353,15 +362,38 @@ export async function storePreferenceChanges(userId: string, ch: PrefChanges, o:
 }
 
 // Withdraws one rule (what-Cue-knows removal). Returns whether a row changed.
+// Their words go with it (object_label and meta.words blanked, the free-removal ruling): only the structure and its state stay, so
+// nothing can read the rule back from its record. A twin the same words wrote elsewhere goes in the same change: the call cadence
+// (meta.twins.callCadence, set by the learning read that saw both).
 export async function withdrawPreference(db: Db, userId: string, id: string, now: Date = new Date()): Promise<boolean> {
   const r = await db.query(
-    `UPDATE co_facts SET retired_at = $3, meta = meta || '{"state":"withdrawn"}'::jsonb WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}' AND retired_at IS NULL`,
+    `UPDATE co_facts SET retired_at = $3, object_label = '', meta = (meta - 'words') || '{"state":"withdrawn","words":[]}'::jsonb
+     WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}' AND retired_at IS NULL RETURNING meta`,
     [id, userId, now],
   );
-  return !!r.rowCount;
+  if (!r.rowCount) return false;
+  if ((r.rows[0]?.meta as any)?.twins?.callCadence) await db.query(`UPDATE co_profiles SET checkin_call_cadence_days = NULL WHERE user_id = $1`, [userId]);
+  return true;
+}
+// The same learning read wrote a call cadence from the words that set these rules: they're one thing, withdrawn together.
+export async function markCadenceTwin(userId: string, ids: string[], db: Db = pool): Promise<void> {
+  if (!ids.length) return;
+  await db.query(`UPDATE co_facts SET meta = jsonb_set(meta, '{twins,callCadence}', 'true'::jsonb, true) WHERE owner_user_id = $1 AND id = ANY($2::bigint[]) AND relation = '${PREF_RELATION}'`, [userId, ids.map(Number)]);
 }
 
-// The vague "less": asked once. Marked when the reply that carried the ask goes (the reply facts below hand it the ask).
+// The vague "less": asked once. The reply's facts hand it the ask (noteLessAsk); it's marked asked only once that reply was actually
+// sent (confirmLessAsked, from the turn's send), so a reply that never went asks again next time.
+const pendingLessAsk = new Map<string, string[]>();
+export function noteLessAsk(userId: string, ids: string[]): void {
+  if (ids.length) pendingLessAsk.set(userId, ids);
+  else pendingLessAsk.delete(userId);
+}
+export async function confirmLessAsked(userId: string, db: Db = pool): Promise<void> {
+  const ids = pendingLessAsk.get(userId);
+  if (!ids?.length) return;
+  pendingLessAsk.delete(userId);
+  await markLessAsked(userId, ids, new Date(), db);
+}
 export async function markLessAsked(userId: string, ids: string[], now: Date = new Date(), db: Db = pool): Promise<void> {
   if (!ids.length) return;
   await db.query(`UPDATE co_facts SET meta = meta || jsonb_build_object('askedAt', $3::text) WHERE owner_user_id = $1 AND id = ANY($2::bigint[]) AND relation = '${PREF_RELATION}'`, [userId, ids.map(Number), now.toISOString()]);
@@ -375,6 +407,41 @@ export async function learnPreferences(userId: string, raw: unknown, o: { messag
   if (!reads.length) return { added: [], retired: [] };
   const onFile = o.onFile ?? (await activePreferences(userId, now));
   return storePreferenceChanges(userId, resolveReads(onFile, reads, { now, zone: o.zone, source: o.source }), { now });
+}
+
+// ---------------------------------------------------------------- the read before the reply (spec: a rule said in a turn shapes that turn)
+
+// One small read of their own words (never a photo's or file's description, a merged earlier link, or quoted text), before the reply,
+// so the reply's facts (replyPreferenceFacts) already hold what they just set and say honestly whether it's applied. Stored through the
+// same resolve as everything else. The turn's later learning read doesn't read rules again. Returns the ids it stored.
+let prefModelForTests: ((prompt: string) => Promise<string>) | null = null;
+export function setPreferenceModelForTests(fn: typeof prefModelForTests): void {
+  prefModelForTests = fn;
+}
+export function preferenceReadPrompt(o: { words: string; onFile: Preference[]; localToday: string }): string {
+  return `Read the last message a person texted Cue (an assistant). Find only standing instructions about how Cue should treat them.
+
+Their message: "${o.words.slice(0, 1500)}"
+
+${preferencePromptItem({ n: 1, onFile: o.onFile, localToday: o.localToday })}
+
+Return ONLY valid JSON, no preamble: {${PREFERENCE_JSON_SHAPE}}. An empty list when there's none.`;
+}
+export async function capturePreferencesNow(userId: string, words: string, o: { zone: string | null; source: Preference["source"]; now?: Date }): Promise<{ added: string[]; retired: string[] }> {
+  const now = o.now ?? new Date();
+  const own = ownWords(words).trim();
+  if (own.length < 4) return { added: [], retired: [] };
+  const onFile = await activePreferences(userId, now);
+  const prompt = preferenceReadPrompt({ words: own, onFile, localToday: DateTime.fromJSDate(now).setZone(wordsZone(o.zone)).toISODate()! });
+  const text = prefModelForTests
+    ? await prefModelForTests(prompt)
+    : await (async () => {
+        const [{ generateText }, { anthropic }, { MODELS }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js")]);
+        return (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 600, abortSignal: AbortSignal.timeout(8000), experimental_telemetry: { isEnabled: true, functionId: "preferences.read", recordInputs: false, recordOutputs: false }, prompt })).text;
+      })();
+  const { parseModelJson } = await import("./modelJson.js");
+  const raw = (() => { try { return parseModelJson<any>(text)?.preferences; } catch { return null; } })();
+  return learnPreferences(userId, raw ?? [], { message: own, zone: o.zone, now, source: o.source, onFile });
 }
 
 // ---------------------------------------------------------------- words (member-facing: the PR's Copy section lists every one)
@@ -419,7 +486,8 @@ export function replyPreferenceFacts(prefs: Preference[], now: Date): { known: s
   const askIds: string[] = [];
   for (const p of live) {
     const applied = ENFORCED_AREAS.has(p.area);
-    known.push(`A standing rule they set${p.basis === "inferred" ? " (Cue's tentative read, not confirmed)" : ""}: ${describePreference(p)}. ${applied ? "Cue's sends enforce it in code; replies to their texts always go." : "No path applies this yet: never say it's applied; say plainly Cue noted it and can't apply it yet."}`);
+    const justNow = now.getTime() - Date.parse(p.setAt) < 5 * 60_000;
+    known.push(`A standing rule they ${justNow ? "set in this message" : "set"}${p.basis === "inferred" ? " (Cue's tentative read, not confirmed)" : ""}: ${describePreference(p)}. ${applied ? "Cue's sends enforce it in code; replies to their texts always go." : "No path applies this yet: never say it's applied; say plainly Cue noted it and can't apply it yet."}`);
     if (p.rule.less && p.rule.maxPerDay === undefined && p.rule.maxPerWeek === undefined && !p.askedAt) askIds.push(p.id);
   }
   if (askIds.length) instructions.push("They asked Cue to reach out less without saying how often. Ask once, in a few words, how often works for them. Never suggest a number yourself.");

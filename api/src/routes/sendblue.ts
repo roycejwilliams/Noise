@@ -1316,6 +1316,15 @@ export function sendblueRouter(io: Server): Router {
         const theirLinkP: Promise<LinkRead | null> | null = theirLink
           ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
           : null;
+        // A rule they set in this message (services/memberPreferences.ts capturePreferencesNow), read from their own words only (what
+        // they typed, or said in a voice memo; never a photo's or file's description or an earlier link merged in), before the reply, so
+        // the reply's facts already hold it and say honestly whether it's applied. It runs beside the turn's other reads.
+        const ownWordsNow = hasText ? String(content) : isVoice ? resolvedContent : "";
+        const prefCaptureP: Promise<{ added: string[] } | null> | null = ownWordsNow.trim()
+          ? import("../services/memberPreferences.js")
+              .then(async (P) => P.capturePreferencesNow(user.id, ownWordsNow, { zone: await (await import("../services/memberTime.js")).memberZone(user.id).catch(() => null), source: { via: "text", ref: typeof req.body?.message_handle === "string" ? req.body.message_handle : null } }))
+              .catch((err: any) => (console.error("sendblue: reading a rule before the reply failed (non-fatal):", err?.message ?? err), null))
+          : null;
         // Away from home, in their own words ("I'm traveling", "back in SF on the 20th"): a fact, written now, that holds finds tied
         // to where they live until they're back; "I'm back" ends it (services/away.ts, 2026-10-11).
         if (hasText) {
@@ -1702,6 +1711,8 @@ export function sendblueRouter(io: Server): Router {
         turn = turnP ? await turnP.catch(() => null) : null;
         // This message's feeling was just recorded; the context read the ones before it.
         if (turn) turn.emotional = emotional;
+        // The rule read lands before the facts (at most a few seconds' wait; past that the reply goes without it and the rule is still stored).
+        const prefStored = prefCaptureP ? await Promise.race([prefCaptureP, new Promise<null>((r) => setTimeout(() => r(null), 6000))]) : null;
         const replyFacts = await gatherReplyFacts(user.id, {
           snapshot: replySnapshot,
           turn: turn ?? undefined,
@@ -1821,6 +1832,8 @@ export function sendblueRouter(io: Server): Router {
             ok = await sendCoReply({ ...p, replyTo: await threadHandle() });
           }
           if (ok) deliveredThisTurn.push(p.message);
+          // The vague "less" ask counts as asked only once a reply carrying it actually went (services/memberPreferences.ts).
+          if (ok) import("../services/memberPreferences.js").then((P) => P.confirmLessAsked(user.id)).catch(() => {});
           return ok;
         };
         // hold: the line sent while a search runs, logged as "Co is looking:"
@@ -2733,6 +2746,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           message: resolvedContent,
           coReply,
           sourceRef,
+          preferenceIds: prefStored?.added ?? [],
           coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
         }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err))
           // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts), so the next
