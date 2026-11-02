@@ -191,7 +191,7 @@ async function main() {
   // api/src/server.ts (api/src/routes/invitePage.ts).
   app.get("/i/:code", serveInvitePage);
 
-  // Serves generated voice-note audio (ElevenLabs) — mirrors
+  // Serves generated voice-note audio (OpenAI speech) — mirrors
   // production's identical route in api/src/server.ts. Needed here since
   // Twilio's <Play> requires a fetchable URL, not inline audio data.
   app.get("/audio/:id", (req, res) => {

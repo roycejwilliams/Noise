@@ -161,7 +161,7 @@ app.get("/co.vcf", (_req, res) => {
 // code and a greeting filled in. Public, like /co.vcf.
 app.get("/i/:code", serveInvitePage);
 
-// Serve ElevenLabs-generated voice note audio files for Sendblue media messages
+// Serve voice note audio (OpenAI speech, services/voiceNote.ts) for Sendblue media messages
 // Files are stored in memory with a 10-minute TTL — long enough for Sendblue to fetch
 app.get("/audio/:id", (req, res) => {
   const entry = getAudioEntry(req.params.id);
