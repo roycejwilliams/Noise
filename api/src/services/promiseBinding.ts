@@ -22,7 +22,7 @@ import type { GateCheck } from "../harness/core.js";
 import { parseModelJson } from "./modelJson.js";
 import { DateTime } from "luxon";
 import { parseAskWindow } from "./askWindow.js";
-import { bringsItUp, overlap } from "./followThrough.js";
+import { reminderTiedTo } from "./followThrough.js";
 import { INSTANT, atPromiseCap, theirWordsFor, promiseGoal, promiseCovered } from "./promises.js";
 import { TASK_LIMITS, type CoTask } from "./coTasks.js";
 import { OFFERS_WHAT_CO_CANT } from "./taskWeb.js";
@@ -169,11 +169,16 @@ export type BindDeps = {
   // bound to it, never given a task of its own as well (review of #352: the same reminder twice, once by the relay, once by a task).
   reminders?: () => Promise<PendingReminder[]>;
 };
-export type PendingReminder = { id: number; what: string; dueAt: Date };
-// Pure: the reminder that keeps this promise: it fires by the promise's time, and the promise is Cue's own "I'll remind you / bring it
-// up" (followThrough.ts bringsItUp, Cue's words) or is about what the reminder says (most of its words). Null when none does.
+export type PendingReminder = { id: number; what: string; dueAt: Date; createdAt: Date };
+// A reminder set "in this turn": within this many minutes before the promise is read (the tool runs earlier in the same reply).
+export const REMINDER_SAME_TURN_MS = 5 * 60_000;
+// Pure: the reminder that keeps this promise. It fires by the promise's time, and it's tied to this promise by a fact: it was set in
+// this same turn and the promise is Cue's own "I'll remind you / bring it up" (followThrough.ts bringsItUp, Cue's words), or the promise
+// is about what the reminder says (most of its words). Never any reminder due by then: "bring up the lease" isn't kept by "pay rent"
+// (round 2 review of #352). The same tie as the task's backstop (taskTurn.ts reminderCoversTask). Null when none keeps it.
 export function reminderKeeping(sentence: string, by: Date, now: Date, reminders: PendingReminder[]): PendingReminder | null {
-  return reminders.find((r) => r.dueAt.getTime() >= now.getTime() - 5 * 60_000 && r.dueAt.getTime() <= by.getTime() + BINDING_LIMITS.graceMin * 60_000 && (bringsItUp(sentence) || overlap(sentence, r.what) >= 0.5)) ?? null;
+  const sameTurn = (r: PendingReminder) => r.createdAt.getTime() >= now.getTime() - REMINDER_SAME_TURN_MS && r.createdAt.getTime() <= now.getTime() + 60_000;
+  return reminders.find((r) => r.dueAt.getTime() >= now.getTime() - 5 * 60_000 && r.dueAt.getTime() <= by.getTime() + BINDING_LIMITS.graceMin * 60_000 && reminderTiedTo(sentence, r.what, { sameTurn: sameTurn(r) })) ?? null;
 }
 
 // The guard. Returns the verdict for each timed promise, the failed checks for the unbound ones, and the tasks it opened (dropped by
@@ -336,8 +341,8 @@ export async function realBindDeps(userId: string, theirMessage: string): Promis
     },
     reminders: async () => {
       const { default: pool } = await import("../db/db.js");
-      const { rows } = await pool.query(`SELECT id, what, due_at FROM member_reminders WHERE user_id = $1 AND sent_at IS NULL AND due_at > NOW() - INTERVAL '5 minutes'`, [userId]);
-      return rows.map((r: any) => ({ id: Number(r.id), what: String(r.what ?? ""), dueAt: new Date(r.due_at) }));
+      const { rows } = await pool.query(`SELECT id, what, due_at, created_at FROM member_reminders WHERE user_id = $1 AND sent_at IS NULL AND due_at > NOW() - INTERVAL '5 minutes'`, [userId]);
+      return rows.map((r: any) => ({ id: Number(r.id), what: String(r.what ?? ""), dueAt: new Date(r.due_at), createdAt: new Date(r.created_at) }));
     },
     scheduledCalls: async () => {
       const { default: pool } = await import("../db/db.js");

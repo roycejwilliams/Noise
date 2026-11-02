@@ -285,27 +285,49 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   // A send that threw where it can't be told whether it went (a timeout, a 5xx): checked before any retry (review of #352).
   check("only failures before delivery retry blind: 4xx, our own refusals, a pause", R.failedBeforeDelivery("401 Invalid Credentials") && R.failedBeforeDelivery("429 Too Many Requests") && R.failedBeforeDelivery("sendblue: send breaker open for ...0150, refusing to send") && R.failedBeforeDelivery("proactive outreach is paused"));
   check("...a timeout, a 5xx, a dropped connection or no reason don't", !R.failedBeforeDelivery("Request timed out.") && !R.failedBeforeDelivery("502 Bad Gateway") && !R.failedBeforeDelivery("Connection error.") && !R.failedBeforeDelivery(undefined));
-  const realList = (sendblue as any).messages.list;
+  // Sendblue's list through the real client shape: the SDK's Messages class, whose methods live on its prototype (the send wrapper's
+  // spread of client.messages copies none of them, round 2 review of #352). Patched on that prototype, so the module's own client
+  // instance answers it, exactly as in production; a lookup through the wrapper would never reach it.
+  const { SendblueAPI } = await import("sendblue");
+  const MessagesProto: any = Object.getPrototypeOf(new SendblueAPI({ apiKey: "x", apiSecret: "y" }).messages);
+  const realList = MessagesProto.list;
+  let listCalls = 0;
+  check("the send wrapper has no list of its own (why the lookup reads the SDK client)", typeof (sendblue as any).messages.list === "undefined" && typeof realList === "function");
   const timeoutCase = async (o: { list: () => Promise<any>; ours?: boolean }) => {
     seed();
     db.zones.set("Nightville", zoneAtHour(12));
     db.reminders.push({ id: 920, user_id: "ua", what: "send the lease back", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null, attempts: 0, retry_at: null });
     if (o.ours) db.outbound.push({ user_id: "ua", content: "Reminder you asked for: send the lease back", sent_at: new Date() });
     (sendblue as any).messages.send = async () => { throw new Error("Request timed out."); };
-    (sendblue as any).messages.list = o.list;
+    MessagesProto.list = async (...a: any[]) => { listCalls++; return o.list(); };
     await R.sendDueReminders();
     (sendblue as any).messages.send = realSend;
-    (sendblue as any).messages.list = realList;
+    MessagesProto.list = realList;
     return db.reminders[0];
   };
   const notThere = await timeoutCase({ list: async () => ({ data: [] }) });
-  check("a timeout Sendblue's record says didn't go: released and retried", notThere.queued_at === null && notThere.retry_at instanceof Date && notThere.sent_at === null, notThere);
+  check("a timeout Sendblue's record says didn't go: released and retried (its list was really read)", listCalls === 1 && notThere.queued_at === null && notThere.retry_at instanceof Date && notThere.sent_at === null, notThere);
   const there = await timeoutCase({ list: async () => ({ data: [{ number: PHONE_A, content: "Reminder you asked for: send the lease back", is_outbound: true }] }) });
   check("a timeout Sendblue's record shows went: recorded as sent, never retried", there.sent_at instanceof Date && !there.retry_at && (await R.sendDueReminders()) === 0 && outbox.length === 0, there);
   const unknown = await timeoutCase({ list: async () => { throw new Error("503"); } });
   check("a timeout that can't be checked: left claimed, not retried, not marked sent", unknown.queued_at instanceof Date && !unknown.retry_at && unknown.sent_at === null && (await R.sendDueReminders()) === 0, unknown);
   const ours = await timeoutCase({ ours: true, list: async () => { throw new Error("not reached"); } });
   check("a timeout our own outbound record shows went: recorded as sent", ours.sent_at instanceof Date && !ours.retry_at, ours);
+  // The deferred queue words a thrown send "error: <message>": a 401 at their 8am is still known not to have gone, and is retried.
+  check("the status is read past the queue's prefix", R.sendFailureStatus("error: 401 Invalid Credentials") === 401 && R.sendFailureStatus("401 Invalid Credentials") === 401 && R.failedBeforeDelivery("error: 401 Invalid Credentials") && !R.failedBeforeDelivery("error: 502 Bad Gateway") && !R.failedBeforeDelivery("error: Request timed out.") && R.sendFailureStatus("error: Request timed out.") === null);
+  seed();
+  db.reminders.push({ id: 922, user_id: "ua", what: "book the vet", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null, attempts: 0, retry_at: null });
+  await R.sendDueReminders(); // 2am their time: queued for their 8am
+  (sendblue as any).messages.send = async () => { throw new Error("401 Invalid Credentials"); };
+  let listed = 0;
+  MessagesProto.list = async () => { listed++; return { data: [] }; };
+  let at = db.deferred[0].due_at as Date;
+  for (let i = 0; i < 3; i++) { await D.runDueDeferredSends(at); at = new Date(db.deferred[0].due_at.getTime()); }
+  (sendblue as any).messages.send = realSend;
+  MessagesProto.list = realList;
+  const r922 = db.reminders[0];
+  check("a 401 at their 8am through the deferred queue: three tries there, then the reminder is released with its retry", db.deferred[0].status === "failed" && /^error: 401/.test(db.deferred[0].error ?? "") && r922.queued_at === null && r922.attempts === 1 && r922.retry_at instanceof Date && r922.sent_at === null, { d: db.deferred[0], r922 });
+  check("...known not to have gone, so Sendblue wasn't asked", listed === 0);
   // The retry column missing (its migration didn't run): the old read still sends due reminders.
   seed();
   db.zones.set("Nightville", zoneAtHour(12));

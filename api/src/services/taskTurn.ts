@@ -27,7 +27,8 @@ import { exchangeText } from "./followUps.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
 import { assembleMessages, captionOk, draftTaskMessages, namedFinds, orderByTier, type SendItem } from "./taskMessages.js";
-import { goalBody, overlap, promiseKeptBy, reminderPromise, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
+import { REMINDER_RETRY } from "./relay.js";
+import { goalBody, promiseKeptBy, reminderTiedTo, reminderPromise, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
 import { WRITE_DOCUMENT_INPUT, type WriteDocumentInput } from "./documentSheet.js";
@@ -139,17 +140,34 @@ export function documentPromiseLine(t: Pick<CoTask, "source" | "goal" | "theirWo
 
 // Pure: the reminder they asked for that keeps this bring-up promise (review of #352): due from the promise to the end of the window Cue
 // first gave, and set in the same turn (within five minutes of the task) or about the same thing (most of its words). Sent: it was the
-// bring-up. Still waiting (due, retrying, or queued for their morning): it will be. Given up on, or none: null, and the task brings it up.
-export type ReminderRow = { id: number; what: string; dueAt: Date; createdAt: Date; sentAt: Date | null; retryAt: Date | null; waiting: boolean };
-export function reminderCoversTask(t: Pick<CoTask, "createdAt" | "goal" | "theirWords" | "window">, rows: ReminderRow[]): { id: number; sent: boolean; pending: boolean; at: Date } | null {
+// bring-up. Pending (reminderPendingUntil): it will be, or may already have been. Given up on, or none: null, and the task brings it up.
+export type ReminderRow = { id: number; what: string; dueAt: Date; createdAt: Date; sentAt: Date | null; retryAt: Date | null; queuedAt: Date | null; attempts: number; deferredDueAt: Date | null };
+// Pure: when a reminder that hasn't been recorded as sent should be looked at again, or null when it never will go.
+//   - Claimed (queued_at set) and unsent: in flight, queued for their morning, or a failed send nobody could tell went or not (relay.ts
+//     reminderDelivered leaves those claimed). It may still go, or may have gone, so the task never sends while a reminder holds its
+//     claim (round 2 review of #352). The one exception: claimed after its last try, every try recorded as not delivered (attempts only
+//     count failures known not to have gone), so it never went and never will.
+//   - Unclaimed: due, or waiting on its retry, while it has tries left and is under two days late (the sweep's own limits).
+export function reminderPendingUntil(r: Pick<ReminderRow, "dueAt" | "retryAt" | "queuedAt" | "attempts" | "deferredDueAt">, now: Date): Date | null {
+  if (r.queuedAt) {
+    if (r.attempts >= REMINDER_RETRY.maxAttempts) return null;
+    if (r.deferredDueAt) return r.deferredDueAt;
+    // In flight (claimed moments ago): look right after. Couldn't be told: it won't change on its own; look again tomorrow.
+    return now.getTime() - r.queuedAt.getTime() < 15 * 60_000 ? new Date(r.queuedAt.getTime() + 15 * 60_000) : new Date(now.getTime() + 24 * 3_600_000);
+  }
+  if (r.attempts >= REMINDER_RETRY.maxAttempts || r.dueAt.getTime() <= now.getTime() - 2 * 24 * 3_600_000) return null;
+  return r.retryAt && r.retryAt > r.dueAt ? r.retryAt : r.dueAt;
+}
+export function reminderCoversTask(t: Pick<CoTask, "createdAt" | "goal" | "theirWords" | "window">, rows: ReminderRow[], now: Date): { id: number; sent: boolean; pending: boolean; at: Date } | null {
   const created = new Date(t.createdAt).getTime();
   const first = t.window ? (t.window.previous?.[0] ?? t.window) : null;
   const end = (first ? new Date(first.deadline).getTime() : created + 24 * 3_600_000) + 15 * 60_000;
   const about = `${goalBody(t.goal)} ${t.theirWords ?? ""}`;
-  const r = rows.find((x) => x.dueAt.getTime() >= created - 5 * 60_000 && x.dueAt.getTime() <= end && (Math.abs(x.createdAt.getTime() - created) <= 5 * 60_000 || overlap(x.what, about) >= 0.5));
+  const r = rows.find((x) => x.dueAt.getTime() >= created - 5 * 60_000 && x.dueAt.getTime() <= end && reminderTiedTo(t.goal, x.what, { sameTurn: Math.abs(x.createdAt.getTime() - created) <= 5 * 60_000, about }));
   if (!r) return null;
   if (r.sentAt) return { id: r.id, sent: true, pending: false, at: r.sentAt };
-  return r.waiting ? { id: r.id, sent: false, pending: true, at: r.retryAt && r.retryAt > r.dueAt ? r.retryAt : r.dueAt } : null;
+  const until = reminderPendingUntil(r, now);
+  return until ? { id: r.id, sent: false, pending: true, at: until } : null;
 }
 
 // The promise is to bring something up again (followThrough.ts reminderPromise): the text that brings it up is the delivery.
@@ -669,7 +687,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   let held: { safety: boolean; mood: boolean } | null = null;
   // Already brought up on an earlier wake (its own text, services/followThrough.ts sendsSince): kept, never said a second time.
   const keptBefore = reminder && !texts.length ? (await promiseCloseCheck(task, texts, deps, docsSent).catch(() => ({ ok: false, why: "" }))).ok : false;
-  const cover = reminder && !texts.length && !keptBefore ? await deps.coveringReminder?.().catch(() => null) ?? null : null;
+  let coverRead = true;
+  const cover = reminder && !texts.length && !keptBefore ? await deps.coveringReminder?.().catch(() => { coverRead = false; return null; }) ?? null : null;
+  let holdSlip = false;
   let reminderWaits = false;
   if (reminder && keptBefore) {
     await deps.close("done", "Kept: it was already brought up.");
@@ -699,9 +719,13 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       did.push(`reminder: next check moved inside the window, ${localStamp(lastGood, deps.zone)}`);
     } else if (!localHourOk(deps.now(), deps.zone)) {
       reminderWhy = "outside their hours";
+    } else if (!coverRead) {
+      // Their reminders couldn't be read: one of them may be the bring-up, so none goes from here this turn.
+      reminderWhy = "their reminders couldn't be read";
     } else if ((held = await deps.holds?.().catch(() => ({ safety: true, mood: false })) ?? null) && (held.safety || held.mood)) {
       // A hold read that fails holds it (fail safe): a late reminder beats one sent into a crisis.
       reminderWhy = held.safety ? "a safety hold is on" : "they're in a hard stretch (mood hold)";
+      holdSlip = true;
     } else {
       const about = `What you promised to bring back up: "${goalBody(task.goal).slice(0, 200)}". Say what it is in a plain sentence, from their own thread (their_recent_thread), in a line or two, the way a friend picks a thread back up (a light question after it is fine): no progress report, nothing about searching, no "circling back" or "checking in".`;
       const r = await tell(
@@ -772,6 +796,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `Bring it up now, as you said you would (it didn't go last time: ${why.slice(0, 120)}).`);
       did.push(`reminder: not sent (${why}); tries again ${re.when}`);
       await logSlip(task, `the reminder didn't go (${why}); tries again ${re.when}`, re.window.deadline);
+      // A hold is theirs, not the task's: a wake it held doesn't count toward the task's limit (coTasks.ts unspendWake), so a safety
+      // hold of days can't run the promise out of wakes (round 2 review of #352).
+      if (holdSlip) await deps.unspendWake?.();
     } else {
       if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `You told them ${task.window.words}; it moves to ${re.when}. Do the work and send it then: one message with the thing itself.`);
       did.push(`window: moved quietly to ${re.when}, no "not yet" text`);
@@ -1110,15 +1137,14 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
       return { safety, mood: moodHold(await getEmotionalContext(userId, clock()), { now: clock(), lastInboundAt: last }).hold };
     },
     coveringReminder: async () => {
-      const { REMINDER_RETRY } = await import("./relay.js");
+      // A read that fails throws: the turn then holds the bring-up (a slip), never sends one past a reminder it couldn't see.
       const { rows } = await pool.query(
-        `SELECT r.id, r.what, r.due_at, r.created_at, r.sent_at, r.retry_at,
-                ((r.queued_at IS NULL AND r.attempts < $3 AND r.due_at > NOW() - INTERVAL '2 days')
-                  OR EXISTS (SELECT 1 FROM deferred_sends d WHERE d.user_id = r.user_id AND d.target_key = 'reminder:' || r.id AND d.status IN ('queued', 'sending'))) AS waiting
+        `SELECT r.id, r.what, r.due_at, r.created_at, r.sent_at, r.retry_at, r.queued_at, r.attempts,
+                (SELECT d.due_at FROM deferred_sends d WHERE d.user_id = r.user_id AND d.target_key = 'reminder:' || r.id AND d.status IN ('queued', 'sending') LIMIT 1) AS deferred_due
            FROM member_reminders r WHERE r.user_id = $1 AND r.created_at > $2::timestamptz - INTERVAL '1 day' ORDER BY r.created_at LIMIT 20`,
-        [userId, task.createdAt, REMINDER_RETRY.maxAttempts],
+        [userId, task.createdAt],
       );
-      return reminderCoversTask(task, rows.map((r: any) => ({ id: Number(r.id), what: String(r.what ?? ""), dueAt: new Date(r.due_at), createdAt: new Date(r.created_at), sentAt: r.sent_at ? new Date(r.sent_at) : null, retryAt: r.retry_at ? new Date(r.retry_at) : null, waiting: r.waiting === true })));
+      return reminderCoversTask(task, rows.map((r: any) => ({ id: Number(r.id), what: String(r.what ?? ""), dueAt: new Date(r.due_at), createdAt: new Date(r.created_at), sentAt: r.sent_at ? new Date(r.sent_at) : null, retryAt: r.retry_at ? new Date(r.retry_at) : null, queuedAt: r.queued_at ? new Date(r.queued_at) : null, attempts: Number(r.attempts ?? 0), deferredDueAt: r.deferred_due ? new Date(r.deferred_due) : null })), clock());
     },
     onFile: () => onFileFor(userId, task),
     recheckOnFile: async (f) => { const S = await import("./sendCheck.js"); return S.recheckOnFile(userId, f, zone, S.realSendCheckDeps); },

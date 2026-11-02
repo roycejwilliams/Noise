@@ -180,7 +180,10 @@ const draftPrompts = () => seen.map((b) => JSON.stringify(b)).filter((s) => /tas
   // A failed draft (the model gave nothing): not sent, not done, tried again; the next wake that can draft sends it, once, late.
   wake(null);
   const f1 = harness(new Date("2026-10-22T23:30:00Z"));
+  let f1Unspent = 0;
+  f1.deps.unspendWake = async () => { f1Unspent++; };
   const rf = await TT.runTaskTurnWith(zoneTask(), f1.deps);
+  check("a failed draft spends its wake (only a hold gives it back)", f1Unspent === 0);
   check("a failed draft: nothing sent, never closed as done", f1.log.texts.length === 0 && f1.log.closed.length === 0 && rf.did.some((d) => /reminder: not sent/.test(d)), rf.did);
   check("...its next check is set and its window moves, with the slip logged", f1.log.at.length >= 1 && f1.log.windows.length === 1);
   seen.length = 0;
@@ -224,19 +227,51 @@ function unrelatedText() { return text(new Date("2026-10-28T15:00:28Z"), "Been t
     now: () => now, zone: SF, open: async () => [], pullEarlier: async () => false,
     openPromise: async () => { opened++; return { ok: true, id: 77 }; },
     read: async () => JSON.stringify({ promises: [{ sentence: "I'll remind you tomorrow at 3.", when: "tomorrow at 3", by: "2026-11-03T15:00:00-08:00", about: "other", entry: null }] }),
-    reminders: async () => [{ id: 5, what: "call the landlord about the lease", dueAt: new Date("2026-11-03T23:00:00Z") }],
+    reminders: async () => [{ id: 5, what: "call the landlord about the lease", dueAt: new Date("2026-11-03T23:00:00Z"), createdAt: new Date(now.getTime() - 20_000) }],
   };
   const r = await PB.bindPromises("Done, set. I'll remind you tomorrow at 3.", bdeps);
   check("a promise a reminder they asked for keeps is bound to it: no promise task opens too", opened === 0 && r.verdicts.length === 1 && r.verdicts[0].bound && r.checks.length === 0, r.verdicts);
   const r2 = await PB.bindPromises("Done, set. I'll remind you tomorrow at 3.", { ...bdeps, reminders: async () => [] });
   check("...and without the reminder, the task opens as before", opened === 1 && r2.verdicts[0].bound);
-  check("a reminder about something else doesn't keep a find promise", PB.reminderKeeping("I'll send you venue options tomorrow at 3.", new Date("2026-11-03T23:00:00Z"), now, [{ id: 5, what: "call the landlord about the lease", dueAt: new Date("2026-11-03T22:00:00Z") }]) === null);
+  check("a reminder about something else doesn't keep a find promise", PB.reminderKeeping("I'll send you venue options tomorrow at 3.", new Date("2026-11-03T23:00:00Z"), now, [{ id: 5, what: "call the landlord about the lease", dueAt: new Date("2026-11-03T22:00:00Z"), createdAt: new Date(now.getTime() - 20_000) }]) === null);
+  // Round 2: only a reminder tied to the promise keeps it, never any reminder due by then.
+  const by = new Date("2026-11-03T23:00:00Z");
+  const rent = (createdAt: Date) => [{ id: 6, what: "pay rent", dueAt: new Date("2026-11-03T22:00:00Z"), createdAt }];
+  const yesterday = new Date(now.getTime() - 24 * 3_600_000);
+  check("'bring up the lease' isn't kept by an older 'pay rent' reminder", PB.reminderKeeping("I'll bring up the lease tomorrow at 3.", by, now, rent(yesterday)) === null);
+  check("...nor by a 'pay rent' reminder set in this same turn (the promise names another subject)", PB.reminderKeeping("I'll bring up the lease tomorrow at 3.", by, now, rent(new Date(now.getTime() - 20_000))) === null);
+  check("'I'll remind you tomorrow at 3' (no subject of its own) is kept by the reminder set in this turn", PB.reminderKeeping("I'll remind you tomorrow at 3.", by, now, rent(new Date(now.getTime() - 20_000)))?.id === 6);
+  check("...but not by one set yesterday", PB.reminderKeeping("I'll remind you tomorrow at 3.", by, now, rent(yesterday)) === null);
+  check("a promise about what an older reminder says is kept by it (same subject)", PB.reminderKeeping("I'll remind you to pay rent tomorrow at 3.", by, now, rent(yesterday))?.id === 6);
+  const r3 = await PB.bindPromises("Done, set. I'll bring up the lease tomorrow at 3.", { ...bdeps, read: async () => JSON.stringify({ promises: [{ sentence: "I'll bring up the lease tomorrow at 3.", when: "tomorrow at 3", by: "2026-11-03T15:00:00-08:00", about: "other", entry: null }] }), reminders: async () => rent(yesterday) });
+  check("binding: an unrelated reminder doesn't swallow the promise; its own task opens", opened === 2 && r3.verdicts[0].bound && (r3.verdicts[0] as any).how === "opened", r3.verdicts);
+  check("call binding uses the same reminders and the same rule (realBindDeps for both)", /const d = deps \?\? \(await realBindDeps\(userId, theirLast \|\| "\(said on a call\)"\)\);/.test(src("services/promiseBinding.ts")) && /reminderTiedTo\(sentence, r\.what, \{ sameTurn: sameTurn\(r\) \}\)/.test(src("services/promiseBinding.ts")) && /reminderTiedTo\(t\.goal, x\.what/.test(src("services/taskTurn.ts")));
   // The backstop in the task: a reminder row covering the window means no bring-up from the task.
-  const rows = (o: any = {}): any[] => [{ id: 2, what: "Follow up on paralegal roles that don't require transcripts", dueAt: new Date("2026-10-22T21:00:00Z"), createdAt: new Date(T1.getTime() - 4000), sentAt: null, retryAt: null, waiting: true, ...o }];
-  check("the reminder set in the same turn, due in the window, covers the task", TT.reminderCoversTask(zoneTask(), rows())?.pending === true);
-  check("...one sent covers it as sent", TT.reminderCoversTask(zoneTask(), rows({ sentAt: new Date("2026-10-22T21:00:05Z") }))?.sent === true);
-  check("...one given up on (not waiting) doesn't: the task brings it up", TT.reminderCoversTask(zoneTask(), rows({ waiting: false })) === null);
-  check("...an unrelated reminder from another day doesn't", TT.reminderCoversTask(zoneTask(), rows({ createdAt: new Date("2026-10-15T00:00:00Z"), what: "renew the parking permit" })) === null);
+  // Rows shaped as the real read gives them (member_reminders + its deferred row), decided by the real reminderCoversTask.
+  const NOW1 = new Date("2026-10-22T23:30:00Z");
+  const rows = (o: any = {}): any[] => [{ id: 2, what: "Follow up on paralegal roles that don't require transcripts", dueAt: new Date("2026-10-22T21:00:00Z"), createdAt: new Date(T1.getTime() - 4000), sentAt: null, retryAt: null, queuedAt: null, attempts: 0, deferredDueAt: null, ...o }];
+  check("the reminder set in the same turn, due in the window, covers the task", TT.reminderCoversTask(zoneTask(), rows(), NOW1)?.pending === true);
+  check("...one sent covers it as sent", TT.reminderCoversTask(zoneTask(), rows({ sentAt: new Date("2026-10-22T21:00:05Z") }), NOW1)?.sent === true);
+  check("...one in flight (claimed moments ago, not yet recorded) is pending: looked at 15 minutes after the claim", TT.reminderCoversTask(zoneTask(), rows({ queuedAt: new Date(NOW1.getTime() - 30_000) }), NOW1)?.at.getTime() === NOW1.getTime() - 30_000 + 15 * 60_000);
+  check("...one whose send couldn't be told (claimed long ago, unsent) is pending: the task never sends past it", TT.reminderCoversTask(zoneTask(), rows({ queuedAt: new Date("2026-10-22T21:00:00Z"), attempts: 1 }), NOW1)?.pending === true);
+  check("...one queued for their morning is pending until that send", TT.reminderCoversTask(zoneTask(), rows({ queuedAt: new Date("2026-10-22T21:00:00Z"), deferredDueAt: new Date("2026-10-23T15:00:00Z") }), NOW1)?.at.toISOString() === "2026-10-23T15:00:00.000Z");
+  check("...one waiting on its retry is pending until the retry", TT.reminderCoversTask(zoneTask(), rows({ attempts: 1, retryAt: new Date("2026-10-22T23:40:00Z") }), NOW1)?.at.toISOString() === "2026-10-22T23:40:00.000Z");
+  check("...one given up on after its last try (all known not to have gone) doesn't: the task brings it up", TT.reminderCoversTask(zoneTask(), rows({ queuedAt: new Date("2026-10-22T21:00:00Z"), attempts: 5 }), NOW1) === null && TT.reminderCoversTask(zoneTask(), rows({ attempts: 5 }), NOW1) === null);
+  check("...an unrelated reminder from another day doesn't", TT.reminderCoversTask(zoneTask(), rows({ createdAt: new Date("2026-10-15T00:00:00Z"), what: "renew the parking permit" }), NOW1) === null);
+  // The whole turn, with the real decision wired as the real deps wire it: claimed and unsent, so no bring-up from the task.
+  for (const [label, o] of [["in flight", { queuedAt: new Date(NOW1.getTime() - 30_000) }], ["can't tell", { queuedAt: new Date("2026-10-22T21:00:00Z"), attempts: 1 }]] as const) {
+    wake(BRING_UP);
+    const hc = harness(NOW1);
+    hc.deps.coveringReminder = async () => TT.reminderCoversTask(zoneTask(), rows(o), NOW1);
+    const rc2 = await TT.runTaskTurnWith(zoneTask(), hc.deps);
+    check(`a reminder ${label}: the task sends nothing and doesn't close`, hc.log.texts.length === 0 && hc.log.closed.length === 0 && rc2.did.some((d) => /their reminder #2 keeps it/.test(d)), rc2.did);
+  }
+  wake(BRING_UP);
+  const unread = harness(NOW1);
+  unread.deps.coveringReminder = async () => { throw new Error("db down"); };
+  const ru = await TT.runTaskTurnWith(zoneTask(), unread.deps);
+  check("their reminders can't be read: no bring-up this turn, a slip with why", unread.log.texts.length === 0 && unread.log.closed.length === 0 && ru.did.some((d) => /reminders couldn't be read/.test(d)), ru.did);
+  check("the real deps read claimed state, attempts and the deferred row, and use reminderCoversTask", /r\.queued_at, r\.attempts,/.test(src("services/taskTurn.ts")) && /AS deferred_due/.test(src("services/taskTurn.ts")) && /return reminderCoversTask\(task, rows\.map/.test(src("services/taskTurn.ts")));
   wake(BRING_UP);
   const pend = harness(new Date("2026-10-22T23:30:00Z"), { cover: { id: 2, sent: false, pending: true, at: new Date("2026-10-22T23:35:00Z") } });
   const rp = await TT.runTaskTurnWith(zoneTask(), pend.deps);
@@ -250,8 +285,11 @@ function unrelatedText() { return text(new Date("2026-10-28T15:00:28Z"), "Been t
   for (const [label, holds, why] of [["a safety hold", { safety: true, mood: false }, /a safety hold is on/], ["a hard stretch (mood hold)", { safety: false, mood: true }, /mood hold/]] as const) {
     wake(BRING_UP);
     const h = harness(new Date("2026-10-22T23:30:00Z"), { holds });
+    let unspent = 0;
+    h.deps.unspendWake = async () => { unspent++; };
     const rh = await TT.runTaskTurnWith(zoneTask(), h.deps);
     check(`${label}: no text, not closed, the slip says why and it's tried again`, h.log.texts.length === 0 && h.log.closed.length === 0 && h.log.at.length >= 1 && rh.did.some((d) => /^reminder: not sent/.test(d) && why.test(d)), rh.did);
+    check(`${label}: the held wake is given back, so a long hold can't expire the promise`, unspent === 1);
   }
   wake(BRING_UP);
   const failedRead = harness(new Date("2026-10-22T23:30:00Z"));
