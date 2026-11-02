@@ -259,6 +259,22 @@ export async function listInboundMessages(q: { sendblue_number: string; created_
   return { data, hasMore };
 }
 
+// Whether a text with this content went to this number since a moment, by Sendblue's own record (GET /api/v2/messages, outbound). For a
+// send that threw where it can't be told whether Sendblue took it (a timeout, a 5xx): a reminder is retried only when this says it
+// didn't go (services/relay.ts reminderDelivered). Null when it couldn't be read: the caller doesn't retry then.
+export async function outboundSentSince(q: { number: string; since: Date; content: string }): Promise<boolean | null> {
+  const digits = (n: unknown) => String(n ?? "").replace(/\D/g, "").slice(-10);
+  const words = (t: unknown) => String(t ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  try {
+    const res: any = await (sendblue.messages as any).list({ is_outbound: "true", created_at_gte: q.since.toISOString(), order_by: "createdAt", order_direction: "desc", limit: 100, offset: 0 });
+    if (!Array.isArray(res?.data)) return null;
+    const want = words(cleanCoMessage(q.content));
+    return res.data.some((d: any) => digits(d?.number ?? d?.to_number) === digits(q.number) && words(d?.content) === want);
+  } catch {
+    return null;
+  }
+}
+
 // Read receipts (Royce, 2026-09-15): the moment a 1:1 text reaches Co, the
 // sender sees it was read, even while the reply is still being worked on.
 // Sendblue sends these only for iMessage/RCS, best effort; never blocks.

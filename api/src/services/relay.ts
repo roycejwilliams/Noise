@@ -237,13 +237,20 @@ export async function addReminder(userId: string, what: string, when: string, zo
 // A failed send gives its claim back with a time to try again (reminderDelivered, REMINDER_RETRY): closure audit 11-02, reminder 2
 // failed once (401) and stayed claimed, so it never went. Never past two days late.
 export async function sendDueReminders(): Promise<number> {
-  const { rows } = await pool
-    .query(
+  const due = (retry: boolean) =>
+    pool.query(
       `SELECT r.id, r.user_id, r.what, u.phone_number, cp.city FROM member_reminders r JOIN users u ON u.id = r.user_id
        LEFT JOIN co_profiles cp ON cp.user_id = r.user_id
-       WHERE r.sent_at IS NULL AND r.queued_at IS NULL AND r.due_at <= NOW() AND r.due_at > NOW() - INTERVAL '2 days'
-         AND (r.retry_at IS NULL OR r.retry_at <= NOW()) LIMIT 20`,
-    )
+       WHERE r.sent_at IS NULL AND r.queued_at IS NULL AND r.due_at <= NOW() AND r.due_at > NOW() - INTERVAL '2 days'${retry ? `
+         AND (r.retry_at IS NULL OR r.retry_at <= NOW())` : ""} LIMIT 20`,
+    );
+  // The retry column missing (its migration didn't run) must never stop every reminder: the old read, said loudly (review of #352).
+  const { rows } = await due(true)
+    .catch((err: any) => {
+      console.error(`relay: REMINDERS: the retry-aware read failed (${String(err?.message ?? err).slice(0, 120)}); sending due reminders without retries. Check the member_reminders retry_at migration.`);
+      recordDecision({ layer: 3, decision: "relay.reminder", userId: null, outcome: "skip", action: "retry_read_failed", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
+      return due(false);
+    })
     .catch(() => ({ rows: [] as any[] }));
   const { sendExemptWhenAllowed } = await import("../harness/proactive.js");
   const { memberZone } = await import("./memberTime.js");
@@ -262,6 +269,14 @@ export async function sendDueReminders(): Promise<number> {
   return n;
 }
 
+// Pure: a send failure that happened before anything reached Sendblue's delivery: Sendblue refused it (4xx: bad credentials, a bad
+// number, a rate limit), our own send layer refused it, outreach is paused, or it was never queued. Safe to try again. Anything else (a
+// timeout, a 5xx, a dropped connection, no reason) may have gone, and is checked first (reminderDelivered).
+export function failedBeforeDelivery(reason: string | null | undefined): boolean {
+  const r = String(reason ?? "").trim();
+  return /^4\d\d\b/.test(r) || /^sendblue: /.test(r) || /proactive outreach is paused|send failed before anything delivered|^queue failed|^already (?:failed|skipped)/.test(r);
+}
+
 // A failed reminder send tries again, spaced out: 5 minutes, then 20, 80, 320; after the fifth failure it stays claimed and isn't
 // tried again (a send error that lasts hours is not fixed by trying more). Never inside their quiet hours: a try that would land
 // there waits for their morning, so a night doesn't use up the tries.
@@ -277,7 +292,18 @@ export const reminderText = (what: string) => `Reminder you asked for: ${what}`;
 
 // The reminder's record once its send is settled: sent_at only when it went. Skipped (they opted out, or are archived) keeps the
 // claim, so it stops there. Failed gives the claim back with its next try (reminderRetryAt), or keeps it after the last.
-export async function reminderDelivered(reminderId: number, outcome: "sent" | "skipped" | "failed"): Promise<void> {
+// A failure that may have gone (failedBeforeDelivery false) is checked before any retry: our own outbound record, then Sendblue's. Went:
+// recorded as sent. Didn't: retried. Can't tell: left claimed, never retried, and logged loudly (never a second text by guess).
+export async function reminderDelivered(reminderId: number, outcome: "sent" | "skipped" | "failed", reason?: string): Promise<void> {
+  if (outcome === "failed" && !failedBeforeDelivery(reason)) {
+    const went = await reminderWentAnyway(reminderId).catch(() => null);
+    if (went === true) outcome = "sent";
+    else if (went === null) {
+      console.error(`relay: REMINDER ${reminderId} send failed (${String(reason ?? "no reason").slice(0, 120)}) and it can't be told whether it went: not retried.`);
+      await recordDecision({ layer: 3, decision: "relay.reminder", userId: null, outcome: "skip", action: "failed_unverified", reason: String(reason ?? "").slice(0, 200), proposal: { reminderId } }).catch(() => {});
+      return;
+    }
+  }
   if (outcome === "sent") await pool.query(`UPDATE member_reminders SET sent_at = COALESCE(sent_at, NOW()) WHERE id = $1`, [reminderId]);
   let retryAt: Date | null = null;
   if (outcome === "failed") {
@@ -289,9 +315,26 @@ export async function reminderDelivered(reminderId: number, outcome: "sent" | "s
       const zone = await memberZone(String(rows[0].user_id)).catch(() => null);
       retryAt = reminderRetryAt(Number(rows[0].attempts), new Date(), zone, (at, z) => localHourOk(at, z), (at, z) => nextLocalHour(at, z, RULES.startHour));
       if (retryAt) await pool.query(`UPDATE member_reminders SET queued_at = NULL, retry_at = $2 WHERE id = $1 AND sent_at IS NULL`, [reminderId, retryAt]).catch(() => {});
-    }
+    } else console.error(`relay: REMINDER ${reminderId} failed and its retry couldn't be set (check the member_reminders attempts/retry_at migration).`);
   }
   await recordDecision({ layer: 3, decision: "relay.reminder", userId: null, outcome: outcome === "sent" ? "act" : "skip", action: outcome, proposal: { reminderId, ...(outcome === "failed" ? { retryAt: retryAt?.toISOString() ?? null } : {}) } }).catch(() => {});
+}
+
+// Whether a reminder whose send threw went out anyway: true (in our outbound record, or in Sendblue's), false (Sendblue's record says it
+// didn't), null (couldn't be read). Only since its claim, and only its own words to its own member.
+async function reminderWentAnyway(reminderId: number): Promise<boolean | null> {
+  const { rows } = await pool.query(
+    `SELECT r.user_id, r.what, r.queued_at, u.phone_number FROM member_reminders r JOIN users u ON u.id = r.user_id WHERE r.id = $1`,
+    [reminderId],
+  );
+  const r = rows[0];
+  if (!r?.phone_number) return null;
+  const since = new Date(new Date(r.queued_at ?? Date.now()).getTime() - 60_000);
+  const S = await import("./sendblue.js");
+  const text = S.cleanCoMessage(reminderText(String(r.what ?? "")));
+  const ours = await pool.query(`SELECT 1 FROM outbound_messages WHERE user_id = $1 AND sender = 'co' AND sent_at > $2 AND content = $3 LIMIT 1`, [r.user_id, since, text]);
+  if (ours.rows.length) return true;
+  return S.outboundSentSince({ number: String(r.phone_number), since, content: text });
 }
 
 // Reminders that came due outside their hours and are waiting for their morning: Co knows they haven't gone yet.

@@ -83,7 +83,16 @@ export function wantsDocument(goal: string, theirWords?: string | null): boolean
 // find first: the text that brings it up is the delivery, so it goes in its window (services/taskTurn.ts), never moves quietly.
 const BRINGS_IT_UP = /\b(?:bring(?:ing)? (?:it|this|that|them|these|those|(?:the|your) [\w'-]+(?: [\w'-]+){0,3}) (?:back )?up|bring(?:ing)? (?:back )?up|remind(?:ing)? you|nudg(?:e|ing) you)\b/i;
 export function reminderPromise(t: { source?: string | null; goal: string }): boolean {
-  return t.source === "promise" && BRINGS_IT_UP.test(goalBody(t.goal));
+  return t.source === "promise" && bringsItUp(t.goal);
+}
+// Pure: the same read of one sentence (or a promise goal), for the promise binding (services/promiseBinding.ts).
+export function bringsItUp(sentence: string): boolean {
+  return BRINGS_IT_UP.test(goalBody(sentence));
+}
+// Pure: a text that says something, not only asks: at least one sentence that isn't a question. A question alone ("what time works?")
+// asks; it doesn't bring anything up.
+export function saysSomething(text: string): boolean {
+  return (String(text ?? "").match(/[^.!?\n]+[.!?]*/g) ?? []).map((x) => x.trim()).some((x) => x.length >= 8 && !/\?\s*$/.test(x));
 }
 
 // A promise made in a reply (or a proactive text) opens its task while that text is being checked, before it goes out: the text that
@@ -118,12 +127,13 @@ export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at:
   // nothing ("back", "tomorrow"): only the task keeping it bringing it up keeps it.
   const bringUp = BRINGS_IT_UP.test(goalBody(p.goal));
   const fits = (s: Sent) =>
-    bringUp ? !!s.forThis && s.kind === "text" && s.text.trim().length >= 20
+    bringUp ? !!s.forThis && s.kind === "text" && s.text.trim().length >= 20 && saysSomething(s.text)
     : kind === "document" ? s.kind === "document"
     : kind === "link" ? s.kind === "link" || s.kind === "document"
     : about(s) && (s.kind !== "text" || s.text.trim().length >= 20);
   const turnEnd = (p.turnEnd ?? promiseTurnEnd(p.goal, p.at)).getTime();
-  const ownTurn = (s: Sent) => !s.forThis && s.at.getTime() <= turnEnd;
+  // Only its texts: a link or a document sent in the same reply is already the thing (review of #352).
+  const ownTurn = (s: Sent) => !s.forThis && s.kind === "text" && s.at.getTime() <= turnEnd;
   const after = sends.filter((s) => s.at.getTime() > p.at.getTime()).sort((x, y) => x.at.getTime() - y.at.getTime());
   const counted = after.filter((s) => !ownTurn(s) && !repeatsPromise(p.goal, s.text));
   const by = counted.find(fits) ?? null;
@@ -136,6 +146,14 @@ export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at:
     by: null,
     why: `nothing went out after the promise (${p.at.toISOString().slice(0, 16).replace("T", " ")} UTC) that keeps it: it needs ${want}${counted.length ? `, and what went out since isn't one` : ""}${own ? `. "${own.text.slice(0, 80)}" was the promise being made (the reply that made it, or the promise said again), so it doesn't count` : ""}${earlier ? `. "${earlier.text.slice(0, 80)}" was sent ${earlier.at.toISOString().slice(0, 16).replace("T", " ")} UTC, before the promise, so it doesn't count` : ""}`,
   };
+}
+
+// Pure: the sends that are the task's own, by its ledger rows (proactive_sends.message, several messages joined by a blank line),
+// compared after the send wrapper's cleanup and normalized on both sides.
+export function markOwnSends(sends: Sent[], ledger: string[], clean: (t: string) => string): Sent[] {
+  const key = (t: string) => norm(clean(String(t ?? "")));
+  const own = new Set(ledger.flatMap((m) => String(m ?? "").split("\n\n")).map(key).filter(Boolean));
+  return own.size ? sends.map((x) => (own.has(key(x.text)) ? { ...x, forThis: true } : x)) : sends;
 }
 
 // What Co actually sent a member since a time: texts (outbound_messages) and its own record of sends (co_facts, by when it
@@ -161,9 +179,15 @@ export async function sendsSince(userId: string, since: Date, taskId?: number | 
       ? pool.query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND starts_with(target_key, $2) AND sent_at > $3 LIMIT 50`, [userId, `task:${taskId}:`, since])
       : Promise.resolve({ rows: [] as any[] }),
   ]);
-  // A task send of several messages is one row, its messages joined by a blank line (harness/proactive.ts sendExempt).
-  const own = new Set(mine.rows.flatMap((r: any) => String(r.message ?? "").split("\n\n")).map((m: string) => m.trim()).filter(Boolean));
-  const out: Sent[] = texts.rows.map((r: any) => ({ at: new Date(r.sent_at), text: String(r.content ?? ""), kind: /^\s*https?:\/\/\S+\s*$/.test(String(r.content ?? "")) ? "link" : "text", ...(own.has(String(r.content ?? "").trim()) ? { forThis: true } : {}) }));
+  // A task send of several messages is one row, its messages joined by a blank line (harness/proactive.ts sendExempt). The ledger keeps
+  // them as drafted; outbound_messages keeps what went out after the send wrapper's cleanup (services/sendblue.ts cleanCoMessage), so
+  // both sides are compared cleaned and normalized (review of #352: an exact match missed a cleaned text, and it went twice).
+  const clean = mine.rows.length ? (await import("./sendblue.js")).cleanCoMessage : (t: string) => t;
+  const out: Sent[] = markOwnSends(
+    texts.rows.map((r: any) => ({ at: new Date(r.sent_at), text: String(r.content ?? ""), kind: /^\s*https?:\/\/\S+\s*$/.test(String(r.content ?? "")) ? "link" : "text" })),
+    mine.rows.map((r: any) => String(r.message ?? "")),
+    clean,
+  );
   for (const f of facts.rows) {
     const label = String(f.object_label ?? "");
     const kind: Sent["kind"] = /^a document\b/i.test(label) ? "document" : f.url || /https?:\/\//.test(label) ? "link" : "text";

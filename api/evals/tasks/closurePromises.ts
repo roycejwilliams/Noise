@@ -27,6 +27,9 @@ const M = await import("../../src/services/memberTime.js");
 const TT = await import("../../src/services/taskTurn.js");
 const FT = await import("../../src/services/followThrough.js");
 const L = await import("../../src/services/commitmentLog.js");
+const PB = await import("../../src/services/promiseBinding.js");
+const CC = await import("../../src/services/callCommitments.js");
+const { cleanCoMessage } = await import("../../src/services/sendblue.js");
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 
 let total = 0, failed = 0;
@@ -56,7 +59,7 @@ const ACK2 = [text(sec(T2, 6), "Got it, the rooftop launch is off my list."), te
   check("shape 2: the turn's own acknowledgment (6 to 9 s after the row) never keeps it", !v2.kept, v2);
   check("the promise said again a day later doesn't keep it either", !FT.promiseKeptBy(p1, [PROMISE1, text(new Date("2026-10-22T18:00:00Z"), "I'll bring it back up tomorrow afternoon.")]).kept);
   check("the task's own text saying it again doesn't keep it", !FT.promiseKeptBy(p1, [text(new Date("2026-10-22T23:30:00Z"), "Sounds good, I'll bring it back up tomorrow afternoon.", true)]).kept);
-  const bringUp = text(new Date("2026-10-22T23:30:00Z"), "Picking the paralegal search back up, like you asked: still after roles that don't ask for a transcript?", true);
+  const bringUp = text(new Date("2026-10-22T23:30:00Z"), "Picking the paralegal search back up, like you asked. Still after roles that don't ask for a transcript?", true);
   check("shape 1: a later bring-up by the task keeping it does keep it", FT.promiseKeptBy(p1, [PROMISE1, bringUp]).kept);
   check("shape 2: a later delivery about it does keep it", FT.promiseKeptBy(p2, [...ACK2, text(new Date("2026-10-29T22:31:00Z"), "Harbor Angels is an investor group backing pre-seed consumer apps; applications are open on their site.")]).kept);
   check("a bring-up promise isn't kept by another text that only shares a word with it ('back', 'tomorrow')", !FT.promiseKeptBy(p1, [PROMISE1, text(new Date("2026-10-22T18:00:00Z"), "Welcome back! The tasting is tomorrow afternoon at four, by the way.")]).kept);
@@ -90,8 +93,8 @@ const THREAD = [
   "[Wed Oct 21, 4:46pm PDT] User said: Bring this up to me again tmrw afternoon thanks",
   "[Wed Oct 21, 4:46pm PDT] Co replied: Sounds good, I'll bring it back up tomorrow afternoon.",
 ].join("\n");
-const BRING_UP = "Picking the paralegal search back up, like you asked: still after roles that don't ask for a transcript, or is the transcript itself the snag?";
-function harness(clock: Date, o: { send?: (m: string[]) => Promise<{ sent: boolean; reason?: string }>; textsToday?: number; sentSince?: () => Promise<any[]> } = {}) {
+const BRING_UP = "Picking the paralegal search back up, like you asked. Still after roles that don't ask for a transcript, or is the transcript itself the snag?";
+function harness(clock: Date, o: { send?: (m: string[]) => Promise<{ sent: boolean; reason?: string }>; textsToday?: number; sentSince?: () => Promise<any[]>; holds?: { safety: boolean; mood: boolean }; cover?: { id: number; sent: boolean; pending: boolean; at: Date } | null } = {}) {
   const log = { texts: [] as string[], windows: [] as any[], at: [] as Date[], scheduled: [] as number[], closed: [] as string[] };
   const deps: any = {
     person: { first_name: "Jordan", phone_number: "+14155550100", city: "San Francisco" }, recent: THREAD, zone: SF,
@@ -103,6 +106,7 @@ function harness(clock: Date, o: { send?: (m: string[]) => Promise<{ sent: boole
     send: o.send ?? (async (m: string[]) => { log.texts.push(...m); return { sent: true }; }),
     search: async () => [], web: async () => ({ kept: [], dropped: [], droppedDetails: [], note: "" }), readPage: async () => ({ ok: false, facts: [], text: "" }),
     now: () => clock, sentSince: o.sentSince ?? (async () => [PROMISE1]),
+    holds: async () => o.holds ?? { safety: false, mood: false }, coveringReminder: async () => o.cover ?? null,
     setWindow: async (w: any) => { log.windows.push(w); },
   };
   return { deps, log };
@@ -210,6 +214,69 @@ const draftPrompts = () => seen.map((b) => JSON.stringify(b)).filter((s) => /tas
   check("...and the bring-up goes instead, then it closes as kept", fin.log.texts.length === 1 && fin.log.closed.length === 1 && /^done: Kept: brought it up/.test(fin.log.closed[0]), { texts: fin.log.texts, closed: fin.log.closed, did: rfin.did });
 }
 function unrelatedText() { return text(new Date("2026-10-28T15:00:28Z"), "Been thinking about your client's hearing. How's it going?"); }
+
+// ======================================================================= 2b. review of #352
+{
+  // The same reminder twice: the reply set followUp(remind_me) AND said "I'll remind you tomorrow at 3". Binding sees the reminder.
+  const now = new Date("2026-11-02T20:00:00Z"); // noon in SF
+  let opened = 0;
+  const bdeps: any = {
+    now: () => now, zone: SF, open: async () => [], pullEarlier: async () => false,
+    openPromise: async () => { opened++; return { ok: true, id: 77 }; },
+    read: async () => JSON.stringify({ promises: [{ sentence: "I'll remind you tomorrow at 3.", when: "tomorrow at 3", by: "2026-11-03T15:00:00-08:00", about: "other", entry: null }] }),
+    reminders: async () => [{ id: 5, what: "call the landlord about the lease", dueAt: new Date("2026-11-03T23:00:00Z") }],
+  };
+  const r = await PB.bindPromises("Done, set. I'll remind you tomorrow at 3.", bdeps);
+  check("a promise a reminder they asked for keeps is bound to it: no promise task opens too", opened === 0 && r.verdicts.length === 1 && r.verdicts[0].bound && r.checks.length === 0, r.verdicts);
+  const r2 = await PB.bindPromises("Done, set. I'll remind you tomorrow at 3.", { ...bdeps, reminders: async () => [] });
+  check("...and without the reminder, the task opens as before", opened === 1 && r2.verdicts[0].bound);
+  check("a reminder about something else doesn't keep a find promise", PB.reminderKeeping("I'll send you venue options tomorrow at 3.", new Date("2026-11-03T23:00:00Z"), now, [{ id: 5, what: "call the landlord about the lease", dueAt: new Date("2026-11-03T22:00:00Z") }]) === null);
+  // The backstop in the task: a reminder row covering the window means no bring-up from the task.
+  const rows = (o: any = {}): any[] => [{ id: 2, what: "Follow up on paralegal roles that don't require transcripts", dueAt: new Date("2026-10-22T21:00:00Z"), createdAt: new Date(T1.getTime() - 4000), sentAt: null, retryAt: null, waiting: true, ...o }];
+  check("the reminder set in the same turn, due in the window, covers the task", TT.reminderCoversTask(zoneTask(), rows())?.pending === true);
+  check("...one sent covers it as sent", TT.reminderCoversTask(zoneTask(), rows({ sentAt: new Date("2026-10-22T21:00:05Z") }))?.sent === true);
+  check("...one given up on (not waiting) doesn't: the task brings it up", TT.reminderCoversTask(zoneTask(), rows({ waiting: false })) === null);
+  check("...an unrelated reminder from another day doesn't", TT.reminderCoversTask(zoneTask(), rows({ createdAt: new Date("2026-10-15T00:00:00Z"), what: "renew the parking permit" })) === null);
+  wake(BRING_UP);
+  const pend = harness(new Date("2026-10-22T23:30:00Z"), { cover: { id: 2, sent: false, pending: true, at: new Date("2026-10-22T23:35:00Z") } });
+  const rp = await TT.runTaskTurnWith(zoneTask(), pend.deps);
+  check("their reminder is still due: no bring-up from the task, not closed, looked at again after it, no slip", pend.log.texts.length === 0 && pend.log.closed.length === 0 && pend.log.at.some((d) => d.toISOString() === "2026-10-22T23:50:00.000Z") && pend.log.windows.length === 0 && rp.did.some((d) => /their reminder #2 keeps it/.test(d)), { did: rp.did, at: pend.log.at });
+  wake(BRING_UP);
+  const went = harness(new Date("2026-10-22T23:30:00Z"), { cover: { id: 2, sent: true, pending: false, at: new Date("2026-10-22T21:00:05Z") } });
+  await TT.runTaskTurnWith(zoneTask(), went.deps);
+  check("their reminder went: closed as kept by it, no second text", went.log.texts.length === 0 && went.log.closed.length === 1 && /^done: Kept: the reminder they asked for went/.test(went.log.closed[0]), went.log);
+
+  // Holds: the code bring-up never goes into a safety hold or a hard stretch; a logged slip, not done.
+  for (const [label, holds, why] of [["a safety hold", { safety: true, mood: false }, /a safety hold is on/], ["a hard stretch (mood hold)", { safety: false, mood: true }, /mood hold/]] as const) {
+    wake(BRING_UP);
+    const h = harness(new Date("2026-10-22T23:30:00Z"), { holds });
+    const rh = await TT.runTaskTurnWith(zoneTask(), h.deps);
+    check(`${label}: no text, not closed, the slip says why and it's tried again`, h.log.texts.length === 0 && h.log.closed.length === 0 && h.log.at.length >= 1 && rh.did.some((d) => /^reminder: not sent/.test(d) && why.test(d)), rh.did);
+  }
+  wake(BRING_UP);
+  const failedRead = harness(new Date("2026-10-22T23:30:00Z"));
+  failedRead.deps.holds = async () => { throw new Error("db down"); };
+  await TT.runTaskTurnWith(zoneTask(), failedRead.deps);
+  check("a hold read that fails holds it (fail safe)", failedRead.log.texts.length === 0 && failedRead.log.closed.length === 0);
+
+  // A question alone isn't a bring-up: it doesn't keep or close it.
+  check("a question-only text from the task doesn't keep a bring-up", !FT.promiseKeptBy({ goal: GOAL1, theirWords: THEIRS1, at: T1 }, [text(new Date("2026-10-22T23:30:00Z"), "Want me to keep looking at paralegal roles?", true)]).kept);
+  check("...a statement with a question after it does", FT.promiseKeptBy({ goal: GOAL1, theirWords: THEIRS1, at: T1 }, [text(new Date("2026-10-22T23:30:00Z"), BRING_UP, true)]).kept);
+
+  // An earlier bring-up is the task's own even after the send wrapper's cleanup (an em dash becomes a comma).
+  const drafted = "Picking the paralegal search back up \u2014 like you asked. Still after roles without a transcript?";
+  const sent = cleanCoMessage(drafted);
+  const marked = FT.markOwnSends([text(new Date("2026-10-22T23:30:05Z"), sent)], [drafted], cleanCoMessage);
+  check("a cleaned text still matches its ledger row, so it isn't sent again", sent !== drafted && marked[0].forThis === true);
+
+  // The promise's own turn excludes only its texts: a link sent in the same reply is the thing.
+  check("a link sent in the promise's own reply keeps a link promise", FT.promiseKeptBy({ goal: 'Keep your promise: "I\'ll text you the link tonight."', at: T1 }, [{ at: sec(T1, 5), text: "https://lu.ma/x", kind: "link" }]).kept);
+
+  // Call commitments: the check reads sends with the task's id, so its own texts count.
+  const seenArgs: any[] = [];
+  await CC.checkCallCommitments(new Date("2026-10-08T03:00:00Z"), { due: async () => [{ id: "111", user_id: "u1", goal: 'Keep your word from the call: "I\'ll text you the link."', created_at: new Date("2026-10-08T00:30:00Z") }], sentSince: async () => null, sends: async (...a: any[]) => { seenArgs.push(a); return []; }, note: async () => null, record: async () => {} } as any);
+  check("the call commitment check passes its task id to the send read", seenArgs[0]?.[2] === 111, seenArgs);
+}
 
 // ======================================================================= 3. a promise that isn't a reminder keeps its quiet move
 {

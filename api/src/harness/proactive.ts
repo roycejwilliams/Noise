@@ -2111,14 +2111,14 @@ export async function sendExemptWhenAllowed(opts: {
     const result = await sendExempt({ ...send, now }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
     const o = D.outcomeOf(result, false);
     // Inline "already sent" is an earlier send of the same key, not this one: the caller's record stays as it was.
-    if (result.reason !== "already sent") await D.runAfter(after, o === "sent" ? "sent" : o === "skipped" ? "skipped" : "failed");
+    if (result.reason !== "already sent") await D.runAfter(after, o === "sent" ? "sent" : o === "skipped" ? "skipped" : "failed", undefined, result.reason);
     return { sent: result.sent, queued: false, reason: result.reason };
   }
   const at = nextLocalHour(now, opts.timezone, RULES.startHour);
   const q = await D.enqueueDeferredSend({ ...send, dueAt: at, after }).catch((err: any) => ({ queued: false, reason: `queue failed: ${String(err?.message ?? err)}` }) as { queued: boolean; reason?: string });
   if (!q.queued) {
     console.error(`sendExemptWhenAllowed(${opts.type}): not queued for ${opts.userId}: ${q.reason}`);
-    if (q.reason !== "already sent") await D.runAfter(after, "failed");
+    if (q.reason !== "already sent") await D.runAfter(after, "failed", undefined, q.reason);
     return { sent: false, queued: false, reason: q.reason };
   }
   return { sent: false, queued: true, reason: `outside local hours, queued for ${at.toISOString()}`, dueAt: at };
