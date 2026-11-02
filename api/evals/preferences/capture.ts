@@ -213,6 +213,24 @@ const fresh = P.replyPreferenceFacts(await active(A, new Date()), new Date());
 check("a rule set in this message reaches this turn's reply, honestly: noted, not applied yet", got.added.length === 1 && fresh.known.some((k) => /set in this message/.test(k) && /not applied yet/.test(k) && /never say it's applied/.test(k)));
 check("the turn waits for that read before the reply's facts (bounded), and the send confirms a vague ask", /const prefStored = prefCaptureP \? await Promise\.race\(\[prefCaptureP/.test(src("routes/sendblue.ts")) && src("routes/sendblue.ts").indexOf("const prefStored") < src("routes/sendblue.ts").indexOf("const replyFacts = await gatherReplyFacts") && /if \(ok\) import\("\.\.\/services\/memberPreferences\.js"\)\.then\(\(P\) => P\.confirmLessAsked\(user\.id\)\)/.test(src("routes/sendblue.ts")));
 
+// ---------------------------------------------------------------- the read before the reply failed: the learning read takes the rules
+{
+  facts.length = 0;
+  const prompts: string[] = [];
+  TL.setTurnLearningModelForTests(async (prompt) => { prompts.push(prompt); return JSON.stringify({ profile: {}, preferences: [{ type: "standing", area: "contact", covers: "all", channel: "all", basis: "explicit", rule: { max_per_day: 1 }, quote: "only message me once per day" }] }); });
+  const base = { userId: A, recentConversation: "", message: "For now only message me once per day", coReply: "Got it.", coSaidBefore: null, ownWords: "For now only message me once per day" };
+  await TL.learnFromTextTurn({ ...base, preferenceCapture: Promise.resolve(null) });
+  const failedRead = { asked: /10\. preferences:/.test(prompts[0] ?? ""), stored: (await active(A, new Date())).length };
+  facts.length = 0;
+  await TL.learnFromTextTurn({ ...base, preferenceCapture: Promise.resolve({ added: ["99"] }) });
+  const okRead = { asked: /10\. preferences:/.test(prompts[1] ?? ""), stored: (await active(A, new Date())).length };
+  TL.setTurnLearningModelForTests(null);
+  check("the read before the reply failed: the learning read asks for rules and stores the message's rule", failedRead.asked && failedRead.stored === 1);
+  check("it succeeded: the learning read doesn't read rules again (no double capture)", !okRead.asked && okRead.stored === 0);
+  check("an unreadable answer from the read before the reply counts as failed, not as no rules", await (async () => { P.setPreferenceModelForTests(async () => "not json"); const r = await P.capturePreferencesNow(A, "only text me on weekends", { zone: NY, source: { via: "text", ref: null } }).then(() => "ok", () => "threw"); P.setPreferenceModelForTests(null); return r === "threw"; })());
+  check("the route hands the learning read the settled capture and the words it read", /const prefs = \{ preferenceIds: prefStored\?\.added \?\? \[\], preferenceCapture: prefCaptureP \?\? undefined, ownWords: ownWordsNow \};[\s\S]{0,200}\.\.\.prefs,/.test(src("routes/sendblue.ts")));
+}
+
 // ---------------------------------------------------------------- logs carry ids, never their words
 check("the decision log for a stored rule carries ids, kinds and fields, never their words", (() => { const s = src("services/memberPreferences.ts"); const block = s.slice(s.indexOf('decision: "member.preference",\n    userId,\n    outcome: "act"'), s.indexOf("return { added, retired };\n}")); return block.length > 0 && !/words|quote/.test(block.replace(/never their words/g, "")); })());
 

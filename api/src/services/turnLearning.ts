@@ -29,7 +29,8 @@ import {
   type OpenItem,
 } from "./profileExtraction.js";
 import { applyStyleUpdate, MAX_NOTES } from "./textingStyle.js";
-import { markCadenceTwin } from "./memberPreferences.js";
+import { activePreferences, learnPreferences, markCadenceTwin, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
+import { localDay, memberZone } from "./memberTime.js";
 
 export type TurnLearningInput = {
   userId: string;
@@ -42,6 +43,10 @@ export type TurnLearningInput = {
   sourceRef?: string | null;
   // The rules the read before the reply stored from this message (capturePreferencesNow): their twins are marked here.
   preferenceIds?: string[];
+  // That read itself, and the words it read. Settled null (it failed or couldn't be read): this read takes the rules instead, as before,
+  // so a message's rule is never lost; settled with a result: rules aren't read again (no double capture). Absent: no words to read.
+  preferenceCapture?: Promise<{ added: string[] } | null>;
+  ownWords?: string;
 };
 
 type OnFileProfile = {
@@ -62,6 +67,8 @@ export function turnLearningPrompt(o: {
   openAsks: OpenItem[];
   styleNotes: string[];
   coSaidBefore: string | null;
+  // Only when the read before the reply failed: their rules on file and their local date, for item 10.
+  preferences?: { onFile: Parameters<typeof preferencePromptItem>[0]["onFile"]; localToday: string } | null;
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -117,7 +124,9 @@ Only change the notes if what they just said makes clear how they want Cue to te
 
 9. met_someone: did the person say, in their own words in their LAST message, that they met someone at an event (a person they talked to, got a contact from, hit it off with)? If yes, a short quote of exactly their words saying it. Otherwise null. Not for people they already knew, and not for plans to meet someone.
 
-Return ONLY valid JSON, no preamble:
+${o.preferences ? `${preferencePromptItem({ n: 10, onFile: o.preferences.onFile, localToday: o.preferences.localToday })}
+
+` : ""}Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
@@ -126,7 +135,8 @@ Return ONLY valid JSON, no preamble:
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
  "advice": null or {"topic": "...", "gist": "..."},
- "met_someone": null or "their exact words"}`;
+ "met_someone": null or "their exact words"${o.preferences ? `,
+ ${PREFERENCE_JSON_SHAPE}` : ""}}`;
 }
 
 export type TurnLearning = {
@@ -173,6 +183,12 @@ export function turnTranscript(thread: string, message: string, coReply: string)
   return `${thread}\nuser: ${message}\nassistant: ${coReply}`.trim();
 }
 
+// A test seam: the learning read's answer, so the fallback for rules can be driven with zero tokens.
+let turnLearningModelForTests: ((prompt: string) => Promise<string>) | null = null;
+export function setTurnLearningModelForTests(fn: typeof turnLearningModelForTests): void {
+  turnLearningModelForTests = fn;
+}
+
 // Background, after the reply. Non-fatal throughout.
 export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnLearning | null> {
   const started = Date.now();
@@ -202,7 +218,12 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
     const openAsks: OpenItem[] = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind, link: r.link ?? null, owned: !!r.owned }));
     const styleNotes: string[] = Array.isArray(row?.texting_style) ? row.texting_style : [];
 
-    const { text } = await generateText({
+    // The read before the reply failed (settled null): the rules are read here instead, against what's on file now.
+    const pre = input.preferenceCapture ? await input.preferenceCapture.catch(() => null) : undefined;
+    const readRulesHere = pre === null && !!input.ownWords?.trim();
+    const zone = readRulesHere ? await memberZone(input.userId).catch(() => null) : null;
+    const fallback = readRulesHere ? { onFile: await activePreferences(input.userId).catch(() => [] as Preference[]), localToday: localDay(new Date(), zone) } : null;
+    const { text } = turnLearningModelForTests ? { text: await turnLearningModelForTests(turnLearningPrompt({ transcript, message: input.message, today: new Date().toISOString().slice(0, 10), onFile, openAsks, styleNotes, coSaidBefore: input.coSaidBefore, preferences: fallback })) } : await generateText({
       model: anthropic(PROFILE_JUDGMENT_MODEL),
       // 2026-09-29: at the default effort the model spent up to 2500 tokens
       // reasoning before writing, and about half of the reads on a real profile
@@ -220,6 +241,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
         openAsks,
         styleNotes,
         coSaidBefore: input.coSaidBefore,
+        preferences: fallback,
       }),
     });
     const learned = parseTurnLearning(text);
@@ -266,7 +288,11 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
       learned.advice ? recordAdvice(input.userId, learned.advice.topic, learned.advice.gist).catch(() => false) : Promise.resolve(false),
       // The rules this message set were read before the reply (memberPreferences.ts capturePreferencesNow). A call cadence this same
       // read took from those words is their twin: withdrawing the rule clears it too.
-      input.preferenceIds?.length && learned.cadence !== "unstated" ? markCadenceTwin(input.userId, input.preferenceIds).catch(() => {}) : Promise.resolve(null),
+      fallback
+        ? learnPreferences(input.userId, learned.preferences, { message: input.ownWords!, zone, onFile: fallback.onFile, source: { via: "text", ref: input.sourceRef ?? null } })
+            .then((r) => (r.added.length && learned.cadence !== "unstated" ? markCadenceTwin(input.userId, r.added) : undefined))
+            .catch((err: any) => console.error("turnLearning: preference write failed (non-fatal):", err?.message ?? err))
+        : input.preferenceIds?.length && learned.cadence !== "unstated" ? markCadenceTwin(input.userId, input.preferenceIds).catch(() => {}) : Promise.resolve(null),
       // They said they met someone: on their most recent Co event, only if the quote is theirs.
       learned.metSomeone && metQuoteIsTheirs(learned.metSomeone, input.message) ? recordMetSomeone(input.userId, learned.metSomeone).catch(() => null) : Promise.resolve(null),
     ]);
