@@ -62,6 +62,7 @@
     "evals/capabilities/moRemoved.ts",
     "evals/capabilities/nameSweep.ts",
     "evals/capabilities/guards.ts",
+    "evals/capabilities/directAsk.ts",
     "evals/capabilities/helperChoice.ts",
     "evals/emotion/run.ts",
     "evals/intake/run.ts",

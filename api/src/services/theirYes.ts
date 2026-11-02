@@ -1,12 +1,18 @@
 // Their yes, before anything that needs it (review of the lane moves branch, 2026-10-13). Co decides, code guards facts:
 //   1. the fact, in code: the words Co quotes as their yes are in THIS message, as whole words (a raw substring took "ok" from
 //      "booking" and "no" from "I know"). Not there: Co quotes again, only their words that say yes; nobody is asked twice.
-//   2. the intent, a short Haiku read of the recent exchange: did Co offer THIS action, and is their latest message a yes to it? The
-//      exchange, not Co's last line: a clarifying question can sit between offer and yes, a link can be the last thing Co sent, and an
-//      offer can span beats (re-review, 2026-10-13). Only when a tool that needs their yes is called, never on the plain reply path. An
-//      error or an answer that can't be read is not a yes, and is logged.
+//   2. the intent, a short Haiku read of the recent exchange: does their latest message ask Cue for THIS action, or say yes to Cue's
+//      offer of it? The exchange, not Co's last line: a clarifying question can sit between offer and yes, a link can be the last
+//      thing Co sent, and an offer can span beats (re-review, 2026-10-13). Only when a tool that needs their yes is called, never on
+//      the plain reply path. An error or an answer that can't be read is not a yes, and is logged.
+//      A direct ask is a yes on its own, with no offer before it (2026-11-02 helper audit: "put that in a document for me" was refused
+//      six times on 11-01 because Cue never offered; the registry's their_yes has always been "they asked for it, or said yes to Co's
+//      offer", services/capabilities.ts). A passing mention, a wish, or Cue's own unanswered offer is still no. For an intro this is
+//      the asker's side only: the other member is asked separately (double opt-in, services/eventGuestMatchHandoff.ts).
 // Words never decide intent here: "Yes! Can't wait", "no problem, go ahead" and "why not" are yeses that a negation regex refused.
-// One check for every tool that needs their yes (agent/toolGuard.ts), lane moves included (services/laneMoves.ts).
+// One check for every tool that needs their yes (agent/toolGuard.ts), lane moves included (services/laneMoves.ts). A lane move also
+// needs Cue's own question naming the move, in code (laneMoves.ts offersMove; Royce 2026-10-13: "Co proposing and me confirming"), so
+// there a direct ask passes this read but still moves nothing.
 import Anthropic from "@anthropic-ai/sdk";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
@@ -93,7 +99,9 @@ Member's latest message: "${r.message.slice(0, 600)}"
 
 The action Cue is about to take on their yes: ${r.ability.slice(0, 300)}
 
-In this recent exchange, did Cue offer THIS action (not a different one: an offer to draft an email is not an offer to move an item, book something or send an intro), and is the member's latest message a yes to it? A yes to a different offer, a maybe, a not-now, a question back, or a plain acknowledgment that doesn't accept ("I know", "got it", "noted") is no. If no offer of this action appears in the exchange, no. Casual or enthusiastic yeses count ("why not", "no problem, go ahead", "Yes! Can't wait"), and a word about timing doesn't make a yes a maybe ("Sure, no rush", "yes, whenever"). Match the action by what it does in plain terms, not by its wording here ("an intro to Maya" is the introduction action; "keep it as a lookout" is the move). Judge only whether it was offered and whether they said yes: whether they qualify for it, or the details of the action, are checked elsewhere.
+Does the member's latest message, in their own words, either ask Cue for THIS action, or say yes to Cue's offer of it in this exchange? THIS action, not a different one: an offer to draft an email is not an offer to move an item, book something or send an intro.
+A direct ask is enough on its own, with no offer before it ("put that in a document for me", "can you make me a checklist", "connect me with Sam"). A request for the same thing in other words counts ("write it up", "make that a doc I can tick off").
+No: a passing mention or a wish that doesn't ask Cue to do it ("I should write this down sometime", "a doc might help"), a yes to a different offer, a maybe, a not-now, a question back, or a plain acknowledgment that doesn't accept ("I know", "got it", "noted"). Cue's own words are never theirs: an offer of Cue's that their latest message doesn't ask for or accept is no. Casual or enthusiastic yeses count ("why not", "no problem, go ahead", "Yes! Can't wait"), and a word about timing doesn't make a yes a maybe ("Sure, no rush", "yes, whenever"). Match the action by what it does in plain terms, not by its wording here ("an intro to Maya" is the introduction action; "keep it as a lookout" is the move). For an action that involves another person, judge only the member's side: the other person is asked separately. Judge only whether they asked for it or said yes: whether they qualify for it, or the details of the action, are checked elsewhere.
 
 Return ONLY JSON: {"yes": true or false, "why": "under 15 words"}`;
 }
