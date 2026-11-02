@@ -398,6 +398,15 @@ async function sendIntroEmail(eventId: string, _callerEventName: string, a: Matc
   // Already introduced (the pair record): never a second email.
   const sentBefore = (await RM.pairRows(a.user_id, b.user_id)).some((r) => r.intro_sent_at);
   const onceCheck = sentBefore ? { name: "intro_once", pass: false, reason: "already introduced" } : { name: "intro_once", pass: true };
+  // They already know each other another way (introduced elsewhere, one of them said so, a personal invite): no intro email between
+  // them (services/knownConnections.ts). Checked right before the send, so a connection added while it waited stops it.
+  const connected = sentBefore ? null : await (await import("./knownConnections.js")).alreadyConnected(a.user_id, b.user_id);
+  if (connected?.known) {
+    await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [{ name: "not_already_connected", pass: false, reason: connected.why }], { eventId, b: b.user_id });
+    // Final: a held email is never retried for a pair that already knows each other.
+    if (aYes && bYes) await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "already connected", true);
+    return false;
+  }
   // Held by the pause: marked once on the pair (logged once), sent by retryHeldIntros when it lifts.
   if (paused && aYes && bYes && !sentBefore) {
     await RM.noteIntroHeld(eventId, a.user_id, b.user_id, paused);

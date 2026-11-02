@@ -590,6 +590,9 @@ export type NetworkFacts = {
   alreadySuggestedOrDeclined: boolean;
   askerActive: boolean;
   candidateActive: boolean;
+  // They already know each other (services/knownConnections.ts): introduced before, one said so, or a personal invite. Optional for
+  // callers that build facts by hand; read as not connected.
+  alreadyConnected?: string | null;
 };
 
 // The words matching.ts puts in front of a quoted ask.
@@ -638,6 +641,7 @@ export function evaluateNetworkCandidate(f: NetworkFacts): { ok: boolean; checks
     f.candidateActive
       ? { name: "candidate_active", pass: true }
       : { name: "candidate_active", pass: false, reason: "candidate opted out or inactive" },
+    f.alreadyConnected ? { name: "not_already_connected", pass: false, reason: f.alreadyConnected } : { name: "not_already_connected", pass: true },
   ];
   return { ok: gate(checks).ok, checks };
 }
@@ -650,7 +654,7 @@ export async function gatherNetworkFacts(
   shareReason: string | null | undefined,
 ): Promise<NetworkFacts> {
   const [a, b] = askerId < candidateId ? [askerId, candidateId] : [candidateId, askerId];
-  const [profile, memories, suggested, active, graphFacts] = await Promise.all([
+  const [profile, memories, suggested, active, graphFacts, connected] = await Promise.all([
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [candidateId]),
     pool.query(
       `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent' ORDER BY created_at DESC LIMIT 300`,
@@ -669,6 +673,8 @@ export async function gatherNetworkFacts(
     // Their owner-only facts (services/coFacts.ts): inferred wants and
     // offers are private too.
     import("../services/coFacts.js").then((m) => m.ownerOnlyFacts(candidateId)).catch(() => [] as string[]),
+    // Read at the queue and again at the reveal (gateNetworkCandidate's two stages): a connection added in between stops it.
+    import("../services/knownConnections.js").then((m) => m.alreadyConnected(askerId, candidateId)).catch(() => ({ known: false }) as const),
   ]);
   const p = profile.rows[0] ?? {};
   const stated = Array.isArray(p.intent) ? (p.intent as any[]).filter((i) => isOpenAsk(i) && i?.shareable === true).map((i) => String(i.text)) : [];
@@ -687,6 +693,7 @@ export async function gatherNetworkFacts(
     alreadySuggestedOrDeclined: suggested.rows.length > 0,
     askerActive: activeIds.has(askerId),
     candidateActive: activeIds.has(candidateId),
+    alreadyConnected: connected.known ? connected.why : null,
   };
 }
 

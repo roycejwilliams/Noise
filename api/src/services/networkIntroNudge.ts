@@ -423,7 +423,10 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
     await holdNetworkIntro(a, b, paused);
     return "held";
   }
-  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes), await introEmailHiddenCheck(matchReason, [a.user_id, b.user_id])], { b: b.user_id }))) return "failed";
+  // Already connected another way (an event intro, one of them said so, a personal invite): no intro email (services/knownConnections.ts).
+  const connected = await (await import("./knownConnections.js")).alreadyConnected(a.user_id, b.user_id, { exceptNetwork: true });
+  const connectedCheck = connected.known ? { name: "not_already_connected", pass: false, reason: connected.why } : { name: "not_already_connected", pass: true };
+  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes), await introEmailHiddenCheck(matchReason, [a.user_id, b.user_id]), connectedCheck], { b: b.user_id }))) return "failed";
   // The pair in one order (by id), so a retry from either side or after a crash builds the very same email: the send's
   // idempotency key covers the same body only (as eventGuestMatchHandoff.ts introEmailContent).
   const [p1, p2] = a.user_id < b.user_id ? [a, b] : [b, a];
@@ -602,6 +605,9 @@ export function networkAskStaleReason(row: { status?: string | null; a_intereste
 }
 
 export async function networkAskStale(x: string, y: string): Promise<string | null> {
+  // Right before a queued or deferred ask goes: a connection added meanwhile stops it (services/knownConnections.ts).
+  const known = await (await import("./knownConnections.js")).knownReason(x, y, "networkIntroNudge.askStale");
+  if (known) return known;
   const [a, b] = x < y ? [x, y] : [y, x];
   const { rows } = await pool.query(`SELECT status, a_interested_at, b_interested_at FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [a, b]).catch(() => ({ rows: [] as any[] }));
   return networkAskStaleReason(rows[0] ?? null, x === a);
