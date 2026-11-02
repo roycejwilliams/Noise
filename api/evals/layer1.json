@@ -183,6 +183,7 @@
     "evals/calls/gptLiveStream.ts",
     "evals/calls/gptLiveEveryone.ts",
     "evals/calls/noElevenLabsCalls.ts",
+    "evals/calls/callParity.ts",
     "evals/calls/provenance.ts",
     "evals/calls/spokenGrounding.ts",
     "evals/docs/document.ts",
