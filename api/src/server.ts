@@ -36,7 +36,7 @@ import { handleTwilioStream, isVoiceStreamPath, voiceStreamSignatureOk, type Soc
 import { handleGptLiveStream, twilioStreamSignatureOk } from "./services/gptLiveBridge.js";
 import { gptLiveStreamUrl, isGptLiveStreamPath } from "./services/gptLive.js";
 import { configureSocket } from "./socket/index.js";
-import { buildCoVCard } from "./utils/vcard.js";
+import { serveCoVCard, serveVersionedVCard } from "./routes/contactCard.js";
 import { createEmailOptOutRouter } from "./routes/emailOptOut.js";
 import { createGoogleRouter } from "./routes/google.js";
 import { createReadoutRouter } from "./routes/readout.js";
@@ -148,14 +148,9 @@ app.use("/d", createCoPageRouter());
 // Serve Co's vCard so Sendblue can attach it to the circle_placement iMessage.
 // Sendblue fetches media_url before sending — this endpoint must be publicly reachable
 // (via ngrok in dev, or Railway in prod). CO_VCARD_URL points here.
-app.get("/co.vcf", (_req, res) => {
-  const phone = process.env.SENDBLUE_PHONE_NUMBER ?? "";
-  const vcard = buildCoVCard(phone);
-  res.setHeader("Content-Type", "text/vcard");
-  res.setHeader("Content-Disposition", "attachment; filename=Cue.vcf");
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  return res.send(vcard);
-});
+app.get("/co.vcf", serveCoVCard);
+// One card version exactly, for a push (services/cardReissue.ts); only an approved version is served.
+app.get("/cards/:version/Cue.vcf", serveVersionedVCard);
 
 // A member's invite link (routes/invitePage.ts): opens a text to Co with the
 // code and a greeting filled in. Public, like /co.vcf.

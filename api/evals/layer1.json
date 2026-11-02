@@ -43,6 +43,7 @@
     "evals/rhythm/rules.ts",
     "evals/delivery/rules.ts",
     "evals/delivery/sentinelSends.ts",
+    "evals/delivery/contactCard.ts",
     "evals/discretion/rules.ts",
     "evals/payloadFirst/rules.ts",
     "evals/threads/rules.ts",

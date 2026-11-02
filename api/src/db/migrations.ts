@@ -3213,6 +3213,31 @@ export async function concurrencyMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("gpt_live_minutes init failed:", err));
+  // Cue's contact card, by version (services/cardReissue.ts): when each version was first served (/co.vcf), and per member, what
+  // happened when a version was pushed to them (sent, failed, held), so nobody gets a version twice and a retry only tries the members
+  // it didn't reach. New and empty: nothing existing is touched.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS contact_card_versions (
+        version INTEGER PRIMARY KEY,
+        live_since TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS contact_card_sends (
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          version INTEGER NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('sent', 'failed', 'held')),
+          reason TEXT,
+          attempts INTEGER NOT NULL DEFAULT 1,
+          sent_at TIMESTAMPTZ,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, version)
+        )`,
+      ),
+    )
+    .catch((err: Error) => console.error("contact_card tables init failed:", err));
   // One live copy of a photo per member (services/memberAssets.ts keepAsset). Numbered images only: a cleaned-up copy is kept as -N
   // and may share its original's bytes. If copies already exist this fails and is logged; keepAsset works either way.
   await pool
