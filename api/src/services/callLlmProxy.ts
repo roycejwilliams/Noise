@@ -100,7 +100,7 @@ export function memberClosed(theirLast: string): boolean {
   return MEMBER_CLOSING.test(tail) || SHORT_CLOSING.test((sentences[sentences.length - 1] ?? "").trim());
 }
 // Co's own goodbye in its last turn, however phrased ("Alright Royce, take care.", "Enjoy tonight, bye!", "Night!", "Cheers, Jordan.").
-const CO_CLOSING = /\b(?:bye|goodbye|good ?night|night|take care|talk (?:to you )?(?:soon|later|tomorrow)|speak soon|see you|catch you later|cheers|enjoy (?:tonight|the|your|it)|have a (?:good|great|nice|lovely) (?:night|evening|one|day|weekend|time|trip))\b/i;
+export const CO_CLOSING = /\b(?:bye|goodbye|good ?night|night|take care|talk (?:to you )?(?:soon|later|tomorrow)|speak soon|see you|catch you later|cheers|enjoy (?:tonight|the|your|it)|have a (?:good|great|nice|lovely) (?:night|evening|one|day|weekend|time|trip))\b/i;
 // Pure: their words ask Co something, once a greeting's own question ("what's up?", "how's it going?", "how are you?") is set aside.
 const GREETING_Q = /\b(?:what'?s up|what'?s new|what'?s going on|what'?s happening|how'?s it going|how are you(?: doing)?|how'?s (?:your|ur) (?:day|night|evening|week|weekend)|how have you been|you good|sup)\b(?: (?:with you|man|dude|co|cue))?\s*\?*/gi;
 export function asksCo(said: string): boolean {
@@ -319,6 +319,17 @@ export function safetyCall(b: OaiRequest): boolean {
   });
 }
 
+// Pure: whether end_call can pass on this request: their last words close the call (memberClosed), or they're replying to Co's own
+// goodbye. The same read runCallLlm makes for the turn's closed fact; a caller that hands sentences on before the answer is done uses it
+// to hold a closing turn's words until it knows whether the call ends.
+export function callClosing(b: OaiRequest): boolean {
+  const lastAt = b.messages.map((m) => m.role).lastIndexOf("user");
+  if (lastAt < 0) return false;
+  const coBefore = [...b.messages.slice(0, lastAt)].reverse().find((m) => m.role === "assistant" && textOf(m.content ?? "").trim());
+  const coLastWords = coBefore ? textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2) : [];
+  return memberClosed(textOf(b.messages[lastAt]?.content ?? "")) || coLastWords.some((x) => GOODBYE.test(x.trim()) || CO_CLOSING.test(x));
+}
+
 // The stream of OpenAI chunks ElevenLabs reads. Text is cleaned and guarded sentence by sentence; a tool call passes through whole.
 export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerator<OaiChunk> {
   const now = deps.now ?? Date.now;
@@ -360,14 +371,14 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const coBefore = [...b.messages.slice(0, lastAt)].reverse().find((m) => m.role === "assistant" && textOf(m.content ?? "").trim());
   const coLastWords = coBefore ? textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2) : [];
   const saidGoodbye = coLastWords.some((x) => GOODBYE.test(x.trim()));
-  // Looser, for end_call only: Co closed its last turn in any words, and this is their reply to it.
-  const coClosed = saidGoodbye || coLastWords.some((x) => CO_CLOSING.test(x));
   // The brain judges the turn from these facts (brain/index.ts judgeCallTurn); what it rules out is enforced below.
   const decision = judgeCallTurn({
     drained,
     safetyCall: safetyCall(b),
     inboundFirst,
-    closed: memberClosed(theirLast) || coClosed,
+    // Their goodbye now, or their reply to Co's own goodbye in any words (callClosing: one read, shared with callers that need it
+    // before the turn runs).
+    closed: callClosing(b),
     tools: co ? { note: co.note, ...(co.turnFacts ?? { turnWords: "", tasks: [], canWriteTasks: false }) } : null,
     givenTurnNote: co?.turnNote,
   });
@@ -796,6 +807,7 @@ export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHR
   let usage: Record<string, any> | null = null;
   let model = req.model;
   let ended = false;
+  let outChars = 0; // what the model wrote, for the output count when the stream is stopped before its final usage
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -810,6 +822,8 @@ export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHR
         let ev: AnthropicEvent;
         try { ev = JSON.parse(data) as AnthropicEvent; } catch { continue; /* a partial or keep-alive line */ }
         usage = usageFromEvent(ev, usage);
+        const dt = ev.delta?.text ?? ev.delta?.partial_json;
+        if (typeof dt === "string") outChars += dt.length;
         if ((ev as any).type === "message_start" && typeof (ev as any).message?.model === "string") model = (ev as any).message.model;
         yield ev;
       }
@@ -818,8 +832,16 @@ export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHR
     // The reader stopped early (an answer the caller moved on from, 2026-11-02): the connection is closed, so the rest isn't
     // generated.
     if (!ended) void reader.cancel().catch(() => {});
-    if (usage) recordAnthropicUsage("call.turn", model, usage, userId);
+    if (usage) recordAnthropicUsage("call.turn", model, ended ? usage : usageAtStop(usage, outChars), userId);
   }
+}
+
+// Pure: the usage of a stream stopped before its final message_delta. Only message_start's output count (about 1) has arrived, so the
+// output is counted from what was received, at about 4 characters a token, never below what Anthropic reported. An estimate and a
+// lower bound: a few tokens written after the last one received aren't seen.
+export function usageAtStop(usage: Record<string, any>, outChars: number): Record<string, any> {
+  const reported = Number(usage.output_tokens) || 0;
+  return { ...usage, output_tokens: Math.max(reported, Math.ceil(outChars / 4)) };
 }
 
 // message_start holds the request's input counts (and output so far); each message_delta holds the running totals, so the last

@@ -193,6 +193,15 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     send(twilio, { event: "clear", streamSid });
   };
 
+  // Once per call: OpenAI's safety filter closed it (content) and a thinking answer on it carried a crisis or safety line, whether the
+  // line was seen before the close or written after it (review of #345: an answer still being written when the filter cut in).
+  let safetyCutDone = false;
+  const safetyCutIfDue = () => {
+    if (safetyCutDone || !call || !started || !finished || endedBy !== "openai_closed" || reason !== "content" || !safetyMoment) return;
+    safetyCutDone = true;
+    d.record({ layer: 8, decision: "call.gpt_live_safety_cut", userId: call.userId, outcome: "act", action: "safety_path", proposal: { provider: "gpt-live", sessionId } });
+    d.safetyCut(call).catch((err: any) => d.log(`gpt-live: safety path failed for ${sessionId}: ${err?.message ?? err}`));
+  };
   const finish = (why: string, by: EndedBy) => {
     if (finished) return;
     finished = true;
@@ -219,10 +228,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     for (const gapMs of replyGaps(turns)) d.record({ layer: 8, decision: "call.turn_latency", userId: call.userId, outcome: "act", action: "gpt_live_voice", proposal: { provider: "gpt-live", sessionId, gapMs } });
     d.log(`gpt-live: session ${sessionId} ended (${endedBy}: ${reason}) ${secs}s, ${turns.length} turns, ${delegations} delegations, ${clears} clears`);
     // OpenAI's safety filter ended the call while it was on their safety: the team hears now and they get the safety path's follow-up.
-    if (endedBy === "openai_closed" && reason === "content" && safetyMoment) {
-      d.record({ layer: 8, decision: "call.gpt_live_safety_cut", userId: call.userId, outcome: "act", action: "safety_path", proposal: { provider: "gpt-live", sessionId } });
-      d.safetyCut(call).catch((err: any) => d.log(`gpt-live: safety path failed for ${sessionId}: ${err?.message ?? err}`));
-    }
+    safetyCutIfDue();
     d.postCall({ call, sessionId, turns, startedAt: new Date(startedAt), endedAt: new Date(d.now()), seconds: secs, reason, endedBy: endedBy!, voicemail: voicemailAt != null ? { fromMs: voicemailMs } : null }).catch((err: any) => d.log(`gpt-live: post-call failed for ${sessionId}: ${err?.message ?? err}`));
   };
   // Ask OpenAI to close, keep reading until session.closed (final usage), then finish. Every ending (hang-up, either cap) goes here.
@@ -291,7 +297,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const onSentence = (t: string): boolean => {
       if (cut || finished || voicemailAt != null) return false;
       if (movedOn()) { cut = true; return false; }
-      if (exactRest || SAFETY_LINE.test(t)) { exactRest += pending + t; pending = ""; return true; }
+      // A crisis or safety line: this is a safety moment from now (review of #345: set here, not from the finished answer, so a stream
+      // that fails after it, or an answer longer than one append, still takes the safety-cut path on a content close). Anything not yet
+      // handed on joins it, so nothing is paraphrased once the line has been seen; it and everything after it go word for word.
+      if (exactRest || SAFETY_LINE.test(t)) { safetyMoment = true; exactRest += pending + t; pending = ""; return true; }
       pending += t;
       burst ??= setImmediate(flush);
       return true;
@@ -306,7 +315,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     if (burst) { clearImmediate(burst); burst = null; if (out.endCall) pending = ""; else flush(); }
     // Only an answer that itself carried a crisis or safety line makes this a safety moment (review of #331: safetyCall reads the whole
     // call, so "I'm safe from the layoffs" then a content close set off the safety path).
-    if (out.exact) safetyMoment = true;
+    if (out.exact) { safetyMoment = true; safetyCutIfDue(); }
     // Outbound: the answer is held until a person is confirmed on the line; still held when the voicemail message is asked for, it's
     // dropped (below, logged).
     const heldFrom = d.now();

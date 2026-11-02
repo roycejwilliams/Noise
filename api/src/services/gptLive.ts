@@ -21,7 +21,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { CALL_CRITERIA } from "./callEvals.js";
-import { runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
+import { callClosing, runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type AnthropicEvent, type OaiRequest } from "./callLlmProxy.js";
 import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation, withVoiceReadRule } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { parseModelJson } from "./modelJson.js";
@@ -345,12 +345,14 @@ export type MessageGuard = (messages: OaiRequest["messages"]) => Promise<OaiRequ
 // before the rest is written (OpenAI's delegation guide: "Stream useful results ... Send each result as soon as you have enough text to
 // understand it on its own"; several commentary appends may share one delegation id). Returning false stops the answer there (the
 // caller moved on): the rest isn't generated. Never on a call that has touched their safety (safetyCall over the request): there the
-// whole answer is read first, as before, so a crisis line goes out word for word (sayExactly). streamed says which way this turn went.
+// whole answer is read first, as before, so a crisis line goes out word for word (sayExactly). Never on a closing turn either (their
+// goodbye, or their reply to Cue's: callClosing, the read that lets end_call through), where Claude may end the call and its words then
+// go unsaid (review of #345: in a real stream the text comes hundreds of ms before end_call). streamed says which way this turn went.
 export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard, voiceLine?: (callKey: string, req: OaiRequest) => Promise<string | null>, onSentence?: (text: string) => boolean) {
   const req = delegationRequest(call, turns);
   if (guard) req.messages = await guard(req.messages).catch(() => req.messages);
   const voiceRead = call.voiceOn && voiceLine ? await voiceLine(call.callKey, req).catch(() => null) : null;
-  const streamed = !!onSentence && !safetyCall(req);
+  const streamed = !!onSentence && !safetyCall(req) && !callClosing(req);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
@@ -362,12 +364,23 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
     }
     if (d.tool_calls?.some((t) => t.function?.name === "end_call")) endCall = true;
   }
-  const said = stripCues(text).replace(/\s+/g, " ").trim().slice(0, GPT_LIVE.commentaryMaxChars);
+  const said = voiceCap(stripCues(text).replace(/\s+/g, " ").trim());
   const safety = safetyCall(req) || (!!said && safetyCall({ ...req, messages: [...req.messages, { role: "assistant", content: said }] }));
   // Said exactly only when this answer itself carries a crisis or safety line (review of #330: safetyCall reads the whole call, so after
   // one safety mention every later answer went out word for word, "what's on for Friday?" included).
   const exact = !!said && SAFETY_LINE.test(said);
+  // Even an answer longer than one append: a crisis line anywhere in it makes this a safety turn (voiceCap keeps the line).
   return { text: said, timing: timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null, safety, exact, endCall, streamed, stopped };
+}
+// Pure: an answer cut to one append (GPT_LIVE.commentaryMaxChars, under OpenAI's 500 tokens). A crisis or safety line past the cut is
+// never lost (review of #345): the answer then starts at the sentence that carries it.
+export function voiceCap(text: string, max: number = GPT_LIVE.commentaryMaxChars): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const at = text.search(SAFETY_LINE);
+  if (at < 0 || SAFETY_LINE.test(head)) return head;
+  const from = Math.max(0, ...[". ", "! ", "? "].map((p) => text.lastIndexOf(p, at) + (text.lastIndexOf(p, at) >= 0 ? 2 : 0)));
+  return text.slice(from, from + max);
 }
 // A safety turn's answer goes as a trusted instruction to say it word for word (OpenAI: session.instructions.append "can be used to
 // request exact spoken wording"; commentary is paraphrased), so crisis resources like 988 are never reworded.
