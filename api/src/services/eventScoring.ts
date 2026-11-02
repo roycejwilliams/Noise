@@ -910,16 +910,16 @@ async function scoreMatchedGroupInScope(
       return null;
     });
     if (!scored) return;
-    // How Cue's earlier intros went for THIS member, by the shape of the reason, never by who (services/roomMatching.ts
-    // outcomeAdjustedScore): a kind that wasn't useful or never happened moves down, one that was useful a little up, and nothing
-    // below the bar is ever lifted to it. Their own side only; the other person's answers never move anyone's ranking.
+    // How Cue's earlier intros went for THIS member, by which of their own asks the pairing served, never by who (services/roomMatching.ts
+    // outcomeAdjustedScore): a kind that wasn't useful or never happened moves down, one that was useful a little up, one signal counts
+    // half, older ones fade, and nothing below the bar is ever lifted to it. Their own side only; the other person's answers never move anyone's ranking.
     const RMo = await import("./roomMatching.js");
     const signals = await RMo.ownOutcomeSignals(person.user_id).catch(() => [] as import("./roomMatching.js").OutcomeSignal[]);
     const movedBy = new Map<string, number>();
     const ranked: RankedCandidate[] = scored
       .map((s) => {
         const e = edges.get(s.candidate.user_id);
-        const adj = RMo.outcomeAdjustedScore(s.score, s.shareReason, signals, MATCH_NUDGE_MIN_SCORE);
+        const adj = RMo.outcomeAdjustedScore(s.score, `${s.reason} ${s.shareReason}`, signals, MATCH_NUDGE_MIN_SCORE, frame.asks.map((a) => String(a.text ?? "")));
         if (adj.moved) movedBy.set(s.candidate.user_id, adj.moved);
         return {
           candidate_id: s.candidate.user_id,

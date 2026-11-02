@@ -553,34 +553,68 @@ export async function notePairsFromCheckin(x: string, eventId: string, text: str
 
 // ============================================================ outcomes feed pair selection (their own side only)
 //
-// What worked for THIS member, by the shape of the reason (their own value line for that pair, which rests on what the other person
-// shared), never by who it was. A new candidate whose share reason shares that shape is moved: down after "not useful" or "never
-// met" (they said so), a little up after "useful". Never past the bar: a candidate below MATCH_NUDGE_MIN_SCORE stays below it,
-// whatever worked before (no forced match, a stated constraint is never relaxed). A no-show of their own says nothing about the
-// pairing's kind and is left out.
-export type OutcomeSignal = { line: string; kind: "useful" | "not_useful" | "not_met" };
-export const OUTCOME_ADJUST = { notUseful: -12, notMet: -5, useful: 6, maxDown: -24, maxUp: 10 };
+// What worked for THIS member, by the ask the pairing served, never by who it was (review of #358: matching on any two shared words
+// let "founder", "building" or "raising" tie one bad outcome to nearly every candidate). The kind of a pairing is the one of THEIR OWN
+// asks (the room frame's asks) its reason rests on: their own value line for a past pair, the scorer's reason and the candidate's share
+// reason for a new one, each needing two distinctive words of that ask (generic words never count) and one clear winner, else no kind
+// and no move. Inside one kind: "not useful" or "never met" (they said so) moves a new candidate down, "useful" a little up; one signal
+// alone counts half, and each fades with age (half-life OUTCOME_ADJUST.halfLifeDays). Never past the bar: a candidate below
+// MATCH_NUDGE_MIN_SCORE stays below it, whatever worked before (no forced match, a stated constraint is never relaxed). Their own
+// no-show says nothing about a kind of pairing and is left out.
+export type OutcomeSignal = { line: string; kind: "useful" | "not_useful" | "not_met"; at?: string | null };
+export const OUTCOME_ADJUST = { notUseful: -12, notMet: -5, useful: 6, maxDown: -24, maxUp: 10, single: 0.5, halfLifeDays: 90 };
 
-// Pure: the signals in one side's evidence. Only stated evidence counts.
+// Words that say nothing about which ask a pairing served: they'd tie one outcome to most of the room.
+const GENERIC = new Set(["founder", "founders", "founding", "building", "build", "builder", "raising", "raise", "startup", "startups", "company", "companies", "business", "work", "working", "people", "person", "help", "helping", "great", "good", "meet", "meeting", "talk", "connect", "connection", "network", "networking", "intro", "introduction", "someone", "anyone", "new", "early", "stage", "space", "industry", "tech", "team", "things", "really", "also", "just", "would", "could", "might", "worth", "value", "useful"]);
+const distinct = (s: string) => new Set(contentWords(s).map(stem).filter((w) => !GENERIC.has(w) && !GENERIC.has(`${w}s`) && w.length > 2));
+
+// Pure: which of their own asks this text rests on (index), or null when none clearly does: at least two distinctive words of the ask,
+// and strictly more than any other ask.
+export function themeOf(text: string, asks: string[]): number | null {
+  const have = distinct(text);
+  let best = -1;
+  let bestHits = 0;
+  let tie = false;
+  asks.forEach((a, i) => {
+    const words = [...distinct(a)];
+    const hits = words.filter((w) => have.has(w)).length;
+    if (hits < Math.min(2, words.length) || hits === 0) return;
+    if (hits > bestHits) {
+      best = i;
+      bestHits = hits;
+      tie = false;
+    } else if (hits === bestHits) tie = true;
+  });
+  return best >= 0 && !tie ? best : null;
+}
+
+// Pure: one candidate's score after their own outcomes. candidateText: what the new pairing rests on (the scorer's reason and the
+// candidate's share reason). asks: their own asks (the frame). bar: the score a match must reach; nothing below it is lifted to it.
+export function outcomeAdjustedScore(score: number, candidateText: string, signals: OutcomeSignal[], bar: number, asks: string[] = [], now = new Date()): { score: number; moved: number } {
+  if (!candidateText || !signals.length || score <= 0 || !asks.length) return { score, moved: 0 };
+  const theme = themeOf(candidateText, asks);
+  if (theme == null) return { score, moved: 0 };
+  const same = signals.filter((s) => s.line && themeOf(s.line, asks) === theme);
+  if (!same.length) return { score, moved: 0 };
+  let moved = 0;
+  for (const s of same) {
+    const base = s.kind === "not_useful" ? OUTCOME_ADJUST.notUseful : s.kind === "not_met" ? OUTCOME_ADJUST.notMet : OUTCOME_ADJUST.useful;
+    const ageDays = s.at ? Math.max(0, (now.getTime() - new Date(s.at).getTime()) / 86_400_000) : 0;
+    moved += base * Math.pow(0.5, (Number.isFinite(ageDays) ? ageDays : 0) / OUTCOME_ADJUST.halfLifeDays);
+  }
+  if (same.length === 1) moved *= OUTCOME_ADJUST.single;
+  moved = Math.round(Math.max(OUTCOME_ADJUST.maxDown, Math.min(OUTCOME_ADJUST.maxUp, moved)));
+  if (moved > 0 && score < bar) moved = 0;
+  const next = Math.max(0, Math.min(100, score + moved));
+  return { score: next, moved: next - score };
+}
+
+// Pure: the signal in one side's evidence, and when it was said. Only stated evidence counts.
 export function signalOf(e: SideEvidence | null | undefined): OutcomeSignal["kind"] | null {
   if (!e) return null;
   if (e.useful?.how === "stated") return e.useful.value === "no" ? "not_useful" : e.useful.value === "yes" ? "useful" : null;
   if (e.met?.how === "stated" && e.met.value === "no") return "not_met";
   return null;
-}
-
-// Pure: one candidate's score after their own outcomes. bar: the score a match must reach; nothing below it is ever lifted to it.
-export function outcomeAdjustedScore(score: number, shareReason: string, signals: OutcomeSignal[], bar: number): { score: number; moved: number } {
-  if (!shareReason || !signals.length || score <= 0) return { score, moved: 0 };
-  let moved = 0;
-  for (const s of signals) {
-    if (!s.line || !groundedIn(s.line, [shareReason])) continue;
-    moved += s.kind === "not_useful" ? OUTCOME_ADJUST.notUseful : s.kind === "not_met" ? OUTCOME_ADJUST.notMet : OUTCOME_ADJUST.useful;
-  }
-  moved = Math.max(OUTCOME_ADJUST.maxDown, Math.min(OUTCOME_ADJUST.maxUp, moved));
-  if (moved > 0 && score < bar) moved = 0;
-  const next = Math.max(0, Math.min(100, score + moved));
-  return { score: next, moved: next - score };
 }
 
 // Their own outcome signals: their side's evidence and their own value line, newest first. Never the other side's.
@@ -596,7 +630,8 @@ export async function ownOutcomeSignals(x: string): Promise<OutcomeSignal[]> {
   for (const r of rows) {
     const kind = signalOf(r.ev);
     const line = usableLine(r.line);
-    if (kind && line) out.push({ line, kind });
+    const at = kind === "not_met" ? r.ev?.met?.at : r.ev?.useful?.at;
+    if (kind && line) out.push({ line, kind, at: at ?? null });
   }
   return out;
 }

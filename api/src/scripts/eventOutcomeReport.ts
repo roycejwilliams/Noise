@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+// TEAM-ONLY. Never sent to a member or a host, never on a page: it reads every pair at every event (counts only, but across members).
+//
 // Match outcomes per event (Royce, 2026-11-02: "both accepted" isn't enough; did they meet, was it useful, would they keep talking).
 // Read-only and free: one read-only session, no model, nothing written. The number to run after an event:
 //
