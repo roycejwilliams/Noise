@@ -123,6 +123,13 @@ export function requestKey(name: string, input: unknown): string {
   return `${name} ${JSON.stringify(sorted(input ?? {}))}`;
 }
 
+// Tools that only read (a subset of CHANGES_NOTHING, which also holds sends): only these get a free retry after a throw. A tool
+// not listed is treated as one that sends or changes something, so a new tool is never retried by default.
+export const READS_ONLY: ReadonlySet<string> = new Set([
+  "searchEvents", "webSearch", "searchPosts", "readPage", "readReference", "readInspo", "readDocument", "openArtifact",
+  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows",
+]);
+
 // Pure: the receipt for a voiceRead call (services/voiceReadConsent.ts): which answer the model read, never their words or message, so
 // a yes taken back leaves no copy of what they said in the decision log. Null for any other tool.
 export function voiceReadReceipt(name: string, input: any): { answer: string } | null {
@@ -143,6 +150,8 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
   // Requests that threw this turn, by requestKey: the same request again isn't run or recorded again; it gets the same error back
   // (2026-11-02 helper audit: a throw left no receipt at all, and a repeat could act twice or log twice).
   const threwThisTurn = new Map<string, unknown>();
+  // Tools that threw this turn, by name: their limit never says nothing went, since a throw can come after a send or a write.
+  const threwByName = new Set<string>();
   for (const [name, t] of Object.entries(tools)) {
     if (UNGUARDED.has(name)) continue;
     const ability = abilityForTool(name);
@@ -199,6 +208,10 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       if (await isSwitchedOff(ability.id)) {
         return refuse("off", `${ability.id.replace(/_/g, " ")} is switched off right now, so it wasn't done.`, "This is switched off right now. Tell them plainly it isn't available at the moment.");
       }
+      // The same request that threw earlier this turn: one receipt for it already, so nothing is run, read, logged or counted again
+      // (review of #350: before a limit or a yes read, so a repeat never pays for a Haiku read or logs a second row).
+      const key = requestKey(name, input);
+      if (threwThisTurn.has(key)) throw threwThisTurn.get(key);
       const used = usedThisTurn.get(name) ?? 0;
       if (limits.perTurn && used >= limits.perTurn) {
         const refused = refusedThisTurn.get(name) ?? 0;
@@ -208,6 +221,14 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
             "limited",
             `${name} wasn't run again: it already made ${madeUnsent} this turn, but that didn't send.`,
             `Already done this turn: ${madeUnsent} exists, but the text with it didn't send. Don't make it again; give it in your reply.`,
+          );
+        }
+        // After a throw, what happened is unknown: it may have sent or changed something before it failed (review of #350).
+        if (refused && !doneThisTurn.has(name) && threwByName.has(name)) {
+          return refuse(
+            "limited",
+            `${name} wasn't run again: it failed with an error earlier this turn, so whether any of it went through isn't known.`,
+            "Not run again: it failed with an error earlier this turn, so whether any of it went through isn't known. Don't try again now. Say plainly you're not sure it went through; never describe it as done, and never say nothing went.",
           );
         }
         if (refused && !doneThisTurn.has(name)) {
@@ -256,20 +277,19 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
         }
       }
 
-      // The same request that threw earlier this turn: one receipt for it already, so nothing is run, logged or counted again.
-      const key = requestKey(name, input);
-      if (threwThisTurn.has(key)) throw threwThisTurn.get(key);
       usedThisTurn.set(name, used + 1);
       let raw: any;
       try {
         raw = await run(input, options);
       } catch (err: any) {
         // A tool that throws still leaves its receipt (2026-11-02 helper audit: no row, no NOT DONE, so nothing stopped a reply from
-        // saying it was done). Logged as not_done with what was thrown, counted as a refusal (one free retry with something
-        // different), and thrown on unchanged: the model reads the same tool error it always did.
+        // saying it was done). Logged as not_done with what was thrown, counted as a refusal, and thrown on unchanged: the model reads
+        // the same tool error it always did. A free retry only for a tool that only reads: one that sends or changes something may
+        // have done part of it before it threw, so it isn't run again this turn (review of #350).
         threwThisTurn.set(key, err);
+        threwByName.add(name);
         refusedThisTurn.set(name, (refusedThisTurn.get(name) ?? 0) + 1);
-        if (!retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
+        if (READS_ONLY.has(name) && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
         ctx.notDone(`${name} didn't go through: it failed with an error.`);
         await log("not_done", { error: `threw: ${String(err?.message ?? err).slice(0, 180)}`, threw: true, ...(person ? { person } : {}) });
         throw err;
