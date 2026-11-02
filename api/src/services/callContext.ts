@@ -17,7 +17,7 @@ import type { SentItem } from "./turnContext.js";
 import type { Exchange, Fact, KnowledgeDeps, KnowledgeSection, MemberKnowledge, MemberRules } from "./memberKnowledge.js";
 import { plainCorrected } from "./memberKnowledge.js";
 import { DateTime } from "luxon";
-import { threadWindow, WINDOW_MAX_ROWS } from "./threadWindow.js";
+import { OLD_WINDOW_ROWS, threadWindow, WINDOW_CHARS, WINDOW_MAX_ROWS } from "./threadWindow.js";
 import { withMember } from "./llmUsage.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
@@ -128,10 +128,29 @@ const exchangeLine = (x: Fact<Exchange>) => (x.from === "member" ? `User said: $
 // (the median on dev), and the whole line was skipped when the rest of the summary was full. Call summaries ([Call] rows) aren't
 // texts: the last calls have their own section.
 export const CALL_THREAD_HEAD = "Your recent texts with them, oldest first:";
-export function callThread(exchanges: readonly Fact<Exchange>[]): string {
-  const newestFirst = exchanges.filter((x) => !x.call).map((x) => ({ content: exchangeLine(x) })).reverse();
-  const rows = threadWindow(newestFirst);
+// guardsUnread: the live guards' read failed (memberKnowledge.ts), so the rows are unguarded: the old, shorter read (OLD_WINDOW_ROWS),
+// as the reply does (routes/sendblue.ts), never the longer one. Hard-capped at WINDOW_CHARS (review of #354): threadWindow drops older
+// rows first and cuts only Cue's; a text of theirs too long for the whole budget is never cut mid-way, it's left out with a marker.
+export const CALL_THREAD_TOO_LONG = (words: number) => `User said: [a long text of theirs, about ${words} words, is left out here]`;
+export function callThread(exchanges: readonly Fact<Exchange>[], o: { guardsUnread?: boolean } = {}): string {
+  // A text of theirs longer than the whole budget becomes the marker before the window is taken, so it never pushes out the rest.
+  const newestFirst = exchanges
+    .filter((x) => !x.call)
+    .map((x) => ({ content: x.from === "member" && exchangeLine(x).length > WINDOW_CHARS ? CALL_THREAD_TOO_LONG(x.text.split(/\s+/).filter(Boolean).length) : exchangeLine(x) }))
+    .reverse();
+  const rows = threadWindow(o.guardsUnread ? newestFirst.slice(0, OLD_WINDOW_ROWS) : newestFirst);
   return rows.length ? `${CALL_THREAD_HEAD}\n${rows.map((r) => r.content).join("\n")}` : "";
+}
+
+// Pure: what Cue is carrying for them and where each stands, and what it said on a call it would do, as audit facts (review of
+// #354: without them the audit "corrected" true lines about Cue's own work, "the pilot-partner search is under way"). Cue's own
+// record of its work, the same lines the call opens on.
+export function carryingFacts(promised: string[], loopLines: string[]): string[] {
+  const bare = (l: string) => l.replace(/^- /, "").trim();
+  return [
+    ...loopLines.map((l) => `Cue is carrying this for them (its own record, with where it stands): ${bare(l)}`),
+    ...promised.map((l) => `Cue said on a call it would do this, still open: ${bare(l)}`),
+  ];
 }
 // Pure: the layer's corrections as the rows this file's correction rules read.
 export const correctionRows = (k: Pick<MemberKnowledge, "corrections">): CorrectionRow[] => k.corrections.map((c) => ({ field: c.field, old_value: c.was, new_value: c.now, corrected_at: c.verifiedAt }));
@@ -782,7 +801,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     .join("\n\n");
 
   const sentLines = await strip(sentDetailLines({ sent }, 7));
-  const thread = callThread(k.exchanges);
+  const thread = callThread(k.exchanges, { guardsUnread: !!k.guardsUnread });
   const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread });
 
   const ledger = await strip(await ledgerLines);
@@ -790,6 +809,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     ...sentLines,
     ...ledger,
     ...k.asks.slice(0, 8).map((a) => `They've asked Cue for (their words): "${a.text}"`),
+    ...carryingFacts(promised, loopLines),
   ].join("\n");
   // Impressions: what Co's models wrote about them (never proof of a specific fact).
   const impressions = [who, lastCalls, recap, threads.map((t) => t.text).join("\n"), p.emotionalLine ?? ""].filter(Boolean).join("\n\n");

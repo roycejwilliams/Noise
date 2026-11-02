@@ -49,6 +49,9 @@ export type CallClaim = {
   asked_quote?: string | null;
   // invented_fact: the exact names, places, times or numbers that had no source
   specifics?: string[] | null;
+  // invented_fact about where something stands (#344 on calls): who or what the stage is about, in Cue's words ("Dana", "the pilot
+  // search"). Set, the record overturns the claim only on one line naming both it and the stage (stageVerdict).
+  stage_subject?: string | null;
   // Set by code, never by the audit: a sentence the call's offer source check flagged (services/offerGuard.ts unsourcedInCall).
   source?: "offer_source";
 };
@@ -136,6 +139,22 @@ export function knownBeforeFrom(
 // replyGrounding.ts addHint): summaries and read-outs Co's own models wrote
 // going into the call. They help read the call, but they're never proof of a
 // specific time, place, count, or what another person said, wants or did.
+// Pure: the thread as the audit reads it: whole, or its heading and the newest whole lines that fit (review of #354: a plain slice
+// could cut the heading off).
+export const AUDIT_THREAD_MAX = 6500;
+export function auditThread(thread: string, max = AUDIT_THREAD_MAX): string {
+  const t = thread.trim();
+  if (t.length <= max) return t;
+  const [head, ...rows] = t.split("\n");
+  const kept: string[] = [];
+  let used = head.length;
+  for (const l of rows.reverse()) {
+    if (used + l.length + 1 > max) break;
+    kept.unshift(l);
+    used += l.length + 1;
+  }
+  return [head, ...kept].join("\n");
+}
 // thread (2026-11-02, both mediums): the text thread the call read (callContext.ts callThread). Their own lines there are a source for
 // their life and where things stand, as on a text reply's claim read (replyGrounding.ts); Cue's lines there are not proof.
 export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string, doneOnCall: (string | DoneItem)[] = [], foundOnCall: FoundOnCall[] = [], thread?: string): string {
@@ -165,7 +184,7 @@ Cue's own impressions going in (summaries its models wrote). Use these to unders
 ${impressions.slice(0, 6000)}
 ` : ""}${thread?.trim() ? `
 Their recent texts with Cue before the call, oldest first. What they said there ("User said") is their own words: a source for their own life and plans, and for where things stand as they told it. Cue's own lines there are not proof.
-${thread.slice(-6000)}
+${auditThread(thread)}
 ` : ""}
 Call transcript ("assistant" is Cue):
 ${transcript.slice(-12000)}
@@ -173,11 +192,11 @@ ${transcript.slice(-12000)}
 List every statement by Cue ("assistant" lines only) that is a promise of a future action, a specific fact about an event, a person, or a place, where something or someone stands, or a claim about what Cue can do. For each:
 - "promise_keepable": a promise to look for something, keep an eye out, or do work, after the call, and text what it finds, with no guaranteed result or time. Casual ones count the same: "you'll hear from me", "I'm on it", "I'll keep an ear out for the right moment", "leave it with me". Put what to do in "what", specific enough to act on from the call (what to look for, for what, by when if said). In "asked_quote", copy the person's exact words from a "user" line that asked for it (a request, or their yes to Cue's offer together with what it answered); null only when Cue offered it on its own and they never asked.
 - "promise_unkeepable": any other promise (a time, a guaranteed result, booking, contacting someone for them).
-- "invented_fact": a specific fact not in what Cue knew or what the person said on the call. In "specifics", list the exact names, places, times or numbers that had no source. Where something stands must match the stage its source gives: suggested, planned, set up (access given, a sample handed over, an intro sent), under way, and done are different, so "I gave her a sample" never backs "she's trying it" or "she liked it", and "we might run a test" never backs "you're testing it". A stage further along than its source is "invented_fact": in "specifics", copy the words of Cue's line that claim the stage.
+- "invented_fact": a specific fact not in what Cue knew or what the person said on the call. In "specifics", list the exact names, places, times or numbers that had no source. Where something stands must match the stage its source gives: suggested, planned, set up (access given, a sample handed over, an intro sent), under way, and done are different, so "I gave her a sample" never backs "she's trying it" or "she liked it", and "we might run a test" never backs "you're testing it". A stage further along than its source is "invented_fact": in "specifics", copy the words of Cue's line that claim the stage, and in "stage_subject" who or what it's about, in Cue's words ("Dana", "the pilot search").
 - "capability": a claim about what Cue can or can't do that the registry above contradicts. In "limit", the number of the can't line it breaks ("L3"). If a registry line says Cue does it, it is "ok", not "capability"; put that line's id in "ability".
 - "ok": supported by the facts Cue knew, what the person said, or the registry. Leave these out of the list: only the other types are used.
 
-Return ONLY JSON: {"claims": [{"quote": "Cue's exact words", "type": "...", "what": "...", "ability": "id or null", "limit": "L# or null", "asked_quote": "their exact words or null", "specifics": []}]}`;
+Return ONLY JSON: {"claims": [{"quote": "Cue's exact words", "type": "...", "what": "...", "ability": "id or null", "limit": "L# or null", "asked_quote": "their exact words or null", "specifics": [], "stage_subject": "for a stage claim only, else null"}]}`;
 }
 
 export function callAuditChecks(claims: CallClaim[]): GateCheck[] {
@@ -267,6 +286,20 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
 
 // ---- what the audit's verdicts are held to before anything is saved (2026-10-08 call review)
 
+// Pure: a stage claim the audit flagged is overturned only by one line of their words or Cue's records that names both who or what it's
+// about and the stage Cue claimed (review of #354: matched anywhere, "I'm trying it with the new running shoes" took back a flagged
+// "Dana's trying it"). A pronoun names nobody, so the audit's judgment stands. Possessives read as the name ("Dana's" is Dana).
+const STAGE_WORDS = (s: string) => ` ${String(s ?? "").toLowerCase().replace(/['’‘]/g, " ").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+const PRONOUN = /^(?:he|she|they|it|you|him|her|them|his|hers|their|this|that|we|i|me)$/i;
+export function stageVerdict(subject: string, stage: string[], lines: string[]): { save: boolean; why: string; onRecord: string[] } {
+  const who = STAGE_WORDS(subject.replace(/^(?:the|a|an|your|their|his|her)\s+/i, ""));
+  const said = stage.map((s) => STAGE_WORDS(s)).filter((s) => s.trim());
+  if (PRONOUN.test(who.trim()) || !who.trim() || !said.length) return { save: true, why: "a stage claim with no named subject to look up: kept as the audit judged it", onRecord: [] };
+  const hits = said.filter((s) => lines.some((l) => { const w = STAGE_WORDS(l); return w.includes(who) && w.includes(s); }));
+  if (hits.length === said.length) return { save: false, why: `one line of their texts or Cue's records says that stage for ${subject.trim()}`, onRecord: stage };
+  return { save: true, why: `no line of their texts or Cue's records says that stage for ${subject.trim()}`, onRecord: [] };
+}
+
 const userLinesOf = (transcript: string) =>
   transcript.split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, ""));
 
@@ -291,8 +324,9 @@ export function capabilityCorrectionVerdict(c: Pick<CallClaim, "quote" | "what" 
 
 // Pure: an "invented" fact whose every unsourced specific is in the member's own texts or Co's records wasn't invented.
 // Sources on the call are the member's own lines and what Co knew going in; Co having said it earlier on the call is not one.
-export function inventedFactVerdict(c: Pick<CallClaim, "quote" | "specifics">, transcript: string, knownBefore: string, records: string): { save: boolean; why: string; onRecord: string[] } {
+export function inventedFactVerdict(c: Pick<CallClaim, "quote" | "specifics" | "stage_subject">, transcript: string, knownBefore: string, records: string): { save: boolean; why: string; onRecord: string[] } {
   const flagged = Array.isArray(c.specifics) && c.specifics.some((x) => typeof x === "string" && x.trim()) ? c.specifics.filter((x): x is string => typeof x === "string") : specificsIn(c.quote);
+  if (typeof c.stage_subject === "string" && c.stage_subject.trim()) return stageVerdict(c.stage_subject, flagged, [...userLinesOf(transcript), ...knownBefore.split("\n"), ...records.split("\n")]);
   const r = specificsOnRecord(flagged, `${userLinesOf(transcript).join("\n")}\n${knownBefore}`, records);
   if (r.backed) return { save: false, why: `on record in their texts or Cue's records: ${r.onRecord.join(", ")}`, onRecord: r.onRecord };
   return { save: true, why: r.unbacked.length ? `no source for: ${r.unbacked.join(", ")}` : "kept as the audit judged it", onRecord: r.onRecord };
