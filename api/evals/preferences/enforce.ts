@@ -50,6 +50,11 @@ const run = async (raw: string, a: any[] = [], tx?: { at: Date; release?: () => 
   if (/^SELECT type, sent_at, notify_class FROM proactive_sends/.test(sql)) return { rows: db.sends.filter((s) => s.user_id === a[0]) };
   if (/^SELECT type, target_key, topic_key, sent_at, exempt FROM proactive_sends/.test(sql)) return { rows: /DISTINCT ON/.test(sql) ? [] : db.sends.filter((s) => s.user_id === a[0]).map((s) => ({ ...s, topic_key: s.target_key })) };
   if (/^SELECT id, object_label, happened_at, retired_at, meta FROM co_facts/.test(sql)) return { rows: db.prefs.filter((r) => r.owner_user_id === a[0] && !r.retired_at) };
+  if (/^INSERT INTO proactive_sends/.test(sql) && /VALUES \(\$1, 'in_room', \$2/.test(sql)) {
+    if (db.sends.some((s) => s.user_id === a[0] && s.target_key === a[1])) return { rows: [] };
+    db.sends.push({ user_id: a[0], type: "in_room", target_key: a[1], sent_at: tx?.at ?? new Date(), exempt: false, notify_class: "unsolicited" });
+    return { rows: [{ id: db.sends.length }] };
+  }
   if (/^INSERT INTO proactive_sends/.test(sql)) {
     if (db.sends.some((s) => s.user_id === a[0] && s.target_key === a[2])) return { rows: [] };
     const cls = /notify_class\)\s*VALUES[^)]*'reply'\)/.test(sql) ? "reply" : /'unsolicited'\)$/.test(sql) ? "unsolicited" : a[a.length - 1];
@@ -110,20 +115,73 @@ const ev = PR.evaluateCandidates(state([cand("event_offer", { askId: "ask-1" }),
 check("the daily pick: an ask's find, a check-in and a morning find are all held by the rule (ignorePacing doesn't skip it)", ev.perCandidate.every((p) => p.checks.some((c) => c.name === G.MEMBER_RULE && !c.pass)));
 check("a safety follow-up keeps its precedence", PR.evaluateCandidates(state([cand("companion", { safetyFollowUp: true })], prefsA)).perCandidate[0].checks.every((c) => c.name !== G.MEMBER_RULE));
 check("sendWithLedger rechecks it inside its lock", /const \{ retryAt: _r, \.\.\.rule \} = await memberRuleGate\(client, \{ userId: person\.userId, now, cls, channel: "text" \}\);/.test(src("harness/proactive.ts")));
-// A reply is never held.
+// A delivery minutes after their text is still a delivery (R1): held by an "all" rule and counted. Only the turn's own answer is a reply.
 db.inbound.set(A, new Date(Date.now() - 5 * 60_000));
 r = await exempt(A, { answers: { askedAt: new Date(Date.now() - 4 * 60_000) } });
-check("Cue's answer to the text they just sent goes (a task started from it, minutes later)", r.sent === true);
-check("and isn't counted toward their cap", db.sends.some((s) => s.notify_class === "reply"));
+check("a task's result minutes after their text is a requested delivery: their 'all' rule holds it", r.sent === false && /member's own rule/.test(r.reason ?? ""));
+check("sendExempt never turns a delivery into a reply (answers only skips the spacing)", !/"reply" : opts\.cls/.test(src("harness/proactive.ts")) && /const answersLast = !!opts\.answers && answersLastText/.test(src("harness/proactive.ts")) && /if \(!opts\.coInitiated && !answersLast && SPACED_EXEMPT\.has/.test(src("harness/proactive.ts")));
+check("a document they asked for is requested, never a reply, however fresh", /const cls: SendClass = o\.cls \?\? \(o\.owed \? "requested" : "unsolicited"\);/.test(src("harness/proactive.ts")));
+reset();
+db.inbound.set(A, new Date(Date.now() - 5 * 60_000));
+db.sends.push({ user_id: A, type: "event_offer", target_key: "event_offer:x", sent_at: new Date(Date.now() - 10 * 60_000), exempt: true, notify_class: "unsolicited" });
+r = await exempt(A, { answers: { askedAt: new Date(Date.now() - 4 * 60_000) } });
+check("with no rule, a result answering their latest message skips the spacing (R4) and counts as requested", r.sent === true && db.sends.some((x) => x.notify_class === "requested"));
 r = await exempt(A, { answers: { askedAt: new Date(Date.now() - 20 * 3_600_000) } });
-check("a look-out started from an older message is a delivery, not a reply: held", r.sent === false);
-// In-room and calls.
-check("in-room texts (the close included) ask the gate right before they go", /const rule = await memberRuleGate\(pool, \{ userId, now: new Date\(\), cls: "unsolicited", channel: "text" \}\);\n  if \(!rule\.pass\) \{[\s\S]{0,300}return false;\n  \}\n  if \(opts\.close\) return true;/.test(src("harness/proactive.ts")));
+check("a look-out started from an older message keeps the spacing", r.sent === false && /went out less than 3h ago/.test(r.reason ?? ""));
+reset();
+rule(A, { rule: { max_per_day: 1 } });
+// Soon notices (R2): about something within hours, a held rule lets it through (and it counts).
+await exempt(A, { type: "event_change", targetKey: "event_change:first" });
+r = await exempt(A, { type: "event_change", targetKey: "event_change:soon", soonAt: new Date(Date.now() + 2 * 3_600_000) });
+check("an event change for an event two hours out gets through a held rule", r.sent === true);
+r = await exempt(A, { type: "call_reminder", targetKey: "call_reminder:1", soonAt: new Date(Date.now() + 15 * 60_000) });
+check("a reminder for a call they booked 15 minutes out gets through", r.sent === true);
+r = await exempt(A, { type: "event_change", targetKey: "event_change:later", soonAt: new Date(Date.now() + 3 * 86_400_000) });
+check("one for an event three days out is held (queued if asked)", r.sent === false);
+r = await exempt(A, { targetKey: "task:soon", soonAt: new Date(Date.now() + 3_600_000), cls: "unsolicited" });
+check("soon never lets Cue's own outreach through", r.sent === false);
+check("the reminder, the event change and the no-show ask pass when they're about", /soonAt: new Date\(row\.scheduled_for\)/.test(src("jobs/scheduledCall.ts")) && /soonAt: await \(await import\("\.\.\/db\/db\.js"\)\)\.default\.query\(`SELECT start_at FROM luma_event_snapshots/.test(src("agent/eventChangeNotification.ts")) && /cls: "requested", soonAt: event\.start_at/.test(src("services/eventNoShow.ts")));
+// In-room: the gate and the claim in one locked transaction.
+reset();
+rule(A, { rule: { max_per_day: 1 } });
+const ir = await Promise.all([1, 2].map((i) => PR.inRoomSendAllowed(A, "evt-1", { claim: { targetKey: `in_room:additive:evt-1:${i}`, message: "x" } })));
+check("two in-room texts at once against a cap of one: one is claimed, the other held", ir.filter(Boolean).length === 1 && db.sends.filter((x) => x.type === "in_room").length === 1);
+const closeOk = await PR.inRoomSendAllowed(A, "evt-1", { close: true, claim: { targetKey: "in_room:close:evt-1", message: "bye" } });
+check("the close follows their rule too (R3)", !closeOk);
+check("a failed in-room send takes its claim back", /await releaseInRoomClaim\(person\.user_id, `in_room:close:\$\{eventId\}`\)/.test(src("services/eventUnmatchedFollowUp.ts")) && (src("services/eventScoring.ts").match(/releaseInRoomClaim\(/g) ?? []).length === 2);
+// The missed-call follow-up and the PDF retry: claimed (counted) under the lock.
+check("the missed-call text is claimed with its class before it goes, and released if it fails", /claimCoInitiatedSend\(\{ userId: user\.id, type: "missed_call"[^\n]*ruleOnly: true, cls: "unsolicited" \}\)/.test(src("routes/co.ts")) && src("routes/co.ts").indexOf("claimCoInitiatedSend({ userId: user.id") < src("routes/co.ts").indexOf("await sendblue.messages.send({\n      number: user.phone_number") && /releaseCoInitiatedClaim\(user\.id, claim\.ledgerId\)/.test(src("routes/co.ts")));
+check("a PDF retry is claimed as requested, deferred when held, released when it fails", /ruleOnly: true, cls: "requested"/.test(src("services/documentDelivery.ts")) && /waiting: their own rule/.test(src("services/documentDelivery.ts")) && /await unclaim\(\);\n      const last = rec\.attempts/.test(src("services/documentDelivery.ts")));
+reset();
+rule(A, { rule: { max_per_day: 1 } });
+await exempt(A, { type: "event_change", targetKey: "event_change:one" });
+const mc = await PR.claimCoInitiatedSend({ userId: A, type: "missed_call", targetKey: "missed_call_followup:CA1", message: "[missed-call follow-up]", kind: null, timezone: NY, ruleOnly: true, cls: "unsolicited" });
+check("so the missed-call text is held by their cap, like any send", mc.ok === false && /member's own rule/.test((mc as any).reason));
+// Booked calls (R2): their own exception to the rules they had when they booked; a later rule moves the call, never fails it.
+{
+  const booked = new Date("2026-11-02T12:00:00Z");
+  const mk = (id: string, setAt: string): any => ({ id, area: "contact", covers: "all", channel: "all", basis: "explicit", type: "standing", words: [], source: { via: "text", ref: null }, startsAt: null, expiresAt: null, zone: NY, state: "active", setAt, rule: { none: true } });
+  const before = mk("1", "2026-11-01T12:00:00.000Z");
+  const after = mk("2", "2026-11-02T13:00:00.000Z");
+  const at = new Date("2026-11-02T20:00:00Z");
+  check("a rule set before they booked the call doesn't hold it", G.memberRuleCheck([before], { now: at, cls: "requested", channel: "call", sent: [], rulesAfter: booked }).pass);
+  check("a rule set after holds it, with when it may go", (() => { const c = G.memberRuleCheck([after], { now: at, cls: "requested", channel: "call", sent: [], rulesAfter: booked }); return !c.pass && !!c.retryAt; })());
+  check("the call gate passes the booking time, and a held booked call is moved (pending, new time, reminder reset), never failed", /rulesAfter: kind === "scheduled_call" \? await bookedAt/.test(src("harness/callGate.ts")) && /heldUntil: callState\.memberRule!\.retryAt/.test(src("services/callTrigger.ts")) && /SET status = 'pending', scheduled_for = \$2, reminder_sent_at = NULL/.test(src("jobs/scheduledCall.ts")));
+  check("a queued call reminder whose call is no longer pending and ahead is dropped", /row\.type === "call_reminder" && !\(await callStillAhead/.test(src("services/deferredSends.ts")) && /status = 'pending' AND scheduled_for > \$2/.test(src("services/deferredSends.ts")));
+}
+// Placed calls count by their kind.
+check("a placed call counts by its kind: asked for now isn't counted, booked is requested, check-in a check-in, intake Cue's own", G.callClassOf("router_decision") === "reply" && G.callClassOf("inferred scheduled_call") === "requested" && G.callClassOf("checkin_cadence") === "checkin" && G.callClassOf("auto_intake") === "unsolicited");
+// Owed work never loses its wakes to a hold, and nothing held is lost.
+{
+  const RB = await import("../../src/services/researchBrief.js");
+  check("a research brief held by a rule or the spacing waits however many wakes it's had, and gives its wake back", RB.briefLineOutcome({ sent: false, reason: "held: a task_update went out less than 3h ago" }, 99) === "hold" && /if \(held\) await unspendWake\(task\.userId, task\.id\)/.test(src("services/researchBrief.ts")) && /held \?\? nextSendable/.test(src("services/researchBrief.ts")));
+}
+check("a reminder they set is requested; a held window warning is queued; the call follow-through is asked at the call's end", /reminderText\(r\.what\)\], timezone: zone, cls: "requested"/.test(src("services/relay.ts")) && /type: "task_window"[^\n]*queueIfHeld: true/.test(src("services/taskTurn.ts")) && /answers: \{ askedAt: endedAt \?\? null \}/.test(src("services/callFollowThrough.ts")) && !/askedAt: new Date\(\)/.test(src("services/callFollowThrough.ts")) && /cls: "requested" as const/.test(src("services/deferredSends.ts")));
 const callState = (memberRule: any): any => ({ callStatus: null, callStatusUpdatedAt: null, optedOut: false, subscriptionActive: true, requireSubscription: false, localHourOk: true, lastCallAt: null, evidence: { scheduledCallDue: true, recentInboundText: true, routerPlaceCallDecision: true, cadenceSet: true, autoIntakeEligible: true }, memberRule });
 const held = { name: G.MEMBER_RULE, pass: false, reason: "rule" };
 check("a check-in call and an intake call Cue starts are held by their rule", !CG.decideCall(callState(held), { kind: "checkin_cadence" }, new Date()).allowed && !CG.decideCall(callState(held), { kind: "auto_intake" }, new Date()).allowed && !CG.decideCall(callState(held), { kind: "scheduled_call" }, new Date()).allowed);
 check("a call they ask for right now is never held", CG.decideCall(callState(held), { kind: "router_decision" }, new Date()).allowed);
-check("the call gate reads the rule for the call channel, for the kind it decides", /memberRuleGate\(pool, \{ userId, now, cls: CALL_CLASS\[kind\], channel: "call" \}\)/.test(src("harness/callGate.ts")));
+check("the call gate reads the rule for the call channel, for the kind it decides", /memberRuleGate\(pool, \{ userId, now, cls: CALL_CLASS\[kind\], channel: "call", rulesAfter:/.test(src("harness/callGate.ts")));
 
 // ---------------------------------------------------------------- scope: what a rule covers, and only that
 const now = new Date("2026-11-04T16:00:00Z"); // Wednesday 11am New York
@@ -150,9 +208,10 @@ check("an expired rule holds nothing ('no check-ins this week' is over Monday)",
 // ---------------------------------------------------------------- caps hold across concurrent jobs, retries and bubbles
 reset();
 rule(A, { rule: { max_per_day: 1 } });
-const results = await Promise.all([1, 2, 3, 4].map((i) => exempt(A, { targetKey: `task:race:${i}` })));
+// Notices (no spacing of their own), so only the rule decides.
+const results = await Promise.all([1, 2, 3, 4].map((i) => exempt(A, { type: "event_change", targetKey: `event_change:race:${i}` })));
 check("four jobs at once, a cap of one: exactly one message goes", results.filter((x) => x.sent).length === 1 && db.outbox.length === 3);
-const retry = await exempt(A, { targetKey: "task:race:1" });
+const retry = await exempt(A, { type: "event_change", targetKey: "event_change:race:1" });
 check("a retry of the one that went is a no-op, not a second message", retry.sent === false);
 reset();
 rule(A, { rule: { max_per_day: 2 } });
@@ -207,20 +266,21 @@ check("and nothing else proactive goes in that window", !after.eligible.length);
 // ---------------------------------------------------------------- every send path asks the gate (the proof)
 // Each place a message leaves (a Sendblue send, a dial, or the shared send functions) is listed here with what gates it. A new one
 // fails this test until it's listed: gated, or a reply/system send with its reason.
-const SITES: Record<string, { n: number; gate: string }> = {
-  "harness/proactive.ts": { n: 6, gate: "sendWithLedger (2) and sendExempt (4): memberRuleGate inside the lock, before the ledger row" },
-  "routes/sendblue.ts": { n: 5, gate: "reply: the turn's own answer, STOP/START confirmations, 'Calling you now'" },
-  "routes/co.ts": { n: 1, gate: "missed-call follow-up: memberRuleGate before it" },
-  "services/eventScoring.ts": { n: 2, gate: "in-room: inRoomSendAllowed (memberRuleGate)" },
-  "services/eventUnmatchedFollowUp.ts": { n: 1, gate: "in-room close: inRoomSendAllowed (memberRuleGate)" },
-  "services/networkIntroNudge.ts": { n: 1, gate: "reply: the reveal answers their yes" },
-  "services/documentDelivery.ts": { n: 1, gate: "deps.send after claimCoInitiatedSend (owed or Cue's own), PDF retry: memberRuleGate" },
-  "services/callTools.ts": { n: 1, gate: "reply: a text they asked for on the call they're on" },
-  "agent/conversationTools.ts": { n: 1, gate: "reply: the contact card in the turn" },
-  "harness/failureCount.ts": { n: 1, gate: "team: ops alert to the team phone, never a member" },
-  "otpActions.ts": { n: 1, gate: "system: sign-in codes" },
-  "services/sendblue.ts": { n: 1, gate: "the wrapper itself" },
-  "services/callTrigger.ts": { n: 1, gate: "dial: decideCall's member_rule" },
+// proof: what in that file shows the gate (or why none applies): checked, not just counted.
+const SITES: Record<string, { n: number; gate: string; proof: RegExp }> = {
+  "harness/proactive.ts": { n: 6, gate: "sendWithLedger (2) and sendExempt (4): memberRuleGate inside the lock, before the ledger row", proof: /await memberRuleGate\(client, \{ userId: person\.userId[\s\S]*await memberRuleGate\(client, \{ userId: opts\.userId/ },
+  "routes/sendblue.ts": { n: 5, gate: "reply: the turn's own answer, STOP/START confirmations, 'Calling you now'", proof: /^(?=[\s\S]*isOptOutKeyword\(content\))(?=[\s\S]*const confirmation = "Calling you now\.";)(?=[\s\S]*export async function sendCoReply)/ },
+  "routes/co.ts": { n: 1, gate: "missed-call follow-up: claimCoInitiatedSend (rule + count) before it", proof: /const claim = await P\.claimCoInitiatedSend\(\{ userId: user\.id, type: "missed_call"[\s\S]{0,600}if \(!claim\.ok\) \{[\s\S]{0,300}return;[\s\S]*await sendblue\.messages\.send\(\{\n      number: user\.phone_number/ },
+  "services/eventScoring.ts": { n: 2, gate: "in-room: inRoomSendAllowed (rule + claim under the lock)", proof: /inRoomSendAllowed\(person\.user_id, eventId, \{ claim: \{ targetKey: `in_room:match:[\s\S]*inRoomSendAllowed\(person\.user_id, eventId, \{ claim: \{ targetKey: additiveKey/ },
+  "services/eventUnmatchedFollowUp.ts": { n: 1, gate: "in-room close: inRoomSendAllowed (rule + claim under the lock)", proof: /inRoomSendAllowed\(person\.user_id, eventId, \{ close: true, claim:[\s\S]{0,400}await sendblue\.messages\.send/ },
+  "services/networkIntroNudge.ts": { n: 1, gate: "reply: the reveal answers their yes", proof: /resolveNetworkTeaseReply|reveal send failed/ },
+  "services/documentDelivery.ts": { n: 1, gate: "deps.send after claimCoInitiatedSend (owed or Cue's own); PDF retry claimed", proof: /^(?=[\s\S]*owed: \{ askedAt: o\.askedAt \?\? null \})(?=[\s\S]*ruleOnly: true, cls: "requested")/ },
+  "services/callTools.ts": { n: 1, gate: "reply: a text they asked for on the call they're on", proof: /sendblue\.messages/ },
+  "agent/conversationTools.ts": { n: 1, gate: "reply: the contact card in the turn", proof: /sendContactCard: tool\(/ },
+  "harness/failureCount.ts": { n: 1, gate: "team: ops alert to the team phone, never a member", proof: /TEAM_ALERT_PHONE[\s\S]{0,800}sender: "ops"/ },
+  "otpActions.ts": { n: 1, gate: "system: sign-in codes", proof: /otp|code/i },
+  "services/sendblue.ts": { n: 1, gate: "the wrapper itself", proof: /const sendblue = \{/ },
+  "services/callTrigger.ts": { n: 1, gate: "dial: decideCall's member_rule, read by gatherCallState", proof: /const callState = await gatherCallState\(userId, user, auth\);\n  const gateResult = decideCall\(callState, auth, new Date\(\)\);[\s\S]*if \(!gateResult\.allowed\) \{[\s\S]*await dial\(\{/ },
 };
 const found: Record<string, number> = {};
 const walk = (d: string) => {
@@ -235,6 +295,9 @@ const walk = (d: string) => {
 walk(SRC);
 for (const [f, n] of Object.entries(found)) check(`send site ${f} (${n}) is listed with its gate`, SITES[f]?.n === n);
 for (const f of Object.keys(SITES)) check(`listed send site ${f} still exists`, !!found[f]);
+for (const [f, x] of Object.entries(SITES)) check(`send site ${f} proves its gate (${x.gate})`, x.proof.test(src(f)));
+// The call gate really holds on the rule: decideCall pushes it, and gatherCallState reads it for the kind it decides.
+check("the call gate applies the member's rule to every kind but a call they ask for now", /if \(state\.memberRule && kind && CALL_CLASS\[kind\] !== "reply"\) checks\.push\(state\.memberRule\);/.test(src("harness/callGate.ts")) && /memberRule: kind \? await import\("\.\/notifyGate\.js"\)/.test(src("harness/callGate.ts")));
 const ps = src("harness/proactive.ts");
 const body = (name: string) => ps.slice(ps.indexOf(`async function ${name}(`), ps.indexOf("\n}\n", ps.indexOf(`async function ${name}(`)));
 check("the shared send functions each ask the member's rules", ["sendWithLedger", "sendExempt", "claimCoInitiatedSend", "inRoomSendAllowed"].every((f) => /memberRuleGate\(/.test(body(f))));

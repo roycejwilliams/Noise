@@ -79,7 +79,7 @@ const briefDeps = (h: ReturnType<typeof wired>, now: Date, extra: any = {}) => (
   check("F2: a failed render: the brief as text now, its line first, saying the PDF follows", r.sent && (r as any).pdfPending === true && h.wire.length === 1 && !h.wire[0].media_url && h.wire[0].content.startsWith("Here's the venue brief you asked for earlier today.") && /The PDF version will follow\.$/.test(h.wire[0].content), h.wire);
   check("F2: ...recorded as pdf_pending with a retry set (the one retry path for it)", h.receipts.all.length === 1 && h.receipts.all[0].status === "pdf_pending" && !!h.receipts.all[0].nextRetryAt);
   h.setRender("ok");
-  const deps = { receipts: h.receipts, deliver: h.deliver, person: async () => ({ firstName: "Jordan", phone: person.phone, zone: SF }), blocked: async () => null, log: async () => {}, rule: async () => ({ pass: true }) };
+  const deps = { receipts: h.receipts, deliver: h.deliver, person: async () => ({ firstName: "Jordan", phone: person.phone, zone: SF }), blocked: async () => null, log: async () => {}, claim: async () => ({ ok: true as const, ledgerId: 1 }), release: async () => {} };
   const due = new Date(h.receipts.all[0].nextRetryAt!.getTime() + 1000);
   const fixed = await DD.retryPendingPdfs(due, deps);
   const again = await DD.retryPendingPdfs(new Date(due.getTime() + 3_600_000), deps);

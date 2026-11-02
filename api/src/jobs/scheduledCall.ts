@@ -4,6 +4,7 @@ import pool from "../db/db.js";
 import { cleanCoMessage } from "../services/sendblue.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendExempt } from "../harness/proactive.js";
+import { recordDecision } from "../harness/core.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { MODELS } from "../models.js";
 import { withMember } from "../services/llmUsage.js";
@@ -45,6 +46,10 @@ export async function placeDueCalls(io: import("socket.io").Server | null): Prom
           `UPDATE scheduled_calls SET status = 'completed', call_sid = $2 WHERE id = $1`,
           [row.id, result.call_sid],
         );
+      } else if ("heldUntil" in result && result.heldUntil) {
+        // Held by a rule they set after booking (harness/callGate.ts): moved to when it may go, its reminder with it, never failed.
+        await pool.query(`UPDATE scheduled_calls SET status = 'pending', scheduled_for = $2, reminder_sent_at = NULL WHERE id = $1`, [row.id, result.heldUntil]);
+        await recordDecision({ layer: 8, decision: "call.scheduled_held", userId: row.user_id, outcome: "skip", action: "moved", proposal: { scheduledCallId: row.id, to: result.heldUntil.toISOString() } }).catch(() => {});
       } else {
         console.error(`scheduledCall: triggerCallForUser failed for scheduled call ${row.id}:`, result.error);
         await pool.query(`UPDATE scheduled_calls SET status = 'failed' WHERE id = $1`, [row.id]);
@@ -71,7 +76,7 @@ export function reminderStillDue(call: { status: string; scheduled_for: Date | s
 // window itself.
 export async function sendDueReminders(): Promise<void> {
   const due = await pool.query(
-    `SELECT sc.id, u.id AS user_id, u.first_name, u.phone_number
+    `SELECT sc.id, sc.scheduled_for, u.id AS user_id, u.first_name, u.phone_number
      FROM scheduled_calls sc
      JOIN users u ON u.id = sc.user_id
      WHERE sc.status = 'pending'
@@ -135,7 +140,9 @@ export async function sendDueReminders(): Promise<void> {
         type: "call_reminder",
         targetKey: `call_reminder:${row.id}`,
         messages: [cleanCoMessage(reminderMessage)],
-        // Held by their own rule: queued, never dropped (harness/notifyGate.ts).
+        // About a call minutes away: it gets through a held rule rather than arriving late (R2). Anything else holding it queues it,
+        // and the queue drops it once the call is no longer pending and ahead (services/deferredSends.ts).
+        soonAt: new Date(row.scheduled_for),
         queueIfHeld: true,
       });
     } catch (err: any) {

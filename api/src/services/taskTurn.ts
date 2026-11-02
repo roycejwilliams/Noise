@@ -1082,7 +1082,7 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
     // type so it never counts as the promised thing (services/followThrough.ts sendsSince) or uses up the task's text budget.
     warn: async (text, key) => {
       // Owed (review of #129): the new time for something Co committed to. Held, it would land after the time it's about.
-      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock(), answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null } });
+      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock(), answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, queueIfHeld: true });
       return { sent: r.sent, reason: r.reason };
     },
     writeDocument: async (input, { read }) => {

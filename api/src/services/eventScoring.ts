@@ -10,7 +10,7 @@ import { goalTexts } from "./goalJourney.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import { scheduleUnmatchedFollowUp } from "./eventUnmatchedFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
-import { inRoomSendAllowed, recordInRoomSend, enqueueCandidate, type OutputRules } from "../harness/proactive.js";
+import { inRoomSendAllowed, recordInRoomSend, releaseInRoomClaim, enqueueCandidate, type OutputRules } from "../harness/proactive.js";
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
@@ -518,7 +518,8 @@ async function maybeSendMatchNudge(
       return false;
     }
 
-    if (!(await inRoomSendAllowed(person.user_id, eventId))) {
+    // Claimed on the ledger in the same locked check (harness/proactive.ts inRoomSendAllowed); a failed send takes it back.
+    if (!(await inRoomSendAllowed(person.user_id, eventId, { claim: { targetKey: `in_room:match:${eventId}`, message } }))) {
       console.log(`eventScoring: match nudge throttled for ${person.user_id} (in-room text limit for this event reached)`);
       await releaseMatchNudgeClaim(eventId, person.user_id);
       await freeSlot();
@@ -529,6 +530,7 @@ async function maybeSendMatchNudge(
       await sendblue.messages.send({ number: person.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
     } catch (err: any) {
       console.error(`eventScoring: match nudge send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+      await releaseInRoomClaim(person.user_id, `in_room:match:${eventId}`);
       await releaseMatchNudgeClaim(eventId, person.user_id); // send failed — free the claim so a later pass can retry
       await freeSlot();
       return false;
@@ -729,7 +731,8 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
 
   // Proactive-nudge cap still applies — this is still one of today's
   // discretionary outbound texts, same as the original match nudge.
-  if (!(await inRoomSendAllowed(person.user_id, eventId))) {
+  const additiveKey = `in_room:additive:${eventId}:${Date.now()}`;
+  if (!(await inRoomSendAllowed(person.user_id, eventId, { claim: { targetKey: additiveKey, message } }))) {
     console.log(`eventScoring: additive offer throttled for ${person.user_id} (in-room text limit for this event reached)`);
     await freeSlot();
     return false;
@@ -743,11 +746,12 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
     });
   } catch (err: any) {
     console.error(`eventScoring: additive offer send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+    await releaseInRoomClaim(person.user_id, additiveKey);
     await freeSlot();
     return false;
   }
 
-  await recordInRoomSend(person.user_id, `in_room:additive:${eventId}:${Date.now()}`, message);
+  await recordInRoomSend(person.user_id, additiveKey, message);
   // Who arrived lives only on the offer (services/inRoomOffers.ts), never in their notes: they haven't been told, and
   // after their yes each person is named only through the share gate (eventGuestMatchHandoff.ts handleAdditiveReply).
   await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds: newCandidates.map((c) => c.user_id) }).catch((err: any) => console.error("eventScoring: opening the additive offer failed (non-fatal):", err?.message ?? err));

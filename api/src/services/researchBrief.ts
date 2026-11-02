@@ -326,7 +326,10 @@ export async function deliverBrief(
 export function briefLineOutcome(r: { sent: boolean; reason?: string }, wakes: number): "told" | "hold" | "untold" {
   if (r.sent || r.reason === "already sent") return "told";
   // Held by their own rule or the spacing (harness/notifyGate.ts) waits the same way: it's work they asked for, never dropped for it.
-  if ((r.reason === "outside local hours" || r.reason?.startsWith("held:")) && wakes < BRIEF_HOLD_MAX_WAKES) return "hold";
+  // Held by their own rule or the spacing (harness/notifyGate.ts): it's work they asked for, it waits however long, never dropped for it
+  // (its wake is given back, below).
+  if (r.reason?.startsWith("held:")) return "hold";
+  if (r.reason === "outside local hours" && wakes < BRIEF_HOLD_MAX_WAKES) return "hold";
   return "untold";
 }
 
@@ -358,9 +361,14 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null } }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
     const next = briefLineOutcome(r, task.wakes);
     if (next === "hold") {
-      const { holdBriefLine } = await import("./coTasks.js");
+      const { holdBriefLine, unspendWake } = await import("./coTasks.js");
       const { nextSendable } = await import("./memberTime.js");
-      if (await holdBriefLine(task.userId, task.id, { text, status, outcome }, nextSendable(new Date(), zone))) return;
+      // Held by their rule or the spacing: it waits until it may go, and the wake comes back (a hold never uses up an owed delivery).
+      const held = r.reason?.startsWith("held:") ? (r as { retryAt?: Date }).retryAt ?? null : null;
+      if (await holdBriefLine(task.userId, task.id, { text, status, outcome }, held ?? nextSendable(new Date(), zone))) {
+        if (held) await unspendWake(task.userId, task.id).catch(() => {});
+        return;
+      }
     }
     await closeTask(task.userId, task.id, next === "told" ? status : "dropped", next === "told" ? outcome : `${outcome}; never told them (${r.reason ?? "not sent"})`);
   };

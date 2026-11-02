@@ -399,7 +399,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   // The member's own rules and what's been sent (harness/notifyGate.ts): this world's members set none.
   if (has("FROM co_facts WHERE owner_user_id = $1 AND relation = 'prefers'")) return R([]);
   if (has("SELECT type, sent_at, notify_class FROM proactive_sends WHERE user_id = $1")) return R(W.proactiveSends.filter((s) => s.user_id === p[0]).map((s) => ({ type: s.type, sent_at: new Date(), notify_class: null })));
-  if (has("SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript'")) return R([]);
+  if (has("SELECT created_at, reason FROM harness_decisions WHERE user_id = $1 AND decision = 'call.gate'")) return R([]);
   // in-room sends cap / ledger
   if (has("SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'")) {
     return R(W.proactiveSends.filter((s) => s.user_id === p[0] && s.type === "in_room" && String(s.target_key).startsWith("in_room:")).map((s) => ({ target_key: s.target_key })));

@@ -260,7 +260,7 @@ export async function sendDueReminders(): Promise<number> {
     const claimed = await pool.query(`UPDATE member_reminders SET queued_at = NOW() WHERE id = $1 AND sent_at IS NULL AND queued_at IS NULL RETURNING id`, [r.id]).catch(() => ({ rows: [] as any[] }));
     if (!claimed.rows[0]) continue;
     const zone = await memberZone(r.user_id);
-    const s = await sendExemptWhenAllowed({ userId: r.user_id, phoneNumber: r.phone_number, type: "direct_ask", targetKey: `reminder:${r.id}`, messages: [reminderText(r.what)], timezone: zone, after: { kind: "reminder", payload: { reminderId: r.id } } });
+    const s = await sendExemptWhenAllowed({ userId: r.user_id, phoneNumber: r.phone_number, type: "direct_ask", targetKey: `reminder:${r.id}`, messages: [reminderText(r.what)], timezone: zone, cls: "requested", after: { kind: "reminder", payload: { reminderId: r.id } } });
     // Its key is already on the send ledger: an earlier try went out (proactive_sends is written only when the text was accepted), so
     // it's recorded as sent, never sent twice.
     if (s.reason === "already sent") await reminderDelivered(Number(r.id), "sent");

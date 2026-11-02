@@ -31,7 +31,7 @@ export type TriggerCallResult =
   | { success: true; call_sid: string }
   // dialFailed: the gate allowed it but the call never started (the call link or Twilio's create threw); the error then says whether
   // the call.dial report landed (services/callReasons.ts dialFailureError).
-  | { success: false; error: string; dialFailed?: true };
+  | { success: false; error: string; dialFailed?: true; heldUntil?: Date };
 
 // Twilio's create, swappable in layer-1 tests (no test may reach Twilio).
 type Dial = (opts: Parameters<typeof twilioClient.calls.create>[0]) => Promise<{ sid: string }>;
@@ -78,7 +78,9 @@ export async function triggerCallForUser(
     reason: gateResult.authorization ? `${gateResult.inferred ? "inferred " : ""}${gateResult.authorization}` : null,
   });
   if (!gateResult.allowed) {
-    return { success: false, error: gateResult.error ?? "Call blocked." };
+    // Held only by the member's own rule: when it may go (a booked call is moved there, never failed: jobs/scheduledCall.ts).
+    const onlyRule = gateResult.checks.filter((c) => !c.pass).every((c) => c.name === "member_rule") && callState.memberRule?.retryAt;
+    return { success: false, error: gateResult.error ?? "Call blocked.", ...(onlyRule ? { heldUntil: callState.memberRule!.retryAt } : {}) };
   }
 
   // Every call runs on GPT-Live and never on ElevenLabs (Royce, 2026-10-31; routes/co.ts gptLiveAnswer answers when they pick up).

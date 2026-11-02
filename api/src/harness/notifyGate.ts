@@ -3,8 +3,8 @@
 // has one, so a rule set or withdrawn after something was queued or scheduled still decides it.
 //
 // Message classes (what a rule covers is the member's choice, read from their words: PrefCovers):
-//   reply        Cue's answer to a text they just sent (or to what they asked on a call they're on). Never held and never counted:
-//                they opened the conversation. A rule can't silence an answer to their own message.
+//   reply        the turn's own answer to their text (or what Cue says on a call they're on). Never held and never counted (Royce,
+//                2026-11-02, R1). Only the turn's answer is a reply: a delivery that lands later, even minutes later, is requested.
 //   requested    something they asked for or signed up for, arriving later: an answer to their ask, a task's result, a document,
 //                a reminder they set, an event change or a reminder for a call they booked. A notification all the same: held by a
 //                rule that covers "all", never by one that covers only what Cue starts.
@@ -48,10 +48,11 @@ const minutes = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3,
 
 // Pure: one rule against one send. Null when it allows it; else why (ids and field names only, never their words) and when it could
 // go. Sends counted are those of the same channel scope and a class the rule covers.
-export function ruleBlocks(p: Preference, o: { now: Date; cls: SendClass; channel: NotifyChannel; sent: Counted[] }): { why: string; retryAt: Date | null } | null {
+export function ruleBlocks(p: Preference, o: { now: Date; cls: SendClass; channel: NotifyChannel; sent: Counted[]; zone?: string | null }): { why: string; retryAt: Date | null } | null {
   if (!covers(p.area === "checkins" ? "checkins" : p.covers, o.cls)) return null;
   if (p.channel !== "all" && p.channel !== o.channel) return null;
-  const zone = wordsZone(p.zone);
+  // Their zone now (a member who moved keeps "not before 10" at 10 where they are); the rule's own zone when it isn't known.
+  const zone = wordsZone(o.zone ?? p.zone);
   const local = DateTime.fromJSDate(o.now).setZone(zone);
   const tomorrow = local.plus({ days: 1 }).startOf("day");
   const r = p.rule;
@@ -87,9 +88,20 @@ export function ruleBlocks(p: Preference, o: { now: Date; cls: SendClass; channe
 }
 
 // Pure: the gate's check for one send. pass when no rule holds it; retryAt: the soonest moment every rule that held it could allow it.
-export function memberRuleCheck(prefs: Preference[], o: { now: Date; cls: SendClass; channel: NotifyChannel; sent: Counted[] }): GateCheck & { retryAt?: Date } {
+// soonAt: when what this send is about happens (a call they booked, an event they're going to). Within NOTICE_SOON_HOURS of it, a notice
+// gets through a held rule rather than arriving late (Royce, 2026-11-02, R2); it still counts. rulesAfter: only rules set after this
+// moment hold it (a call they booked is their own exception to the rules they had then).
+export const NOTICE_SOON_HOURS = 6;
+export function noticeIsSoon(soonAt: Date | null | undefined, now: Date): boolean {
+  if (!soonAt) return false;
+  const ms = soonAt.getTime() - now.getTime();
+  return ms <= NOTICE_SOON_HOURS * 3_600_000 && ms >= -3 * 3_600_000;
+}
+export function memberRuleCheck(prefs: Preference[], o: { now: Date; cls: SendClass; channel: NotifyChannel; sent: Counted[]; zone?: string | null; soonAt?: Date | null; rulesAfter?: Date | null }): GateCheck & { retryAt?: Date } {
   if (o.cls === "reply") return { name: MEMBER_RULE, pass: true };
-  const held = holdingRules(prefs, o.now).map((p) => ruleBlocks(p, o)).filter((x): x is NonNullable<typeof x> => !!x);
+  if (o.cls === "requested" && noticeIsSoon(o.soonAt, o.now)) return { name: MEMBER_RULE, pass: true, reason: "soon: what it's about happens within hours" };
+  const rules = o.rulesAfter ? holdingRules(prefs, o.now).filter((p) => Date.parse(p.setAt) > o.rulesAfter!.getTime()) : holdingRules(prefs, o.now);
+  const held = rules.map((p) => ruleBlocks(p, o)).filter((x): x is NonNullable<typeof x> => !!x);
   if (!held.length) return { name: MEMBER_RULE, pass: true };
   const at = Math.max(...held.map((h) => (h.retryAt ?? new Date(o.now.getTime() + 86_400_000)).getTime()));
   return { name: MEMBER_RULE, pass: false, reason: `the member's own rule holds it (${held.map((h) => h.why).join("; ")})`, retryAt: new Date(at) };
@@ -180,23 +192,33 @@ export async function loadCounted(db: Q, userId: string): Promise<Counted[]> {
     db.query(`SELECT type, sent_at, notify_class FROM proactive_sends WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '8 days'`, [userId])
       // Before the column's migration has run: every row by its type's class.
       .catch(() => db.query(`SELECT type, sent_at FROM proactive_sends WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '8 days'`, [userId])),
-    // Calls Cue placed itself (harness/callGate.ts reads the same marker for its own gap).
-    db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND content LIKE 'Co initiated call%' AND created_at > NOW() - INTERVAL '8 days'`, [userId]).catch(() => ({ rows: [] as any[] })),
+    // Calls placed, by the kind the call gate decided them as (harness/callGate.ts records it): one they asked for now is a reply (not
+    // counted), one they booked is requested, a check-in call a check-in, an intake call Cue's own.
+    db.query(`SELECT created_at, reason FROM harness_decisions WHERE user_id = $1 AND decision = 'call.gate' AND action = 'place_call' AND created_at > NOW() - INTERVAL '8 days'`, [userId]).catch(() => ({ rows: [] as any[] })),
   ]);
   return [
     ...countedRows(rows.map((r: any) => ({ sentAt: new Date(r.sent_at), type: String(r.type), cls: r.notify_class ?? null }))),
-    ...calls.map((r: any) => ({ at: new Date(r.created_at), cls: "unsolicited" as const, channel: "call" as const })),
+    ...calls.flatMap((r: any) => {
+      const cls = callClassOf(String(r.reason ?? ""));
+      return cls === "reply" ? [] : [{ at: new Date(r.created_at), cls, channel: "call" as const }];
+    }),
   ];
+}
+
+// Pure: a placed call's class from the call gate's recorded authorization ("scheduled_call", "inferred auto_intake", ...).
+export function callClassOf(reason: string): SendClass {
+  const kind = reason.replace(/^inferred /, "").trim();
+  return ({ user_initiated: "reply", router_decision: "reply", scheduled_call: "requested", checkin_cadence: "checkin", auto_intake: "unsolicited" } as Record<string, SendClass>)[kind] ?? "unsolicited";
 }
 
 // The whole gate for one send, read fresh: their rules and what's been sent. A rules read that fails holds the send (it can't know a
 // rule isn't there) and says so; it's retried like any hold.
-export async function memberRuleGate(db: Q, o: { userId: string; now: Date; cls: SendClass; channel: NotifyChannel }): Promise<GateCheck & { retryAt?: Date }> {
+export async function memberRuleGate(db: Q, o: { userId: string; now: Date; cls: SendClass; channel: NotifyChannel; soonAt?: Date | null; rulesAfter?: Date | null }): Promise<GateCheck & { retryAt?: Date }> {
   if (o.cls === "reply") return { name: MEMBER_RULE, pass: true };
   const { activePreferences } = await import("../services/memberPreferences.js");
   try {
-    const [prefs, sent] = await Promise.all([activePreferences(o.userId, o.now, db), loadCounted(db, o.userId)]);
-    return memberRuleCheck(prefs, { now: o.now, cls: o.cls, channel: o.channel, sent });
+    const [prefs, sent, zone] = await Promise.all([activePreferences(o.userId, o.now, db), loadCounted(db, o.userId), import("../services/memberTime.js").then((M) => M.memberZone(o.userId)).catch(() => null)]);
+    return memberRuleCheck(prefs, { now: o.now, cls: o.cls, channel: o.channel, sent, zone, soonAt: o.soonAt, rulesAfter: o.rulesAfter });
   } catch (err: any) {
     return { name: MEMBER_RULE, pass: false, reason: `couldn't read their rules (${String(err?.message ?? err).slice(0, 60)})`, retryAt: new Date(o.now.getTime() + 15 * 60_000) };
   }

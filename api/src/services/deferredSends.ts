@@ -249,10 +249,13 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     else if (row.after_kind === "event_direct_ask" && (await (await import("./roomMatching.js")).mayAsk(String((row.after_payload as any)?.eventId ?? ""), String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? ""), "deferredSends.directAsk"))) result = { sent: false, reason: "no longer valid" };
     else if (row.after_kind === "event_direct_ask" && (await (await import("./roomMatching.js")).directAskStale(String((row.after_payload as any)?.eventId ?? ""), String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? "")))) result = { sent: false, reason: "no longer valid" };
     else if (row.after_kind === "network_intro_ask" && (await (await import("./networkIntroNudge.js")).networkAskStale(String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? "")))) result = { sent: false, reason: "no longer valid" };
+    // A call reminder whose call is no longer pending and still ahead is stale: dropped, never sent after the call.
+    else if (row.type === "call_reminder" && !(await callStillAhead(String(row.target_key), now))) result = { sent: false, reason: "no longer valid" };
     else if (!localHourOk(now, row.timezone)) result = { sent: false, reason: "outside local hours" };
     else {
       result = await deps
-        .send({ userId: row.user_id, phoneNumber: row.phone_number, type: row.type, targetKey: row.target_key, messages, timezone: row.timezone, respectHours: true, now })
+        // A reminder they set is a delivery they asked for (requested), whatever its send type (harness/notifyGate.ts).
+        .send({ userId: row.user_id, phoneNumber: row.phone_number, type: row.type, targetKey: row.target_key, messages, timezone: row.timezone, respectHours: true, now, ...(/^reminder:/.test(String(row.target_key)) ? { cls: "requested" as const } : {}) })
         .catch((err: any) => ({ sent: false, reason: `error: ${String(err?.message ?? err)}` }));
     }
     const o = outcomeOf(result, true);
@@ -284,6 +287,13 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     await recordDecision({ layer: 7, decision: "proactive.deferredSend", userId: row.user_id, outcome: o === "sent" ? "act" : "skip", action: o, reason: o === "sent" ? undefined : result.reason, proposal: { type: row.type, targetKey: row.target_key, attempts } }).catch(() => {});
   }
   return out;
+}
+
+// The booked call a queued reminder is for (call_reminder:<id>) is still pending and ahead. Unreadable: not ahead (never a late reminder).
+export async function callStillAhead(targetKey: string, now: Date): Promise<boolean> {
+  const id = targetKey.replace(/^call_reminder:/, "");
+  const { rows } = await pool.query(`SELECT 1 FROM scheduled_calls WHERE id::text = $1 AND status = 'pending' AND scheduled_for > $2`, [id, now]).catch(() => ({ rows: [] as any[] }));
+  return rows.length > 0;
 }
 
 // Whether a send for this key is waiting (queued or mid-send). Readers use it to say "queued", never "sent".

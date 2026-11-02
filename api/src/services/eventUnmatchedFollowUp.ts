@@ -5,7 +5,7 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { MODELS } from "../models.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
-import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
+import { inRoomSendAllowed, recordInRoomSend, releaseInRoomClaim } from "../harness/proactive.js";
 import { draftWithConsent, eventPromptLine } from "../harness/introConsent.js";
 import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd, roomPhase, type RoomPhase } from "../harness/introConsent.js";
 import { getEventGuestList, type LumaGuest } from "./luma.js";
@@ -154,7 +154,8 @@ Write the goodbye a good host gives at the door: one short, warm line (no em das
     },
   );
   const message = closeText(draft);
-  if (!(await inRoomSendAllowed(person.user_id, eventId, { close: true }))) {
+  // Claimed on the ledger in the same locked check (the member's own rule holds the close too: Royce, R3); a failed send takes it back.
+  if (!(await inRoomSendAllowed(person.user_id, eventId, { close: true, claim: { targetKey: `in_room:close:${eventId}`, message } }))) {
     console.log(`eventUnmatchedFollowUp: close held for ${person.user_id} (texts paused or matching stopped)`);
     return "held";
   }
@@ -162,6 +163,7 @@ Write the goodbye a good host gives at the door: one short, warm line (no em das
     await sendblue.messages.send({ number: person.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
   } catch (err: any) {
     console.error(`eventUnmatchedFollowUp: close send failed for ${person.user_id} (non-fatal, tried again next pass):`, err?.message ?? err);
+    await releaseInRoomClaim(person.user_id, `in_room:close:${eventId}`);
     return "failed";
   }
   await recordInRoomSend(person.user_id, `in_room:close:${eventId}`, message);

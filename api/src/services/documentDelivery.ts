@@ -409,7 +409,7 @@ export const asksToResend = (words: string): boolean => {
 export const PDF_RETRY = { firstAfterMs: 5 * 60_000, maxAttempts: 5, backoffMs: 15 * 60_000, claimMs: 15 * 60_000 } as const;
 
 // The PDFs still owed after a text fallback, retried inside their delivery hours: sent with its own line, never the text again.
-export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?: ReceiptStore; deliver?: typeof deliverDocument; person?: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null } | null>; blocked?: (userId: string, zone: string | null, now: Date, o?: { immediate?: boolean; asked?: boolean }) => Promise<string | null>; log?: RecordDeps["log"]; rule?: (userId: string, now: Date) => Promise<{ pass: boolean; retryAt?: Date }> } = {}): Promise<{ sent: number; failed: number; waiting: number }> {
+export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?: ReceiptStore; deliver?: typeof deliverDocument; person?: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null } | null>; blocked?: (userId: string, zone: string | null, now: Date, o?: { immediate?: boolean; asked?: boolean }) => Promise<string | null>; log?: RecordDeps["log"]; claim?: (userId: string, now: Date, key: string) => Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }>; release?: (userId: string, ledgerId: number) => Promise<void> } = {}): Promise<{ sent: number; failed: number; waiting: number }> {
   const R = await import("./deliveryReceipts.js");
   const { deliveredThing } = await import("./speakable.js");
   const { nextDeliveryTime } = await import("./memberTime.js");
@@ -445,12 +445,14 @@ export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?
     }
     // Their own rule (harness/notifyGate.ts): the PDF is a delivery they asked for, a notification all the same; held, it waits for
     // when the rule allows it (attempts stay), never dropped.
-    const rule = blocked ? null : await (deps.rule ?? ((u: string, at: Date) => import("../harness/notifyGate.js").then((G) => G.memberRuleGate(pool, { userId: u, now: at, cls: "requested", channel: "text" }))))(rec.userId, now);
-    if (rule && !rule.pass) {
-      await store.defer(rec.id, rule.retryAt ?? nextDeliveryTime(new Date(now.getTime() + 3_600_000), p.zone), "waiting: their own rule");
+    // Claimed on the ledger under their lock (it counts, harness/notifyGate.ts); a send that then fails takes it back.
+    const claim = blocked ? null : await (deps.claim ?? ((u: string, at: Date, key: string) => import("../harness/proactive.js").then((PR) => PR.claimCoInitiatedSend({ userId: u, type: "task_update", targetKey: key, message: "[document] the PDF version", kind: null, timezone: p.zone, now: at, ruleOnly: true, cls: "requested" }))))(rec.userId, now, `pdf_retry:${rec.id}:${rec.attempts}`);
+    if (claim && !claim.ok) {
+      await store.defer(rec.id, claim.retryAt ?? nextDeliveryTime(new Date(now.getTime() + 3_600_000), p.zone), "waiting: their own rule");
       out.waiting++;
       continue;
     }
+    const unclaim = async () => { if (claim?.ok) await (deps.release ?? ((u: string, id: number) => import("../harness/proactive.js").then((PR) => PR.releaseCoInitiatedClaim(u, id))))(rec.userId, claim.ledgerId).catch(() => {}); };
     if (blocked) {
       // Opted out, no longer a member, or unreadable: never retried again.
       await store.close(rec.id, `not sent: ${blocked}`);
@@ -464,6 +466,7 @@ export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?
       await log({ layer: 7, decision: "document.pdf_retry", userId: rec.userId, outcome: "act", action: "pdf_sent", proposal: { receipt: rec.id, attempt: rec.attempts + 1 } }).catch(() => {});
       out.sent++;
     } else {
+      await unclaim();
       const last = rec.attempts + 1 >= PDF_RETRY.maxAttempts;
       await store.pdfRetry(rec.id, r.why, last ? null : new Date(now.getTime() + PDF_RETRY.backoffMs * 2 ** rec.attempts));
       await log({ layer: 7, decision: "document.pdf_retry", userId: rec.userId, outcome: "skip", action: last ? "gave_up" : "retry_later", reason: r.why, proposal: { receipt: rec.id, attempt: rec.attempts + 1 } }).catch(() => {});
