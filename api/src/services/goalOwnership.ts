@@ -809,7 +809,8 @@ export async function runGoalCheckin(task: CoTask, opts: { now?: () => Date } = 
     return { action: "held: draft" };
   }
   // The thing they were told would come: owed, so no Co-initiated pacing, but their hours, opt-out and the pause still hold.
-  const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:checkin:${goal.id}`, messages: composed.messages, timezone: zone, respectHours: true, now: now() });
+  // A check-in by its class (harness/notifyGate.ts): "no check-ins this week" holds it; a hold is retried below like any not-sent.
+  const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:checkin:${goal.id}`, messages: composed.messages, timezone: zone, respectHours: true, now: now(), cls: "checkin" });
   if (!r.sent) {
     const at = new Date(Math.max(now().getTime() + HOUR, nextSendable(now(), zone).getTime()));
     await scheduleTaskAt(userId, task.id, at, task.planNext ?? "Check in");

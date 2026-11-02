@@ -409,7 +409,7 @@ export const asksToResend = (words: string): boolean => {
 export const PDF_RETRY = { firstAfterMs: 5 * 60_000, maxAttempts: 5, backoffMs: 15 * 60_000, claimMs: 15 * 60_000 } as const;
 
 // The PDFs still owed after a text fallback, retried inside their delivery hours: sent with its own line, never the text again.
-export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?: ReceiptStore; deliver?: typeof deliverDocument; person?: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null } | null>; blocked?: (userId: string, zone: string | null, now: Date, o?: { immediate?: boolean; asked?: boolean }) => Promise<string | null>; log?: RecordDeps["log"] } = {}): Promise<{ sent: number; failed: number; waiting: number }> {
+export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?: ReceiptStore; deliver?: typeof deliverDocument; person?: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null } | null>; blocked?: (userId: string, zone: string | null, now: Date, o?: { immediate?: boolean; asked?: boolean }) => Promise<string | null>; log?: RecordDeps["log"]; rule?: (userId: string, now: Date) => Promise<{ pass: boolean; retryAt?: Date }> } = {}): Promise<{ sent: number; failed: number; waiting: number }> {
   const R = await import("./deliveryReceipts.js");
   const { deliveredThing } = await import("./speakable.js");
   const { nextDeliveryTime } = await import("./memberTime.js");
@@ -440,6 +440,14 @@ export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?
     if (blocked === QUIET_HOURS) {
       // Not a failed try, just later: attempts stay.
       await store.defer(rec.id, nextDeliveryTime(new Date(now.getTime() + 60_000), p.zone), `waiting: ${blocked}`);
+      out.waiting++;
+      continue;
+    }
+    // Their own rule (harness/notifyGate.ts): the PDF is a delivery they asked for, a notification all the same; held, it waits for
+    // when the rule allows it (attempts stay), never dropped.
+    const rule = blocked ? null : await (deps.rule ?? ((u: string, at: Date) => import("../harness/notifyGate.js").then((G) => G.memberRuleGate(pool, { userId: u, now: at, cls: "requested", channel: "text" }))))(rec.userId, now);
+    if (rule && !rule.pass) {
+      await store.defer(rec.id, rule.retryAt ?? nextDeliveryTime(new Date(now.getTime() + 3_600_000), p.zone), "waiting: their own rule");
       out.waiting++;
       continue;
     }
@@ -507,12 +515,12 @@ export type TaskDocDeps = {
   now: () => Date;
   receipts?: ReceiptStore;
   // A Co-initiated document (a look-out from Co's own promise): claimed on the proactive ledger first, released if nothing went.
-  claim?: (o: { userId: string; targetKey: string; message: string; kind: "find" | null; zone: string | null; now: Date }) => Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }>;
+  claim?: (o: { userId: string; targetKey: string; message: string; kind: "find" | null; zone: string | null; now: Date; owed?: { askedAt: Date | null } }) => Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }>;
   release?: (userId: string, ledgerId: number) => Promise<void>;
 };
 export const realTaskDocDeps: TaskDocDeps = {
   theirWords: loadTheirWords, blocked: documentSendBlocked, deliver: deliverDocument, record: recordDocumentSent, now: () => new Date(),
-  claim: async (c) => (await import("../harness/proactive.js")).claimCoInitiatedSend({ userId: c.userId, type: "task_update", targetKey: c.targetKey, message: c.message, kind: c.kind, timezone: c.zone, now: c.now }),
+  claim: async (c) => (await import("../harness/proactive.js")).claimCoInitiatedSend({ userId: c.userId, type: "task_update", targetKey: c.targetKey, message: c.message, kind: c.kind, timezone: c.zone, now: c.now, owed: c.owed }),
   release: async (userId, id) => (await import("../harness/proactive.js")).releaseCoInitiatedClaim(userId, id),
 };
 
@@ -542,6 +550,12 @@ export async function sendDocumentForTask(
   if (o.coInitiated) {
     if (!deps.claim) return { ok: false, blocked: true, why: "Not sent: a document Cue starts itself needs the proactive ledger, and it isn't available here." };
     const c = await deps.claim({ userId: o.userId, targetKey: `task:${o.taskId}:doc:${now.getTime()}`, message: `[document] ${doc.title}`, kind: o.coInitiated.kind, zone: o.zone, now });
+    if (!c.ok) return { ok: false, blocked: true, nextAt: c.retryAt, why: `Not sent: ${c.reason}.` };
+    claimed = c.ledgerId;
+  } else if (deps.claim) {
+    // A document they asked for: claimed through the same lock and ledger (harness/proactive.ts claimCoInitiatedSend owed), so their own
+    // rule holds it and it counts. Cue's answer to their latest message goes; a later delivery waits for when the rule allows it.
+    const c = await deps.claim({ userId: o.userId, targetKey: `task:${o.taskId}:doc:${now.getTime()}`, message: `[document] ${doc.title}`, kind: null, zone: o.zone, now, owed: { askedAt: o.askedAt ?? null } });
     if (!c.ok) return { ok: false, blocked: true, nextAt: c.retryAt, why: `Not sent: ${c.reason}.` };
     claimed = c.ledgerId;
   }

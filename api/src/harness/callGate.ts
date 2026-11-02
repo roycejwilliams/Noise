@@ -71,6 +71,19 @@ export type CallState = {
     // gatherCallState; logged with the gate's decision. Undefined only in older pure eval cases (no read happened).
     callReason?: CallReasonResult;
   };
+  // The member's own rules for this call (harness/notifyGate.ts), read by gatherCallState for the kind it will be decided as. Missing:
+  // not read (older pure cases), nothing held by one.
+  memberRule?: GateCheck | null;
+};
+
+// A call's class for the member's own rules (harness/notifyGate.ts): one they asked for now is Cue answering them; one they booked is a
+// delivery of what they asked for; a check-in call is a check-in; an intake call is Cue's own.
+export const CALL_CLASS: Record<CallAuthKind, import("./notifyGate.js").SendClass> = {
+  user_initiated: "reply",
+  router_decision: "reply",
+  scheduled_call: "requested",
+  checkin_cadence: "checkin",
+  auto_intake: "unsolicited",
 };
 
 export type CallDecision = {
@@ -160,6 +173,10 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
         : `${NO_REASON}${passed.length ? ` (considered: ${passed.slice(0, 4).map((c) => `${c.kind}: ${String(c.why ?? "").split(":")[0]}`).join("; ")})` : " (nothing in their life on file to call about)"}`,
     });
   }
+
+  // The member's own rules ("no calls", "not before 10", "nothing this week"): held like any send (harness/notifyGate.ts). A call they
+  // ask for right now is their reply, never held.
+  if (state.memberRule && kind && CALL_CLASS[kind] !== "reply") checks.push(state.memberRule);
 
   const gapMin = RECENT_CALL_MINUTES[kind ?? "auto_intake"];
   const sinceLastMs = state.lastCallAt ? now.getTime() - state.lastCallAt.getTime() : Infinity;
@@ -335,6 +352,7 @@ export async function gatherCallState(
     timezoneKnown: !!timezone && DateTime.now().setZone(timezone).isValid,
     lastCallAt: lastCall.rows[0]?.at ? new Date(lastCall.rows[0].at) : null,
     evidence,
+    memberRule: kind ? await import("./notifyGate.js").then(({ memberRuleGate }) => memberRuleGate(pool, { userId, now, cls: CALL_CLASS[kind], channel: "call" })).then(({ retryAt: _r, ...c }) => c) : null,
   };
 }
 

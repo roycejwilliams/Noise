@@ -122,6 +122,16 @@ async function sendMissedCallFollowUpInScope(
   CallStatus: string,
   situationPrompt: string,
 ): Promise<void> {
+  // The member's own rules (harness/notifyGate.ts): a follow-up to a call they didn't pick up is Cue's own text. Held, it isn't sent
+  // (nothing they asked for is lost: the call was Cue's), and the hold is logged with ids only.
+  {
+    const { memberRuleGate } = await import("../harness/notifyGate.js");
+    const rule = await memberRuleGate(pool, { userId: user.id, now: new Date(), cls: "unsolicited", channel: "text" });
+    if (!rule.pass) {
+      await recordDecision({ layer: 8, decision: "call.missed_followup", userId: user.id, outcome: "skip", action: "held_member_rule", proposal: { callSid: CallSid } }).catch(() => {});
+      return;
+    }
+  }
   let coMessage: string;
   try {
     const result = await propagateAttributes(

@@ -234,7 +234,7 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     const stale = verdict && !verdict.send ? verdict : null;
     if (verdict?.send) recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "act", action: "sent_as_written", proposal: { id: row.id, type: row.type }, reason: verdict.why }).catch(() => {});
 
-    let result: { sent: boolean; reason?: string };
+    let result: { sent: boolean; reason?: string; retryAt?: Date };
     if (row.archived) result = { sent: false, reason: "archived" };
     else if (stale) {
       result = { sent: false, reason: `corrected since queued: "${stale.correction.was}" is now "${stale.correction.now}" (${stale.why})`.slice(0, 300) };
@@ -256,6 +256,13 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
         .catch((err: any) => ({ sent: false, reason: `error: ${String(err?.message ?? err)}` }));
     }
     const o = outcomeOf(result, true);
+    // Held by their own rule or the spacing (harness/notifyGate.ts): it waits for when it may go, rechecked then, never dropped.
+    const heldUntil = (result as { retryAt?: Date }).retryAt;
+    if (!result.sent && result.reason?.startsWith("held:") && heldUntil) {
+      await requeue(heldUntil, null);
+      out.requeued++;
+      continue;
+    }
     if (o === "retry_hours") {
       await requeue(nextLocalHour(now, row.timezone, RULES.startHour), null);
       out.requeued++;

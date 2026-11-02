@@ -421,6 +421,8 @@ export function registerJobs(io: Server) {
             type: "missed_call",
             targetKey: `missed_call:${row.id}`,
             messages: [text],
+            // Held by their own rule: queued, never dropped (harness/notifyGate.ts).
+            queueIfHeld: true,
           });
         } catch (smsErr: any) {
           console.error(`Delayed missed-call follow-up failed for ${row.user_id}:`, smsErr?.message ?? smsErr);
