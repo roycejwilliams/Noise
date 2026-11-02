@@ -386,7 +386,7 @@ export type ResolutionResult = {
 export const NO_RESOLUTION: ResolutionResult = { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [], relatedGoals: [], relatedAskIds: [], unsure: [], quoteOf: {} };
 
 // A related or unsure item for the decision log: its kind and id, a goal by its hash (its text is their words).
-const logRef = (p: ProposedResolution): { kind: string; ref: string } => ({ kind: p.kind, ref: p.kind === "goal" ? crypto.createHash("sha256").update(p.item).digest("hex").slice(0, 16) : p.item });
+const logRef = (p: ProposedResolution): { kind: string; ref: string } => ({ kind: p.kind, ref: p.kind === "ask" ? p.item : crypto.createHash("sha256").update(p.item).digest("hex").slice(0, 16) });
 
 // The numbered list every resolution read sees (here, services/turnLearning.ts, services/callLearning.ts): their open asks and look-outs,
 // their goals, and Cue's open tasks for them, each labelled so the read knows what each one is.
@@ -456,8 +456,13 @@ export async function applyResolutionOutput(
         userId,
         outcome: gated.accepted.length ? "act" : "skip",
         action: "retire_items",
-        proposal: gated.proposals,
-        checks: gated.checks,
+        // Ids, kinds and hashes only (review of #351): their quotes and a goal's or blocker's text are their words, and this log is
+        // never scrubbed by a removal.
+        proposal: { proposed: gated.proposals.map(logRef), accepted: gated.accepted.map(logRef) },
+        checks: [
+          ...gated.rejected.map((x) => ({ name: "resolution_supported", pass: false, reason: `${logRef(x.proposal).kind} ${logRef(x.proposal).ref}: ${x.reason}` })),
+          ...(gated.accepted.length ? [{ name: "resolution_supported", pass: true, reason: `${gated.accepted.length} accepted` }] : []),
+        ],
         reason: `${gated.accepted.length} of ${gated.proposals.length} retirements supported by a quote`,
       });
     }
@@ -1240,10 +1245,10 @@ export async function applyRetirements(userId: string, r: ResolutionResult): Pro
     for (const t of tasks) {
       const n = Number(t.slice(TASK_ITEM.length));
       if (!Number.isInteger(n)) continue;
-      // Their words stay out of the task's outcome and the commitment log (it closes at their word: released); a related close never
-      // settles the goal Cue carries for them (review of #351).
+      // Their words stay out of the task's outcome and the commitment log (it closes at their word: released); no close from this read
+      // ever settles the goal Cue carries for them, direct or related (review of #351: a quote is never enough to settle Cue's own goal).
       const outcome = related.has(t) ? "Dropped: what it served is off, at their word" : "Dropped: they said it's no longer needed";
-      if (await closeTask(userId, n, "dropped", outcome, { theirWord: quote(t), logWords: false, cascade: !related.has(t) }).catch(() => false)) out.tasksClosed.push(n);
+      if (await closeTask(userId, n, "dropped", outcome, { theirWord: quote(t), logWords: false, cascade: false }).catch(() => false)) out.tasksClosed.push(n);
     }
   }
 

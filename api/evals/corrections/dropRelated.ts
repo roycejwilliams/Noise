@@ -212,6 +212,8 @@ const idx = async (id: string) => (await J.openErrandsAndGoals(U)).findIndex((i)
     check("nothing about any of it sends a text (no candidate queued)", w.candidates.length === 0 && !w.sql.some((s) => /sendblue|outbound_messages/i.test(s)));
     const logs = w.decisions.filter((d) => JSON.stringify(d.proposal).includes("retire_related") || JSON.stringify(d.proposal).includes("unsure_after_drop"));
     check("what went with it, and what's kept to ask, is logged by kind and id only: never their words or a goal's text", logs.length === 2 && logs.every((d) => !/Northwind|launch party is off/i.test(JSON.stringify(d.proposal))), logs.map((d) => d.proposal));
+    const itemLogs = w.decisions.filter((d) => JSON.stringify(d.proposal).includes("retire_items"));
+    check("the retirements log (retire_items) is ids, kinds and hashes too: no quote, no goal text, in the proposal or its checks", itemLogs.length === 1 && !/Northwind|launch party is off|drop that/i.test(JSON.stringify(itemLogs[0].proposal)) && /accepted/.test(JSON.stringify(itemLogs[0].proposal)), itemLogs.map((d) => d.proposal));
 
     // ---- the next search, task and snapshot inputs
     const searchGoals = GS.goalSweepGoals({ goals: w.profile.goals, intent: w.profile.intent }) ?? [];
@@ -266,6 +268,16 @@ const idx = async (id: string) => (await J.openErrandsAndGoals(U)).findIndex((i)
     check("a check-in serving the ask they said is over closes with it, dropped, without their words on it", w2.asks.find((a) => a.ask_id === "a-venue")!.resolved_at && t9.status === "dropped" && !/venues for the launch anymore/i.test(t9.outcome), t9);
     check("a task linked to a goal Cue carries isn't closed by a related guess, and the goal isn't settled", w2.tasks.find((t) => t.id === 10)!.status === "open" && w2.coGoalsClosed === 0);
   } finally { restore2(); }
+
+  // The read puts a goal piece straight into resolved_asks on a vague quote: it may close, but it never settles the goal Cue carries.
+  const w3 = world();
+  const restore3 = install(w3);
+  try {
+    const vague = "I'm done with that part, honestly";
+    await runRead(w3, { resolved_goals: [], resolved_blockers: [], resolved_asks: [{ index: await idx("task:10"), quote: vague }], related: [], unsure: [] }, `user: ${vague}\nassistant: Fair.`, vague);
+    check("a task the read resolves directly closes, but no close from the retire read settles the goal Cue carries", w3.tasks.find((t) => t.id === 10)!.status === "dropped" && w3.coGoalsClosed === 0, { t: w3.tasks.find((t) => t.id === 10), closed: w3.coGoalsClosed });
+    check("every task close from the retire read passes cascade: false", /closeTask\(userId, n, "dropped", outcome, \{ theirWord: quote\(t\), logWords: false, cascade: false \}\)/.test(src("services/profileExtraction.ts")));
+  } finally { restore3(); }
 }
 
 // ---------------------------------------------------------------- forget: a removal clears their words from an unsure mark
