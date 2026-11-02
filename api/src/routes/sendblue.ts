@@ -560,7 +560,9 @@ export function sendblueRouter(io: Server): Router {
   // restart (replayOwedTurn, below). The text was already checked, acked,
   // de-duplicated, saved and marked read, and its "User said" line may
   // already be logged, so none of that happens twice.
-  const handleWebhook = async (req: Request, webhookRes: Response, next: NextFunction, replay: { receivedAt: Date; late?: boolean; lockHeld?: boolean } | null = null) => {
+  // verifiedBy: a text that reached Cue another way and was checked there (a Twilio-signed SMS to Cue's calling line,
+  // routes/co.ts /co/incoming-sms): the Sendblue secret isn't its proof. Everything after that check is the same turn.
+  const handleWebhook = async (req: Request, webhookRes: Response, next: NextFunction, replay: { receivedAt: Date; late?: boolean; lockHeld?: boolean } | null = null, verifiedBy: "twilio" | null = null) => {
       // The member's message is logged once, however many times its turn runs.
       const logTextExchange = replay ? (userId: string, content: string) => logTextExchangeOnce(userId, content, replay.receivedAt) : logTextExchangeRow;
       // Only Sendblue can post here (2026-09-17 code review: with no check,
@@ -571,6 +573,8 @@ export function sendblueRouter(io: Server): Router {
       const expectedSecret = process.env.SENDBLUE_WEBHOOK_SECRET;
       if (replay) {
         // Checked when it first arrived.
+      } else if (verifiedBy) {
+        // Checked by its own signature before it was handed here.
       } else if (!expectedSecret) {
         // Fail closed in production specifically, per Royce's instruction —
         // co-test (RAILWAY_ENVIRONMENT_NAME === "dev") and local dev still
@@ -2835,7 +2839,22 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
     await handleWebhook({ body: payload, get: () => undefined, ip: "replay" } as any, noop, (err?: any) => err && console.error("sendblue: replayed turn failed:", err?.message ?? err), { receivedAt, late: o.late, lockHeld: o.lockHeld });
   };
 
+  inboundHandler = async (payload: any) => {
+    const noop: any = { headersSent: true, status: () => noop, send: () => noop, json: () => noop, sendStatus: () => noop };
+    await handleWebhook({ body: payload, get: () => undefined, ip: "twilio" } as any, noop, (err?: any) => err && console.error("sendblue: a text from the calling line failed:", err?.message ?? err), null, "twilio");
+  };
+
   return router;
+}
+
+// Set once the router exists: a text that came in on Cue's calling line (Twilio), already signature-checked and shaped like a
+// Sendblue inbound (services/twilioInboundSms.ts), run as the same turn a text to the texting number gets. Cue answers from the
+// texting number. False when there's no handler yet (nothing ran).
+let inboundHandler: ((payload: any) => Promise<void>) | null = null;
+export async function deliverInboundText(payload: Record<string, unknown>): Promise<boolean> {
+  if (!inboundHandler) return false;
+  await inboundHandler(payload);
+  return true;
 }
 
 // Set once the router exists; runs a saved text's turn again (replayOwedTurn).
