@@ -139,7 +139,8 @@ const formatCases: [boolean, string][] = [
   [PARA.split("\n\n").length === 4 && PARA.split("\n\n")[1].startsWith("Arrival:") && PARA.split("\n\n")[3].startsWith("Close:"), "a long block splits into paragraphs, each labeled part on its own"],
   [paragraphize("Short and sweet. Two lines. Three.") === "Short and sweet. Two lines. Three.", "short texts are left alone"],
   [paragraphize("First para already.\n\nSecond one. " + "x".repeat(400)).startsWith("First para already.\n\nSecond"), "text that already has paragraphs is left alone"],
-  [/give the whole walkthrough in this one reply/.test(replyPrompt) && /End with one question that gauges where they are/.test(replyPrompt), "walkthroughs come whole, ending with a gauging question"],
+  // 2026-11-02: the closing question is asked only when the next step needs their answer (a six-step answer ended on one nobody needed).
+  [/give the whole walkthrough in this one reply/.test(replyPrompt) && /Stop after the last step\. Ask something only when you can't give the right next step without their answer\./.test(replyPrompt) && !/End with one question that gauges where they are/.test(replyPrompt), "walkthroughs come whole and stop at the last step"],
   [/challenge your own answer before you send it/.test(replyPrompt), "advice is pressure-tested against their specifics"],
   [/meet the feeling first, then gauge before you plan/.test(replyPrompt) && /never make them ask twice/.test(replyPrompt), "a feeling is met first, then gauged, then walked through"],
   [/each idea its own short paragraph with a blank line between them/.test(replyPrompt), "reply prompt asks for paragraphs"],
