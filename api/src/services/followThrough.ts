@@ -93,17 +93,21 @@ export function bringsItUp(sentence: string): boolean {
 // reminder due by then (round 2 review of #352: "bring up the lease" must not be kept by "pay rent"):
 //   - set in the same turn, the promise is Cue's own "I'll remind you / bring it up", and the promise names no other subject (only its
 //     verb and its time: "I'll remind you tomorrow at 3"), or shares one with the reminder; or
-//   - about the same thing: most of the promise's words are in the reminder.
+//   - about the same thing: most of the promise's own subject words (not its verb or time) are in the reminder. Measured over the
+//     promise's subject only, never the member's whole message and never the smaller of two sets: their message also saying "rent"
+//     must not tie a "pay rent" reminder to a lease promise (final review of #352).
 // One rule for the promise binding (promiseBinding.ts reminderKeeping) and the task's backstop (taskTurn.ts reminderCoversTask).
 const NOT_A_SUBJECT = new Set(significant("remind reminder reminding bring bringing nudge nudging back again today tonight tomorrow tmrw morning afternoon evening night noon week weekend next later soon monday tuesday wednesday thursday friday saturday sunday mon tue tues wed thu thurs fri sat sun"));
 export function subjectWords(sentence: string): string[] {
   return significant(goalBody(sentence)).filter((w) => !NOT_A_SUBJECT.has(w) && !/^\d/.test(w) && !/^(?:am|pm)$/.test(w));
 }
-export function reminderTiedTo(sentence: string, what: string, o: { sameTurn: boolean; about?: string }): boolean {
-  if (overlap(o.about ?? goalBody(sentence), what) >= 0.5) return true;
-  if (!o.sameTurn || !bringsItUp(sentence)) return false;
+export function reminderTiedTo(sentence: string, what: string, o: { sameTurn: boolean }): boolean {
   const subject = subjectWords(sentence);
-  return !subject.length || subject.some((w) => significant(what).includes(w));
+  const theirs = new Set(significant(what));
+  const shared = subject.filter((w) => theirs.has(w)).length;
+  if (subject.length && shared / subject.length >= 0.5) return true;
+  if (!o.sameTurn || !bringsItUp(sentence)) return false;
+  return !subject.length || shared > 0;
 }
 
 // Pure: a text that says something, not only asks: at least one sentence that isn't a question. A question alone ("what time works?")
