@@ -48,6 +48,8 @@ export function callLearningPrompt(o: {
   openAsks: OpenItem[];
   // Their rules on file and their local date (services/memberPreferences.ts): item 7, the same read as a text turn's item 10.
   preferences?: { onFile: Parameters<typeof preferencePromptItem>[0]["onFile"]; localToday: string };
+  // First names of people Cue introduced them to or pointed them to at a Noise event (the outcome record). None: no section 8.
+  introduced?: string[];
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -90,14 +92,92 @@ ${openItemsBlock(o.openAsks)}
 
 ${preferencePromptItem({ n: 7, via: "call", onFile: o.preferences?.onFile ?? [], localToday: o.preferences?.localToday ?? o.today })}
 
-Return ONLY valid JSON, no preamble:
+${introSection(o.introduced ?? [])}Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "lessons": [{"lesson": "...", "quote": "..."}],
- ${PREFERENCE_JSON_SHAPE}}`;
+ ${PREFERENCE_JSON_SHAPE}${(o.introduced ?? []).length ? `,
+ "introductions": [{"name": "...", "met": null, "useful": null, "kept_talking": null, "quote": "..."}]` : ""}}`;
+}
+
+// Section 8, only for someone Cue has introduced (the prompt is unchanged for everyone else).
+export function introSection(names: string[]): string {
+  if (!names.length) return "";
+  return `8. introductions: Cue introduced them to, or pointed them to at a Noise event, these people (first names): ${names.map((n) => `"${n}"`).join(", ")}. For each of them the person talks about on this call, what THE PERSON said: met ("yes" or "no", or null if they didn't say), useful (how meeting them was for the person: "yes", "somewhat" or "no", or null if they didn't say), kept_talking (whether they've seen or talked with them again since: "yes", "not_yet" or "no", or null if they didn't say), and their exact words (at least a few words, from their line). Only what the person said: never guess, and never fill a field from what Cue said or from silence. Leave out anyone they didn't talk about.
+
+`;
+}
+
+export type CallIntroOutcome = { name: string; met: "yes" | "no" | null; useful: "yes" | "somewhat" | "no" | null; keptTalking: "yes" | "not_yet" | "no" | null };
+
+// Pure: only answers about someone on the list (one first name, one person), each value from its own set, and only with a quote
+// that is really in one of their lines (code check, not the model's say). A field they didn't fill stays null (unknown).
+export function callIntroOutcomes(raw: unknown, transcript: string, names: string[]): CallIntroOutcome[] {
+  const mine = squash(theirLines(transcript));
+  const list = Array.isArray((raw as any)?.introductions) ? (raw as any).introductions : [];
+  const known = new Map<string, string>();
+  for (const n of names) known.set(n.trim().toLowerCase(), n);
+  const pick = <T extends string>(v: unknown, set: readonly T[]): T | null => (typeof v === "string" && (set as readonly string[]).includes(v) ? (v as T) : null);
+  const out: CallIntroOutcome[] = [];
+  for (const x of list) {
+    const name = known.get(String(x?.name ?? "").trim().split(/\s+/)[0]?.toLowerCase() ?? "");
+    const quote = typeof x?.quote === "string" ? squash(x.quote) : "";
+    if (!name || quote.split(" ").length < 3 || !mine.includes(quote)) continue;
+    const r: CallIntroOutcome = { name, met: pick(x.met, ["yes", "no"] as const), useful: pick(x.useful, ["yes", "somewhat", "no"] as const), keptTalking: pick(x.kept_talking, ["yes", "not_yet", "no"] as const) };
+    if (!r.met && !r.useful && !r.keptTalking) continue;
+    if (!out.some((o) => o.name === name)) out.push(r);
+  }
+  return out;
+}
+
+// Who they could be talking about: the people Cue pointed them to at its events and the people Cue introduced them to. A first name
+// two of them share is left out (Cue can't tell which one they meant).
+export async function introducedNames(userId: string): Promise<{ names: string[]; pairs: { pairId: number; otherId: string; firstName: string }[]; intros: import("./secondContact.js").Introduced[] }> {
+  const [pairs, intros] = await Promise.all([
+    import("./roomMatching.js").then((m) => m.pairsToldAbout(userId)).catch(() => []),
+    import("./secondContact.js").then((m) => m.introducedTo(userId)).catch(() => []),
+  ]);
+  const byName = new Map<string, Set<string>>();
+  const add = (first: string, id: string) => {
+    const k = first.trim().toLowerCase();
+    if (k) byName.set(k, (byName.get(k) ?? new Set()).add(id));
+  };
+  for (const p of pairs) add(p.firstName, p.otherId);
+  for (const i of intros) add(i.firstName, i.otherId);
+  const names: string[] = [];
+  for (const p of [...pairs.map((p) => p.firstName), ...intros.map((i) => i.firstName)]) {
+    const k = p.trim().toLowerCase();
+    if (byName.get(k)?.size === 1 && !names.some((n) => n.toLowerCase() === k)) names.push(p.trim());
+  }
+  return { names: names.slice(0, 12), pairs, intros };
+}
+
+// What they said on the call about people Cue introduced, on their side of the outcome record (source "call", stated).
+export async function saveCallIntroOutcomes(userId: string, said: CallIntroOutcome[], known: Awaited<ReturnType<typeof introducedNames>>, quoteOf: (name: string) => string | null = () => null): Promise<number> {
+  const RM = await import("./roomMatching.js");
+  const SC = await import("./secondContact.js");
+  let n = 0;
+  for (const s of said) {
+    const k = s.name.toLowerCase();
+    const pair = known.pairs.find((p) => p.firstName.trim().toLowerCase() === k);
+    const intro = known.intros.find((i) => i.firstName.trim().toLowerCase() === k);
+    if (pair && (s.met || s.useful)) {
+      const outcome = s.met === "no" ? "did_not_meet" : s.useful === "yes" ? "met_good" : s.useful === "somewhat" ? "met_fine" : s.useful === "no" ? "met_not_a_fit" : null;
+      if (outcome) await RM.notePairMet(userId, pair.pairId, outcome, quoteOf(s.name), "call");
+      else await RM.notePairEvidence(userId, pair.pairId, "met", "yes", "call", "stated");
+      n++;
+    }
+    if (s.keptTalking) {
+      const outcome = s.keptTalking === "yes" ? "talked_again" : s.keptTalking === "not_yet" ? "not_yet" : "not_going_to";
+      if (intro) await SC.recordSecondContact(userId, intro, outcome, null, new Date(), null, "call");
+      else if (pair) await SC.notePairKeptTalking(userId, pair.otherId, outcome, "call");
+      n++;
+    }
+  }
+  return n;
 }
 
 const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -197,6 +277,7 @@ export async function learnFromCall(input: {
     activePreferences(input.userId).catch(() => [] as Preference[]),
     memberZone(input.userId).catch(() => null),
   ]);
+  const introduced = await introducedNames(input.userId).catch(() => ({ names: [] as string[], pairs: [], intros: [] }));
   const row = profileRows[0] ?? null;
   const onFile: OnFile | null = row
     ? {
@@ -225,6 +306,7 @@ export async function learnFromCall(input: {
       onFile,
       openAsks,
       preferences: { onFile: prefs, localToday: localDay(new Date(), zone) },
+      introduced: introduced.names,
     }),
   });
   const parsed = parseTurnLearning(text);
@@ -270,13 +352,16 @@ export async function learnFromCall(input: {
     if (stored?.added.length && learned.cadence !== "unstated") await markCadenceTwin(input.userId, stored.added).catch(() => {});
   }
   saveCallLessons(input.userId, lessons).catch((err: any) => console.error("callLearning: lesson write failed (non-fatal):", err?.message ?? err));
+  const introOutcomes = callIntroOutcomes(raw, input.transcript, introduced.names);
+  const quotes = new Map<string, string>(((raw as any)?.introductions ?? []).filter((x: any) => typeof x?.name === "string" && typeof x?.quote === "string").map((x: any) => [String(x.name).trim().split(/\s+/)[0].toLowerCase(), String(x.quote).slice(0, 160)]));
+  await saveCallIntroOutcomes(input.userId, introOutcomes, introduced, (name) => quotes.get(name.toLowerCase()) ?? null).catch((err: any) => console.error("callLearning: intro outcome write failed (non-fatal):", err?.message ?? err));
   await recordDecision({
     layer: 4,
     decision: "profile.callLearning",
     userId: input.userId,
     outcome: "act",
     action: "learned",
-    proposal: { ms: Date.now() - started, plannedEvent: learned.planned_event?.event_name ?? null, lessons, cadence: learned.cadence },
+    proposal: { ms: Date.now() - started, plannedEvent: learned.planned_event?.event_name ?? null, lessons, cadence: learned.cadence, introOutcomes: introOutcomes.length },
   }).catch(() => {});
   return { ...learned, lessons };
 }

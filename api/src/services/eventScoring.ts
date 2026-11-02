@@ -910,12 +910,20 @@ async function scoreMatchedGroupInScope(
       return null;
     });
     if (!scored) return;
+    // How Cue's earlier intros went for THIS member, by the shape of the reason, never by who (services/roomMatching.ts
+    // outcomeAdjustedScore): a kind that wasn't useful or never happened moves down, one that was useful a little up, and nothing
+    // below the bar is ever lifted to it. Their own side only; the other person's answers never move anyone's ranking.
+    const RMo = await import("./roomMatching.js");
+    const signals = await RMo.ownOutcomeSignals(person.user_id).catch(() => [] as import("./roomMatching.js").OutcomeSignal[]);
+    const movedBy = new Map<string, number>();
     const ranked: RankedCandidate[] = scored
       .map((s) => {
         const e = edges.get(s.candidate.user_id);
+        const adj = RMo.outcomeAdjustedScore(s.score, s.shareReason, signals, MATCH_NUDGE_MIN_SCORE);
+        if (adj.moved) movedBy.set(s.candidate.user_id, adj.moved);
         return {
           candidate_id: s.candidate.user_id,
-          score: s.score,
+          score: adj.score,
           reason: s.reason,
           shareReason: s.shareReason,
           mutual: s.mutual,
@@ -924,6 +932,8 @@ async function scoreMatchedGroupInScope(
         };
       })
       .sort((a, b) => b.score - a.score || Number(b.mutual) - Number(a.mutual) || pairOrder(person.user_id, a.candidate_id) - pairOrder(person.user_id, b.candidate_id));
+
+    if (movedBy.size) recordDecision({ layer: 6, decision: "match.outcomes", userId: person.user_id, outcome: "act", action: "eventScoring.score", proposal: { eventId, signals: signals.length, moved: Object.fromEntries(movedBy) } }).catch(() => {});
 
     // Read BEFORE storeRanking overwrites the row — this is the diff basis
     // for the additive-offer path below.

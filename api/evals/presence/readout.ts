@@ -72,7 +72,8 @@ try {
   const smallStats = await R.gatherStats("ev9", "Founders Night", async () => "Investors or funding", async () => [{ user_id: "a" }]);
   check("with fewer than eight asks the data step does not even label them", smallStats.askCount === 1 && Object.keys(smallStats.themes).length === 0);
   check("arrivals are counted only among the members of this event", Array.isArray((arrivedFirst as any)?.[1]) && (arrivedFirst as any)[1].length === 10 && /user_id = ANY\(\$2::uuid\[\]\)/.test(sqls.find((q) => /FROM event_presence WHERE event_api_id/.test(q)) ?? ""));
-  check("every database read is a count, the attendee's own open ask, or what Cue knows they can offer", sqls.every((q) => /COUNT\(|SUM\(|SELECT user_id, intent FROM co_profiles|SELECT owner_user_id, object_label FROM co_facts WHERE owner_user_id = ANY\(\$1::uuid\[\]\) AND relation = 'offers' AND retired_at IS NULL/.test(q)));
+  // The introduced pairs' outcome evidence (no ids, no names, no notes) is read only to count (services/partnerReadout.ts pairRates).
+  check("every database read is a count, the attendee's own open ask, what Cue knows they can offer, or the pairs' outcome evidence to count", sqls.every((q) => /COUNT\(|SUM\(|SELECT user_id, intent FROM co_profiles|SELECT owner_user_id, object_label FROM co_facts WHERE owner_user_id = ANY\(\$1::uuid\[\]\) AND relation = 'offers' AND retired_at IS NULL|^SELECT a_evidence, b_evidence FROM co_pairs WHERE event_id = \$1 AND intro_sent_at IS NOT NULL$/.test(q)));
   check("offers are not labelled when the room's offers are too thin to back the line", stats.offerKnown === 0 && Object.keys(stats.offerThemes ?? {}).length === 0 && !labels.some((l) => /offer/.test(l)));
 } finally {
   (pool as any).query = real;

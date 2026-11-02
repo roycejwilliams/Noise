@@ -615,6 +615,8 @@ export const ABILITIES: Ability[] = [
   {
     id: "room_meeting",
     sheet: null,
+    // On a call too (2026-11-02, both mediums): the call's answer lands on the same pair record as a text's.
+    onCall: true,
     can: "Cue remembers whether they met the people it pointed them to at a Noise event, and how it went for them, and uses that to choose better introductions next time.",
     tool: "noteRoomMeeting",
     limits: { perTurn: 3 },
@@ -984,6 +986,7 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   noteFreeTime: SAVE,
   answerProposal: SAVE,
   noteMetAgain: SAVE,
+  noteRoomMeeting: SAVE,
   findReaction: SAVE,
   offerDocument: SAVE,
   keepArtifact: SAVE,

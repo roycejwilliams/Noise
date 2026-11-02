@@ -76,7 +76,8 @@
 //               or failed up to INTRO_MAX_ATTEMPTS times, both members still active, at most 3 days after both yeses)
 //   intro_sent  the one email went to both
 //   met         one side told Co they met (noteRoomMeeting); a_outcome / b_outcome hold each side's own words, never shown
-//               to the other side
+//               to the other side. What happened after the intro, per side, with its source and whether it was said or
+//               inferred: a_evidence / b_evidence (the outcome record, below; 2026-11-02)
 //   expired     the room closed with the pair still suggested or asked (terminal for this event)
 //
 // ============================================================ THE VALUE-LINE GATE
@@ -253,6 +254,9 @@ export type PairRow = {
   expired_at: Date | null;
   intro_held_at?: Date | null;
   intro_attempts?: number | null;
+  // Each side's own outcome evidence (the outcome record, below). Never read into the other side's anything.
+  a_evidence?: SideEvidence | null;
+  b_evidence?: SideEvidence | null;
 };
 
 export function orderPair(x: string, y: string): { a: string; b: string; xIsA: boolean } {
@@ -420,8 +424,69 @@ export async function notePairIntroSent(eventId: string, x: string, y: string): 
 
 export type MeetingOutcome = "met_good" | "met_fine" | "met_not_a_fit" | "did_not_meet";
 
+// ============================================================ the outcome record (Royce, 2026-11-02: "both accepted" isn't enough)
+//
+// One record per pair: co_pairs. Both accepted is a_answer/b_answer/both_yes_at, as before. What happened after lives per side in
+// a_evidence / b_evidence (JSONB), each field with its value, where it came from, when, and whether the member SAID it or Cue
+// inferred it:
+//   met           yes | no         stated (their words: text, call, the check-in) or inferred (they said they didn't come to the
+//                                  event, so they didn't meet anyone there; a check-in read that named this person warmly)
+//   useful        yes | somewhat | no   stated only (noteRoomMeeting on a text, the call's read)
+//   kept_talking  yes | not_yet | no    stated only (noteMetAgain on a text, the call's read). Cue never sees their messages to each
+//                                  other, so silence is never a "no": a field nobody filled stays unknown.
+// Rules: one side's evidence is written only from that side's own words and is never read into the other side's prompt, reply,
+// nudge or line; the host sees only room-level counts (partnerReadout.ts). An inference never replaces something they said; their
+// newer word replaces their older one. Unknown is a missing field, never a default "no".
+// The older columns stay in step for their readers: met_at (either side said they met), <side>_outcome / _note (noteRoomMeeting).
+export type EvidenceField = "met" | "useful" | "kept_talking";
+export type EvidenceSource = "noshow_ask" | "checkin" | "text" | "call";
+export type EvidenceEntry = { value: string; source: EvidenceSource; at: string; how: "stated" | "inferred" };
+export type SideEvidence = Partial<Record<EvidenceField, EvidenceEntry>>;
+export const EVIDENCE_VALUES: Record<EvidenceField, readonly string[]> = { met: ["yes", "no"], useful: ["yes", "somewhat", "no"], kept_talking: ["yes", "not_yet", "no"] };
+
+// Pure: the side's evidence after one more entry, or null when it doesn't change (an inference never replaces what they said; an
+// unknown value is refused).
+export function mergeEvidence(had: SideEvidence | null | undefined, field: EvidenceField, entry: EvidenceEntry): SideEvidence | null {
+  if (!EVIDENCE_VALUES[field].includes(entry.value)) return null;
+  if (field !== "met" && entry.how !== "stated") return null;
+  const prev = (had ?? {})[field];
+  if (prev && prev.how === "stated" && entry.how === "inferred") return null;
+  if (prev && prev.value === entry.value && prev.how === entry.how && prev.source === entry.source) return null;
+  return { ...(had ?? {}), [field]: entry };
+}
+
+// What noteRoomMeeting's four answers mean in the record.
+export function evidenceFromMeeting(outcome: MeetingOutcome): { met: "yes" | "no"; useful: "yes" | "somewhat" | "no" | null } {
+  if (outcome === "did_not_meet") return { met: "no", useful: null };
+  return { met: "yes", useful: outcome === "met_good" ? "yes" : outcome === "met_fine" ? "somewhat" : "no" };
+}
+
+// x's side of one pair: one field. Optimistic write (the evidence read must still be there), retried once. Never throws.
+export async function notePairEvidence(x: string, pairId: number, field: EvidenceField, value: string, source: EvidenceSource, how: "stated" | "inferred", at = new Date()): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { rows } = await pool.query(`SELECT a_id, b_id, a_evidence, b_evidence FROM co_pairs WHERE id = $1`, [pairId]).catch(() => ({ rows: [] as any[] }));
+    const r = rows[0];
+    if (!r || (r.a_id !== x && r.b_id !== x)) return false;
+    const side = r.a_id === x ? "a" : "b";
+    const had: SideEvidence = r[`${side}_evidence`] ?? {};
+    const next = mergeEvidence(had, field, { value, source, at: at.toISOString(), how });
+    if (!next) return false;
+    const met = field === "met" && value === "yes" && how === "stated";
+    const done = await pool
+      .query(
+        `UPDATE co_pairs SET ${side}_evidence = $2::jsonb, met_at = CASE WHEN $4 THEN COALESCE(met_at, NOW()) ELSE met_at END, updated_at = NOW()
+         WHERE id = $1 AND ${side}_evidence IS NOT DISTINCT FROM $3::jsonb RETURNING id`,
+        [pairId, JSON.stringify(next), JSON.stringify(had), met],
+      )
+      .catch((err: any) => (console.error("co_pairs: evidence write failed (non-fatal):", err?.message ?? err), null));
+    if (done?.rows.length) return true;
+    if (!done) return false;
+  }
+  return false;
+}
+
 // x's side of how meeting y went, on their most recent pair at a Co event Co told x about. Never shown to y.
-export async function notePairMet(x: string, pairId: number, outcome: MeetingOutcome, note: string | null): Promise<boolean> {
+export async function notePairMet(x: string, pairId: number, outcome: MeetingOutcome, note: string | null, source: EvidenceSource = "text"): Promise<boolean> {
   const { rows } = await pool.query(`SELECT a_id, b_id FROM co_pairs WHERE id = $1`, [pairId]);
   const r = rows[0];
   if (!r || (r.a_id !== x && r.b_id !== x)) return false;
@@ -434,7 +499,115 @@ export async function notePairMet(x: string, pairId: number, outcome: MeetingOut
      WHERE id = $1`,
     [pairId, outcome, note, met],
   );
+  const e = evidenceFromMeeting(outcome);
+  await notePairEvidence(x, pairId, "met", e.met, source, "stated");
+  if (e.useful) await notePairEvidence(x, pairId, "useful", e.useful, source, "stated");
   return true;
+}
+
+// The newest pair whose intro went to both x and y (any event), for "kept talking": that's said about an intro, not a night.
+export async function introducedPairId(x: string, y: string): Promise<number | null> {
+  const { a, b } = orderPair(x, y);
+  const { rows } = await pool
+    .query(`SELECT id FROM co_pairs WHERE a_id = $1 AND b_id = $2 AND intro_sent_at IS NOT NULL ORDER BY intro_sent_at DESC LIMIT 1`, [a, b])
+    .catch(() => ({ rows: [] as any[] }));
+  return rows[0] ? Number(rows[0].id) : null;
+}
+
+// They said they didn't make it to the event (the no-show ask, settled "said no"): every pair Co told them about there is "didn't
+// meet", inferred, on THEIR side only. No answer, or an unclear one, changes nothing (unknown stays unknown).
+export async function notePairsNoShow(eventId: string, x: string): Promise<number> {
+  const told = (await pairsToldAbout(x).catch(() => [])).filter((p) => p.eventId === eventId);
+  let n = 0;
+  for (const p of told) if (await notePairEvidence(x, p.pairId, "met", "no", "noshow_ask", "inferred")) n++;
+  return n;
+}
+
+// Pure: the people Co told them about who their check-in answer names, by first name, with no "didn't / never / missed" next to
+// the name. A first name two of them share is nobody (Cue can't tell which).
+export function namedInCheckin(text: string, told: { pairId: number; otherId: string; firstName: string }[]): { pairId: number; firstName: string }[] {
+  const out: { pairId: number; firstName: string }[] = [];
+  const t = String(text ?? "");
+  for (const p of told) {
+    const name = p.firstName.trim();
+    if (name.length < 2) continue;
+    if (new Set(told.filter((q) => q.firstName.trim().toLowerCase() === name.toLowerCase()).map((q) => q.otherId)).size > 1) continue;
+    const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    const sentence = t.split(/(?<=[.!?\n])\s*/).find((s) => re.test(s));
+    if (!sentence) continue;
+    if (/\b(?:didn'?t|did not|never|not|couldn'?t|could not|missed|no sign|wasn'?t|was not|haven'?t|have not)\b/i.test(sentence)) continue;
+    if (!out.some((o) => o.pairId === p.pairId)) out.push({ pairId: p.pairId, firstName: p.firstName });
+  }
+  return out;
+}
+
+// The night-after check-in, answered (sendblue.ts): the read said they named someone worthwhile, and they named someone Co told
+// them about at this event. Met is recorded as inferred (the read and the name, not a sentence that says "we met"); Cue's own
+// noteRoomMeeting in the same reply records what they said, which replaces it. Returns who was named, for Cue's instruction.
+export async function notePairsFromCheckin(x: string, eventId: string, text: string, positive: boolean): Promise<{ pairId: number; firstName: string }[]> {
+  const told = (await pairsToldAbout(x).catch(() => [])).filter((p) => p.eventId === eventId);
+  const named = namedInCheckin(text, told);
+  if (positive) for (const n of named) await notePairEvidence(x, n.pairId, "met", "yes", "checkin", "inferred");
+  return named;
+}
+
+// ============================================================ outcomes feed pair selection (their own side only)
+//
+// What worked for THIS member, by the shape of the reason (their own value line for that pair, which rests on what the other person
+// shared), never by who it was. A new candidate whose share reason shares that shape is moved: down after "not useful" or "never
+// met" (they said so), a little up after "useful". Never past the bar: a candidate below MATCH_NUDGE_MIN_SCORE stays below it,
+// whatever worked before (no forced match, a stated constraint is never relaxed). A no-show of their own says nothing about the
+// pairing's kind and is left out.
+export type OutcomeSignal = { line: string; kind: "useful" | "not_useful" | "not_met" };
+export const OUTCOME_ADJUST = { notUseful: -12, notMet: -5, useful: 6, maxDown: -24, maxUp: 10 };
+
+// Pure: the signals in one side's evidence. Only stated evidence counts.
+export function signalOf(e: SideEvidence | null | undefined): OutcomeSignal["kind"] | null {
+  if (!e) return null;
+  if (e.useful?.how === "stated") return e.useful.value === "no" ? "not_useful" : e.useful.value === "yes" ? "useful" : null;
+  if (e.met?.how === "stated" && e.met.value === "no") return "not_met";
+  return null;
+}
+
+// Pure: one candidate's score after their own outcomes. bar: the score a match must reach; nothing below it is ever lifted to it.
+export function outcomeAdjustedScore(score: number, shareReason: string, signals: OutcomeSignal[], bar: number): { score: number; moved: number } {
+  if (!shareReason || !signals.length || score <= 0) return { score, moved: 0 };
+  let moved = 0;
+  for (const s of signals) {
+    if (!s.line || !groundedIn(s.line, [shareReason])) continue;
+    moved += s.kind === "not_useful" ? OUTCOME_ADJUST.notUseful : s.kind === "not_met" ? OUTCOME_ADJUST.notMet : OUTCOME_ADJUST.useful;
+  }
+  moved = Math.max(OUTCOME_ADJUST.maxDown, Math.min(OUTCOME_ADJUST.maxUp, moved));
+  if (moved > 0 && score < bar) moved = 0;
+  const next = Math.max(0, Math.min(100, score + moved));
+  return { score: next, moved: next - score };
+}
+
+// Their own outcome signals: their side's evidence and their own value line, newest first. Never the other side's.
+export async function ownOutcomeSignals(x: string): Promise<OutcomeSignal[]> {
+  const { rows } = await pool
+    .query(
+      `SELECT CASE WHEN a_id = $1 THEN a_evidence ELSE b_evidence END AS ev, CASE WHEN a_id = $1 THEN value_line_a ELSE value_line_b END AS line
+       FROM co_pairs WHERE (a_id = $1 OR b_id = $1) AND intro_sent_at IS NOT NULL ORDER BY updated_at DESC LIMIT 20`,
+      [x],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  const out: OutcomeSignal[] = [];
+  for (const r of rows) {
+    const kind = signalOf(r.ev);
+    const line = usableLine(r.line);
+    if (kind && line) out.push({ line, kind });
+  }
+  return out;
+}
+
+// ============================================================ measurement (pure): one pair, both sides
+export type PairOutcome = { met: "yes" | "no" | "unknown"; usefulA: string; usefulB: string; keptTalking: "yes" | "no" | "unknown" };
+export function pairOutcome(a: SideEvidence | null | undefined, b: SideEvidence | null | undefined): PairOutcome {
+  const sides = [a ?? {}, b ?? {}];
+  const met = sides.some((s) => s.met?.value === "yes") ? "yes" : sides.some((s) => s.met?.value === "no") ? "no" : "unknown";
+  const kept = sides.some((s) => s.kept_talking?.value === "yes") ? "yes" : sides.some((s) => s.kept_talking && s.kept_talking.value !== "yes") ? "no" : "unknown";
+  return { met, usefulA: sides[0].useful?.value ?? "unknown", usefulB: sides[1].useful?.value ?? "unknown", keptTalking: kept };
 }
 
 // The people Co told this member about at Co events (their side was asked, or they were introduced), newest first.

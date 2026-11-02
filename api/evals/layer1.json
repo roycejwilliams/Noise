@@ -10,6 +10,7 @@
     "evals/matching/run.ts",
     "evals/matching/memberSafe.ts",
     "evals/matching/hiddenSignals.ts",
+    "evals/matching/outcomes.ts",
     "evals/matching/roomFrameSituation.ts",
     "evals/matching/askSolicitation.ts",
     "evals/intro/run.ts",

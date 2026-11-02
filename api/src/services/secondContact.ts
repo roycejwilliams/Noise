@@ -41,13 +41,30 @@ export function secondContactLabel(firstName: string, outcome: SecondContactOutc
 }
 
 // metOn: when they met or talked, if they said ("we met last Tuesday"); the metric counts that day, not the day they told Co.
-export async function recordSecondContact(userId: string, intro: Introduced, outcome: SecondContactOutcome, note: string | null, now = new Date(), metOn: string | null = null): Promise<void> {
+// source: where they said it (a text, or the call's read). An event intro's pair record (services/roomMatching.ts, the outcome record)
+// gets the same answer as "kept talking", on their side only.
+export async function recordSecondContact(userId: string, intro: Introduced, outcome: SecondContactOutcome, note: string | null, now = new Date(), metOn: string | null = null, source: "text" | "call" = "text"): Promise<void> {
   const { recordFactChecked } = await import("./coFacts.js");
   await recordFactChecked({
     ownerUserId: userId, subject: "member", relation: SECOND_CONTACT_RELATION, label: secondContactLabel(intro.firstName, outcome, now), visibility: "owner",
-    source: "noteMetAgain", happenedAt: now,
+    source: source === "call" ? "callLearning" : "noteMetAgain", happenedAt: now,
     meta: { otherId: intro.otherId, introducedAt: intro.introducedAt.toISOString(), outcome, note: note?.slice(0, 200) ?? null, ...(metOn && /^\d{4}-\d{2}-\d{2}$/.test(metOn) ? { metOn } : {}) },
   });
+  await notePairKeptTalking(userId, intro.otherId, outcome, source, now).catch(() => {});
+}
+
+// Pure: what their answer means for "kept talking".
+export function keptTalkingValue(outcome: SecondContactOutcome): "yes" | "not_yet" | "no" {
+  return MET.has(outcome) ? "yes" : outcome === "not_yet" ? "not_yet" : "no";
+}
+
+export async function notePairKeptTalking(userId: string, otherId: string, outcome: SecondContactOutcome, source: "text" | "call", now = new Date()): Promise<boolean> {
+  const RM = await import("./roomMatching.js");
+  const pairId = await RM.introducedPairId(userId, otherId);
+  if (!pairId) return false;
+  // Seeing or talking to them again means they met.
+  if (MET.has(outcome)) await RM.notePairEvidence(userId, pairId, "met", "yes", source, "stated", now);
+  return RM.notePairEvidence(userId, pairId, "kept_talking", keptTalkingValue(outcome), source, "stated", now);
 }
 
 // The investor number. intros: emails that went in the window, old enough to have had SECOND_CONTACT_DAYS (or all, with

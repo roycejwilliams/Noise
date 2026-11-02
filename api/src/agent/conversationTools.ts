@@ -1688,7 +1688,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue introduced them to.`);
           return { ok: false, error: "That isn't someone Cue introduced them to (only Cue's own introductions count)." };
         }
-        await SC.recordSecondContact(ctx.userId, pick, outcome, note ?? null, new Date(), metOn ?? null);
+        await SC.recordSecondContact(ctx.userId, pick, outcome, note ?? null, new Date(), metOn ?? null, ctx.onCall ? "call" : "text");
         ctx.facts?.add("did_this_turn", `Noted that they ${outcome === "met_again" ? "saw" : outcome === "talked_again" ? "talked with" : outcome === "not_yet" ? "haven't seen" : "don't plan to see"} ${pick.firstName} again.`);
         return { ok: true };
       },
@@ -1715,7 +1715,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue pointed them to at a Noise event.`);
           return { ok: false, error: "That isn't someone Cue pointed them to at a Noise event (only Cue's own suggestions count)." };
         }
-        await RM.notePairMet(ctx.userId, told[0].pairId, outcome, note ?? null);
+        await RM.notePairMet(ctx.userId, told[0].pairId, outcome, note ?? null, ctx.onCall ? "call" : "text");
         ctx.facts?.add("did_this_turn", `Noted how meeting ${told[0].firstName} went for them, so Cue's next introductions learn from it.`);
         return { ok: true };
       },
