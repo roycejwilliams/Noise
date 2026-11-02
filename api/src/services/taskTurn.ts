@@ -165,8 +165,8 @@ export function reminderCoversTask(t: Pick<CoTask, "createdAt" | "goal" | "their
   const created = new Date(t.createdAt).getTime();
   const first = t.window ? (t.window.previous?.[0] ?? t.window) : null;
   const end = (first ? new Date(first.deadline).getTime() : created + 24 * 3_600_000) + 15 * 60_000;
-  const about = `${goalBody(t.goal)} ${t.theirWords ?? ""}`;
-  const r = rows.find((x) => x.dueAt.getTime() >= created - 5 * 60_000 && x.dueAt.getTime() <= end && reminderTiedTo(t.goal, x.what, { sameTurn: Math.abs(x.createdAt.getTime() - created) <= 5 * 60_000, about }));
+  // Tied by the promise's own subject words only, the same rule as binding: never their whole message (final review of #352).
+  const r = rows.find((x) => x.dueAt.getTime() >= created - 5 * 60_000 && x.dueAt.getTime() <= end && reminderTiedTo(t.goal, x.what, { sameTurn: Math.abs(x.createdAt.getTime() - created) <= 5 * 60_000 }));
   if (!r) return null;
   if (r.sentAt) return { id: r.id, sent: true, pending: false, at: r.sentAt };
   const until = reminderPendingUntil(r, now);

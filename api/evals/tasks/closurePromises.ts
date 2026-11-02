@@ -258,6 +258,19 @@ function unrelatedText() { return text(new Date("2026-10-28T15:00:28Z"), "Been t
   check("...one waiting on its retry is pending until the retry", TT.reminderCoversTask(zoneTask(), rows({ attempts: 1, retryAt: new Date("2026-10-22T23:40:00Z") }), NOW1)?.at.toISOString() === "2026-10-22T23:40:00.000Z");
   check("...one given up on after its last try (all known not to have gone) doesn't: the task brings it up", TT.reminderCoversTask(zoneTask(), rows({ queuedAt: new Date("2026-10-22T21:00:00Z"), attempts: 5 }), NOW1) === null && TT.reminderCoversTask(zoneTask(), rows({ attempts: 5 }), NOW1) === null);
   check("...an unrelated reminder from another day doesn't", TT.reminderCoversTask(zoneTask(), rows({ createdAt: new Date("2026-10-15T00:00:00Z"), what: "renew the parking permit" }), NOW1) === null);
+  // Final review of #352: their message also mentions rent. The lease promise is tied by its own subject only, so a "pay rent"
+  // reminder never keeps it (it used to: the whole message counted, over the smaller word set, and scored 0.5).
+  const lease = zoneTask({ goal: 'Keep your promise: "I\'ll bring up the lease tomorrow afternoon."', theirWords: "Bring up the lease with me tomorrow afternoon, after I pay rent" });
+  const rentRow = (o: any = {}) => rows({ what: "pay rent", createdAt: new Date("2026-10-20T18:00:00Z"), ...o });
+  check("their message saying 'rent' doesn't tie a 'pay rent' reminder to the lease promise", TT.reminderCoversTask(lease, rentRow(), NOW1) === null && TT.reminderCoversTask(lease, rentRow({ sentAt: new Date("2026-10-22T21:00:05Z") }), NOW1) === null);
+  check("...nor one set in the same turn", TT.reminderCoversTask(lease, rentRow({ createdAt: new Date(T1.getTime() - 4000) }), NOW1) === null);
+  check("...while a reminder about the lease itself still does", TT.reminderCoversTask(lease, rentRow({ what: "go over the lease" }), NOW1)?.pending === true);
+  wake(BRING_UP);
+  const hl = harness(NOW1);
+  hl.deps.coveringReminder = async () => TT.reminderCoversTask(lease, rentRow({ sentAt: new Date("2026-10-22T21:00:05Z") }), NOW1);
+  await TT.runTaskTurnWith(lease, hl.deps);
+  check("the whole turn: the rent reminder having gone doesn't close the lease promise as kept; the lease is brought up", !hl.log.closed.some((c) => /the reminder they asked for went/.test(c)) && hl.log.texts.length === 1, hl.log);
+  check("the same rule as binding: by the promise's subject words, never their whole message", FT.reminderTiedTo('I\'ll bring up the lease tomorrow at 3.', "pay rent", { sameTurn: false }) === false && FT.reminderTiedTo("I'll remind you to pay rent tomorrow at 3.", "pay rent", { sameTurn: false }) === true && !/about\b/.test(src("services/taskTurn.ts").slice(src("services/taskTurn.ts").indexOf("export function reminderCoversTask"), src("services/taskTurn.ts").indexOf("// The promise is to bring something up again"))));
   // The whole turn, with the real decision wired as the real deps wire it: claimed and unsent, so no bring-up from the task.
   for (const [label, o] of [["in flight", { queuedAt: new Date(NOW1.getTime() - 30_000) }], ["can't tell", { queuedAt: new Date("2026-10-22T21:00:00Z"), attempts: 1 }]] as const) {
     wake(BRING_UP);
