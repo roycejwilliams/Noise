@@ -96,6 +96,33 @@ export function withRecordAs<T extends object>(result: T, recordAs: object): T {
   return result;
 }
 
+// Why a call didn't go, for the log only (2026-11-02 helper audit: shareFinds refusals were logged with error "" because the reason sat
+// in refused, and saveAsk's "couldn't save" carried no reason). Remembered by identity like the two maps above, so what the model
+// reads is unchanged; the guard's log, its ledger row and the morning review read the reason.
+const LOG_REASON = new WeakMap<object, string>();
+export function withReason<T extends object>(result: T, reason: string): T {
+  LOG_REASON.set(result, reason);
+  return result;
+}
+// Pure: the reason a failed result is logged with: the one kept with it, else its error, else its refused items, else its note.
+export function refusalReason(result: unknown): string {
+  if (!result || typeof result !== "object") return "";
+  const r = result as Record<string, unknown>;
+  const kept = LOG_REASON.get(r);
+  if (kept) return kept;
+  if (typeof r.error === "string" && r.error.trim()) return r.error;
+  if (Array.isArray(r.refused) && r.refused.length) return r.refused.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" | ");
+  if (typeof r.why === "string" && r.why.trim()) return r.why;
+  return typeof r.note === "string" ? r.note : "";
+}
+// Pure: one request, as the guard tells a repeat of it: the tool and what it was asked, without Cue's why (which changes between
+// tries of the same thing), keys in order.
+export function requestKey(name: string, input: unknown): string {
+  const sorted = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(sorted) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v as object).filter((k) => k !== "why").sort().map((k) => [k, sorted((v as any)[k])])) : v;
+  return `${name} ${JSON.stringify(sorted(input ?? {}))}`;
+}
+
 // Pure: the receipt for a voiceRead call (services/voiceReadConsent.ts): which answer the model read, never their words or message, so
 // a yes taken back leaves no copy of what they said in the decision log. Null for any other tool.
 export function voiceReadReceipt(name: string, input: any): { answer: string } | null {
@@ -113,6 +140,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
   // Made but not sent (a deck, page or link whose text didn't go): it exists. The tool says so with made, and it is never counted as
   // a refusal (review of this branch: "nothing was made" after a deck that was made).
   const madeThisTurn = new Map<string, string>();
+  // Requests that threw this turn, by requestKey: the same request again isn't run or recorded again; it gets the same error back
+  // (2026-11-02 helper audit: a throw left no receipt at all, and a repeat could act twice or log twice).
+  const threwThisTurn = new Map<string, unknown>();
   for (const [name, t] of Object.entries(tools)) {
     if (UNGUARDED.has(name)) continue;
     const ability = abilityForTool(name);
@@ -143,7 +173,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
               action: receipt,
               reason: removal ? "" : String(input?.why ?? "").slice(0, 300),
               proposal: removal
-                ? { ability: ability.id, ...removal, ...(typeof detail.yesCheck === "string" ? { yesCheck: detail.yesCheck } : {}), ...("error" in detail ? { error: "not done" } : {}) }
+                ? { ability: ability.id, ...removal, ...(typeof detail.yesCheck === "string" ? { yesCheck: detail.yesCheck } : {}), ...("error" in detail ? { error: "not done" } : {}), ...(detail.threw ? { threw: true } : {}) }
                 : { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
             })
               .then((d) => {
@@ -226,8 +256,24 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
         }
       }
 
+      // The same request that threw earlier this turn: one receipt for it already, so nothing is run, logged or counted again.
+      const key = requestKey(name, input);
+      if (threwThisTurn.has(key)) throw threwThisTurn.get(key);
       usedThisTurn.set(name, used + 1);
-      const raw = await run(input, options);
+      let raw: any;
+      try {
+        raw = await run(input, options);
+      } catch (err: any) {
+        // A tool that throws still leaves its receipt (2026-11-02 helper audit: no row, no NOT DONE, so nothing stopped a reply from
+        // saying it was done). Logged as not_done with what was thrown, counted as a refusal (one free retry with something
+        // different), and thrown on unchanged: the model reads the same tool error it always did.
+        threwThisTurn.set(key, err);
+        refusedThisTurn.set(name, (refusedThisTurn.get(name) ?? 0) + 1);
+        if (!retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
+        ctx.notDone(`${name} didn't go through: it failed with an error.`);
+        await log("not_done", { error: `threw: ${String(err?.message ?? err).slice(0, 180)}`, threw: true, ...(person ? { person } : {}) });
+        throw err;
+      }
       // askedBack (2026-10-28): the tool asked a question back and did nothing, so this call isn't a request (receipt asked_back).
       // Read here and taken off before the model sees the result, so what the model reads is exactly what it read before.
       const askedBack = !!raw && typeof raw === "object" && raw.askedBack === true;
@@ -255,7 +301,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       const partial = !!result && typeof result === "object" ? (result.recordAs && typeof result.recordAs === "object" ? result.recordAs : (RECORD_AS.get(result) ?? null)) : null;
       const recordAs = partial ?? input;
       // person: the oncePerPerson key, so a later "Sarah" + "Kim" and "Sarah Kim" both find this row (2026-10-28).
-      await log(failed ? "not_done" : "done", { ...(failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : partial ? { recordAs: partial } : {}), ...(person ? { person } : {}) });
+      await log(failed ? "not_done" : "done", { ...(failed ? { error: refusalReason(result).slice(0, 200), ...(made ? { made } : {}) } : partial ? { recordAs: partial } : {}), ...(person ? { person } : {}) });
       // Co's record of what it did for them (services/coFacts.ts).
       if ((!failed || made) && !ctx.dryRun) await recordToolAction(ctx.userId, name, recordAs);
       return result;

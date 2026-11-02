@@ -3,7 +3,7 @@ import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
 import { situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
-import { guardRefusalTellsThem, guardTools, isGuardRefusal } from "./toolGuard.js";
+import { guardRefusalTellsThem, guardTools, isGuardRefusal, withReason } from "./toolGuard.js";
 import { doorOpen } from "../services/theDoor.js";
 import { proactivePaused } from "../services/proactivePause.js";
 import { sendLimiter } from "../services/sendLimiter.js";
@@ -1501,10 +1501,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would save ask for ${ctx.userId}: "${what}"`);
         } else {
-          const saved = await captureIntentForTurn(ctx.userId, `user: ${what}`, { timeoutMs: 6000 }).catch(() => null);
+          // Why it didn't save, for the log only (toolGuard.ts withReason, 2026-11-02 helper audit: eight on dev with no reason).
+          const started = Date.now();
+          let threw: string | null = null;
+          const saved = await captureIntentForTurn(ctx.userId, `user: ${what}`, { timeoutMs: 6000 }).catch((err: any) => ((threw = String(err?.message ?? err).slice(0, 160)), null));
           if (!saved?.ask?.text) {
             notDone(`Saving "${what.slice(0, 120)}" for the daily search didn't work, so Cue is NOT looking for it.`);
-            return { ok: false, error: "couldn't save that as something to look for" };
+            const why = threw ? `the save threw: ${threw}` : Date.now() - started >= 6000 ? "the read of the ask timed out (6s)" : "the read found no ask to save in it";
+            return withReason({ ok: false, error: "couldn't save that as something to look for" }, `couldn't save that as something to look for: ${why}`);
           }
           await recordDecision({ layer: 3, decision: "reply.saveAsk", userId: ctx.userId, outcome: "act", action: saved.deduped ? "updated_ask" : "saved_ask", proposal: { what, saved: saved.ask.text } });
           // Where and until when, in the same breath (services/wantWhen.ts, the bounce): kept only when their own words say it.
