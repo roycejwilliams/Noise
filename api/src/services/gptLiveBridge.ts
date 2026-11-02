@@ -6,8 +6,10 @@
 // Twilio's signature on the WebSocket handshake (server.ts). Cue's audio goes to Twilio at most GPT_LIVE.leadMs ahead of real time,
 // the rest queued here, so when the caller cuts in, little stale audio is left at Twilio.
 //
-// When the caller cuts in, Twilio's buffer is cleared and the local queue dropped. A delegated answer that comes back after the
-// caller has moved on is dropped, and the automatic "let me think" is cancelled the way OpenAI's delegation guide shows.
+// When the caller cuts in, Twilio's buffer is cleared and the local queue dropped. A delegated answer goes to GPT-Live sentence by
+// sentence as the call brain writes it (2026-11-02: waiting for the whole answer held the substance back ~4 s a turn); once the caller
+// has moved on, the rest of it is dropped and no longer written. The automatic "let me think" is cancelled the way OpenAI's
+// delegation guide shows.
 //
 // Per call it records: each delegated turn's latency (call.turn_latency, action gpt_live), each reply's gap after the call
 // (call.turn_latency, action gpt_live_voice), the session (call.gpt_live_session: seconds, endedBy) and its minutes as it runs
@@ -19,7 +21,8 @@ import { guardCallMessages } from "./whatCoKnows.js";
 import { startVoiceTee, type VoiceTee } from "./mediaStreamBridge.js";
 import type { OaiRequest } from "./callLlmProxy.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
-import { anthropicStream } from "./callLlmProxy.js";
+import { anthropicStream, SAFETY_LINE } from "./callLlmProxy.js";
+import { stripCues } from "./voiceCues.js";
 import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
@@ -242,8 +245,14 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const at = d.now();
     // The transcript can trail the audio: wait briefly for it to reach where the turn was handed over.
     const latest = () => frags.reduce((m, f) => Math.max(m, f.endMs), 0);
+    const memberEnd = () => frags.reduce((m, f) => (f.who === "member" ? Math.max(m, f.endMs) : m), 0);
+    // Measured (2026-11-02: 6 of 8 delegations on 10-31 waited the whole catchUpMs): how far the transcript trailed the handover, and
+    // whether the wait brought in any words of theirs. Numbers only.
+    const lagMs = Math.max(0, offsetMs - latest());
+    const memberEndBefore = memberEnd();
     while (d.now() - at < GPT_LIVE.catchUpMs && latest() < offsetMs - 300) await new Promise((r) => setTimeout(r, 50));
     const waitMs = d.now() - at;
+    const waitAddedWords = memberEnd() > memberEndBefore;
     const turns = turnsFrom(frags);
     const theirTurnEnd = turns.filter((t) => t.who === "member").reduce((m, t) => Math.max(m, t.endMs), 0);
     const seenUpTo = Math.max(offsetMs, ...turns.filter((t) => t.who === "member").map((t) => t.startMs));
@@ -255,11 +264,46 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       const rows = await guardRowsP;
       return rows.length ? d.guardMessages(messages, rows) : messages;
     };
+    // The caller has moved on (said something new since this turn was handed over): the answer, or what's left of it, is to a
+    // question no longer asked.
+    const movedOn = () => turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
+    // Streamed when a person is on the line (inbound from the start; outbound once confirmed, else the answer is held as before): each
+    // sentence the call brain lets through goes to GPT-Live as commentary as soon as it's written, sentences that arrive together in
+    // one append. A sentence carrying a crisis or safety line, and everything after it, waits for the end of the answer and goes word
+    // for word (sayExactly), as a whole safety answer always has. Once they've moved on, nothing more is sent or written.
+    let pending = "", exactRest = "", appends = 0, sentChars = 0, cut = false;
+    let firstSendMs: number | null = null;
+    let burst: ReturnType<typeof setImmediate> | null = null;
+    const eventId = () => (appends ? `answer_${id}_${appends + 1}` : `answer_${id}`);
+    const spoken = (t: string) => stripCues(t).replace(/\s+/g, " ").trim();
+    const flush = () => {
+      burst = null;
+      const text = spoken(pending);
+      pending = "";
+      if (!text || cut || finished || voicemailAt != null) return;
+      if (movedOn()) { cut = true; return; }
+      if (sentChars + text.length > GPT_LIVE.commentaryMaxChars) return;
+      sentChars += text.length;
+      send(ai, { type: "session.commentary.append", event_id: eventId(), delegation_id: id, content: text });
+      appends++;
+      firstSendMs ??= d.now() - at;
+    };
+    const onSentence = (t: string): boolean => {
+      if (cut || finished || voicemailAt != null) return false;
+      if (movedOn()) { cut = true; return false; }
+      if (exactRest || SAFETY_LINE.test(t)) { exactRest += pending + t; pending = ""; return true; }
+      pending += t;
+      burst ??= setImmediate(flush);
+      return true;
+    };
     const out = await thinkOnCall(c, turns, d.upstream, (sentence, why) => {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
-    }, guard, d.voiceLine).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false }; });
+    }, guard, d.voiceLine, personAt != null ? onSentence : undefined).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false, streamed: false, stopped: false }; });
+    const streamed = out.streamed || appends > 0 || !!exactRest;
+    // The last sentences, written together at the end: sent now, unless the thinking ended the call (its goodbye is GPT-Live's own).
+    if (burst) { clearImmediate(burst); burst = null; if (out.endCall) pending = ""; else flush(); }
     // Only an answer that itself carried a crisis or safety line makes this a safety moment (review of #331: safetyCall reads the whole
     // call, so "I'm safe from the layoffs" then a content close set off the safety path).
     if (out.exact) safetyMoment = true;
@@ -268,8 +312,9 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const heldFrom = d.now();
     while (personAt == null && voicemailAt == null && !finished) await new Promise((r) => setTimeout(r, 50));
     const heldMs = d.now() - heldFrom;
-    // The caller has moved on (said something new since this turn was handed over): the answer is to a question no longer asked.
-    const stale = turnsFrom(frags).some((t) => t.who === "member" && t.startMs > seenUpTo && !listeningSound(t.text));
+    const movedNow = movedOn();
+    // Stale: some of the answer went unsaid because they had moved on (streamed: what went out before that was said in time).
+    const stale = streamed ? cut || (movedNow && (!!exactRest || (!appends && !!out.text))) : movedNow;
     if (stale) staleDropped++;
     // Their voicemail is recording (review of #333: someone else may hear it): no thinking answer is ever spoken from here on.
     const onVoicemail = voicemailAt != null;
@@ -282,15 +327,24 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const fromMs = Math.max(0, theirTurnEnd - GPT_LIVE.goodbyeOverlapMs);
     const spokeThisTurn = turnsFrom(frags).some((t) => t.who === "cue" && t.startMs >= fromMs);
     const noteSkipped = !out.text && !out.endCall && spokeThisTurn;
-    if (!finished && !stale && !onVoicemail && !out.endCall && !noteSkipped)
-      send(ai, out.text
-        ? out.exact
-          ? { type: "session.instructions.append", event_id: `answer_${id}`, delegation_id: id, content: sayExactly(out.text) }
-          : { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
-        : { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." });
-    if (out.endCall && !finished && !stale && !onVoicemail) pendingEnd = { at: d.now(), fromMs };
+    const noAnswer = { type: "session.thinking.append", event_id: `answer_${id}`, delegation_id: id, content: "No answer came back this time. Don't guess: say you'll text them on it after the call, or ask them to say more." };
+    if (!finished && !movedNow && !onVoicemail && !out.endCall && !noteSkipped) {
+      if (!streamed)
+        send(ai, out.text
+          ? out.exact
+            ? { type: "session.instructions.append", event_id: `answer_${id}`, delegation_id: id, content: sayExactly(out.text) }
+            : { type: "session.commentary.append", event_id: `answer_${id}`, delegation_id: id, content: out.text }
+          : noAnswer);
+      else if (exactRest) {
+        send(ai, { type: "session.instructions.append", event_id: eventId(), delegation_id: id, content: sayExactly(spoken(exactRest).slice(0, GPT_LIVE.commentaryMaxChars)) });
+        appends++;
+        firstSendMs ??= d.now() - at;
+      } else if (!out.text && !appends) send(ai, noAnswer);
+    }
+    if (out.endCall && !finished && !movedNow && !onVoicemail) pendingEnd = { at: d.now(), fromMs };
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
-    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, totalMs: d.now() - at, chars: out.text.length, dropped, stale, error, exact: !!out.exact, heldMs, noteSkipped } });
+    // firstSendMs: from the handover to the first words of the answer reaching GPT-Live (streamed), the number the caller waits on.
+    d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, lagMs, waitAddedWords, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, firstSendMs, totalMs: d.now() - at, chars: out.text.length, streamed, appends, dropped, stale, error, exact: !!out.exact, heldMs, noteSkipped, endAfterText: out.endCall && appends > 0 } });
   };
 
   const onAi = (raw: unknown) => {
