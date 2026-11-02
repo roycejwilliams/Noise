@@ -9,13 +9,17 @@
 // What counts as "they know each other", and what doesn't:
 //   - an intro Cue completed: a pair's intro email went (co_pairs.intro_sent_at, any event), a network intro was made
 //     (network_introductions 'introduced'), or a connection is on record (member_connections);
-//   - one of them said so: "X and I work together", "I already know them" (co_facts 'already_knows', owner-only, written by the
-//     noteAlreadyKnow tool on a text or a call and by the call's read). The model reads the statement, never a regex: "I want to meet
-//     X" is the opposite and writes nothing. It is resolved to one member: someone Cue named to them (a pair it told them about, a
-//     network reveal, an intro), or, with a last name, the one member with that full name. A first name alone is never a member: it's
-//     kept as said and blocks nobody (same name is not same member);
+//   - one of them said so: "X and I work together", "I already know them" (co_facts 'already_knows', owner-only, shown in what Cue
+//     knows and removable there). Written by the post-turn read on a text (turnLearning.ts), the GPT-Live post-call read
+//     (callLearning.ts), and the reply read on a yes to a named intro (saysAlreadyKnow, below). A model reads the statement, never a
+//     regex: "I want to meet X" is the opposite and writes nothing. It is tied to one member only with explicit context (their reply
+//     to Cue's own question about that person) or a full name: a person Cue named to them with that first AND last name, or, at check
+//     time, the one active member with that full name. A first name alone never ties to anyone, even when Cue once named exactly one
+//     person by it: it's kept as said and blocks nobody (same name is not same member);
 //   - a direct personal invite: a referral naming the other person (referrals.recipient is their phone or email), or a vouch
 //     (invite_codes.vouched_by). Joining through someone's invite LINK proves nothing: the link may have been forwarded.
+//     KNOWN LIMIT: this signal is dead today and fails safe. vouched_by has had no writer since Mo was removed, and referrals is filled
+//     only by an endpoint nothing calls (0 rows on dev), its recipient free text. Both read as "not known" until something writes them.
 // What it never does: tell either member anything (a block is silent, as a decline is), or say which side said it.
 //
 // A reconnection is not an intro: this check only stops Cue presenting an existing contact as someone new. A separate, honest
@@ -77,6 +81,33 @@ export async function knownReason(x: string, y: string, action: string): Promise
   if (!c.known) return null;
   await recordDecision({ layer: 6, decision: "match.known", userId: x, outcome: "skip", action, proposal: { other: y, kind: c.kind }, checks: [{ name: "not_already_connected", pass: false, reason: c.why }] }).catch(() => {});
   return `already connected (${c.kind})`;
+}
+
+// ---------------------------------------------------------------- their yes to an intro with someone they already know
+//
+// "yes! Maya and I already work together" to Cue's own "want to meet Maya?" (review of #359): the reply path acts on a yes before the
+// post-turn read runs, so this is read first, only when a named intro's yes is about to be acted on (the one irreversible step), by a
+// small model, never a regex. Yes: the pair is declined, silently (nobody is told why, the other person nothing at all), and the fact
+// is kept against that person. A read that fails is no: the yes goes on as before, and the post-turn read still keeps what they said.
+export function alreadyKnowReplyPrompt(firstName: string, message: string): string {
+  return `Cue asked a member whether they'd like to be introduced to ${firstName}. Their reply: "${message.slice(0, 600)}"
+Does the reply say they ALREADY know ${firstName} personally (they work together, are friends, have met before)? Wanting to meet ${firstName}, being curious about them, or saying yes to the intro is not knowing them.
+Answer ONLY "yes" or "no".`;
+}
+export async function saysAlreadyKnow(firstName: string, message: string, read?: (prompt: string) => Promise<string>): Promise<boolean> {
+  if (!firstName.trim() || !message.trim()) return false;
+  try {
+    const ask =
+      read ??
+      (async (prompt: string) => {
+        const [{ generateText }, { anthropic }, { MODELS }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js")]);
+        const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 5, experimental_telemetry: { isEnabled: true, functionId: "knownConnections.replyRead" }, prompt });
+        return text;
+      });
+    return /^\s*"?yes\b/i.test(await ask(alreadyKnowReplyPrompt(firstName, message)));
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------- "we already know each other"
@@ -149,11 +180,13 @@ export async function namedToThem(x: string): Promise<Named[]> {
 // What they said, kept in their own record. Resolved to a member Cue named to them when one fits; otherwise kept by name (and last
 // name, if they gave one), which blocks a match only through the one member with that full name (CONNECTION_SQL said_by_name).
 // The result never says whether the person is a member, or whether they were resolved: the same answer either way.
-export async function noteAlreadyKnow(x: string, o: { name: string; lastName?: string | null; theirWords: string; source: "text" | "call" }, now = new Date()): Promise<{ resolved: boolean }> {
+// otherId: the member their words are plainly about (their reply to Cue's own question about that person), which needs no resolving.
+export async function noteAlreadyKnow(x: string, o: { name: string; lastName?: string | null; theirWords: string; source: "text" | "call"; otherId?: string | null }, now = new Date()): Promise<{ resolved: boolean }> {
   const name = String(o.name ?? "").trim().split(/\s+/)[0] ?? "";
   if (!name) return { resolved: false };
   const lastName = String(o.lastName ?? "").trim() || null;
-  const hit = resolveNamed(await namedToThem(x), name, lastName);
+  // Explicit context (otherId), or a full name Cue named to them. A first name alone ties to nobody (review of #359).
+  const hit: Named | null = o.otherId ? { otherId: o.otherId, firstName: name, lastName } : lastName ? resolveNamed(await namedToThem(x), name, lastName) : null;
   // Said already (a live call tool and the call's read can both hear it): kept once.
   const { rows: had } = await pool
     .query(
