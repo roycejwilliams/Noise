@@ -159,6 +159,7 @@ const CL = await import("../../src/services/callLearning.js");
   check("room: only for a named intro (never an anonymous heads-up or an additive offer)", /pendingMatchNudge\.kind !== "additive" && !pendingMatchNudge\.anonymous/.test(sb));
   const nRead = sb.indexOf("saysAlreadyKnow(introCandidate.first_name, resolvedContent)");
   check("network: read before resolveNetworkIntroReply, declined, kept", nRead > 0 && sb.indexOf("const context = await resolveNetworkIntroReply(", nRead) > nRead && /if \(alreadyKnewIntro\) \{\s*classification = "not_interested";/.test(sb));
+  check("network: an 'already know' decline is recorded as known (no_signal), never as a 'declined' preference", /alreadyKnewIntro \? "no_signal" : classification === "interested" \? "interested" : "declined"/.test(sb) && /\(they already know each other\)/.test(sb));
   check("the reply says nothing about the other side", /Don't say anything about \$\{other\}'s side\./.test(sb));
 }
 
