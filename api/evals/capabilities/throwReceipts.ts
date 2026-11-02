@@ -27,7 +27,7 @@ const ledger: { relation: string; receipt: string }[] = [];
   return { rows: [] };
 };
 (await import("../../src/services/abilitySwitches.js")).setSwitchesForTest({});
-const { guardTools, refusalReason, requestKey, withReason } = await import("../../src/agent/toolGuard.js");
+const { guardTools, refusalReason, requestKey, withReason, READS_ONLY } = await import("../../src/agent/toolGuard.js");
 const G = await import("../../src/harness/replyGrounding.js");
 const settle = async (n: number) => { for (let i = 0; i < 200 && (decisions.length < n); i++) await new Promise((r) => setTimeout(r, 5)); await new Promise((r) => setTimeout(r, 30)); };
 const quietly = async <T>(fn: () => Promise<T>): Promise<T> => { const l = console.log, e = console.error; console.log = () => {}; console.error = () => {}; try { return await fn(); } finally { console.log = l; console.error = e; } };
@@ -108,6 +108,46 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   });
   await settle(2);
   check("after a throw, a different request that goes through is recorded as done", decisions.map((d) => d.action).join() === "not_done,done", decisions.map((d) => d.action));
+}
+
+// ------------------------------------------------------------ 3b. no free retry after a throw for a tool that sends or changes (review of #350)
+{
+  // draftEmail sends (perTurn 2): a throw uses its turn. One more, different request may run; then the limit, which never says
+  // nothing went.
+  decisions.length = 0;
+  const t = turn({ draftEmail: async () => { throw boom; } });
+  const out: any[] = [];
+  await quietly(async () => {
+    for (const to of ["a@venue.example", "b@venue.example", "c@venue.example"]) out.push(await t.tools.draftEmail.execute({ to, subject: "x" }, {}).catch((e: unknown) => e));
+  });
+  await settle(3);
+  check("a tool that sends: a throw doesn't free up a retry (two runs of its two a turn, then the limit)", t.runs.length === 2 && out[0] === boom && out[1] === boom && out[2]?.ok === false, { runs: t.runs, out });
+  check("…the limit after a throw says the outcome isn't known, never that nothing went", /whether any of it went through isn't known/.test(out[2]?.error ?? "") && !/Nothing from it exists or was sent|Nothing was made/.test(out[2]?.error ?? ""), out[2]);
+  check("…and so does its receipt", t.rf.facts.some((f) => f.kind === "not_done" && /wasn't run again: it failed with an error earlier this turn, so whether any of it went through isn't known/.test(f.text)) && !t.rf.facts.some((f) => /Nothing from it exists or was sent/.test(f.text)), t.rf.facts);
+  // A tool that only reads (webSearch, perTurn 3) still gets its one free retry after a throw: four runs in all.
+  const r = turn({ webSearch: async () => { throw boom; } });
+  await quietly(async () => { for (const q of ["a", "b", "c", "d", "e"]) await r.tools.webSearch.execute({ what: q }, {}).catch(() => {}); });
+  check("a tool that only reads keeps its one free retry after a throw", r.runs.length === 4, r.runs);
+  check("the read-only list holds reads only: nothing that sends or changes", (["draftEmail", "shareFinds", "shareLink", "sendContactCard", "saveAsk", "writeDocument", "correctWhatCoKnows"] as const).every((n) => !READS_ONLY.has(n)) && READS_ONLY.has("webSearch") && READS_ONLY.has("readPage"));
+  // A refusal with no throw keeps its old words: nothing came of it.
+  const plain = turn({ draftEmail: async () => ({ ok: false, error: "Read the place's page first." }) });
+  const p: any[] = [];
+  await quietly(async () => { for (const to of ["a@x.example", "b@x.example", "c@x.example", "d@x.example"]) p.push(await plain.tools.draftEmail.execute({ to, subject: "x" }, {})); });
+  check("control: refusals without a throw still end on 'nothing from it exists or was sent'", /nothing from it exists or was sent/i.test(p[3]?.error ?? ""), p[3]);
+}
+{
+  // The repeat of a request that threw, on a tool that needs their yes: no second read, no second row (review of #350).
+  decisions.length = 0;
+  let yesReads = 0;
+  (await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => (yesReads++, { yes: true, why: "fixture: they asked", read: true }));
+  const rf = G.createReplyFacts();
+  const tools: any = guardTools({ writeDocument: { execute: async () => { throw boom; }, inputSchema: z.object({ what: z.string().optional() }) } }, { userId: "u-1", resolvedContent: "put that in a doc for me", dryRun: false, notDone: (w) => G.addFact(rf, "not_done", w) });
+  await quietly(async () => {
+    await tools.writeDocument.execute({ what: "plan", theirYes: "put that in a doc for me" }, {}).catch(() => {});
+    await tools.writeDocument.execute({ what: "plan", theirYes: "put that in a doc for me", why: "again" }, {}).catch(() => {});
+  });
+  await settle(1);
+  check("a repeat after a throw makes no second yes read and logs no second row", yesReads === 1 && decisions.length === 1 && decisions[0].action === "not_done" && !decisions.some((d) => d.action === "needs_yes"), { yesReads, decisions: decisions.map((d) => d.action) });
 }
 
 // ------------------------------------------------------------ 4. refusals carry their reason in the log
