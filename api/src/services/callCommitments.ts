@@ -158,7 +158,8 @@ export type CheckDeps = {
   sentSince: (userId: string, since: Date) => Promise<Date | null>;
   // What went out since the promise, with what kind it was: when given, the check needs a send that matches the promise
   // (a document for a document), not just any text (services/followThrough.ts promiseKeptBy).
-  sends?: (userId: string, since: Date) => Promise<Sent[]>;
+  // taskId: the commitment's own task, so its own texts count as its own (followThrough.ts sendsSince).
+  sends?: (userId: string, since: Date, taskId?: number) => Promise<Sent[]>;
   note: (userId: string, taskId: number, text: string) => Promise<unknown>;
   record: typeof recordDecision;
 };
@@ -193,7 +194,7 @@ export async function checkCallCommitments(now: Date = new Date(), deps: CheckDe
   for (const t of rows) {
     let sentAt: Date | null;
     if (deps.sends) {
-      const v = promiseKeptBy({ goal: String(t.goal), theirWords: t.their_words ?? null, at: new Date(t.created_at) }, await deps.sends(t.user_id, new Date(t.created_at)));
+      const v = promiseKeptBy({ goal: String(t.goal), theirWords: t.their_words ?? null, at: new Date(t.created_at) }, await deps.sends(t.user_id, new Date(t.created_at), Number(t.id)));
       sentAt = v.kept ? v.by!.at : null;
     } else sentAt = await deps.sentSince(t.user_id, new Date(t.created_at));
     const ok = !!sentAt;

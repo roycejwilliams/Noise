@@ -27,10 +27,12 @@ type Db = {
   reminders: Row[];
   relays: Row[];
   zones: Map<string, string>;
+  outbound: { user_id: string; content: string; sent_at: Date }[];
 };
-const fresh = (): Db => ({ users: new Map(), deferred: [], proactive: new Set(), memories: [], facts: [], reminders: [], relays: [], zones: new Map() });
+const fresh = (): Db => ({ users: new Map(), deferred: [], proactive: new Set(), memories: [], facts: [], reminders: [], relays: [], zones: new Map(), outbound: [] });
 let db = fresh();
 const txKeys: string[] = [];
+let retryColumnMissing = false;
 let seq = 1;
 const now = () => new Date(clockMs());
 let fixedClock: number | null = null;
@@ -95,7 +97,15 @@ async function handle(rawSql: string, args: any[] = []): Promise<{ rows: any[] }
   }
   if (/^SELECT 1 FROM deferred_sends WHERE user_id = \$1 AND target_key = \$2/.test(sql)) return { rows: db.deferred.filter((d) => d.user_id === args[0] && d.target_key === args[1] && ["queued", "sending"].includes(d.status)) };
   // member_reminders
+  if (/^SELECT r\.user_id, r\.what, r\.queued_at, u\.phone_number FROM member_reminders r JOIN users u ON u\.id = r\.user_id WHERE r\.id = \$1/.test(sql)) {
+    const r = db.reminders.find((x) => x.id === args[0]);
+    return { rows: r ? [{ user_id: r.user_id, what: r.what, queued_at: r.queued_at, phone_number: db.users.get(r.user_id)?.phone_number }] : [] };
+  }
+  if (/^SELECT 1 FROM outbound_messages WHERE user_id = \$1 AND sender = 'co' AND sent_at > \$2 AND content = \$3/.test(sql)) {
+    return { rows: db.outbound.filter((o) => o.user_id === args[0] && o.sent_at.getTime() > new Date(args[1]).getTime() && o.content === args[2]).map(() => ({ "?column?": 1 })) };
+  }
   if (/FROM member_reminders r JOIN users u/.test(sql)) {
+    if (retryColumnMissing && /retry_at/.test(sql)) throw new Error('column r.retry_at does not exist');
     return { rows: db.reminders.filter((r) => !r.sent_at && !r.queued_at && r.due_at.getTime() <= Date.now() && r.due_at.getTime() > Date.now() - 2 * 86_400_000 && (!r.retry_at || r.retry_at.getTime() <= Date.now())).map((r) => ({ id: r.id, user_id: r.user_id, what: r.what, phone_number: db.users.get(r.user_id)?.phone_number, city: db.users.get(r.user_id)?.city })) };
   }
   if (/^UPDATE member_reminders SET queued_at = NOW\(\)/.test(sql)) {
@@ -272,6 +282,38 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   const r913 = db.reminders[0];
   check("opted out: nothing sent, the claim kept, no retry set", outbox.length === 0 && r913.queued_at instanceof Date && !r913.retry_at && (r913.attempts ?? 0) === 0, r913);
   check("...and a later run doesn't try again", (await R.sendDueReminders()) === 0 && outbox.length === 0);
+  // A send that threw where it can't be told whether it went (a timeout, a 5xx): checked before any retry (review of #352).
+  check("only failures before delivery retry blind: 4xx, our own refusals, a pause", R.failedBeforeDelivery("401 Invalid Credentials") && R.failedBeforeDelivery("429 Too Many Requests") && R.failedBeforeDelivery("sendblue: send breaker open for ...0150, refusing to send") && R.failedBeforeDelivery("proactive outreach is paused"));
+  check("...a timeout, a 5xx, a dropped connection or no reason don't", !R.failedBeforeDelivery("Request timed out.") && !R.failedBeforeDelivery("502 Bad Gateway") && !R.failedBeforeDelivery("Connection error.") && !R.failedBeforeDelivery(undefined));
+  const realList = (sendblue as any).messages.list;
+  const timeoutCase = async (o: { list: () => Promise<any>; ours?: boolean }) => {
+    seed();
+    db.zones.set("Nightville", zoneAtHour(12));
+    db.reminders.push({ id: 920, user_id: "ua", what: "send the lease back", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null, attempts: 0, retry_at: null });
+    if (o.ours) db.outbound.push({ user_id: "ua", content: "Reminder you asked for: send the lease back", sent_at: new Date() });
+    (sendblue as any).messages.send = async () => { throw new Error("Request timed out."); };
+    (sendblue as any).messages.list = o.list;
+    await R.sendDueReminders();
+    (sendblue as any).messages.send = realSend;
+    (sendblue as any).messages.list = realList;
+    return db.reminders[0];
+  };
+  const notThere = await timeoutCase({ list: async () => ({ data: [] }) });
+  check("a timeout Sendblue's record says didn't go: released and retried", notThere.queued_at === null && notThere.retry_at instanceof Date && notThere.sent_at === null, notThere);
+  const there = await timeoutCase({ list: async () => ({ data: [{ number: PHONE_A, content: "Reminder you asked for: send the lease back", is_outbound: true }] }) });
+  check("a timeout Sendblue's record shows went: recorded as sent, never retried", there.sent_at instanceof Date && !there.retry_at && (await R.sendDueReminders()) === 0 && outbox.length === 0, there);
+  const unknown = await timeoutCase({ list: async () => { throw new Error("503"); } });
+  check("a timeout that can't be checked: left claimed, not retried, not marked sent", unknown.queued_at instanceof Date && !unknown.retry_at && unknown.sent_at === null && (await R.sendDueReminders()) === 0, unknown);
+  const ours = await timeoutCase({ ours: true, list: async () => { throw new Error("not reached"); } });
+  check("a timeout our own outbound record shows went: recorded as sent", ours.sent_at instanceof Date && !ours.retry_at, ours);
+  // The retry column missing (its migration didn't run): the old read still sends due reminders.
+  seed();
+  db.zones.set("Nightville", zoneAtHour(12));
+  db.reminders.push({ id: 921, user_id: "ua", what: "water the plants", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null });
+  retryColumnMissing = true;
+  await R.sendDueReminders();
+  retryColumnMissing = false;
+  check("the retry column missing never stops reminders: the old read sends it", outbox.length === 1 && db.reminders[0].sent_at instanceof Date);
   check("migration: the retry columns", /member_reminders ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0/.test(src("db/migrations.ts")) && /member_reminders ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ/.test(src("db/migrations.ts")));
 }
 

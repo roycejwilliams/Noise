@@ -91,11 +91,12 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
 
 // What a send changes in the record, by kind. Run once the outcome is known: on "sent" it writes what Co did; on
 // "skipped"/"failed" it records that it didn't. Each handler is idempotent (a row re-claimed after a crash may run it twice).
-export type AfterHandlers = Record<AfterKind, (payload: any, outcome: SendOutcome) => Promise<void>>;
+// reason: why a send that didn't go failed, when known (a reminder retries only what failed before delivery: services/relay.ts).
+export type AfterHandlers = Record<AfterKind, (payload: any, outcome: SendOutcome, reason?: string) => Promise<void>>;
 
 export const afterHandlers: AfterHandlers = {
   relay: async (p, outcome) => (await import("./relay.js")).relayDelivered(Number(p.relayId), outcome),
-  reminder: async (p, outcome) => (await import("./relay.js")).reminderDelivered(Number(p.reminderId), outcome),
+  reminder: async (p, outcome, reason) => (await import("./relay.js")).reminderDelivered(Number(p.reminderId), outcome, reason),
   // Not sent because the other side already said yes (their own yes sent the intro): nothing to tell the asker.
   network_intro_ask: async (p, outcome) => {
     if (outcome === "sent") await (await import("./networkIntroNudge.js")).afterDirectAskSent(p as any);
@@ -138,11 +139,11 @@ export async function noteIntroAskNotSent(p: { askerId?: string; candidateId?: s
     .catch((err: any) => console.error("deferredSends: noting an unsent intro ask failed (non-fatal):", err?.message ?? err));
 }
 
-export async function runAfter(after: AfterSend | null | undefined, outcome: SendOutcome, handlers: AfterHandlers = afterHandlers): Promise<void> {
+export async function runAfter(after: AfterSend | null | undefined, outcome: SendOutcome, handlers: AfterHandlers = afterHandlers, reason?: string): Promise<void> {
   if (!after) return;
   const h = handlers[after.kind];
   if (!h) return;
-  await h(after.payload ?? {}, outcome).catch((err: any) => console.error(`deferredSends: after-send (${after.kind}) failed (non-fatal):`, err?.message ?? err));
+  await h(after.payload ?? {}, outcome, reason).catch((err: any) => console.error(`deferredSends: after-send (${after.kind}) failed (non-fatal):`, err?.message ?? err));
 }
 
 export type DeferredDeps = {
@@ -272,7 +273,7 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     }
     await finish(o, o === "sent" ? null : (result.reason ?? null), o === "sent" ? now : null);
     out[o]++;
-    await runAfter(after, o, deps.handlers);
+    await runAfter(after, o, deps.handlers, o === "sent" ? undefined : result.reason);
     await recordDecision({ layer: 7, decision: "proactive.deferredSend", userId: row.user_id, outcome: o === "sent" ? "act" : "skip", action: o, reason: o === "sent" ? undefined : result.reason, proposal: { type: row.type, targetKey: row.target_key, attempts } }).catch(() => {});
   }
   return out;

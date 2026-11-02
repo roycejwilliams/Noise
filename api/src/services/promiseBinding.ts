@@ -22,6 +22,7 @@ import type { GateCheck } from "../harness/core.js";
 import { parseModelJson } from "./modelJson.js";
 import { DateTime } from "luxon";
 import { parseAskWindow } from "./askWindow.js";
+import { bringsItUp, overlap } from "./followThrough.js";
 import { INSTANT, atPromiseCap, theirWordsFor, promiseGoal, promiseCovered } from "./promises.js";
 import { TASK_LIMITS, type CoTask } from "./coTasks.js";
 import { OFFERS_WHAT_CO_CANT } from "./taskWeb.js";
@@ -164,7 +165,16 @@ export type BindDeps = {
   // Open a promise task for it (services/coTasks.ts startTask, source 'promise'), or why not.
   openPromise: (o: { sentence: string; inHours: number; window: ReturnType<typeof commitmentWindow> }) => Promise<{ ok: true; id: number } | { ok: false; why: string }>;
   read: (prompt: string) => Promise<string>;
+  // The reminders they asked for that haven't gone yet (member_reminders, set by followUp remind_me): a promise one of them keeps is
+  // bound to it, never given a task of its own as well (review of #352: the same reminder twice, once by the relay, once by a task).
+  reminders?: () => Promise<PendingReminder[]>;
 };
+export type PendingReminder = { id: number; what: string; dueAt: Date };
+// Pure: the reminder that keeps this promise: it fires by the promise's time, and the promise is Cue's own "I'll remind you / bring it
+// up" (followThrough.ts bringsItUp, Cue's words) or is about what the reminder says (most of its words). Null when none does.
+export function reminderKeeping(sentence: string, by: Date, now: Date, reminders: PendingReminder[]): PendingReminder | null {
+  return reminders.find((r) => r.dueAt.getTime() >= now.getTime() - 5 * 60_000 && r.dueAt.getTime() <= by.getTime() + BINDING_LIMITS.graceMin * 60_000 && (bringsItUp(sentence) || overlap(sentence, r.what) >= 0.5)) ?? null;
+}
 
 // The guard. Returns the verdict for each timed promise, the failed checks for the unbound ones, and the tasks it opened (dropped by
 // the caller if the sentence isn't in what finally goes out).
@@ -176,6 +186,7 @@ export async function bindPromises(reply: string, deps: BindDeps): Promise<{ ver
   const now = deps.now();
   let tasks = await deps.open();
   const calls = deps.scheduledCalls ? await deps.scheduledCalls().catch(() => [] as Date[]) : [];
+  const reminders = deps.reminders ? await deps.reminders().catch(() => [] as PendingReminder[]) : [];
   const entries = () => tasks.filter((t) => t.status === "open").map(entryOf);
   const raw = await deps.read(bindingPrompt(reply, entries(), deps.zone, now)).catch(() => "");
   const parsed = parseBindingRead(raw, reply);
@@ -203,6 +214,8 @@ export async function bindPromises(reply: string, deps: BindDeps): Promise<{ ver
       verdicts.push({ sentence: p.sentence, bound: false, why: "no call with them is scheduled for then" });
       continue;
     }
+    // A reminder they asked for keeps it: that reminder is the send, so no task opens for it too.
+    if (reminderKeeping(p.sentence, by, now, reminders)) { verdicts.push({ sentence: p.sentence, bound: true, entry: 0, how: "already" }); continue; }
     const already = entries().find((e) => (p.entry === null || e.id === p.entry) && firesBy(e, by, now));
     if (already && (p.entry !== null || !read)) { verdicts.push({ sentence: p.sentence, bound: true, entry: already.id, how: "already" }); continue; }
     if (!read) { verdicts.push({ sentence: p.sentence, bound: false, why: "the promise check couldn't run, and nothing on the ledger fires by then" }); continue; }
@@ -320,6 +333,11 @@ export async function realBindDeps(userId: string, theirMessage: string): Promis
       if (!t || t.status !== "open") return false;
       if (t.nextCheckAt && new Date(t.nextCheckAt).getTime() <= at.getTime()) return { previous: null, plan: null };
       return (await T.scheduleTaskAt(userId, taskId, at, plan)) ? { previous: t.nextCheckAt, plan: t.planNext } : false;
+    },
+    reminders: async () => {
+      const { default: pool } = await import("../db/db.js");
+      const { rows } = await pool.query(`SELECT id, what, due_at FROM member_reminders WHERE user_id = $1 AND sent_at IS NULL AND due_at > NOW() - INTERVAL '5 minutes'`, [userId]);
+      return rows.map((r: any) => ({ id: Number(r.id), what: String(r.what ?? ""), dueAt: new Date(r.due_at) }));
     },
     scheduledCalls: async () => {
       const { default: pool } = await import("../db/db.js");
