@@ -242,6 +242,7 @@ const other = (id: number, who: string) => {
   const adj = (score: number, text: string, sig: any[]) => RM.outcomeAdjustedScore(score, text, sig, bar, asks, now);
   check("the theme is the member's own ask the pairing served", RM.themeOf(same, asks) === 0 && RM.themeOf(unrelated, asks) === 1 && RM.themeOf(line, asks) === 0);
   check("generic words (founder, building, raising) tie to no ask", RM.themeOf(generic, asks) === null);
+  check("generic words count as generic after stemming too (raising, companies, business)", RM.themeOf("raising companies", ["raising for companies"]) === null && RM.themeOf("business raising", ["raising money for my business"]) === null);
   check("a generic-word candidate isn't moved by a 'not useful' about climate investors", adj(80, generic, two).moved === 0);
   check("same ask, two 'not useful's: moves down", adj(80, same, two).score < 80);
   check("one signal alone counts half", adj(80, same, notUseful).moved === Math.round(RM.OUTCOME_ADJUST.notUseful * RM.OUTCOME_ADJUST.single * Math.pow(0.5, 1 / RM.OUTCOME_ADJUST.halfLifeDays)));
