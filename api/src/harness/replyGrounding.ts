@@ -134,7 +134,7 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "
 // changedBy: the tools that changed a setting or a record this turn (any not in services/capabilities.ts CHANGES_NOTHING, recorded by the guard).
 // snapshot: the member's pinned snapshot and the lines added since (a text reply): the judge calls send the pinned text as their own
 // cached block (judgeSystem) and list "Since then" after it.
-export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean; theirWords?: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -888,14 +888,25 @@ export const WORLD_CLAIMS = new Set(["time", "place", "link", "count", "offer", 
 // recommendations), which can carry another member's details, so those never
 // back anything (2026-10-01 review of #49: "Maya's building grid storage",
 // quoted from a Co-written intro memory, passed as member_life).
+// "User said:", a voice memo's transcript ("User sent a voice memo:"), and a dated form ("User said on September 29, 2026:").
+const THEIR_LINE = /\bUser(?: said| sent a voice memo)?(?: on [^:]{1,40})?:\s*(.*)$/i;
+// Anyone else's line (Cue's reply or call, a gap marker, a bracketed note) ends their text.
+const SOMEONE_ELSES = /^\s*(?:\[|(?:[-*]\s*)?(?:Co|Cue|Assistant)\b[^:\n]{0,60}:)/i;
 export function theirOwnWords(text: string | undefined): string {
-  return (text ?? "")
-    .split("\n")
-    // "User said:", a voice memo's transcript ("User sent a voice memo:"), and a
-    // dated form ("User said on September 29, 2026:").
-    .map((l) => l.match(/\bUser(?: said| sent a voice memo)?(?: on [^:]{1,40})?:\s*(.+)$/i)?.[1]?.trim() ?? "")
-    .filter(Boolean)
-    .join("\n");
+  // A text of theirs in paragraphs is one row across several lines; the lines after its first are their words too (2026-11-02: a
+  // member's NDA idea and two pieces of feedback sat in the second and third paragraphs of one text, so a claim quoting them found no
+  // support and was cut).
+  const out: string[] = [];
+  let theirs = false;
+  for (const l of (text ?? "").split("\n")) {
+    const m = l.match(THEIR_LINE);
+    if (m) {
+      theirs = true;
+      if (m[1].trim()) out.push(m[1].trim());
+    } else if (SOMEONE_ELSES.test(l)) theirs = false;
+    else if (theirs && l.trim()) out.push(l.trim());
+  }
+  return out.join("\n");
 }
 
 // Cue's own lines in the sources: its replies in the thread and what it already sent this turn.
@@ -1275,8 +1286,9 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // Their thread is asked about, never reported (Royce, 2026-10-14): Co has no record of where it stands. Only a sentence the thread
   // read said reports its status is cut (judgeThreadReports, run before this); a read that failed or never ran keeps it. Quoted, so
   // stripUnsupported cuts exactly that sentence.
+  // A sentence the claim read backed with their own words this conversation is saying it back, never a report (saidBackSentence).
   for (const s of threadCandidates(rf.world, draft)) {
-    if (rf.thread?.judged.get(threadKey(s)) === true) checks.push({ name: "no_thread_report", pass: false, reason: `thread_report: "${s}" (says where their thread stands; only they know, so ask)` });
+    if (rf.thread?.judged.get(threadKey(s)) === true && !saidBackSentence(rf, s)) checks.push({ name: "no_thread_report", pass: false, reason: `thread_report: "${s}" (says where their thread stands; only they know, so ask)` });
   }
   // A stored spot count, time or price said as current when every fact behind it is marked stale (Phase B, B3, services/asOf.ts):
   // say it as of its read, or it's cut. The sentence is quoted so stripUnsupported cuts exactly it.
@@ -1729,8 +1741,10 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     }
     return { name: `claim_${c.type}`, pass, reason };
   });
-  // What each claim was found to rest on, for the machinery-talk check (failureBackedSentence): kept across a recheck's partial read.
+  // What each claim was found to rest on, for the machinery-talk check (failureBackedSentence) and the thread check (saidBackSentence):
+  // kept across a recheck's partial read.
   rf.claimCites ??= new Map();
+  const theirsNow = norm([theirOwnWords(thisConversation(src.recentConversation)), src.message].join("\n"));
   // Rests on the failure: it cites the "what failed" fact or a status saying a report is on record, or the admission judge passed it
   // while a failure is in view (the claim reader may mark "that didn't go through" supported with no fact to cite).
   claims.forEach((c, i) =>
@@ -1738,6 +1752,8 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       pass: checks[i].pass,
       // An on-record status counts too: the status guard above keeps a "no report" citation from ever passing.
       failureFact: checks[i].pass && (!!rf.facts.find((f) => f.id === c.factId && (isFailureFact(f) || reportFactBacks(f))) || (failure.inView && admissions.get(c.text) === true)),
+      // Backed by a quote of their own texts in this conversation: saying back what they told Cue.
+      theirWords: checks[i].pass && !!c.quote && norm(c.quote).length >= 6 && theirsNow.includes(norm(c.quote)),
     }),
   );
   return checks;
@@ -1747,11 +1763,30 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
 // account of what failed, not machinery talk; it's never cut as such. Only when the claim read found claims in it and every one cites
 // that fact.
 export function failureBackedSentence(rf: ReplyFacts, sentence: string): boolean {
-  if (!rf.claimCites?.size) return false;
+  const inIt = claimsIn(rf, sentence);
+  return inIt.length > 0 && inIt.every((v) => v.failureFact);
+}
+
+// The claims the claim read found inside a sentence, or the sentence as most of one claim (a bare "On my end." inside a longer claim
+// isn't).
+function claimsIn(rf: ReplyFacts, sentence: string): { pass: boolean; failureFact: boolean; theirWords?: boolean }[] {
   const s = sentenceKey(sentence).replace(/[.!?]+$/, "");
-  // A claim inside the sentence, or the sentence as most of one claim (a bare "On my end." inside a longer claim isn't).
-  const inIt = [...rf.claimCites].filter(([t]) => t.length > 0 && (s.includes(t) || (t.includes(s) && s.length >= t.length * 0.6)));
-  return inIt.length > 0 && inIt.every(([, v]) => v.failureFact);
+  return [...(rf.claimCites ?? [])].filter(([t]) => t.length > 0 && (s.includes(t) || (t.includes(s) && s.length >= t.length * 0.6))).map(([, v]) => v);
+}
+// A sentence about their thread whose claims all stand on their own texts in this conversation says back what they told Cue: it's
+// never cut as a report of where the thread stands (2026-11-02: asked "what's going on with him, in a summary", Cue's answer from the
+// member's own news was cut three turns running, each time leaving a fragment, while the claim read had backed every claim in it with
+// their words). Only when the claim read found claims in it and every one quotes them; a status they never gave fails the claim read
+// and is cut as before.
+export function saidBackSentence(rf: ReplyFacts, sentence: string): boolean {
+  const inIt = claimsIn(rf, sentence);
+  return inIt.length > 0 && inIt.every((v) => v.theirWords === true);
+}
+// The current conversation: what comes after the last gap marker in the thread ("[— 2 days later —]", routes/sendblue.ts).
+export function thisConversation(recent: string): string {
+  const lines = recent.split("\n");
+  const gap = lines.map((l) => /^\[— .* later —\]$/.test(l.trim())).lastIndexOf(true);
+  return lines.slice(gap + 1).join("\n");
 }
 
 // The redraft's extra line when the cut left dead air (deadAir): Co decides whether their message was a check-in.
