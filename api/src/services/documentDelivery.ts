@@ -447,7 +447,10 @@ export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?
     // when the rule allows it (attempts stay), never dropped.
     // Claimed on the ledger under their lock (it counts, harness/notifyGate.ts); a send that then fails takes it back.
     const claim = blocked ? null : await (deps.claim ?? ((u: string, at: Date, key: string) => import("../harness/proactive.js").then((PR) => PR.claimCoInitiatedSend({ userId: u, type: "task_update", targetKey: key, message: "[document] the PDF version", kind: null, timezone: p.zone, now: at, ruleOnly: true, cls: "requested" }))))(rec.userId, now, `pdf_retry:${rec.id}:${rec.attempts}`);
-    if (claim && !claim.ok) {
+    // Its own claim already on the ledger (an earlier run of this same attempt claimed it and stopped before finishing): that's this
+    // retry's own row, so it goes on under it, never deferred as if a rule held it.
+    const ownClaim = !!claim && !claim.ok && claim.reason === "already sent";
+    if (claim && !claim.ok && !ownClaim) {
       await store.defer(rec.id, claim.retryAt ?? nextDeliveryTime(new Date(now.getTime() + 3_600_000), p.zone), "waiting: their own rule");
       out.waiting++;
       continue;

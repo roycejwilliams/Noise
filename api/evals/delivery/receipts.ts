@@ -122,6 +122,18 @@ function harness(o: { render?: "ok" | "fail" } = {}) {
   const pdfMsg = h.wire[h.wire.length - 1];
   check("retry once rendering works: the PDF follows with its own line", fixed.sent === 1 && h.wire.length === 2 && !!pdfMsg.media_url && pdfMsg.content === "Here's the PDF version of the Cue Presence Plan.", h.wire);
   check("...and the receipt is delivered as a PDF", h.receipts.all[0].status === "delivered" && h.receipts.all[0].channel === "pdf_text");
+  // Its own claim already on the ledger (an earlier run of the same attempt stopped after claiming): it goes, never deferred forever.
+  {
+    const h2 = harness({ render: "fail" });
+    const r2 = await h2.send(PLAN, t, { line: "Here's the Cue Presence Plan you asked for last night." });
+    h2.setRender("ok");
+    const own = await DD.retryPendingPdfs(new Date(r2.receipts[0].nextRetryAt!.getTime() + 1000), { ...deps, receipts: h2.receipts, deliver: h2.deliver, claim: async () => ({ ok: false as const, reason: "already sent" }) });
+    check("a retry whose own claim already exists goes on under it (not 'waiting: their own rule' forever)", own.sent === 1 && own.waiting === 0 && h2.receipts.all[0].status === "delivered");
+    const h3 = harness({ render: "fail" });
+    const r3 = await h3.send(PLAN, t, { line: "Here's the Cue Presence Plan you asked for last night." });
+    const ruled = await DD.retryPendingPdfs(new Date(r3.receipts[0].nextRetryAt!.getTime() + 1000), { ...deps, receipts: h3.receipts, deliver: h3.deliver, claim: async () => ({ ok: false as const, reason: "held: the member's own rule holds it", retryAt: new Date(t.getTime() + 86_400_000) }) });
+    check("one their rule holds waits for when it may go", ruled.waiting === 1 && ruled.sent === 0);
+  }
   // A retry that comes due in their quiet hours waits for their 8am.
   const h2 = harness({ render: "fail" });
   await h2.send(PLAN, at("2026-10-09T03:50:00Z")); // 8:50pm SF
