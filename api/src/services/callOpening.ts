@@ -175,7 +175,9 @@ export async function recentOpenings(userId: string, n = 4): Promise<string[]> {
 // moment it opens on is in what Co knows.
 export function openingSource(summary: string, direction: "inbound" | "outbound", reason?: CallReason | null): string {
   const base = openingContext(summary);
-  return direction === "outbound" && reason ? `${base}\n\nWhy Cue is calling: ${renderCallReason(reason)}` : base;
+  // First, so the writer's cut (OPENING_WRITER.maxContext) never drops it under a long context (review of #354: the text thread made
+  // the context longer than the cut).
+  return direction === "outbound" && reason ? `Why Cue is calling: ${renderCallReason(reason)}\n\n${base}` : base;
 }
 
 // Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).

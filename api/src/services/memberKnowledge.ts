@@ -157,6 +157,9 @@ export type MemberKnowledge = {
   limits: Fact<Limits> | null;
   // How many things they asked Co to remove (services/whatCoKnows.ts), never what they were: read with exchanges or corrections.
   removedCount?: number;
+  // The live guards' read (their removals and corrections) failed, so exchanges and the rest came back unguarded. Said, never silent
+  // (review of #354): a reader that would show more than it used to (a call's thread window) falls back to the old, shorter read.
+  guardsUnread?: boolean;
 };
 
 export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"] as const;
@@ -698,7 +701,8 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   // The removals (not the corrections: those stay with the readers that note them) over Cue's lessons, what it's carrying (open
   // loops, promise results) and its record of what it sent: each is written from their words, so a thing they had Cue forget
   // can't come back through one of them. A part that says it goes; a line that is only it goes.
-  const guards = (["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId), []) : [];
+  let guardsUnread = false;
+  const guards = (["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
   const removed = guards.filter((r) => r.removed);
   const W = guards.length ? await import("./whatCoKnows.js") : null;
   const g = (t: string): string | null => (W && removed.length ? W.guardText(t, removed) : t);
@@ -725,6 +729,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, saidOn: String(c.saidOn).slice(0, 10), verifiedAt: latest(c.confirmedOn, c.saidOn) }));
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
   if (removed.length) k.removedCount = removed.length;
+  if (guardsUnread) k.guardsUnread = true;
   if (on("exchanges")) k.exchanges = exchanges.flatMap((e) => { const content = W ? W.guardText(e.content, guards) : e.content; return content === null ? [] : [{ ...e, content }]; }).map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
   if (on("limits") && limits) k.limits = { avoid: limits.avoid, availability: limits.availability, ...(limits.rules?.length ? { rules: limits.rules } : {}), verifiedAt: latest(limits.at) };
