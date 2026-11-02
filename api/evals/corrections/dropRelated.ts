@@ -2,8 +2,11 @@
 // drop that": search and texts stopped, but two goal entries, two profile goals, their goal states and an ask for the same launch
 // stayed active, because the resolution read only retired an item the member named as over, and never saw Cue's tasks. Now:
 //   1. the read sees every open goal, ask, look-out and Cue's task, each labelled; the rule for a drop is in all three reads
-//   2. what exists only for the dropped thing closes the same turn (related), quietly; an unrelated goal stays; each needs their quote
-//   3. when the read can't tell, the goal stays and is asked about once (the goal recheck, due now); answered or asked, the mark goes
+//   2. what exists only for the dropped thing closes the same turn (related), quietly, and only beside a resolution the same read
+//      accepted (tied to it and its quote); a task only when the ask it serves is the one resolved; an unrelated goal stays
+//      (review of #351: a vague remark with nothing resolved closes nothing; a goal Cue carries is never settled by a related close)
+//   3. when the read can't tell, the goal stays and is asked about once (the goal recheck, due now); answered or asked, the mark goes,
+//      and the same drop re-read on later turns never marks it again; a removal clears their words from the mark; logs carry ids only
 //   4. the correction shows in the next search, task and snapshot inputs, not just the reply
 // Zero tokens: the model's answer is a fixture and the store is an in-memory fake. Invented names throughout.
 //   npx tsx evals/corrections/dropRelated.ts
@@ -34,13 +37,14 @@ const ACCEL = "get into an accelerator";
 const G_LEAD = "Lead the partnership strategy with Northwind for the launch";
 const G_FUND = "Raise a pre-seed round for the new company";
 const G_FIT = "Figure out whether Northwind fits our city plan";
+const DJ = "book a DJ for the Northwind launch";
 const DROP = "The Northwind launch party is off, so drop that.";
 const transcript = `user: ${DROP}\nassistant: Got it, I'll stop on the launch.`;
 
 type Row = Record<string, any>;
 function world() {
   return {
-    profile: { goals: [LAUNCH, ACCEL], blockers: [] as string[], city: "Oakland", intent: [
+    profile: { goals: [LAUNCH, ACCEL, DJ], blockers: [] as string[], city: "Oakland", intent: [
       { id: "g-lead", kind: "goal", status: "active", text: G_LEAD, created_at: "2026-10-07T00:00:00Z" },
       { id: "g-fund", kind: "goal", status: "active", text: G_FUND, created_at: "2026-10-07T00:00:00Z" },
       { id: "g-fit", kind: "goal", status: "active", text: G_FIT, created_at: "2026-10-07T00:00:00Z" },
@@ -56,9 +60,12 @@ function world() {
     tasks: [
       { id: 7, user_id: U, goal: "Draft the Northwind launch run-of-show", their_words: "draft the run of show", status: "open", kind: "work", source: "ask", steps: [], notes: [], followup: null, texts_sent: 0, wakes: 0, created_at: new Date("2026-10-20T00:00:00Z"), outcome: null },
       { id: 8, user_id: U, goal: "Research seed investors for consumer apps", their_words: "find me investors", status: "open", kind: "work", source: "ask", steps: [], notes: [], followup: null, texts_sent: 0, wakes: 0, created_at: new Date("2026-10-21T00:00:00Z"), outcome: null },
+      { id: 9, user_id: U, goal: "Check in on what they told you they want: venues for the Northwind launch", their_words: "", status: "open", kind: "followup", source: "ask", target_key: "ask_checkin:a-venue", steps: [], notes: [], followup: null, texts_sent: 0, wakes: 0, created_at: new Date("2026-10-22T00:00:00Z"), outcome: null },
+      { id: 10, user_id: U, goal: "Shortlist launch caterers (a piece of the launch plan Cue carries)", their_words: "", status: "open", kind: "work", source: "ask", steps: [], notes: [], followup: { goalId: 41, goalItem: 0 }, texts_sent: 0, wakes: 0, created_at: new Date("2026-10-22T00:00:00Z"), outcome: null },
     ] as Row[],
     states: [LAUNCH, G_LEAD, G_FUND, G_FIT].map((g) => ({ user_id: U, goal_hash: G.goalHash(g), goal_text: g, state: "active", reason: "", source: "context", changed_at: new Date("2026-10-14T00:00:00Z"), told_at: new Date("2026-10-14T00:00:00Z"), hints: 0, last_signal_at: new Date("2026-10-20T00:00:00Z"), recheck_asked_at: null })) as Row[],
     decisions: [] as { decision: string; action: string; proposal: any }[],
+    coGoalsClosed: 0,
     candidates: [] as string[],
     sql: [] as string[],
   };
@@ -82,7 +89,12 @@ function install(w: World) {
     if (/^INSERT INTO co_profiles \(/.test(sql)) { w.profile.goals = a[6]; return r([], 1); }
     if (/^SELECT ask_id, ask_text, intent FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NULL/.test(sql)) return r(w.asks.filter((x) => !x.resolved_at));
     if (/^UPDATE ask_checkins SET resolved_at = NOW\(\)/.test(sql)) { let n = 0; for (const x of w.asks) if (a[1].includes(x.ask_id) && !x.resolved_at) { x.resolved_at = new Date(); x.closed_reason = "member"; n++; } return r([], n); }
-    if (/^SELECT id, goal FROM co_tasks WHERE user_id = \$1 AND status = 'open'/.test(sql)) return r(w.tasks.filter((t) => t.status === "open").map((t) => ({ id: t.id, goal: t.goal })));
+    if (/^SELECT id, goal, target_key, followup->>'goalId' AS goal_id FROM co_tasks WHERE user_id = \$1 AND status = 'open'/.test(sql)) return r(w.tasks.filter((t) => t.status === "open").map((t) => ({ id: t.id, goal: t.goal, target_key: t.target_key ?? null, goal_id: t.followup?.goalId ?? null })));
+    if (/^SELECT 1 FROM harness_decisions WHERE user_id = \$1 AND decision = 'goal.recheck_due' AND action = 'unsure_after_drop'/.test(sql)) return r(w.decisions.filter((d) => d.decision === "goal.recheck_due" && JSON.stringify(d.proposal).includes("unsure_after_drop") && JSON.stringify(d.proposal).includes(a[1])).slice(0, 1).map(() => ({ "?column?": 1 })));
+    if (/FROM co_goals WHERE user_id = \$1 AND id = \$2/.test(sql)) return r([{ id: 41, user_id: U, title: "The launch plan", their_words: "", items: [], status: "active", offered_at: new Date(), updated_at: new Date() }]);
+    if (/^UPDATE co_goals SET status = 'closed'/.test(sql)) { w.coGoalsClosed++; return r([], 1); }
+    if (/^SELECT goal_hash, reason FROM goal_states WHERE user_id = \$1 AND reason LIKE 'unsure: %'/.test(sql)) return r(w.states.filter((s) => String(s.reason).startsWith(R.UNSURE_PREFIX)).map((s) => ({ goal_hash: s.goal_hash, reason: s.reason })));
+    if (/^UPDATE goal_states SET reason = '' WHERE user_id = \$1 AND goal_hash = \$2/.test(sql)) { const ex = w.states.find((s) => s.goal_hash === a[1] && String(s.reason).startsWith(R.UNSURE_PREFIX)); if (!ex) return r([], 0); ex.reason = ""; return r([], 1); }
     if (/^SELECT \* FROM co_tasks WHERE user_id = \$1 AND status = 'open' AND kind = 'work'/.test(sql)) return r(w.tasks.filter((t) => t.status === "open" && t.kind === "work"));
     if (/^UPDATE co_tasks SET status = \$3, outcome = \$4/.test(sql)) {
       const t = w.tasks.find((x) => x.id === a[1] && x.status === "open");
@@ -105,7 +117,7 @@ function install(w: World) {
       // markUnsure: a new row, or an active one with no recheck out.
       const ex = w.states.find((s) => s.goal_hash === a[1]);
       if (!ex) { const now = new Date(); w.states.push({ user_id: U, goal_hash: a[1], goal_text: a[2], state: "active", reason: a[3], source: "context", changed_at: now, told_at: now, hints: 0, last_signal_at: now, recheck_asked_at: null }); return r([], 1); }
-      if (ex.state !== "active" || ex.recheck_asked_at) return r([], 0);
+      if (ex.state !== "active" || ex.recheck_asked_at || String(ex.reason).startsWith(R.UNSURE_PREFIX)) return r([], 0);
       Object.assign(ex, { reason: a[3], changed_at: new Date(), hints: 0 });
       return r([], 1);
     }
@@ -147,74 +159,128 @@ function install(w: World) {
 }
 
 // ---------------------------------------------------------------- 2-4. the 10-28 shape, end to end
+const QUOTE = "The Northwind launch party is off";
+const runRead = async (w: World, answer: object, words = transcript, message = DROP) => {
+  const items = (await J.openErrandsAndGoals(U)).map((i) => ({ id: i.ask_id, text: i.ask_text, kind: i.kind, link: i.link ?? null, owned: !!i.owned }));
+  const raw = JSON.stringify(answer);
+  await P.storeProfile(U, { goals: [] } as any, words, { newWords: message, precomputed: { resolutionRaw: raw, openAsks: items, correctionsRaw: JSON.stringify({ corrections: [] }), cadence: "unstated" } });
+  return { items, raw };
+};
+const idx = async (id: string) => (await J.openErrandsAndGoals(U)).findIndex((i) => i.ask_id === id);
 {
   const w = world();
   const restore = install(w);
   try {
-    const items = (await J.openErrandsAndGoals(U)).map((i) => ({ id: i.ask_id, text: i.ask_text, kind: i.kind }));
-    const at = (id: string) => items.findIndex((i) => i.id === id);
-    // What the read answered (a fixture): the named goal is over; the goal entry, the ask, the look-out and the task exist only for the
-    // launch; it can't tell about the fit goal; one "related" quote is Cue's own words, and one points past the list.
-    const answer = JSON.stringify({
-      resolved_goals: [{ item: LAUNCH, quote: "The Northwind launch party is off" }],
+    // What the read answered (a fixture): the launch itself is over; the goal entry, the ask, the look-out and the DJ profile goal go with
+    // it; three tasks are pointed at it too (one unlinked, one serving an ask that isn't the one resolved, one a piece of a goal Cue
+    // carries); one related item names nothing it goes with (and quotes Cue); it can't tell about the fit goal.
+    const answer = {
+      resolved_goals: [{ item: LAUNCH, quote: QUOTE }],
       resolved_blockers: [],
       resolved_asks: [],
       related: [
-        { goal: null, index: at("g-lead"), quote: "The Northwind launch party is off, so drop that" },
-        { goal: null, index: at("a-venue"), quote: "The Northwind launch party is off, so drop that" },
-        { goal: null, index: at("a-djs"), quote: "The Northwind launch party is off, so drop that" },
-        { goal: null, index: at("task:7"), quote: "The Northwind launch party is off, so drop that" },
-        { goal: null, index: at("a-inv"), quote: "I'll stop on the launch" },
-        { goal: null, index: 99, quote: "The Northwind launch party is off" },
+        { goal: null, index: await idx("g-lead"), with: LAUNCH, quote: "drop that" },
+        { goal: null, index: await idx("a-venue"), with: LAUNCH, quote: QUOTE },
+        { goal: null, index: await idx("a-djs"), with: LAUNCH, quote: QUOTE },
+        { goal: DJ, index: null, with: LAUNCH, quote: QUOTE },
+        { goal: null, index: await idx("task:7"), with: LAUNCH, quote: QUOTE },
+        { goal: null, index: await idx("task:9"), with: LAUNCH, quote: QUOTE },
+        { goal: null, index: await idx("task:10"), with: LAUNCH, quote: QUOTE },
+        { goal: null, index: await idx("a-inv"), quote: "I'll stop on the launch" },
+        { goal: null, index: 99, with: LAUNCH, quote: QUOTE },
       ],
-      unsure: [{ goal: null, index: at("g-fit"), quote: "The Northwind launch party is off" }],
-    });
-    const gated = P.gateResolutionOutput(answer, transcript, w.profile.goals, [], items);
-    check("a related item quoted from Cue's own line is refused, one past the list is never read", gated.related.accepted.length === 4 && gated.related.rejected.some((x) => /something Cue said/.test(x.reason)) && !gated.related.proposals.some((p) => p.item === undefined), gated.related);
+      unsure: [{ goal: null, index: await idx("g-fit"), quote: QUOTE }],
+    };
+    const items = (await J.openErrandsAndGoals(U)).map((i) => ({ id: i.ask_id, text: i.ask_text, kind: i.kind, link: i.link ?? null, owned: !!i.owned }));
+    const gated = P.gateResolutionOutput(JSON.stringify(answer), transcript, w.profile.goals, [], items);
+    check("related items tied to the accepted resolution take its quote; the four that exist only for it are accepted", gated.related.accepted.length === 4 && gated.related.accepted.every((p) => p.quote === QUOTE), gated.related.accepted);
+    check("a related item that names nothing it goes with is demoted to unsure, where Cue's own words are refused", gated.unsure.rejected.some((x) => /something Cue said/.test(x.reason)), gated.unsure.rejected);
+    check("a task goes with a drop only when the ask it serves is the one resolved: unlinked, other-ask and goal-piece tasks are demoted", ["task:7", "task:9", "task:10"].every((t) => !gated.related.accepted.some((p) => p.item === t) && gated.unsure.accepted.some((p) => p.item === t)), gated.unsure.accepted);
 
-    await P.storeProfile(U, { goals: [] } as any, transcript, { newWords: DROP, precomputed: { resolutionRaw: answer, openAsks: items, correctionsRaw: JSON.stringify({ corrections: [] }), cadence: "unstated" } });
-
+    await runRead(w, answer);
     const entry = (id: string) => w.profile.intent.find((e) => e.id === id)!;
     const state = (g: string) => w.states.find((s) => s.goal_hash === G.goalHash(g));
     check("dropping the launch takes the named goal off their goals", !w.profile.goals.includes(LAUNCH) && w.profile.goals.includes(ACCEL), w.profile.goals);
     check("... and its goal state with it (done), so it never reads as an active goal no longer on file", state(LAUNCH)?.state === "done", state(LAUNCH));
-    check("the related goal entry closes the same turn, quietly: set aside, no goal-closed moment", entry("g-lead").status === "resolved" && state(G_LEAD)?.state === "stale" && /went with what they dropped/.test(state(G_LEAD)?.reason) && !w.candidates.length, { e: entry("g-lead"), s: state(G_LEAD), c: w.candidates });
+    check("a related profile goal named by its text comes off their goals the same turn", !w.profile.goals.includes(DJ), w.profile.goals);
+    check("the related goal entry closes the same turn, quietly: set aside, no goal-closed moment, no words kept on it", entry("g-lead").status === "resolved" && !entry("g-lead").closed_quote && state(G_LEAD)?.state === "stale" && state(G_LEAD)?.reason === "went with something they dropped" && !w.candidates.length, { e: entry("g-lead"), s: state(G_LEAD), c: w.candidates });
     check("the related ask and look-out close (resolved, at their word), in the profile too", w.asks.find((a) => a.ask_id === "a-venue")!.resolved_at && w.asks.find((a) => a.ask_id === "a-djs")!.resolved_at && entry("a-venue").status === "resolved" && entry("a-djs").status === "resolved");
-    const t7 = w.tasks.find((t) => t.id === 7)!;
-    check("Cue's task for the launch closes as dropped, with their words", t7.status === "dropped" && /Northwind launch party is off/.test(t7.outcome), t7);
+    check("no task closes on a related guess: the unlinked one, the one for another ask and the goal piece stay open", [7, 9, 10].every((id) => w.tasks.find((t) => t.id === id)!.status === "open"), w.tasks.map((t) => [t.id, t.status]));
+    check("... and the goal Cue carries for them is never settled by it", w.coGoalsClosed === 0);
     check("the unrelated goal, ask and task are left alone", entry("g-fund").status === "active" && state(G_FUND)?.state === "active" && !w.asks.find((a) => a.ask_id === "a-inv")!.resolved_at && w.tasks.find((t) => t.id === 8)!.status === "open");
-    check("unsure: the fit goal stays active, marked for its one question with their words", entry("g-fit").status === "active" && state(G_FIT)?.state === "active" && R.unsureQuote(state(G_FIT)?.reason) === "The Northwind launch party is off", state(G_FIT));
+    check("unsure: the fit goal stays active, marked for its one question with their words", entry("g-fit").status === "active" && state(G_FIT)?.state === "active" && R.unsureQuote(state(G_FIT)?.reason) === QUOTE, state(G_FIT));
     check("nothing about any of it sends a text (no candidate queued)", w.candidates.length === 0 && !w.sql.some((s) => /sendblue|outbound_messages/i.test(s)));
-    check("what went with it, and what's kept to ask, is logged as one decision", w.sql.some((s) => /^INSERT INTO harness_decisions/.test(s)) && w.decisions.some((d) => d.proposal.includes("retire_related")));
+    const logs = w.decisions.filter((d) => JSON.stringify(d.proposal).includes("retire_related") || JSON.stringify(d.proposal).includes("unsure_after_drop"));
+    check("what went with it, and what's kept to ask, is logged by kind and id only: never their words or a goal's text", logs.length === 2 && logs.every((d) => !/Northwind|launch party is off/i.test(JSON.stringify(d.proposal))), logs.map((d) => d.proposal));
 
     // ---- the next search, task and snapshot inputs
     const searchGoals = GS.goalSweepGoals({ goals: w.profile.goals, intent: w.profile.intent }) ?? [];
     check("the next goal search reads none of the launch goals, and still the rest", !searchGoals.some((g) => /Northwind launch|Lead the partnership/.test(g)) && searchGoals.includes(ACCEL) && searchGoals.includes(G_FUND) && searchGoals.includes(G_FIT), searchGoals);
     const nextRead = await J.openErrandsAndGoals(U);
-    check("the next ask search and the next retire read see no launch ask, look-out or task", !nextRead.some((i) => ["a-venue", "a-djs", "task:7", "g-lead"].includes(i.ask_id)) && nextRead.some((i) => i.ask_id === "a-inv") && nextRead.some((i) => i.ask_id === "task:8"), nextRead.map((i) => i.ask_id));
-    const open = await T.openTasks(U);
-    check("the next task wake has only the unrelated task", open.map((t) => t.id).join() === "8", open.map((t) => t.id));
+    check("the next ask search and the next retire read see no launch ask, look-out or goal; the kept tasks are still there", !nextRead.some((i) => ["a-venue", "a-djs", "g-lead"].includes(i.ask_id)) && nextRead.some((i) => i.ask_id === "a-inv") && ["task:7", "task:8", "task:9", "task:10"].every((t) => nextRead.some((i) => i.ask_id === t)), nextRead.map((i) => i.ask_id));
     const goals = K.goalsOf({ firstName: "Ellis", city: "Oakland", goals: w.profile.goals, intent: w.profile.intent, updatedAt: new Date() }, await G.goalStates(U).then((m) => [...m.values()]));
     const active = goals.filter((g) => g.state === "active").map((g) => g.text);
     check("the snapshot's goals: none of the launch ones active, the unrelated and the unsure ones still are", !active.some((t) => /Northwind launch|Lead the partnership/.test(t)) && active.includes(G_FUND) && active.includes(G_FIT) && active.includes(ACCEL), goals.map((g) => `${g.state}: ${g.text}`));
 
     // ---- ask once: the recheck is due now for the unsure goal, it rides the reply, then the mark goes
     const now = new Date();
-    const rows = (await G.goalStates(U).then((m) => [...m.values()])).filter((r) => r.state === "active");
-    const turn = await R.recheckForTurn(U, "ok thanks", { userId: U, strip: (t: string) => t } as any, now, {
-      rows: async () => rows,
-      reactions: async () => [],
-      plans: async () => [],
-      onFile: async () => new Set([...searchGoals.map((g) => G.goalHash(g))]),
-      lastAsk: async () => null,
-    });
+    const fence = { userId: U, strip: (t: string) => t } as any;
+    const turnDeps = { rows: async () => (await G.goalStates(U).then((m) => [...m.values()])), reactions: async () => [], plans: async () => [], onFile: async () => new Set([...searchGoals.map((g) => G.goalHash(g))]), lastAsk: async () => null };
+    const turn = await R.recheckForTurn(U, "ok thanks", fence, now, turnDeps);
     check("the next reply is handed the unsure goal as its one question (due now, though it isn't searched)", turn.length === 1 && turn[0].goal === G_FIT && turn[0].recheck === "ask", turn.map((t) => [t.goal, t.recheck]));
     check("... no other active goal is asked about on a quiet clock it hasn't reached", !turn.some((t) => t.goal === G_FUND));
+    const rows = (await G.goalStates(U).then((m) => [...m.values()])).filter((r) => r.state === "active");
     const later = new Date(now.getTime() + 60_000);
     const steps = R.recheckDecide({ rows: rows.map((r) => ({ ...r, lastSignalAt: r.lastSignalAt ?? now, searched: false, hints: 0 })), now: later, signals: [{ goalHash: G.goalHash(G_FIT), at: new Date(now.getTime() + 30_000), kind: "text" }], lastExchangeAt: later, held: [], pendingText: [] });
     check("if they bring it up after the drop, that's their answer: it stays, nothing is asked", steps.find((s) => s.goalHash === G.goalHash(G_FIT))?.action === "signal");
     await R.markRecheckAsked(U, G.goalHash(G_FIT), G_FIT, "reply");
-    check("once the question goes out, the mark goes: it's asked once, never again", !String(state(G_FIT)?.reason).startsWith(R.UNSURE_PREFIX) && !!state(G_FIT)?.recheck_asked_at, state(G_FIT));
+    check("once the question goes out, the mark goes", !String(state(G_FIT)?.reason).startsWith(R.UNSURE_PREFIX) && !!state(G_FIT)?.recheck_asked_at, state(G_FIT));
+    // They answer "still on" (markGoal active: a goal action), and the next turns' reads re-read the same drop line.
+    await R.noteGoalAction(U, [G_FIT]);
+    await runRead(w, { resolved_goals: [], resolved_blockers: [], resolved_asks: [], related: [], unsure: [{ goal: null, index: await idx("g-fit"), quote: QUOTE }] });
+    await runRead(w, { resolved_goals: [], resolved_blockers: [], resolved_asks: [], related: [], unsure: [{ goal: null, index: await idx("g-fit"), quote: QUOTE }] });
+    const again = await R.recheckForTurn(U, "sounds good", fence, new Date(), turnDeps);
+    check("the same drop re-read after they answered marks nothing again: no second question", !String(state(G_FIT)?.reason).startsWith(R.UNSURE_PREFIX) && again.length === 0, { s: state(G_FIT), again: again.map((t) => t.goal) });
+  } finally { restore(); }
+}
+
+// ---------------------------------------------------------------- a vague remark closes nothing; a resolved ask takes its own check-in
+{
+  const w = world();
+  const restore = install(w);
+  try {
+    const vague = "I'm done with that part, it was exhausting";
+    const words = `user: ${vague}\nassistant: That sounds like a lot.`;
+    await runRead(w, { resolved_goals: [], resolved_blockers: [], resolved_asks: [], related: [{ goal: null, index: await idx("task:9"), with: null, quote: vague }, { goal: null, index: await idx("a-venue"), with: null, quote: vague }, { goal: LAUNCH, index: null, with: LAUNCH, quote: vague }], unsure: [] }, words, vague);
+    check("a vague drop with nothing resolved closes nothing: every task, ask and goal stays", w.tasks.every((t) => t.status === "open") && w.asks.every((a) => !a.resolved_at) && w.profile.goals.includes(LAUNCH) && w.profile.intent.every((e) => e.status === "active") && w.coGoalsClosed === 0);
+  } finally { restore(); }
+
+  const w2 = world();
+  const restore2 = install(w2);
+  try {
+    const said = "I don't need venues for the launch anymore";
+    const words = `user: ${said}\nassistant: Okay.`;
+    const venue = await idx("a-venue");
+    await runRead(w2, { resolved_goals: [], resolved_blockers: [], resolved_asks: [{ index: venue, quote: said }], related: [{ goal: null, index: await idx("task:9"), with: venue, quote: said }, { goal: null, index: await idx("task:10"), with: venue, quote: said }], unsure: [] }, words, said);
+    const t9 = w2.tasks.find((t) => t.id === 9)!;
+    check("a check-in serving the ask they said is over closes with it, dropped, without their words on it", w2.asks.find((a) => a.ask_id === "a-venue")!.resolved_at && t9.status === "dropped" && !/venues for the launch anymore/i.test(t9.outcome), t9);
+    check("a task linked to a goal Cue carries isn't closed by a related guess, and the goal isn't settled", w2.tasks.find((t) => t.id === 10)!.status === "open" && w2.coGoalsClosed === 0);
+  } finally { restore2(); }
+}
+
+// ---------------------------------------------------------------- forget: a removal clears their words from an unsure mark
+{
+  const w = world();
+  const restore = install(w);
+  try {
+    const W = await import("../../src/services/whatCoKnows.js");
+    await R.markUnsure(U, G_FIT, QUOTE);
+    await R.markUnsure(U, G_FUND, "money is tight this month");
+    const gone = W.removalRows([{ ref: "goal:g-x", source: "goal", was: "the Northwind launch party", now: null } as any]);
+    const n = await R.forgetUnsureQuotes(U, (t) => !!W.forgets(t, gone, "their_words"));
+    const st = (g: string) => w.states.find((s) => s.goal_hash === G.goalHash(g))!;
+    check("a removal clears the unsure mark whose words say the removed thing (and its question), and only that one", n === 1 && st(G_FIT).reason === "" && R.unsureQuote(st(G_FUND).reason) === "money is tight this month", { n, fit: st(G_FIT).reason, fund: st(G_FUND).reason });
+    check("the removal path runs it after the change commits", /forgetUnsureQuotes\(userId, \(t\) => !!forgets\(t, gone, "their_words"\)\)/.test(src("services/whatCoKnows.ts")));
   } finally { restore(); }
 }
 

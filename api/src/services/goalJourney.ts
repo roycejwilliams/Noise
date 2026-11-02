@@ -75,18 +75,21 @@ export function arcLine(intent: unknown): string | null {
 // goal, or Cue's task.
 export type OpenItemKind = "ask" | "lookout" | "goal" | "task";
 export const TASK_ITEM = "task:";
-export async function openErrandsAndGoals(userId: string): Promise<{ ask_id: string; ask_text: string; kind: OpenItemKind }[]> {
+export async function openErrandsAndGoals(userId: string): Promise<{ ask_id: string; ask_text: string; kind: OpenItemKind; link?: string | null; owned?: boolean }[]> {
   const [asks, prof, tasks] = await Promise.all([
     pool.query(`SELECT ask_id, ask_text, intent FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [userId]),
     pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]),
     // A task read that fails leaves tasks out of this read (nothing closes from a list it didn't see); asks and goals still read.
     pool
-      .query(`SELECT id, goal FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind IN ('work', 'followup', 'research_brief') ORDER BY created_at DESC LIMIT 20`, [userId])
+      .query(`SELECT id, goal, target_key, followup->>'goalId' AS goal_id FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind IN ('work', 'followup', 'research_brief') ORDER BY created_at DESC LIMIT 20`, [userId])
       .catch(() => ({ rows: [] as any[] })),
   ]);
   const goals = goalEntries(prof.rows[0]?.intent).map((g) => ({ ask_id: String(g.id), ask_text: String(g.text), kind: "goal" as const }));
   const open = asks.rows.map((a: any) => ({ ask_id: String(a.ask_id), ask_text: String(a.ask_text), kind: (a.intent === "lookout" ? "lookout" : "ask") as OpenItemKind }));
-  const work = (tasks.rows ?? []).map((t: any) => ({ ask_id: `${TASK_ITEM}${t.id}`, ask_text: String(t.goal ?? ""), kind: "task" as const })).filter((t: { ask_text: string }) => t.ask_text.trim());
+  // What a task serves, for code only: the ask an ask check-in is for (its target key), and whether it's a piece of a goal Cue carries.
+  const work = (tasks.rows ?? [])
+    .map((t: any) => ({ ask_id: `${TASK_ITEM}${t.id}`, ask_text: String(t.goal ?? ""), kind: "task" as const, link: /^ask_checkin:/.test(String(t.target_key ?? "")) ? String(t.target_key).slice("ask_checkin:".length) : null, owned: t.goal_id != null }))
+    .filter((t: { ask_text: string }) => t.ask_text.trim());
   return [...open, ...goals, ...work];
 }
 
@@ -105,7 +108,7 @@ export async function closeGoal(userId: string, goalId: string, quote: string | 
     await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(next)]);
     // The goal's state (services/goalEdges.ts): done at their word, so it stops generating searches and stays on file.
     if (o.quiet) {
-      await import("./goalEdges.js").then((m) => m.setGoalState(userId, String(goal.text), "stale", quote ? `went with what they dropped: "${String(quote).slice(0, 160)}"` : "went with what they dropped", "member")).catch(() => {});
+      await import("./goalEdges.js").then((m) => m.setGoalState(userId, String(goal.text), "stale", "went with something they dropped", "member")).catch(() => {});
       return true;
     }
     await import("./goalEdges.js").then((m) => m.setGoalState(userId, String(goal.text), "done", quote ? `they said: "${String(quote).slice(0, 160)}"` : "they closed it", "member")).catch(() => {});
@@ -141,8 +144,8 @@ export async function retireGoalStates(userId: string, goals: { goal: string; re
   const done: string[] = [];
   for (const g of goals) {
     if (!live.has(G.goalHash(g.goal))) continue;
-    const q = String(g.quote ?? "").slice(0, 160);
-    const ok = await G.setGoalState(userId, g.goal, g.related ? "stale" : "done", g.related ? `went with what they dropped: "${q}"` : `they said: "${q}"`, "member").catch(() => false);
+    // Their words stay out of the row (the read's decision has the ids; review of #351).
+    const ok = await G.setGoalState(userId, g.goal, g.related ? "stale" : "done", g.related ? "went with something they dropped" : "they said it's over", "member").catch(() => false);
     if (ok) done.push(g.goal);
   }
   return done;

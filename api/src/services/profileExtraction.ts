@@ -385,9 +385,14 @@ export type ResolutionResult = {
 };
 export const NO_RESOLUTION: ResolutionResult = { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [], relatedGoals: [], relatedAskIds: [], unsure: [], quoteOf: {} };
 
+// A related or unsure item for the decision log: its kind and id, a goal by its hash (its text is their words).
+const logRef = (p: ProposedResolution): { kind: string; ref: string } => ({ kind: p.kind, ref: p.kind === "goal" ? crypto.createHash("sha256").update(p.item).digest("hex").slice(0, 16) : p.item });
+
 // The numbered list every resolution read sees (here, services/turnLearning.ts, services/callLearning.ts): their open asks and look-outs,
 // their goals, and Cue's open tasks for them, each labelled so the read knows what each one is.
-export type OpenItem = { id: string; text: string; kind?: import("./goalJourney.js").OpenItemKind };
+// link: the ask a task serves (an ask check-in's), owned: a piece of a goal Cue carries for them (goalOwnership.ts). Code only, never shown
+// to the read: a task closes with a drop only when the ask it serves is the one they said is over.
+export type OpenItem = { id: string; text: string; kind?: import("./goalJourney.js").OpenItemKind; link?: string | null; owned?: boolean };
 const ITEM_LABEL: Record<string, string> = { ask: "ask", lookout: "look-out", goal: "goal", task: "Cue's task" };
 export function openItemsBlock(items: OpenItem[]): string {
   return items.length ? `\nOpen asks, look-outs, goals and Cue's tasks for them (numbered):\n${items.map((a, i) => `${i}. ${a.kind ? `(${ITEM_LABEL[a.kind] ?? a.kind}) ` : ""}${a.text}`).join("\n")}\n` : "";
@@ -398,8 +403,8 @@ export function openItemsBlock(items: OpenItem[]): string {
 // as over. A drop covers what exists only for it; whether an item does is the model's read of their words and what the item is for,
 // never a word match, and when it can't tell the item stays and Cue asks once (Royce, 2026-11-02).
 export const RELATED_DROP_RULE =
-  "When they say they're no longer pursuing something (it's off, cancelled, dropped, they're not doing it anymore), that also covers every on-file goal and numbered item that exists only for that thing, even one that doesn't repeat their words: put each in related, with the same quote. Judge it from what each item is for, never from shared words alone; an item that also serves something they still want stays out. When you can't tell whether an item exists only for what they dropped, put it in unsure instead: it stays, and Cue asks them once. Only for something they dropped; nothing goes in related or unsure otherwise.";
-export const RELATED_DROP_JSON = `"related": [{"goal": "exact on-file goal text, or null", "index": null, "quote": "..."}], "unsure": [{"goal": null, "index": 0, "quote": "..."}]`;
+  "When they say they're no longer pursuing something on file (it's off, cancelled, dropped, they're not doing it anymore), first put that thing itself in resolved_goals or resolved_asks. Then every other on-file goal and numbered item that exists only for it, even one that doesn't repeat their words, goes in related, with \"with\" naming the resolved item it goes with (its exact goal text, or its number) and the same quote. Judge it from what each item is for, never from shared words alone; an item that also serves something they still want stays out. When you can't tell whether an item exists only for what they dropped, or you can't tell which on-file thing they dropped, put it in unsure instead: it stays, and Cue asks them once. Only for something they dropped; nothing goes in related or unsure otherwise.";
+export const RELATED_DROP_JSON = `"related": [{"goal": "exact on-file goal text, or null", "index": null, "with": "the resolved goal's exact text, or the resolved item's number", "quote": "..."}], "unsure": [{"goal": null, "index": 0, "quote": "..."}]`;
 
 async function assessResolvedItems(
   transcript: string,
@@ -464,8 +469,8 @@ export async function applyResolutionOutput(
         userId,
         outcome: gated.related.accepted.length || gated.unsure.accepted.length ? "act" : "skip",
         action: "retire_related",
-        proposal: { related: gated.related.proposals, unsure: gated.unsure.proposals },
-        checks: [...gated.related.checks, ...gated.unsure.checks],
+        // Ids and kinds only, never their words or an item's text (a goal by its hash).
+        proposal: { related: gated.related.accepted.map(logRef), unsure: gated.unsure.accepted.map(logRef), demoted: gated.related.demoted, refused: gated.related.rejected.length + gated.unsure.rejected.length },
         reason: `${gated.related.accepted.length} of ${gated.related.proposals.length} went with what they dropped; ${gated.unsure.accepted.length} of ${gated.unsure.proposals.length} kept to ask once`,
       });
     }
@@ -526,16 +531,13 @@ export function gateResolutionOutput(
   const clean = raw.trim();
   const parsed = parseModelJson(clean);
   // related / unsure: an on-file goal by its exact text, or a numbered item by its number; each held to the same quote gate.
-  const pointed = (list: unknown): ProposedResolution[] =>
-    (Array.isArray(list) ? list : []).flatMap((x: any): ProposedResolution[] => {
-      const quote = String(x?.quote ?? "");
-      if (Number.isInteger(x?.index) && x.index >= 0 && x.index < openAsks.length) return [{ kind: "ask", item: openAsks[x.index].id, quote }];
-      if (typeof x?.goal === "string" && x.goal.trim()) return [{ kind: "goal", item: x.goal, quote }];
-      return [];
-    });
+  const point = (x: any): ProposedResolution | null => {
+    const quote = String(x?.quote ?? "");
+    if (Number.isInteger(x?.index) && x.index >= 0 && x.index < openAsks.length) return { kind: "ask", item: openAsks[x.index].id, quote };
+    if (typeof x?.goal === "string" && x.goal.trim()) return { kind: "goal", item: x.goal, quote };
+    return null;
+  };
   const onFile = { goals: existingGoals, blockers: existingBlockers, asks: openAsks };
-  const relatedProposals = pointed(parsed?.related);
-  const unsureProposals = pointed(parsed?.unsure);
   const proposals: ProposedResolution[] = [
     ...(Array.isArray(parsed.resolved_goals) ? parsed.resolved_goals : []).map((g: any) => ({
       kind: "goal" as const,
@@ -551,10 +553,30 @@ export function gateResolutionOutput(
       .filter((a: any) => Number.isInteger(a?.index) && a.index >= 0 && a.index < openAsks.length)
       .map((a: any) => ({ kind: "ask" as const, item: openAsks[a.index].id, quote: String(a?.quote ?? "") })),
   ];
+  const direct = gateResolutions(proposals, onFile, transcript);
+  // Related closes only beside a resolution the same read accepted (review of #351: "I'm done with that part, it was exhausting", with
+  // nothing on file resolved, had a task and an ask accepted as related on the read's guess alone). Each related item names the accepted
+  // resolution it goes with and takes that resolution's quote; anything else is demoted to unsure (kept, asked once for a goal). A task
+  // closes this way only when the ask it serves is the one resolved: a task serving anything else (an ask still open, a goal Cue carries
+  // for them) is demoted too.
+  const accepted = new Map(direct.accepted.filter((p) => p.kind !== "blocker").map((p) => [p.item, p]));
+  const tied: ProposedResolution[] = [];
+  const demoted: ProposedResolution[] = [];
+  for (const x of Array.isArray(parsed?.related) ? parsed.related : []) {
+    const p = point(x);
+    if (!p) continue;
+    const w = x?.with;
+    const withId = Number.isInteger(w) && w >= 0 && w < openAsks.length ? openAsks[w].id : typeof w === "string" ? w : null;
+    const to = withId ? accepted.get(withId) : undefined;
+    const task = openAsks.find((a) => a.id === p.item && a.kind === "task");
+    if (!to || to.item === p.item || (task && (task.owned || !task.link || task.link !== to.item))) { demoted.push(p); continue; }
+    tied.push({ ...p, quote: to.quote });
+  }
+  const unsureProposals = [...(Array.isArray(parsed?.unsure) ? parsed.unsure : []).map(point).filter((p: ProposedResolution | null): p is ProposedResolution => !!p), ...demoted];
   return {
     proposals,
-    ...gateResolutions(proposals, onFile, transcript),
-    related: { proposals: relatedProposals, ...gateResolutions(relatedProposals, onFile, transcript) },
+    ...direct,
+    related: { proposals: tied, demoted: demoted.length, ...gateResolutions(tied, onFile, transcript) },
     unsure: { proposals: unsureProposals, ...gateResolutions(unsureProposals, onFile, transcript) },
   };
 }
@@ -940,7 +962,7 @@ export async function storeProfile(
   // already resolved.
   // Errands AND goals, so a goal can close at their word (services/goalJourney.ts); only the member's own quoted words close either.
   const openAskRows = await (await import("./goalJourney.js")).openErrandsAndGoals(user_id);
-  const openAsks: OpenItem[] = opts.precomputed?.openAsks ?? openAskRows.map((r) => ({ id: r.ask_id, text: r.ask_text, kind: r.kind }));
+  const openAsks: OpenItem[] = opts.precomputed?.openAsks ?? openAskRows.map((r) => ({ id: r.ask_id, text: r.ask_text, kind: r.kind, link: r.link ?? null, owned: !!r.owned }));
   const pre = opts.precomputed;
 
   const onFile: OnFile = {
@@ -1205,7 +1227,7 @@ export async function applyRetirements(userId: string, r: ResolutionResult): Pro
 
   // A goal closes only at their word, and when it does it is a companion moment, not a status flip (services/goalJourney.ts).
   for (const id of r.resolvedAskIds.filter((x) => activeGoal.has(x))) if (await closeGoal(userId, id, null)) out.goalsClosed.push(activeGoal.get(id)!);
-  for (const id of r.relatedAskIds.filter((x) => activeGoal.has(x))) if (await closeGoal(userId, id, quote(id), { quiet: true })) out.goalsClosed.push(activeGoal.get(id)!);
+  for (const id of r.relatedAskIds.filter((x) => activeGoal.has(x))) if (await closeGoal(userId, id, null, { quiet: true })) out.goalsClosed.push(activeGoal.get(id)!);
 
   // Their profile goals that came off the list: the goal_states row that's still active follows (services/goalJourney.ts).
   const profileGoals = [...r.resolvedGoals.map((g) => ({ goal: g, related: false, quote: quote(g) })), ...r.relatedGoals.map((g) => ({ goal: g, related: true, quote: quote(g) }))];
@@ -1218,9 +1240,10 @@ export async function applyRetirements(userId: string, r: ResolutionResult): Pro
     for (const t of tasks) {
       const n = Number(t.slice(TASK_ITEM.length));
       if (!Number.isInteger(n)) continue;
-      const q = String(quote(t) ?? "").slice(0, 160);
-      const outcome = related.has(t) ? `Dropped with what they said is off: "${q}"` : `They said it's no longer needed: "${q}"`;
-      if (await closeTask(userId, n, "dropped", outcome, { theirWord: q || null }).catch(() => false)) out.tasksClosed.push(n);
+      // Their words stay out of the task's outcome and the commitment log (it closes at their word: released); a related close never
+      // settles the goal Cue carries for them (review of #351).
+      const outcome = related.has(t) ? "Dropped: what it served is off, at their word" : "Dropped: they said it's no longer needed";
+      if (await closeTask(userId, n, "dropped", outcome, { theirWord: quote(t), logWords: false, cascade: !related.has(t) }).catch(() => false)) out.tasksClosed.push(n);
     }
   }
 

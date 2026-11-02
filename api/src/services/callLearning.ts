@@ -198,7 +198,7 @@ export async function learnFromCall(input: {
         availability_pattern: row.availability_pattern ?? null,
       }
     : null;
-  const openAsks: OpenItem[] = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind }));
+  const openAsks: OpenItem[] = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind, link: r.link ?? null, owned: !!r.owned }));
 
   // No catch: a failed read fails the call's processing, which is retried.
   const { text } = await generateText({
