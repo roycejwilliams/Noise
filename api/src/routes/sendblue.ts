@@ -2334,7 +2334,8 @@ export function sendblueRouter(io: Server): Router {
                 .noteAlreadyKnow(user.id, { name: introCandidate.first_name, theirWords: resolvedContent.slice(0, 200), source: "text", otherId: introCandidate.candidate_id })
                 .catch(() => {});
             }
-            await recordSuggestionOutcome(user.id, "intro", `intro:${introCandidate.candidate_id}`, `an intro to ${introCandidate.first_name}`, classification === "interested" ? "interested" : "declined");
+            // Already knowing them is no preference about intros (review of #359): recorded as no signal, labelled as known, never "declined".
+            await recordSuggestionOutcome(user.id, "intro", `intro:${introCandidate.candidate_id}`, alreadyKnewIntro ? `an intro to ${introCandidate.first_name} (they already know each other)` : `an intro to ${introCandidate.first_name}`, alreadyKnewIntro ? "no_signal" : classification === "interested" ? "interested" : "declined");
             const context = await resolveNetworkIntroReply(
               { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
               resolvedIntro.item.ref.pending,
