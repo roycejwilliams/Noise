@@ -13,7 +13,7 @@
 // members never tried for that version; retry only those whose last attempt failed or was held.
 import fs from "node:fs";
 import path from "node:path";
-import { approvalFlag, proposedDiff, realPushDeps, reissueCheck, runPush, type Mode } from "../services/cardReissue.js";
+import { approvalFlag, diffFromPrevious, realPushDeps, reissueCheck, runPush, type Mode } from "../services/cardReissue.js";
 import { cardDiff, cardSha, cardVersion, liveVersion, renderCard } from "../utils/vcard.js";
 
 const arg = (name: string): string | null => {
@@ -32,7 +32,7 @@ async function main() {
   if (cmd === "diff") {
     const v = cardVersion(n);
     if (!v) throw new Error(`no card version ${n}`);
-    const rows = n === 2 ? proposedDiff() : cardDiff(liveVersion(), v);
+    const rows = diffFromPrevious(n) ?? cardDiff(liveVersion(), v);
     for (const d of rows) console.log(`${d.changed ? "*" : " "} ${d.field.padEnd(5)} ${d.from.slice(0, 90)}\n        -> ${d.to.slice(0, 90)}`);
     console.log(`\ncontentSha ${cardSha(v)}  flag ${approvalFlag(v)}`);
     return;

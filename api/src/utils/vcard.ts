@@ -51,15 +51,16 @@ export type CardFields = {
   title?: never;
   note: string;
   phones: CardPhone[];
-  email: string;
-  url: string;
+  // Optional: version 2 has neither (Royce, 2026-11-02: the email and homepage aren't set up yet).
+  email?: string;
+  url?: string;
   photo: PhotoAsset | null;
   uid?: string;
   rev?: string;
 };
 
 export type CardApproval = {
-  by: "Royce";
+  by: "Royce Williams";
   on: string; // YYYY-MM-DD
   // cardSha(version) at approval: any change to the fields or the note after this voids it.
   contentSha: string;
@@ -100,7 +101,7 @@ export const V1: CardVersion = {
   approval: "legacy",
 };
 
-// Version 2 (proposed 2026-11-02, waiting on Royce). What changes and why:
+// Version 2 (2026-11-02; the card and its note approved by Royce, the send not yet: see the approval below). What changes and why:
 //   PHOTO  the "Co." wordmark names an old identity; Royce's redesigned "Cue." mark replaces it (branding).
 //   TEL    the calling line is a different number from the texting one (services/capabilities.ts callLine), and calling the texting
 //          number doesn't reach Cue; v1 only had the texting number, so Cue's calls showed as an unknown number (contact).
@@ -108,8 +109,7 @@ export const V1: CardVersion = {
 //   NOTE   v1 describes "a personal AI" and nothing of what Cue is for now; the proposed line comes from Royce's approved shift copy
 //          (services/announcements.ts SHIFT_BODY) (description).
 //   UID/REV a stable UID across versions, and the revision date.
-// Unchanged, and gaps for Royce (no Noise domain or address is in code): EMAIL support@copatible.com, URL https://app.copatible.com
-// (whose page still reads "CoPatible").
+//   EMAIL/URL dropped (Royce, 2026-11-02: "The email and homepage aren't set up yet so if we can do without it just move passed it").
 export const V2: CardVersion = {
   version: 2,
   fields: {
@@ -121,17 +121,23 @@ export const V2: CardVersion = {
       { source: "SENDBLUE_PHONE_NUMBER", label: "Texts", types: ["CELL", "pref"] },
       { source: "TWILIO_PHONE_NUMBER", label: "Calls", types: ["VOICE"] },
     ],
-    email: "support@copatible.com",
-    url: "https://app.copatible.com",
     photo: "cue_mark_jpeg",
     uid: CARD_UID,
     rev: "2026-11-02T00:00:00Z",
   },
-  // PROPOSED, not approved: Royce approves these words with the card (one record, below).
+  // Approved as written by Royce, 2026-11-02, with the card (one record, below).
   memberNote: "A new card for your contacts, with the number I call from, so it shows as me when I ring. Tap it, then Add to Existing Contact.",
   basis: ["branding", "contact", "identity", "description"],
-  // Royce fills this in to approve: { by: "Royce", on: "YYYY-MM-DD", contentSha: cardSha(V2), telLast4: {...}, ref: "..." }.
-  approval: null,
+  // The card and the note, approved. This makes v2 the card /co.vcf serves once deployed. It does NOT approve the push: a run still
+  // needs his --approved flag (services/cardReissue.ts sendPermission), and he hasn't given it. The numbers are the co-test lines'
+  // last four digits (texting ...8080, calling ...1762); a send refuses if either has changed.
+  approval: {
+    by: "Royce Williams",
+    on: "2026-11-02",
+    contentSha: "5ba374a6402d6a9beaf565a7621fa1d36dd01cab9665db5b0c13d5022f0b9123",
+    telLast4: { SENDBLUE_PHONE_NUMBER: "8080", TWILIO_PHONE_NUMBER: "1762" },
+    ref: "PR #342 decision, relayed by the coordinator 2026-11-02: \"go with your recommendations on the card\"; the member note approved as written",
+  },
 };
 
 export const CARD_VERSIONS: readonly CardVersion[] = [V1, V2];
@@ -182,7 +188,9 @@ function renderFields(f: CardFields, phones: Phones): string {
       lines.push(`TEL${types}:${number}`);
     }
   }
-  lines.push(`EMAIL;type=INTERNET:${f.email}`, `URL:${f.url}`, `NOTE:${escapeText(f.note)}`);
+  if (f.email) lines.push(`EMAIL;type=INTERNET:${f.email}`);
+  if (f.url) lines.push(`URL:${f.url}`);
+  lines.push(`NOTE:${escapeText(f.note)}`);
   if (f.photo) lines.push(`PHOTO;ENCODING=b;TYPE=${PHOTO[f.photo].type}:${PHOTO[f.photo].base64}`);
   if (f.uid) lines.push(`UID:${f.uid}`);
   if (f.rev) lines.push(`REV:${f.rev}`);
@@ -203,7 +211,7 @@ export function cardSha(v: CardVersion): string {
 }
 export function isApproved(v: CardVersion): boolean {
   if (v.approval === "legacy") return true;
-  return !!v.approval && v.approval.by === "Royce" && /^\d{4}-\d{2}-\d{2}$/.test(v.approval.on) && v.approval.contentSha === cardSha(v);
+  return !!v.approval && v.approval.by === "Royce Williams" && /^\d{4}-\d{2}-\d{2}$/.test(v.approval.on) && v.approval.contentSha === cardSha(v);
 }
 // The numbers it was approved with still the env's numbers. A legacy or unapproved version: false (never pushed).
 export function numbersStillApproved(v: CardVersion, phones: Phones): boolean {
@@ -246,8 +254,8 @@ export function fieldSummary(f: CardFields): Record<DiffField, string> {
     TITLE: "(none)",
     NOTE: f.note,
     TEL: f.phones.map((p) => `${p.source}${p.label ? ` "${p.label}"` : ""}${p.types?.length ? ` [${p.types.join(",")}]` : ""}`).join(" + "),
-    EMAIL: f.email,
-    URL: f.url,
+    EMAIL: f.email ?? "(none)",
+    URL: f.url ?? "(none)",
     PHOTO: f.photo ? PHOTO[f.photo].label : "(none)",
     UID: f.uid ?? "(none)",
     REV: f.rev ?? "(none)",

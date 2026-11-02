@@ -18,7 +18,7 @@
 // (proactive_sends, unique on user_id + target_key), plus a contact_card_sends row with what happened. A retry run only ever tries
 // the members whose last attempt failed or was held; a first run only members never tried.
 import type { CardFields, CardVersion, Phones } from "../utils/vcard.js";
-import { CARD_VERSIONS, cardDiff, cardSha, fieldSummary, isApproved, liveVersion, numbersStillApproved, phonesFromEnv, V2 } from "../utils/vcard.js";
+import { CARD_VERSIONS, cardDiff, cardSha, fieldSummary, isApproved, liveVersion, numbersStillApproved, phonesFromEnv } from "../utils/vcard.js";
 
 // ---------------------------------------------------------------- 1. the decision
 
@@ -297,7 +297,8 @@ export function noteVersionServed(version: number): void {
     });
 }
 
-// For the PR and the script: the proposed version against what members hold.
-export function proposedDiff(): ReturnType<typeof cardDiff> {
-  return cardDiff(liveVersion(), V2);
+// For the PR and the script: a version against the one before it.
+export function diffFromPrevious(n: number): ReturnType<typeof cardDiff> | null {
+  const v = CARD_VERSIONS.find((x) => x.version === n), before = CARD_VERSIONS.find((x) => x.version === n - 1);
+  return v && before ? cardDiff(before, v) : null;
 }
