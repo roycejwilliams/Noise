@@ -1831,9 +1831,9 @@ export function sendblueRouter(io: Server): Router {
             threadNextSend = false;
             ok = await sendCoReply({ ...p, replyTo: await threadHandle() });
           }
-          if (ok) deliveredThisTurn.push(p.message);
           // The vague "less" ask counts as asked only once a reply carrying it actually went (services/memberPreferences.ts).
           if (ok) import("../services/memberPreferences.js").then((P) => P.confirmLessAsked(user.id)).catch(() => {});
+          if (ok) deliveredThisTurn.push(p.message);
           return ok;
         };
         // hold: the line sent while a search runs, logged as "Co is looking:"
