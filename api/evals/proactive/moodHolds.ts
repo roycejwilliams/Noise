@@ -194,7 +194,7 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   check("safety unchanged: a reply never carries it when they may not be safe", /if \(\(state\.stopNotes\.length \|\| state\.stopNotesSent\.length\) && !ctx\.safetyConcern && !state\.safetyFlagged\) message = carryLaneNotes/.test(src("agent/conversationTools.ts")));
 
   // The reply: decided on this message's own feeling read (the turn's read is replaced with it before the facts are gathered).
-  check("the reply turn swaps in this message's read before the facts are gathered", /if \(turn\) turn\.emotional = emotional;\s*const replyFacts = await gatherReplyFacts\(/.test(src("routes/sendblue.ts")));
+  check("the reply turn swaps in this message's read before the facts are gathered", /if \(turn\) turn\.emotional = emotional;\s*(?:\/\/[^\n]*\n\s*const prefStored = [^\n]*\n\s*)?const replyFacts = await gatherReplyFacts\(/.test(src("routes/sendblue.ts")));
   const { gatherReplyFacts } = await import("../../src/harness/replyGrounding.js");
   const realQuery = pool.query;
   const writes: string[] = [];
