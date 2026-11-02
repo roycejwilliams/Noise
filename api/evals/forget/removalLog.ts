@@ -10,6 +10,9 @@ process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { default: pool } = await import("../../src/db/db.js");
 const W = await import("../../src/services/whatCoKnows.js");
+// Which lines their message asks to remove is its own read (services/theirYes.ts judgeRemoval), tested in evals/forget/removalLines.ts;
+// here every line Cue picked is one they asked for, so the checks are about what a removal does.
+(await import("../../src/services/theirYes.js")).setRemovalJudgeForTests(async (r) => ({ read: true, answers: r.lines.map(() => "yes" as const) }));
 
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };

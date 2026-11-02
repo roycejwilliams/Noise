@@ -145,7 +145,8 @@ const build = (): World => {
 const SAID_SARAH = "Member: I met Sarah at Cue Night, could you connect us?\nCue: Happy to look into it. What's her last name?";
 const turn = async (w: World, input: Record<string, string>, recentExchange: string = SAID_SARAH) => {
   const tools: any = createConversationTools({
-    userId: w.jo.id, phoneNumber: w.jo.phone_number, resolvedContent: "yes please, I'd love an intro", recentExchange, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
+    // Their answer carries the last name they were asked for: a name Cue passes has to be in their words (review of #349).
+    userId: w.jo.id, phoneNumber: w.jo.phone_number, resolvedContent: input.lastName ? `yes please, her last name is ${input.lastName}` : "yes please, I'd love an intro", recentExchange, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
     sendCoReply: async () => true, facts: { add: () => {}, text: () => "" },
   } as any).tools;
   const result = await quiet(() => tools.requestEventIntro.execute({ ...input, theirYes: "yes please", why: "they asked for the intro" }, { toolCallId: "t0", messages: [] }));
@@ -229,16 +230,16 @@ const run = async (outcome: "not_found" | "declined" | "silent" | "unreached" | 
   check("…and dropped, the request row is forgotten", requests.length === 0, requests);
 }
 
-// A name Jo never wrote (Cue said it, or the model passed it on its own): the close names no one.
+// A name Jo never wrote (Cue said it, or the model passed it on its own): since review of #349 the intro isn't requested at all, so
+// nothing is recorded and no close is ever queued for it. The close's own no-name line is checked on its own.
 {
   const w = build();
   const askedAt = Date.now();
-  await turn(w, { personName: "Sarah", lastName: "Kim" }, "Member: the founder I met at Cue Night, could you connect us?\nCue: Was that Sarah Kim?");
-  check("a name only Cue said is never recorded as theirs", requests.length === 1 && requests[0].name_said === "", requests.map((r) => r.name_said));
+  const r = await turn(w, { personName: "Sarah", lastName: "Kim" }, "Member: the founder I met at Cue Night, could you connect us?\nCue: Was that Sarah Kim?");
+  check("a name only Cue said is refused: no request recorded, Sarah never asked", r?.ok === false && requests.length === 0 && !W.sent.some((x) => x.to === w.sarah.phone_number), { r, requests });
   await quiet(() => IC.queueDueIntroCloses(new Date(askedAt + 7 * DAY + 60_000)));
-  const c = asCandidate(W.candidates[0]);
-  const draft = await proactiveRegistry.intro_close.draft(c, { userId: w.jo.id, firstName: "Jo", phoneNumber: w.jo.phone_number!, city: null, timezone: null });
-  check("…and the close is the no-name line", "messages" in draft && JSON.stringify(draft.messages) === JSON.stringify(["The intro you asked about didn't come together, so I've closed it."]), draft);
+  check("…and no close is queued for it", W.candidates.length === 0, W.candidates);
+  check("the close's no-name line, for a request whose name isn't theirs", IC.introCloseText("") === "The intro you asked about didn't come together, so I've closed it.");
 }
 
 // ------------------------------------------------------------ 3. exactly once

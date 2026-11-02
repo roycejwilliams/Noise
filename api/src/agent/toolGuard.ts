@@ -121,7 +121,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
 
     const extra: Record<string, z.ZodTypeAny> = { why: z.string().optional().describe("One short line: why this, now.") };
     if (limits.resendIfMissing) extra.resendBecauseMissing = z.boolean().optional().describe("True only when they said the earlier one didn't arrive.");
-    if (ability.confirm) extra.theirYes = z.string().describe("Their own words in THIS message saying yes to it. If they haven't said yes yet, don't call this: propose it and ask first.");
+    if (ability.confirm) extra.theirYes = z.string().describe("Their own words in THIS message asking you for it, or saying yes to your offer of it. If they've done neither, don't call this: propose it and ask first.");
     if (t.inputSchema && typeof t.inputSchema.extend === "function") t.inputSchema = t.inputSchema.extend(extra);
 
     const run = t.execute;
