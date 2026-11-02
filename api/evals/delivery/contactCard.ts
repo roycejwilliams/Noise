@@ -43,9 +43,14 @@ function oldCard(phone: string): string {
   };
   return ["BEGIN:VCARD", "VERSION:3.0", "FN:Cue", `TEL:${phone}`, "URL:https://app.copatible.com", "EMAIL:support@copatible.com", "NOTE:A personal AI that gets to know you and helps you move forward with what matters most.", `PHOTO;ENCODING=b;TYPE=PNG:${CO_ICON_PNG_BASE64}`, "END:VCARD"].map((l) => fold(l)).join("\r\n");
 }
-check("live: version 1 while version 2 waits on Royce", VC.liveVersion().version === 1 && VC.V2.approval === null);
-check("live card is byte-for-byte the card served before", VC.buildCoVCard(TEXT, CALLS) === oldCard(TEXT) && VC.renderCard(VC.V1, phones) === oldCard(TEXT));
-check("an unapproved version is never served on its own URL", VC.buildVersionedVCard(2, phones) === null && VC.buildVersionedVCard(9, phones) === null);
+check("live: version 2, approved by Royce Williams (2026-11-02), its approval matching its content", VC.liveVersion().version === 2 && VC.isApproved(VC.V2) && VC.V2.approval !== "legacy" && VC.V2.approval?.by === "Royce Williams" && VC.V2.approval?.on === "2026-11-02");
+check("/co.vcf serves version 2", VC.buildCoVCard(TEXT, CALLS) === VC.renderCard(VC.V2, phones));
+check("version 1 still renders byte-for-byte the card served before", VC.renderCard(VC.V1, phones) === oldCard(TEXT));
+check("an unapproved or unknown version is never served on its own URL", VC.buildVersionedVCard(9, phones) === null && VC.buildVersionedVCard(2, phones) === VC.renderCard(VC.V2, phones));
+{
+  const unapproved = { ...VC.V2, approval: null };
+  check("an unapproved version is never live", VC.liveVersion([VC.V1, unapproved]).version === 1);
+}
 check("version 2 renders the same every time (same content hash)", VC.renderCard(VC.V2, phones) === VC.renderCard(VC.V2, phones) && VC.cardSha(VC.V2) === VC.cardSha(VC.V2));
 check("one UID, a fixed urn:uuid", /^urn:uuid:[0-9a-f-]{36}$/.test(VC.CARD_UID) && VC.V2.fields.uid === VC.CARD_UID);
 check("the UID is on the card as written", lines(VC.renderCard(VC.V2, phones)).includes(`UID:${VC.CARD_UID}`));
@@ -104,14 +109,19 @@ function fakeDeps(rows: Row[], o: { fail?: Set<string>; hold?: Set<string>; phon
   return { deps, sentTo, records };
 }
 // A version 2 Royce approved (a test copy: the real one stays null until he signs it).
-const approve = (v: typeof VC.V2, more: Partial<import("../../src/utils/vcard.js").CardApproval> = {}) => ({ ...v, approval: { by: "Royce" as const, on: "2026-11-03", contentSha: VC.cardSha(v), telLast4: { SENDBLUE_PHONE_NUMBER: "0100", TWILIO_PHONE_NUMBER: "0101" }, ref: "test", ...more } });
+const approve = (v: typeof VC.V2, more: Partial<import("../../src/utils/vcard.js").CardApproval> = {}) => ({ ...v, approval: { by: "Royce Williams" as const, on: "2026-11-03", contentSha: VC.cardSha(v), telLast4: { SENDBLUE_PHONE_NUMBER: "0100", TWILIO_PHONE_NUMBER: "0101" }, ref: "test", ...more } });
 const A2 = approve(VC.V2);
 const versionsApproved = [VC.V1, A2];
 
 {
   const f = fakeDeps([row("jordan"), row("noor")]);
-  const r = await CR.runPush({ version: 2, mode: "send", flag: CR.approvalFlag(VC.V2) }, f.deps);
-  check("the real v2 (no approval record): nothing sent, even with the right flag", f.sentTo.length === 0 && !!r.refused?.some((w) => /no approval record/.test(w)), r.refused);
+  const r = await CR.runPush({ version: 2, mode: "send", flag: null }, f.deps);
+  check("the real v2 (card approved, send not): nothing sent without the --approved flag", f.sentTo.length === 0 && !!r.refused?.includes("no --approved flag"), r.refused);
+  const r2 = await CR.runPush({ version: 2, mode: "send", flag: CR.approvalFlag(VC.V2) }, f.deps);
+  check("the real v2 with the flag, but not the numbers it was approved with: nothing sent", f.sentTo.length === 0 && !!r2.refused?.some((w) => /number it was approved with/.test(w)), r2.refused);
+  const unapproved = { ...VC.V2, approval: null };
+  const r3 = await CR.runPush({ version: 2, mode: "send", flag: CR.approvalFlag(unapproved), versions: [VC.V1, unapproved] }, f.deps);
+  check("a version with no approval record: nothing sent, even with the right flag", f.sentTo.length === 0 && !!r3.refused?.some((w) => /no approval record/.test(w)), r3.refused);
 }
 {
   const f = fakeDeps([row("jordan")]);
@@ -147,7 +157,7 @@ const versionsApproved = [VC.V1, A2];
   check("approved + the matching flag + the same numbers: it sends", f.sentTo.length === 2 && r.sent === 2 && !r.refused, r);
 }
 check("approval is a code record, never an env switch", !/process\.env\.[A-Z_]*(APPROV|ENABLE|PUSH|SEND_CARD)/.test(src("services/cardReissue.ts") + src("utils/vcard.ts") + src("scripts/cardReissue.ts")));
-check("the real v2 carries no approval in code (Royce signs it)", /approval: null,\n\};\n\nexport const CARD_VERSIONS/.test(src("utils/vcard.ts")));
+check("the send flag is never stored in code: only Royce passes it", !/--approved v2:[0-9a-f]{12}/.test(src("utils/vcard.ts") + src("services/cardReissue.ts") + src("scripts/cardReissue.ts")) && !src("services/cardReissue.ts").includes(CR.approvalFlag(VC.V2)));
 
 // ---------------------------------------------------------------- 4. never twice; retry only who it missed
 
@@ -199,8 +209,8 @@ check("the push links its exact version, ending in .vcf", CR.versionedCardUrl("h
 {
   let status = 200;
   const res: any = { status(s: number) { status = s; return this; }, send() { return this; }, setHeader() {} };
-  serveVersionedVCard({ params: { version: "v2" } } as any, res);
-  check("the route 404s an unapproved version", status === 404);
+  serveVersionedVCard({ params: { version: "v9" } } as any, res);
+  check("the route 404s a version that isn't approved", status === 404);
 }
 
 // ---------------------------------------------------------------- 6. when to reissue
@@ -227,8 +237,14 @@ check("a description naming an old identity: revise, on description", CR.decideR
   const r = await CR.runPush({ version: 3, mode: "send", flag: CR.approvalFlag(p!.version), versions }, f.deps);
   check("a prepared revision can't be sent until Royce approves it", f.sentTo.length === 0 && !!r.refused?.length);
 }
-const today = CR.reissueCheck(phones);
-check("today: v1 is held, v2 waits on Royce, the basis is identity, contact, branding and description", today.held.version === 1 && today.waiting?.version === 2 && ["identity", "contact", "branding", "description"].every((k) => today.decision.basis.some((s) => s.kind === k)));
+// The approved numbers' last four (the env's real numbers are never here): fake numbers ending the same.
+const sameNumbers = { SENDBLUE_PHONE_NUMBER: "+14155558080", TWILIO_PHONE_NUMBER: "+14155551762" };
+const today = CR.reissueCheck(sameNumbers);
+check("today: v2 is the card, nothing waits, no revision needed", today.held.version === 2 && today.waiting === null && !today.decision.revise, today.decision);
+check("today, if the texting number changed: a revision is needed, on contact", (() => { const d = CR.reissueCheck({ ...sameNumbers, SENDBLUE_PHONE_NUMBER: "+14155550199" }).decision; return d.revise && d.basis.every((s) => s.kind === "contact"); })());
+const v1to2 = CR.decideReissue(CR.detectChanges({ fields: VC.V1.fields, numbersCurrent: true }, VC.V2.fields));
+check("v1 to v2 was on identity, contact, branding and description", ["identity", "contact", "branding", "description"].every((k) => v1to2.basis.some((s) => s.kind === k)));
+check("v2 has no EMAIL or URL (not set up yet)", !/^(EMAIL|URL)/m.test(unfold(VC.renderCard(VC.V2, phones))) && VC.V2.fields.email === undefined && VC.V2.fields.url === undefined);
 
 // ---------------------------------------------------------------- 7. the proposed note (for Royce)
 
