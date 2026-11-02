@@ -123,6 +123,15 @@ check("what Cue reads about moving lanes has no em dash or exclamation point and
     check("a yes to a different offer moves nothing", r.ok === false && /wasn't to this move/.test(r.error) && f.writes.length === 0 && s3.laneNotes.length === 0, r);
     check("…and the refusal is logged", f.logs.some((d) => d.action === "not_offered"));
   }
+  {
+    // A direct ask passes the read now (2026-11-02), but a lane move is still Cue's question and their yes (Royce, 2026-10-13):
+    // with no question from Cue naming the move, nothing moves.
+    console.log = () => {};
+    const { tools: t5, state: s5 } = make("make the jazz nights a lookout instead", { lastCoMessage: "Have a good night." });
+    const r = await t5.moveLane.execute({ item: "jazz nights in SF", from: "goal", to: "lookout", label: "the jazz nights", theirYes: "make the jazz nights a lookout instead" }, {});
+    console.log = quiet;
+    check("a direct ask to move, with no question from Cue about it, moves nothing (the lanes ruling holds in code)", r.ok === false && /wasn't to this move/.test(r.error) && f.writes.length === 0 && s5.laneNotes.length === 0, r);
+  }
   L.setLaneStoreForTests(null);
 }
 check("the quote fact takes whole words", yesIsTheirs("yes please", "Yes please! do it") && yesIsTheirs("go ahead", "no problem, go ahead") && !yesIsTheirs("ok", "booking it") && !yesIsTheirs("no", "I know") && !yesIsTheirs("", "yes"));
@@ -159,7 +168,10 @@ check("…not one from further back than Cue's turn before their previous messag
   }
   const cr = src("agent/conversationReply.ts");
   check("texts and calls both hand the read the exchange", /recentExchange: exchangeFromLog\(input\.recentConversation\)/.test(cr) && /recentExchange: exchangeText\(msgs\.slice\(0, i\)/.test(src("routes/callLlm.ts")) && /recent: ctx\.recentExchange/.test(src("agent/toolGuard.ts")));
-  check("the read asks whether Cue offered this action in the exchange", /did Cue offer THIS action/.test(Y.yesPrompt({ recent: clarifying, message: "ok yes", ability: "x" })) && /If no offer of this action appears in the exchange, no\./.test(Y.yesPrompt({ recent: "", message: "", ability: "" })));
+  // 2026-11-02 helper audit: "If no offer of this action appears in the exchange, no" refused a direct ask (a document asked for
+  // twice, refused six times on 11-01). A direct ask is a yes; the move itself still needs Cue's question (offersMove, below).
+  const prompt = Y.yesPrompt({ recent: clarifying, message: "ok yes", ability: "x" });
+  check("the read asks whether they asked for this action or said yes to Cue's offer of it in the exchange", /either ask Cue for THIS action, or say yes to Cue's offer of it in this exchange/.test(prompt) && prompt.includes(clarifying) && !/If no offer of this action appears/.test(Y.yesPrompt({ recent: "", message: "", ability: "" })), prompt);
 }
 
 // ---- 3. with their yes: it moves, it's logged, and the reply carries the line exactly once
