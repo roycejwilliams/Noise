@@ -75,7 +75,8 @@ const build = (): World => {
 const turn = async (w: World, input: Record<string, string>, i: number) => {
   const facts: { kind: string; text: string }[] = [];
   const tools: any = createConversationTools({
-    userId: w.jo.id, phoneNumber: w.jo.phone_number, resolvedContent: "yes please, I'd love an intro", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
+    // The names Cue passes are the ones they wrote (review of #349: a name only Cue supplied is refused before any lookup).
+    userId: w.jo.id, phoneNumber: w.jo.phone_number, resolvedContent: `yes please, I'd love an intro to ${[input.personName, input.lastName].filter(Boolean).join(" ")}`, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
     sendCoReply: async () => true, facts: { add: (kind: string, text: string) => facts.push({ kind, text }), text: () => "" },
   } as any).tools;
   const result = await quiet(() => tools.requestEventIntro.execute({ ...input, theirYes: "yes please", why: "they asked for the intro" }, { toolCallId: `t${i}`, messages: [] }));

@@ -24,7 +24,7 @@ const introEmailed = () => logged.some((l) => /\[sendIntroEmail stub/.test(l));
 const Y = await import("../../src/services/theirYes.js");
 (await import("../../src/services/abilitySwitches.js")).setSwitchesForTest({});
 const { guardTools } = await import("../../src/agent/toolGuard.js");
-const { ABILITIES } = await import("../../src/services/capabilities.js");
+const { ABILITIES, LIMITS } = await import("../../src/services/capabilities.js");
 
 // The fixture judge: for each member message, the text the read hands back. It builds the real prompt for every read, so a case can
 // see exactly what the model would have been shown.
@@ -46,14 +46,18 @@ Y.setYesJudgeForTests(async (r) => {
   check("…a passing mention or a wish is still no", /a passing mention or a wish that doesn't ask Cue to do it/.test(p));
   check("…a yes to a different offer, a maybe, a not-now, a question back, an acknowledgment are still no", /a yes to a different offer, a maybe, a not-now, a question back, or a plain acknowledgment/.test(p));
   check("…Cue's own words are never theirs", /Cue's own words are never theirs: an offer of Cue's that their latest message doesn't ask for or accept is no/.test(p));
+  check("…words they quoted, pasted or forwarded aren't their ask", /Words they quoted, pasted or forwarded from someone else .* aren't their ask/.test(p));
   check("…for an action with another person, only the member's side", /judge only the member's side: the other person is asked separately/.test(p));
   check("…and it shows the exchange, their message and the action", p.includes("Cue: Here's the list") && p.includes('"Place that in a document for me"') && p.includes("Cue can write them a document"));
 }
-check("the field Cue fills is still their own words in this message", (() => {
+// What the main model reads says the same as the registry (review of #349): they asked for it, or said yes to Cue's offer of it.
+check("the field Cue fills: their own words in this message asking for it or saying yes to Cue's offer", (() => {
   const t: any = { execute: async () => ({ ok: true }), inputSchema: z.object({ title: z.string() }) };
   guardTools({ writeDocument: t }, { userId: "u", resolvedContent: "", dryRun: true, notDone: () => {} });
-  return /Their own words in THIS message/.test(t.inputSchema.shape.theirYes?.description ?? "");
+  const d = t.inputSchema.shape.theirYes?.description ?? "";
+  return /^Their own words in THIS message asking you for it, or saying yes to your offer of it\./.test(d) && !/haven't said yes yet/.test(d);
 })());
+check("the limits line says the same: they ask for it, or say yes to Cue's offer of it", LIMITS.some((l) => /needs their clear yes first: they ask for it, or say yes to Cue's offer of it, then it happens\./.test(l)) && !LIMITS.some((l) => /Cue proposes it, they confirm/.test(l)));
 check("every tool this read gates needs their yes in the registry", ["writeDocument", "writeFromFile", "researchBrief", "requestEventIntro", "moveLane"].every((n) => !!ABILITIES.find((a) => a.tool === n)?.confirm));
 
 // ------------------------------------------------------------ 2. through the guard
@@ -119,6 +123,16 @@ const guarded = (message: string, recent: string) => {
   check("their unrelated words quoted instead: the read says no, nothing is written", b.ok === false && /doesn't read as a yes/.test(b.error ?? "") && prompts.length === 1 && ran.length === 0, { b, ran });
 }
 
+// Forwarded words: someone else's ask, pasted in, isn't theirs.
+{
+  const msg = "Fwd from Dana: \"can you put that in a document for me\"";
+  FIXTURES.set(msg, '{"yes": false, "why": "forwarded words from someone else, not their ask"}');
+  ran.length = 0; prompts.length = 0;
+  const { tools } = guarded(msg, "Cue: Here's the plan for the launch.");
+  const r = await quiet(() => tools.writeDocument.execute({ what: "doc", theirYes: "can you put that in a document for me", why: "they asked" }, {}));
+  check("forwarded words asking for a document: the read is told they aren't their ask, and nothing is written", r.ok === false && ran.length === 0 && /forwarded from someone else .* aren't their ask/.test(prompts[0] ?? ""), { r, ran });
+}
+
 // A read that couldn't be read is still not a yes.
 {
   const msg = "make that a doc please";
@@ -154,28 +168,37 @@ const guarded = (message: string, recent: string) => {
   const { createConversationTools } = await import("../../src/agent/conversationTools.js");
   const msg = "connect me with Sarah Kim from Cue Night";
   FIXTURES.set(msg, '{"yes": true, "why": "they asked for an intro to Sarah"}');
-  const run = async (sarahSaidYes: boolean) => {
+  // Every statement the world was asked during the call, so a case can see whether anything was looked up.
+  const asked: string[] = [];
+  const counted = (pool as any).query;
+  (pool as any).query = async (sql: string, p: any[] = []) => (asked.push(sql.replace(/\s+/g, " ")), counted(sql, p));
+  type Turn = { message?: string; recent?: string; personName?: string; lastName?: string; theirYes?: string };
+  const run = async (sarahSaidYes: boolean, t: Turn = {}) => {
     reset();
     logged.length = 0;
     prompts.length = 0;
     const jo = addMember({ first_name: "Jo", last_name: "Lee", intent: [ask("a cofounder for a climate startup")] });
     const sarah = addMember({ first_name: "Sarah", last_name: "Kim", intent: [ask("an engineer who has shipped hardware")] });
-    addEvent({ api_id: "evt-direct", name: "Cue Night" }, [{ m: jo }, { m: sarah }]);
+    const dana = addMember({ first_name: "Dana", last_name: "Park", intent: [ask("a designer for a food app")] });
+    addEvent({ api_id: "evt-direct", name: "Cue Night" }, [{ m: jo }, { m: sarah }, { m: dana }]);
     W.checkinFollowups.push({ user_id: jo.id, event_api_id: "evt-direct", event_name: "Cue Night" });
     if (sarahSaidYes) W.optIns.push({ event_id: "evt-direct", person_id: sarah.id, candidate_id: jo.id, status: "interested" });
     const facts: { kind: string; text: string }[] = [];
     const tools: any = createConversationTools({
-      userId: jo.id, phoneNumber: jo.phone_number, resolvedContent: msg, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
-      recentExchange: "Member: met some great people last night\nCue: Sounds like a good night.",
+      userId: jo.id, phoneNumber: jo.phone_number, resolvedContent: t.message ?? msg, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false,
+      recentExchange: t.recent ?? "Member: met some great people last night\nCue: Sounds like a good night.",
       sendCoReply: async () => true, facts: { add: (kind: string, text: string) => facts.push({ kind, text }), text: () => "" },
     } as any).tools;
+    asked.length = 0;
     const r = await quiet(async () => {
-      const out = await tools.requestEventIntro.execute({ personName: "Sarah", lastName: "Kim", theirYes: "connect me with Sarah Kim", why: "they asked" }, { toolCallId: "t0", messages: [] });
-      for (let i = 0; i < 200 && !W.decisions.some((d) => d.decision === "reply.requestEventIntro"); i++) await new Promise((res) => setTimeout(res, 5));
+      const out = await tools.requestEventIntro.execute({ personName: t.personName ?? "Sarah", ...(t.lastName === "" ? {} : { lastName: t.lastName ?? "Kim" }), theirYes: t.theirYes ?? "connect me with Sarah Kim", why: "they asked" }, { toolCallId: "t0", messages: [] });
+      for (let i = 0; i < 200 && out?.ok !== false && !W.decisions.some((d) => d.decision === "reply.requestEventIntro"); i++) await new Promise((res) => setTimeout(res, 5));
       return out;
     });
-    return { r, jo, sarah, facts };
+    return { r, jo, sarah, dana, facts };
   };
+  // Only the guard's own log and record: no guest list, no member, no event read.
+  const lookedUp = () => asked.filter((q) => !/^\s*INSERT INTO (harness_decisions|co_facts)/i.test(q) && !/FROM harness_decisions/.test(q));
   {
     const { r, jo, sarah, facts } = await run(false);
     check("an intro asked for directly, never offered: the request goes", r?.ok === true && prompts.length === 1 && /judge only the member's side/.test(prompts[0]), { r, prompts: prompts.length });
@@ -188,6 +211,23 @@ const guarded = (message: string, recent: string) => {
     // The control: the same ask after Sarah already said yes to Jo is the one case that introduces them.
     const { r } = await run(true);
     check("control: with Sarah's own yes already on file, the same ask does introduce them", r?.ok === true && introEmailed(), logged.filter((l) => /intro/i.test(l)));
+  }
+  // The person has to be the one they named (review of #349: a direct ask passes the read, so a name Cue supplied must not).
+  for (const [label, personName, lastName] of [["a member of that night", "Dana", "Park"], ["no one by that name", "Robin", "Vale"]] as const) {
+    const { r, dana } = await run(false, { personName, lastName });
+    check(`they named Sarah, Cue asks for ${personName} ${lastName} (${label}): refused before any lookup`, r?.ok === false && lookedUp().length === 0 && W.sent.length === 0 && W.optIns.length === 0, { r, lookedUp: lookedUp() });
+    check(`…with the same answer either way, so it says nothing about who exists (${label})`, r?.error === "Not done: the person has to be the one they named, in their own words. Use the name exactly as they wrote it; if they haven't named who they mean, ask them." && !W.sent.some((s) => s.to === dana.phone_number), r);
+  }
+  {
+    // A last name they never wrote, with the first name theirs, is refused the same way.
+    const { r } = await run(false, { personName: "Sarah", lastName: "Park" });
+    check("a last name Cue supplied is refused too, before any lookup", r?.ok === false && lookedUp().length === 0, { r, lookedUp: lookedUp() });
+  }
+  {
+    // The second step: they named Sarah earlier, and their reply now is just her last name.
+    FIXTURES.set("Kim", '{"yes": true, "why": "they answered with her last name to continue the intro they asked for"}');
+    const { r, sarah } = await run(false, { message: "Kim", recent: "Member: can you connect me with Sarah from Cue Night\nCue: Happy to check. What's her last name?", theirYes: "Kim" });
+    check("the second step, their reply just \"Kim\" after naming Sarah: it goes, and Sarah is asked", r?.ok === true && W.sent.filter((s) => s.to === sarah.phone_number).length === 1, { r, sent: W.sent });
   }
   (globalThis as any).Date = RealDate;
 }

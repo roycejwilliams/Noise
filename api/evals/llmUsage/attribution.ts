@@ -137,7 +137,8 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   for (const [f, id] of sites) {
     const s = src(f);
     const creates = (s.match(/messages\.create\(/g) ?? []).length;
-    const records = (s.match(new RegExp(`recordAnthropicUsage\\("${id.replace(/\./g, "\\.")}"`, "g")) ?? []).length;
+    // An id's own sub-reads count as its rows too ("theirYes.read.removal" under "theirYes.read").
+    const records = (s.match(new RegExp(`recordAnthropicUsage\\("${id.replace(/\./g, "\\.")}(?:\\.[a-z]+)?"`, "g")) ?? []).length;
     check(`${f}: every messages.create is followed by its usage row`, creates > 0 && creates === records);
   }
   // Behavioral: a real direct call (theirYes) through the stubbed Anthropic host, inside a member's scope.
