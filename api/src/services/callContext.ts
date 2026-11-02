@@ -17,6 +17,7 @@ import type { SentItem } from "./turnContext.js";
 import type { Exchange, Fact, KnowledgeDeps, KnowledgeSection, MemberKnowledge, MemberRules } from "./memberKnowledge.js";
 import { plainCorrected } from "./memberKnowledge.js";
 import { DateTime } from "luxon";
+import { threadWindow, WINDOW_MAX_ROWS } from "./threadWindow.js";
 import { withMember } from "./llmUsage.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
@@ -112,13 +113,26 @@ export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" |
     rules ? `The rules they set for how you treat them (the same lines a text reply gets; keep to them on this call):\n${[...rules.known, ...rules.instructions].map((l) => `- ${l}`).join("\n")}` : null,
   ].filter((x): x is string => !!x);
 }
-// The recent texts (20) and their own words of the last 48 hours (25) both come from one exchange read.
-export const CONTEXT_EXCHANGES = { exchanges: 45, exchangeDays: 30 } as const;
+// The recent texts (20; a call's thread window, callThread) and their own words of the last 48 hours (25) all come from one exchange
+// read. As many rows as the text reply's window reads (services/threadWindow.ts WINDOW_MAX_ROWS), so a call's window can hold their
+// last ten texts the way a reply's does.
+export const CONTEXT_EXCHANGES = { exchanges: WINDOW_MAX_ROWS, exchangeDays: 30 } as const;
 const RECENT_TEXTS = 20;
 const OWN_WORDS = { max: 25, hours: 48 };
 
 // Pure: a stored exchange line as the context shows it ("User said: ...", "Co replied: ...", "[Call] ...").
 const exchangeLine = (x: Fact<Exchange>) => (x.from === "member" ? `User said: ${x.text}` : x.call ? `[Call] ${x.text}` : `Co replied: ${x.text}`);
+// Pure: the text thread a call reads, oldest first, under a heading (2026-11-02, both mediums: the reply's own window,
+// services/threadWindow.ts). Their last WINDOW_THEIR_TEXTS texts and what Cue said between them; their texts whole, only Cue's long
+// rows cut, inside the reply's character budget. Before: the last 20 rows, so a few multi-bubble answers left about four of theirs
+// (the median on dev), and the whole line was skipped when the rest of the summary was full. Call summaries ([Call] rows) aren't
+// texts: the last calls have their own section.
+export const CALL_THREAD_HEAD = "Your recent texts with them, oldest first:";
+export function callThread(exchanges: readonly Fact<Exchange>[]): string {
+  const newestFirst = exchanges.filter((x) => !x.call).map((x) => ({ content: exchangeLine(x) })).reverse();
+  const rows = threadWindow(newestFirst);
+  return rows.length ? `${CALL_THREAD_HEAD}\n${rows.map((r) => r.content).join("\n")}` : "";
+}
 // Pure: the layer's corrections as the rows this file's correction rules read.
 export const correctionRows = (k: Pick<MemberKnowledge, "corrections">): CorrectionRow[] => k.corrections.map((c) => ({ field: c.field, old_value: c.was, new_value: c.now, corrected_at: c.verifiedAt }));
 // Pure: the parts the layer covers. Their own words lately: their lines and Co's call summaries in the last 48 hours, oldest
@@ -390,7 +404,9 @@ async function contextSummary(userId: string): Promise<string> {
 // after-call audit: facts (what Co sent and what's on file, Co's own record,
 // their asks in their words) and impressions (summaries and read-outs Co's
 // models wrote), which never count as proof of a specific fact.
-export type CallKnowledge = { summary: string; facts: string; impressions: string };
+// thread: the text thread the call read (callThread), for the after-call audit: their own lines there are a source for their life and
+// where things stand, as on a text reply's claim read.
+export type CallKnowledge = { summary: string; facts: string; impressions: string; thread: string };
 export type CorrectionRow = { field: string; old_value: string; new_value: string | null; corrected_at: Date | string };
 
 // Room for the whole picture (about 2,000 tokens): 4,500 was spent mostly on the sent events, and the
@@ -546,7 +562,9 @@ export function pairCalls(rows: { created_at: Date | string; memory_type: string
 //   8. what was sent lately, last and bounded, with the facts on file
 // A thread line stamped OLD goes to 7. A section that doesn't fit is skipped,
 // not the end of the build, so a long one can't take every later short one with it.
-export function assembleCallSummary(o: { haveIt?: string | null; now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number }): string {
+// thread: the text thread (callThread), after the rest and before what was sent, outside max: it has its own budget (the reply's), and
+// a full summary never drops it, nor it anything else.
+export function assembleCallSummary(o: { haveIt?: string | null; now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number; thread?: string | null }): string {
   const max = o.max ?? CALL_CONTEXT_MAX;
   const sentMax = o.sentMax ?? CALL_SENT_MAX;
   const now = o.now ? `Where things stand now (start here). ${o.now}` : null;
@@ -580,7 +598,7 @@ export function assembleCallSummary(o: { haveIt?: string | null; now?: string | 
     if (next.length + reserve > max) continue;
     summary = next;
   }
-  return sent ? (summary ? `${summary}\n\n${sent}` : sent) : summary;
+  return [summary, o.thread?.trim() || "", sent ?? ""].filter(Boolean).join("\n\n");
 }
 // A call can't wait on slow page reads: whatever details are on file by then are used.
 const CALL_CONTEXT_WAIT_MS = 3000;
@@ -759,13 +777,13 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     ...fitLines,
     recap ? `Ongoing summary: ${recap}` : null,
     ...profileLines(p, (t) => keep(t)),
-    p.recentTexts.length ? `Recent texts: ${[...p.recentTexts].filter((x) => !/^\[Call\]/.test(x)).reverse().join(" / ")}` : null,
   ]
     .filter(Boolean)
     .join("\n\n");
 
   const sentLines = await strip(sentDetailLines({ sent }, 7));
-  const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base });
+  const thread = callThread(k.exchanges);
+  const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread });
 
   const ledger = await strip(await ledgerLines);
   const facts = [
@@ -775,7 +793,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   ].join("\n");
   // Impressions: what Co's models wrote about them (never proof of a specific fact).
   const impressions = [who, lastCalls, recap, threads.map((t) => t.text).join("\n"), p.emotionalLine ?? ""].filter(Boolean).join("\n\n");
-  return { summary, facts, impressions };
+  return { summary, facts, impressions, thread };
 }
 
 // The summary a call opens with.

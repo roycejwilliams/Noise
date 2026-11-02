@@ -1131,7 +1131,7 @@ async function processEndedCallInScope(o: {
       // the shared layer (services/memberKnowledge.ts), the same truth every path
       // reads; the call picture adds sent-page details, ledger lines and impressions.
       const [callPicture, auditKnowledge] = await Promise.all([
-        buildCallKnowledge(user_id).catch(() => ({ summary: "", facts: "", impressions: "" })),
+        buildCallKnowledge(user_id).catch(() => ({ summary: "", facts: "", impressions: "", thread: "" })),
         memberKnowledge(user_id, { include: AUDIT_SECTIONS }).catch(() => null),
       ]);
       const knownBeforeCall0 = knownBeforeFrom(auditKnowledge, callPicture);

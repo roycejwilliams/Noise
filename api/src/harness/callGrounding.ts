@@ -102,9 +102,11 @@ export const saidDay = (saidOn: string): string => {
 const ASK_LINE = /^They've asked (?:Co|Cue) for \(their words\): /;
 export function knownBeforeFrom(
   k: Pick<MemberKnowledge, "goals" | "asks" | "delivered" | "corrections" | "claims" | "identity"> | null,
-  picture: { facts: string; impressions: string },
-): { facts: string; impressions: string } {
-  if (!k) return { facts: picture.facts, impressions: picture.impressions };
+  picture: { facts: string; impressions: string; thread?: string },
+): { facts: string; impressions: string; thread?: string } {
+  // The text thread the call read (callContext.ts callThread) rides along as it is, for the audit's own section.
+  const thread = picture.thread?.trim() ? { thread: picture.thread } : {};
+  if (!k) return { facts: picture.facts, impressions: picture.impressions, ...thread };
   const day = (at: string) => DateTime.fromISO(at).setZone(k.identity.timeZone).toFormat("LLL d");
   // Asks come from the layer now; the picture's copy of the same rows is dropped so each ask is listed once.
   // A claim holding a value they corrected away is never on record (enduring claims never expire on their own).
@@ -127,14 +129,16 @@ export function knownBeforeFrom(
     : null;
   const inferred = claims.filter((c) => c.provenance === "co_inferred").map((c) => `- ${c.text}`);
   const impressions = [picture.impressions, goals, inferred.length ? `Cue's own read of them (never something they said):\n${inferred.join("\n")}` : null].filter((x): x is string => !!x && !!x.trim());
-  return { facts: facts.join("\n"), impressions: impressions.join("\n\n") };
+  return { facts: facts.join("\n"), impressions: impressions.join("\n\n"), ...thread };
 }
 
 // impressions (2026-09-28, the facts-vs-hints rule on the text side,
 // replyGrounding.ts addHint): summaries and read-outs Co's own models wrote
 // going into the call. They help read the call, but they're never proof of a
 // specific time, place, count, or what another person said, wants or did.
-export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string, doneOnCall: (string | DoneItem)[] = [], foundOnCall: FoundOnCall[] = []): string {
+// thread (2026-11-02, both mediums): the text thread the call read (callContext.ts callThread). Their own lines there are a source for
+// their life and where things stand, as on a text reply's claim read (replyGrounding.ts); Cue's lines there are not proof.
+export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string, doneOnCall: (string | DoneItem)[] = [], foundOnCall: FoundOnCall[] = [], thread?: string): string {
   const reg = auditRegistry();
   return `Audit what Cue said on a phone call. Cue can only claim things it actually knew and only promise things it can actually do.
 
@@ -159,14 +163,17 @@ ${foundLines(foundOnCall).map((l) => `- ${l}`).join("\n")}
 ` : ""}${impressions?.trim() ? `
 Cue's own impressions going in (summaries its models wrote). Use these to understand the call, never as proof: a specific time, place, count, link, or what another person said, wants or did that only an impression backs is "invented_fact". What the person themself said in these recent texts is fine to rely on.
 ${impressions.slice(0, 6000)}
+` : ""}${thread?.trim() ? `
+Their recent texts with Cue before the call, oldest first. What they said there ("User said") is their own words: a source for their own life and plans, and for where things stand as they told it. Cue's own lines there are not proof.
+${thread.slice(-6000)}
 ` : ""}
 Call transcript ("assistant" is Cue):
 ${transcript.slice(-12000)}
 
-List every statement by Cue ("assistant" lines only) that is a promise of a future action, a specific fact about an event, a person, or a place, or a claim about what Cue can do. For each:
+List every statement by Cue ("assistant" lines only) that is a promise of a future action, a specific fact about an event, a person, or a place, where something or someone stands, or a claim about what Cue can do. For each:
 - "promise_keepable": a promise to look for something, keep an eye out, or do work, after the call, and text what it finds, with no guaranteed result or time. Casual ones count the same: "you'll hear from me", "I'm on it", "I'll keep an ear out for the right moment", "leave it with me". Put what to do in "what", specific enough to act on from the call (what to look for, for what, by when if said). In "asked_quote", copy the person's exact words from a "user" line that asked for it (a request, or their yes to Cue's offer together with what it answered); null only when Cue offered it on its own and they never asked.
 - "promise_unkeepable": any other promise (a time, a guaranteed result, booking, contacting someone for them).
-- "invented_fact": a specific fact not in what Cue knew or what the person said on the call. In "specifics", list the exact names, places, times or numbers that had no source.
+- "invented_fact": a specific fact not in what Cue knew or what the person said on the call. In "specifics", list the exact names, places, times or numbers that had no source. Where something stands must match the stage its source gives: suggested, planned, set up (access given, a sample handed over, an intro sent), under way, and done are different, so "I gave her a sample" never backs "she's trying it" or "she liked it", and "we might run a test" never backs "you're testing it". A stage further along than its source is "invented_fact": in "specifics", copy the words of Cue's line that claim the stage.
 - "capability": a claim about what Cue can or can't do that the registry above contradicts. In "limit", the number of the can't line it breaks ("L3"). If a registry line says Cue does it, it is "ok", not "capability"; put that line's id in "ability".
 - "ok": supported by the facts Cue knew, what the person said, or the registry. Leave these out of the list: only the other types are used.
 
@@ -624,7 +631,7 @@ async function openPromiseThread(userId: string, p: PlannedPromise, transcript: 
 export async function auditCall(
   userId: string,
   transcript: string,
-  knownBefore: string | { facts: string; impressions: string },
+  knownBefore: string | { facts: string; impressions: string; thread?: string },
   // doneOnCall: what Cue's tools did on the call (services/callLedger.ts); foundOnCall: what its searches found on it; offerFlags: the
   // call's offer source check (services/offerGuard.ts unsourcedInCall), held to the record and done checks before any is saved.
   // correctionsHeld: why no correction may be written for this call (its done list couldn't be read, so a real send or find could be
@@ -633,6 +640,7 @@ export async function auditCall(
 ): Promise<AuditPlan | null> {
   const facts = typeof knownBefore === "string" ? knownBefore : knownBefore.facts;
   const impressions = typeof knownBefore === "string" ? undefined : knownBefore.impressions;
+  const thread = typeof knownBefore === "string" ? undefined : knownBefore.thread;
   try {
     let claims = opts.claims;
     if (!claims) {
@@ -643,7 +651,7 @@ export async function auditCall(
         // A long call's claims ran past the default and the JSON came back cut off, so the whole audit, every promise with it, was
         // lost (2026-10-08, #113). "ok" statements are no longer listed, and there is room for the rest.
         maxOutputTokens: 8000,
-        prompt: callAuditPrompt(transcript, facts, impressions, opts.doneOnCall ?? [], opts.foundOnCall ?? []),
+        prompt: callAuditPrompt(transcript, facts, impressions, opts.doneOnCall ?? [], opts.foundOnCall ?? [], thread),
       });
       claims = parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? [];
     }
