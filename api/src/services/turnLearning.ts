@@ -8,6 +8,7 @@
 // correction history; quoted resolutions and corrections; the ask dedupe
 // and same-ask judgment; the planned-event embedding and match; the style
 // notes merge). The call path (routes/co.ts) keeps its own pipeline.
+import { ALREADY_KNOW_JSON, ALREADY_KNOW_RULE, alreadyKnowFrom, saveAlreadyKnow } from "./knownConnections.js";
 import { withoutTeammateLines } from "./teamLines.js";
 import { recordAdvice } from "./advice.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -126,7 +127,9 @@ Only change the notes if what they just said makes clear how they want Cue to te
 
 ${o.preferences ? `${preferencePromptItem({ n: 10, onFile: o.preferences.onFile, localToday: o.preferences.localToday })}
 
-` : ""}Return ONLY valid JSON, no preamble:
+` : ""}${o.preferences ? 11 : 10}. already_know, from their LAST message only: ${ALREADY_KNOW_RULE}
+
+Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
@@ -136,7 +139,8 @@ ${o.preferences ? `${preferencePromptItem({ n: 10, onFile: o.preferences.onFile,
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
  "advice": null or {"topic": "...", "gist": "..."},
  "met_someone": null or "their exact words"${o.preferences ? `,
- ${PREFERENCE_JSON_SHAPE}` : ""}}`;
+ ${PREFERENCE_JSON_SHAPE}` : ""},
+ ${ALREADY_KNOW_JSON}}`;
 }
 
 export type TurnLearning = {
@@ -293,6 +297,15 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
             .then((r) => (r.added.length && learned.cadence !== "unstated" ? markCadenceTwin(input.userId, r.added) : undefined))
             .catch((err: any) => console.error("turnLearning: preference write failed (non-fatal):", err?.message ?? err))
         : input.preferenceIds?.length && learned.cadence !== "unstated" ? markCadenceTwin(input.userId, input.preferenceIds).catch(() => {}) : Promise.resolve(null),
+      // They said they already know someone (services/knownConnections.ts): kept, so no path introduces them as strangers. Quoted from
+      // this message only.
+      (async () => {
+        let raw: unknown = null;
+        try {
+          raw = (await import("./modelJson.js")).parseModelJson(text);
+        } catch {}
+        return saveAlreadyKnow(input.userId, alreadyKnowFrom(raw, input.message), "text");
+      })().catch(() => 0),
       // They said they met someone: on their most recent Co event, only if the quote is theirs.
       learned.metSomeone && metQuoteIsTheirs(learned.metSomeone, input.message) ? recordMetSomeone(input.userId, learned.metSomeone).catch(() => null) : Promise.resolve(null),
     ]);

@@ -1048,6 +1048,9 @@ export const proactiveRegistry: ProactiveRegistry = {
       // The matching kill switch (services/roomMatching.ts): waits, never dropped.
       const paused = await (await import("../services/roomMatching.js")).matchingPause(p.eventId);
       if (paused) return { defer: new Date(Date.now() + 30 * 60_000), reason: paused };
+      // Queued, then a connection was added (an intro elsewhere, "we already know each other"): it never goes (services/knownConnections.ts).
+      const known = await (await import("../services/knownConnections.js")).knownReason(c.userId, p.candidateId, "proactive.eventMatchNudge");
+      if (known) return skip(known);
       return { messages: [p.message], text: p.message, rules: p.rules };
     },
     async onSent(c) {

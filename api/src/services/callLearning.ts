@@ -30,6 +30,7 @@ import { extractPsychographicProfile, openItemsBlock, RELATED_DROP_JSON, RELATED
 import { parseTurnLearning, type TurnLearning } from "./turnLearning.js";
 import { activePreferences, learnPreferences, markCadenceTwin, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
 import { localDay, memberZone } from "./memberTime.js";
+import { ALREADY_KNOW_JSON, ALREADY_KNOW_RULE, alreadyKnowFrom, saveAlreadyKnow } from "./knownConnections.js";
 
 type OnFile = {
   city: string | null;
@@ -92,7 +93,7 @@ ${openItemsBlock(o.openAsks)}
 
 ${preferencePromptItem({ n: 7, via: "call", onFile: o.preferences?.onFile ?? [], localToday: o.preferences?.localToday ?? o.today })}
 
-${introSection(o.introduced ?? [])}Return ONLY valid JSON, no preamble:
+${introSection(o.introduced ?? [])}${alreadyKnowSection((o.introduced ?? []).length ? 9 : 8)}Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
@@ -100,8 +101,15 @@ ${introSection(o.introduced ?? [])}Return ONLY valid JSON, no preamble:
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "lessons": [{"lesson": "...", "quote": "..."}],
  ${PREFERENCE_JSON_SHAPE}${(o.introduced ?? []).length ? `,
- "introductions": [{"name": "...", "met": null, "useful": null, "kept_talking": null, "quote": "..."}]` : ""}}`;
+ "introductions": [{"name": "...", "met": null, "useful": null, "kept_talking": null, "quote": "..."}]` : ""},
+ ${ALREADY_KNOW_JSON}}`;
 }
+
+// The last item, on every call (services/knownConnections.ts): people they say they already know, so Cue never introduces them as
+// strangers. Numbered after the preferences item (7) and the introductions item (8) when there is one.
+export const alreadyKnowSection = (n: number) => `${n}. already_know: ${ALREADY_KNOW_RULE}
+
+`;
 
 // Section 8, only for someone Cue has introduced (the prompt is unchanged for everyone else).
 export function introSection(names: string[]): string {
@@ -355,6 +363,8 @@ export async function learnFromCall(input: {
   const introOutcomes = callIntroOutcomes(raw, input.transcript, introduced.names);
   const quotes = new Map<string, string>(((raw as any)?.introductions ?? []).filter((x: any) => typeof x?.name === "string" && typeof x?.quote === "string").map((x: any) => [String(x.name).trim().split(/\s+/)[0].toLowerCase(), String(x.quote).slice(0, 160)]));
   await saveCallIntroOutcomes(input.userId, introOutcomes, introduced, (name) => quotes.get(name.toLowerCase()) ?? null).catch((err: any) => console.error("callLearning: intro outcome write failed (non-fatal):", err?.message ?? err));
+  // People they said they already know (services/knownConnections.ts): the same record the text tool writes, source "call".
+  await saveAlreadyKnow(input.userId, alreadyKnowFrom(raw, theirLines(input.transcript)), "call");
   await recordDecision({
     layer: 4,
     decision: "profile.callLearning",
