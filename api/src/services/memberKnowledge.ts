@@ -286,11 +286,13 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     )) as CorrectionRow[],
   limits: async (userId) => {
     const r = (await rows(`SELECT avoid, availability_pattern, intent, updated_at FROM co_profiles WHERE user_id = $1`, [userId]))[0];
-    if (!r) return { avoid: [], availability: null, at: null };
+    // Their rules (services/memberPreferences.ts): one member's rows, in force now. A failed read leaves them out of this read only.
+    const rules = await import("./memberPreferences.js").then((P) => P.activePreferences(userId)).catch(() => undefined);
+    if (!r) return { avoid: [], availability: null, at: null, ...(rules?.length ? { rules } : {}) };
     const { latestAskEntry } = await import("../harness/profileWrite.js");
     const latestAsk = latestAskEntry(r.intent);
     const availability = (latestAsk?.availability && String(latestAsk.availability).trim()) || (r.availability_pattern && String(r.availability_pattern).trim()) || null;
-    return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()).map((a: string) => a.trim()) : [], availability, at: dateOrNull(r.updated_at) };
+    return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()).map((a: string) => a.trim()) : [], availability, at: dateOrNull(r.updated_at), ...(rules?.length ? { rules } : {}) };
   },
   roomTaste: async (userId) => {
     const R = await import("./roomTaste.js");
@@ -723,7 +725,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (removed.length) k.removedCount = removed.length;
   if (on("exchanges")) k.exchanges = exchanges.flatMap((e) => { const content = W ? W.guardText(e.content, guards) : e.content; return content === null ? [] : [{ ...e, content }]; }).map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
-  if (on("limits") && limits) k.limits = { avoid: limits.avoid, availability: limits.availability, verifiedAt: latest(limits.at) };
+  if (on("limits") && limits) k.limits = { avoid: limits.avoid, availability: limits.availability, ...(limits.rules?.length ? { rules: limits.rules } : {}), verifiedAt: latest(limits.at) };
 
   // The strip, last, over everything (see the header): nothing un-stripped leaves.
   const linked = [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))];

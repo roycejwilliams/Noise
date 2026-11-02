@@ -14,7 +14,9 @@ import { MODELS } from "../models.js";
 import { availabilityConflict } from "./availability.js";
 import { recordAnthropicUsage } from "./llmUsage.js";
 
-export type Limits = { avoid: string[]; availability: string | null };
+// rules: the standing rules they set for how Cue treats them (services/memberPreferences.ts), in force now, read with the rest of their
+// limits so every reader of the record (calls, tasks, dispatch drafts, sweeps in PR C) gets them from the same read.
+export type Limits = { avoid: string[]; availability: string | null; rules?: import("./memberPreferences.js").Preference[] };
 
 // Words that name the shape of a thing, not its kind ("crypto events" is the kind "crypto").
 const SHAPE = new Set(["event", "events", "thing", "things", "stuff", "kind", "kinds", "type", "types", "anything", "any", "more", "the", "a", "an", "of", "to", "for", "and", "or"]);

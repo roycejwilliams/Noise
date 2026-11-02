@@ -84,7 +84,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -185,6 +185,9 @@ export type RawKnown = {
   docs?: { since: string } | null;
   // Their yes to the voice read on calls (services/voiceReadConsent.ts), while it's on; removing it is taking it back.
   voiceRead?: { since: string } | null;
+  // The rules they set for how Cue treats them (services/memberPreferences.ts), in force now: what each does, in plain words, and
+  // their latest words for it. Removing one withdraws it; a new one is said in conversation.
+  prefs?: { id: string; text: string; quote: string | null }[];
   // Their design system (member_design_signals), the way decks and pages read it: per context with signals of its own, the look
   // and the fonts in plain words; and each confirmed reference read Co took the look from.
   design?: { context: "professional" | "personal"; look: string | null; fonts: string | null }[];
@@ -292,6 +295,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   if (r.calendar) add("grant:calendar", "grant", "where", `your calendar, connected ${r.calendar.since}: I see only when you're busy or free, never what, where or with whom, and it's never shared`, null, false);
   if (r.docs) add("grant:docs", "grant", "where", `Google Docs, connected ${r.docs.since}: I save documents I make for you to your Drive and see only those, nothing else there`, null, false);
   if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
+  for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   return out;
 }
@@ -620,6 +624,8 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     calendar: await import("./cueGrants.js").then((C) => C.calendarConnected(userId, db as any)).catch(() => null),
     docs: await import("./cueGrants.js").then((C) => C.docsConnected(userId, db as any)).catch(() => null),
     voiceRead: await import("./voiceReadConsent.js").then((V) => V.voiceReadOnSince(userId, db as any)).catch(() => null),
+    // Never guessed: a read that fails fails the view, so a rule they set is never shown as gone.
+    prefs: await import("./memberPreferences.js").then(async (P) => (await P.activePreferences(userId, new Date(), db as any)).map((x) => ({ id: x.id, text: P.describePreference(x), quote: x.words[x.words.length - 1] ?? null }))),
     files,
     ...designKnown(signals),
   };
@@ -896,6 +902,12 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       if (!(await disconnectGrant(a, userId))) throw new NotApplied();
       return { ref: item.ref, source: "grant", was, now: null };
     }
+    case "pref": {
+      // A rule they set: withdrawn (retired with its state, so nothing rebuilds it). A new one is said in conversation.
+      const { withdrawPreference } = await import("./memberPreferences.js");
+      if (!(await withdrawPreference(db, userId, a))) throw new NotApplied();
+      return { ref: item.ref, source: "pref", was, now: null };
+    }
     case "free": {
       // A free time they stated: removed (it's never proposed against again).
       const r = await db.query(`UPDATE member_free_times SET removed_at = NOW(), quote = '' WHERE user_id = $1 AND id = $2 AND removed_at IS NULL`, [userId, a]);
@@ -932,6 +944,7 @@ export function fieldFor(ref: string): string {
   if (kind === "place") return "where Cue looks for one of their wants";
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
+  if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "docs" ? "their Google Docs connection" : a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
   return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
 }
@@ -1112,7 +1125,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";

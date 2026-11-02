@@ -29,6 +29,8 @@ import {
   type OpenItem,
 } from "./profileExtraction.js";
 import { applyStyleUpdate, MAX_NOTES } from "./textingStyle.js";
+import { activePreferences, learnPreferences, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
+import { localDay, memberZone } from "./memberTime.js";
 
 export type TurnLearningInput = {
   userId: string;
@@ -37,6 +39,8 @@ export type TurnLearningInput = {
   message: string; // what they just said
   coReply: string; // what Co replied
   coSaidBefore: string | null; // Co's line right before their message, for style
+  // The message's own id (its Sendblue handle), the source a preference records (services/memberPreferences.ts).
+  sourceRef?: string | null;
 };
 
 type OnFileProfile = {
@@ -57,6 +61,8 @@ export function turnLearningPrompt(o: {
   openAsks: OpenItem[];
   styleNotes: string[];
   coSaidBefore: string | null;
+  // Their rules on file and their local date (services/memberPreferences.ts): item 10 reads new ones and changes to these.
+  preferences?: { onFile: Parameters<typeof preferencePromptItem>[0]["onFile"]; localToday: string };
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -112,6 +118,8 @@ Only change the notes if what they just said makes clear how they want Cue to te
 
 9. met_someone: did the person say, in their own words in their LAST message, that they met someone at an event (a person they talked to, got a contact from, hit it off with)? If yes, a short quote of exactly their words saying it. Otherwise null. Not for people they already knew, and not for plans to meet someone.
 
+${preferencePromptItem({ n: 10, onFile: o.preferences?.onFile ?? [], localToday: o.preferences?.localToday ?? o.today })}
+
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
@@ -121,7 +129,8 @@ Return ONLY valid JSON, no preamble:
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
  "advice": null or {"topic": "...", "gist": "..."},
- "met_someone": null or "their exact words"}`;
+ "met_someone": null or "their exact words",
+ ${PREFERENCE_JSON_SHAPE}}`;
 }
 
 export type TurnLearning = {
@@ -136,6 +145,8 @@ export type TurnLearning = {
   advice: { topic: string; gist: string } | null;
   // Their words saying they met someone at an event (the morning report counts it).
   metSomeone: string | null;
+  // Standing instructions in what they just said, unvalidated (services/memberPreferences.ts parsePreferenceReads checks them).
+  preferences: unknown[];
 };
 
 export function parseTurnLearning(text: string): TurnLearning | null {
@@ -152,6 +163,7 @@ export function parseTurnLearning(text: string): TurnLearning | null {
       style: p.style && typeof p.style === "object" ? p.style : null,
       advice: p.advice && typeof p.advice.topic === "string" && typeof p.advice.gist === "string" ? { topic: p.advice.topic, gist: p.advice.gist } : null,
       metSomeone: typeof p.met_someone === "string" && p.met_someone.trim() ? p.met_someone.trim().slice(0, 200) : null,
+      preferences: Array.isArray(p.preferences) ? p.preferences : [],
     };
   } catch {
     return null;
@@ -170,13 +182,16 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
   // The same transcript the separate calls read before.
   const transcript = turnTranscript(withoutTeammateLines(input.recentConversation), input.message, input.coReply);
   try {
-    const [{ rows: profileRows }, { rows: askRows }] = await Promise.all([
+    const [{ rows: profileRows }, { rows: askRows }, prefs, zone] = await Promise.all([
       pool.query(
         `SELECT city, life_chapters, goals, blockers, activity_preferences, long_term_direction, availability_pattern, texting_style
          FROM co_profiles WHERE user_id = $1`,
         [input.userId],
       ),
       import("./goalJourney.js").then((m) => m.openErrandsAndGoals(input.userId)).then((rows) => ({ rows })),
+      // A failed read: no rules listed, so a change can't name one; a new rule is still read and stored.
+      activePreferences(input.userId).catch(() => [] as Preference[]),
+      memberZone(input.userId).catch(() => null),
     ]);
     const row = profileRows[0] ?? null;
     const onFile: OnFileProfile | null = row
@@ -211,6 +226,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
         openAsks,
         styleNotes,
         coSaidBefore: input.coSaidBefore,
+        preferences: { onFile: prefs, localToday: localDay(new Date(), zone) },
       }),
     });
     const learned = parseTurnLearning(text);
@@ -255,6 +271,12 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
       // The advice Co gave in this reply, so it can ask how it went later.
       // The only place advice is recorded (the noteAdvice tool fired 1 time in 8 and was removed, 2026-09-30); a repeat topic is skipped.
       learned.advice ? recordAdvice(input.userId, learned.advice.topic, learned.advice.gist).catch(() => false) : Promise.resolve(false),
+      // Standing instructions (services/memberPreferences.ts): only quotes from this message, resolved against the rules listed above.
+      learned.preferences.length
+        ? learnPreferences(input.userId, learned.preferences, { message: input.message, zone, onFile: prefs, source: { via: "text", ref: input.sourceRef ?? null } }).catch((err: any) =>
+            console.error("turnLearning: preference write failed (non-fatal):", err?.message ?? err),
+          )
+        : Promise.resolve(null),
       // They said they met someone: on their most recent Co event, only if the quote is theirs.
       learned.metSomeone && metQuoteIsTheirs(learned.metSomeone, input.message) ? recordMetSomeone(input.userId, learned.metSomeone).catch(() => null) : Promise.resolve(null),
     ]);

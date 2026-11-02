@@ -2725,11 +2725,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // profile fields, resolved goals/asks, corrections, call cadence, the
         // ask, a planned event and texting style, each through its own gate
         // and write, instead of seven separate calls on the same transcript.
+        // The message's own id, the source a rule they set records (services/memberPreferences.ts).
+        const sourceRef = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
         learnFromTextTurn({
           userId: user.id,
           recentConversation,
           message: resolvedContent,
           coReply,
+          sourceRef,
           coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
         }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err))
           // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts), so the next

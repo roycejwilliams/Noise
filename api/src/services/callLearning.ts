@@ -28,6 +28,8 @@ import { LIFE_CHAPTERS_RULE, mightBeCorrection, PROFILE_JUDGMENT_MODEL } from ".
 import { parseModelJson } from "./modelJson.js";
 import { extractPsychographicProfile, openItemsBlock, RELATED_DROP_JSON, RELATED_DROP_RULE, storePlannedEventMention, storeProfile, type OpenItem } from "./profileExtraction.js";
 import { parseTurnLearning, type TurnLearning } from "./turnLearning.js";
+import { activePreferences, learnPreferences, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
+import { localDay, memberZone } from "./memberTime.js";
 
 type OnFile = {
   city: string | null;
@@ -44,6 +46,8 @@ export function callLearningPrompt(o: {
   today: string;
   onFile: OnFile | null;
   openAsks: OpenItem[];
+  // Their rules on file and their local date (services/memberPreferences.ts): item 7, the same read as a text turn's item 10.
+  preferences?: { onFile: Parameters<typeof preferencePromptItem>[0]["onFile"]; localToday: string };
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -84,13 +88,16 @@ ${openItemsBlock(o.openAsks)}
 
 6. lessons: moments where they corrected or pushed back on Cue itself: something Cue said, assumed, suggested, or how Cue was talking to them ("that's not what I asked", "this has nothing to do with my event", "you already told me that", "slow down"). Not a correction of their own details (that's #3), and not disagreement with a normal answer. For each, one short standing note to Cue about how to be with them from now on, general enough to apply next time ("when he asks about logistics, answer the logistics; don't tie it to his own event"), and their exact words (at least a few words, from their line). None when there were none.
 
+${preferencePromptItem({ n: 7, via: "call", onFile: o.preferences?.onFile ?? [], localToday: o.preferences?.localToday ?? o.today })}
+
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
- "lessons": [{"lesson": "...", "quote": "..."}]}`;
+ "lessons": [{"lesson": "...", "quote": "..."}],
+ ${PREFERENCE_JSON_SHAPE}}`;
 }
 
 const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -176,15 +183,19 @@ export type CallLearning = TurnLearning & { lessons: string[] };
 export async function learnFromCall(input: {
   userId: string;
   transcript: string; // the cleaned transcript (voicemail lines stripped)
+  // The call's own id, the source a preference records.
+  callRef?: string | null;
 }): Promise<CallLearning | null> {
   const started = Date.now();
-  const [{ rows: profileRows }, { rows: askRows }] = await Promise.all([
+  const [{ rows: profileRows }, { rows: askRows }, prefs, zone] = await Promise.all([
     pool.query(
       `SELECT city, life_chapters, goals, blockers, activity_preferences, long_term_direction, availability_pattern
        FROM co_profiles WHERE user_id = $1`,
       [input.userId],
     ),
     import("./goalJourney.js").then((m) => m.openErrandsAndGoals(input.userId)).then((rows) => ({ rows })),
+    activePreferences(input.userId).catch(() => [] as Preference[]),
+    memberZone(input.userId).catch(() => null),
   ]);
   const row = profileRows[0] ?? null;
   const onFile: OnFile | null = row
@@ -213,6 +224,7 @@ export async function learnFromCall(input: {
       today: new Date().toISOString().slice(0, 10),
       onFile,
       openAsks,
+      preferences: { onFile: prefs, localToday: localDay(new Date(), zone) },
     }),
   });
   const parsed = parseTurnLearning(text);
@@ -247,6 +259,13 @@ export async function learnFromCall(input: {
   storePlannedEventMention(input.userId, learned.planned_event, theirLines(input.transcript)).catch((err: any) =>
     console.error("callLearning: planned event write failed (non-fatal):", err?.message ?? err),
   );
+  // Standing instructions said on the call (services/memberPreferences.ts): the same resolve and store as a text turn's, quotes checked
+  // against their own lines on the call.
+  if (learned.preferences.length) {
+    await learnPreferences(input.userId, learned.preferences, { message: theirLines(input.transcript), zone, onFile: prefs, source: { via: "call", ref: input.callRef ?? null } }).catch((err: any) =>
+      console.error("callLearning: preference write failed (non-fatal):", err?.message ?? err),
+    );
+  }
   saveCallLessons(input.userId, lessons).catch((err: any) => console.error("callLearning: lesson write failed (non-fatal):", err?.message ?? err));
   await recordDecision({
     layer: 4,
