@@ -53,6 +53,8 @@ import { HELD_RECAP_APPROVED, MOOD_FALLBACK_KEY, MOOD_FALLBACK_LINE, MOOD_FALLBA
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
+import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass } from "./notifyGate.js";
+import type { Preference } from "../services/memberPreferences.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
 export const GOAL_SEASON_DAYS = 56;
@@ -322,6 +324,9 @@ export type PickState = {
   midConversation?: boolean;
   // When they joined (users.created_at): no companion check-in in their first day (NEW_MEMBER_QUIET_HOURS).
   joinedAt?: Date | null;
+  // The member's own rules and what's been sent, as the one send gate reads them (harness/notifyGate.ts). Missing: no rule read
+  // (a pure state built without it), so nothing is held by one here; the send-time read inside the lock still decides.
+  memberRules?: { prefs: Preference[]; sent: Counted[] } | null;
 };
 
 // While someone is struggling, asks, check-ins on asks, and product updates
@@ -609,6 +614,16 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
 // answer or rode along in a counted text, so it spaces either way.
 // Task texts space too (review of #129): a find going out 15 minutes after a task update was the 11:30 incident reversed.
 const TASK_TEXT_TYPES = new Set(["task_update", "task_window"]);
+// The exempt texts a delivery they're owed waits the spacing for (sendExempt), unless it answers their latest message.
+export const SPACED_EXEMPT: ReadonlySet<string> = new Set(["task_update", "search_result"]);
+// How fresh their message must be for a delivery to count as Cue's answer to it, and how close the ask must be to that message.
+export const ANSWER_WINDOW_MINUTES = 60;
+// Pure: what they asked for at askedAt is answered by this send as a reply: the ask came from their latest message (or the call that
+// was their latest), and that message is under ANSWER_WINDOW_MINUTES old. A look-out started yesterday is a delivery, not a reply.
+export function answersLastText(askedAt: Date | null, lastInboundAt: Date | null, now: Date): boolean {
+  if (!askedAt || !lastInboundAt) return false;
+  return askedAt.getTime() >= lastInboundAt.getTime() - 2 * 60_000 && now.getTime() - lastInboundAt.getTime() <= ANSWER_WINDOW_MINUTES * 60_000;
+}
 function spaces(s: SendRecord): boolean {
   return !s.exempt || ANSWERING_TYPES.has(s.type) || s.type === "event_offer" || TASK_TEXT_TYPES.has(s.type);
 }
@@ -667,8 +682,10 @@ async function coInitiatedHold(client: Queryable, o: { userId: string; timezone:
 // A Co-initiated send that isn't a text through sendExempt (a look-out's document, PDF or Google Doc, services/documentDelivery.ts):
 // the same gate and the same ledger row, claimed before it goes (Royce, 2026-10-09: "a Co lookout must not be able to send an
 // uncounted PDF"). The caller delivers, then releases the claim if nothing went out, so a send that failed never counts as let pass.
-export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType; targetKey: string; message: string; kind: ProactiveKind | null; timezone: string | null; now?: Date }): Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }> {
-  if (proactivePaused()) return { ok: false, reason: "proactive outreach is paused" };
+// owed: a document they asked for (askedAt: when), claimed through the same lock and ledger so their own rule holds it and it counts.
+export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType; targetKey: string; message: string; kind: ProactiveKind | null; timezone: string | null; now?: Date; owed?: { askedAt: Date | null } }): Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }> {
+  // The pause holds what Cue starts; a document they asked for isn't outreach, as before (only their own rule holds it).
+  if (proactivePaused() && !o.owed) return { ok: false, reason: "proactive outreach is paused" };
   const now = o.now ?? new Date();
   const client = await pool.connect();
   try {
@@ -679,18 +696,25 @@ export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType
       await client.query("ROLLBACK");
       return { ok: false, reason: "opted out" };
     }
-    const { failed, sends } = await coInitiatedHold(client, { userId: o.userId, timezone: o.timezone, now, kind: o.kind });
+    // Owed (a document they asked for): only their own rule holds it. Cue's own: the Co-initiated gate too.
+    const lastIn = await loadLastInbound(client, o.userId).catch(() => null);
+    const cls: SendClass = o.owed ? (answersLastText(o.owed.askedAt, lastIn, now) ? "reply" : "requested") : "unsolicited";
+    const { failed, sends } = o.owed ? { failed: [] as GateCheck[], sends: [] as SendRecord[] } : await coInitiatedHold(client, { userId: o.userId, timezone: o.timezone, now, kind: o.kind });
+    const rule = await memberRuleGate(client, { userId: o.userId, now, cls, channel: "text" });
+    if (!rule.pass) failed.push(rule);
     if (failed.length) {
       await client.query("ROLLBACK");
       const reason = failed.map((c) => c.reason ?? c.name).join("; ");
-      await recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: o.userId, outcome: "skip", action: "held_co_initiated", reason, proposal: { type: o.type, targetKey: o.targetKey } }).catch(() => {});
-      return { ok: false, reason: `held: ${reason}`, retryAt: coInitiatedRetryAt({ now, sends }, failed.map((c) => c.name)) };
+      await recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: o.userId, outcome: "skip", action: rule.pass ? "held_co_initiated" : "held_member_rule", reason, proposal: { type: o.type, targetKey: o.targetKey } }).catch(() => {});
+      const paced = failed.filter((c) => c.name !== MEMBER_RULE).map((c) => c.name);
+      const at = Math.max(paced.length ? coInitiatedRetryAt({ now, sends }, paced).getTime() : 0, rule.retryAt?.getTime() ?? 0);
+      return { ok: false, reason: `held: ${reason}`, retryAt: new Date(at || now.getTime() + 3_600_000) };
     }
     const ins = await client.query(
-      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind)
-       VALUES ($1, $2, $3, $3, $4, true, $5)
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, notify_class)
+       VALUES ($1, $2, $3, $3, $4, true, $5, $6)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [o.userId, o.type, o.targetKey, o.message, o.kind],
+      [o.userId, o.type, o.targetKey, o.message, o.kind, cls],
     );
     await client.query("COMMIT");
     return ins.rows[0] ? { ok: true, ledgerId: Number(ins.rows[0].id) } : { ok: false, reason: "already sent" };
@@ -711,8 +735,8 @@ export async function releaseCoInitiatedClaim(userId: string, ledgerId: number):
 export const REPLY_WATCH_OFFER_TYPE = "watch_offer";
 export async function recordReplyWatchOffer(userId: string, message: string, now: Date = new Date()): Promise<void> {
   await pool.query(
-    `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, sent_at)
-     VALUES ($1, $2, $3, $3, $4, true, 'find', $5)
+    `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, sent_at, notify_class)
+     VALUES ($1, $2, $3, $3, $4, true, 'find', $5, 'reply')
      ON CONFLICT (user_id, target_key) DO NOTHING`,
     [userId, REPLY_WATCH_OFFER_TYPE, `${REPLY_WATCH_OFFER_TYPE}:${now.getTime()}`, message.slice(0, 2000), now],
   );
@@ -853,7 +877,9 @@ const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "en
 // a find the picker chose right after their 9am sweep, marked by services/dailySweep.ts with that day (payload.morningDay). On that
 // day it skips the pacing (the caps, the unanswered pause, the engagement pace and the spacing) and doesn't count against the caps.
 // Hours, opt-out, mid-conversation and every candidate check (safety, away, emotional timing, repeats) still apply.
-const MORNING_SKIPS = new Set([...QUOTA_CHECKS, "spacing"]);
+// Spacing is no longer skipped (Royce, 2026-11-02: a morning find went 55 minutes after a task's results and 68 after another find,
+// three bursts in one morning to a member on his first day): one bundle per spacing window, a morning find included.
+const MORNING_SKIPS = new Set([...QUOTA_CHECKS]);
 export function morningFind(c: Pick<Candidate, "type" | "payload">, now: Date, timezone: string | null): boolean {
   const day = (c.payload as { morningDay?: string } | null)?.morningDay;
   return c.type === "event_offer" && typeof day === "string" && day === DateTime.fromJSDate(now).setZone(hoursZone(timezone)).toISODate();
@@ -912,6 +938,11 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
       (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(morning && MORNING_SKIPS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap") && !safetyPassesHold(k, candidate),
     );
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering, recapApproved: opts.recapApproved })];
+    // The member's own rules (harness/notifyGate.ts), before any draft is written. A safety follow-up keeps its precedence.
+    if (state.memberRules && !isSafetyFollowUp(candidate)) {
+      const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: candidateClass(candidate.type, answering), channel: "text", sent: state.memberRules.sent });
+      checks.push(rule);
+    }
     return { candidate, checks, ok: gate(checks).ok };
   });
   const eligible = userOk ? perCandidate.filter((p) => p.ok).map((p) => p.candidate) : [];
@@ -1856,6 +1887,13 @@ async function sendWithLedger(
       ),
       ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
     ];
+    // The member's own rules, read inside the lock with what's been sent (harness/notifyGate.ts): two sends at once can't both pass a
+    // cap, and a rule set after this was queued still decides it. A safety follow-up keeps its precedence (it goes, and counts).
+    const cls = candidateClass(c.type, answering);
+    if (!isSafetyFollowUp(c)) {
+      const { retryAt: _r, ...rule } = await memberRuleGate(client, { userId: person.userId, now, cls, channel: "text" });
+      checks.push(rule);
+    }
     // The day's discovery cap, read again inside the lock, so two sends at once can't both pass it (review of the tier PR).
     const discovery = [c, ...extras.map((e) => e.candidate)].filter((x) => x.topicKey !== MOOD_FALLBACK_TOPIC && isDiscoveryFind(x)).length;
     if (discovery) {
@@ -1870,19 +1908,19 @@ async function sendWithLedger(
     // The riding note's key, claimed first: if another send already told them (two dispatches at once), this text goes without it.
     if (ride) {
       const claimed = await client.query(
-        `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
-         VALUES ($1, $2, $3, $4, $5, $6, true) ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-        [person.userId, ride.candidate.type, ride.candidate.targetKey, ride.candidate.topicKey, ride.candidate.id, messages.join("\n\n")],
+        `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt, notify_class)
+         VALUES ($1, $2, $3, $4, $5, $6, true, $7) ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
+        [person.userId, ride.candidate.type, ride.candidate.targetKey, ride.candidate.topicKey, ride.candidate.id, messages.join("\n\n"), RIDING],
       );
       if (claimed.rows[0]) await client.query(`UPDATE proactive_candidates SET status = 'sent', decided_at = NOW(), updated_at = NOW() WHERE id = $1`, [ride.candidate.id]);
       else messages = ride.without;
     }
     // The kind goes on the ledger (services/kindRestraint.ts): what restraint reads to learn which kinds they let pass.
     const ins = await client.query(
-      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt, kind)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt, kind, notify_class)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true) || morning, c.topicKey === MOOD_FALLBACK_TOPIC ? null : kindOf(c.type, c.payload)],
+      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true) || morning, c.topicKey === MOOD_FALLBACK_TOPIC ? null : kindOf(c.type, c.payload), cls],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
@@ -1903,9 +1941,9 @@ async function sendWithLedger(
     // count as one text there.
     for (const e of extras) {
       await client.query(
-        `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
-         VALUES ($1, $2, $3, $4, $5, $6, true) ON CONFLICT (user_id, target_key) DO NOTHING`,
-        [person.userId, e.candidate.type, e.candidate.targetKey, e.candidate.topicKey, e.candidate.id, e.messages.join("\n\n")],
+        `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt, notify_class)
+         VALUES ($1, $2, $3, $4, $5, $6, true, $7) ON CONFLICT (user_id, target_key) DO NOTHING`,
+        [person.userId, e.candidate.type, e.candidate.targetKey, e.candidate.topicKey, e.candidate.id, e.messages.join("\n\n"), RIDING],
       );
       await client.query(`UPDATE proactive_candidates SET status = 'sent', decided_at = NOW(), updated_at = NOW() WHERE id = $1`, [e.candidate.id]);
     }
@@ -1978,7 +2016,16 @@ export async function sendExempt(opts: {
   // unanswered pause and kind backoff as every other text Co sends first (issue #126; Royce, 2026-10-09: an 11:30 task update
   // went out 15 minutes after another text). `kind` is the restraint kind it counts as, when it has one.
   coInitiated?: { kind: ProactiveKind | null };
-}): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date }> {
+  // What this sends is what they asked for at askedAt (a task started from their text, a call's follow-through). When that was their
+  // latest message and it's still fresh (answersLastText), it's Cue's answer to them: a reply, never held. Otherwise it's a delivery
+  // that arrives later, gated like one.
+  answers?: { askedAt: Date | null };
+  // Held by their rule or the spacing: queued for when it may go (services/deferredSends.ts), never dropped. For a caller with no retry
+  // of its own (a notice, a reminder); one that schedules its own next look (a task) leaves it off and uses retryAt.
+  queueIfHeld?: boolean;
+  // Its class when its type's isn't it (harness/notifyGate.ts): a goal check-in sent as a task update is a check-in.
+  cls?: SendClass;
+}): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date; queued?: boolean }> {
   if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
@@ -2012,8 +2059,11 @@ export async function sendExempt(opts: {
       await record("skip", "blocked_opted_out", "opted out");
       return { sent: false, reason: "opted out" };
     }
+    const now = opts.now ?? new Date();
+    // Its class (harness/notifyGate.ts): Cue's own text, a delivery they asked for, or Cue's answer to their latest message.
+    const lastIn = await loadLastInbound(client, opts.userId).catch(() => null);
+    const cls: SendClass = opts.answers && answersLastText(opts.answers.askedAt, lastIn, now) ? "reply" : opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
     if (opts.coInitiated) {
-      const now = opts.now ?? new Date();
       const { failed, sends } = await coInitiatedHold(client, { userId: opts.userId, timezone: opts.timezone ?? null, now, kind: opts.coInitiated.kind });
       if (failed.length) {
         await client.query("ROLLBACK");
@@ -2022,12 +2072,43 @@ export async function sendExempt(opts: {
         return { sent: false, reason: `held: ${reason}`, retryAt: coInitiatedRetryAt({ now, sends }, failed.map((c) => c.name)) };
       }
     }
+    // A task's results or a search's answer they're owed keeps the spacing too, unless it answers their latest message (Royce,
+    // 2026-11-02: a task's results went 13 minutes after a find to a member on his first day, past the spacing that held the pick).
+    // Notices about something they're in (an event change, a call reminder) keep going on time, as before: only their own rule holds them.
+    const held: GateCheck[] = [];
+    let retryAt: Date | null = null;
+    if (!opts.coInitiated && cls !== "reply" && SPACED_EXEMPT.has(opts.type)) {
+      const sends = await loadSends(client, opts.userId);
+      const sp = spacingCheck({ now, sends });
+      if (!sp.pass) {
+        held.push(sp);
+        retryAt = coInitiatedRetryAt({ now, sends }, ["spacing"]);
+      }
+    }
+    // The member's own rules (harness/notifyGate.ts), inside the lock with what's been sent.
+    const rule = await memberRuleGate(client, { userId: opts.userId, now, cls, channel: "text" });
+    if (!rule.pass) {
+      held.push(rule);
+      if (rule.retryAt && (!retryAt || rule.retryAt > retryAt)) retryAt = rule.retryAt;
+    }
+    if (held.length) {
+      await client.query("ROLLBACK");
+      const reason = held.map((c) => c.reason ?? c.name).join("; ");
+      await record("skip", held.some((h) => h.name === MEMBER_RULE) ? "held_member_rule" : "held_spacing", reason.slice(0, 300));
+      const at = retryAt ?? new Date(now.getTime() + 60 * 60_000);
+      if (opts.queueIfHeld) {
+        const D = await import("../services/deferredSends.js");
+        const q = await D.enqueueDeferredSend({ userId: opts.userId, phoneNumber: opts.phoneNumber, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, timezone: opts.timezone ?? null, dueAt: at }).catch(() => ({ queued: false }));
+        return { sent: false, reason: `held: ${reason}`, retryAt: at, queued: q.queued };
+      }
+      return { sent: false, reason: `held: ${reason}`, retryAt: at };
+    }
     // The kind goes on the ledger for a Co-initiated text too, so restraint learns from it (services/kindRestraint.ts).
     const ins = await client.query(
-      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind)
-       VALUES ($1, $2, $3, $3, $4, true, $5)
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, notify_class)
+       VALUES ($1, $2, $3, $3, $4, true, $5, $6)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [opts.userId, opts.type, opts.targetKey, opts.messages.join("\n\n"), opts.coInitiated?.kind ?? null],
+      [opts.userId, opts.type, opts.targetKey, opts.messages.join("\n\n"), opts.coInitiated?.kind ?? null, cls],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
@@ -2108,7 +2189,12 @@ export async function sendExemptWhenAllowed(opts: {
   const now = opts.now ?? new Date();
   const { after, ...send } = opts;
   if (localHourOk(now, opts.timezone)) {
-    const result = await sendExempt({ ...send, now }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+    const result: { sent: boolean; reason?: string; retryAt?: Date } = await sendExempt({ ...send, now }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+    // Held by their own rule (or the spacing): queued for when it may go, with what the send means for the record, never dropped.
+    if (!result.sent && result.reason?.startsWith("held:") && result.retryAt) {
+      const q = await D.enqueueDeferredSend({ ...send, dueAt: result.retryAt, after }).catch((err: any) => ({ queued: false, reason: `queue failed: ${String(err?.message ?? err)}` }) as { queued: boolean; reason?: string });
+      if (q.queued) return { sent: false, queued: true, reason: result.reason, dueAt: result.retryAt };
+    }
     const o = D.outcomeOf(result, false);
     // Inline "already sent" is an earlier send of the same key, not this one: the caller's record stays as it was.
     if (result.reason !== "already sent") await D.runAfter(after, o === "sent" ? "sent" : o === "skipped" ? "skipped" : "failed", undefined, result.reason);
@@ -2143,6 +2229,14 @@ export async function inRoomSendAllowed(userId: string, eventId: string, opts: {
   if (proactivePaused()) return false;
   // The matching kill switch, global or this event (services/roomMatching.ts), read fresh.
   if (await (await import("../services/roomMatching.js")).matchingPause(eventId)) return false;
+  // The member's own rules (harness/notifyGate.ts), the close included: their rule is theirs, whatever the night. Read here, right
+  // before the send; in-room texts have no ledger lock of their own (the per-event limit below and the event pass's one-at-a-time run
+  // are what keep two from racing).
+  const rule = await memberRuleGate(pool, { userId, now: new Date(), cls: "unsolicited", channel: "text" });
+  if (!rule.pass) {
+    await recordDecision({ layer: 6, decision: "inroom.member_rule", userId, outcome: "skip", action: "held_member_rule", proposal: { eventId, close: !!opts.close } }).catch(() => {});
+    return false;
+  }
   if (opts.close) return true;
   // Counted per event, exactly: a prefix match let three texts at evt-1234 use up the limit at evt-12.
   const { rows } = await pool.query(`SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'`, [userId]);
@@ -2159,8 +2253,8 @@ export function inRoomKeyEvent(key: string): string | null {
 export async function recordInRoomSend(userId: string, targetKey: string, message: string): Promise<void> {
   await pool
     .query(
-      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt)
-       VALUES ($1, 'in_room', $2, $2, $3, false)
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, notify_class)
+       VALUES ($1, 'in_room', $2, $2, $3, false, 'unsolicited')
        ON CONFLICT (user_id, target_key) DO NOTHING`,
       [userId, targetKey, message],
     )
@@ -2244,11 +2338,16 @@ async function recordSkipOnce(userId: string, reason: string, decision: Paramete
 export type MemberSendState = { state: Omit<PickState, "candidates">; holdUntil: Date | null; spaceUntil: Date | null; raw: import("../services/memberKnowledge.js").RawRestraint };
 export async function memberSendState(userId: string, person: { timezone: string | null; optedOut: boolean }, now: Date): Promise<MemberSendState> {
   const MK = await import("../services/memberKnowledge.js");
-  const [raw, sends, undeliveredYes, joinedAt] = await Promise.all([
+  const [raw, sends, undeliveredYes, joinedAt, memberRules] = await Promise.all([
     MK.realKnowledgeDeps.restraint(userId, now),
     loadSends(pool, userId),
     import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(userId)).catch(() => false),
     loadJoinedAt(pool, userId).catch(() => null),
+    // The member's own rules (harness/notifyGate.ts), read early so nothing is drafted for a send they'd hold. A failed read leaves it
+    // to the send-time gate, which holds what it can't read.
+    Promise.all([import("../services/memberPreferences.js").then((P) => P.activePreferences(userId, now)), import("./notifyGate.js").then((G) => G.loadCounted(pool, userId))])
+      .then(([prefs, sent]) => ({ prefs, sent }))
+      .catch(() => null),
   ]);
   const midConversation = await midConversationNow(pool, userId, now, raw.lastInboundAt);
   return {
@@ -2268,6 +2367,7 @@ export async function memberSendState(userId: string, person: { timezone: string
       away: raw.away ?? null,
       midConversation,
       joinedAt,
+      memberRules,
     },
     holdUntil: raw.holdUntil,
     spaceUntil: raw.spaceUntil,

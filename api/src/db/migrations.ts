@@ -2834,6 +2834,11 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS split_read JSONB`)
     .catch((err: Error) => console.error("ask_checkins.split_read init failed:", err));
+  // The class of each send as the member's own rules count it (harness/notifyGate.ts, 2026-11-02): reply, requested, unsolicited or
+  // checkin. NULL on older rows: their type's class is read instead.
+  await pool
+    .query(`ALTER TABLE proactive_sends ADD COLUMN IF NOT EXISTS notify_class TEXT`)
+    .catch((err: Error) => console.error("proactive_sends.notify_class init failed:", err));
   // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
   // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.

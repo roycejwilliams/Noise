@@ -245,7 +245,9 @@ const realDeps: FollowThroughDeps = {
   // past an opt-out (sendExempt re-reads it), once per call and link (its target key).
   deliver: async ({ userId, phone, item, key }) => {
     const caption = item.name.replace(/\s+/g, " ").trim().slice(0, 200);
-    const r = await sendExempt({ userId, phoneNumber: phone, type: "direct_ask", targetKey: key, messages: caption ? [item.url, caption] : [item.url] });
+    // Cue's answer to the call they were just on (harness/proactive.ts answersLastText: the call is their latest message and fresh);
+    // a retry hours later is a delivery, held by their own rule like any.
+    const r = await sendExempt({ userId, phoneNumber: phone, type: "direct_ask", targetKey: key, messages: caption ? [item.url, caption] : [item.url], answers: { askedAt: new Date() }, cls: "requested" });
     if (r.sent) await import("./coFacts.js").then((F) => F.recordSentItems(userId, [{ name: item.name, url: item.url }], "call.owed")).catch(() => {});
     return { sent: r.sent, reason: r.reason };
   },
@@ -261,7 +263,7 @@ const realDeps: FollowThroughDeps = {
     const run = () => draftProactive({ functionId: "call.followthrough.confirm", firstName, facts, task: confirmationTask(), maxSentences: 2, freshKeys: ["their_words_on_the_call"] });
     return redo ? draftAgain(redo, run) : run();
   },
-  send: ({ userId, phone, key, text, zone }) => sendExempt({ userId, phoneNumber: phone, type: CONFIRM_TYPE, targetKey: key, messages: [text], timezone: zone, respectHours: true }),
+  send: ({ userId, phone, key, text, zone }) => sendExempt({ userId, phoneNumber: phone, type: CONFIRM_TYPE, targetKey: key, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: new Date() } }),
   runTask: async (userId, c) => {
     // Claimed the way the cron claims (coTasks.ts claimDueTasks), only if the cron hasn't woken it since it was read.
     const claimed = await pool.query(

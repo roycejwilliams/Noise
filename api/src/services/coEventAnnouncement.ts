@@ -187,6 +187,8 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
       messages,
       timezone,
       respectHours: true,
+      // Held by their own rule: queued for when it may go (harness/notifyGate.ts), rechecked then.
+      queueIfHeld: true,
     }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
     if (result.sent) {
       sent++;

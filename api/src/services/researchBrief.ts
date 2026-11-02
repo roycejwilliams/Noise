@@ -325,7 +325,8 @@ export async function deliverBrief(
 }
 export function briefLineOutcome(r: { sent: boolean; reason?: string }, wakes: number): "told" | "hold" | "untold" {
   if (r.sent || r.reason === "already sent") return "told";
-  if (r.reason === "outside local hours" && wakes < BRIEF_HOLD_MAX_WAKES) return "hold";
+  // Held by their own rule or the spacing (harness/notifyGate.ts) waits the same way: it's work they asked for, never dropped for it.
+  if ((r.reason === "outside local hours" || r.reason?.startsWith("held:")) && wakes < BRIEF_HOLD_MAX_WAKES) return "hold";
   return "untold";
 }
 
@@ -354,7 +355,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // dropped while the task closed as done, so they never heard (2026-10-07). Now: told, then closed; outside their hours, held
   // to their morning with the task kept open; never told for any other reason, closed as dropped and saying so.
   const tellThenClose = async (text: string, status: "done" | "dropped", outcome: string) => {
-    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null } }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
     const next = briefLineOutcome(r, task.wakes);
     if (next === "hold") {
       const { holdBriefLine } = await import("./coTasks.js");

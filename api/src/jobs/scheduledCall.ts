@@ -135,6 +135,8 @@ export async function sendDueReminders(): Promise<void> {
         type: "call_reminder",
         targetKey: `call_reminder:${row.id}`,
         messages: [cleanCoMessage(reminderMessage)],
+        // Held by their own rule: queued, never dropped (harness/notifyGate.ts).
+        queueIfHeld: true,
       });
     } catch (err: any) {
       console.error(`scheduledCall: reminder send failed for ${row.id} (non-fatal):`, err?.message ?? err);

@@ -53,6 +53,8 @@ export async function runEventChangeNotificationAgent(
     type: "event_change",
     targetKey: `event_change:${changeKey}`,
     messages: [message],
+    // Held by their own rule: queued for when it may go (harness/notifyGate.ts), never dropped.
+    queueIfHeld: true,
   });
   if (sent) {
     await writeMemory(person.userId, "event_change_notification", `Told them about a change to "${eventName}": ${fact}`).catch(() => {});

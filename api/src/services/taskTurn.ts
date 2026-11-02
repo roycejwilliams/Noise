@@ -1082,7 +1082,7 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
     // type so it never counts as the promised thing (services/followThrough.ts sendsSince) or uses up the task's text budget.
     warn: async (text, key) => {
       // Owed (review of #129): the new time for something Co committed to. Held, it would land after the time it's about.
-      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock() });
+      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock(), answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null } });
       return { sent: r.sent, reason: r.reason };
     },
     writeDocument: async (input, { read }) => {
@@ -1098,10 +1098,12 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
       // Only a text they're owed goes exempt. A look-out from Co's own promise sends finds, counted and held like sweep finds
       // (Royce, 2026-10-09: "without this, lookouts are a spam path around restraint"); one they asked for is owed, never kinded.
       const coInitiated = o?.owed ? undefined : { kind: lookoutKind(task) };
+      // Started from their latest message and still fresh: Cue's answer to them (harness/proactive.ts answersLastText), never held.
+      const answers = { askedAt: task.createdAt ? new Date(task.createdAt) : null };
       // A slip text (slipException) has its own fixed key, so the same slip can only ever go once.
       const r = o?.key
-        ? await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: o.key, messages, timezone: zone, respectHours: true, now: clock(), coInitiated })
-        : await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated });
+        ? await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: o.key, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers })
+        : await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers });
       const urls = messages.filter((m) => /^https?:\/\//.test(m));
       if (r.sent && urls.length) await recordSentItems(userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
       return { sent: r.sent, reason: r.reason, retryAt: r.retryAt };
