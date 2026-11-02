@@ -27,7 +27,7 @@ import { exchangeText } from "./followUps.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
 import { assembleMessages, captionOk, draftTaskMessages, namedFinds, orderByTier, type SendItem } from "./taskMessages.js";
-import { promiseKeptBy, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
+import { goalBody, promiseKeptBy, reminderPromise, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
 import { WRITE_DOCUMENT_INPUT, type WriteDocumentInput } from "./documentSheet.js";
@@ -131,6 +131,12 @@ export function documentPromiseLine(t: Pick<CoTask, "source" | "goal" | "theirWo
   return `\nWHAT YOU PROMISED IS A DOCUMENT. Send it with writeDocument (it arrives as a PDF), never as a text or a run of texts. Their points (the sections) only in their own words: what they want, their event, their constraints. Your plan, ideas and recommendations go in suggestions: that's most of a planning doc, and it's fine. Don't name a place, person, number or date they never said or you never read. Once it's sent, finish the task as done.`;
 }
 
+// The promise is to bring something up again (followThrough.ts reminderPromise): the text that brings it up is the delivery.
+export function reminderPromiseLine(t: Pick<CoTask, "source" | "goal">): string {
+  if (!reminderPromise(t)) return "";
+  return `\nWHAT YOU PROMISED IS TO BRING IT UP AGAIN. The text that brings it up is the delivery: there's nothing to find first. Inside your window, tellThem what it is, from your thread with them, in a line or two, then finish as done.`;
+}
+
 // Pure: a piece of a goal they handed Co (services/goalOwnership.ts): only this piece is Co's, and its delivery is the receipt.
 export function goalPieceLine(t: Pick<CoTask, "followup">): string {
   const g = t.followup;
@@ -175,7 +181,7 @@ export function taskRules(r: MemberRules, k?: Pick<MemberKnowledge, "restraint" 
 
 export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string; onFile?: OnFile[]; knowledge?: string; rules?: string }): string {
   const t = o.task;
-  const deadlineLine = `${t.deadline ? `\nTheir deadline: ${t.deadline}.` : ""}${t.window && !t.window.closedAt ? `\nYour window: ${windowLine(t.window)} An empty search is a result, and they hear it inside the window: if it won't be ready in time, don't text about that yourself, just schedule your next look; when it lands past the window they're told once, in one plain line, with the new time.` : ""}${documentPromiseLine(t)}`;
+  const deadlineLine = `${t.deadline ? `\nTheir deadline: ${t.deadline}.` : ""}${t.window && !t.window.closedAt ? `\nYour window: ${windowLine(t.window)} An empty search is a result, and they hear it inside the window: if it won't be ready in time, don't text about that yourself, just schedule your next look; when it lands past the window they're told once, in one plain line, with the new time.` : ""}${documentPromiseLine(t)}${reminderPromiseLine(t)}`;
   const finalLine = o.final
     ? `\nTHIS IS YOUR LAST CHECK BEFORE THEIR DEADLINE. Do what you can now, then tellThem plainly where it stands, even if the answer is that nothing real turned up. Don't go quiet on a deadline. Keep the task open and schedule your next look unless they've said they don't need it; if you ask them something, their answer wakes it. Don't mark a step done that you didn't do (sending options you don't have isn't done).`
     : "";
@@ -288,7 +294,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     const v = await promiseCloseCheck(task, messages, deps, docsSent).catch(() => ({ ok: true, why: "" }));
     return v.ok ? null : `Not sent: this is the one delivery for the promise, and it would leave part out (${v.why}). Get the missing piece (a link on file counts), then send it all together in one message.`;
   };
-  const tell = async (what: string, links?: string[]) => {
+  // They opted out (the send path's own re-read, harness/proactive.ts sendExempt): the task stops, it never waits to try again.
+  let optedOut = false;
+  // extra: more facts the text may state (the reminder's own thread, below); never anything the turn didn't read.
+  const tell = async (what: string, links?: string[], extra?: Record<string, string>) => {
         // One delivery, one line (services/speakable.ts): the document went with its own sentence. Nothing texts about it again.
         if (docsSent.length) return { ok: false, error: "The document already went out with its one line. Don't text about it: finish the task, or note anything else for later." };
         // Outside their hours nothing is held in memory to send later: Co waits for their morning.
@@ -331,6 +340,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           verified_results: verifiedFactLines(verified).join(" | ") || "(none)",
           events_found: events.map((e) => `${e.name}${e.url ? ` (${e.url})` : ""}${e.facts.length ? `: ${e.facts.join("; ")}` : ""}`).join(" | ") || "(none)",
           verified_page_facts: pageFacts.join(" | ") || "(none)",
+          ...extra,
         };
         // An on-file find is read again before it goes (Phase B, B5, 2026-10-10: on-file finds went out unchecked, with no time on
         // them): sold out, gone or past is left out (and exits, services/sendCheck.ts recheckOnFile); unreadable is left out of this
@@ -410,6 +420,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           const whole = await wholeDelivery(messages);
           if (whole) return { ok: false, error: whole };
           const sent = await deps.send(messages, { owed: owed || task.source !== "lookout" });
+          if (sent.reason === "opted out") optedOut = true;
           if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
           await deps.markTexted();
           await deps.note(`Texted them ${good.length} thing(s): ${good.map((g) => items.find((i) => i.url === g.url)?.name).join(", ")}${closing ? `, then: ${closing.slice(0, 120)}` : ""}${droppedCaptions.length ? ` (left out: ${droppedCaptions.join("; ")})` : ""}`, null);
@@ -457,6 +468,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         const chase = chases(text, asOfNow, { final });
         if (chase) return { ok: false, error: `Not sent: ${chase}. Wait for them; their reply wakes this task.` };
         const sent = await deps.send([text], { owed });
+        if (sent.reason === "opted out") optedOut = true;
         if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await deps.markTexted();
         await deps.note(`Texted them: ${text.slice(0, 200)}`, null);
@@ -626,6 +638,58 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     nextAt = open;
     did.push(`final check: outside their hours, moved to ${localStamp(open, deps.zone)}`);
   }
+  // A promise to bring something up again (followThrough.ts reminderPromise; closure audit 11-02, task 1089: "I'll bring it back up
+  // tomorrow afternoon" moved quietly six times in seven days, then closed as done with nothing sent). The text that brings it up is
+  // the delivery, so it never moves quietly: a turn that ends without it, with its next check past the window, brings it up now, from
+  // their own thread, through the same send path and gates as any task text (hours, opt-out, pacing, the daily cap). Past the time Cue
+  // said, the same text says so plainly, once. A gate or a failed draft can delay it (logged as a slip with why, below), never close it.
+  const reminder = decided !== "finished" && !docsSent.length && reminderPromise(task);
+  let reminderWhy: string | null = null;
+  // Already brought up on an earlier wake (its own text, services/followThrough.ts sendsSince): kept, never said a second time.
+  const keptBefore = reminder && !texts.length ? (await promiseCloseCheck(task, texts, deps, docsSent).catch(() => ({ ok: false, why: "" }))).ok : false;
+  if (reminder && keptBefore) {
+    await deps.close("done", "Kept: it was already brought up.");
+    decided = "finished";
+    did.push("finished (done): it was already brought up");
+  } else if (reminder && !texts.length && task.window && !task.window.closedAt && missesWindow(task.window, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now())) {
+    // Late is against the time Cue first said, however often the window has moved since.
+    const first = task.window.previous?.[0] ?? task.window;
+    const late = deps.now().getTime() > new Date(first.deadline).getTime();
+    // Still time inside the window: its last good moment (the warn-by less ten minutes, as a first check is placed: coTasks.ts
+    // firstCheckInWindow) rather than early, and nothing is said yet. Once late, it goes at the first moment it can.
+    const lastGood = new Date(new Date(task.window.warnBy).getTime() - 10 * 60_000);
+    if (!late && deps.now().getTime() < lastGood.getTime() - 60_000 && deps.scheduleAt) {
+      await deps.scheduleAt(lastGood, "Bring it up now, as you said you would: one text about it, then finish.");
+      nextAt = lastGood;
+      did.push(`reminder: next check moved inside the window, ${localStamp(lastGood, deps.zone)}`);
+    } else if (!localHourOk(deps.now(), deps.zone)) {
+      reminderWhy = "outside their hours";
+    } else {
+      const about = `What you promised to bring back up: "${goalBody(task.goal).slice(0, 200)}". Say what it is, from their own thread (their_recent_thread), in a line or two, the way a friend picks a thread back up: no progress report, nothing about searching, no "circling back" or "checking in".`;
+      const r = await tell(
+        late ? `It's later than you said you'd bring it up. Own that in a few plain words, once, with no excuse, reason or time, then bring it up. ${about}` : `Bring it up now, as you said you would. ${about}`,
+        undefined,
+        { their_recent_thread: deps.recent || "(none)" },
+      );
+      if (r.ok) did.push(late ? "reminder: brought it up past its time, and said so" : "reminder: brought it up in its window");
+      else reminderWhy = String(("error" in r ? r.error : null) ?? "not sent").slice(0, 160);
+    }
+  }
+  // Brought up (by Cue's own tellThem or the line above): kept, by a send after the promise's own turn, so it closes itself.
+  if (reminder && texts.length && decided !== "finished") {
+    const kept = await promiseCloseCheck(task, texts, deps, docsSent);
+    if (kept.ok) {
+      await deps.close("done", `Kept: brought it up ("${texts[0].slice(0, 120)}").`);
+      decided = "finished";
+      did.push("finished (done): brought it up");
+    }
+  }
+  // They opted out: the task stops here, closed on their own STOP (commitmentLog.ts OPTED_OUT), never retried or marked done.
+  if (optedOut && decided !== "finished") {
+    await deps.close("dropped", "Member opted out or archived.");
+    decided = "finished";
+    did.push("dropped: they opted out");
+  }
   // Held: whatever the turn scheduled, the next look waits for the hold (review of #129: an hourly retry under a 24h pause ran a
   // task out of wakes undelivered), and a wake that could only be held doesn't count against the task.
   // set inside tell(), which TypeScript doesn't follow; never past the last check before their deadline (re-review of #129)
@@ -664,9 +728,17 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   } else if (decided !== "finished" && !texts.length && !docsSent.length && task.window && !task.window.closedAt && missesWindow(task.window, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now())) {
     const re = rescheduledWindow(nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now(), deps.zone, task.window);
     await deps.setWindow?.(re.window);
-    if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `You told them ${task.window.words}; it moves to ${re.when}. Do the work and send it then: one message with the thing itself.`);
-    did.push(`window: moved quietly to ${re.when}, no "not yet" text`);
-    await logSlip(task, `moved quietly from ${task.window.words} to ${re.when}`, re.window.deadline);
+    // A reminder that couldn't go this turn tries again at the first moment it can, and the ledger says why it slipped.
+    if (reminder) {
+      const why = reminderWhy ?? "the turn ended without it";
+      if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `Bring it up now, as you said you would (it didn't go last time: ${why.slice(0, 120)}).`);
+      did.push(`reminder: not sent (${why}); tries again ${re.when}`);
+      await logSlip(task, `the reminder didn't go (${why}); tries again ${re.when}`, re.window.deadline);
+    } else {
+      if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `You told them ${task.window.words}; it moves to ${re.when}. Do the work and send it then: one message with the thing itself.`);
+      did.push(`window: moved quietly to ${re.when}, no "not yet" text`);
+      await logSlip(task, `moved quietly from ${task.window.words} to ${re.when}`, re.window.deadline);
+    }
   }
   // Found and checked this turn: stamped, so a later turn knows how old they are (Phase B, B5).
   const checkedAt = deps.now().toISOString();
@@ -991,7 +1063,7 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
       return { ok: r.status === "ok", facts: describeRead(url, r).facts, text: ex ?? "" };
     },
     now: clock,
-    sentSince: (since) => sendsSince(userId, since),
+    sentSince: (since) => sendsSince(userId, since, task.id),
     onFile: () => onFileFor(userId, task),
     recheckOnFile: async (f) => { const S = await import("./sendCheck.js"); return S.recheckOnFile(userId, f, zone, S.realSendCheckDeps); },
     rejected: () => pickerRejected(userId),

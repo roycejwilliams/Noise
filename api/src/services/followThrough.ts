@@ -78,9 +78,35 @@ export function wantsDocument(goal: string, theirWords?: string | null): boolean
   return WANTS_DOC.test(`${g} ${theirWords ?? ""}`) || WRITES_A_PLAN.test(g);
 }
 
-// Pure: was the promise kept by something sent AFTER it was made, and of the kind it promised (a document for a document,
-// a link for links)? Anything sent before the promise never counts, however well it matches.
-export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at: Date }, sends: Sent[]): { kept: boolean; by: Sent | null; why: string } {
+// Pure: a promise whose deliverable is bringing something up again at a time ("I'll bring it back up tomorrow afternoon", "I'll remind
+// you Friday"). Read from Cue's own promise sentence (what Cue said it would do), never from the member's words. There is nothing to
+// find first: the text that brings it up is the delivery, so it goes in its window (services/taskTurn.ts), never moves quietly.
+const BRINGS_IT_UP = /\b(?:bring(?:ing)? (?:it|this|that|them|these|those|(?:the|your) [\w'-]+(?: [\w'-]+){0,3}) (?:back )?up|bring(?:ing)? (?:back )?up|remind(?:ing)? you|nudg(?:e|ing) you)\b/i;
+export function reminderPromise(t: { source?: string | null; goal: string }): boolean {
+  return t.source === "promise" && BRINGS_IT_UP.test(goalBody(t.goal));
+}
+
+// A promise made in a reply (or a proactive text) opens its task while that text is being checked, before it goes out: the text that
+// makes the promise, and the rest of that same reply, are sent in the seconds after the task row (dev, 2026-11-02: every promise
+// task whose sentence went out did so 1 to 10 s after its row). Those sends are the promise being made, never it being kept (closure
+// audit 11-02: task 1089's own "I'll bring it back up tomorrow afternoon", sent 2 s after its row, closed it as kept; task 1096's
+// acknowledgment did the same). A call's promise is made on the call, which ended before its task was written: nothing to skip.
+export const PROMISE_TURN_MS = 60_000;
+export function promiseTurnEnd(goal: string, at: Date): Date {
+  return /^Keep your promise:/i.test(String(goal ?? "").trim()) ? new Date(at.getTime() + PROMISE_TURN_MS) : at;
+}
+
+// Pure: a send that only says the promise again ("Sounds good, I'll bring it back up tomorrow afternoon."), whenever it went.
+export function repeatsPromise(goal: string, text: string): boolean {
+  const said = norm(goalBody(goal)), sent = norm(text);
+  if (said.length < 12 || sent.length < 4) return false;
+  return sent.includes(said) || (sent.length >= 12 && said.includes(sent));
+}
+
+// Pure: was the promise kept by something sent after its own turn, and of the kind it promised (a document for a document, a link for
+// links)? Anything sent before the promise, in the turn that made it, or that only repeats it, never counts, however well it matches.
+// The task keeping it (forThis) sends only on its own wakes, so its sends are never the promising turn.
+export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at: Date; turnEnd?: Date }, sends: Sent[]): { kept: boolean; by: Sent | null; why: string } {
   const what = `${goalBody(p.goal)} ${p.theirWords ?? ""}`;
   const kind: Sent["kind"] | "any" = wantsDocument(p.goal, p.theirWords) ? "document" : WANTS_LINKS.test(what) ? "link" : "any";
   // Anything else: something about the promised thing, i.e. sent by the task keeping it, or sharing what the promise is about
@@ -88,26 +114,36 @@ export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at:
   // and a text also has to be a real message, not a stub.
   const theirs = PLACEHOLDER.test(norm(p.theirWords)) ? "" : String(p.theirWords ?? "");
   const about = (s: Sent) => !!s.forThis || overlap(goalBody(p.goal), s.text) > 0 || (!!theirs && overlap(theirs, s.text) > 0);
+  // A promise to bring something up names no subject of its own ("I'll bring it back up tomorrow afternoon"), so shared words prove
+  // nothing ("back", "tomorrow"): only the task keeping it bringing it up keeps it.
+  const bringUp = BRINGS_IT_UP.test(goalBody(p.goal));
   const fits = (s: Sent) =>
-    kind === "document" ? s.kind === "document"
+    bringUp ? !!s.forThis && s.kind === "text" && s.text.trim().length >= 20
+    : kind === "document" ? s.kind === "document"
     : kind === "link" ? s.kind === "link" || s.kind === "document"
     : about(s) && (s.kind !== "text" || s.text.trim().length >= 20);
+  const turnEnd = (p.turnEnd ?? promiseTurnEnd(p.goal, p.at)).getTime();
+  const ownTurn = (s: Sent) => !s.forThis && s.at.getTime() <= turnEnd;
   const after = sends.filter((s) => s.at.getTime() > p.at.getTime()).sort((x, y) => x.at.getTime() - y.at.getTime());
-  const by = after.find(fits) ?? null;
+  const counted = after.filter((s) => !ownTurn(s) && !repeatsPromise(p.goal, s.text));
+  const by = counted.find(fits) ?? null;
   if (by) return { kept: true, by, why: `${by.kind === "document" ? "a document" : by.kind === "link" ? "a link" : "a text"} went out at ${by.at.toISOString().slice(0, 16).replace("T", " ")} UTC, after the promise` };
   const earlier = sends.filter((s) => s.at.getTime() <= p.at.getTime() && fits(s)).sort((x, y) => y.at.getTime() - x.at.getTime())[0];
-  const want = kind === "document" ? "a document" : kind === "link" ? "a link" : "a text about it";
+  const own = after.filter((s) => (ownTurn(s) || repeatsPromise(p.goal, s.text)) && (bringUp || fits(s)))[0];
+  const want = bringUp ? "the text that brings it up" : kind === "document" ? "a document" : kind === "link" ? "a link" : "a text about it";
   return {
     kept: false,
     by: null,
-    why: `nothing went out after the promise (${p.at.toISOString().slice(0, 16).replace("T", " ")} UTC) that keeps it: it needs ${want}${after.length ? `, and what went out since isn't one` : ""}${earlier ? `. "${earlier.text.slice(0, 80)}" was sent ${earlier.at.toISOString().slice(0, 16).replace("T", " ")} UTC, before the promise, so it doesn't count` : ""}`,
+    why: `nothing went out after the promise (${p.at.toISOString().slice(0, 16).replace("T", " ")} UTC) that keeps it: it needs ${want}${counted.length ? `, and what went out since isn't one` : ""}${own ? `. "${own.text.slice(0, 80)}" was the promise being made (the reply that made it, or the promise said again), so it doesn't count` : ""}${earlier ? `. "${earlier.text.slice(0, 80)}" was sent ${earlier.at.toISOString().slice(0, 16).replace("T", " ")} UTC, before the promise, so it doesn't count` : ""}`,
   };
 }
 
 // What Co actually sent a member since a time: texts (outbound_messages) and its own record of sends (co_facts, by when it
 // happened, not when the row was written: a backfilled row can be written hours after the send).
-export async function sendsSince(userId: string, since: Date): Promise<Sent[]> {
-  const [texts, facts] = await Promise.all([
+// taskId: the task asking. Its own texts from earlier wakes (proactive_sends keyed task:<id>:...) are marked forThis, so a delivery
+// it already made keeps its promise on a later wake too, and is never sent a second time.
+export async function sendsSince(userId: string, since: Date, taskId?: number | null): Promise<Sent[]> {
+  const [texts, facts, mine] = await Promise.all([
     // The after-call confirmation (services/callFollowThrough.ts) and a miss warning (taskTurn.ts, type task_window) say the thing is coming; neither is the thing itself.
     pool.query(
       `SELECT om.content, om.sent_at FROM outbound_messages om WHERE om.user_id = $1 AND om.sender = 'co' AND om.sent_at > $2
@@ -121,8 +157,13 @@ export async function sendsSince(userId: string, since: Date): Promise<Sent[]> {
        ORDER BY happened_at LIMIT 200`,
       [userId, since],
     ),
+    taskId != null
+      ? pool.query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND starts_with(target_key, $2) AND sent_at > $3 LIMIT 50`, [userId, `task:${taskId}:`, since])
+      : Promise.resolve({ rows: [] as any[] }),
   ]);
-  const out: Sent[] = texts.rows.map((r: any) => ({ at: new Date(r.sent_at), text: String(r.content ?? ""), kind: /^\s*https?:\/\/\S+\s*$/.test(String(r.content ?? "")) ? "link" : "text" }));
+  // A task send of several messages is one row, its messages joined by a blank line (harness/proactive.ts sendExempt).
+  const own = new Set(mine.rows.flatMap((r: any) => String(r.message ?? "").split("\n\n")).map((m: string) => m.trim()).filter(Boolean));
+  const out: Sent[] = texts.rows.map((r: any) => ({ at: new Date(r.sent_at), text: String(r.content ?? ""), kind: /^\s*https?:\/\/\S+\s*$/.test(String(r.content ?? "")) ? "link" : "text", ...(own.has(String(r.content ?? "").trim()) ? { forThis: true } : {}) }));
   for (const f of facts.rows) {
     const label = String(f.object_label ?? "");
     const kind: Sent["kind"] = /^a document\b/i.test(label) ? "document" : f.url || /https?:\/\//.test(label) ? "link" : "text";

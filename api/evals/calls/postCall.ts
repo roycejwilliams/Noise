@@ -96,7 +96,7 @@ user: Thanks.`;
   const other: any = { goal: "Keep your promise: \"I'll check what time it starts and let you know\"", theirWords: "what time does it start", createdAt: promisedAt.toISOString(), source: "promise" };
   check("a promise kept by the task's own text this turn closes", (await TT.promiseCloseCheck(other, ["It starts at 7 and doors open at 6:30, so there's time for dinner first."], deps)).ok);
   const tt = src("services/taskTurn.ts");
-  check("finish(done) and marking the send step done both go through the check, and the real turn reads what was sent", /if \(status === "done"\) \{\s*const kept = await promiseCloseCheck\(task, texts, deps, docsSent\);/.test(tt) && /stepDone && task\.source === "promise"/.test(tt) && /sentSince: \(since\) => sendsSince\(userId, since\)/.test(tt));
+  check("finish(done) and marking the send step done both go through the check, and the real turn reads what was sent", /if \(status === "done"\) \{\s*const kept = await promiseCloseCheck\(task, texts, deps, docsSent\);/.test(tt) && /stepDone && task\.source === "promise"/.test(tt) && /sentSince: \(since\) => sendsSince\(userId, since, task\.id\)/.test(tt));
   check("sends are read by when they happened, not when the record was written", /COALESCE\(happened_at, created_at\) > \$2/.test(src("services/followThrough.ts")));
   // the after-call commitment check uses the same rule
   const recorded: any[] = [];
