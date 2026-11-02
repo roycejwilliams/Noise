@@ -1,0 +1,102 @@
+{
+  "hash": "f8ef15e813e9ba7c",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-02T19:18:44.362Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"That almost-walked-off moment, then nailing it clean, that's the part that gets me. Nerves winning right up until they don't.\n\nSeven years old and already knows what it's like to sit back down and finish the thing anyway. That's a good night.\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Text never owns the 'dry' callout at all before launching into the recital reply.\"}",
+      "usage": {
+        "input_tokens": 348,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 198,
+        "output_tokens_details": {
+          "thinking_tokens": 156
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgee89UydAppZcmqBMoFT",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EoYHCsQCCBMYAipASZu0ZHcj6VVQBq8lBXsS7srV9hKDNbbWu/A8O5RHCd0nL3UFgcFet6v4KlqLZ4jAwNCnogEmYl7LZglhym4b+TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBk8Sj1wbCAToIBBAAGgwC2ooDTzcFdh8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCcBk+gKKUmdAyunDf7I3o9u+cK7DcedHOqyaTHSXkwBiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzn+yew8B6j1f004ywaDKvYtt1nejtJdNYJqSIwi+z/laRsnbJ2v9yvvaYX35QoTfoU9h2DqOqBVQZjhURwEn/r5+lQTMV03NN6eIT5Ku4DHw0vPQivkqax5275Bcweo3mlCdk3323q9etzYDipxf91MYABseDh31E/TJSpLrpb+5UdOfAZ8yTx/ARzBqVIzHydo4V1Srt57uoGcH11Oshu/coiQ7CMyjTopzrcqcE+HFmp1vFheVc/nXR1PDmHGKTPoNz68MMZdolLS6vDNgEhQcfwgVEHBBGsiVrRJCzOxRB1hoA7Z1qiLL2jeEezLsuugboTZvfRsi7au1xomcuPRrbuIAZjYF1QNOg9/ltxgoqygjxOKPMiVxXlNg+SCgaYgkAga0ZeP70+6BHzzvHnqpEx594v5ZWcT/rSHso2bq47lP54/pk5JoJckM72bZ08TDWq/ls5qtx45SXr2kFKmbnjYsdIYie6MKwK14O4g5ZsKXwRc0MVVt4txZoCs3t6G0oMngBtVeysgm3i+ctvZHa38bB8HAny8LkFwizEJAdlW9mvASS/M6cxAJi9MzTQPS9p2RAvJTfJAdVRKctB1rcQu12HHLo3GcVyQ/LJezhk1nRvAXhRyj/XToCrm6yL1X4ic3pa4FxgZG8ja8LmC7YbWX6QtLMeNs2sPA6w5/9TjABkqeJ2g9Vc0NgrE5Wy3uXgacM013A0ESlAyiGIAUXfESs6WLswQ5RP6A5mP6fA+nBP8lLEWhmKbT8YAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Text never owns the 'dry' callout at all before launching into the recital reply.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 348,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 198,
+          "output_tokens_details": {
+            "thinking_tokens": 156
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "f8ef15e813e9ba7c",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
