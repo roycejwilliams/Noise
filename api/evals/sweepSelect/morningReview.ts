@@ -192,7 +192,9 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
   check("pin: the count is discovery finds that went today (the SQL twin of isDiscoveryFind), and an unreadable count holds", px.includes("NOT(COALESCE(payload->>'askId','')NOTIN('','profile')") && px.includes(".catch(()=>DAILY_FIND_CAP)"));
   const sh = src("services/sweepShadow.ts").replace(/\s+/g, "");
   check("pin: a retried morning cuts only discovery picks past what's left; answers always queue; what's cut is said, never replaced", sh.includes("!P.isDiscoveryFind({type:\"event_offer\",payload:{askId:q.askId,fromProfile:q.fromProfile,again:q.again,reminder:q.reminder}})||room-->0") && sh.includes("!n.why.startsWith(DAY_CAP_NOTE)"));
-  check("the weekly cap stays skipped for the morning (silence pacing is the guardrail)", /const MORNING_SKIPS = new Set\(\[\.\.\.QUOTA_CHECKS, "spacing"\]\);/.test(src("harness/proactive.ts")));
+  check("the weekly cap stays skipped for the morning (silence pacing is the guardrail)", /const MORNING_SKIPS = new Set\(\[\.\.\.QUOTA_CHECKS\]\);/.test(src("harness/proactive.ts")) && /"weekly_cap"/.test(src("harness/proactive.ts").match(/const QUOTA_CHECKS = [^\n]*/)![0]));
+  // Since 2026-11-02 (preferences PR B): a morning find keeps the 3h spacing, so one bundle goes per window (three bursts in one morning).
+  check("the morning find keeps the spacing", !/MORNING_SKIPS = new Set\(\[[^\]]*"spacing"/.test(src("harness/proactive.ts")));
 }
 
 // ---------------------------------------------------------------- the failed-bundle else, as before the tier PR

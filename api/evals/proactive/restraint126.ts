@@ -44,7 +44,7 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   const px = src("harness/proactive.ts");
   check("sendExempt reads the gates inside the lock (coInitiatedHold on the locked client) and holds a Co-initiated text with its reason, logged", /if \(opts\.coInitiated\) \{[\s\S]{0,300}coInitiatedHold\(client, /.test(px) && /async function coInitiatedHold\(client: Queryable[\s\S]{0,200}loadSends\(client, o\.userId\)/.test(px) && /record\("skip", "held_co_initiated", reason\)/.test(px));
   check("a backoff it can't read holds a send with a kind (fails closed); one without a kind never reads it", /couldn't read their backoff/.test(px) && /const suppressed = o\.kind \? await loadKindRestraint\(/.test(px));
-  check("the kind goes on the ledger so restraint learns from task texts", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, \$5\)/.test(px));
+  check("the kind goes on the ledger so restraint learns from task texts", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, \$5(, \$6)?\)/.test(px));
   const tt = src("services/taskTurn.ts");
   check("task updates pass owed; anything else goes as Co-initiated, kinded by the look-out's recorded origin (Royce, 2026-10-09)", /const coInitiated = o\?\.owed \? undefined : \{ kind: lookoutKind\(task\) \}/.test(tt));
   check("the window warning is owed: held, it would land after the time it's about (review of #129)", /type: "task_window"(?![^\n]*coInitiated)/.test(tt));

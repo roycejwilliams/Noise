@@ -113,7 +113,7 @@ function harness(o: { render?: "ok" | "fail" } = {}) {
   check("receipt: text_fallback, the PDF pending, the failure kept, a retry set", rec.channel === "text_fallback" && rec.status === "pdf_pending" && /couldn't be made/.test(rec.error ?? "") && !!rec.nextRetryAt && rec.nextRetryAt > t);
   check("the failure is logged for retry", h.logs.some((d) => d.decision === "document.pdf_failed" && d.action === "sent_as_text"));
   check("follow-ups know the PDF is outstanding (and not to resend the document)", /^Outstanding: the PDF of "Cue Presence Plan/.test(R.receiptLines(h.receipts.all, SF, t)[0]) && /don't send the document again/.test(R.receiptLines(h.receipts.all, SF, t)[0]));
-  const deps = { receipts: h.receipts, deliver: h.deliver, person: async () => ({ firstName: "Jordan", phone: "+14155550123", zone: SF }), blocked: async (_u: string, zone: string | null, now: Date) => (MT.deliverableAt(now, zone) ? null : DD.QUIET_HOURS), log: async (d: any) => { h.logs.push(d); } };
+  const deps = { receipts: h.receipts, deliver: h.deliver, person: async () => ({ firstName: "Jordan", phone: "+14155550123", zone: SF }), blocked: async (_u: string, zone: string | null, now: Date) => (MT.deliverableAt(now, zone) ? null : DD.QUIET_HOURS), log: async (d: any) => { h.logs.push(d); }, rule: async () => ({ pass: true }) };
   const stillDown = await DD.retryPendingPdfs(new Date(rec.nextRetryAt!.getTime() + 1000), deps);
   check("retry while rendering is still down: no text again, another try later", stillDown.failed === 1 && h.wire.length === 1 && h.receipts.all[0].attempts === 1 && h.receipts.all[0].status === "pdf_pending");
   h.setRender("ok");
@@ -138,7 +138,8 @@ function harness(o: { render?: "ok" | "fail" } = {}) {
 // ---- 4b. the retry, after review of #106: superseded PDFs never go, quiet hours spend no attempts, a pause doesn't hold
 //          their own ask, an unreachable member is closed, two runs never both send, a lost receipt never resends
 {
-  const base = { person: async () => ({ firstName: "Jordan", phone: "+14155550123", zone: SF }), log: async () => {} };
+  // No rule of theirs here (harness/notifyGate.ts is exercised in evals/preferences/enforce.ts).
+  const base = { person: async () => ({ firstName: "Jordan", phone: "+14155550123", zone: SF }), log: async () => {}, rule: async () => ({ pass: true }) };
   const blockedBy = (state: { paused?: boolean; optedOut?: boolean }) => async (_u: string, zone: string | null, now: Date, o: { immediate?: boolean; asked?: boolean } = {}) =>
     !o.asked && state.paused ? "proactive outreach is paused" : !o.immediate && !MT.deliverableAt(now, zone) ? DD.QUIET_HOURS : state.optedOut ? "they opted out of texts" : null;
   const DAY = at("2026-10-08T19:00:00Z"); // noon SF

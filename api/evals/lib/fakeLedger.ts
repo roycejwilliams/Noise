@@ -19,7 +19,7 @@ export function installFakeLedger(pool: any, sendblue: any): { ledger: FakeLedge
     if (/^SELECT 1 FROM proactive_sends WHERE user_id = \$1 AND target_key = \$2/.test(sql)) return { rows: ledger.sends.filter((r) => r.user_id === args[0] && r.target_key === args[1]).map(() => ({ "?column?": 1 })) };
     if (/^INSERT INTO proactive_sends/.test(sql)) {
       if (ledger.sends.some((r) => r.user_id === args[0] && r.target_key === args[2])) return { rows: [] };
-      ledger.sends.push({ user_id: args[0], type: args[1], target_key: args[2], topic_key: args[3] ?? null, sent_at: new Date(), exempt: /, true\)/.test(sql) || args[6] === true, message: String(args[5] ?? ""), kind: args[7] ?? null });
+      ledger.sends.push({ user_id: args[0], type: args[1], target_key: args[2], topic_key: args[3] ?? null, sent_at: new Date(), exempt: /, true(, \$\d+)?\)/.test(sql) || args[6] === true, message: String(args[5] ?? ""), kind: args[7] ?? null });
       return { rows: [{ id: ledger.sends.length }] };
     }
     if (/^UPDATE proactive_candidates SET status = 'sent'/.test(sql)) {

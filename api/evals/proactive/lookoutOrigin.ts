@@ -79,7 +79,7 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   const tt = src("services/taskTurn.ts");
   check("a member-requested look-out is owed every time", /task\.lookoutOrigin === "member"/.test(tt) && /const owed = task\.source === "promise" \|\| task\.lookoutOrigin === "member" \|\|/.test(tt));
   check("the send path reads the recorded origin (lookoutKind), never a guess", /const coInitiated = o\?\.owed \? undefined : \{ kind: lookoutKind\(task\) \}/.test(tt));
-  check("the ledger row carries the kind, so restraint counts it", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, \$5\)/.test(src("harness/proactive.ts")) && /opts\.coInitiated\?\.kind \?\? null/.test(src("harness/proactive.ts")));
+  check("the ledger row carries the kind, so restraint counts it", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, \$5(, \$6)?\)/.test(src("harness/proactive.ts")) && /opts\.coInitiated\?\.kind \?\? null/.test(src("harness/proactive.ts")));
 }
 
 // A Co-initiated look-out find counts toward the two-ignored suppression, the same as sweep finds.
@@ -144,7 +144,7 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   check("a question that doesn't offer to watch isn't one", CT.watchOfferIn("Want me to send the menu?") === null);
   check("a question about someone else isn't Cue's offer (\"Did Maya let you know when it starts?\")", CT.watchOfferIn("Did Maya let you know when the party starts?") === null && !CT.isYesToWatchOffer("yes", "Did Maya let you know when the party starts?"));
   check("the reply logs it after it went, never gates it", /const offer = \(await import\("\.\.\/services\/coTasks\.js"\)\)\.watchOfferIn\(state\.sentMessages\.join\("\\n"\)\);[\s\S]{0,200}recordReplyWatchOffer\(input\.userId, offer\)/.test(src("agent/conversationReply.ts")) && /if \(state\.sent && !opts\.dryRun && opts\.record !== false\) \{\s*const offer/.test(src("agent/conversationReply.ts")));
-  check("it goes on the ledger as a find (exempt, so it never takes a cap)", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, 'find', \$5\)/.test(src("harness/proactive.ts")) && P.REPLY_WATCH_OFFER_TYPE === "watch_offer");
+  check("it goes on the ledger as a find (exempt, so it never takes a cap)", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, 'find', \$5(, 'reply')?\)/.test(src("harness/proactive.ts")) && P.REPLY_WATCH_OFFER_TYPE === "watch_offer");
   const now = new Date("2026-10-20T18:00:00Z");
   const ago = (h: number) => new Date(now.getTime() - h * 3_600_000);
   const v = KR.evaluateKindRestraint({ sends: [{ id: "o1", kind: "find", sentAt: ago(120), message: "Want me to keep an eye out for founder runs?" }, { id: "s1", kind: "find", sentAt: ago(60), message: "A pitch night Tuesday" }], inbound: [], now });
@@ -194,7 +194,8 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   check("a claimed document whose send throws before it goes is released", thrown.released.includes(88), thrown);
   check("a claimed document that didn't go out comes off the ledger (never counted as let pass)", !failed.r.ok && failed.log.released.includes(77), failed);
   const member = await run({});
-  check("a member look-out's document is owed: no claim, it goes", member.r.ok && member.log.claims.length === 0, member);
+  // Owed: claimed as owed (only their own rule holds it, harness/notifyGate.ts; preferences PR B), and it goes.
+  check("a member look-out's document is owed: claimed as owed, never as a find, and it goes", member.r.ok && member.log.claims.length === 1 && !!member.log.claims[0].owed && member.log.claims[0].kind === null, member);
   const tt = src("services/taskTurn.ts");
   check("the task passes a Cue look-out's kind to its document send (PDF and Google Doc go through the same send)", /const kind = lookoutKind\(task\);[\s\S]{0,400}\.\.\.\(kind \? \{ coInitiated: \{ kind \} \} : \{\}\)/.test(tt));
   check("a held document holds the task like a held text", /Not sent: held:/.test(tt) && /heldUntil = quietUntil/.test(tt));
