@@ -207,40 +207,78 @@ const other = (id: number, who: string) => {
   check("host read: no names, no notes, no pair", !/Jordan|Ellis|Noor|Sam|not what I need|0000-4000/.test(text) && !/Jordan|Ellis|not what I need/.test(JSON.stringify(g.pairOutcomes)));
 }
 
-// ---------------------------------------------------------------- 4. host aggregates respect the minimum count
+// ---------------------------------------------------------------- 4. host aggregates: minimum counts, no extremes, coarse bands
 {
-  const P = (n: number, met: number) => Array.from({ length: n }, (_, i) => ({ a: i < met ? { met: { value: "yes", how: "stated", source: "text", at: "x" } } : { met: { value: "no", how: "stated", source: "text", at: "x" } }, b: {} }));
-  const four = PR.pairRates(P(4, 3), RM.pairOutcome);
-  check("4 introduced pairs: no outcome lines at all", PR.pairOutcomeLines(four).length === 0);
-  const five = PR.pairRates(P(5, 3), RM.pairOutcome);
-  const lines = PR.pairOutcomeLines(five);
-  check("5 pairs who said: a met rate, rounded (about 6 in 10)", lines.length === 1 && /about 6 in 10 met/.test(lines[0]), lines);
-  check("useful needs 5 people's own answers, not 5 pairs", !lines.some((l) => /useful/.test(l)));
-  check("rateLine: under the minimum says nothing", PR.rateLine(2, 4) === null && PR.rateLine(4, 5) === "about 8 in 10");
+  const stated = (v: string) => ({ met: { value: v, how: "stated", source: "text", at: "x" } });
+  const P = (n: number, met: number) => Array.from({ length: n }, (_, i) => ({ a: stated(i < met ? "yes" : "no"), b: {} }));
+  check("4 introduced pairs: no outcome lines at all", PR.pairOutcomeLines(PR.pairRates(P(4, 2), RM.pairOutcome)).length === 0);
+  check("5 answers, all met: no line (it would give away every answer)", PR.pairOutcomeLines(PR.pairRates(P(5, 5), RM.pairOutcome)).length === 0);
+  check("5 answers, none met: no line", PR.pairOutcomeLines(PR.pairRates(P(5, 0), RM.pairOutcome)).length === 0);
+  check("5 answers, 4 met: no line (only 1 said no)", PR.pairOutcomeLines(PR.pairRates(P(5, 4), RM.pairOutcome)).length === 0);
+  const six = PR.pairOutcomeLines(PR.pairRates(P(6, 3), RM.pairOutcome));
+  check("6 answers, 3 met: a coarse band (about half), no number", six.length === 1 && /about half met/.test(six[0]) && !/\d/.test(six[0]), six);
+  check("bands: fewer than half / about half / more than half", PR.rateLine(3, 10) === "fewer than half" && PR.rateLine(5, 10) === "about half" && PR.rateLine(7, 10) === "more than half");
+  check("rateLine: under the minimum or near an extreme says nothing", PR.rateLine(2, 4) === null && PR.rateLine(2, 10) === null && PR.rateLine(8, 10) === null);
+  const inferred = Array.from({ length: 8 }, (_, i) => ({ a: { met: { value: i < 4 ? "yes" : "no", how: "inferred", source: "checkin", at: "x" } }, b: {} }));
+  check("inferred met (a check-in read, a no-show) never counts in the host's met rate", PR.pairRates(inferred, RM.pairOutcome).metKnown === 0);
   const unknown = PR.pairRates(Array.from({ length: 8 }, () => ({ a: {}, b: {} })), RM.pairOutcome);
   check("unknowns are never counted as no: 8 pairs, nothing said, no rate line", PR.pairOutcomeLines(unknown).length === 0 && unknown.metKnown === 0);
-  check("the minimum is part of READOUT", PR.READOUT.minPairsForRates === 5);
+  check("the minimums are part of READOUT", PR.READOUT.minPairsForRates === 5 && PR.READOUT.smallCell === 3);
 }
 
-// ---------------------------------------------------------------- 5. outcomes change selection, never past the bar
+// ---------------------------------------------------------------- 5. outcomes change selection, by the ask served, never past the bar
 {
   const bar = 60;
-  const notUseful = [{ line: "Ellis backs seed rounds for climate hardware founders, which is the raise you're working on.", kind: "not_useful" as const }];
-  const useful = [{ line: "Ellis backs seed rounds for climate hardware founders, which is the raise you're working on.", kind: "useful" as const }];
-  const same = "angel investor writing seed checks into climate hardware";
+  const asks = ["seed investors for climate hardware", "a founding designer for my consumer app"];
+  const at = new Date("2026-11-01T00:00:00Z").toISOString();
+  const now = new Date("2026-11-02T00:00:00Z");
+  const line = "Ellis backs seed rounds for climate hardware founders, which is the raise you're working on.";
+  const notUseful = [{ line, kind: "not_useful" as const, at }];
+  const two = [...notUseful, { ...notUseful[0] }];
+  const useful = [{ line, kind: "useful" as const, at }, { line, kind: "useful" as const, at }];
+  const same = "an angel writing seed checks into climate hardware";
   const unrelated = "a product designer for consumer apps";
-  check("a kind that wasn't useful moves down", RM.outcomeAdjustedScore(80, same, notUseful, bar).score < 80);
-  check("...and can fall below the bar (no longer proposed)", RM.outcomeAdjustedScore(66, same, notUseful, bar).score < bar);
-  check("a kind that was useful moves up", RM.outcomeAdjustedScore(70, same, useful, bar).score > 70);
-  check("never past the bar: a below-bar candidate is never lifted, whatever worked before", RM.outcomeAdjustedScore(55, same, useful, bar).score === 55 && RM.outcomeAdjustedScore(59, same, [...useful, ...useful, ...useful], bar).score === 59);
-  check("a zero (pruned or no fit) stays zero", RM.outcomeAdjustedScore(0, same, useful, bar).score === 0);
-  check("a different kind of pairing doesn't move", RM.outcomeAdjustedScore(80, unrelated, notUseful, bar).moved === 0);
-  check("no share reason: no move", RM.outcomeAdjustedScore(80, "", notUseful, bar).moved === 0);
-  check("bounded: many 'not useful's cap the drop", RM.outcomeAdjustedScore(90, same, Array(10).fill(notUseful[0]), bar).score === 90 + RM.OUTCOME_ADJUST.maxDown);
-  check("signals carry a reason's shape and a kind, never who", Object.keys(notUseful[0]).sort().join(",") === "kind,line");
+  const generic = "a founder building and raising for a fintech startup";
+  const adj = (score: number, text: string, sig: any[]) => RM.outcomeAdjustedScore(score, text, sig, bar, asks, now);
+  check("the theme is the member's own ask the pairing served", RM.themeOf(same, asks) === 0 && RM.themeOf(unrelated, asks) === 1 && RM.themeOf(line, asks) === 0);
+  check("generic words (founder, building, raising) tie to no ask", RM.themeOf(generic, asks) === null);
+  check("a generic-word candidate isn't moved by a 'not useful' about climate investors", adj(80, generic, two).moved === 0);
+  check("same ask, two 'not useful's: moves down", adj(80, same, two).score < 80);
+  check("one signal alone counts half", adj(80, same, notUseful).moved === Math.round(RM.OUTCOME_ADJUST.notUseful * RM.OUTCOME_ADJUST.single * Math.pow(0.5, 1 / RM.OUTCOME_ADJUST.halfLifeDays)));
+  check("an old signal fades (a year on, much less)", Math.abs(RM.outcomeAdjustedScore(80, same, two, bar, asks, new Date("2027-11-01T00:00:00Z")).moved) < Math.abs(adj(80, same, two).moved));
+  check("...and can fall below the bar (no longer proposed)", adj(70, same, [...two, ...two]).score < bar);
+  check("a kind that was useful moves up", adj(70, same, useful).score > 70);
+  check("never past the bar: a below-bar candidate is never lifted, whatever worked before", adj(55, same, useful).score === 55 && adj(59, same, [...useful, ...useful, ...useful]).score === 59);
+  check("a zero (pruned or no fit) stays zero", adj(0, same, useful).score === 0);
+  check("a different ask doesn't move", adj(80, unrelated, two).moved === 0);
+  check("no asks or no text: no move", RM.outcomeAdjustedScore(80, same, two, bar, [], now).moved === 0 && adj(80, "", two).moved === 0);
+  check("bounded: many 'not useful's cap the drop", adj(90, same, Array(10).fill(notUseful[0])).score === 90 + RM.OUTCOME_ADJUST.maxDown);
+  check("signals carry a reason's shape, a kind and a time, never who", Object.keys(notUseful[0]).sort().join(",") === "at,kind,line");
   check("only stated evidence makes a signal; an inferred no-show doesn't", RM.signalOf({ met: { value: "no", how: "inferred", source: "noshow_ask", at: "x" } }) === null && RM.signalOf({ met: { value: "no", how: "stated", source: "text", at: "x" } }) === "not_met");
   const es = src("src/services/eventScoring.ts");
-  check("the room scorer ranks on the adjusted score, with the bar", /RMo\.outcomeAdjustedScore\(s\.score, s\.shareReason, signals, MATCH_NUDGE_MIN_SCORE\)/.test(es) && /score: adj\.score,/.test(es) && /RMo\.ownOutcomeSignals\(person\.user_id\)/.test(es));
+  check("the room scorer ranks on the adjusted score, with the bar and their frame's asks", /RMo\.outcomeAdjustedScore\(s\.score, `\$\{s\.reason\} \$\{s\.shareReason\}`, signals, MATCH_NUDGE_MIN_SCORE, frame\.asks\.map/.test(es) && /score: adj\.score,/.test(es) && /RMo\.ownOutcomeSignals\(person\.user_id\)/.test(es));
+}
+
+// ---------------------------------------------------------------- 5b. visible knowledge: their side shown, removable, really removed
+{
+  const W = await import("../../src/services/whatCoKnows.js");
+  const raw: any = { profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], pairOutcomes: [{ id: "1", side: "a", eventName: "Founders Supper", evidence: { met: { value: "yes", how: "stated" }, useful: { value: "somewhat", how: "stated" }, kept_talking: { value: "yes", how: "stated" } }, note: "great talk about seed rounds" }, { id: "2", side: "b", eventName: null, evidence: { met: { value: "yes", how: "inferred" } }, note: null }] };
+  const items = W.knownItems(raw).filter((i: any) => i.source === "pair");
+  check("what Cue knows shows their side of each intro's outcome, their note as their words", items.length === 2 && /how an introduction I made at Founders Supper went for you: you met, it was fine, you've stayed in touch/.test(items[0].text) && items[0].theirWords === "great talk about seed rounds", items);
+  check("an inference says it's Cue's read", /you met \(my read\)/.test(items[1].text));
+  check("it names nobody", !items.some((i: any) => /Ellis|Jordan|Noor|Sam/.test(i.text)));
+  check("it can be removed (never 'corrected' into something they didn't say)", items.every((i: any) => i.canCorrect === false) && W.fieldFor("pair:1:a") === "how an introduction went for them");
+  // Removal at the source: their side cleared, note gone, met_at kept only on the other's stated yes, the kept-talking fact retired.
+  const sqls: { sql: string; p: any[] }[] = [];
+  const db = { query: async (sql: string, p: any[] = []) => { sqls.push({ sql, p }); return /UPDATE co_pairs/.test(sql) ? { rows: [{ other: ELLIS }], rowCount: 1 } : { rows: [], rowCount: 1 }; } };
+  const r: any = await W.applyOne(db as any, JORDAN, raw, items[0], "remove", null, "forget how that intro went");
+  const upd = sqls.find((x) => /UPDATE co_pairs/.test(x.sql))?.sql ?? "";
+  check("removing clears their side at the source (evidence, outcome, note), only on their own side", r.source === "pair" && r.now === null && /SET a_evidence = '\{\}'::jsonb, a_outcome = NULL, a_outcome_note = NULL/.test(upd) && /WHERE id = \$2 AND a_id = \$1/.test(upd) && !/b_evidence = '\{\}'/.test(upd));
+  check("met_at stays only when the other person said they met", /met_at = CASE WHEN b_evidence->'met'->>'value' = 'yes' AND b_evidence->'met'->>'how' = 'stated' THEN met_at ELSE NULL END/.test(upd));
+  check("the kept-talking fact it came from is retired too", sqls.some((x) => /UPDATE co_facts SET retired_at = NOW\(\) WHERE owner_user_id = \$1 AND relation = 'second_contact'/.test(x.sql) && x.p[1] === ELLIS));
+  // And nothing reads it again: an empty side makes no signal and no line.
+  check("after removal: no signal, no line", RM.signalOf({}) === null && W.pairOutcomeLine({}) === "");
+  check("the view reads their side only", /CASE WHEN p\.a_id = \$1 THEN p\.a_evidence ELSE p\.b_evidence END AS ev/.test(src("src/services/whatCoKnows.ts")));
 }
 
 // ---------------------------------------------------------------- 6. the call path captures an outcome mention (GPT-Live post-call)

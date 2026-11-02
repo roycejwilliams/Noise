@@ -96,16 +96,22 @@ export type Stats = {
   pairOutcomes?: PairRates;
 };
 
-// Counts across the event's introduced pairs. metKnown: pairs where either side said (or their no-show said) whether they met.
-// usefulKnown: people (each side counted on its own) who said how it was. keptKnown: pairs where either side said whether they kept
-// talking. Unknown is never counted as a no.
+// Counts across the event's introduced pairs. metKnown: pairs where either side SAID whether they met (an inference, such as a check-in
+// read that named the person, is never counted here). usefulKnown: people (each side on its own) who said how it was. keptKnown: pairs
+// where either side said whether they kept talking. Unknown is never counted as a no.
 export type PairRates = { introduced: number; metKnown: number; met: number; usefulKnown: number; useful: number; keptKnown: number; kept: number };
 
-// Pure: the counts, from each pair's two sides.
+const statedOnly = (e: any) => {
+  const out: any = {};
+  for (const [k, v] of Object.entries(e ?? {})) if ((v as any)?.how === "stated") out[k] = v;
+  return out;
+};
+
+// Pure: the counts, from each pair's two sides, stated answers only.
 export function pairRates(rows: { a: any; b: any }[], outcomeOf: (a: any, b: any) => { met: string; usefulA: string; usefulB: string; keptTalking: string }): PairRates {
   const r: PairRates = { introduced: rows.length, metKnown: 0, met: 0, usefulKnown: 0, useful: 0, keptKnown: 0, kept: 0 };
   for (const row of rows) {
-    const o = outcomeOf(row.a ?? {}, row.b ?? {});
+    const o = outcomeOf(statedOnly(row.a), statedOnly(row.b));
     if (o.met !== "unknown") r.metKnown++;
     if (o.met === "yes") r.met++;
     for (const u of [o.usefulA, o.usefulB]) {
@@ -119,10 +125,13 @@ export function pairRates(rows: { a: any; b: any }[], outcomeOf: (a: any, b: any
   return r;
 }
 
-// Pure: "about 6 in 10", or null when fewer than READOUT.minPairsForRates stand behind it.
+// Pure: a coarse band ("fewer than half", "about half", "more than half"), or null when it could tell the host what any one person said:
+// fewer than READOUT.minPairsForRates behind it, or fewer than READOUT.smallCell on either side of it (with 5 answers, "none" or "all"
+// gives away every answer; review of #358).
 export function rateLine(n: number, of: number): string | null {
-  if (of < READOUT.minPairsForRates) return null;
-  return `about ${Math.round((n / of) * 10)} in 10`;
+  if (of < READOUT.minPairsForRates || n < READOUT.smallCell || of - n < READOUT.smallCell) return null;
+  const share = n / of;
+  return share < 0.4 ? "fewer than half" : share <= 0.6 ? "about half" : "more than half";
 }
 
 export function pairOutcomeLines(p: PairRates | undefined): string[] {

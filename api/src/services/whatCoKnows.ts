@@ -84,7 +84,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref" | "pair";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -192,6 +192,9 @@ export type RawKnown = {
   // and the fonts in plain words; and each confirmed reference read Co took the look from.
   design?: { context: "professional" | "personal"; look: string | null; fonts: string | null }[];
   designRefs?: { id: string; ref: string }[];
+  // How an introduction Cue made went, as THEY told it (services/roomMatching.ts, the outcome record): their side of the pair only,
+  // never the other person's answers, never a name (ruling 10-14: your side only). Removable; removing it clears their side.
+  pairOutcomes?: { id: string; side: "a" | "b"; eventName: string | null; evidence: Record<string, { value: string; how: string }>; note: string | null }[];
 };
 
 const CONTEXT_WORDS = { professional: "work", personal: "personal" } as const;
@@ -297,7 +300,27 @@ export function knownItems(r: RawKnown): KnownItem[] {
   if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
+  for (const x of r.pairOutcomes ?? []) {
+    const line = pairOutcomeLine(x.evidence);
+    if (line) add(`pair:${x.id}:${x.side}`, "pair", "said", `how an introduction I made${x.eventName ? ` at ${x.eventName}` : ""} went for you: ${line}`, x.note, false);
+  }
   return out;
+}
+
+// Pure: their side of an intro's outcome, in plain words. What Cue only inferred says so.
+export function pairOutcomeLine(e: Record<string, { value: string; how: string }> | null | undefined): string {
+  const words: Record<string, Record<string, string>> = {
+    met: { yes: "you met", no: "you didn't meet" },
+    useful: { yes: "it was useful", somewhat: "it was fine", no: "it wasn't useful" },
+    kept_talking: { yes: "you've stayed in touch", not_yet: "you hadn't been in touch again yet", no: "you don't plan to stay in touch" },
+  };
+  const parts: string[] = [];
+  for (const f of ["met", "useful", "kept_talking"]) {
+    const x = e?.[f];
+    const w = x ? words[f][x.value] : null;
+    if (w) parts.push(x!.how === "inferred" ? `${w} (my read)` : w);
+  }
+  return parts.join(", ");
 }
 
 // Pure: grouped, the same thing said in more than one place shown once with all its refs, short.
@@ -589,6 +612,16 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
          AND (want_key LIKE 'goal:%' OR want_key IN (SELECT 'ask:' || id::text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL))
        ORDER BY updated_at DESC LIMIT 200`, [userId]).catch(() => [] as any[]),
   ]);
+  // Their side of each intro whose outcome is on file. A failed read shows nothing here (the rest of the view still reads).
+  const pairRows = await q(
+    `SELECT p.id, CASE WHEN p.a_id = $1 THEN 'a' ELSE 'b' END AS side, CASE WHEN p.a_id = $1 THEN p.a_evidence ELSE p.b_evidence END AS ev,
+            CASE WHEN p.a_id = $1 THEN p.a_outcome_note ELSE p.b_outcome_note END AS note, c.event_name
+     FROM co_pairs p LEFT JOIN event_room_closures c ON c.event_id = p.event_id
+     WHERE (p.a_id = $1 OR p.b_id = $1)
+       AND (CASE WHEN p.a_id = $1 THEN p.a_evidence ELSE p.b_evidence END) <> '{}'::jsonb
+     ORDER BY p.updated_at DESC LIMIT 10`,
+    [userId],
+  ).catch(() => [] as any[]);
   const freeRows = await import("./wantWhen.js").then(async (WW) => {
     const { localDay } = await import("./memberTime.js");
     return (await WW.freeTimesOf(userId, localDay(new Date(), zone ?? null), db as any)).map((f) => ({ id: f.id, text: WW.describeFreeTime(f), quote: f.quote }));
@@ -628,6 +661,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     prefs: await import("./memberPreferences.js").then(async (P) => (await P.activePreferences(userId, new Date(), db as any)).map((x) => ({ id: x.id, text: P.describePreference(x), quote: x.words[x.words.length - 1] ?? null }))),
     files,
     ...designKnown(signals),
+    pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
 }
 
@@ -914,6 +948,24 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       if (!r.rowCount) throw new NotApplied();
       return { ref: item.ref, source: "free", was, now: null };
     }
+    case "pair": {
+      // Their side of an intro's outcome, cleared at its source (the pair record), their note with it, and the "kept talking" fact it
+      // came from (services/secondContact.ts), so nothing reads it again. The other person's side is never touched; met_at stays only
+      // when the other person said they met.
+      const side = b === "a" ? "a" : b === "b" ? "b" : null;
+      if (!side || !/^\d+$/.test(a)) return { why: "not something Cue can change" };
+      const other = side === "a" ? "b" : "a";
+      const r = await must(
+        `UPDATE co_pairs SET ${side}_evidence = '{}'::jsonb, ${side}_outcome = NULL, ${side}_outcome_note = NULL,
+           met_at = CASE WHEN ${other}_evidence->'met'->>'value' = 'yes' AND ${other}_evidence->'met'->>'how' = 'stated' THEN met_at ELSE NULL END,
+           state = CASE WHEN state = 'met' AND NOT COALESCE(${other}_evidence->'met'->>'value' = 'yes' AND ${other}_evidence->'met'->>'how' = 'stated', false) THEN 'intro_sent' ELSE state END,
+           updated_at = NOW()
+         WHERE id = $2 AND ${side}_id = $1 RETURNING ${other}_id AS other`,
+        [userId, Number(a)],
+      );
+      await db.query(`UPDATE co_facts SET retired_at = NOW() WHERE owner_user_id = $1 AND relation = 'second_contact' AND meta->>'otherId' = $2 AND retired_at IS NULL`, [userId, String(r.rows[0]?.other ?? "")]);
+      return { ref: item.ref, source: "pair", was, now: null };
+    }
     case "avoid": {
       const list = raw.profile?.avoid ?? [];
       const old = list.find((x) => hashOf(x) === a);
@@ -946,7 +998,7 @@ export function fieldFor(ref: string): string {
   if (kind === "free") return "when they said they're free";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "docs" ? "their Google Docs connection" : a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested", pair: "how an introduction went for them" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -1125,7 +1177,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file", "pair"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";
