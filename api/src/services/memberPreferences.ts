@@ -440,8 +440,10 @@ export async function capturePreferencesNow(userId: string, words: string, o: { 
         return (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 600, abortSignal: AbortSignal.timeout(8000), experimental_telemetry: { isEnabled: true, functionId: "preferences.read", recordInputs: false, recordOutputs: false }, prompt })).text;
       })();
   const { parseModelJson } = await import("./modelJson.js");
-  const raw = (() => { try { return parseModelJson<any>(text)?.preferences; } catch { return null; } })();
-  return learnPreferences(userId, raw ?? [], { message: own, zone: o.zone, now, source: o.source, onFile });
+  // An answer that can't be read is a failed read (it throws): the turn's later learning read takes the rules then, never silently none.
+  const parsed = parseModelJson<any>(text);
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.preferences)) throw new Error("preferences read: no list in the answer");
+  return learnPreferences(userId, parsed.preferences, { message: own, zone: o.zone, now, source: o.source, onFile });
 }
 
 // ---------------------------------------------------------------- words (member-facing: the PR's Copy section lists every one)

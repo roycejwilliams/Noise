@@ -2740,13 +2740,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // and write, instead of seven separate calls on the same transcript.
         // The message's own id, the source a rule they set records (services/memberPreferences.ts).
         const sourceRef = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+        // The read before the reply, settled (it ends itself within seconds): when it failed, the learning read takes the rules instead.
+        const prefs = { preferenceIds: prefStored?.added ?? [], preferenceCapture: prefCaptureP ?? undefined, ownWords: ownWordsNow };
         learnFromTextTurn({
           userId: user.id,
           recentConversation,
           message: resolvedContent,
           coReply,
           sourceRef,
-          preferenceIds: prefStored?.added ?? [],
+          ...prefs,
           coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
         }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err))
           // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts), so the next
