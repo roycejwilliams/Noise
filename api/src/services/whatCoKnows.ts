@@ -926,7 +926,7 @@ export function fieldFor(ref: string): string {
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
 // theirWords: their own words asking for it, from this message (checked by the tool guard's their_yes).
-export async function applyKnowledgeChanges(userId: string, changes: Change[], o: { message: string; theirWords: string; lastCoMessage?: string | null }): Promise<ChangeResult> {
+export async function applyKnowledgeChanges(userId: string, changes: Change[], o: { message: string; theirWords: string; lastCoMessage?: string | null; recent?: string | null }): Promise<ChangeResult> {
   // Fails closed like the view: without the names to strip, nothing is changed and nothing is said back.
   const { memberSafeLine } = await import("./memberSafeMemories.js");
   const safe = await memberSafeLine(userId);
@@ -937,6 +937,20 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   const removing = changes.some((c) => c.action === "remove");
   const cancelled: Cancelled[] = [];
   const asked = !removing || removalAsked(o.message, o.lastCoMessage);
+  // Each line Cue picked to remove, read against their message before anything goes (review of #349: one "forget my old address"
+  // must never take an unrelated line with it). Read on the stripped lines, before the transaction (a model call never holds the
+  // lock); only lines read as yes are removed, and when the read is unsure about any line, or didn't read, nothing is removed.
+  const removalYes = new Set<string>();
+  let removalUnsure = false;
+  if (removing && asked) {
+    const pre = strippedItems(await readKnown(userId), safe);
+    const preRefs = [...new Set(changes.filter((c) => c.action === "remove").flatMap((c) => resolveRefs(c.refs, pre).refs))];
+    const texts = [...new Set(preRefs.map((r) => pre.find((i) => i.ref === r)!.text))];
+    const { judgeRemoval } = await import("./theirYes.js");
+    const v = await judgeRemoval({ recent: o.recent ?? "", message: o.message, lines: texts });
+    if (!v.read || v.answers.includes("unsure")) removalUnsure = true;
+    else for (const r of preRefs) if (v.answers[texts.indexOf(pre.find((i) => i.ref === r)!.text)] === "yes") removalYes.add(r);
+  }
   // Files go after the transaction (only memberFiles.ts touches their table), and only once everything else held.
   const fileRemovals: { item: KnownItem }[] = [];
   const decisions: Parameters<typeof recordDecision>[0][] = [];
@@ -969,6 +983,14 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
       for (const ref of unknown) refused.push({ ref: ref.slice(0, 80), why: "not one of the items on file now (call whatCoKnows again and pass its refs)" });
       for (const ref of refs) {
         const item = byRef.get(ref)!;
+        if (c.action === "remove" && removalUnsure) {
+          refused.push({ ref, why: "nothing was removed: it isn't clear which of these lines their message asks to remove, and a removal can't be undone. Ask them which one, in plain words" });
+          continue;
+        }
+        if (c.action === "remove" && !removalYes.has(ref)) {
+          refused.push({ ref, why: "their message doesn't ask to remove this line, so it stays" });
+          continue;
+        }
         if (item.source === "file") {
           if (c.action === "remove") fileRemovals.push({ item });
           else refused.push({ ref, why: "a file can only be removed" });

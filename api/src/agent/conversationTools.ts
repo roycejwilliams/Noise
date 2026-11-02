@@ -688,7 +688,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const { changes } = input as { changes: { refs: string[]; action: "correct" | "remove"; now?: string }[] };
         if (ctx.dryRun) return { ok: true, applied: [], note: "(dry run) nothing changed." };
         const W = await import("../services/whatCoKnows.js");
-        const r = await W.applyKnowledgeChanges(ctx.userId, changes, { message: ctx.resolvedContent, theirWords: String(input?.theirYes ?? ctx.resolvedContent), lastCoMessage: ctx.lastCoMessage ?? null });
+        const r = await W.applyKnowledgeChanges(ctx.userId, changes, { message: ctx.resolvedContent, theirWords: String(input?.theirYes ?? ctx.resolvedContent), lastCoMessage: ctx.lastCoMessage ?? null, recent: recentOf(ctx) });
         for (const a of r.applied) {
           ctx.facts?.add("did_this_turn", a.now == null ? `Removed from what Cue knows about them, everywhere Cue uses it: "${a.was.slice(0, 120)}".` : `Corrected what Cue knows about them, everywhere Cue uses it: "${a.was.slice(0, 80)}" is now "${a.now.slice(0, 80)}".`);
         }
@@ -1903,6 +1903,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
           );
           return { ok: true, note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list, and don't say whether you found them." };
         };
+        // The person has to be the one they named, in their own words (this message or their lines just before it): never a name Cue
+        // supplied (review of #349: a direct ask now passes the yes read, so the name is checked here). Refused before any lookup, the
+        // same for every name, so the refusal says nothing about whether anyone by that name exists.
+        const theirLines = [ctx.resolvedContent, ...memberLinesOf(recentOf(ctx))];
+        const nameWords = `${personName ?? ""} ${lastName ?? ""}`.split(/\s+/).filter(Boolean);
+        if (!nameWords.length || !nameWords.every((w) => nameFromTheirWords(w, theirLines))) {
+          notDone("No intro was requested: the name isn't one they gave in their own words.");
+          return { ok: false, error: "Not done: the person has to be the one they named, in their own words. Use the name exactly as they wrote it; if they haven't named who they mean, ask them." };
+        }
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would look up "${personName}" for ${ctx.userId} to request an intro`);
           return { ok: true, note: "dry run" };

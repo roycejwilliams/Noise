@@ -807,7 +807,7 @@ export const ABILITIES: Ability[] = [
 
 // The lines Co doesn't cross, whatever it's asked.
 export const LIMITS: string[] = [
-  "Anything that affects another member, costs money, or can't be undone needs their clear yes first: Cue proposes it, they confirm, then it happens.",
+  "Anything that affects another member, costs money, or can't be undone needs their clear yes first: they ask for it, or say yes to Cue's offer of it, then it happens.",
   "Cue is never given its own phone number's digits, so it never writes a phone number.",
   "For events and opportunities Cue sent, the details on file (time, place, from their Luma page, including Luma pages linked from an X post) are in its facts; Cue checks them before saying it doesn't have something, and says plainly which detail isn't on file. Outside a task, Cue can't go chase down a specific link, detail, or answer later; when it takes one on as a task (startTask, a research brief, or a promise it keeps), it does, and can say when it'll get back to them.",
   "Two events only clash if both start times are known and they overlap. If Cue doesn't have both times, it says it doesn't know yet; if the times allow both, it says they could make both.",
