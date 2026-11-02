@@ -30,6 +30,7 @@ type Db = {
 };
 const fresh = (): Db => ({ users: new Map(), deferred: [], proactive: new Set(), memories: [], facts: [], reminders: [], relays: [], zones: new Map() });
 let db = fresh();
+const txKeys: string[] = [];
 let seq = 1;
 const now = () => new Date(clockMs());
 let fixedClock: number | null = null;
@@ -40,12 +41,17 @@ async function handle(rawSql: string, args: any[] = []): Promise<{ rows: any[] }
   const sql = rawSql.replace(/\s+/g, " ").trim();
   // Let other async work interleave, like a real round trip (the double-run test depends on it).
   await new Promise((r) => setImmediate(r));
-  if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
+  // A send's ledger row is written inside its transaction: a failed send rolls it back (harness/proactive.ts sendExempt), so a retry
+  // isn't read as "already sent".
+  if (/^ROLLBACK/.test(sql)) { for (const k of txKeys.splice(0)) db.proactive.delete(k); return { rows: [] }; }
+  if (/^(BEGIN|COMMIT)/.test(sql)) { txKeys.length = 0; return { rows: [] }; }
+  if (/pg_advisory_xact_lock/.test(sql)) return { rows: [] };
   if (/^SELECT COALESCE\(sms_opted_out, false\) AS opted_out FROM users/.test(sql)) return { rows: [{ opted_out: db.users.get(args[0])?.sms_opted_out === true }] };
   if (/^INSERT INTO proactive_sends/.test(sql)) {
     const k = `${args[0]}|${args[2]}`;
     if (db.proactive.has(k)) return { rows: [] };
     db.proactive.add(k);
+    txKeys.push(k);
     return { rows: [{ id: seq++ }] };
   }
   if (/^INSERT INTO co_memories/.test(sql)) { db.memories.push({ user_id: args[0], type: args[1], content: args[2] }); return { rows: [{ id: seq++ }] }; }
@@ -90,7 +96,7 @@ async function handle(rawSql: string, args: any[] = []): Promise<{ rows: any[] }
   if (/^SELECT 1 FROM deferred_sends WHERE user_id = \$1 AND target_key = \$2/.test(sql)) return { rows: db.deferred.filter((d) => d.user_id === args[0] && d.target_key === args[1] && ["queued", "sending"].includes(d.status)) };
   // member_reminders
   if (/FROM member_reminders r JOIN users u/.test(sql)) {
-    return { rows: db.reminders.filter((r) => !r.sent_at && !r.queued_at && r.due_at.getTime() <= Date.now()).map((r) => ({ id: r.id, user_id: r.user_id, what: r.what, phone_number: db.users.get(r.user_id)?.phone_number, city: db.users.get(r.user_id)?.city })) };
+    return { rows: db.reminders.filter((r) => !r.sent_at && !r.queued_at && r.due_at.getTime() <= Date.now() && r.due_at.getTime() > Date.now() - 2 * 86_400_000 && (!r.retry_at || r.retry_at.getTime() <= Date.now())).map((r) => ({ id: r.id, user_id: r.user_id, what: r.what, phone_number: db.users.get(r.user_id)?.phone_number, city: db.users.get(r.user_id)?.city })) };
   }
   if (/^UPDATE member_reminders SET queued_at = NOW\(\)/.test(sql)) {
     const r = db.reminders.find((x) => x.id === args[0] && !x.sent_at && !x.queued_at);
@@ -98,6 +104,13 @@ async function handle(rawSql: string, args: any[] = []): Promise<{ rows: any[] }
     r.queued_at = now();
     return { rows: [{ id: r.id }] };
   }
+  if (/^UPDATE member_reminders SET attempts = attempts \+ 1/.test(sql)) {
+    const r = db.reminders.find((x) => x.id === args[0] && !x.sent_at);
+    if (!r) return { rows: [] };
+    r.attempts = (r.attempts ?? 0) + 1;
+    return { rows: [{ user_id: r.user_id, attempts: r.attempts }] };
+  }
+  if (/^UPDATE member_reminders SET queued_at = NULL, retry_at = \$2/.test(sql)) { const r = db.reminders.find((x) => x.id === args[0] && !x.sent_at); if (r) Object.assign(r, { queued_at: null, retry_at: new Date(args[1]) }); return { rows: [] }; }
   if (/^UPDATE member_reminders SET sent_at = COALESCE/.test(sql)) { const r = db.reminders.find((x) => x.id === args[0]); if (r) r.sent_at ??= now(); return { rows: [] }; }
   if (/FROM member_reminders r JOIN deferred_sends d/.test(sql)) {
     return { rows: db.reminders.filter((r) => r.user_id === args[0] && !r.sent_at && r.queued_at && db.deferred.some((d) => d.user_id === r.user_id && d.target_key === `reminder:${r.id}` && ["queued", "sending"].includes(d.status))) };
@@ -199,6 +212,67 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   check("reminder at their 8am: sent once, and only now is sent_at set", outbox.length === 1 && /Reminder you asked for: call Sam/.test(outbox[0].content) && rem.sent_at instanceof Date);
   check("reminder: the 'Co replied' line is written once, on delivery", memLines("ua").filter((l) => /Reminder you asked for/.test(l)).length === 1);
   check("reminder: no longer reads as queued", (await R.reminderFacts("ua")).length === 0);
+}
+
+// ---------------------------------------------------------------- 3b. a failed reminder gives its claim back and tries again (closure audit 11-02)
+// Reminder 2 on dev: its send failed once (Sendblue 401) and queued_at stayed set, so the 5-minute cron never picked it up again.
+{
+  seed();
+  db.zones.set("Nightville", zoneAtHour(12));
+  db.reminders.push({ id: 910, user_id: "ua", what: "bring up the paralegal search", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null, attempts: 0, retry_at: null });
+  const rem = db.reminders[0];
+  const realSend = (sendblue as any).messages.send;
+  let failNext = 1;
+  (sendblue as any).messages.send = async (b: any) => { if (failNext > 0) { failNext--; throw new Error("401 Invalid Credentials"); } return realSend(b); };
+  await R.sendDueReminders();
+  check("a 401 at noon their time: nothing went out", outbox.length === 0 && rem.sent_at === null);
+  check("...the claim is given back, with its first retry about 5 minutes out", rem.queued_at === null && rem.attempts === 1 && rem.retry_at instanceof Date && Math.abs(rem.retry_at.getTime() - (Date.now() + R.REMINDER_RETRY.firstMs)) < 30_000, rem);
+  check("...and not before then", (await R.sendDueReminders()) === 0 && outbox.length === 0);
+  rem.retry_at = new Date(Date.now() - 1000);
+  await R.sendDueReminders();
+  check("the retry sends it once, and only now is sent_at set", outbox.length === 1 && /Reminder you asked for: bring up the paralegal search/.test(outbox[0].content) && rem.sent_at instanceof Date);
+  rem.retry_at = new Date(Date.now() - 1000);
+  await R.sendDueReminders();
+  check("never a second text after it went", outbox.length === 1);
+  // A try that went out but whose record didn't (its key is on the send ledger): recorded as sent, never sent again.
+  seed();
+  db.zones.set("Nightville", zoneAtHour(12));
+  db.reminders.push({ id: 911, user_id: "ua", what: "call the landlord", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null, attempts: 1, retry_at: new Date(Date.now() - 1000) });
+  db.proactive.add("ua|reminder:911");
+  await R.sendDueReminders();
+  check("a retry whose earlier try already went: no second text, recorded as sent", outbox.length === 0 && db.reminders[0].sent_at instanceof Date);
+  // Bounded: a send that keeps failing is tried five times in all, spaced 5, 20, 80 and 320 minutes, then left alone.
+  seed();
+  db.zones.set("Nightville", zoneAtHour(12));
+  db.reminders.push({ id: 912, user_id: "ua", what: "pay the deposit", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null, attempts: 0, retry_at: null });
+  (sendblue as any).messages.send = async () => { throw new Error("401 Invalid Credentials"); };
+  const gaps: number[] = [];
+  for (let i = 0; i < 8; i++) {
+    const r = db.reminders[0];
+    if (r.retry_at) r.retry_at = new Date(Date.now() - 1000);
+    const before = Date.now();
+    await R.sendDueReminders();
+    if (r.retry_at && r.queued_at === null) gaps.push(Math.round((r.retry_at.getTime() - before) / 60_000));
+  }
+  const r912 = db.reminders[0];
+  check("always failing: five tries, then it stays claimed and isn't tried again", r912.attempts === 5 && r912.queued_at instanceof Date && r912.sent_at === null, r912);
+  check("...spaced 5, 20, 80 and 320 minutes", JSON.stringify(gaps.slice(0, 4)) === "[5,20,80,320]", gaps);
+  check("the backoff never lands in their quiet hours: a 2am retry waits for 8am", (() => {
+    const at = R.reminderRetryAt(1, new Date("2026-10-23T08:58:00Z"), "America/Los_Angeles", P.localHourOk, (a, z) => P.nextLocalHour(a, z, P.RULES.startHour));
+    return at?.toISOString() === "2026-10-23T15:00:00.000Z";
+  })());
+  check("past the last try there's no retry", R.reminderRetryAt(R.REMINDER_RETRY.maxAttempts, new Date(), null, () => true, (a) => a) === null);
+  (sendblue as any).messages.send = realSend;
+  // Opted out: skipped, the claim kept, never retried.
+  seed();
+  db.zones.set("Nightville", zoneAtHour(12));
+  db.users.get("ua")!.sms_opted_out = true;
+  db.reminders.push({ id: 913, user_id: "ua", what: "renew the permit", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null, attempts: 0, retry_at: null });
+  await R.sendDueReminders();
+  const r913 = db.reminders[0];
+  check("opted out: nothing sent, the claim kept, no retry set", outbox.length === 0 && r913.queued_at instanceof Date && !r913.retry_at && (r913.attempts ?? 0) === 0, r913);
+  check("...and a later run doesn't try again", (await R.sendDueReminders()) === 0 && outbox.length === 0);
+  check("migration: the retry columns", /member_reminders ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0/.test(src("db/migrations.ts")) && /member_reminders ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ/.test(src("db/migrations.ts")));
 }
 
 // ---------------------------------------------------------------- 4. a queued relay shows as queued

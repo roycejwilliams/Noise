@@ -2444,6 +2444,11 @@ export async function runMigrations(): Promise<void> {
     .query(`ALTER TABLE member_reminders ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ`)
     .then(() => pool.query(`ALTER TABLE member_relays ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`))
     .catch((err: Error) => console.error("member_reminders/member_relays durable-send columns failed:", err));
+  // A failed reminder send gives its claim back with a time to try again (services/relay.ts reminderDelivered, closure audit 11-02).
+  await pool
+    .query(`ALTER TABLE member_reminders ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`)
+    .then(() => pool.query(`ALTER TABLE member_reminders ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ`))
+    .catch((err: Error) => console.error("member_reminders retry columns failed:", err));
   // A text held for the member's hours (harness/proactive.ts sendExemptWhenAllowed, callFollowThrough's night hold). It used
   // to wait in an in-process timer that a restart or deploy lost. A minute cron sends due rows through sendExempt (STOP,
   // pause and hours checked again at send time); a row is claimed by bumping attempts, so two instances never both send it,

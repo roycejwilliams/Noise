@@ -164,6 +164,7 @@
     "evals/calls/followThrough.ts",
     "evals/tasks/windows.ts",
     "evals/tasks/looseEnds.ts",
+    "evals/tasks/closurePromises.ts",
     "evals/calls/llmProxy.ts",
     "evals/calls/actOnCalls.ts",
     "evals/calls/gptLive.ts",

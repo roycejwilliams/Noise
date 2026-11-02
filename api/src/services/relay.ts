@@ -234,12 +234,15 @@ export async function addReminder(userId: string, what: string, when: string, zo
 // Due reminders, sent to the member who asked (never anyone else). queued_at claims one so the 5-minute cron never picks
 // it up twice; sent_at and the "Co replied:" line are written only once it actually goes out (reminderDelivered, and
 // sendExempt's own text_exchange write), which at night is their 8am (services/deferredSends.ts).
+// A failed send gives its claim back with a time to try again (reminderDelivered, REMINDER_RETRY): closure audit 11-02, reminder 2
+// failed once (401) and stayed claimed, so it never went. Never past two days late.
 export async function sendDueReminders(): Promise<number> {
   const { rows } = await pool
     .query(
       `SELECT r.id, r.user_id, r.what, u.phone_number, cp.city FROM member_reminders r JOIN users u ON u.id = r.user_id
        LEFT JOIN co_profiles cp ON cp.user_id = r.user_id
-       WHERE r.sent_at IS NULL AND r.queued_at IS NULL AND r.due_at <= NOW() AND r.due_at > NOW() - INTERVAL '2 days' LIMIT 20`,
+       WHERE r.sent_at IS NULL AND r.queued_at IS NULL AND r.due_at <= NOW() AND r.due_at > NOW() - INTERVAL '2 days'
+         AND (r.retry_at IS NULL OR r.retry_at <= NOW()) LIMIT 20`,
     )
     .catch(() => ({ rows: [] as any[] }));
   const { sendExemptWhenAllowed } = await import("../harness/proactive.js");
@@ -251,17 +254,44 @@ export async function sendDueReminders(): Promise<number> {
     if (!claimed.rows[0]) continue;
     const zone = await memberZone(r.user_id);
     const s = await sendExemptWhenAllowed({ userId: r.user_id, phoneNumber: r.phone_number, type: "direct_ask", targetKey: `reminder:${r.id}`, messages: [reminderText(r.what)], timezone: zone, after: { kind: "reminder", payload: { reminderId: r.id } } });
+    // Its key is already on the send ledger: an earlier try went out (proactive_sends is written only when the text was accepted), so
+    // it's recorded as sent, never sent twice.
+    if (s.reason === "already sent") await reminderDelivered(Number(r.id), "sent");
     if (s.sent || s.queued) n++;
   }
   return n;
 }
 
+// A failed reminder send tries again, spaced out: 5 minutes, then 20, 80, 320; after the fifth failure it stays claimed and isn't
+// tried again (a send error that lasts hours is not fixed by trying more). Never inside their quiet hours: a try that would land
+// there waits for their morning, so a night doesn't use up the tries.
+export const REMINDER_RETRY = { maxAttempts: 5, firstMs: 5 * 60_000, factor: 4 };
+// Pure: when a reminder that has now failed `failures` times is tried again, or null when it isn't.
+export function reminderRetryAt(failures: number, now: Date, zone: string | null, ok: (at: Date, zone: string | null) => boolean, nextOpen: (at: Date, zone: string | null) => Date): Date | null {
+  if (failures < 1 || failures >= REMINDER_RETRY.maxAttempts) return null;
+  const at = new Date(now.getTime() + REMINDER_RETRY.firstMs * REMINDER_RETRY.factor ** (failures - 1));
+  return ok(at, zone) ? at : nextOpen(at, zone);
+}
+
 export const reminderText = (what: string) => `Reminder you asked for: ${what}`;
 
-// The reminder's record once its send is settled: sent_at only when it went.
+// The reminder's record once its send is settled: sent_at only when it went. Skipped (they opted out, or are archived) keeps the
+// claim, so it stops there. Failed gives the claim back with its next try (reminderRetryAt), or keeps it after the last.
 export async function reminderDelivered(reminderId: number, outcome: "sent" | "skipped" | "failed"): Promise<void> {
   if (outcome === "sent") await pool.query(`UPDATE member_reminders SET sent_at = COALESCE(sent_at, NOW()) WHERE id = $1`, [reminderId]);
-  await recordDecision({ layer: 3, decision: "relay.reminder", userId: null, outcome: outcome === "sent" ? "act" : "skip", action: outcome, proposal: { reminderId } }).catch(() => {});
+  let retryAt: Date | null = null;
+  if (outcome === "failed") {
+    const { rows } = await pool
+      .query(`UPDATE member_reminders SET attempts = attempts + 1 WHERE id = $1 AND sent_at IS NULL RETURNING user_id, attempts`, [reminderId])
+      .catch(() => ({ rows: [] as any[] }));
+    if (rows[0]) {
+      const [{ memberZone }, { localHourOk, nextLocalHour, RULES }] = await Promise.all([import("./memberTime.js"), import("../harness/proactive.js")]);
+      const zone = await memberZone(String(rows[0].user_id)).catch(() => null);
+      retryAt = reminderRetryAt(Number(rows[0].attempts), new Date(), zone, (at, z) => localHourOk(at, z), (at, z) => nextLocalHour(at, z, RULES.startHour));
+      if (retryAt) await pool.query(`UPDATE member_reminders SET queued_at = NULL, retry_at = $2 WHERE id = $1 AND sent_at IS NULL`, [reminderId, retryAt]).catch(() => {});
+    }
+  }
+  await recordDecision({ layer: 3, decision: "relay.reminder", userId: null, outcome: outcome === "sent" ? "act" : "skip", action: outcome, proposal: { reminderId, ...(outcome === "failed" ? { retryAt: retryAt?.toISOString() ?? null } : {}) } }).catch(() => {});
 }
 
 // Reminders that came due outside their hours and are waiting for their morning: Co knows they haven't gone yet.
