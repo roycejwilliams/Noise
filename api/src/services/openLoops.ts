@@ -88,9 +88,13 @@ export function describeLoops(rows: (Pick<LoopRow, "title" | "status" | "detail"
 // Pure: the day an offer's event is over by (its last day, in their zone), or null when it carries no date. Every date source an
 // offer can carry (services/dateGuard.ts itemDays: the event page's start and end, the event date, the dates a post states, an
 // application deadline).
+// Its start time, when it has one, wins over a bare event_date: the start is converted to their zone, while an event_date can be a UTC
+// day (an evening event in Pacific is the next day in UTC; review of #351).
 export function offerDay(match: unknown, zone: string | null): string | null {
   if (!match || typeof match !== "object") return null;
-  const d = itemDays(match, zone);
+  const m = match as any;
+  const startAt = [m.details?.startAt, m.startAt].find((v) => typeof v === "string" && v.trim() && !Number.isNaN(Date.parse(v)));
+  const d = itemDays(startAt ? { ...m, details: { ...(m.details ?? {}), startAt } } : m, zone);
   return d.end ?? d.start ?? null;
 }
 

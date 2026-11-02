@@ -386,9 +386,13 @@ const theirWordAtClose = new Map<string, string>();
 export function closedOnTheirWord(userId: string, id: number, quote: string): void {
   theirWordAtClose.set(`${userId}:${id}`, quote);
 }
-export async function closeTask(userId: string, id: number, status: "done" | "dropped" | "expired", outcome: string, opts: { theirWord?: string | null } = {}): Promise<boolean> {
+// logWords false: their word decides the outcome (released), but only ids go in the log. cascade false: the goal Cue carries for them is
+// never settled by this close (a close that only went with something they dropped; review of #351).
+export async function closeTask(userId: string, id: number, status: "done" | "dropped" | "expired", outcome: string, opts: { theirWord?: string | null; logWords?: boolean; cascade?: boolean } = {}): Promise<boolean> {
   const held = theirWordAtClose.get(`${userId}:${id}`) ?? null;
   theirWordAtClose.delete(`${userId}:${id}`);
+  const logWords = opts.logWords !== false;
+  const cascade = opts.cascade !== false;
   opts = { theirWord: opts.theirWord ?? held };
   const { rowCount, rows } = await pool.query(
     `UPDATE co_tasks SET status = $3, outcome = $4, closed_at = NOW(), next_check_at = NULL, updated_at = NOW(),
@@ -400,9 +404,9 @@ export async function closeTask(userId: string, id: number, status: "done" | "dr
   const row = rows?.[0];
   if (closed && row) {
     const L = await import("./commitmentLog.js");
-    if (L.isCommitment(row)) await L.logCommitment("outcome", { userId, taskId: id, goalId: row.followup?.goalId ?? null, outcome: L.outcomeOf(status, outcome, Array.isArray(row.steps) ? row.steps : [], { source: row.source, goalItem: row.followup?.goalItem != null, theirWord: opts.theirWord ?? null, sentAnything: Number(row.texts_sent ?? 0) > 0 }), why: outcome, what: row.goal, source: row.source, theirWord: opts.theirWord ?? null });
+    if (L.isCommitment(row)) await L.logCommitment("outcome", { userId, taskId: id, goalId: row.followup?.goalId ?? null, outcome: L.outcomeOf(status, outcome, Array.isArray(row.steps) ? row.steps : [], { source: row.source, goalItem: row.followup?.goalItem != null, theirWord: opts.theirWord ?? null, sentAnything: Number(row.texts_sent ?? 0) > 0 }), why: outcome, what: row.goal, source: row.source, theirWord: logWords ? (opts.theirWord ?? null) : null });
     // A goal whose last open piece or check-in just closed is settled now (goalOwnership.ts closeGoalIfSettled).
-    if (row.followup?.goalId != null) await import("./goalOwnership.js").then((G) => G.closeGoalIfSettled(userId, Number(row.followup.goalId))).catch(() => false);
+    if (cascade && row.followup?.goalId != null) await import("./goalOwnership.js").then((G) => G.closeGoalIfSettled(userId, Number(row.followup.goalId))).catch(() => false);
   }
   return closed;
 }

@@ -190,7 +190,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
           availability_pattern: row.availability_pattern ?? null,
         }
       : null;
-    const openAsks: OpenItem[] = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind }));
+    const openAsks: OpenItem[] = askRows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind, link: r.link ?? null, owned: !!r.owned }));
     const styleNotes: string[] = Array.isArray(row?.texting_style) ? row.texting_style : [];
 
     const { text } = await generateText({

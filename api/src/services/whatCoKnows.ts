@@ -1083,6 +1083,9 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   if (applied.some((a) => a.now == null)) {
     const gone = removalRows(applied);
     void import("./elevenLabsForget.js").then((F) => F.forgetCallsNow(userId, (t) => callSaysRemoved(t, gone))).catch(() => {});
+    // An unsure goal's mark holds their words from a drop (services/goalRecheck.ts markUnsure): words that say the removed thing go,
+    // and the question with them.
+    await import("./goalRecheck.js").then((R) => R.forgetUnsureQuotes(userId, (t) => !!forgets(t, gone, "their_words"))).catch(() => 0);
   }
   // What else still says it, from the fresh read (stripped like the view).
   const after = await whatCoKnows(userId).catch(() => null);

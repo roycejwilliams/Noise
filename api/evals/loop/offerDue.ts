@@ -16,7 +16,11 @@ const TODAY = "2026-11-02";
 const PT = "America/Los_Angeles";
 
 // ---- the day an offer is over by, from every date it can carry, in their zone
-check("a public event: its event day", O.offerDay({ kind: "public_event", event_date: "2026-11-01", startAt: "2026-11-02T02:30:00.000Z" }, PT) === "2026-11-01");
+check("a public event: its event day", O.offerDay({ kind: "public_event", event_date: "2026-11-01", startAt: "2026-11-01T18:30:00.000Z" }, PT) === "2026-11-01");
+// An evening event whose event_date was written as the UTC day: its start, in their zone, wins (review of #351).
+check("an evening event: its start time in their zone wins over an event_date written as the UTC day", O.offerDay({ kind: "public_event", event_date: "2026-11-05", startAt: "2026-11-05T03:00:00.000Z" }, PT) === "2026-11-04");
+check("... the page's own start wins the same way", O.offerDay({ event_date: "2026-11-05", details: { startAt: "2026-11-05T03:00:00.000Z" } }, PT) === "2026-11-04");
+check("... and with no start, the event_date stands", O.offerDay({ event_date: "2026-11-05" }, PT) === "2026-11-05");
 check("... its page's end when it runs over days", O.offerDay({ details: { startAt: "2026-11-07T17:00:00Z", endAt: "2026-11-08T23:00:00Z" } }, PT) === "2026-11-08");
 check("a web opportunity: the date its post states", O.offerDay({ kind: "opportunity", statedDates: { start: "2026-10-21" } }, PT) === "2026-10-21");
 check("an evening start in UTC is still that evening's day where they are", O.offerDay({ details: { startAt: "2026-11-04T02:30:00.000Z" } }, PT) === "2026-11-03");

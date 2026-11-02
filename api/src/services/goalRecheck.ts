@@ -179,17 +179,42 @@ export const unsureQuote = (reason: string | null | undefined): string | null =>
 export const isUnsure = (r: { state: GoalState; reason?: string | null; recheckAskedAt?: Date | null }): boolean =>
   r.state === "active" && !r.recheckAskedAt && String(r.reason ?? "").startsWith(UNSURE_PREFIX);
 // Kept active and marked; a goal with a recheck already out, or one that isn't active, is left as it is (it was already asked, or it's
-// already settled).
+// already settled). Once per drop (review of #351): the turn read re-reads the recent conversation, so the same drop line comes back
+// for several turns. A row already holding the mark is left as it is, and a goal marked in the last UNSURE_ONCE_DAYS (asked or answered
+// since, or still waiting) is never marked again; if that can't be read, nothing is marked (no second question on a guess).
+export const UNSURE_ONCE_DAYS = 7;
 export async function markUnsure(userId: string, goal: string, quote: string): Promise<boolean> {
+  const hash = goalHash(goal);
+  const before = await pool
+    .query(`SELECT 1 FROM harness_decisions WHERE user_id = $1 AND decision = 'goal.recheck_due' AND action = 'unsure_after_drop' AND proposal->>'goalHash' = $2 AND created_at > NOW() - make_interval(days => $3) LIMIT 1`, [userId, hash, UNSURE_ONCE_DAYS])
+    .then((r) => r.rows.length > 0)
+    .catch(() => true);
+  if (before) return false;
   const { rowCount } = await pool.query(
     `INSERT INTO goal_states (user_id, goal_hash, goal_text, state, reason, source, changed_at, told_at, hints, last_signal_at)
      VALUES ($1, $2, $3, 'active', $4, 'context', NOW(), NOW(), 0, NOW())
      ON CONFLICT (user_id, goal_hash) DO UPDATE SET reason = EXCLUDED.reason, changed_at = NOW(), hints = 0
-     WHERE goal_states.state = 'active' AND goal_states.recheck_asked_at IS NULL`,
-    [userId, goalHash(goal), goal.slice(0, 500), unsureReason(quote)],
+     WHERE goal_states.state = 'active' AND goal_states.recheck_asked_at IS NULL AND goal_states.reason NOT LIKE '${UNSURE_PREFIX}%'`,
+    [userId, hash, goal.slice(0, 500), unsureReason(quote)],
   );
-  if (rowCount) await realRecheckDeps.log({ userId, decision: "goal.recheck_due", outcome: "act", action: "unsure_after_drop", reason: "they dropped something this goal may go with: kept, asked once", proposal: { goal: goal.slice(0, 200), goalHash: goalHash(goal) } }).catch(() => {});
+  // Logged by the goal's hash only: never the goal's words or theirs.
+  if (rowCount) await realRecheckDeps.log({ userId, decision: "goal.recheck_due", outcome: "act", action: "unsure_after_drop", reason: "they dropped something this goal may go with: kept, asked once", proposal: { goalHash: hash } }).catch(() => {});
   return !!rowCount;
+}
+
+// Forget (review of #351): an unsure mark holds their words (the quote the reply's question names). When they have Cue remove something
+// those words say (services/whatCoKnows.ts, after the removal committed), the mark goes: the words are cleared from the row and the
+// question with them, since asking it would say the removed thing back. says: the removal guard over their words.
+export async function forgetUnsureQuotes(userId: string, says: (text: string) => boolean): Promise<number> {
+  const { rows } = await pool.query(`SELECT goal_hash, reason FROM goal_states WHERE user_id = $1 AND reason LIKE '${UNSURE_PREFIX}%'`, [userId]);
+  let n = 0;
+  for (const r of rows) {
+    const q = unsureQuote(r.reason);
+    if (q && !says(q)) continue;
+    const { rowCount } = await pool.query(`UPDATE goal_states SET reason = '' WHERE user_id = $1 AND goal_hash = $2 AND reason LIKE '${UNSURE_PREFIX}%'`, [userId, r.goal_hash]);
+    n += rowCount ?? 0;
+  }
+  return n;
 }
 
 // Pure: every recheck decision for one member's goals. At most one text per member per run (the goal due longest), none while held
