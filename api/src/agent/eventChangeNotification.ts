@@ -53,7 +53,9 @@ export async function runEventChangeNotificationAgent(
     type: "event_change",
     targetKey: `event_change:${changeKey}`,
     messages: [message],
-    // Held by their own rule: queued for when it may go (harness/notifyGate.ts), never dropped.
+    // About an event within the next few hours: it gets through a held rule rather than arriving late (R2). Otherwise a hold queues
+    // it for when it may go (harness/notifyGate.ts), never dropped.
+    soonAt: await (await import("../db/db.js")).default.query(`SELECT start_at FROM luma_event_snapshots WHERE event_id = $1`, [eventId]).then((r: any) => (r.rows[0]?.start_at ? new Date(r.rows[0].start_at) : null)).catch(() => null),
     queueIfHeld: true,
   });
   if (sent) {

@@ -122,15 +122,13 @@ async function sendMissedCallFollowUpInScope(
   CallStatus: string,
   situationPrompt: string,
 ): Promise<void> {
-  // The member's own rules (harness/notifyGate.ts): a follow-up to a call they didn't pick up is Cue's own text. Held, it isn't sent
-  // (nothing they asked for is lost: the call was Cue's), and the hold is logged with ids only.
-  {
-    const { memberRuleGate } = await import("../harness/notifyGate.js");
-    const rule = await memberRuleGate(pool, { userId: user.id, now: new Date(), cls: "unsolicited", channel: "text" });
-    if (!rule.pass) {
-      await recordDecision({ layer: 8, decision: "call.missed_followup", userId: user.id, outcome: "skip", action: "held_member_rule", proposal: { callSid: CallSid } }).catch(() => {});
-      return;
-    }
+  // The member's own rules (harness/notifyGate.ts): a follow-up to a call they didn't pick up is Cue's own text, claimed on the ledger
+  // under their lock (it counts) before it goes. Held, it isn't sent (nothing they asked for is lost: the call was Cue's), logged with ids.
+  const P = await import("../harness/proactive.js");
+  const claim = await P.claimCoInitiatedSend({ userId: user.id, type: "missed_call", targetKey: `missed_call_followup:${CallSid}`, message: "[missed-call follow-up]", kind: null, timezone: null, ruleOnly: true, cls: "unsolicited" });
+  if (!claim.ok) {
+    await recordDecision({ layer: 8, decision: "call.missed_followup", userId: user.id, outcome: "skip", action: /held/.test(claim.reason) ? "held_member_rule" : "not_claimed", proposal: { callSid: CallSid } }).catch(() => {});
+    return;
   }
   let coMessage: string;
   try {
@@ -165,6 +163,8 @@ async function sendMissedCallFollowUpInScope(
     });
   } catch (smsErr: any) {
     console.error(`call-status: Sendblue failed for ${user.id}:`, smsErr?.message ?? smsErr);
+    // Nothing went: the claim comes off the ledger.
+    await P.releaseCoInitiatedClaim(user.id, claim.ledgerId).catch(() => {});
   }
 
   const memContent = `Co called ${user.first_name} — ${CallStatus} (${CallSid}). Followed up via iMessage: "${coMessage}"`;

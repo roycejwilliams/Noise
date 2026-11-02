@@ -683,9 +683,9 @@ async function coInitiatedHold(client: Queryable, o: { userId: string; timezone:
 // the same gate and the same ledger row, claimed before it goes (Royce, 2026-10-09: "a Co lookout must not be able to send an
 // uncounted PDF"). The caller delivers, then releases the claim if nothing went out, so a send that failed never counts as let pass.
 // owed: a document they asked for (askedAt: when), claimed through the same lock and ledger so their own rule holds it and it counts.
-export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType; targetKey: string; message: string; kind: ProactiveKind | null; timezone: string | null; now?: Date; owed?: { askedAt: Date | null } }): Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }> {
+export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType; targetKey: string; message: string; kind: ProactiveKind | null; timezone: string | null; now?: Date; owed?: { askedAt: Date | null }; ruleOnly?: boolean; cls?: SendClass }): Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }> {
   // The pause holds what Cue starts; a document they asked for isn't outreach, as before (only their own rule holds it).
-  if (proactivePaused() && !o.owed) return { ok: false, reason: "proactive outreach is paused" };
+  if (proactivePaused() && !o.owed && !o.ruleOnly) return { ok: false, reason: "proactive outreach is paused" };
   const now = o.now ?? new Date();
   const client = await pool.connect();
   try {
@@ -698,8 +698,11 @@ export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType
     }
     // Owed (a document they asked for): only their own rule holds it. Cue's own: the Co-initiated gate too.
     const lastIn = await loadLastInbound(client, o.userId).catch(() => null);
-    const cls: SendClass = o.owed ? (answersLastText(o.owed.askedAt, lastIn, now) ? "reply" : "requested") : "unsolicited";
-    const { failed, sends } = o.owed ? { failed: [] as GateCheck[], sends: [] as SendRecord[] } : await coInitiatedHold(client, { userId: o.userId, timezone: o.timezone, now, kind: o.kind });
+    void lastIn;
+    // Owed is a requested delivery (R1: never a reply). ruleOnly: a send claimed only for the member's rule and the count (a missed-call
+    // follow-up, a PDF that follows its text): no Co-initiated pacing.
+    const cls: SendClass = o.cls ?? (o.owed ? "requested" : "unsolicited");
+    const { failed, sends } = o.owed || o.ruleOnly ? { failed: [] as GateCheck[], sends: [] as SendRecord[] } : await coInitiatedHold(client, { userId: o.userId, timezone: o.timezone, now, kind: o.kind });
     const rule = await memberRuleGate(client, { userId: o.userId, now, cls, channel: "text" });
     if (!rule.pass) failed.push(rule);
     if (failed.length) {
@@ -2017,9 +2020,11 @@ export async function sendExempt(opts: {
   // went out 15 minutes after another text). `kind` is the restraint kind it counts as, when it has one.
   coInitiated?: { kind: ProactiveKind | null };
   // What this sends is what they asked for at askedAt (a task started from their text, a call's follow-through). When that was their
-  // latest message and it's still fresh (answersLastText), it's Cue's answer to them: a reply, never held. Otherwise it's a delivery
-  // that arrives later, gated like one.
+  // latest message and it's still fresh (answersLastText), it skips the spacing (Royce, R4). It is still a requested delivery, never a
+  // reply (R1): their own rule holds it and it counts.
   answers?: { askedAt: Date | null };
+  // When what it's about happens (a booked call, an event they're going to): within hours of it, it gets through a held rule (R2).
+  soonAt?: Date | null;
   // Held by their rule or the spacing: queued for when it may go (services/deferredSends.ts), never dropped. For a caller with no retry
   // of its own (a notice, a reminder); one that schedules its own next look (a task) leaves it off and uses retryAt.
   queueIfHeld?: boolean;
@@ -2062,7 +2067,8 @@ export async function sendExempt(opts: {
     const now = opts.now ?? new Date();
     // Its class (harness/notifyGate.ts): Cue's own text, a delivery they asked for, or Cue's answer to their latest message.
     const lastIn = await loadLastInbound(client, opts.userId).catch(() => null);
-    const cls: SendClass = opts.answers && answersLastText(opts.answers.askedAt, lastIn, now) ? "reply" : opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
+    const answersLast = !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now);
+    const cls: SendClass = opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
     if (opts.coInitiated) {
       const { failed, sends } = await coInitiatedHold(client, { userId: opts.userId, timezone: opts.timezone ?? null, now, kind: opts.coInitiated.kind });
       if (failed.length) {
@@ -2077,7 +2083,7 @@ export async function sendExempt(opts: {
     // Notices about something they're in (an event change, a call reminder) keep going on time, as before: only their own rule holds them.
     const held: GateCheck[] = [];
     let retryAt: Date | null = null;
-    if (!opts.coInitiated && cls !== "reply" && SPACED_EXEMPT.has(opts.type)) {
+    if (!opts.coInitiated && !answersLast && SPACED_EXEMPT.has(opts.type)) {
       const sends = await loadSends(client, opts.userId);
       const sp = spacingCheck({ now, sends });
       if (!sp.pass) {
@@ -2086,7 +2092,7 @@ export async function sendExempt(opts: {
       }
     }
     // The member's own rules (harness/notifyGate.ts), inside the lock with what's been sent.
-    const rule = await memberRuleGate(client, { userId: opts.userId, now, cls, channel: "text" });
+    const rule = await memberRuleGate(client, { userId: opts.userId, now, cls, channel: "text", soonAt: opts.soonAt ?? null });
     if (!rule.pass) {
       held.push(rule);
       if (rule.retryAt && (!retryAt || rule.retryAt > retryAt)) retryAt = rule.retryAt;
@@ -2184,6 +2190,8 @@ export async function sendExemptWhenAllowed(opts: {
   timezone: string | null;
   after?: import("../services/deferredSends.js").AfterSend;
   now?: Date;
+  // Its class when its type's isn't it (a reminder they set is requested, not Cue's own).
+  cls?: SendClass;
 }): Promise<{ sent: boolean; queued: boolean; reason?: string; dueAt?: Date }> {
   const D = await import("../services/deferredSends.js");
   const now = opts.now ?? new Date();
@@ -2225,22 +2233,50 @@ export const MAX_IN_ROOM_SENDS_PER_EVENT = 3;
 // released, and a later pass sends it once the pause lifts.
 // The end-of-night close is the one in-room text the limit never holds and never counts (Royce, 2026-10-14: "A cap that leaves
 // the most engaged people in the room without a goodbye is inverted - one line, once, always"). The kill switches still hold it.
-export async function inRoomSendAllowed(userId: string, eventId: string, opts: { close?: boolean } = {}): Promise<boolean> {
+// claim: the send's ledger row, written in the same locked transaction as the member's rule and the per-event count (harness/notifyGate.ts),
+// so two in-room texts at once can't both pass a cap. A send that then fails takes its claim back (releaseInRoomClaim).
+export async function inRoomSendAllowed(userId: string, eventId: string, opts: { close?: boolean; claim?: { targetKey: string; message: string } } = {}): Promise<boolean> {
   if (proactivePaused()) return false;
   // The matching kill switch, global or this event (services/roomMatching.ts), read fresh.
   if (await (await import("../services/roomMatching.js")).matchingPause(eventId)) return false;
-  // The member's own rules (harness/notifyGate.ts), the close included: their rule is theirs, whatever the night. Read here, right
-  // before the send; in-room texts have no ledger lock of their own (the per-event limit below and the event pass's one-at-a-time run
-  // are what keep two from racing).
-  const rule = await memberRuleGate(pool, { userId, now: new Date(), cls: "unsolicited", channel: "text" });
-  if (!rule.pass) {
-    await recordDecision({ layer: 6, decision: "inroom.member_rule", userId, outcome: "skip", action: "held_member_rule", proposal: { eventId, close: !!opts.close } }).catch(() => {});
-    return false;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`proactive:${userId}`]);
+    // The member's own rules, the close included: their rule is theirs, whatever the night (Royce, R3).
+    const rule = await memberRuleGate(client, { userId, now: new Date(), cls: "unsolicited", channel: "text" });
+    if (!rule.pass) {
+      await client.query("ROLLBACK");
+      await recordDecision({ layer: 6, decision: "inroom.member_rule", userId, outcome: "skip", action: "held_member_rule", proposal: { eventId, close: !!opts.close } }).catch(() => {});
+      return false;
+    }
+    if (!opts.close) {
+      // Counted per event, exactly: a prefix match let three texts at evt-1234 use up the limit at evt-12.
+      const { rows } = await client.query(`SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'`, [userId]);
+      if (rows.filter((r: any) => inRoomKeyEvent(String(r.target_key)) === eventId && !String(r.target_key).startsWith("in_room:close:")).length >= MAX_IN_ROOM_SENDS_PER_EVENT) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+    }
+    if (opts.claim) {
+      await client.query(
+        `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, notify_class)
+         VALUES ($1, 'in_room', $2, $2, $3, false, 'unsolicited') ON CONFLICT (user_id, target_key) DO NOTHING`,
+        [userId, opts.claim.targetKey, opts.claim.message],
+      );
+    }
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-  if (opts.close) return true;
-  // Counted per event, exactly: a prefix match let three texts at evt-1234 use up the limit at evt-12.
-  const { rows } = await pool.query(`SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'`, [userId]);
-  return rows.filter((r: any) => inRoomKeyEvent(String(r.target_key)) === eventId && !String(r.target_key).startsWith("in_room:close:")).length < MAX_IN_ROOM_SENDS_PER_EVENT;
+}
+// An in-room send that didn't go out: its claim comes off the ledger.
+export async function releaseInRoomClaim(userId: string, targetKey: string): Promise<void> {
+  await pool.query(`DELETE FROM proactive_sends WHERE user_id = $1 AND target_key = $2 AND type = 'in_room'`, [userId, targetKey]).catch(() => {});
 }
 
 // The event an in-room send was for, from its key: in_room:<kind>:<eventId>, and the additive offer adds :<timestamp>.

@@ -100,7 +100,7 @@ export type FollowThroughDeps = {
   // (older tests), the follow-through runs as before.
   ledger?: (userId: string, since: Date, until: Date) => Promise<CallLedger>;
   sends?: (userId: string, since: Date) => Promise<Sent[]>;
-  deliver?: (o: { userId: string; phone: string; item: { name: string; url: string }; key: string }) => Promise<{ sent: boolean; reason?: string }>;
+  deliver?: (o: { userId: string; phone: string; item: { name: string; url: string }; key: string; endedAt?: Date }) => Promise<{ sent: boolean; reason?: string }>;
   close?: (userId: string, taskId: number, outcome: string) => Promise<unknown>;
   commitments: (userId: string, since: Date) => Promise<Commitment[]>;
   person: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null; reachable: boolean } | null>;
@@ -177,7 +177,7 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
           await deps.record({ layer: 8, decision: "call.owed_delivery", userId: o.userId, outcome: "skip", action: "unreachable", proposal: { url: item.url }, reason: "opted out, archived or no number" }).catch(() => {});
           continue;
         }
-        const r = await deps.deliver({ userId: o.userId, phone: person.phone, item, key: `call_owed:${since.toISOString().slice(0, 16)}:${item.url}`.slice(0, 300) }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+        const r = await deps.deliver({ userId: o.userId, phone: person.phone, item, key: `call_owed:${since.toISOString().slice(0, 16)}:${item.url}`.slice(0, 300), endedAt: o.endedAt ?? t0 }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
         if (r.sent) owedSent.push(item.url);
         await deps.record({ layer: 8, decision: "call.owed_delivery", userId: o.userId, outcome: r.sent ? "act" : "skip", action: r.sent ? "sent" : "not_sent", proposal: { url: item.url, msSinceEnd: deps.now().getTime() - (o.endedAt ?? t0).getTime() }, reason: r.sent ? null : r.reason ?? null }).catch(() => {});
       }
@@ -243,11 +243,11 @@ const realDeps: FollowThroughDeps = {
   sends: async (userId, since) => (await import("./followThrough.js")).sendsSince(userId, since),
   // The owed link, as a direct answer to what they asked on the call: it goes now, at any hour (they were just on the phone), never
   // past an opt-out (sendExempt re-reads it), once per call and link (its target key).
-  deliver: async ({ userId, phone, item, key }) => {
+  deliver: async ({ userId, phone, item, key, endedAt }) => {
     const caption = item.name.replace(/\s+/g, " ").trim().slice(0, 200);
-    // Cue's answer to the call they were just on (harness/proactive.ts answersLastText: the call is their latest message and fresh);
-    // a retry hours later is a delivery, held by their own rule like any.
-    const r = await sendExempt({ userId, phoneNumber: phone, type: "direct_ask", targetKey: key, messages: caption ? [item.url, caption] : [item.url], answers: { askedAt: new Date() }, cls: "requested" });
+    // A delivery of what they asked for on the call (requested, never a reply: R1). Asked at the call's end, so right after the call it
+    // skips the spacing (answersLastText); their own rule holds it like any delivery.
+    const r = await sendExempt({ userId, phoneNumber: phone, type: "direct_ask", targetKey: key, messages: caption ? [item.url, caption] : [item.url], answers: { askedAt: endedAt ?? null }, cls: "requested" });
     if (r.sent) await import("./coFacts.js").then((F) => F.recordSentItems(userId, [{ name: item.name, url: item.url }], "call.owed")).catch(() => {});
     return { sent: r.sent, reason: r.reason };
   },
@@ -263,7 +263,7 @@ const realDeps: FollowThroughDeps = {
     const run = () => draftProactive({ functionId: "call.followthrough.confirm", firstName, facts, task: confirmationTask(), maxSentences: 2, freshKeys: ["their_words_on_the_call"] });
     return redo ? draftAgain(redo, run) : run();
   },
-  send: ({ userId, phone, key, text, zone }) => sendExempt({ userId, phoneNumber: phone, type: CONFIRM_TYPE, targetKey: key, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: new Date() } }),
+  send: ({ userId, phone, key, text, zone }) => sendExempt({ userId, phoneNumber: phone, type: CONFIRM_TYPE, targetKey: key, messages: [text], timezone: zone, respectHours: true }),
   runTask: async (userId, c) => {
     // Claimed the way the cron claims (coTasks.ts claimDueTasks), only if the cron hasn't woken it since it was read.
     const claimed = await pool.query(

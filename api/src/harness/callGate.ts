@@ -73,8 +73,16 @@ export type CallState = {
   };
   // The member's own rules for this call (harness/notifyGate.ts), read by gatherCallState for the kind it will be decided as. Missing:
   // not read (older pure cases), nothing held by one.
-  memberRule?: GateCheck | null;
+  memberRule?: (GateCheck & { retryAt?: Date }) | null;
 };
+
+// When the call being placed was booked (scheduled_calls.created_at); unreadable: the start of time, so every rule still holds it.
+async function bookedAt(userId: string, id: string | null): Promise<Date> {
+  const { rows } = await pool
+    .query(`SELECT created_at FROM scheduled_calls WHERE user_id = $1 ${id ? "AND id = $2" : "AND status IN ('pending', 'processing')"} ORDER BY scheduled_for LIMIT 1`, id ? [userId, id] : [userId])
+    .catch(() => ({ rows: [] as any[] }));
+  return rows[0]?.created_at ? new Date(rows[0].created_at) : new Date(0);
+}
 
 // A call's class for the member's own rules (harness/notifyGate.ts): one they asked for now is Cue answering them; one they booked is a
 // delivery of what they asked for; a check-in call is a check-in; an intake call is Cue's own.
@@ -352,7 +360,9 @@ export async function gatherCallState(
     timezoneKnown: !!timezone && DateTime.now().setZone(timezone).isValid,
     lastCallAt: lastCall.rows[0]?.at ? new Date(lastCall.rows[0].at) : null,
     evidence,
-    memberRule: kind ? await import("./notifyGate.js").then(({ memberRuleGate }) => memberRuleGate(pool, { userId, now, cls: CALL_CLASS[kind], channel: "call" })).then(({ retryAt: _r, ...c }) => c) : null,
+    // A call they booked is their own exception to the rules they had when they booked it (Royce, 2026-11-02): only a rule set after
+    // the booking holds it, and then it's moved to when the rule allows it (jobs/scheduledCall.ts), never failed.
+    memberRule: kind ? await import("./notifyGate.js").then(async ({ memberRuleGate }) => memberRuleGate(pool, { userId, now, cls: CALL_CLASS[kind], channel: "call", rulesAfter: kind === "scheduled_call" ? await bookedAt(userId, requested?.scheduledCallId ?? null) : null })) : null,
   };
 }
 

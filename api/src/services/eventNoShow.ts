@@ -190,7 +190,9 @@ async function sendAsk(event: { api_id: string; name: string; start_at: string; 
     return "held";
   }
   const zone = await (await import("./memberTime.js")).memberZone(p.user_id).catch(() => null);
-  const r = await sendExempt({ userId: p.user_id, phoneNumber: p.phone_number, type: "co_event", targetKey: `noshow_ask:${event.api_id}`, messages: [noShowAskText(event)], timezone: zone ?? event.timezone ?? null, respectHours: true, now });
+  // About the event they registered for, happening now: it gets through a held rule (R2) as a requested notice; anything else holding it
+  // leaves noshow_asked_at unset, so the next pass asks again while it's due.
+  const r = await sendExempt({ userId: p.user_id, phoneNumber: p.phone_number, type: "co_event", targetKey: `noshow_ask:${event.api_id}`, messages: [noShowAskText(event)], timezone: zone ?? event.timezone ?? null, respectHours: true, now, cls: "requested", soonAt: event.start_at ? new Date(event.start_at) : null });
   // Sent now, or by an earlier pass that crashed before marking it: either way it was asked.
   if (r.sent || r.reason === "already sent") {
     await pool.query(
