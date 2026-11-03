@@ -244,7 +244,7 @@ const BLOCKER = "my divorce is dragging on";
   check("no reason, no intro: the in-room nudge needs a share reason", /if \(!top\.shareReason\) return false;/.test(src("src/services/eventScoring.ts")));
   check("... the additive reveal too", /r\.shareReason && r\.score >= MATCH_NUDGE_MIN_SCORE/.test(src("src/services/eventGuestMatchHandoff.ts")));
   check("... the network intro too", /re\.share_reason IS NOT NULL AND re\.share_reason <> ''/.test(src("src/services/networkIntroNudge.ts")));
-  check("... the event brief and the pre-arrival count too", /!r\.shareReason\?\.trim\(\)/.test(src("src/services/eventBrief.ts")) && /r\.score >= PRE_ARRIVAL\.strongScore && r\.shareReason/.test(src("src/services/preArrival.ts")));
+  check("... the event brief and the pre-arrival count too", /!r\.shareReason\?\.trim\(\)/.test(src("src/services/eventBrief.ts")) && /return pickNamed\(\{ ranked: p\.ranked/.test(src("src/services/preArrival.ts")));
 }
 
 // ================================================================ no trace text for a prompt with hidden asks (review of #245 x #247)
