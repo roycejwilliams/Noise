@@ -1955,6 +1955,14 @@ export function placeholderCandidate(index: number, c: Candidate, messages: stri
   return c;
 }
 
+// Follow-on bubbles of one send: the gap between them, and the waits before a failed one's retries (3 tries in all). Mutable for tests.
+export const BUBBLE_GAP_MS_DEFAULT = 2000;
+let BUBBLE_GAP_MS = BUBBLE_GAP_MS_DEFAULT;
+const BUBBLE_RETRY_MS: number[] = [1000, 3000];
+export function setBubbleTimingForTests(o: { gapMs: number; retryMs: number[] }): void {
+  BUBBLE_GAP_MS = o.gapMs;
+  BUBBLE_RETRY_MS.splice(0, BUBBLE_RETRY_MS.length, ...o.retryMs);
+}
 async function sendWithLedger(
   c: Candidate,
   person: Person,
@@ -2072,21 +2080,30 @@ async function sendWithLedger(
     client.release();
   }
 
-  // Claim is durable now. Remaining messages are sent outside the
-  // transaction; a failure here can only mean a missed message, never a
-  // resend of what already went out.
+  // Claim is durable now. Remaining messages are sent outside the transaction, in order. A bubble that fails is retried on its own
+  // (BUBBLE_RETRY_MS: at most 3 tries, short backoff), never one before it: each index goes at most once, so a retry can't repeat a
+  // bubble that already went. One that never goes stops the rest (a later bubble alone reads wrong), and what didn't go is recorded.
   for (let i = 1; i < messages.length; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    try {
-      await sendblue.messages.send({ number: person.phoneNumber, content: messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-      delivered.push(messages[i]);
-    } catch (err: any) {
-      console.error(
-        `proactive: sendWithLedger message ${i + 1}/${messages.length} failed for ${person.userId} (ledger already claimed, not retried, ${delivered.length} delivered):`,
-        err?.message ?? err,
-      );
-      break;
+    await new Promise((r) => setTimeout(r, BUBBLE_GAP_MS));
+    let went = false;
+    let lastErr: any = null;
+    for (let attempt = 0; attempt <= BUBBLE_RETRY_MS.length && !went; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, BUBBLE_RETRY_MS[attempt - 1]));
+      try {
+        await sendblue.messages.send({ number: person.phoneNumber, content: messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+        went = true;
+      } catch (err: any) {
+        lastErr = err;
+      }
     }
+    if (went) {
+      delivered.push(messages[i]);
+      continue;
+    }
+    const missed = messages.length - i;
+    console.error(`proactive: sendWithLedger message ${i + 1}/${messages.length} failed for ${person.userId} after ${BUBBLE_RETRY_MS.length + 1} tries (ledger already claimed; ${delivered.length} delivered, ${missed} not sent):`, lastErr?.message ?? lastErr);
+    await recordDecision({ layer: 7, decision: "proactive.bubbleMissed", userId: person.userId, outcome: "skip", action: `send:${c.type}`, proposal: { candidate: c.id, targetKey: c.targetKey, failedBubble: i + 1, of: messages.length, delivered: delivered.length, notSent: missed }, reason: `bubble ${i + 1} of ${messages.length} never went after ${BUBBLE_RETRY_MS.length + 1} tries (${String(lastErr?.message ?? lastErr).slice(0, 80)}); the rest were not sent` }).catch(() => {});
+    break;
   }
   return { sent: true, delivered };
 }
