@@ -20,6 +20,8 @@ export const INTAKE_EXTRACT_MODEL = MODELS.haiku;
 
 // After this many retry messages in a row without capturing identity, Co
 // stops asking the same way and explains in one plain line why it needs it.
+// (Since 2026-11-02 the text door sends none of these: decideIntake still gates what's captured, and the reply asks once,
+// intakeAskFor below.)
 export const INTAKE_MAX_RETRIES = 3;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
@@ -188,6 +190,47 @@ export function decideIntake(
     checks,
     reason: `still missing ${missing.join(" and ")}`,
   };
+}
+
+// ---- ruling A: Cue answers while it collects ---------------------------------
+// Royce, 2026-10-14 ruling A ("the hostage version dies, the requirement stays"), shipped 2026-11-02 (onboarding ruling 3): name
+// and email are still required, but asked once, inside the conversation, while Cue keeps answering. Every text a new member sends
+// is answered by the reply agent; nothing waits on name or email. What the extraction finds is saved whenever it comes. The ask
+// is an instruction to the reply (Cue's own words, never a set line), given until a reply that went out asked it once
+// (users.intake_retries counts asks made, by text or on a call; the retry lines above are no longer sent).
+
+// Pure: what the reply should ask for this turn: the fields not on file, only while nothing has asked yet.
+export function intakeAskFor(o: { knownName: string | null; knownEmail: string | null; partialEmail: string | null; asked: boolean }): ("name" | "email")[] {
+  if (o.asked) return [];
+  const missing: ("name" | "email")[] = [];
+  if (!o.knownName) missing.push("name");
+  if (!o.knownEmail && !o.partialEmail) missing.push("email");
+  return missing;
+}
+
+// Pure: an email they just sent that can't be used, from the gate's checks (the extraction saw one in their words).
+export function intakeCorrection(d: Pick<IntakeDecision, "checks">): "email_taken" | "email_invalid" | null {
+  if (d.checks.some((c) => c.name === "email_not_on_other_account" && !c.pass)) return "email_taken";
+  if (d.checks.some((c) => c.name === "email_format" && !c.pass)) return "email_invalid";
+  return null;
+}
+
+// Pure: the reply's instruction for the ask and any correction. Guidance, never a line to send.
+export function intakeInstruction(ask: ("name" | "email")[], correction: "email_taken" | "email_invalid" | null): string | null {
+  const parts: string[] = [];
+  if (correction === "email_invalid") parts.push("The email they just sent doesn't look complete: after answering anything else they said, say so in a few words, once.");
+  if (correction === "email_taken") parts.push("The email they just sent is already on another account: after answering anything else they said, say so in a few words and ask if there's another one they use.");
+  if (ask.length) {
+    const what = ask.length === 2 ? "full name and email" : ask[0] === "name" ? "full name" : "email";
+    parts.push(`Their ${what} ${ask.length === 2 ? "aren't" : "isn't"} on file yet. Once, after you've answered what they said, ask for their ${what} in a few words, and say why in a few words: it's how Cue sets them up and sends them things like event details. It's never a condition: help them fully either way, don't hold anything back for it, and if they skip it, leave it. When this reply's move is close, feeling or quiet, leave the ask for a later reply.`);
+  }
+  return parts.length ? parts.join(" ") : null;
+}
+
+// Pure: whether a reply that went out asked for what was missing (so it's never asked again).
+export function replyAskedFor(ask: ("name" | "email")[], replyText: string | null | undefined): boolean {
+  if (!ask.length || !replyText) return false;
+  return ask.includes("email") ? /\be-?mail\b/i.test(replyText) : /\bname\b/i.test(replyText);
 }
 
 export function buildIntakeExtractionPrompt(state: Pick<IntakeState, "knownName" | "knownEmail" | "partialEmail">, reply: string | null): string {

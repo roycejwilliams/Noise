@@ -4,7 +4,8 @@
 // THE FIRST HOUR BEFORE THIS (read from the code, origin/co-test 04cee0d):
 //   1. A new number texts. routes/sendblue.ts asks for an invite code (onboardingLines.ts GATE_ASK); a good code gets "You're in"
 //      (naming the member who invited them), how Co works, Co's contact card, and the name and email ask.
-//   2. Name and email (harness/intake.ts) are captured, then Co offers a five-minute call or texting (CALL_OFFER).
+//   2. Name and email (harness/intake.ts) are captured, then Co offers a five-minute call or texting (CALL_OFFER). Since 2026-11-02
+//      (ruling A) the reply answers every text and asks for name and email once inside it; the automatic call offer is gone.
 //   3. "Text is fine" opens the real conversation. From then on every reply is the normal reply agent. While they have fewer than
 //      two findable interests on file, a reply may ask one easy question (services/coldStart.ts), and what they name is saved quietly
 //      with saveAsk. A new member's goal sweep runs as soon as their seeds change, and any find goes out later through the proactive

@@ -23,7 +23,7 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
 
 // The text reply: both prompts (default and flow) introduce the reads as uncertain, for delivery, outranked by their words.
 const reply = src("agent/conversationReply.ts");
-const header = /How \$\{input\.firstName\} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls\. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them\./g;
+const header = /How \$\{(?:input\.firstName|name)\} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls\. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them\./g;
 check("the reply prompt (one since the sweep) says the reads can be wrong, shape delivery only, and are outranked by their words", (reply.match(header) ?? []).length === 1);
 check("the old header that read the score as their words is gone", !/their words, plus a frustration score from calls\):/.test(reply));
 check("the reads are no longer where the reply starts from", !/Start from this\. Decide what they most need/.test(reply));

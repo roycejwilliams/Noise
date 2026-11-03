@@ -695,11 +695,14 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
     // The Hume voice read (services/mediaStreamBridge.ts startVoiceTee), as on ElevenLabs: only where it may run for them (their yes on
     // file and not taken back, or a test number; voiceReadConsent.ts voiceReadOnFor). Read again when the session starts.
     const voiceOn = await import("../services/voiceReadConsent.js").then((m) => m.voiceReadOnFor(o.userId)).catch(() => false);
-    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone) });
+    // A first call (no past call transcript) gets the first-conversation guidance and, in its opening, a line of their own texted words
+    // and the inviter they named themselves (services/firstCall.ts). A failed read is a later call: the four phases, as before.
+    const first = await import("../services/firstCall.js").then((m) => m.firstCallFacts(o.userId)).catch(() => ({ firstCall: false }));
+    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone), first });
     const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, budgetLimited: admitted.budgetLimited }, Date.now(), admitted.id);
     G.markCall(o.callSid, o.userId, "pending");
     // What the opening had to go on (which pieces, never their words): GPT-Live writes the line itself.
-    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason } } }).catch(() => {});
+    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason, firstCall: !!call.opening.firstCall, theirWords: !!call.opening.theirWords, inviter: !!call.opening.inviter } } }).catch(() => {});
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.connect({ action: `${process.env.API_URL}/co/gpt-live/after-stream` }).stream({ url: streamUrl }).parameter({ name: "s", value: id });
     return { twiml: twiml.toString() };
@@ -1229,6 +1232,9 @@ async function processEndedCallInScope(o: {
       captureIntent(user_id, cleanTranscript, { scope: "whole_transcript" })
         .then(() => surfaceNewAsksNow(user_id))
         .catch(() => {});
+      // Their email, when it isn't on file and they gave it on the call (services/callEmail.ts): the intake extraction, then one text
+      // confirming the address. Non-blocking; a member with an email on file is a single read.
+      import("../services/callEmail.js").then((m) => m.captureEmailFromCall(user_id, cleanTranscript)).catch((err: any) => console.error("post-call: email capture failed (non-fatal):", err?.message ?? err));
       // Crisis wording on their side of the call (services/safety.ts): the
       // call prompt tells Co what to do in the moment; this makes sure the
       // team hears about it and offers are held afterward.

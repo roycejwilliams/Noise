@@ -124,8 +124,9 @@ export function knownSections(system: string): string {
   let on = false;
   for (const line of system.split("\n")) {
     if (/^# /.test(line)) on = KNOWN_SECTION.test(line);
-    // The context block's own closing line; the guides after it (variety, coaching, brand) have no heading of their own.
-    if (/^If that's empty, this is your first real conversation/.test(line)) on = false;
+    // The context block's own closing line; the guides after it (variety, coaching, brand) have no heading of their own. (Its wording
+    // since 2026-11-02, when a first call became a real flag, and before.)
+    if (/^If that's empty, (?:you have nothing from before|this is your first real conversation)/.test(line)) on = false;
     if (on) out.push(line);
   }
   return out.join("\n");

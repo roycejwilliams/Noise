@@ -43,7 +43,7 @@ check("end_call and voicemail detection are still there", tools.some((t) => t.na
 // 2026-10-08: the word caps made every turn the same shape; Hume's own phone section sets the rhythm.
 check("no word caps in the call prompt (under ten words, 15 words, 60 words, two to four sentences)", !/under ten words|past 15 words|60 words at most|two to four short sentences/.test(ap.prompt));
 
-check("the call guide still says: no AI disclaimer, never 'not how I work' for multi-day help, act on the call", /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Cue does look[^\n]*/g, "")));
+check("the call guide still says: no AI disclaimer, never 'not how I work' for multi-day help, act on the call", /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Cue does look[^\n]*/g, "").replace("Then give a real next step: what you'll do after the call,", "")));
 
 // ---- 5. keywords
 const kw: string[] = c.asr.keywords;

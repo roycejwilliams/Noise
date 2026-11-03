@@ -92,6 +92,7 @@
     "evals/review/neverLoseText.ts",
     "evals/review/email.ts",
     "evals/onboarding/rules.ts",
+    "evals/onboarding/firstConversation.ts",
     "evals/invites/rules.ts",
     "evals/capture/rules.ts",
     "evals/search/rules.ts",

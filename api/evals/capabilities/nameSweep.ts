@@ -27,7 +27,7 @@ check("the sweep sees through the allowlist: a stray old name next to an allowed
 
 // What a member actually gets, rendered by the code.
 const OL = await import("../../src/services/onboardingLines.js");
-const lines = [...OL.GATE_ASK, ...OL.WRONG_CODE, ...OL.WELCOME, ...OL.HOW_IT_WORKS, ...OL.CARD, ...OL.NAME_EMAIL, ...OL.CALL_OFFER, ...OL.WELCOME_INVITED, ...OL.INVITE_JOINED].map((l) => OL.pickLine([l], { firstName: "Jordan", inviter: "Noor" } as any));
+const lines = [...OL.GATE_ASK, ...OL.WRONG_CODE, ...OL.WELCOME, ...OL.HOW_IT_WORKS, ...OL.CARD, ...OL.NAME_EMAIL, ...OL.WELCOME_INVITED, ...OL.INVITE_JOINED].map((l) => OL.pickLine([l], { firstName: "Jordan", inviter: "Noor" } as any));
 check("onboarding: every line is free of the old names, and the first text says Cue", lines.every((l) => !oldNamesIn(l).length) && OL.GATE_ASK.every((l) => /\bCue\b/.test(l)), lines.filter((l) => oldNamesIn(l).length));
 const { buildCoVCard } = await import("../../src/utils/vcard.js");
 const card = buildCoVCard("+14155550100");

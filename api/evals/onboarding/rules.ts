@@ -2,7 +2,8 @@ import { readFileSync } from "fs";
 // Model-free checks for the approved onboarding lines (services/
 // onboardingLines.ts, 2026-09-19). No API calls, no database:
 //   npx tsx evals/onboarding/rules.ts
-import { CALL_OFFER, CARD, GATE_ASK, HOW_IT_WORKS, NAME_EMAIL, WELCOME, WRONG_CODE, pickLine } from "../../src/services/onboardingLines.js";
+import * as OL from "../../src/services/onboardingLines.js";
+import { CARD, GATE_ASK, HOW_IT_WORKS, NAME_EMAIL, WELCOME, WRONG_CODE, pickLine } from "../../src/services/onboardingLines.js";
 import { GATE_REPLY_BUDGET, decideGateReply, looksAutomated } from "../../src/services/gateGuard.js";
 import { IDENTITY_RULE, stripUngroundedIdentity, ungroundedIdentityClaims } from "../../src/services/identityGuard.js";
 
@@ -16,7 +17,7 @@ const check = (label: string, ok: boolean) => {
   }
 };
 
-const pools = { GATE_ASK, WRONG_CODE, WELCOME, HOW_IT_WORKS, CARD, NAME_EMAIL, CALL_OFFER };
+const pools = { GATE_ASK, WRONG_CODE, WELCOME, HOW_IT_WORKS, CARD, NAME_EMAIL };
 for (const [name, pool] of Object.entries(pools)) {
   check(`${name} has at least 3 options, so onboardings vary`, pool.length >= 3);
   for (const line of pool) {
@@ -30,11 +31,11 @@ for (const [name, pool] of Object.entries(pools)) {
 }
 check("every first text asks for the invite code", GATE_ASK.every((l) => /invite code/i.test(l)));
 check("every first text says who Cue is", GATE_ASK.every((l) => /\bCue\b/.test(l)));
-check("every call offer uses their name", CALL_OFFER.every((l) => l.includes("{name}")));
-check("every call offer keeps texting an option", CALL_OFFER.every((l) => /text/i.test(l)));
-check("every call offer offers now or a time", CALL_OFFER.every((l) => /now/i.test(l) && /time/i.test(l)));
-check("the name is filled in", pickLine(CALL_OFFER, { name: "Jacqueline" }, () => 0).startsWith("Good to meet you, Jacqueline."));
-check("no name falls back to 'there', never a blank", !pickLine(CALL_OFFER, { name: "" }, () => 0).includes(", ."));
+// The automatic call offer modelled on Boardy's is gone (Royce, 2026-11-02, onboarding ruling 3; evals/onboarding/textDoor.ts).
+check("no automatic call offer is left in the onboarding lines", !("CALL_OFFER" in OL) && !Object.values(OL).some((v) => Array.isArray(v) && v.some((l) => /five-minute call|5-minute call/i.test(String(l)))));
+const NAMED = ["Good to meet you, {name}."];
+check("the name is filled in", pickLine(NAMED, { name: "Jacqueline" }, () => 0) === "Good to meet you, Jacqueline.");
+check("no name falls back to 'there', never a blank", pickLine(NAMED, { name: "" }, () => 0) === "Good to meet you, there.");
 const seen = new Set([0, 0.34, 0.67, 0.999].map((r) => pickLine(WELCOME, {}, () => r)));
 check("every option can be picked", seen.size === WELCOME.length);
 

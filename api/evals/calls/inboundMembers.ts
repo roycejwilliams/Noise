@@ -22,7 +22,8 @@ const guest = await G.inboundCallMember("+14155550102", db({ ...member, id: "u-g
 check("a partner-night guest (texted the door QR, never a member) is declined like an unknown number", guest.userId === null && /not a member/.test(guest.why ?? ""));
 check("an applicant whose code isn't verified is declined", (await G.inboundCallMember("+14155550103", db({ ...member, invite_verified: null }))).userId === null);
 check("an archived account is declined", (await G.inboundCallMember("+14155550104", db({ ...member, archived_at: new Date() }))).userId === null);
-check("a member still in intake is declined (texts finish intake first, as on texts)", (await G.inboundCallMember("+14155550105", db({ ...member, identity_captured: false }))).userId === null);
+// Ruling A (2026-11-02): an invited member whose name or email isn't on file yet is a member; the first call asks for the email once.
+check("an invited member without name or email on file yet is admitted (ruling A: never a condition)", (await G.inboundCallMember("+14155550105", db({ ...member, identity_captured: false }))).userId === "u-member");
 check("no account, or no caller number: declined", (await G.inboundCallMember("+14155550106", db(null))).userId === null && (await G.inboundCallMember(null, db(member))).userId === null);
 const route = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
 const handler = route.slice(route.indexOf('"/incoming-call"'), route.indexOf("registerElevenLabsCall({", route.indexOf('"/incoming-call"')));
