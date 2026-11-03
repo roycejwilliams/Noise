@@ -23,6 +23,7 @@ import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from ".
 import type { CoverageAssessment } from "./profileExtraction.js";
 import type { EmotionTarget, Intensity, TextEmotion, Valence } from "../harness/emotion.js";
 import type { TurnContext } from "./turnContext.js";
+import { exchangeAddendum, parseExchangeRead, type ExchangeBase, type ExchangeRead } from "./exchangeRecord.js";
 
 // What Co's reaction says it is doing. Meanings, not scripts: the read picks
 // the one that fits, code sends only these.
@@ -69,6 +70,9 @@ export type TurnRead = {
   // about to do (Royce, 2026-09-29, from Instinct); null for most messages.
   ack: string | null;
   coverage: CoverageAssessment | null;
+  // The move against the whole exchange (services/exchangeRecord.ts): what "that" meant, what they already answered, what they closed,
+  // and the move. Null when the read had no record to work from, or gave no move.
+  exchange?: ExchangeRead | null;
 };
 
 const MODES: Mode[] = ["sharing", "reacting", "asking", "logistics", "feedback", "planning", "small_talk"];
@@ -122,7 +126,7 @@ ${topics}`;
 
 const str = (v: unknown, n: number) => (typeof v === "string" && v.trim() && v.trim().toLowerCase() !== "null" ? v.trim().slice(0, n) : null);
 
-export function parseTurnRead(obj: any, sentNames: string[]): Omit<TurnRead, "latencyMs"> {
+export function parseTurnRead(obj: any, sentNames: string[], record: ExchangeBase | null = null): Omit<TurnRead, "latencyMs"> {
   const router = parseRouterOutput(obj);
   const mode: Mode = MODES.includes(obj?.mode) ? obj.mode : "asking";
   const dots: Dot[] = (Array.isArray(obj?.dots) ? obj.dots : [])
@@ -162,6 +166,7 @@ export function parseTurnRead(obj: any, sentNames: string[]): Omit<TurnRead, "la
     asksForList: obj?.asks_for_list === true,
     ack: mode === "small_talk" ? null : parseAck(obj?.ack),
     coverage: Array.isArray(obj?.missing) ? { missing_topics: topicList(obj.missing), fresh_topics: topicList(obj?.covered_now), ready_to_summarize: false } : null,
+    exchange: parseExchangeRead(obj, record),
   };
 }
 
@@ -169,7 +174,7 @@ export async function readTurn(
   routeInput: RouteInput,
   ctx: Pick<TurnContext, "asks" | "threads" | "offersThisWeek" | "sent"> | null,
   priorContext: string | null,
-  opts: { model?: string; reactions?: string | null } = {},
+  opts: { model?: string; reactions?: string | null; record?: ExchangeBase | null } = {},
 ): Promise<TurnRead> {
   const model = opts.model ?? ROUTER_MODEL;
   const started = Date.now();
@@ -178,11 +183,11 @@ export async function readTurn(
     maxOutputTokens: 4000,
     providerOptions: !model.startsWith("claude-haiku") ? { anthropic: { effort: "low" } } : undefined,
     experimental_telemetry: { isEnabled: true, functionId: "readTurn" },
-    prompt: buildRouterPrompt(routeInput) + turnReadAddendum(ctx, priorContext) + reactionsLine(opts.reactions ?? null),
+    prompt: buildRouterPrompt(routeInput) + turnReadAddendum(ctx, priorContext) + exchangeAddendum(opts.record) + reactionsLine(opts.reactions ?? null),
   });
   const json = extractFirstJsonObject(text.replace(/```(?:json)?/g, ""));
   if (!json) throw new Error(`readTurn returned no JSON: ${text.slice(0, 200)}`);
-  return { ...parseTurnRead(JSON.parse(json), (ctx?.sent ?? []).map((s) => s.name)), latencyMs: Date.now() - started };
+  return { ...parseTurnRead(JSON.parse(json), (ctx?.sent ?? []).map((s) => s.name), opts.record ?? null), latencyMs: Date.now() - started };
 }
 
 // When they ask what Co is: its own description is what's true, whatever an

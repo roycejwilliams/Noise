@@ -394,6 +394,19 @@ export type ThinkOptions = {
   carry?: string[] | null;
   onCapped?: (unsaid: string[]) => void;
   onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
+  // The whole exchange for this call's member (services/exchangeRecord.ts loadCallExchange, cached per call): its lines go in the turn's
+  // note and its facts hold what the answer may say (harness/moveCheck.ts callSentenceMiss). Absent: neither.
+  exchange?: ((call: LiveCall) => Promise<import("./exchangeRecord.js").ExchangeRecord | null>) | null;
+};
+// The call's record, read at most once a minute per call (a turn never waits on more than one read of it).
+const exchangeCache = new Map<string, { at: number; p: Promise<import("./exchangeRecord.js").ExchangeRecord | null> }>();
+export const cachedCallExchange = (call: LiveCall, now = Date.now()): Promise<import("./exchangeRecord.js").ExchangeRecord | null> => {
+  for (const [k, v] of exchangeCache) if (now - v.at > 10 * 60_000) exchangeCache.delete(k);
+  const hit = exchangeCache.get(call.callKey);
+  if (hit && now - hit.at < 60_000) return hit.p;
+  const p = import("./exchangeRecord.js").then((X) => X.loadCallExchange(call.userId)).catch(() => null);
+  exchangeCache.set(call.callKey, { at: now, p });
+  return p;
 };
 // voiceLine: the live voice read's line for this turn (services/mediaStreamBridge.ts voiceReadLineFor, through routes/callLlm.ts
 // voiceLineForTurn), to Claude only, never to GPT-Live; runCallLlm puts it after their words and drops it on a safety call.
@@ -410,16 +423,21 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   const safety0 = safetyCall(req);
   const voiceRead = call.voiceOn && voiceLine ? await voiceLine(call.callKey, req).catch(() => null) : null;
   // A safety turn runs no helpers: nothing is built, so nothing can slow or fail it.
-  const tools = !safety0 && o.tools ? await o.tools(call, req).catch(() => null) : null;
+  // The tools and the whole exchange's record, read together. Neither on a safety turn: nothing slows or holds a safety answer.
+  const [tools, exchange] = await Promise.all([
+    !safety0 && o.tools ? o.tools(call, req).catch(() => null) : Promise.resolve(null),
+    !safety0 && o.exchange ? o.exchange(call).catch(() => null) : Promise.resolve(undefined),
+  ]);
   // After their words, past the cache breakpoint (runCallLlm turnNotes): the call's system prompt stays the same every turn. Never the
   // cap note on a safety turn: nothing pulls it back to an earlier answer.
-  const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : ""].filter(Boolean);
+  const X = exchange ? await import("./exchangeRecord.js") : null;
+  const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : "", X ? X.callTurnNote(exchange) ?? "" : ""].filter(Boolean);
   const streamed = !!onSentence && !safety0 && !callClosing(req);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
   const ran: string[] = [];
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange } : {}), onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") {
       text += d.content;

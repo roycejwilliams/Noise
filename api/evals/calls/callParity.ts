@@ -157,7 +157,7 @@ check("#343: buildCallKnowledge passes the thread to the summary and to the audi
   check("#349/#350: a GPT-Live delegation offers the thinking end_call and nothing else: no helper runs mid-call", (req.tools ?? []).map((t) => t.function.name).join(",") === "end_call");
   // Since #365 the call brain has Cue's helpers, and only through the one guard: buildCallTools over the texting tools (guardTools), the
   // GPT-Live list, never on a safety turn (evals/calls/gptLiveHelpers.ts runs them).
-  check("#349/#350: …and the call brain's tools come only from the guarded builder (GPT-Live's list), never on a safety turn", /runCallLlm\(req, \{ stream: \(r\) => upstream\(r, call\.userId\), clean: true, tools, jobClaims: true,/.test(src("services/gptLive.ts")) && /const tools = !safety0 && o\.tools \?/.test(src("services/gptLive.ts")) && /T\.buildCallTools\(\{[^\n]*only: C\.liveCallToolNames\(\), guide: LIVE_TOOLS_GUIDE \}\)/.test(src("services/gptLive.ts")));
+  check("#349/#350: …and the call brain's tools come only from the guarded builder (GPT-Live's list), never on a safety turn", /runCallLlm\(req, \{ stream: \(r\) => upstream\(r, call\.userId\), clean: true, tools, jobClaims: true,/.test(src("services/gptLive.ts")) && /!safety0 && o\.tools \? o\.tools\(call, req\)/.test(src("services/gptLive.ts")) && /T\.buildCallTools\(\{[^\n]*only: C\.liveCallToolNames\(\), guide: LIVE_TOOLS_GUIDE \}\)/.test(src("services/gptLive.ts")));
   check("#349/#350: the proxy's call toolset is the texting tools wrapped by the same guard (toolGuard.ts)", /createConversationTools\(\{/.test(src("services/callTools.ts")) && /guardTools\(tools, \{ userId: ctx\.userId/.test(src("agent/conversationTools.ts")));
   decisions.length = 0;
   const runs: string[] = [];

@@ -34,6 +34,9 @@ export type Scene = {
   // The moment read wired the way the text route wires it (routes/sendblue.ts: replyFacts.moment and momentInstruction). Off for the
   // cases recorded before it (their recorded requests carry no moment line).
   withMoment?: boolean;
+  // The whole exchange wired the way the text route wires it (routes/sendblue.ts: the record into the read, its lines into this turn's
+  // instructions, the record to the draft check). Off for the cases recorded before it (their recorded read carries no record).
+  withExchange?: { sent?: { name: string; url: string | null }[]; asks?: string[]; closed?: { label: string; how: "solved" | "dropped" }[] };
 };
 // reacted: Co answered with a reaction move (a tapback, or leaving it at one) instead of a text: Co's choice (tapbacks are quiet).
 export type Reply = { text: string; tools: string[]; checked: string[]; world: string; reacted: boolean };
@@ -81,7 +84,14 @@ export async function reply(s: Scene): Promise<Reply> {
     .filter((l) => s.now.getTime() - l.at.getTime() < 3 * 86_400_000)
     .map((l) => `${l.from === "member" ? "User said" : "Co replied"}: ${l.text}`)
     .join("\n");
-  const read: any = await R.readTurn({ message: s.message, recentConversation: recent, openItems: [] }, null, null).catch(() => null);
+  const X = s.withExchange ? await import("../../../src/services/exchangeRecord.js") : null;
+  const base = X && s.withExchange ? { done: X.doneFrom(recent, s.withExchange.sent ?? []), unresolved: X.unresolvedFrom({ asks: (s.withExchange.asks ?? []).map((text) => ({ text })), closed: s.withExchange.closed ?? [] }), priorMeant: [] } : null;
+  const read: any = await R.readTurn({ message: s.message, recentConversation: recent, openItems: [] }, null, null, base ? { record: base } : {}).catch(() => null);
+  if (X && base) {
+    facts.exchange = { ...base, read: read?.exchange ?? null };
+    const lines = X.recordLines(facts.exchange);
+    if (lines) G.addInstruction(facts, lines);
+  }
   if (read?.aboutCo) G.addInstruction(facts, R.ABOUT_CO_INSTRUCTION);
   const note = R.feedbackInstruction(read?.feedback ?? []);
   if (note) G.addInstruction(facts, note);

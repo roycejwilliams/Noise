@@ -16,6 +16,8 @@ import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.j
 import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
 import { classifyModelFailure, failureLabel, noteModelFailure } from "./modelKeyAlert.js";
 import { plainPunctuation } from "./safetyText.js";
+import { callSentenceMiss } from "../harness/moveCheck.js";
+import type { ExchangeRecord } from "./exchangeRecord.js";
 import { claimHeld, claimKind, emptyClaimState, jobBacked, jobClaimKind, SEND_TALK, type ClaimState, type JobState } from "./callClaims.js";
 // After "texting it to you now" and a send that didn't go: approved copy (Royce, 2026-10-29), spoken by code so it's never missing.
 export const FAILED_SEND_LINE = "That didn't go through, so I'll text it to you right after the call.";
@@ -322,6 +324,10 @@ export type ProxyDeps = {
   // This turn's own notes (no tools this turn, where the last answer stopped): after their words, past the cache breakpoint, like the
   // turn note, so the call's cached prefix is untouched (review of #365).
   turnNotes?: string[];
+  // The whole exchange (services/exchangeRecord.ts), Royce 2026-11-03: a sentence that asks again what they answered (on this call or in
+  // the record), offers again what was already sent, or reopens something they closed is held before it's spoken, and the turn answers
+  // again in its own words (the #365 hold). Undefined: the check is off (the ElevenLabs path, tests that don't pass it).
+  exchange?: ExchangeRecord | null;
 };
 
 // What the member last said, for the safety check on the question rule.
@@ -415,6 +421,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // it started earlier on the call) and, as tools come back, what they started this turn.
   const jobCheck = clean && !voiceOnly && !!deps.jobClaims;
   const jobs: JobState = { thisTurn: 0, corpus: co?.jobs?.corpus ?? "", callJobs: co?.jobs?.callJobs ?? "", onCall: !!co?.jobs?.callJobs.trim(), need: co?.turnFacts?.turnWords || theirLast };
+  // The draft against the whole exchange (harness/moveCheck.ts callSentenceMiss): the call so far as turns, Cue's and theirs.
+  const moveCheck = clean && !voiceOnly && deps.exchange !== undefined;
+  const callTurns = b.messages.slice(0, lastAt + 1).filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ from: m.role === "user" ? ("them" as const) : ("co" as const), text: textOf(m.content ?? "") })).filter((t) => t.text.trim());
   // A job line said before the tool that starts it, in this same reply: held until that tool comes back, then said if the job is real.
   let pendingJob: string[] = [];
   // A send that didn't go couldn't be queued for after the call: nothing may promise it later.
@@ -483,6 +492,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (clean && insistsAfterPushback(theirLast, sentence)) {
       deps.onDropped?.(sentence, "insists they said something they say they didn't");
       return null;
+    }
+    if (moveCheck && !safetyTurn && !SAFETY_LINE.test(plainS) && !SAFETY_TURN.test(plainS)) {
+      const miss = callSentenceMiss(sentence, { rec: deps.exchange ?? null, callTurns: [...callTurns, ...spokenLines.map((t) => ({ from: "co" as const, text: t }))], delivered: claims.delivered });
+      if (miss) {
+        const why = `move held: ${miss.why}`;
+        deps.onDropped?.(sentence, why);
+        heldWhy.push(why);
+        blanked = true;
+        return null;
+      }
     }
     if (jobCheck && !safetyTurn && !SAFETY_LINE.test(plainS)) {
       const jk = jobClaimKind(sentence);

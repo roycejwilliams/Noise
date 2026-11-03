@@ -104,6 +104,9 @@ export type ConversationToolContext = {
   callKey?: string | null;
   // Whether the reply loop has a step and the seconds left for a redraft (agent/conversationReply.ts); unset means it has.
   redraftLeft?: () => boolean;
+  // The whole exchange and this turn's move (services/exchangeRecord.ts): a draft that misses the move, or re-sends, re-asks, points
+  // "that" at the wrong thing or reopens something closed, gets one rewrite toward the move (harness/moveCheck.ts).
+  exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null;
   // The reaction already put on their text this turn (routes/sendblue.ts ack),
   // so Co can leave it at that (leaveItAtReaction).
   ackSent?: string | null;
@@ -321,7 +324,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
@@ -479,6 +482,22 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // A note to itself ("(no further message needed)") is never the reply while nothing has answered them yet (10-17: it was, and
         // the fallback line went out).
         if (/^\s*\([^)]*\)\s*$/.test(draft) && !answeredSent().length) return stillOwed(), { ok: false, error: "Not sent: that's a note to yourself, and nothing has answered them yet (a holding line isn't an answer). Write the reply to them and call sendReply again." };
+        // The draft against the move and the whole exchange (harness/moveCheck.ts, Royce 2026-11-03): one rewrite toward the move, in
+        // Cue's own words, when it re-sends or re-offers what's done, re-asks what they told, points "that" at the wrong thing, reopens
+        // something they closed, or adds a question after they closed. Once a turn and only while a redraft can follow; never on a turn
+        // that touches their safety. Past that, the draft goes on to the fact check as before.
+        if (ctx.exchange?.read && canRedraft && !state.moveNudged && !ctx.safetyConcern && !state.safetyFlagged) {
+          const { moveMisses, moveRedraftNote } = await import("../harness/moveCheck.js");
+          const misses = moveMisses(draft, ctx.exchange);
+          if (misses.length) {
+            state.moveNudged = true;
+            if (!ctx.dryRun) {
+              const { recordDecision } = await import("../harness/core.js");
+              await recordDecision({ layer: 3, decision: "reply.move_check", userId: ctx.userId, outcome: "skip", action: misses.map((m) => m.name).join(","), proposal: { move: ctx.exchange.read.move, misses: misses.map((m) => m.name) } }).catch(() => {});
+            }
+            return stillOwed(), { ok: false, error: moveRedraftNote(misses, ctx.exchange) };
+          }
+        }
         // Finds waiting and a redraft still possible: a reply the check cuts to almost nothing comes back empty, for the redraft below.
         // The window is read again when the check decides (review of #228): the check's own redrafts can outlast it, and an empty
         // reply then asks for a redraft that can't happen, so the member got the fallback line. Past it, the check's honest line goes.
@@ -612,6 +631,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async ({ theirWords }) => {
         if (state.sentMessages.includes("[sent Cue's contact card]")) return { ok: true, note: "Already sent this turn." };
+        // Already sent in this exchange and not asked for again (services/exchangeRecord.ts: the done list and the turn read's asks_again):
+        // not sent twice. Asked for again, it goes, and the reply says it's the same card again.
+        const cardDone = ctx.exchange?.read ? ctx.exchange.done.find((d) => d.kind === "card") : undefined;
+        if (cardDone && ctx.exchange!.read!.again !== cardDone.id) {
+          notDone("Cue's contact card was not sent again: it already went to them in this exchange and they didn't ask for it again.");
+          return { ok: false, error: `Not sent: your card already went to them in this exchange (${cardDone.id}) and they didn't ask for it again. Don't send it; answer what they said.` };
+        }
         if (!process.env.CO_VCARD_URL) {
           notDone("Cue's contact card was not sent (it isn't available right now).");
           return { ok: false, error: "The card isn't available right now, so it was NOT sent. Tell them plainly." };
