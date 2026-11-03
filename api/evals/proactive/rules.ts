@@ -246,7 +246,8 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
 // sent one tier's offer three seconds before the sweep queued the others).
 {
   const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
-  check("the dispatch cron is not on the sweep minutes", jobs.includes('cron.schedule("15,45 * * * *", runDispatch)') && !/cron\.schedule\("\*\/15 \* \* \* \*", async \(\) => \{\s*if \(dispatchRunning\)/.test(jobs));
+  // Every 15 minutes since the one door (harness/door.ts, 2026-11-02), still off the hour and the half hour.
+  check("the dispatch cron is not on the sweep minutes", jobs.includes('cron.schedule("5,20,35,50 * * * *", runDispatch)') && !/cron\.schedule\("\*\/15 \* \* \* \*", async \(\) => \{\s*if \(dispatchRunning\)/.test(jobs));
   check("each surfacing sweep dispatches when it finishes queueing", (jobs.match(/await runDispatch\(\);/g) ?? []).length === 2);
 }
 

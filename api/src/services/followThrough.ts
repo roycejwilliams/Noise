@@ -182,7 +182,7 @@ export function markOwnSends(sends: Sent[], ledger: string[], clean: (t: string)
 // taskId: the task asking. Its own texts from earlier wakes (proactive_sends keyed task:<id>:...) are marked forThis, so a delivery
 // it already made keeps its promise on a later wake too, and is never sent a second time.
 export async function sendsSince(userId: string, since: Date, taskId?: number | null): Promise<Sent[]> {
-  const [texts, facts, mine] = await Promise.all([
+  const [texts, facts, mine, waiting] = await Promise.all([
     // The after-call confirmation (services/callFollowThrough.ts) and a miss warning (taskTurn.ts, type task_window) say the thing is coming; neither is the thing itself.
     pool.query(
       `SELECT om.content, om.sent_at FROM outbound_messages om WHERE om.user_id = $1 AND om.sender = 'co' AND om.sent_at > $2
@@ -199,6 +199,10 @@ export async function sendsSince(userId: string, since: Date, taskId?: number | 
     taskId != null
       ? pool.query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND starts_with(target_key, $2) AND sent_at > $3 LIMIT 50`, [userId, `task:${taskId}:`, since])
       : Promise.resolve({ rows: [] as any[] }),
+    // Its texts waiting at the door for Cue's next message (harness/door.ts): handed over, so the task never writes them a second time.
+    taskId != null
+      ? pool.query(`SELECT payload->'messages' AS messages, created_at FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND starts_with(target_key, $2) AND created_at > $3 LIMIT 20`, [userId, `task:${taskId}:`, since]).catch(() => ({ rows: [] as any[] }))
+      : Promise.resolve({ rows: [] as any[] }),
   ]);
   // A task send of several messages is one row, its messages joined by a blank line (harness/proactive.ts sendExempt). The ledger keeps
   // them as drafted; outbound_messages keeps what went out after the send wrapper's cleanup (services/sendblue.ts cleanCoMessage), so
@@ -209,6 +213,13 @@ export async function sendsSince(userId: string, since: Date, taskId?: number | 
     mine.rows.map((r: any) => String(r.message ?? "")),
     clean,
   );
+  for (const w of waiting?.rows ?? []) {
+    const msgs: unknown[] = Array.isArray(w.messages) ? w.messages : [];
+    for (const m of msgs) {
+      const text = String(m ?? "");
+      if (text.trim()) out.push({ at: new Date(w.created_at), text, kind: /^\s*https?:\/\/\S+\s*$/.test(text) ? "link" : "text", forThis: true });
+    }
+  }
   for (const f of facts.rows) {
     const label = String(f.object_label ?? "");
     const kind: Sent["kind"] = /^a document\b/i.test(label) ? "document" : f.url || /https?:\/\//.test(label) ? "link" : "text";

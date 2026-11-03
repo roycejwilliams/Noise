@@ -74,7 +74,14 @@ export type CallState = {
   // The member's own rules for this call (harness/notifyGate.ts), read by gatherCallState for the kind it will be decided as. Missing:
   // not read (older pure cases), nothing held by one.
   memberRule?: (GateCheck & { retryAt?: Date }) | null;
+  // The pick's budget for a call Cue starts on its own (harness/proactive.ts callBudgetCheck: the spacing after a text Cue sent first),
+  // read by gatherCallState. Missing: not read (older pure cases), nothing held by it.
+  pickerBudget?: GateCheck | null;
 };
+
+// Calls Cue starts on its own, which count toward the same budget as the texts it starts (Royce, 2026-11-02, notification grouping).
+// A call they asked for, now or booked, is theirs.
+export const CUE_STARTED_CALLS: ReadonlySet<CallAuthKind> = new Set<CallAuthKind>(["checkin_cadence", "auto_intake"]);
 
 // When the call being placed was booked (scheduled_calls.created_at); unreadable: the start of time, so every rule still holds it.
 async function bookedAt(userId: string, id: string | null): Promise<Date> {
@@ -185,6 +192,8 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
   // The member's own rules ("no calls", "not before 10", "nothing this week"): held like any send (harness/notifyGate.ts). A call they
   // ask for right now is their reply, never held.
   if (state.memberRule && kind && CALL_CLASS[kind] !== "reply") checks.push(state.memberRule);
+  // One budget with texts: a call Cue starts on its own waits the spacing after a text Cue sent first.
+  if (state.pickerBudget && kind && CUE_STARTED_CALLS.has(kind)) checks.push(state.pickerBudget);
 
   const gapMin = RECENT_CALL_MINUTES[kind ?? "auto_intake"];
   const sinceLastMs = state.lastCallAt ? now.getTime() - state.lastCallAt.getTime() : Infinity;
@@ -362,6 +371,7 @@ export async function gatherCallState(
     evidence,
     // A call they booked is their own exception to the rules they had when they booked it (Royce, 2026-11-02): only a rule set after
     // the booking holds it, and then it's moved to when the rule allows it (jobs/scheduledCall.ts), never failed.
+    pickerBudget: kind && CUE_STARTED_CALLS.has(kind) ? await import("./proactive.js").then(async (P) => P.callBudgetCheck({ now, sends: await P.pickerSends(userId) })).catch(() => ({ name: "picker_spacing", pass: false, reason: "couldn't read what Cue sent today" })) : null,
     memberRule: kind ? await import("./notifyGate.js").then(async ({ memberRuleGate }) => memberRuleGate(pool, { userId, now, cls: CALL_CLASS[kind], channel: "call", rulesAfter: kind === "scheduled_call" ? await bookedAt(userId, requested?.scheduledCallId ?? null) : null })) : null,
   };
 }

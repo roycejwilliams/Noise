@@ -210,7 +210,9 @@ export function registerJobs(io: Server) {
   // calls runDispatch itself when it finishes queueing. Dispatching at the same
   // minute sent one tier's offer three seconds before the sweep had queued the
   // others (2026-09-21), so the offers of every tier could not go out together.
-  cron.schedule("15,45 * * * *", runDispatch);
+  // Every 15 minutes since the one door (harness/door.ts, 2026-11-02): a ready candidate waits GATHER_MINUTES for others, so it goes
+  // 20-35 minutes after it arrived instead of up to an hour.
+  cron.schedule("5,20,35,50 * * * *", runDispatch);
 
   // Texts whose turn never finished, or whose retry a restart cut off, run
   // again from their saved copy when it's safe (routes/sendblue.ts

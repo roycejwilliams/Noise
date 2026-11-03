@@ -17,7 +17,7 @@ import { localHourOk, nextLocalHour, RULES, sendExempt, type ExemptType } from "
 import { dropStaleAck } from "./speakable.js";
 import { recordDecision } from "../harness/core.js";
 
-export type AfterKind = "relay" | "reminder" | "network_intro_ask" | "event_direct_ask" | "call_confirm";
+export type AfterKind = "relay" | "reminder" | "network_intro_ask" | "event_direct_ask" | "call_confirm" | "co_event_announce";
 export type AfterSend = { kind: AfterKind; payload: Record<string, unknown> };
 export type SendOutcome = "sent" | "skipped" | "failed";
 
@@ -116,6 +116,10 @@ export const afterHandlers: AfterHandlers = {
   call_confirm: async (p, outcome) => {
     await (await import("./callFollowThrough.js")).afterConfirmSent(p as any, outcome);
   },
+  // Cue's own event announcement, sent by the pick from the door (harness/door.ts): its record, or given up.
+  co_event_announce: async (p, outcome) => {
+    await (await import("./coEventAnnouncement.js")).afterAnnounced(p as any, outcome);
+  },
 };
 
 // Whether an event has ended by `now`: its end (introConsent.effectiveEnd), or its room closed for the night, read in one
@@ -151,7 +155,18 @@ export type DeferredDeps = {
   handlers: AfterHandlers;
   // Tests: the judge for a Co-initiated text marked by a correction (default: judgeAfterCorrection, one Haiku call).
   judge?: CorrectionJudge;
+  // Tests: the door's enqueue (default: harness/door.ts enterDoor).
+  door?: typeof import("../harness/door.js").enterDoor;
 };
+
+// Pure: a held row the door takes when it comes due instead of sending it (harness/door.ts, Royce 2026-11-02: "held work released by
+// the gate flows back through the picker, never as a burst"): an intro ask, a task's results, Cue's own event announcement. What's
+// tied to a time (a reminder they set, a call reminder, a window warning, a missed call, an event change, a relayed message, the
+// after-call confirmation) still goes when due.
+export function doorTakesRow(row: Pick<DeferredRow, "type" | "after_kind" | "target_key">): boolean {
+  if (row.after_kind === "network_intro_ask") return true;
+  return !row.after_kind && (row.type === "task_update" || row.type === "co_event") && !/^reminder:/.test(String(row.target_key ?? ""));
+}
 
 // One correction a queued text is re-read against (services/whatCoKnows.ts recheckMark).
 export type Correction = { ref: string; was: string; now: string };
@@ -251,6 +266,22 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     else if (row.after_kind === "network_intro_ask" && (await (await import("./networkIntroNudge.js")).networkAskStale(String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? "")))) result = { sent: false, reason: "no longer valid" };
     // A call reminder whose call is no longer pending and still ahead is stale: dropped, never sent after the call.
     else if (row.type === "call_reminder" && !(await callStillAhead(String(row.target_key), now))) result = { sent: false, reason: "no longer valid" };
+    else if (doorTakesRow(row)) {
+      // Into the door, with what it means for the record: the pick sends it with Cue's next message (or drops it, and its after step
+      // hears so). This row is done: handed over, never sent from here.
+      const enter = deps.door ?? (await import("../harness/door.js")).enterDoor;
+      const H = await import("../harness/door.js");
+      const cls = row.type === "co_event" || row.after_kind === "network_intro_ask" ? ("unsolicited" as const) : ("requested" as const);
+      const q = await enter({ userId: row.user_id, type: row.type as import("../harness/door.js").DoorType, targetKey: row.target_key, messages, cls, summary: row.after_kind === "network_intro_ask" ? "An intro ask: someone Cue knows would like to meet them" : `A held ${row.type === "co_event" ? "event announcement" : "task result"}`, validUntil: H.doorValidUntil("requested", now, row.timezone), now, intro: row.after_kind === "network_intro_ask", after }).catch((err: any) => ({ queued: false, error: String(err?.message ?? err) }));
+      if (q.queued) {
+        await finish("skipped", "handed to the door: the pick sends it with Cue's next message", null);
+        out.skipped++;
+        await recordDecision({ layer: 7, decision: "proactive.deferredSend", userId: row.user_id, outcome: "act", action: "to_door", proposal: { type: row.type, targetKey: row.target_key, attempts } }).catch(() => {});
+        continue;
+      }
+      // Not taken: an error (retried), or the door already decided this one (sent or dropped there): nothing goes from here.
+      result = { sent: false, reason: (q as { error?: string }).error ? `error: ${(q as { error?: string }).error}` : "no longer valid" };
+    }
     else if (!localHourOk(now, row.timezone)) result = { sent: false, reason: "outside local hours" };
     else {
       result = await deps

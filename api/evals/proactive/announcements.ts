@@ -108,7 +108,7 @@ check("quiet day only: nothing ready, nothing", AN.quietDayOnly([]).length === 0
 check("never carries a stopped-looking line or the generic name ride (not a riding type)", !AR.NOTE_RIDES.has("announcement") && !AR.noteMayRide({ type: "announcement", payload: {} }, false));
 check("never batched into a find bundle", P.pickSiblingOffers(cand({ id: "e", userId: "u", type: "event_offer", targetKey: "e:1" }), [shiftCand("u")]).length === 0);
 const pr = src("harness/proactive.ts");
-check("dispatch: the pick sees announcements only on a quiet day", /const withoutName = nameNotice && ev\.eligible\.length > 1 \? ev\.eligible\.filter\(\(x\) => x\.type !== "name_change"\) : ev\.eligible;/.test(pr) && /const pickable = \(await import\("\.\.\/services\/announcements\.js"\)\)\.quietDayOnly\(withoutName\);/.test(pr) && /choosePick\(pickable,/.test(pr));
+check("dispatch: the pick sees announcements only on a quiet day", /const withoutName = nameNotice && ev\.eligible\.length > 1 \? ev\.eligible\.filter\(\(x\) => x\.type !== "name_change"\) : ev\.eligible;/.test(pr) && /const quiet = \(await import\("\.\.\/services\/announcements\.js"\)\)\.quietDayOnly\(withoutName\);\n  const banded = topBand\(quiet, /.test(pr) && /choosePick\(pickable,/.test(pr));
 check("dispatch: the only thing an announcement claims with it is the rename it carries, and never in a bundle", /if \(!composed && c\.type === "announcement"\) \{\s*const fold = \(await import\("\.\.\/services\/announcements\.js"\)\)\.nameFold\(c, sending, state\.candidates\);/.test(pr) && /if \(fold === "unfoldable"\) \{[\s\S]{0,400}?return;\s*\}\s*if \(fold\) nameRide = fold;/.test(pr));
 
 // ---------------------------------------------------------------- 6. the draft at send time

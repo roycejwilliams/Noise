@@ -230,7 +230,11 @@ try {
     const closes = sqlLog.filter((l) => /^\s*UPDATE co_tasks SET status = \$3/.test(l.sql));
     const holds = sqlLog.filter((l) => /UPDATE co_tasks SET followup = jsonb_set/.test(l.sql));
     const exaCalls = sqlLog.filter((l) => /INSERT INTO web_search_log/.test(l.sql)).length;
-    return { texts: [...texts], closes: closes.map((c) => ({ status: c.p[2], outcome: c.p[3] })), holds: holds.length, exaCalls };
+    // A line that doesn't answer their latest message waits at the door for Cue's next message (harness/door.ts): its words, as queued.
+    // One per target key (the stand-in database never returns the inserted row, so the enqueue tries its insert twice).
+    const doorRows = new Map(sqlLog.filter((l) => /INSERT INTO proactive_candidates/.test(l.sql)).map((l) => [String(l.p[2]), l]));
+    const atDoor = [...doorRows.values()].flatMap((l) => (JSON.parse(String(l.p[5] ?? "{}")).messages ?? []) as string[]);
+    return { texts: [...texts, ...atDoor], closes: closes.map((c) => ({ status: c.p[2], outcome: c.p[3] })), holds: holds.length, exaCalls };
   };
   rowsFor = (sql) => (/SELECT u\.first_name, u\.phone_number, cp\.city/.test(sql) ? [{ first_name: "Jordan", phone_number: "+15550100001", city: "San Francisco" }] : []);
   exa = DOWN;

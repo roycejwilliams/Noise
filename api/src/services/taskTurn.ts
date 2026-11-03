@@ -17,6 +17,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
+import { doorValidUntil } from "../harness/door.js";
 import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { capToFinal, isDoorLook, unspendWake } from "./coTasks.js";
@@ -58,7 +59,8 @@ export type TaskTurnDeps = {
   // owed: a text the member is owed (owedText) goes out exempt; any other waits on the pacing every Co-started text does, and a
   // held one says when it's worth another look (retryAt).
   // key: a fixed send key (a slip text's, so it can only go once); otherwise each send gets its own.
-  send: (messages: string[], o?: { owed: boolean; key?: string }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date }>;
+  // queued: it waits at the door for Cue's next message (harness/door.ts), counted as texted here; the pick sends it.
+  send: (messages: string[], o?: { owed: boolean; key?: string }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date; queued?: boolean }>;
   // The slip exception's one read (goalOwnership.ts pieceNeededFor); a test stands in for it.
   pieceNeeded?: (piece: string, goalTitle: string, m: { date: string; words: string }) => Promise<{ needed: boolean; read: boolean }>;
   markTexted: () => Promise<void>;
@@ -210,6 +212,9 @@ export function taskKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying" 
 // Co hands work to a task (harness/proactive.ts payload first), hold_until only when the daily pick picks nothing, and the
 // unanswered count is the proactive lanes' pause. Read here, any of them would tell the task to hold the very result it owes.
 // What's about them stays: a safety hold, a hard time, frustration with Co, the kinds they let pass.
+// The task's own note when its text waits at the door (harness/door.ts) instead of going this minute.
+export const QUEUED_NOTE = "Queued for Cue's next message to them (it goes with whatever else is ready)";
+
 export function taskRestraint(r: Restraint | null): Restraint | null {
   return r ? { ...r, holdUntil: null, spaceUntil: null, unanswered: { ...r.unanswered, count: 0 } } : null;
 }
@@ -460,9 +465,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           if (whole) return { ok: false, error: whole };
           const sent = await deps.send(messages, { owed: owed || task.source !== "lookout" });
           if (sent.reason === "opted out") optedOut = true;
-          if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
+          if (!sent.sent && !sent.queued) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
           await deps.markTexted();
-          await deps.note(`Texted them ${good.length} thing(s): ${good.map((g) => items.find((i) => i.url === g.url)?.name).join(", ")}${closing ? `, then: ${closing.slice(0, 120)}` : ""}${droppedCaptions.length ? ` (left out: ${droppedCaptions.join("; ")})` : ""}`, null);
+          await deps.note(`${sent.queued ? QUEUED_NOTE : "Texted them"} ${good.length} thing(s): ${good.map((g) => items.find((i) => i.url === g.url)?.name).join(", ")}${closing ? `, then: ${closing.slice(0, 120)}` : ""}${droppedCaptions.length ? ` (left out: ${droppedCaptions.join("; ")})` : ""}`, null);
           texts.push(...messages);
           did.push(`texted them ${good.length} link(s), each with its caption`);
           return { ok: true, sent: messages.join(" / ") };
@@ -508,9 +513,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (chase) return { ok: false, error: `Not sent: ${chase}. Wait for them; their reply wakes this task.` };
         const sent = await deps.send([text], { owed });
         if (sent.reason === "opted out") optedOut = true;
-        if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
+        if (!sent.sent && !sent.queued) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await deps.markTexted();
-        await deps.note(`Texted them: ${text.slice(0, 200)}`, null);
+        await deps.note(`${sent.queued ? `${QUEUED_NOTE}:` : "Texted them:"} ${text.slice(0, 200)}`, null);
         texts.push(text);
         did.push("texted them");
         return { ok: true, sent: text };
@@ -1101,12 +1106,15 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
       // Started from their latest message and still fresh: Cue's answer to them (harness/proactive.ts answersLastText), never held.
       const answers = { askedAt: task.createdAt ? new Date(task.createdAt) : null };
       // A slip text (slipException) has its own fixed key, so the same slip can only ever go once.
+      // One door (harness/door.ts): a result waits for Cue's next message, ranked and gathered with whatever else is ready, unless it
+      // answers their latest message. A slip text (its own key) says a time will be missed: it can't wait, it goes now.
+      const door = o?.key ? undefined : { summary: `${coInitiated ? "A find Cue's own look-out turned up" : "Results of work they asked for"}: ${task.goal.slice(0, 120)}`, validUntil: doorValidUntil(coInitiated ? "unsolicited" : "requested", clock(), zone), taskId: task.id };
       const r = o?.key
         ? await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: o.key, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers })
-        : await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers });
+        : await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers, door });
       const urls = messages.filter((m) => /^https?:\/\//.test(m));
       if (r.sent && urls.length) await recordSentItems(userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
-      return { sent: r.sent, reason: r.reason, retryAt: r.retryAt };
+      return { sent: r.sent, reason: r.reason, retryAt: r.retryAt, queued: !!(r.door && r.queued) };
     },
     markTexted: () => markTexted(userId, task.id),
     unspendWake: () => unspendWake(userId, task.id),

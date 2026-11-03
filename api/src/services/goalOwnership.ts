@@ -810,15 +810,18 @@ export async function runGoalCheckin(task: CoTask, opts: { now?: () => Date } = 
   }
   // The thing they were told would come: owed, so no Co-initiated pacing, but their hours, opt-out and the pause still hold.
   // A check-in by its class (harness/notifyGate.ts): "no check-ins this week" holds it; a hold is retried below like any not-sent.
-  const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:checkin:${goal.id}`, messages: composed.messages, timezone: zone, respectHours: true, now: now(), cls: "checkin" });
-  if (!r.sent) {
+  // Through the door (harness/door.ts): a check-in waits for Cue's next message and ranks last; a reminder they set goes at its time.
+  const door = reminder ? undefined : { summary: `A check-in on their goal: ${String(goal.title ?? "").slice(0, 120)}`, validUntil: (await import("../harness/door.js")).doorValidUntil("checkin", now(), zone), taskId: task.id };
+  const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:checkin:${goal.id}`, messages: composed.messages, timezone: zone, respectHours: true, now: now(), cls: "checkin", door });
+  const queued = !!(r.door && r.queued);
+  if (!r.sent && !queued) {
     const at = new Date(Math.max(now().getTime() + HOUR, nextSendable(now(), zone).getTime()));
     await scheduleTaskAt(userId, task.id, at, task.planNext ?? "Check in");
     await logCommitment("slipped", { userId, taskId: task.id, goalId: goal.id, why: `not sent (${r.reason ?? "unknown"}); next try ${localStamp(at, zone)}` });
     return { action: `held: ${r.reason ?? "not sent"}` };
   }
   await pool.query(`UPDATE co_tasks SET texts_sent = texts_sent + 1, last_texted_at = NOW(), awaiting_reply = $3 WHERE user_id = $1 AND id = $2`, [userId, task.id, composed.asked.length > 0]);
-  await closeTask(userId, task.id, "done", reminder ? "Reminder sent." : `Checked in${composed.didNothing ? ", and said plainly nothing was done yet" : ""}${composed.asked.length ? `; asked about ${composed.asked.join(", ").slice(0, 120)}` : ""}.`);
+  await closeTask(userId, task.id, "done", reminder ? "Reminder sent." : `${queued ? "Check-in queued for Cue's next message" : "Checked in"}${composed.didNothing ? ", and said plainly nothing was done yet" : ""}${composed.asked.length ? `; asked about ${composed.asked.join(", ").slice(0, 120)}` : ""}.`);
   await recordDecision({ layer: 7, decision: "goal.checkin", userId, outcome: "act", action: reminder ? "reminder" : "checkin", proposal: { goalId: goal.id, taskId: task.id, didNothing: composed.didNothing, asked: composed.asked, messages: composed.messages } }).catch(() => {});
   await closeGoalIfSettled(userId, goal.id).catch(() => false);
   return { action: "sent" };

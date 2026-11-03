@@ -157,8 +157,8 @@ const told = (outbox: { content: string }[], phone: string) => outbox.filter((m)
 // The dispatcher's wiring (harness/proactive.ts): it never competes for the pick, rides on the stop-note terms, and its key is
 // claimed inside the send lock.
 const pr = src("harness/proactive.ts");
-check("dispatch: never in the pick while anything else is ready", /const withoutName = nameNotice && ev\.eligible\.length > 1 \? ev\.eligible\.filter\(\(x\) => x\.type !== "name_change"\) : ev\.eligible;/.test(pr) && /const pickable = \(await import\("\.\.\/services\/announcements\.js"\)\)\.quietDayOnly\(withoutName\);/.test(pr) && /choosePick\(pickable,/.test(pr));
-check("dispatch: rides only where a stopped-looking line may, never with one, never in a composed bundle", /if \(!composed && !rideNote && nameNotice && c\.type !== "name_change"\)/.test(pr) && /A\.noteMayRide\(c, heldForMood\(member\.state\)\) && !N\.carriesNameChange/.test(pr));
+check("dispatch: never in the pick while anything else is ready", /const withoutName = nameNotice && ev\.eligible\.length > 1 \? ev\.eligible\.filter\(\(x\) => x\.type !== "name_change"\) : ev\.eligible;/.test(pr) && /const quiet = \(await import\("\.\.\/services\/announcements\.js"\)\)\.quietDayOnly\(withoutName\);\n  const banded = topBand\(quiet, /.test(pr) && /choosePick\(pickable,/.test(pr));
+check("dispatch: rides only where a stopped-looking line may, never with one, never in a composed bundle", /if \(!composed && !asWritten && !rideNote && nameNotice && c\.type !== "name_change"\)/.test(pr) && /A\.noteMayRide\(c, heldForMood\(member\.state\)\) && !N\.carriesNameChange/.test(pr));
 check("send: the riding key is claimed inside the lock, and the text goes without the line if it was taken", pr.indexOf("The riding note's key, claimed first") > pr.indexOf("pg_advisory_xact_lock(hashtext($1))`, [`proactive:${person.userId}`]") && /else messages = ride\.without;/.test(pr));
 // The queue is the update announcements' (services/announcements.ts RENAME), the same SQL it always ran.
 const ncSrc = src("services/announcements.ts");
