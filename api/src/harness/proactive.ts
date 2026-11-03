@@ -60,6 +60,7 @@ import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services
 import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass, isRelayKey } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
+import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, type ClosedSet, type ClosedSubject } from "./closedSubject.js";
 import { attentionChecks, deliveredItems, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
 
 // How soon a check-in whose feeling read couldn't answer is tried again (harness/attention.ts feelingCheck infra).
@@ -748,6 +749,12 @@ export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType
     // Owed is a requested delivery (R1: never a reply). ruleOnly: a send claimed only for the member's rule and the count (a missed-call
     // follow-up, a PDF that follows its text): no Co-initiated pacing.
     const cls: SendClass = o.cls ?? (o.owed ? "requested" : "unsolicited");
+    // What it serves, read inside the lock (harness/closedSubject.ts): a look-out's document for a task they dropped never goes.
+    const closedHit = await heldSendClosed(client, { userId: o.userId, type: o.type, targetKey: o.targetKey, cls, stage: "claim_lock" });
+    if (closedHit) {
+      await client.query("ROLLBACK");
+      return { ok: false, reason: closedReason(closedHit) };
+    }
     const { failed, sends } = o.owed || o.ruleOnly ? { failed: [] as GateCheck[], sends: [] as SendRecord[] } : await coInitiatedHold(client, { userId: o.userId, timezone: o.timezone, now, kind: o.kind });
     const rule = await memberRuleGate(client, { userId: o.userId, now, cls, channel: "text" });
     if (!rule.pass) failed.push(rule);
@@ -2070,7 +2077,7 @@ async function sendWithLedger(
   extras: { candidate: Candidate; messages: string[] }[] = [],
   // A note riding in this text with its own once-only key (the name notice): claimed here, inside the lock, or the text goes without it.
   ride: { candidate: Candidate; without: string[] } | null = null,
-): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[]; placeholderOf?: Candidate }> {
+): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[]; placeholderOf?: Candidate; closed?: { candidate: Candidate; hit: ClosedSubject }[] }> {
   // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused before anything is claimed, and logged.
   const placeholder = sentinelIn([...messages, ...extras.flatMap((e) => e.messages)]);
   if (placeholder) {
@@ -2123,6 +2130,14 @@ async function sendWithLedger(
     if (!g.ok) {
       await client.query("ROLLBACK");
       return { sent: false, failed: g.failed };
+    }
+    // Read once more inside the lock (harness/closedSubject.ts): a close that landed while this was drafted stops it here. Nothing in
+    // this send goes; the caller drops what closed, and what's still open waits for the next pick.
+    const inThisSend = [c, ...extras.map((e) => e.candidate)];
+    const closedNow = closedAmong(inThisSend, await closedInLock(client, person.userId, inThisSend));
+    if (closedNow.length) {
+      await client.query("ROLLBACK");
+      return { sent: false, failed: [{ name: "subject_closed", pass: false, reason: closedNow.map((f) => `${f.candidate.id}: ${f.hit.ref.kind} ${f.hit.ref.id} closed (${f.hit.how})`).join("; ") }], closed: closedNow };
     }
     // The riding note's key, claimed first: if another send already told them (two dispatches at once), this text goes without it.
     if (ride) {
@@ -2345,6 +2360,13 @@ export async function sendExempt(opts: {
     const lastIn = await loadLastInbound(client, opts.userId).catch(() => null);
     const answersLast = !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now);
     const cls: SendClass = opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
+    // What it serves, read inside the lock (harness/closedSubject.ts): a task's result or check-in for a task they closed or dropped
+    // never goes, owed or not. Logged as proactive.dropped_closed.
+    const closedHit = await heldSendClosed(client, { userId: opts.userId, type: opts.type, targetKey: opts.targetKey, cls, stage: "exempt_lock" });
+    if (closedHit) {
+      await client.query("ROLLBACK");
+      return { sent: false, reason: closedReason(closedHit) };
+    }
     if (opts.coInitiated) {
       const { failed, sends } = await coInitiatedHold(client, { userId: opts.userId, timezone: opts.timezone ?? null, now, kind: opts.coInitiated.kind });
       if (failed.length) {
@@ -2602,6 +2624,47 @@ export async function dropCandidate(registry: ProactiveRegistry, c: Candidate, s
   );
 }
 
+// Never reopen what they closed (harness/closedSubject.ts, Royce 2026-11-03): the candidates whose subject (an ask, goal, task, thread
+// or loop) is closed, by the read given (null: a read that failed, so nothing is closed and nothing drops).
+export function closedAmong<T extends Candidate>(cands: T[], closed: ClosedSet | null): { candidate: T; hit: ClosedSubject }[] {
+  if (!closed) return [];
+  return cands.flatMap((c) => {
+    const hit = closedSubjectFor(c, closed, candidateClass(c.type, isAnswering(c), c.payload));
+    return hit ? [{ candidate: c, hit }] : [];
+  });
+}
+// The read inside a send's lock, on its own client: a savepoint keeps a failed read from aborting the send's transaction (then nothing
+// is closed and the send goes on as before). Only when something in the send serves a subject.
+export async function closedInLock(client: Pick<PoolClient, "query">, userId: string, cands: { type: string; targetKey?: string | null; payload?: unknown }[]): Promise<ClosedSet | null> {
+  if (!cands.some((c) => subjectRefs(c).length)) return null;
+  await client.query("SAVEPOINT closed_read");
+  try {
+    const set = await loadClosedSubjects(userId, client as any);
+    await client.query("RELEASE SAVEPOINT closed_read");
+    return set;
+  } catch (err: any) {
+    await client.query("ROLLBACK TO SAVEPOINT closed_read").catch(() => {});
+    console.error("proactive: the closed-subject read inside the lock failed (non-fatal, nothing dropped):", err?.message ?? err);
+    return null;
+  }
+}
+// A held or exempt send's own subject (a task's result or look-out document, keyed task:<id>:...), read inside its lock: the close that
+// stops it, or null. Requested or not, a task's own result stops only when they closed or dropped the task.
+export async function heldSendClosed(client: Pick<PoolClient, "query">, o: { userId: string; type: string; targetKey: string; cls: SendClass; stage: string }): Promise<ClosedSubject | null> {
+  const item = { type: o.type, targetKey: o.targetKey, payload: {} };
+  const hit = closedSubjectFor(item, await closedInLock(client, o.userId, [item]), o.cls);
+  if (hit) recordDecision(droppedClosedDecision({ userId: o.userId, stage: o.stage, candidate: { id: null, type: o.type, targetKey: o.targetKey }, hit })).catch(() => {});
+  return hit;
+}
+
+// Each one dropped and logged (proactive.dropped_closed, ids only), at the stage that found it.
+export async function dropClosed(registry: ProactiveRegistry, userId: string, found: { candidate: Candidate; hit: ClosedSubject }[], stage: string): Promise<void> {
+  for (const f of found) {
+    await dropCandidate(registry, f.candidate, "skipped", droppedClosedDecision({ userId, stage, candidate: f.candidate, hit: f.hit }).reason);
+    await recordDecision(droppedClosedDecision({ userId, stage, candidate: f.candidate, hit: f.hit })).catch(() => {});
+  }
+}
+
 // A find the composer skipped while they were struggling waits (moodWaitRead, the mood_wait check): stamped with this skip's time, so
 // it isn't composed into the same hard day again; it competes again once they're okay, or MOOD_HOLD_CAP_HOURS after the skip. It stays
 // pending, so its own expiry still ends it. The hold is logged once, with no member text (services/moodHold.ts).
@@ -2815,13 +2878,19 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     [userId, heldTypes()],
   );
   // A queued find whose ask has closed since it was queued is dead (Royce, 2026-10-12): it leaves the queue here, before the pick
-  // sees it, not only when it's drafted. A reminder is exempt (services/askLifecycle.ts servesClosedAsk).
-  const AL = await import("../services/askLifecycle.js");
-  const closedAsks = await AL.closedAskRefs(userId).catch(() => new Set<string>());
+  // sees it, not only when it's drafted. A reminder is exempt (services/askLifecycle.ts servesClosedAsk). And every other candidate whose
+  // subject they closed or dropped (harness/closedSubject.ts, Royce 2026-11-03: never reopen what they closed): a task's results, a
+  // look-out's find, a door item, a check-in on a thread or goal. Requested work goes unless they closed it themselves. A read that
+  // fails drops nothing.
   // A kind the registry no longer has (a removed feature's queued row) is left where it is, never picked or drafted.
   const all = candRows.map(rowToCandidate).filter((c) => c.type in registry);
-  const dead = all.filter((c) => c.type === "event_offer" && AL.servesClosedAsk(c.payload as { askId?: string; reminder?: boolean }, closedAsks));
-  if (!opts.dryRun) for (const c of dead) await dropCandidate(registry, c, "skipped", "their ask has since closed");
+  const closedAtStart = await loadClosedSubjects(userId).catch((err: any) => {
+    console.error("proactive: closed-subject read failed (non-fatal, nothing dropped):", err?.message ?? err);
+    return null;
+  });
+  const deadFound = closedAmong(all, closedAtStart);
+  const dead = deadFound.map((f) => f.candidate);
+  if (!opts.dryRun) await dropClosed(registry, userId, deadFound, "dispatch");
   const state: PickState = { ...member.state, candidates: all.filter((c) => !dead.includes(c)) };
   // The learned preference is written when it flips, from the same read.
   if (member.raw.kinds && !opts.dryRun) await syncKindPreferences(userId, member.raw.kinds.verdicts, member.raw.kinds.stored).catch(() => 0);
@@ -2955,6 +3024,18 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // The bundle leads with the most time-bound of the day's picks (leadPick, code): the decision follows it.
   if (c.id !== decision.pick) decision = { ...decision, pick: c.id };
   const pickChecks = ev.perCandidate.find((p) => p.candidate.id === c.id)?.checks ?? [];
+  // Read again right before drafting (harness/closedSubject.ts): the pick can take a while, and they may have closed it meanwhile. The
+  // lead whose subject closed is dropped and nothing goes this tick; a closed sibling never rides.
+  const closedBeforeDraft = closedAmong(ev.eligible.includes(c) ? ev.eligible : [c, ...ev.eligible], await loadClosedSubjects(userId).catch(() => null));
+  if (closedBeforeDraft.length) {
+    if (!opts.dryRun) await dropClosed(registry, userId, closedBeforeDraft, "before_draft");
+    if (closedBeforeDraft.some((f) => f.candidate.id === c.id)) {
+      done(c.type);
+      return;
+    }
+  }
+  // A closed one never rides with the lead: it leaves what the bundle is built from.
+  for (const f of closedBeforeDraft) if (ev.eligible.includes(f.candidate)) ev.eligible.splice(ev.eligible.indexOf(f.candidate), 1);
 
   if (needsRelevanceCheck(c, state.now)) {
     const r = await stillRelevant(c, { recentConversation: recentStamped, now: state.now, timezone: person.timezone });
@@ -3393,6 +3474,8 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     // A placeholder draft ("SKIP", empty) is dropped, not left pending: otherwise it's drafted again every tick (a model call each)
     // until it expires (review of #265). Logged with ids only.
     if (result.placeholderOf) await dropPlaceholder(registry, userId, result.placeholderOf);
+    // What they closed while it was being written is dropped and logged; the rest waits for the next pick.
+    if (result.closed?.length) await dropClosed(registry, userId, result.closed, "send_lock");
     return;
   }
 

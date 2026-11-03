@@ -28,6 +28,7 @@ import { DateTime } from "luxon";
 import { isCoCommitment } from "./askKind.js";
 import { isCoTaskGoal } from "./goalEdges.js";
 import { overlap, type MemberThread } from "../harness/memberThreads.js";
+import { subjectRefs } from "../harness/closedSubject.js";
 import type { Claim } from "./factLabels.js";
 import type { NudgeEntry } from "./memberStateNudges.js";
 import type { CallAuthKind } from "../harness/callGate.js";
@@ -160,7 +161,37 @@ export type CallReasonState = {
   coWork: string[];
   // Reason keys the last calls Co placed were about (not the same reason twice running).
   recentReasonKeys: string[];
+  // What they closed or dropped (harness/closedSubject.ts, Royce 2026-11-03: never reopen what they closed): the subjects by key, and
+  // Cue's own labels for what they dropped at their word lately (the #368 record's closedLately). Missing: not read (older pure cases).
+  closed?: { keys: ReadonlySet<string>; labels: string[] };
 };
+
+// Pure: why a call reason would reopen something they closed, or null. By id first (a nudge's entry, a thread); then, for a reason about
+// something still ahead or still open, by Cue's own label of what they closed (two of Cue's own labels compared, never their words). A
+// celebration of what they finished, or how a dated thing went, is never a reopening.
+const REOPENING_KINDS: ReadonlySet<CallReasonKind> = new Set<CallReasonKind>(["their_commitment", "deadline", "coming_up", "worry", "open_thread", "goal_quiet"]);
+export function reopensClosed(c: Pick<CallReason, "kind" | "key" | "text">, closed: CallReasonState["closed"]): string | null {
+  if (!closed) return null;
+  const k = c.key.match(/^thread:(.+)$/);
+  const refs = k ? [`thread:${k[1]}`] : subjectRefs({ type: "call_reason", payload: { entryKey: c.key } }).map((r) => `${r.kind}:${r.id}`);
+  const byId = refs.find((r) => closed.keys.has(r));
+  if (byId) return `they closed it (${byId})`;
+  if (!REOPENING_KINDS.has(c.kind)) return null;
+  const hit = closed.labels.find((l) => sameThing(c.text, l));
+  return hit ? "about something they dropped lately" : null;
+}
+// Pure: two of Cue's own labels name the same thing: most of the words of the longer one are in the other (both ways, so a bigger
+// thing that only shares a few words with a dropped piece of it, "the launch party next Friday" against "find a DJ for the launch
+// party", isn't the same thing).
+const LABEL_FILLER = new Set(["with", "from", "that", "this", "their", "them", "they", "about", "into", "some", "what", "when", "will", "would", "have", "been", "were", "your", "just", "more"]);
+const labelWords = (t: string) => new Set(String(t).toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter((w) => w.length > 3 && !LABEL_FILLER.has(w)));
+export function sameThing(a: string, b: string): boolean {
+  const A = labelWords(a), B = labelWords(b);
+  if (A.size < 2 || B.size < 2) return false;
+  let n = 0;
+  for (const w of A) if (B.has(w)) n++;
+  return n / Math.max(A.size, B.size) >= 0.6;
+}
 
 export const CALL_REASON = {
   // A nudge counts when its own time is this close (the text version may still be hours out).
@@ -278,7 +309,8 @@ export function callReasonFor(s: CallReasonState): CallReasonResult {
     const why =
       coWorkWhy(c.text, s.coWork, c.kind === "their_commitment") ??
       (c.theirWords && leadsWithCoHomework(c.theirWords) ? "their words are about Cue's homework, not their life" : null) ??
-      (s.recentReasonKeys.includes(c.key) ? "the last call Cue placed was about this" : null);
+      (s.recentReasonKeys.includes(c.key) ? "the last call Cue placed was about this" : null) ??
+      reopensClosed(c, s.closed);
     if (why) {
       considered.push({ kind: c.kind, key: c.key, text: c.text.slice(0, 160), kept: false, why });
       continue;
@@ -359,7 +391,7 @@ export async function loadCallReasonState(userId: string, kind: CallAuthKind, no
   const zone = k.identity.zone;
   const today = localDay(now, zone);
   const q = (sql: string, args: unknown[]) => pool.query(sql, args).then((r: any) => r.rows as any[]).catch(() => [] as any[]);
-  const [nudges, threads, milestones, plans, tasks, recent] = await Promise.all([
+  const [nudges, threads, milestones, plans, tasks, recent, closed] = await Promise.all([
     loadSnapshot(userId, now).then(detectAll).catch(() => [] as NudgeEntry[]),
     listThreads(userId).catch(() => [] as MemberThread[]),
     // A "went" moment only on their stated going (services/milestones.ts WENT_CONFIRMED_SQL, 2026-10-12).
@@ -374,6 +406,9 @@ export async function loadCallReasonState(userId: string, kind: CallAuthKind, no
        ORDER BY created_at DESC LIMIT 2`,
       [userId],
     ),
+    // What they closed (harness/closedSubject.ts) and Cue's labels for what they dropped lately at their word (the #368 record's
+    // closedLately). A read that fails leaves it out: the call reason reads as before.
+    loadClosedCallSubjects(userId, pool).catch(() => undefined),
   ]);
   return {
     now,
@@ -388,7 +423,17 @@ export async function loadCallReasonState(userId: string, kind: CallAuthKind, no
       .map((p: any) => ({ name: String(p.event_name_raw), date: p.event_date instanceof Date ? DateTime.fromJSDate(p.event_date, { zone: "utc" }).toISODate()! : String(p.event_date).slice(0, 10), stated: isStated(p.provenance) })),
     coWork: coWorkFromKnowledge(k, tasks.map((t: any) => String(t.goal ?? ""))),
     recentReasonKeys: recent.map((r: any) => String(r.key ?? "")).filter(Boolean),
+    ...(closed ? { closed } : {}),
   };
+}
+
+// The closed subjects a Cue-started call reads: keys of every closed subject, and the labels of what they dropped at their word lately.
+export async function loadClosedCallSubjects(userId: string, db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> }): Promise<NonNullable<CallReasonState["closed"]>> {
+  const [{ loadClosedSubjects }, { closedLately }] = await Promise.all([import("../harness/closedSubject.js"), import("./exchangeRecord.js")]);
+  const [set, lately] = await Promise.all([loadClosedSubjects(userId, db), closedLately(userId, db)]);
+  // Only what they dropped: a thing they solved ("got the venue") leaves what it was for (the party) still ahead and still theirs.
+  const labels = lately.filter((l) => l.how === "dropped").map((l) => l.label).filter((l) => l.trim());
+  return { keys: new Set(set.keys()), labels };
 }
 
 // The gate's read: the reason for a call Co starts itself, and the held reason for any call. Fails closed: a read that throws

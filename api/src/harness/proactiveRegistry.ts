@@ -8,6 +8,7 @@ import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
 import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type Person, type ProactiveRegistry, type TypeSpec } from "./proactive.js";
 import type { DoorPayload } from "./door.js";
+import { SUBJECT_CLOSED } from "./closedSubject.js";
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, recentAskCheckins, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
@@ -287,7 +288,9 @@ const doorEntry: TypeSpec = {
     if (p.after) await D.runAfter(p.after as import("../services/deferredSends.js").AfterSend, "skipped", undefined, reason ?? status);
     if (p.taskId != null) {
       const T = await import("../services/coTasks.js");
-      await T.noteOnTask(c.userId, Number(p.taskId), `${DOOR_DROPPED_NOTE} (${status}${reason ? `: ${reason.slice(0, 120)}` : ""}). If it still matters, tell them again when you next can.`, null, { evenClosed: true }).catch(() => null);
+      // Dropped because what it served closed at their word (harness/closedSubject.ts): never "tell them again", which would reopen it.
+      const closedNow = !!reason && reason.startsWith(SUBJECT_CLOSED);
+      await T.noteOnTask(c.userId, Number(p.taskId), closedNow ? `${DOOR_DROPPED_NOTE}: what it served had closed, so it stays unsaid unless they bring it back.` : `${DOOR_DROPPED_NOTE} (${status}${reason ? `: ${reason.slice(0, 120)}` : ""}). If it still matters, tell them again when you next can.`, null, { evenClosed: true }).catch(() => null);
       if (p.close) await T.closeTask(c.userId, Number(p.taskId), "dropped", `${p.close.outcome}; never told them (${status})`.slice(0, 300)).catch(() => false);
     }
   },
@@ -743,6 +746,12 @@ export const proactiveRegistry: ProactiveRegistry = {
   // A goal they closed at their word: a companion moment that acknowledges the arc.
   goal_closed: {
     async draft(c, person) {
+      // One acknowledgment: when Cue's own reply in the turn that closed it already said it (the #368 close move, or the reply's own
+      // words), the moment doesn't go (services/goalJourney.ts replyAcknowledgedClose). A read that fails sends it as before.
+      const GJ = await import("../services/goalJourney.js");
+      const turn = await GJ.closingTurnReply(c.userId, c.createdAt).catch(() => null);
+      const ack = turn ? GJ.replyAcknowledgedClose({ ...turn, goal: String(c.payload.text ?? "") }) : null;
+      if (ack?.acknowledged) return skip(`${GJ.ACKNOWLEDGED_IN_REPLY}: ${ack.why}`);
       const text = await draftProactive({
         functionId: "goalJourney.closed.draft",
         firstName: person.firstName,
