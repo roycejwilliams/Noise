@@ -55,6 +55,7 @@ import { flagNotStored, recordCallHealth } from "../services/callHealth.js";
 import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook, withCallSituation } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
 import { withMember } from "../services/llmUsage.js";
+import { twilioSmsHandler } from "../services/twilioInboundSms.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -106,6 +107,16 @@ function validateTwilioSignature(req: Request, path: string): boolean {
   const url = `${process.env.API_URL}${path}`;
   return twilio.validateRequest(secret, sig, url, req.body);
 }
+
+// A text to Cue's calling line (services/twilioInboundSms.ts): signature-checked here, then the same inbound turn a text to the
+// texting number gets (routes/sendblue.ts). Twilio's reply is always empty, so the calling line never texts anyone.
+router.post(
+  "/incoming-sms",
+  twilioSmsHandler({
+    validate: (req) => validateTwilioSignature(req, "/co/incoming-sms"),
+    deliver: async (payload) => (await import("./sendblue.js")).deliverInboundText(payload),
+  }),
+);
 
 // Shared by both the standard missed-call path (no-answer/busy/failed/
 // canceled) and the voicemail-detected path — Claude drafts the copy,
