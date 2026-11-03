@@ -82,11 +82,13 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
 // ---------------------------------------------------------------- 2. a texted email correction really updates the email
 {
   const I = await import("../../src/harness/intake.js");
-  const run = async (o: { text: string; lastCo: string; taken?: boolean; dup?: boolean; email?: string }) => {
+  const CONFIRM = "Got your email as jordan.lea@gmail.com. If that's not right, just text me the right one.";
+  const run = async (o: { text: string; lastCo: string; taken?: boolean; dup?: boolean; email?: string; confirm?: string | null }) => {
     const writes: { sql: string; args: unknown[] }[] = [];
     const db = {
       query: async (sql: string, args: unknown[] = []) => {
         if (/content LIKE 'Co replied:%'/.test(sql)) return { rows: [{ content: `Co replied: ${o.lastCo}` }] };
+        if (/FROM proactive_sends WHERE user_id = \$1 AND target_key LIKE 'call_email:%'/.test(sql)) return { rows: o.confirm === null ? [] : [{ message: o.confirm ?? CONFIRM }] };
         if (/lower\(email\) = lower\(\$1\)/.test(sql)) return { rows: o.taken ? [{ x: 1 }] : [] };
         if (/^UPDATE users SET email/.test(sql)) {
           if (o.dup) throw Object.assign(new Error("dup"), { code: "23505" });
@@ -99,7 +101,6 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
     const r = await I.correctEmailFromText({ userId: "u-jordan", text: o.text, email: o.email ?? "jordan.lea@gmail.com" }, db);
     return { r, writes, note: I.emailCorrectionNote(r) };
   };
-  const CONFIRM = "Got your email as jordan.lea@gmail.com. If that's not right, just text me the right one.";
   const fixed = await run({ text: "oops it's jordan.lee@gmail.com", lastCo: CONFIRM });
   check("right after the confirmation, the address they text replaces the one on file (saved: users.email)", fixed.r.action === "updated" && fixed.writes.length === 1 && fixed.writes[0].args[1] === "jordan.lee@gmail.com" && fixed.writes[0].args[2] === "jordan.lea@gmail.com", fixed);
   check("the reply is told it was updated, as a fact of this turn", fixed.note.fact === "Updated their email on file to jordan.lee@gmail.com (it was jordan.lea@gmail.com)." && !fixed.note.instruction);
@@ -107,6 +108,17 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
   check("an address on another account: nothing written, the reply is told it was not saved and never to say updated", taken.r.action === "taken" && !taken.writes.length && /was not saved/.test(taken.note.instruction ?? "") && /Never say it was updated/.test(taken.note.instruction ?? "") && !taken.note.fact);
   const race = await run({ text: "jordan.lee@gmail.com", lastCo: CONFIRM, dup: true });
   check("a lost race on the unique email: treated as taken, nothing saved", race.r.action === "taken" && !race.writes.length);
+  // Re-review: only a reply to the confirmation text itself; the last address that differs; never someone else's.
+  const named = await run({ text: "oh and the right one is jordan.lee@gmail.com", lastCo: "Sent the plan to jordan.lea@gmail.com.", confirm: CONFIRM });
+  check("Cue's last line named their address but wasn't the confirmation: nothing changes", named.r.action === "not_a_correction" && !named.writes.length);
+  const noConfirm = await run({ text: "jordan.lee@gmail.com", lastCo: CONFIRM, confirm: null });
+  check("no confirmation text on record: nothing changes", noConfirm.r.action === "not_a_correction" && !noConfirm.writes.length);
+  const cofounder = await run({ text: "can you also invite my cofounder sam@acme.com?", lastCo: CONFIRM });
+  check("'invite my cofounder sam@acme.com' right after the confirmation: never their email", cofounder.r.action === "not_a_correction" && !cofounder.writes.length);
+  const forward = await run({ text: "great, forward it to priya@shah.co too", lastCo: CONFIRM });
+  check("asking Cue to forward to someone: never their email", forward.r.action === "not_a_correction" && !forward.writes.length);
+  const typo = await run({ text: "it's not jordan.lea@gmail.com, it's jordan.lee@gmail.com", lastCo: CONFIRM });
+  check("'it's not X, it's Y': the last address that differs is saved", typo.r.action === "updated" && typo.writes[0]?.args[1] === "jordan.lee@gmail.com", typo);
   const bad = await run({ text: "jordan.lee@gmail", lastCo: CONFIRM });
   check("an incomplete address: nothing written, the reply says so and never says updated", bad.r.action === "invalid" && !bad.writes.length && /Never say it was updated/.test(bad.note.instruction ?? ""));
   const unrelated = await run({ text: "can you email noor@studio.co the deck?", lastCo: "Here's the deck you asked for." });
@@ -169,6 +181,7 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
 // ---------------------------------------------------------------- 4. the placeholder is never a send address; no email means a text
 {
   const ID = await import("../../src/services/identity.js");
+  check("hasPendingEmail ignores case and spaces", ID.hasPendingEmail("Pending-AB12@COPATIBLE.PENDING ") && ID.usableEmail("Pending-AB12@COPATIBLE.PENDING") === null);
   check("usableEmail: the placeholder is no email", ID.usableEmail("pending-ab12@copatible.pending") === null && ID.usableEmail("jordan@studio.co") === "jordan@studio.co" && ID.usableEmail("") === null && ID.usableEmail(null) === null);
   check("the plan sheet's email address is usableEmail (never the placeholder)", /usableEmail\(rows\[0\]\?\.email\)/.test(src("src/agent/loopTools.ts")));
   check("every templated email (otpActions sendEmail) refuses the placeholder", /if \(!usableEmail\(email\)\) return;/.test(src("src/otpActions.ts")));
@@ -181,12 +194,23 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
   const noor = { user_id: "b-noor", first_name: "Noor", phone_number: "+14155550102", email: "noor@studio.co" };
   const ch = IT.introChannels(jordan, noor);
   check("channels: the member with only the placeholder gets a text, the other the email", ch.text.map((p) => p.user_id).join() === "a-jordan" && ch.email.map((p) => p.user_id).join() === "b-noor");
-  const toNoor = IT.introText(noor, jordan, ["Body."], "Close.");
-  check("the text never shows the placeholder as their email", !/copatible\.pending/.test(toNoor) && !/email:/.test(toNoor));
+  const ellis = { user_id: "c-ellis", first_name: "Ellis", phone_number: "+14155550103", email: null };
+  // The intro text, word for word (Cue's first person; the lines are in the PR's Copy section for Royce).
+  check("intro text (event, the other has email): first person, minimal, their email to reach them", IT.introText(jordan, noor, { event: "Thursday Supper" }, true) === "Jordan, meet Noor. You were both at Thursday Supper, and I thought you two should meet. You both said yes. You can reach Noor at noor@studio.co.");
+  check("intro text (network, neither has email, relay on): Cue passes things on, never a phone number", IT.introText(ellis, jordan, { reason: "You're both building in climate" }, true) === "Ellis, meet Jordan. You're both building in climate. I thought you two should meet. You both said yes. Text me anything for Jordan and I'll pass it on." && !/\+1|555/.test(IT.introText(ellis, jordan, { reason: "x" }, true)));
+  check("intro text: relay off, no promise to pass anything on", !/pass it on/.test(IT.introText(ellis, jordan, { event: "E" }, false)));
+  check("intro text never shows the placeholder", !/copatible\.pending/.test(IT.introText(noor, jordan, { event: "E" }, true)));
+  check("the emailed member's close points to the relay when the other has no email (relay on), never 'reply to this email'", IT.emailCloseFor(ch, true) === "You both said yes. To reach Jordan, text Cue and it'll pass it on." && IT.emailCloseFor(ch, false) === IT.EMAIL_CLOSE && IT.emailCloseFor({ text: [] }, true) === IT.EMAIL_CLOSE);
+  check("the event email carries that close", (await import("../../src/services/eventGuestMatchHandoff.js")).introEmailContent("Supper", noor, jordan, IT.emailCloseFor(ch, true)).html.includes("To reach Jordan, text Cue and it&#39;ll pass it on.") || (await import("../../src/services/eventGuestMatchHandoff.js")).introEmailContent("Supper", noor, jordan, IT.emailCloseFor(ch, true)).html.includes("To reach Jordan, text Cue and it'll pass it on."));
+  // The same-turn reply knows who got what (re-review finding 3).
+  check("reply note: a member with no email is never told to check their email", /Never tell them to check their email or inbox/.test(IT.introHowNote(jordan, noor)) && /to them by email and to Jordan by text/.test(IT.introHowNote(noor, jordan)) && /Never mention email/.test(IT.introHowNote(jordan, ellis)));
+  check("network same-turn lines carry the note and never say 'intro email'", !/intro email/.test(src("src/services/networkIntroNudge.ts").slice(src("src/services/networkIntroNudge.ts").indexOf("export function alreadyIntroducedLine"))) && /you've already sent the intro\. \$\{how\}/.test(src("src/services/networkIntroNudge.ts")));
+  check("sendblue's fact for a sent network intro says how it went", /introHowNote\(\{ user_id: user\.id/.test(src("src/routes/sendblue.ts")) && !/Cue sent an intro email to both of them/.test(src("src/routes/sendblue.ts")));
 
   // The real event intro path (sendHeldIntro -> sendIntroEmail) on a fake database: the email goes to Noor only, Jordan gets the same
   // content by text, and the pair is saved as introduced only once both went.
   const run = async (o: { textOk: boolean }) => {
+    process.env.CO_RELAY = "on";
     const writes: string[] = [], texts: any[] = [], logs: string[] = [];
     (pool as any).query = async (sql: string, args: any[] = []) => {
       const q = String(sql).replace(/\s+/g, " ").trim();
@@ -207,15 +231,20 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
     console.log = log; console.error = err;
     IT.setIntroTextSendForTests(null);
     (pool as any).query = realQuery;
+    delete process.env.CO_RELAY;
     return { ok, writes, texts, logs };
   };
   const went = await run({ textOk: true });
   const emailLog = went.logs.find((l) => /sendIntroEmail stub/.test(l)) ?? "";
   check("event intro: the email goes to the member with a real email only, never the placeholder", /to noor@studio\.co:/.test(emailLog) && !/copatible\.pending/.test(emailLog), went.logs);
-  check("event intro: the member without an email gets the same content by text, through the gated send", went.texts.length === 1 && went.texts[0].userId === "a-jordan" && went.texts[0].phoneNumber === "+14155550101" && went.texts[0].text.startsWith("Jordan, meet Noor.") && went.texts[0].text.includes("You were both at Thursday Supper, and Cue thought you two should meet. Consider this your introduction.") && went.texts[0].text.includes("You both said yes. Take it from here.") && went.texts[0].text.includes("Noor's email: noor@studio.co"), went.texts);
+  check("event intro: the member without an email gets it by text, through the gated send", went.texts.length === 1 && went.texts[0].userId === "a-jordan" && went.texts[0].phoneNumber === "+14155550101" && went.texts[0].text === "Jordan, meet Noor. You were both at Thursday Supper, and I thought you two should meet. You both said yes. You can reach Noor at noor@studio.co.", went.texts);
   check("event intro: saved as introduced (co_pairs intro_sent_at) once both went", went.ok === true && went.writes.some((w) => /UPDATE co_pairs SET intro_sent_at/.test(w)), went.writes);
   const held = await run({ textOk: false });
-  check("event intro: a text that can't go leaves the pair not introduced and counted as a failed try", held.ok === false && !held.writes.some((w) => /SET intro_sent_at/.test(w)) && held.writes.some((w) => /SET intro_attempts/.test(w)), held.writes);
+  check("event intro: a text that can't go leaves the pair not introduced, counted as a failed try, and NO email goes", held.ok === false && !held.writes.some((w) => /SET intro_sent_at/.test(w)) && held.writes.some((w) => /SET intro_attempts/.test(w)) && !held.logs.some((l) => /sendIntroEmail stub/.test(l)), { writes: held.writes, logs: held.logs });
+  const hs = src("src/services/eventGuestMatchHandoff.ts");
+  check("event intro: in the code, the text is sent before any email", hs.indexOf("IT.textIntro(") > 0 && hs.indexOf("IT.textIntro(") < hs.indexOf("resend.emails.send({ from: CO_EMAIL_FROM, to: emailTo"));
+  const ns = src("src/services/networkIntroNudge.ts");
+  check("network intro: the text is sent before any email too", ns.indexOf("IT.textIntro(") > 0 && ns.indexOf("IT.textIntro(") < ns.indexOf("resend.emails.send({ from: CO_EMAIL_FROM, to: emailTo"));
   const RG = await import("../../src/harness/replyGrounding.js");
   const d = new Date("2026-11-03T18:00:00Z");
   check("the reply's record of an intro by text says by text (Cue never claims an email it didn't send)", RG.introRecordLines("event_intro_email_sent", 'Sent an intro by text connecting Jordan and Noor ahead of "Thursday Supper".', d, "Jordan").some((l: string) => /one intro by text connecting them with Noor/.test(l)));
@@ -235,6 +264,9 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
     "My wife and I are separating so I'm planning a move to Austin",
   ];
   for (const p of PROBES) check(`never in the opening: "${p}"`, SENSITIVE.test(p) && F.openingWords([p]) === null, F.openingWords([p]));
+  // Re-review 8: casual words alone don't trip it; anchored ones do.
+  check("not sensitive: 'we fired up the kiln', 'afraid we'll run late', 'let go of the old logo'", !SENSITIVE.test("We fired up the kiln for the launch") && !SENSITIVE.test("afraid we'll run late to the launch") && !SENSITIVE.test("let go of the old logo for the studio"));
+  check("sensitive: 'got fired', 'was let go', 'I'm scared'", SENSITIVE.test("I got fired on Friday") && SENSITIVE.test("I was let go from the agency") && SENSITIVE.test("honestly I'm scared"));
   check("work and plans still pass", F.openingWords(["We're raising a seed round in March and hiring two engineers"]) === "We're raising a seed round in March and hiring two engineers");
 }
 
@@ -254,6 +286,14 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
   check("text: 'what should I call you?' counts as the name ask", I.replyAskedFor(["name"], "Before I forget, what should I call you?"));
   check("text: a venue's address in a statement isn't an ask", !I.replyAskedFor(["email"], "The address is 12 Valencia, doors at 7."));
   check("call: the same shapes count on a call", CE.cueAskedForEmail("assistant: Best address to send event details to?\nuser: later") && !CE.cueAskedForEmail("assistant: The address is 12 Valencia.\nuser: ok"));
+  // Re-review: only questions about THEIR email or name.
+  for (const t of ["What's the address of the venue?", "Want me to reach out to the host's contact?", "I'll email you the plan.", "What's the name of the bakery?"]) check(`not an ask: "${t}"`, !I.askedForEmail(t) && !I.askedForName(t) && !I.replyAskedFor(["name", "email"], t) && !I.replyAskedFor(["name"], t));
+  check("call: 'I'll email you the plan' on a call isn't the ask", !CE.cueAskedForEmail("assistant: I'll email you the plan.\nuser: great") && !CE.cueAskedForEmail("assistant: What's the address of the venue?\nuser: 12 Valencia"));
+  check("still asks: your email, best email, what should I call you, your name", I.askedForEmail("What's your email?") && I.askedForEmail("What's the best email for you?") && I.askedForName("What should I call you?") && I.askedForName("What's your name?"));
+  // Names from the wrong question (re-review 7): a bare answer is theirs only after a question about THEIR name.
+  check("'Nopa' after 'the name of the place?' is not their name", !I.nameIsTheirs("Nopa", "Nopa", "What's the name of the place?"));
+  check("'Priya Shah' after 'the name of the guy?' is not their name", !I.nameIsTheirs("Priya Shah", "Priya Shah", "What's the name of the guy?"));
+  check("a bare name after 'what's your name?' is theirs", I.nameIsTheirs("Jordan Lee", "Jordan Lee", "What's your name?"));
   check("old door: a member who only got NAME_EMAIL counts as asked once", I.intakeAlreadyAsked({ retries: 0, oldLineAsked: true }) && !I.intakeAlreadyAsked({ retries: 0, oldLineAsked: false }));
   const OL = await import("../../src/services/onboardingLines.js");
   const seen: { sql: string; args: any[] }[] = [];

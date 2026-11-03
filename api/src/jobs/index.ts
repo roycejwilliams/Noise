@@ -106,7 +106,8 @@ export async function runAutoIntakeCalls(io: Server): Promise<void> {
        FROM users u
        LEFT JOIN co_profiles cp ON cp.user_id = u.id
        WHERE u.subscription_status = 'active'
-         AND COALESCE(u.identity_captured, true) = true
+         -- A member, as the call gate's own check (harness/callGate.ts decideAutoIntake): invite-verified, not archived. Parked job.
+         AND COALESCE(u.invite_verified, true) = true AND u.archived_at IS NULL
          AND NOT EXISTS (
            SELECT 1 FROM co_memories cm
            WHERE cm.user_id = u.id

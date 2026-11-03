@@ -372,12 +372,10 @@ export function introSendOutcome(error: { name?: string | null; statusCode?: num
 
 // Pure: the email itself, from the pair in one order (by id) and the event's own name, so a retry after a crash builds the
 // very same email the first try did (the idempotency key covers the same body only).
-export function introEmailContent(eventName: string, x: { user_id: string; first_name: string }, y: { user_id: string; first_name: string }): { subject: string; html: string; first: string; second: string; body: string[]; close: string } {
+// `close`: the emailed member's close (services/introByText.ts emailCloseFor: the relay when the other gets it by text).
+export function introEmailContent(eventName: string, x: { user_id: string; first_name: string }, y: { user_id: string; first_name: string }, close = "You both said yes. Take it from here."): { subject: string; html: string; first: string; second: string } {
   const [a, b] = x.user_id < y.user_id ? [x, y] : [y, x];
   return {
-    // The same content, for a member who gets it by text (services/introByText.ts).
-    body: [`You were both at ${eventName}, and Cue thought you two should meet. Consider this your introduction.`],
-    close: "You both said yes. Take it from here.",
     subject: `Introducing ${a.first_name} and ${b.first_name}`,
     html: galleryEmail({
       preview: `From ${eventName}: Cue thinks you two should meet.`,
@@ -385,7 +383,7 @@ export function introEmailContent(eventName: string, x: { user_id: string; first
       headline: `${a.first_name}, meet ${b.first_name}.`,
       // Sent once both say yes: in the room, or after it. Never "before it".
       body: [`You were both at ${eventName}, and Cue thought you two should meet. Consider this your introduction.`],
-      close: "You both said yes. Take it from here.",
+      close,
     }),
     first: a.user_id,
     second: b.user_id,
@@ -441,7 +439,18 @@ async function sendIntroEmail(eventId: string, _callerEventName: string, a: Matc
     await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "event name unreadable");
     return false;
   }
-  const { subject, html, body, close } = introEmailContent(eventName, a, b);
+  // The text side first (review of the onboarding branch): if it can't go, nothing is sent, the pair stays retryable, and no email
+  // went that a retry could send again.
+  const relayOn = (await import("./relay.js")).relayEnabled();
+  if (channels.text.length) {
+    const t = await IT.textIntro({ to: channels.text, pair: [a as any, b as any], why: { event: eventName }, relayOn, key: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
+    if (!t.ok) {
+      if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
+      await RM.noteIntroFailed(eventId, a.user_id, b.user_id, `intro text: ${t.results.find((r) => !r.sent && !r.queued)?.reason ?? "not sent"}`.slice(0, 120));
+      return false;
+    }
+  }
+  const { subject, html } = introEmailContent(eventName, a, b, IT.emailCloseFor(channels, relayOn));
   const emailTo = channels.email.map((p) => p.email as string);
   if (!emailTo.length) {
     // Nobody to email: the text below is the whole intro.
@@ -465,15 +474,6 @@ async function sendIntroEmail(eventId: string, _callerEventName: string, a: Matc
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
       if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
       await RM.noteIntroFailed(eventId, a.user_id, b.user_id, String(err?.message ?? err).slice(0, 120));
-      return false;
-    }
-  }
-  if (channels.text.length) {
-    const t = await IT.textIntro({ to: channels.text, pair: [a as any, b as any], body, close, key: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
-    if (!t.ok) {
-      // Retried like a failed email (the email's key and the texts' target keys keep a retry from sending twice).
-      if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
-      await RM.noteIntroFailed(eventId, a.user_id, b.user_id, `intro text: ${t.results.find((r) => !r.sent && !r.queued)?.reason ?? "not sent"}`.slice(0, 120));
       return false;
     }
   }

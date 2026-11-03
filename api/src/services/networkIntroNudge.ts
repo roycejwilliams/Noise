@@ -436,8 +436,18 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
   // idempotency key covers the same body only (as eventGuestMatchHandoff.ts introEmailContent).
   const [p1, p2] = a.user_id < b.user_id ? [a, b] : [b, a];
   const subject = `Introducing ${p1.first_name} and ${p2.first_name}`;
+  // The text side first (review of the onboarding branch): if it can't go, nothing is sent and the pair stays retryable, with no
+  // email out that a retry could send again.
+  const relayOn = (await import("./relay.js")).relayEnabled();
+  if (channels.text.length) {
+    const t = await IT.textIntro({ to: channels.text, pair: [p1 as any, p2 as any], why: { reason: matchReason }, relayOn, key: `network-intro:${p1.user_id}:${p2.user_id}` });
+    if (!t.ok) {
+      console.error("sendNetworkIntroEmail: the intro text didn't go (non-fatal):", t.results.find((r) => !r.sent && !r.queued)?.reason);
+      return "failed";
+    }
+  }
   const body = [matchReason, "Cue figured you two should actually meet. Consider this your introduction."];
-  const close = "You both said yes. Take it from here.";
+  const close = IT.emailCloseFor(channels, relayOn);
   const html = galleryEmail({
     preview: `Cue thinks you two should meet.`,
     eyebrow: "An introduction",
@@ -468,13 +478,6 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
       else if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);
-      return "failed";
-    }
-  }
-  if (channels.text.length) {
-    const t = await IT.textIntro({ to: channels.text, pair: [p1 as any, p2 as any], body, close, key: `network-intro:${p1.user_id}:${p2.user_id}` });
-    if (!t.ok) {
-      console.error("sendNetworkIntroEmail: the intro text didn't go (non-fatal):", t.results.find((r) => !r.sent && !r.queued)?.reason);
       return "failed";
     }
   }
@@ -558,10 +561,12 @@ export function networkEmailState(r: { email_sent?: unknown; email_outcome?: unk
 
 // Pure: what a later yes is told about an intro already claimed. "Sent" only when the send was recorded; "coming" only while a
 // retake can still finish it; past that, plainly that Co can't confirm it, with no promise.
-export function alreadyIntroducedLine(firstName: string, state: NetworkEmailState): string {
-  if (state === "sent") return `\nThey said yes to ${firstName} again; the two of them were already introduced by email. Acknowledge briefly, don't send or promise another intro.`;
-  if (state === "unknown") return `\nThey said yes to ${firstName}; both of them are in, but Cue can't confirm the intro email went through. Tell them plainly it may not have reached them, and to tell you if they don't have it. Don't say it was sent, and don't promise it's coming.`;
-  return `\nThey said yes to ${firstName}; both of them are in and the intro email is on its way. Tell them plainly the intro email is coming. Don't say it was sent, and don't say when. Don't promise another.`;
+// `how`: services/introByText.ts introHowNote, how the intro reaches each of them (a member with no email gets it by text).
+export function alreadyIntroducedLine(firstName: string, state: NetworkEmailState, how = ""): string {
+  const h = how ? ` ${how}` : "";
+  if (state === "sent") return `\nThey said yes to ${firstName} again; the two of them were already introduced.${h} Acknowledge briefly, don't send or promise another intro.`;
+  if (state === "unknown") return `\nThey said yes to ${firstName}; both of them are in, but Cue can't confirm the intro went through.${h} Tell them plainly it may not have reached them, and to tell you if they don't have it. Don't say it was sent, and don't promise it's coming.`;
+  return `\nThey said yes to ${firstName}; both of them are in and the intro is on its way.${h} Tell them plainly the intro is coming. Don't say it was sent, and don't say when. Don't promise another.`;
 }
 
 async function networkEmailSent(x: string, y: string): Promise<NetworkEmailState> {
@@ -767,7 +772,9 @@ export async function resolveNetworkIntroReply(
   );
   const bothInterested = rows[0]?.both_interested === true;
   // Already introduced (a repeated reply, a retried turn): no second intro. Said as sent only when the send was recorded.
-  if (rows[0]?.status === "introduced") return alreadyIntroducedLine(pending.candidate.first_name, networkEmailState(rows[0]));
+  // How the intro reaches each of them, for every line below (a member with no email gets it by text: never "check your email").
+  const how = (await import("./introByText.js")).introHowNote(person as any, { user_id: pending.candidate.candidate_id, first_name: pending.candidate.first_name, phone_number: pending.candidate.phone_number, email: pending.candidate.email });
+  if (rows[0]?.status === "introduced") return alreadyIntroducedLine(pending.candidate.first_name, networkEmailState(rows[0]), how);
   // The body comes from the pair's stored reason (the first one written), the same one a retry reads: one body per key.
   const storedReason = String(rows[0]?.match_reason ?? pending.candidate.match_reason);
 
@@ -778,7 +785,7 @@ export async function resolveNetworkIntroReply(
       .then((r) => r.rows.length > 0)
       // A failed mark keeps the old behaviour (send); only a confirmed "already introduced" stops it.
       .catch((err: any) => { console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err); return null; });
-    if (claimed === false) return alreadyIntroducedLine(pending.candidate.first_name, await networkEmailSent(aId, bId));
+    if (claimed === false) return alreadyIntroducedLine(pending.candidate.first_name, await networkEmailSent(aId, bId), how);
     const candidateInfo: MatchNudgeCandidate = {
       user_id: pending.candidate.candidate_id,
       first_name: pending.candidate.first_name,
@@ -787,7 +794,7 @@ export async function resolveNetworkIntroReply(
     };
     const emailed = await sendNetworkIntroEmail(person, candidateInfo, storedReason);
     if (emailed === "held") {
-      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them hasn't gone out yet; Cue will send it. Tell them plainly that both of you are in and the intro email is coming. Don't say it was sent, and don't say when.`;
+      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro hasn't gone out yet; Cue will send it. ${how} Tell them plainly that both of you are in and the intro is coming. Don't say it was sent, and don't say when.`;
     }
     if (emailed !== "sent") {
       // Not introduced: the pair goes back to waiting on its email, counted, and retryHeldNetworkIntros tries again (before this, a
@@ -795,10 +802,10 @@ export async function resolveNetworkIntroReply(
       await pool
         .query(`UPDATE network_introductions SET status = 'both_interested', introduced_at = NULL, email_attempts = email_attempts + 1 WHERE person_a_id = $1 AND person_b_id = $2 AND email_sent_at IS NULL`, [aId, bId])
         .catch((err: any) => console.error("resolveNetworkIntroReply: failed-send revert failed (non-fatal):", err?.message ?? err));
-      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them failed to send. Tell them plainly that both of you are in, but the intro email didn't go through yet. Don't say it was sent.`;
+      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro failed to send. ${how} Tell them plainly that both of you are in, but the intro didn't go through yet. Don't say it was sent.`;
     }
     await scheduleIntroFollowUps([[person.user_id, pending.candidate.first_name], [pending.candidate.candidate_id, person.first_name]] as const);
-    return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too — you've already sent a real intro email to both of them. Acknowledge warmly and briefly, don't repeat the email content back.`;
+    return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too — you've already sent the intro. ${how} Acknowledge warmly and briefly, don't repeat the intro back.`;
   }
 
   const candidateInfo: MatchNudgeCandidate = {

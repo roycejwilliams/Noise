@@ -2379,8 +2379,10 @@ export function sendblueRouter(io: Server): Router {
               addInstruction(replyFacts, context);
               const other = resolvedIntro.item.ref.pending.candidate.first_name;
               if (classification === "not_interested") addFact(replyFacts, "did_this_turn", `Recorded that they passed on an intro to ${other}.`);
-              else if (/intro email/i.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes, so Cue sent an intro email to both of them.`);
-              else addFact(replyFacts, "did_this_turn", `Asked ${other} whether they're open to an intro. Waiting to hear back; no intro has been made. If ${other} says yes, Cue emails an intro to both of them.`);
+              // Sent only when it really went ("you've already sent the intro"), and how: a member with no email got it by text.
+              else if (/you've already sent the intro/.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes, so Cue sent the intro. ${(await import("../services/introByText.js")).introHowNote({ user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email }, { user_id: resolvedIntro.item.ref.pending.candidate.candidate_id, first_name: other, phone_number: resolvedIntro.item.ref.pending.candidate.phone_number, email: resolvedIntro.item.ref.pending.candidate.email })}`);
+              else if (/both of you are in/.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes too. The intro hasn't gone out yet.`);
+              else addFact(replyFacts, "did_this_turn", `Asked ${other} whether they're open to an intro. Waiting to hear back; no intro has been made. If ${other} says yes, Cue introduces them.`);
             }
           } catch (err: any) {
             console.error("sendblue: network intro-offer reply handling failed (non-fatal):", err?.message ?? err);
