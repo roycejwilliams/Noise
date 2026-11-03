@@ -98,6 +98,13 @@ const closedFor = (c: any, rows: Rows) => CS.closedSubjectFor(c, CS.closedSetFro
   check("goal: one on a goal still active goes", closedFor(cand("goal_checkin", { goalId: "g2" }), rows) === null);
   check("goal: the goal_closed moment itself is never dropped by this", closedFor(cand("goal_closed", { goalId: "g1" }), rows) === null);
   check("loop: \"still on your plate?\" for a loop marked done is dropped", closedFor(cand("loop_check", { loopId: 9 }), rows) !== null);
+  // Sends with no payload, read by their key alone (sendExempt's lock, deferred rows).
+  check("key: a goal check-in sent as a task update (task:<id>:checkin:<goal>) reads its goal", CS.subjectRefs({ type: "task_update", targetKey: "task:61:checkin:g1" }).some((r) => r.kind === "goal" && r.id === "g1"));
+  check("key: ...and is dropped once that goal closed, its task still open", closedFor(cand("task_update", { cls: "checkin" }, "task:61:checkin:g1"), rows)?.ref.kind === "goal");
+  check("key: ...one on a goal still active goes", closedFor(cand("task_update", { cls: "checkin" }, "task:61:checkin:g2"), rows) === null);
+  check("key: a research brief's key (research_brief:<task>) reads its task", CS.subjectRefs({ type: "task_update", targetKey: "research_brief:44" }).some((r) => r.kind === "task" && r.id === "44"));
+  check("key: a brief whose task they dropped is dropped; one Cue closed itself goes", closedFor(cand("task_update", { cls: "requested" }, "research_brief:44"), { ...empty(), tasks: [{ id: 44, status: "dropped", outcome: "Dropped: they said no longer needed" }] }) !== null && closedFor(cand("task_update", { cls: "requested" }, "research_brief:44"), { ...empty(), tasks: [{ id: 44, status: "done", outcome: "Sent the brief." }] }) === null);
+  check("key: an unrelated key carries no subject", CS.subjectRefs({ type: "co_event", targetKey: "noshow_ask:evt-1" }).length === 0);
   check("loop: a loop that only went stale isn't a close", closedFor(cand("loop_check", { loopId: 10 }), rows) === null);
   check("nudge: a goal nudge on a closed goal is dropped", closedFor(cand("goal_nudge", { entryKey: "goal:g1", fingerprint: "f" }), rows) !== null);
   check("nudge: a commitment nudge on a thread they resolved is dropped", closedFor(cand("commitment_nudge", { entryKey: "commitment:th-run", fingerprint: "f" }), rows) !== null);

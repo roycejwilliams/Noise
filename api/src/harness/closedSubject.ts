@@ -66,8 +66,13 @@ export function subjectRefs(c: { type: string; targetKey?: string | null; payloa
   const e = entry.replace(/^deadline:/, "");
   const m = e.match(/^(goal|commitment|ask|task|thread):(.+)$/);
   if (m) add(m[1] === "commitment" ? "thread" : (m[1] as SubjectKind), m[2]);
-  const tk = String(c.targetKey ?? "").match(/^task:(\d+):/);
+  // Keys of sends that carry no payload (sendExempt, claimCoInitiatedSend, deferred rows): task:<id>:..., a goal check-in's
+  // task:<id>:checkin:<goal>, and a research brief's research_brief:<task>.
+  const key = String(c.targetKey ?? "");
+  const tk = key.match(/^(?:task|research_brief):(\d+)(?::|$)/);
   if (tk) add("task", tk[1]);
+  const gk = key.match(/^task:\d+:checkin:(.+)$/);
+  if (gk) add("goal", gk[1]);
   return out;
 }
 
