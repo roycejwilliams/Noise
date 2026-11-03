@@ -57,6 +57,7 @@ const run = async (raw: string, a: any[] = []) => {
   // A Cue call counts only when its dial went (the dial's own "Co initiated call" record right after the gate's place_call).
   if (/FROM harness_decisions d WHERE d\.user_id = \$1 AND d\.decision = 'call\.gate' AND d\.action = 'place_call' AND d\.reason = ANY/.test(sql) && /Co initiated call/.test(sql)) return { rows: db.calls.filter((c) => c.user_id === a[0] && a[1].includes(c.reason) && c.dialed !== false) };
   if (/^SELECT id, status, payload, expires_at FROM proactive_candidates WHERE user_id = \$1 AND target_key = \$2 FOR UPDATE/.test(sql)) return { rows: db.candidates.filter((c) => c.user_id === a[0] && c.target_key === a[1]) };
+  if (/^SELECT status FROM proactive_candidates WHERE user_id = \$1 AND target_key = \$2/.test(sql)) return { rows: db.candidates.filter((c) => c.user_id === a[0] && c.target_key === a[1]) };
   if (/^SELECT 1 FROM proactive_sends WHERE user_id = \$1 AND target_key = \$2/.test(sql)) return { rows: db.sends.filter((s) => s.user_id === a[0] && s.target_key === a[1]) };
   if (/^INSERT INTO proactive_candidates/.test(sql)) {
     if (db.candidates.some((c) => c.user_id === a[0] && c.target_key === a[2])) return { rows: [] };
@@ -239,7 +240,7 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   check("expiry: nothing went out for them", db.outbox.length === 0);
   check("expiry, the real entry point (runProactiveDispatch, the cron's): the rows are expired before any member is dispatched, so the dispatch is never handed them", db.candidates.filter((c) => [41, 42].includes(c.id)).every((c) => c.status === "expired") && !db.dispatched.includes(ELI));
   check("expiry: a door text's drop is noted on its task, never silent", /The text queued for them never went/.test(src("harness/proactiveRegistry.ts")));
-  check("valid-until: requested results have no clock (only moot ends them); an intro ask through tomorrow; a find to the end of its day; a check-in two days", DR.doorValidUntil("requested", at, ZONE) === null && DR.doorValidUntil("intro", at, ZONE)!.getTime() === pt("2026-11-04T23:59:59.999").getTime() && DR.doorValidUntil("unsolicited", at, ZONE)!.getTime() === pt("2026-11-03T23:59:59.999").getTime() && DR.doorValidUntil("checkin", at, ZONE)!.getTime() === at.getTime() + 48 * HOUR);
+  check("valid-until: requested results end at a 14-day backstop at most; an intro ask through tomorrow; a find to the end of its day; a check-in two days", DR.doorValidUntil("requested", at, ZONE).getTime() === at.getTime() + DR.REQUESTED_BACKSTOP_DAYS * 86_400_000 && DR.REQUESTED_BACKSTOP_DAYS === 14 && DR.doorValidUntil("intro", at, ZONE)!.getTime() === pt("2026-11-04T23:59:59.999").getTime() && DR.doorValidUntil("unsolicited", at, ZONE)!.getTime() === pt("2026-11-03T23:59:59.999").getTime() && DR.doorValidUntil("checkin", at, ZONE)!.getTime() === at.getTime() + 48 * HOUR);
   check("valid-until: requested work ends when the thing is moot (an event's own start)", DR.doorValidUntil("requested", at, ZONE, pt("2026-11-03T18:00:00"))!.getTime() === pt("2026-11-03T18:00:00").getTime());
   const unsol = (written: Date) => ({ ...doorText("unsolicited", { arrives: written }, { writtenAt: written.toISOString() }), createdAt: written });
   const req = (written: Date) => ({ ...doorText("requested", { arrives: written }, { writtenAt: written.toISOString() }), createdAt: written });
@@ -366,7 +367,7 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   db.tasks.push(taskRow("done"));
   await proactiveRegistry.task_update.onDropped!(doorCand({ taskId: 9 }), "expired", "its event passed");
   const noted = db.sql.find((q) => /^UPDATE co_tasks SET steps = \$3::jsonb, notes = \$4::jsonb/.test(q.sql));
-  check("dropped: the note lands on the task even after it closed, so nothing later says it went", !!noted && JSON.parse(noted.a[3]).some((n: any) => /The text queued for them never went \(expired: its event passed\)/.test(n.text)));
+  check("dropped: the note lands on the task even after it closed, so nothing later says it went", !!noted && JSON.parse(noted.a[3]).some((n: any) => /The text queued for them never went, so they were never told \(expired: its event passed\)/.test(n.text)));
   check("dropped: nothing was marked texted", !db.sql.some((q) => /texts_sent = texts_sent \+ 1/.test(q.sql)));
   // A brief's line kept its task open: dropped, the task closes as not told; sent, it closes with its own outcome and is marked texted.
   reset();
@@ -388,7 +389,7 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   const ask: Candidate = { id: "i", userId: ELI, type: "direct_ask", targetKey: "network_direct_ask:a:b", topicKey: "network_direct_ask:a:b", summary: "s", priority: 50, dueAt: new Date(), expiresAt: DR.doorValidUntil("intro", new Date(), ZONE), payload: { door: true, intro: true, messages: ["Someone I know would like to meet you."], cls: "unsolicited", after: { kind: "network_intro_ask", payload: { candidateId: "a", askerId: "b" } }, writtenAt: new Date().toISOString() }, attempts: 0, createdAt: new Date() };
   const paused = await proactiveRegistry.direct_ask.draft(ask, person);
   check("pause: an intro ask while matching is paused waits (a defer, never a skip)", "defer" in paused && paused.defer.getTime() > Date.now());
-  check("pause: the deferral keeps the door text's own valid-until", /WHEN type IN \('task_update', 'co_event', 'event_change', 'direct_ask'\) THEN expires_at/.test(src("harness/proactive.ts")));
+  check("pause: the deferral moves the door text's valid-until with it (never shortened, never lapsed by a pause)", /WHEN type IN \('task_update', 'co_event', 'event_change', 'direct_ask'\) THEN \$4::timestamptz/.test(src("harness/proactive.ts")));
   // The safety and soon bypasses fire.
   reset();
   const safe = await PR.sendExempt({ userId: ELI, phoneNumber: PHONE, type: "task_update", targetKey: "task:safe:1", messages: ["Checking you're okay."], timezone: ZONE, door: { summary: "s", validUntil: null, safety: true } });
@@ -406,6 +407,38 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   check("staleWatch reads the thing's start from its page (verified only)", SW.staleChange({ status: "ok", fields: { start: { value: "2026-11-04T16:00:00-08:00", verified: true } } } as any, { status: "ok", fields: { start: { value: "2026-11-04T19:00:00-08:00", verified: true } } } as any)?.startAt === "2026-11-04T19:00:00-08:00");
   // An announcement the door already decided is given up, never redrafted.
   check("announcement: one the door didn't take is given up cleanly, and any door row for it keeps it from being drafted again", /if \(!\(result as \{ queued\?: boolean \}\)\.queued\) await pool\.query\(`UPDATE co_event_announcements SET gave_up_at = NOW\(\)/.test(src("services/coEventAnnouncement.ts")) && /AND NOT EXISTS \(SELECT 1 FROM proactive_candidates pc WHERE pc\.user_id = a\.user_id AND pc\.target_key = 'co_event:' \|\| a\.event_api_id\)\)?/.test(src("services/coEventAnnouncement.ts")));
+}
+
+// ================================================================ 10. round 2: requested work never goes out late; a pause never expires an ask
+{
+  const now = pt("2026-11-03T10:00:00");
+  check("dated: the earliest dated thing in a text caps it (the end of that day), past days ignored", DR.earliestDated(["date: 2026-11-07", "a date its page mentions: 2026-11-05", "deadline: 2026-11-01", "no date here"], now, ZONE)!.getTime() === pt("2026-11-05T23:59:59.999").getTime() && DR.earliestDated(["nothing dated"], now, ZONE) === null);
+  check("dated: a requested result is capped at its earliest dated thing", DR.doorValidUntil("requested", now, ZONE, DR.earliestDated(["date: 2026-11-05"], now, ZONE)).getTime() === pt("2026-11-05T23:59:59.999").getTime());
+  check("dated: task results pass their items' dates as the cap", /const endsAt = earliestDated\(good\.flatMap\(\(g\) => items\.find\(\(i\) => i\.url === g\.url\)\?\.facts \?\? \[\]\), deps\.now\(\), deps\.zone\);\n\s+const sent = await deps\.send\(messages, \{ owed: owed \|\| task\.source !== "lookout", endsAt \}\);/.test(src("services/taskTurn.ts")) && /doorValidUntil\(coInitiated \? "unsolicited" : "requested", clock\(\), zone, o\?\.endsAt \?\? null\)/.test(src("services/taskTurn.ts")));
+  const t0 = pt("2026-11-02T10:00:00");
+  const longNone = (n: Date): Preference[] => [{ id: "n", area: "contact", channel: "all", covers: "all", rule: { none: true }, basis: "explicit", type: "standing", words: ["nothing for a while"], source: { via: "text", ref: null }, startsAt: null, expiresAt: pt("2026-11-23T00:00:00").toISOString(), zone: ZONE, state: "active", setAt: pt("2026-11-01T08:00:00").toISOString() } as any].filter((p) => n.getTime() < Date.parse(p.expiresAt));
+  const dated = doorText("requested", { id: "dated", arrives: t0, expiresAt: DR.doorValidUntil("requested", t0, ZONE, DR.earliestDated(["date: 2026-11-06"], t0, ZONE)) });
+  const undated = doorText("requested", { id: "undated", arrives: t0, expiresAt: DR.doorValidUntil("requested", t0, ZONE) });
+  const s4 = simulate({ candidates: [dated, undated], from: pt("2026-11-02T09:55:00"), to: pt("2026-11-24T12:00:00"), lastInboundAt: pt("2026-11-02T07:00:00"), joinedAt: pt("2026-10-01T10:00:00"), prefs: longNone });
+  check("late: held three weeks, neither result goes out late: the dated one ends at its date, the undated at the 14-day backstop", s4.sends.length === 0 && s4.expired.includes("dated") && s4.expired.includes("undated"));
+  check("late: the backstop is a real expiry (the dispatch sweep drops and logs it, and the task is noted as never told)", !!undated.expiresAt && undated.expiresAt.getTime() === t0.getTime() + 14 * 86_400_000 && /never went, so they were never told/.test(src("harness/proactiveRegistry.ts")));
+  check("brief: a line that ended at the door is never told, and the brief stops looking", RB.briefLineOutcome({ sent: false, door: true, queued: false, reason: PR.DOOR_ENDED }, 1) === "untold" && RB.briefLineOutcome({ sent: false, door: true, queued: false, reason: "already sent" }, 1) === "told");
+  reset();
+  db.candidates.push({ id: 70, user_id: ELI, type: "task_update", target_key: "research_brief:70", topic_key: "research_brief:70", summary: "s", payload: { door: true, messages: ["x"], cls: "requested" }, due_at: new Date(0), expires_at: new Date(0), priority: 50, status: "expired" });
+  const again = await PR.sendExempt({ userId: ELI, phoneNumber: PHONE, type: "task_update", targetKey: "research_brief:70", messages: ["x"], timezone: ZONE, door: { summary: "s", validUntil: DR.doorValidUntil("requested", new Date(), ZONE) } });
+  check("brief: handing over a line that already ended says so (not 'already sent')", again.door === true && again.queued === false && again.reason === PR.DOOR_ENDED && db.outbox.length === 0);
+  check("brief: the task kept open for its line closes when the line ends (next_check_at cleared), so the 12h look stops", /closeTask\(c\.userId, Number\(p\.taskId\), "dropped"/.test(src("harness/proactiveRegistry.ts")) && /next_check_at = NULL/.test(src("services/coTasks.ts")));
+  let at = pt("2026-11-03T10:00:00");
+  let exp: Date | null = DR.doorValidUntil("intro", at, ZONE);
+  let lapsed = false;
+  for (let i = 0; i < 3 * 48; i++) {
+    const deferTo = new Date(at.getTime() + 30 * MIN);
+    exp = DR.deferredDoorExpiry(exp, deferTo);
+    at = deferTo;
+    if (!exp || exp.getTime() <= at.getTime()) lapsed = true;
+  }
+  check("pause: through a three-day matching pause, the deferred intro ask never expires (its valid-until stays ahead of each defer)", !lapsed && !!exp && exp.getTime() > pt("2026-11-06T10:00:00").getTime());
+  check("pause: the dispatch's defer writes that valid-until for a door text", /THEN \$4::timestamptz WHEN type = 'event_offer'/.test(src("harness/proactive.ts")) && /deferredDoorExpiry\(c\.expiresAt, draft\.defer\)/.test(src("harness/proactive.ts")));
 }
 
 console.log(`\none door: ${total - failed}/${total} passed`);

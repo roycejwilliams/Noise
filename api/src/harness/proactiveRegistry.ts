@@ -253,7 +253,7 @@ async function doorStillStands(c: Candidate, now: Date = new Date()): Promise<{ 
   }
   return null;
 }
-export const DOOR_DROPPED_NOTE = "The text queued for them never went";
+export const DOOR_DROPPED_NOTE = "The text queued for them never went, so they were never told";
 const doorEntry: TypeSpec = {
   async draft(c) {
     const p = (c.payload ?? {}) as DoorPayload;
