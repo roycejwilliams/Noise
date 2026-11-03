@@ -372,9 +372,12 @@ export function introSendOutcome(error: { name?: string | null; statusCode?: num
 
 // Pure: the email itself, from the pair in one order (by id) and the event's own name, so a retry after a crash builds the
 // very same email the first try did (the idempotency key covers the same body only).
-export function introEmailContent(eventName: string, x: { user_id: string; first_name: string }, y: { user_id: string; first_name: string }): { subject: string; html: string; first: string; second: string } {
+export function introEmailContent(eventName: string, x: { user_id: string; first_name: string }, y: { user_id: string; first_name: string }): { subject: string; html: string; first: string; second: string; body: string[]; close: string } {
   const [a, b] = x.user_id < y.user_id ? [x, y] : [y, x];
   return {
+    // The same content, for a member who gets it by text (services/introByText.ts).
+    body: [`You were both at ${eventName}, and Cue thought you two should meet. Consider this your introduction.`],
+    close: "You both said yes. Take it from here.",
     subject: `Introducing ${a.first_name} and ${b.first_name}`,
     html: galleryEmail({
       preview: `From ${eventName}: Cue thinks you two should meet.`,
@@ -420,10 +423,13 @@ async function sendIntroEmail(eventId: string, _callerEventName: string, a: Matc
   const claim = aYes && bYes && !paused && !sentBefore ? await RM.claimIntroSend(eventId, a.user_id, b.user_id) : "ok";
   const claimCheck = claim === "taken" ? { name: "intro_claim", pass: false, reason: "another reply is already sending this intro" } : { name: "intro_claim", pass: true };
   if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes), pauseCheck, onceCheck, claimCheck], { eventId, b: b.user_id }))) return false;
-  // No email on file for one of them: nothing to retry.
-  if (!a.email || !b.email) {
+  // A member with no email (none, or the placeholder, never a send address) gets the intro by text (Royce, 2026-11-03: services/
+  // introByText.ts). Neither an email nor a phone for one of them: nothing to retry.
+  const IT = await import("./introByText.js");
+  const channels = IT.introChannels(a as any, b as any);
+  if (channels.text.some((p) => !p.phone_number)) {
     if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
-    await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "missing email", true);
+    await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "no email and no phone", true);
     return false;
   }
 
@@ -435,16 +441,19 @@ async function sendIntroEmail(eventId: string, _callerEventName: string, a: Matc
     await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "event name unreadable");
     return false;
   }
-  const { subject, html } = introEmailContent(eventName, a, b);
-  if (!ALLOW_REAL_SENDS) {
-    console.log(`[sendIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
+  const { subject, html, body, close } = introEmailContent(eventName, a, b);
+  const emailTo = channels.email.map((p) => p.email as string);
+  if (!emailTo.length) {
+    // Nobody to email: the text below is the whole intro.
+  } else if (!ALLOW_REAL_SENDS) {
+    console.log(`[sendIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${emailTo.join(", ")}: ${subject}`);
   } else {
     try {
       const resend = new Resend(process.env.RESEND_API_KEY);
       // Co cc'd (Royce, 2026-09-07: "Co would need to be the driver of the
       // email") — visibly present so a reply-all naturally includes it.
       // One email per pair per event, even if a stale claim is ever taken again after a send went out (Resend keeps the key 24h).
-      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: emailTo, cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
       const outcome = introSendOutcome(error as any);
       if (outcome === "already_sent") console.log(`sendIntroEmail: ${eventId} pair was already emailed under this key; recording it as sent`);
       else if (outcome === "in_flight") {
@@ -459,10 +468,20 @@ async function sendIntroEmail(eventId: string, _callerEventName: string, a: Matc
       return false;
     }
   }
+  if (channels.text.length) {
+    const t = await IT.textIntro({ to: channels.text, pair: [a as any, b as any], body, close, key: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
+    if (!t.ok) {
+      // Retried like a failed email (the email's key and the texts' target keys keep a retry from sending twice).
+      if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
+      await RM.noteIntroFailed(eventId, a.user_id, b.user_id, `intro text: ${t.results.find((r) => !r.sent && !r.queued)?.reason ?? "not sent"}`.slice(0, 120));
+      return false;
+    }
+  }
   // The send is confirmed first: from here the claim is spent and the pair reads as introduced.
   await RM.notePairIntroSent(eventId, a.user_id, b.user_id);
-  await writeMemory(a.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
-  await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
+  const how = channels.text.length && channels.email.length ? "an intro by email and text" : channels.text.length ? "an intro by text" : "an intro email";
+  await writeMemory(a.user_id, "event_intro_email_sent", `Sent ${how} connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
+  await writeMemory(b.user_id, "event_intro_email_sent", `Sent ${how} connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
   await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "event_intro")).catch(() => {});
   return true;

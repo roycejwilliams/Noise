@@ -74,7 +74,7 @@ export const calendarAuthUrl = (state: string, challenge: string, env: NodeJS.Pr
 // Grant screens are for members only (Royce, 2026-10-15): never an applicant, a guest, a partner-night guest or an archived account.
 // Checked here, where every link is made, not only by the routing in front of it (review of the grants work).
 export async function isGrantMember(userId: string, db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<boolean> {
-  const { rows } = await db.query(`SELECT 1 FROM users WHERE id = $1 AND invite_verified = true AND identity_captured = true AND archived_at IS NULL`, [userId]);
+  const { rows } = await db.query(`SELECT 1 FROM users WHERE id = $1 AND invite_verified = true AND archived_at IS NULL`, [userId]);
   return rows.length > 0;
 }
 

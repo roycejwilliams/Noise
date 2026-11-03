@@ -88,7 +88,7 @@ export async function findUsersDueForRecap(): Promise<string[]> {
     SELECT u.id AS user_id
     FROM users u
     LEFT JOIN co_profiles cp ON cp.user_id = u.id
-    WHERE u.identity_captured = true
+    WHERE u.invite_verified = true
       AND u.archived_at IS NULL
       AND (cp.last_recap_at IS NULL OR cp.last_recap_at <= NOW() - INTERVAL '3 days')
       AND EXISTS (

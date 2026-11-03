@@ -70,42 +70,42 @@ check(
 const NOW = new Date("2026-09-17T18:00:00Z");
 check(
   "no subscription isn't eligible",
-  !decideAutoIntake({ subscriptionActive: false, identityCaptured: true, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, NOW).eligible,
+  !decideAutoIntake({ subscriptionActive: false, member: true, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, NOW).eligible,
 );
 check(
-  "still doing name/email intake isn't eligible",
-  !decideAutoIntake({ subscriptionActive: true, identityCaptured: false, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, NOW).eligible,
+  "not a member (no invite, or archived) isn't eligible",
+  !decideAutoIntake({ subscriptionActive: true, member: false, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, NOW).eligible,
 );
 check(
   "a real intake call already happened, even with sparse life_chapters",
-  !decideAutoIntake({ subscriptionActive: true, identityCaptured: true, hadRealCall: true, hasRealProfile: false, attempts: 1, lastAttemptAt: null }, NOW).eligible,
+  !decideAutoIntake({ subscriptionActive: true, member: true, hadRealCall: true, hasRealProfile: false, attempts: 1, lastAttemptAt: null }, NOW).eligible,
 );
 check(
   "a real profile on file (goals/activities/blockers/direction) counts as done",
-  !decideAutoIntake({ subscriptionActive: true, identityCaptured: true, hadRealCall: false, hasRealProfile: true, attempts: 0, lastAttemptAt: null }, NOW).eligible,
+  !decideAutoIntake({ subscriptionActive: true, member: true, hadRealCall: false, hasRealProfile: true, attempts: 0, lastAttemptAt: null }, NOW).eligible,
 );
 check(
   "brand new subscriber with nothing on file is eligible",
-  decideAutoIntake({ subscriptionActive: true, identityCaptured: true, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, NOW).eligible,
+  decideAutoIntake({ subscriptionActive: true, member: true, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, NOW).eligible,
 );
 check(
   `caps at ${AUTO_INTAKE_MAX_ATTEMPTS} attempts`,
   !decideAutoIntake(
-    { subscriptionActive: true, identityCaptured: true, hadRealCall: false, hasRealProfile: false, attempts: AUTO_INTAKE_MAX_ATTEMPTS, lastAttemptAt: new Date(NOW.getTime() - 1000 * 3600 * 24 * 30) },
+    { subscriptionActive: true, member: true, hadRealCall: false, hasRealProfile: false, attempts: AUTO_INTAKE_MAX_ATTEMPTS, lastAttemptAt: new Date(NOW.getTime() - 1000 * 3600 * 24 * 30) },
     NOW,
   ).eligible,
 );
 check(
   `doesn't retry within ${AUTO_INTAKE_MIN_GAP_HOURS}h of the last attempt`,
   !decideAutoIntake(
-    { subscriptionActive: true, identityCaptured: true, hadRealCall: false, hasRealProfile: false, attempts: 1, lastAttemptAt: new Date(NOW.getTime() - 1000 * 3600) },
+    { subscriptionActive: true, member: true, hadRealCall: false, hasRealProfile: false, attempts: 1, lastAttemptAt: new Date(NOW.getTime() - 1000 * 3600) },
     NOW,
   ).eligible,
 );
 check(
   `retries once the gap has passed and under the cap`,
   decideAutoIntake(
-    { subscriptionActive: true, identityCaptured: true, hadRealCall: false, hasRealProfile: false, attempts: 1, lastAttemptAt: new Date(NOW.getTime() - 1000 * 3600 * (AUTO_INTAKE_MIN_GAP_HOURS + 1)) },
+    { subscriptionActive: true, member: true, hadRealCall: false, hasRealProfile: false, attempts: 1, lastAttemptAt: new Date(NOW.getTime() - 1000 * 3600 * (AUTO_INTAKE_MIN_GAP_HOURS + 1)) },
     NOW,
   ).eligible,
 );

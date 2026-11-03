@@ -768,8 +768,8 @@ export function loopTools(
       execute: async (input) => {
         await seeded();
         const { rows } = await pool.query(`SELECT email, first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
-        const raw = String(rows[0]?.email ?? "").trim();
-        const email = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(raw) ? raw : "";
+        // The placeholder (pending-...@copatible.pending) is no email: never a send address.
+        const email = (await import("../services/identity.js")).usableEmail(rows[0]?.email) ?? "";
         // By default the plan is a text: the PDF in this conversation. It goes to their email only when they
         // ask for that in their own words this turn (code checks the words, not Co's say-so); with no email on
         // file, an email request becomes a text and Co says so.

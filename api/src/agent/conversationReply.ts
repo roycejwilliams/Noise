@@ -106,6 +106,8 @@ export type ConversationReplyInput = {
   hasPendingOffer: boolean;
   recentOfferBurstActive: boolean;
   callAction: string;
+  // Ignored since 2026-11-03 (review of the onboarding branch, finding 9): a thin profile's first message no longer gets an automatic
+  // call offer. Kept on the input so callers and evals still type-check.
   isThinProfileFirstMessage: boolean;
   isFirstContact: boolean;
   missingTopic: string | null;
@@ -243,6 +245,13 @@ async function holdReply(
   return { sent: false, offered: false, replyText: "", grounding: [], toolsCalled: [], move: "quiet" };
 }
 
+// Pure: whether this reply may offer a call. Only when what they shared would benefit from talking it through (callAction
+// "would_benefit"), never by default: the automatic offer to a new member with a thin profile is gone (Royce, 2026-11-02, onboarding
+// ruling 3; review finding 9), on every path. A pending offer, a recent burst, or the brain's own ask rules it out.
+export function callOfferEligibleFor(input: Pick<ConversationReplyInput, "hasPendingOffer" | "recentOfferBurstActive" | "callAction">, ruledOutByBrain: boolean): boolean {
+  return !input.hasPendingOffer && !input.recentOfferBurstActive && !ruledOutByBrain && input.callAction === "would_benefit";
+}
+
 // Co Loop Stage 1, agentized: replaces the hardcoded shouldOfferCall/
 // usingTopicNudge branching with a tool-calling loop that decides the reply
 // and topic-nudge gesture. Whether a call offer went out is NOT
@@ -361,12 +370,7 @@ export async function runConversationReplyAgent(
     };
   }
 
-  const callOfferEligible =
-    !input.hasPendingOffer &&
-    !input.recentOfferBurstActive &&
-    // The brain's ask is this reply's one question: no call offer beside it.
-    !ruledOut(decision, "call_offer") &&
-    (input.callAction === "would_benefit" || input.isThinProfileFirstMessage);
+  const callOfferEligible = callOfferEligibleFor(input, !!ruledOut(decision, "call_offer"));
 
   // One question a reply (services/coldStart.ts): a reply that offers a call, or answers a safety concern, never also steers.
   if (input.safetyConcern) withdrawColdStartSteer(input.facts, "a safety concern this turn");
@@ -466,7 +470,7 @@ How it looks on a phone:
 - Normal capitalized sentences, however they text.${input.imageForVision ? "\n- React to what's actually in the photo." : ""}
 
 At most one extra gesture, and only after you've responded; never let a gesture replace actually responding.
-${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first real thing they've shared and nothing is known about them yet. A quick, low-pressure call would get further than texting. After responding, offer one, briefly. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.` : `- What they shared could benefit from talking it through by voice. Offer a call as a warm gesture, not a logistics question. Make it a warm, open invitation rather than a scheduling question, and name a call or the phone plainly so it's clear what you mean. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
+${callOfferEligible ? (`- What they shared could benefit from talking it through by voice. Offer a call as a warm gesture, not a logistics question. Make it a warm, open invitation rather than a scheduling question, and name a call or the phone plainly so it's clear what you mean. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
 ${input.missingTopic ? `- Something Cue is still figuring out about them: ${input.missingTopicDescription}. Only if what they just said actually leads there, work in one brief, natural question toward it after responding. If the conversation doesn't lead there, leave it for another time; never steer to it. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
 
 Then act with your tools:

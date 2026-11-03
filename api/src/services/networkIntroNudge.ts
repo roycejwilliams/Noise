@@ -426,20 +426,30 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
   // Already connected another way (an event intro, one of them said so, a personal invite): no intro email (services/knownConnections.ts).
   const connected = await (await import("./knownConnections.js")).alreadyConnected(a.user_id, b.user_id, { exceptNetwork: true });
   const connectedCheck = connected.known ? { name: "not_already_connected", pass: false, reason: connected.why } : { name: "not_already_connected", pass: true };
-  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes), await introEmailHiddenCheck(matchReason, [a.user_id, b.user_id]), connectedCheck], { b: b.user_id }))) return "failed";
+  // A member with no email (none, or the placeholder, never a send address) gets the intro by text (Royce, 2026-11-03: services/
+  // introByText.ts). Neither an email nor a phone for one of them: not sent.
+  const IT = await import("./introByText.js");
+  const channels = IT.introChannels(a as any, b as any);
+  const reachCheck = channels.text.some((p) => !p.phone_number) ? { name: "both_reachable", pass: false, reason: "one of them has no email and no phone" } : { name: "both_reachable", pass: true };
+  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes), await introEmailHiddenCheck(matchReason, [a.user_id, b.user_id]), connectedCheck, reachCheck], { b: b.user_id }))) return "failed";
   // The pair in one order (by id), so a retry from either side or after a crash builds the very same email: the send's
   // idempotency key covers the same body only (as eventGuestMatchHandoff.ts introEmailContent).
   const [p1, p2] = a.user_id < b.user_id ? [a, b] : [b, a];
   const subject = `Introducing ${p1.first_name} and ${p2.first_name}`;
+  const body = [matchReason, "Cue figured you two should actually meet. Consider this your introduction."];
+  const close = "You both said yes. Take it from here.";
   const html = galleryEmail({
     preview: `Cue thinks you two should meet.`,
     eyebrow: "An introduction",
     headline: `${p1.first_name}, meet ${p2.first_name}.`,
-    body: [matchReason, "Cue figured you two should actually meet. Consider this your introduction."],
-    close: "You both said yes. Take it from here.",
+    body,
+    close,
   });
-  if (!ALLOW_REAL_SENDS) {
-    console.log(`[sendNetworkIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
+  const emailTo = channels.email.map((p) => p.email as string);
+  if (!emailTo.length) {
+    // Nobody to email: the text below is the whole intro.
+  } else if (!ALLOW_REAL_SENDS) {
+    console.log(`[sendNetworkIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${emailTo.join(", ")}: ${subject}`);
   } else {
     try {
       const resend = new Resend(process.env.RESEND_API_KEY);
@@ -451,13 +461,20 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
       // chat does, so Co doesn't act on anything that comes back here; the
       // real outcome signal stays the existing proactive SMS check-in.
       // One email per pair, even when a stale claim is retaken after a send went out (Resend keeps the key 24h).
-      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [p1.email, p2.email], cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `network-intro:${p1.user_id}:${p2.user_id}` });
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: emailTo, cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `network-intro:${p1.user_id}:${p2.user_id}` });
       const outcome = (await import("./eventGuestMatchHandoff.js")).introSendOutcome(error as any);
       if (outcome === "already_sent") console.log("sendNetworkIntroEmail: this pair was already emailed under this key; recording it as sent");
       else if (outcome === "in_flight") throw new Error("a send with this key is in flight");
       else if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);
+      return "failed";
+    }
+  }
+  if (channels.text.length) {
+    const t = await IT.textIntro({ to: channels.text, pair: [p1 as any, p2 as any], body, close, key: `network-intro:${p1.user_id}:${p2.user_id}` });
+    if (!t.ok) {
+      console.error("sendNetworkIntroEmail: the intro text didn't go (non-fatal):", t.results.find((r) => !r.sent && !r.queued)?.reason);
       return "failed";
     }
   }
@@ -468,7 +485,7 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
     console.error(`sendNetworkIntroEmail: the email went but its record didn't save (${x}, ${y}); a retake within ${NETWORK_RETAKE_MAX_HOURS}h is deduplicated by the key`);
     await recordDecision({ layer: 6, decision: "match.introEmail", userId: a.user_id, outcome: "skip", action: "sent_unrecorded", proposal: { a: x, b: y }, reason: "email_sent_at write failed after the send" }).catch(() => {});
   }
-  await writeMemory(a.user_id, "event_intro_email_sent", `Sent a network intro email connecting ${a.first_name} and ${b.first_name}: ${matchReason}`);
+  await writeMemory(a.user_id, "event_intro_email_sent", `Sent a network intro ${channels.text.length ? (channels.email.length ? "by email and text" : "by text") : "email"} connecting ${a.first_name} and ${b.first_name}: ${matchReason}`);
   // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
   await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "network_intro")).catch(() => {});
   return "sent";

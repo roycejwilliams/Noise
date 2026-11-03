@@ -260,8 +260,8 @@ export const AUTO_INTAKE_MIN_GAP_HOURS = 48;
 
 export type AutoIntakeState = {
   subscriptionActive: boolean;
-  // False only for a placeholder row still doing name/email intake by text.
-  identityCaptured: boolean;
+  // Invite-verified and not archived. Their name or email being on file isn't a condition (ruling A, 2026-11-02).
+  member: boolean;
   // A stored call transcript that isn't just the dial marker.
   hadRealCall: boolean;
   // Goals, activities, blockers, or a long-term direction on file.
@@ -272,7 +272,7 @@ export type AutoIntakeState = {
 
 export function decideAutoIntake(s: AutoIntakeState, now: Date): { eligible: boolean; reason: string } {
   if (!s.subscriptionActive) return { eligible: false, reason: "no active subscription" };
-  if (!s.identityCaptured) return { eligible: false, reason: "still getting their name and email by text" };
+  if (!s.member) return { eligible: false, reason: "not a member" };
   if (s.hadRealCall) return { eligible: false, reason: "intake call already happened" };
   if (s.hasRealProfile) return { eligible: false, reason: "a real profile already exists" };
   if (s.attempts >= AUTO_INTAKE_MAX_ATTEMPTS) return { eligible: false, reason: `already tried ${s.attempts} intake calls` };
@@ -289,7 +289,7 @@ export async function gatherCallState(
 ): Promise<CallState> {
   const [extra, lastCall, scheduled, inbound, routerDecision, intakeAttempts] = await Promise.all([
     pool.query(
-      `SELECT u.sms_opted_out, COALESCE(u.identity_captured, true) AS identity_captured, cp.city, cp.checkin_call_cadence_days,
+      `SELECT u.sms_opted_out, (COALESCE(u.invite_verified, true) AND u.archived_at IS NULL) AS member, cp.city, cp.checkin_call_cadence_days,
               (cp.user_id IS NOT NULL AND (
                  COALESCE(array_length(cp.goals, 1), 0) > 0
                  OR COALESCE(array_length(cp.activity_preferences, 1), 0) > 0
@@ -344,7 +344,7 @@ export async function gatherCallState(
   const intake = decideAutoIntake(
     {
       subscriptionActive: user.subscription_status === "active",
-      identityCaptured: x.identity_captured !== false,
+      member: x.member !== false,
       hadRealCall: x.had_real_call === true,
       hasRealProfile: x.has_real_profile === true,
       attempts: Number(intakeAttempts.rows[0]?.n ?? 0),

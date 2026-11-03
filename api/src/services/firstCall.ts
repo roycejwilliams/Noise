@@ -60,7 +60,8 @@ export async function firstCallFacts(userId: string, db: Db = pool): Promise<Fir
     .catch(() => 1);
   if (!isFirstCall(past)) return { firstCall: false };
   const { notToTeammate } = await import("./teamLines.js");
-  const [texts, inviter, user, removed] = await Promise.all([
+  const { NAME_EMAIL } = await import("./onboardingLines.js");
+  const [texts, inviter, user, removed, oldLine] = await Promise.all([
     db
       .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 20`, [userId])
       .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/, "")))
@@ -71,6 +72,11 @@ export async function firstCallFacts(userId: string, db: Db = pool): Promise<Fir
       .catch(() => null),
     db.query(`SELECT email, intake_retries FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     import("./whatCoKnows.js").then((W) => W.forgottenRows(userId, db as any).then((rows) => ({ W, rows: rows.filter((g) => g.removed) }))).catch(() => null),
+    // The old door's name-and-email line counts as the one ask (members mid-intake when the 2026-11-02 change shipped).
+    db
+      .query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = ANY($2::text[]) LIMIT 1`, [userId, NAME_EMAIL.map((l) => `Co replied: ${l}`)])
+      .then((r) => r.rows.length > 0)
+      .catch(() => false),
   ]);
   // What their removals took back never reaches the call (Royce, 10-14 ruling B).
   const kept = removed?.rows.length ? texts.map((t) => removed.W.guardText(t, removed.rows)).filter((t): t is string => !!t && !!t.trim()) : texts;
@@ -81,6 +87,6 @@ export async function firstCallFacts(userId: string, db: Db = pool): Promise<Fir
     theirWords: openingWords(kept),
     inviter: inviterNamedByThem(inviter, kept),
     emailOnFile: !!email && !hasPendingEmail(email),
-    emailAsked: Number(user?.intake_retries ?? 0) > 0,
+    emailAsked: Number(user?.intake_retries ?? 0) > 0 || oldLine,
   };
 }

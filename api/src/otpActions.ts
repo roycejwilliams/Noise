@@ -3,6 +3,7 @@ import "dotenv/config";
 import sendblue from "./services/sendblue.js";
 import { CARD, HOW_IT_WORKS, NAME_EMAIL, WELCOME, pickLine } from "./services/onboardingLines.js";
 import { CO_EMAIL_FROM } from "./services/emailFrom.js";
+import { usableEmail } from "./services/identity.js";
 import { letterpressEmail, quietEmail, spacedCode } from "./services/emailDesign.js";
 
 // Real sends are on by default in production, and everywhere else only
@@ -154,7 +155,8 @@ export const sendEmail = async ({
     },
   };
   try {
-    if (!email) return;
+    // The placeholder (pending-...@copatible.pending) is no email: nothing is ever sent to it.
+    if (!usableEmail(email)) return;
 
     // Design: services/emailDesign.ts (Figma "Email Campaigns", 2026-09-24).
     // Codes and account notes use Quiet; the welcome uses Letterpress.

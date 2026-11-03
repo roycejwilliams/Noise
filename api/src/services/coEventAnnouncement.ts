@@ -23,9 +23,10 @@ import { START_LEAD_MINUTES, eventStartProblem } from "./eventStart.js";
 
 type Person = { id: string; first_name: string | null; phone_number: string; city: string | null };
 
-// Pure: whether this person should get the announcement at all.
-export function announcementAudience(people: { id: string; city: string | null; optedOut: boolean; identityCaptured: boolean }[], nearby: (city: string) => boolean) {
-  return people.filter((p) => !p.optedOut && p.identityCaptured && !!p.city && nearby(p.city));
+// Pure: whether this person should get the announcement at all. A member is invite-verified and not archived; their name or email
+// being on file isn't a condition (ruling A, 2026-11-02: a member who declined email still hears about events near them).
+export function announcementAudience(people: { id: string; city: string | null; optedOut: boolean; member: boolean }[], nearby: (city: string) => boolean) {
+  return people.filter((p) => !p.optedOut && p.member && !!p.city && nearby(p.city));
 }
 
 async function resolveCityFor(event: LumaEvent): Promise<LumaEvent> {
@@ -87,7 +88,8 @@ export async function announceCoEvent(eventId: string): Promise<{ queued: number
     return { queued: 0, sent: 0 };
   }
   const { rows } = await pool.query(
-    `SELECT u.id, u.first_name, u.phone_number, p.city, COALESCE(u.sms_opted_out, false) AS opted_out, COALESCE(u.identity_captured, false) AS identity_captured
+    `SELECT u.id, u.first_name, u.phone_number, p.city, COALESCE(u.sms_opted_out, false) AS opted_out,
+            (COALESCE(u.invite_verified, false) = true AND u.archived_at IS NULL) AS member
      FROM users u LEFT JOIN co_profiles p ON p.user_id = u.id
      WHERE u.phone_number IS NOT NULL`,
   );
@@ -96,12 +98,12 @@ export async function announceCoEvent(eventId: string): Promise<{ queued: number
     if (r.city && !distances.has(r.city)) distances.set(r.city, await withinRadius(event.city, r.city).catch(() => false));
   }
   const audience = announcementAudience(
-    rows.map((r: any) => ({ id: r.id, city: r.city, optedOut: r.opted_out, identityCaptured: r.identity_captured })),
+    rows.map((r: any) => ({ id: r.id, city: r.city, optedOut: r.opted_out, member: r.member === true })),
     (city) => distances.get(city) === true,
   );
   for (const r of rows) {
     if (!audience.some((a) => a.id === r.id)) {
-      await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.id, outcome: "skip", action: r.opted_out ? "opted_out" : "not_nearby", proposal: { eventId, eventCity: event.city, theirCity: r.city } }).catch(() => {});
+      await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.id, outcome: "skip", action: r.opted_out ? "opted_out" : r.member !== true ? "not_a_member" : "not_nearby", proposal: { eventId, eventCity: event.city, theirCity: r.city } }).catch(() => {});
     }
   }
   let queued = 0;
@@ -250,7 +252,7 @@ async function draftAnnouncement(person: Person, event: LumaEvent): Promise<stri
   try {
     const drafted = await draftProactive({
       functionId: "tier1.announce",
-      firstName: person.first_name ?? "there",
+      firstName: person.first_name?.trim() || "there", // a member's name may not be on file yet (ruling A)
       facts: { event_co_is_hosting: record },
       task: `Noise is hosting this event and wants them to see it first. The link preview is already showing above this message, so this is its caption: say it's Noise's own event, when and where, and the one detail that makes it worth coming. Use only event_co_is_hosting. Don't mention the link or sending it.`,
     });

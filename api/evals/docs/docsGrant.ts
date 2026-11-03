@@ -48,7 +48,7 @@ const DF = "https://www.googleapis.com/auth/drive.file";
   const grants: Record<string, any> = { calendar_grants: null, docs_grants: null };
   const states: { kind: string }[] = [];
   (pool as any).query = async (q: string, a: any[] = []) => {
-    if (/FROM users WHERE id = \$1 AND invite_verified = true AND identity_captured = true AND archived_at IS NULL/.test(q)) return { rows: a[0] === "u-guest" ? [] : [{ x: 1 }] };
+    if (/FROM users WHERE id = \$1 AND invite_verified = true AND archived_at IS NULL/.test(q)) return { rows: a[0] === "u-guest" ? [] : [{ x: 1 }] };
     if (/INSERT INTO google_oauth_states/.test(q)) {
       states.push({ kind: a[4] });
       return { rows: [], rowCount: 1 };
@@ -139,7 +139,7 @@ const DF = "https://www.googleapis.com/auth/drive.file";
   const { default: pool } = await import("../../src/db/db.js");
   const real = (pool as any).query;
   const links: string[] = [];
-  (pool as any).query = async (q: string) => (/INSERT INTO google_oauth_states/.test(q) && links.push(q), /FROM users WHERE id = \$1 AND invite_verified = true AND identity_captured = true AND archived_at IS NULL/.test(q) ? { rows: [{ x: 1 }] } : { rows: [], rowCount: 1 });
+  (pool as any).query = async (q: string) => (/INSERT INTO google_oauth_states/.test(q) && links.push(q), /FROM users WHERE id = \$1 AND invite_verified = true AND archived_at IS NULL/.test(q) ? { rows: [{ x: 1 }] } : { rows: [], rowCount: 1 });
   try {
     const early = await (googleTools(ctx, (t) => notDone.push(t), { docsMoment: async () => false }).docsConnection as any).execute({ action: "connect" }, {});
     check("asked before any document: no link made, none sent, and Cue is told not to offer it", early.ok === false && links.length === 0 && sent.length === 0 && /Don't send a link or offer it now/.test(early.error) && /no document has been made/.test(notDone.at(-1) ?? ""));

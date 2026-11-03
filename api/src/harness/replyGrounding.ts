@@ -611,12 +611,14 @@ export function introRecordLines(type: string, content: string, at: Date, ownFir
     return m ? [`Cue's record${day}: Cue told them ${m[1]}, another member, also got to "${m[2]}" and is worth meeting.`] : [];
   }
   if (type === "event_intro_email_sent") {
-    const m = content.match(new RegExp(`^Sent an? (?:network )?intro email connecting ${FIRST} and ${FIRST}`, "u"));
+    // An intro to a member with no email goes by text (services/introByText.ts, 2026-11-03): "intro by text", "intro by email and text".
+    const m = content.match(new RegExp(`^Sent an? (?:network )?intro (?:email|by text|by email and text) connecting ${FIRST} and ${FIRST}`, "u"));
+    const how = /^Sent an? (?:network )?intro by text /.test(content) ? "intro by text" : /^Sent an? (?:network )?intro by email and text /.test(content) ? "intro by email and text" : "intro email";
     if (!m) return [];
     const other = ownFirstName && m[1] === ownFirstName ? m[2] : ownFirstName && m[2] === ownFirstName ? m[1] : null;
     if (!other) return [];
     const event = content.match(/ ahead of "([^"]{1,120})"\.?$/)?.[1];
-    return [`Cue's record${day}: Cue sent one intro email connecting them with ${other}, another member${event ? `, ahead of "${event}"` : ""}.`];
+    return [`Cue's record${day}: Cue sent one ${how} connecting them with ${other}, another member${event ? `, ahead of "${event}"` : ""}.`];
   }
   return [];
 }

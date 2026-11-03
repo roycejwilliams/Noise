@@ -1241,7 +1241,7 @@ export function registerJobs(io: Server) {
          JOIN co_profiles cp ON cp.user_id = u.id
          WHERE u.sms_opted_out = false
            AND u.archived_at IS NULL
-           AND u.identity_captured = true
+           AND u.invite_verified = true
            AND cp.last_recap_at IS NOT NULL
            AND (
              (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '4 days')

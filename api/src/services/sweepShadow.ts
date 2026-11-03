@@ -34,7 +34,7 @@ export const pickerLive = () => reviewEnabled();
 // completes for a member (floor and hourly)"; later: "I want the sweeps to run for everyone"): everyone's picker runs after each of
 // their sweeps (runPickerAfterSweep). The shadow accounts' own 10am run and its retry are off since 2026-10-29 (efficiency phase 1a).
 export const pickerUserIds = async (_env: NodeJS.ProcessEnv = process.env): Promise<string[]> =>
-  (await pool.query(`SELECT id FROM users WHERE archived_at IS NULL AND phone_number IS NOT NULL AND phone_number NOT LIKE '%#%' AND identity_captured = true AND invite_verified = true`)).rows.map((r: any) => String(r.id));
+  (await pool.query(`SELECT id FROM users WHERE archived_at IS NULL AND phone_number IS NOT NULL AND phone_number NOT LIKE '%#%' AND invite_verified = true`)).rows.map((r: any) => String(r.id));
 
 export async function shadowUserIds(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const ids = (env.SWEEP_SHADOW_USER_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);

@@ -317,15 +317,15 @@ onboardingCaseCases.push(
     [resolveCoEventCity("", null, undefined).city === "San Francisco", "no home city set: San Francisco"],
     [(() => {
       const people = [
-        { id: "near", city: "Oakland", optedOut: false, identityCaptured: true },
-        { id: "far", city: "New York", optedOut: false, identityCaptured: true },
-        { id: "opted", city: "San Francisco", optedOut: true, identityCaptured: true },
-        { id: "mid-onboarding", city: "San Francisco", optedOut: false, identityCaptured: false },
-        { id: "no-city", city: null, optedOut: false, identityCaptured: true },
+        { id: "near", city: "Oakland", optedOut: false, member: true },
+        { id: "far", city: "New York", optedOut: false, member: true },
+        { id: "opted", city: "San Francisco", optedOut: true, member: true },
+        { id: "no-invite", city: "San Francisco", optedOut: false, member: false },
+        { id: "no-city", city: null, optedOut: false, member: true },
       ];
       const ids = announcementAudience(people, (c) => c !== "New York").map((p) => p.id);
       return ids.length === 1 && ids[0] === "near";
-    })(), "a new Cue event goes to everyone nearby, never far away, opted out, mid-onboarding or with no city"],
+    })(), "a new Cue event goes to every member nearby, never far away, opted out, without an invite or with no city"],
     [offerScore(0.4, 0.6, false) > offerScore(0.45, 0.2, false), "with a profile, a slightly weaker ask match that suits them better comes first"],
     [offerScore(0.6, 0.1, false) > offerScore(0.35, 0.3, false), "a much stronger ask match still beats a small profile edge"],
     [offerScore(0.1, 0.7, true) === 0.7, "a what's-on ask is ordered by the profile"],

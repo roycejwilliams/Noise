@@ -79,7 +79,7 @@ export function rhythmOf(lines: RhythmLine[], sends: Date[], zone: string): Omit
 // The team's view: every live member, over the last `days`. Read-only.
 export async function engagementRhythm(days = 28): Promise<RhythmRow[]> {
   const d = String(Math.min(90, Math.max(1, Math.floor(days))));
-  const { rows: members } = await pool.query(`SELECT u.id, u.first_name, u.last_name FROM users u WHERE u.archived_at IS NULL AND u.phone_number IS NOT NULL AND u.phone_number NOT LIKE '%#%' AND u.identity_captured = true AND u.invite_verified = true ORDER BY u.created_at`);
+  const { rows: members } = await pool.query(`SELECT u.id, u.first_name, u.last_name FROM users u WHERE u.archived_at IS NULL AND u.phone_number IS NOT NULL AND u.phone_number NOT LIKE '%#%' AND u.invite_verified = true ORDER BY u.created_at`);
   const { rows: lines } = await pool.query(
     `SELECT user_id, created_at, (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%') AS theirs FROM co_memories
       WHERE memory_type = 'text_exchange' AND ${notToTeammate()} AND (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%' OR content LIKE 'Co replied:%' OR content LIKE 'Co is looking:%')
