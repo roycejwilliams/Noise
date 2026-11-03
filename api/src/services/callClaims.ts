@@ -127,19 +127,35 @@ export function jobClaimKind(sentence: string): JobClaim | null {
   }
   return promisesLaterWork(s) ? "promise" : null;
 }
-// thisTurn: jobs that came back done (or were queued as owed) in this turn; corpus: what they and Cue's records say (goals, their
-// words, steps, the owed items' names); onCall: a job was started or queued earlier on this call.
-export type JobState = { thisTurn: number; corpus: string; onCall: boolean };
+// The jobs a claim may stand on (review of #365: the backing text was Cue's whole records, so a find listed earlier on the call, a loop
+// or an old task's words backed "I've started looking for jazz at The Chapel" with no job behind it):
+//   thisTurn  jobs that came back done (or were queued as owed) in this turn
+//   corpus    job text only: this turn's start inputs and results, open tasks' goals, jobs started or queued earlier on this call
+//             (goals and their words), owed items' names. Never finds, loops or anything else on record.
+//   callJobs  the jobs started or queued on this call (this turn included), as text
+//   onCall    a job was started or queued earlier on this call
+//   need      their words this turn: what a promise with no subject of its own ("I'll text you what I find") is about
+export type JobState = { thisTurn: number; corpus: string; callJobs: string; onCall: boolean; need: string };
 // Words a claim about work uses whatever the work is: never its subject.
 const JOB_PLAIN = new Set("started starting kicked queued underway motion works running going already working task tasks search searching looking moving setting same still again yet one ones while soon nothing anything something everything around".split(" "));
 const stemsOf = (w: string) => [w, w.replace(/'s$/, ""), w.replace(/ies$/, "y"), w.replace(/es$/, ""), w.replace(/s$/, ""), w.replace(/ing$/, ""), w.replace(/ed$/, "")].filter((x) => x.length >= 3);
+const hayOf = (t: string) => ` ${t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ")} `;
+const inHay = (w: string, hay: string) => stemsOf(w).some((x) => hay.includes(` ${x}`));
+const subjectOf = (t: string) => promiseTopic(t).filter((w) => !JOB_PLAIN.has(w) && !w.includes("'"));
 // Pure: whether a job backs this claim.
+//   a claim with a subject ("I'll text you the caterers"): a job exists (this turn or on this call) and every subject word is in job text
+//   a claim with none ("I'll text you what I find", "I'm on it"): a job started on this call for what they asked this turn (its words
+//   share one of theirs), or one started this turn when their words name nothing ("yes please")
 export function jobBacked(sentence: string, j: JobState): boolean {
   if (jobClaimKind(sentence) === "booked") return false;
-  const topic = promiseTopic(sentence).filter((w) => !JOB_PLAIN.has(w) && !w.includes("'"));
-  if (!topic.length) return j.thisTurn > 0 || j.onCall;
-  const hay = ` ${j.corpus.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ")} `;
-  return topic.every((w) => stemsOf(w).some((x) => hay.includes(` ${x}`)));
+  const topic = subjectOf(sentence);
+  if (topic.length) {
+    if (!(j.thisTurn > 0 || j.onCall)) return false;
+    const hay = hayOf(j.corpus);
+    return topic.every((w) => inHay(w, hay));
+  }
+  const need = subjectOf(j.need);
+  if (!need.length) return j.thisTurn > 0;
+  const calls = hayOf(j.callJobs);
+  return need.some((w) => inHay(w, calls));
 }
-// Pure: Cue's records name a job it started or queued earlier on this call (services/callTools.ts callRecords "Done earlier on this call").
-export const jobOnRecord = (records: string): boolean => /\bStarted task #\d+|\bAlready started on this call|\bOwed right after the call\b|\bStarted researching\b|\bsaved an ask\b/i.test(records);

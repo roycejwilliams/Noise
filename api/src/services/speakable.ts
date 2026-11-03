@@ -172,8 +172,12 @@ export class SpeakableStream {
   // keep: a sentence the word cap never holds (a safety line: 2026-11-02, a crisis instruction past the cap was dropped like any other).
   constructor(private o: { maxSentenceWords?: number; maxReplyWords?: number; maxSentences?: number; keep?: (s: string) => boolean } = {}) {}
 
-  private get maxS() { return this.o.maxSentenceWords ?? MAX_SENTENCE_WORDS; }
-  private get maxR() { return this.o.maxReplyWords ?? MAX_REPLY_WORDS; }
+  // Lifted (a safety call or turn, review of #365): no reply cap and no long-sentence split, so no step and no crisis sentence is
+  // dropped or broken up. What the cap was already holding goes out at the end.
+  private lifted = false;
+  lift(): void { this.lifted = true; }
+  private get maxS() { return this.lifted ? Number.POSITIVE_INFINITY : (this.o.maxSentenceWords ?? MAX_SENTENCE_WORDS); }
+  private get maxR() { return this.lifted ? Number.POSITIVE_INFINITY : (this.o.maxReplyWords ?? MAX_REPLY_WORDS); }
 
   // Each finished sentence goes out now, or is held once the reply is past its word cap.
   private emit(sentences: string[], out: string[]) {
@@ -249,6 +253,7 @@ export class SpeakableStream {
     this.buf = normalize(this.buf);
     this.drain(true, out);
     if (this.buf.trim()) { const rest = this.buf; this.buf = ""; this.finish(rest, false, out); }
+    if (this.lifted && this.held.length) { for (const h of this.held) out.push(h + " "); this.held = []; }
     const last = this.o.maxSentences !== undefined ? undefined : this.held[this.held.length - 1];
     const kept = !!last && /\?$/.test(last) && this.emitted + wordCount(last) <= this.maxR + CLOSING_QUESTION_EXTRA_WORDS;
     if (kept) out.push(last + " ");

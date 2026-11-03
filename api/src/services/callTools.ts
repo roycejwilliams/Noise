@@ -41,6 +41,8 @@ function within<T>(work: Promise<T>, ms: number): Promise<T | typeof STILL_GOING
   return Promise.race([work, late]).finally(() => { if (timer) clearTimeout(timer); });
 }
 const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
+// A start tool run again on the same call this soon after it came back done is a retry of it (a re-sent delegation), not a new ask.
+export const START_RETRY_MS = 20_000;
 // The call subset is the registry's onCall entries on the allow-list (services/capabilities.ts), the same entries the call
 // briefing's list is written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
 import { VOICE_READ_OFF_ON_CALL_NOTE } from "./voiceReadConsent.js";
@@ -80,7 +82,10 @@ const CALL_MEMORY_MS = 60 * 60_000;
 // found: events a search on this call returned, by name. owed: links a send on this call didn't get to them yet (sent the moment
 // the call ends). inflight: what a send that's still running was for, by its tool call, so a timeout knows what's owed.
 type OnFile = { name: string; url: string; caption: string };
-type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
+// jobs: durable work started or queued on this call (its goal and their words, or what an owed send was for): what a spoken "I've
+// started" or "I'll text you" may stand on (callClaims.ts jobBacked). started: each start tool's last done result and when, so a retry
+// inside START_RETRY_MS is that job, whatever its words.
+type CallMem = { jobs?: string[]; started?: Record<string, { at: number; result: unknown }>; at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
 const callMemory = new Map<string, CallMem>();
 function memoryFor(key: string): CallMem {
   const now = Date.now();
@@ -464,6 +469,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     const fresh = items.filter((x) => !(mem.owed ?? []).some((o) => o.url === x.url));
     if (!fresh.length) return;
     mem.owed = [...(mem.owed ?? []), ...fresh];
+    (mem.jobs ??= []).push(`Owed right after the call: ${fresh.map((x) => x.name).join(", ")}`);
     mem.did.push(`Owed right after the call: ${fresh.map((x) => x.name).join(", ")} (the text didn't reach them on the call). Don't send it again on the call; it goes the moment they hang up.`);
     writes.push(recordOwed(fresh, why, tool).catch((err: any) => { owedWriteFailed = true; console.error("call: recording what's owed after the call failed (non-fatal):", err?.message ?? err); }));
   };
@@ -474,6 +480,10 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   };
   const run: CallToolset["run"] = async (name, input, toolUseId) => {
     const t = picked[name];
+    // The same start tool again on this call within a few seconds (a retried delegation, the same ask re-sent) is the job it just
+    // started, whatever words it was given this time: never a second job (review of #365: the need key alone let a reworded retry in).
+    const prev = mem.started?.[name];
+    if (prev && Date.now() - prev.at < START_RETRY_MS) return { ...(prev.result as object), alreadyStarted: true, note: "That was just started on this call; this is the same job, not a new one. If they changed something about it, write it on it with updateTask." };
     // The allow-list holds here too: nothing off it runs on a call, whatever the model asks for.
     const plan: CallRun | null = callRunFor(name);
     if (!t || !plan) return { ok: false, error: `No tool named ${name} on a call.` };
@@ -576,6 +586,12 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
       }
       mem.inflight?.delete(toolUseId);
     } else result = await work;
+    // Durable work that came back done: a job this call may speak of.
+    if (startsWork(name) && result && (result as any).ok !== false && !(result as any).stillRunning) {
+      const d: any = parsed.data ?? {};
+      (mem.jobs ??= []).push([d.goal, d.what, d.theirWords, ...(Array.isArray(d.steps) ? d.steps : [])].filter((x) => typeof x === "string" && x).join(" | ").slice(0, 600));
+      (mem.started ??= {})[name] = { at: Date.now(), result };
+    }
     // A stop or a no to the voice read on this call: from now on the call drops its lines and every turn's note says so. One still
     // running at its timeout counts too: their stop is never held up by a slow write.
     if (name === "voiceRead" && (result?.ok !== false || result?.stillRunning) && ((parsed.data as any)?.answer === "stop" || (parsed.data as any)?.answer === "no")) mem.voiceReadOff = true;
@@ -596,6 +612,8 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     pending: async () => { await Promise.allSettled(writes); },
     texts: textsThem,
     starts: startsWork,
+    // Job text only (callClaims.ts JobState): open tasks' goals and the jobs started or queued on this call. Never finds or loops.
+    jobs: { corpus: [...i.member.tasks.map((t) => t.goal), ...(mem.jobs ?? [])].join("\n"), callJobs: (mem.jobs ?? []).join("\n") },
     owedDurable: async () => { await Promise.allSettled(writes); return !owedWriteFailed; },
     // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the
     // same guarded updateTask (limits, receipt, decision log, Co's action record).

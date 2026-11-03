@@ -116,7 +116,7 @@ const tool = (id: string, name: string, args: unknown, index = 1) => [
   { type: "content_block_stop", index },
 ];
 const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", tier: 2 as const, lines: ['"Rooftop Jazz Night" starts Saturday, November 7 at 8:00 PM and ends 11:00 PM (America/Los_Angeles).', '"Rooftop Jazz Night" is at The Chapel, 777 Valencia St.'] };
-type Opts = { member?: Partial<Parameters<typeof CT.buildCallTools>[0]["member"]>; sends?: (text: string) => Promise<boolean>; outbound?: boolean };
+type Opts = { member?: Partial<Parameters<typeof CT.buildCallTools>[0]["member"]>; sends?: (text: string) => Promise<boolean>; outbound?: boolean; settleMs?: number; gaps?: Record<number, number> };
 function bridge(replies: any[][], o: Opts = {}) {
   reset();
   const tw = new FakeSocket(), ai = new FakeSocket();
@@ -126,12 +126,14 @@ function bridge(replies: any[][], o: Opts = {}) {
   B.setLiveDeps({
     connectOpenAI: () => { setImmediate(() => ai.emit("open")); return ai as any; },
     apiKey: () => "sk-test",
-    upstream: (r: any) => { reqs.push(JSON.parse(JSON.stringify(r))); const ev = replies.shift() ?? text("Mm."); return (async function* () { for (const e of ev) { await new Promise((x) => setImmediate(x)); yield e as any; } })(); },
+    // gaps: request n's stream pauses gapMs before its first tool use (a tool decided while something else happens on the line).
+    upstream: (r: any) => { reqs.push(JSON.parse(JSON.stringify(r))); const n = reqs.length; const ev = replies.shift() ?? text("Mm."); return (async function* () { for (const e of ev) { if ((e as any).type === "content_block_start" && (e as any).content_block?.type === "tool_use" && o.gaps?.[n]) await sleep(o.gaps[n]); await new Promise((x) => setImmediate(x)); yield e as any; } })(); },
     record: (d) => records.push(d),
     postCall: async () => {},
     minutes: () => {},
     log: () => {},
     now: Date.now,
+    wordsSettleMs: o.settleMs ?? 800, amdHoldMs: 60_000,
     maxSessionMs: 60_000, startTimeoutMs: 60_000, heartbeatMs: 60_000, silenceEndMs: 60_000, endGraceMs: 60_000, endWaitMs: 60_000,
     guardRows: async () => [],
     safetyCut: async () => {},
@@ -294,7 +296,7 @@ let jobRow: any = null;
   await b.turn(ASK, "d1", 1);
   const a2 = await b.turn("And you're looking for the after-party venue for sixty, right?", "d2", 2);
   check("4. the same need started again on the same call is the same job: one row", db.tasks.length === 1, db.tasks.map((t) => t.goal));
-  check("4. ...and the second start came back as that job, not a new one", decisions("tool.startTask").length === 2 && /same one I already started/.test(a2), { a2 });
+  check("4. ...and the second start came back as that job, not a new one (one receipt: a repeat inside the retry window never reaches the guard)", decisions("tool.startTask").length === 1 && /same one I already started/.test(a2) && JSON.stringify(b.reqs[b.reqs.length - 1].messages).includes("alreadyStarted"), { a2 });
   // The store's own backstop: two starts with the same key at once never both insert.
   const key = T.dispatchKeyFor("u-jordan:gl:race", "Find a florist");
   const both = await Promise.all([T.startTask({ userId: USER, goal: "Find a florist", theirWords: "a florist please", steps: [], firstPlan: "look", inHours: 1, dispatchKey: key }), T.startTask({ userId: USER, goal: "Find a florist", theirWords: "a florist please", steps: [], firstPlan: "look", inHours: 1, dispatchKey: key })]);
@@ -506,6 +508,105 @@ let jobRow: any = null;
   check("11. GPT-Live's own prompt: it can't act itself, its thinking can", /only your thinking can/.test(G.NOTHING_ON_THIS_CALL_LIVE) && !/Nothing can be set up, looked up, sent or scheduled on this call/.test(G.liveInstructions({ firstName: "Jordan", direction: "inbound", team: true })));
   check("11. the guide: need over naming a helper, a vent received first, no recap work, and a promise only with a task behind it", /even if they didn't name a helper/.test(G.LIVE_TOOLS_GUIDE) && /A feeling or a vent is received first/.test(G.LIVE_TOOLS_GUIDE) && /Never start work just to recap the call/.test(G.LIVE_TOOLS_GUIDE) && /only when a task for it came back done/.test(G.LIVE_TOOLS_GUIDE));
   check("11. a turn with no answer never tells GPT-Live to promise a text", !/text them on it after the call/.test(fs.readFileSync(new URL("../../src/services/gptLiveBridge.ts", import.meta.url), "utf8")));
+}
+
+// ---------------------------------------------------------------- 12. review of #365: what a claim may stand on
+{
+  // Hole 1: a find listed on the call is not a job. Searching backs naming the find; it never backs "I've started looking" or "I'll text
+  // you more".
+  const b = bridge([
+    [...text("Let me look."), ...tool("q1", "searchEvents", { what: "jazz", when: "this weekend" })],
+    text("Rooftop Jazz Night is Saturday at 8. I've started looking for jazz at The Chapel. I'll text you more jazz nights I find."),
+    text("That's the one I see for now."),
+  ]);
+  await b.start();
+  const a = await b.turn("Anything for jazz this weekend?", "d1", 1);
+  check("12. a find on the call names itself, but backs no 'I've started looking' and no 'I'll text you more' (no job behind them)", /Rooftop Jazz Night is Saturday at 8/.test(a) && !/I've started looking|I'll text you more/.test(a) && db.tasks.length === 0, a);
+  b.tw.close();
+}
+{
+  // Hole 2: a job for one need on the call doesn't back a subject-less promise about another.
+  const ASK = "Can you find me a caterer for the launch, 40 people?";
+  const b = bridge([
+    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find a caterer for a 40-person launch", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("I'll text you what I find."),
+    text("I'll text you what I find."),
+    text("Want me to start on a photographer too?"),
+  ]);
+  await b.start();
+  const a1 = await b.turn(ASK, "d1", 1);
+  const a2 = await b.turn("And a photographer for it as well?", "d2", 2);
+  check("12. 'I'll text you what I find' stands on this turn's own job (the caterer)", /I'll text you what I find/.test(a1), a1);
+  check("12. ...but not on the next turn, about a photographer nothing was started for", !/I'll text you what I find/.test(a2) && /start on a photographer/.test(a2) && db.tasks.length === 1, a2);
+  const J = { thisTurn: 0, corpus: "Find a caterer for a 40-person launch", callJobs: "Find a caterer for a 40-person launch", onCall: true, need: "" };
+  check("12. jobBacked: a found listing alone backs nothing; a subject needs job text; a subject-less promise needs a job for this need", !CL.jobBacked("I'll text you more jazz nights I find.", { thisTurn: 0, corpus: "", callJobs: "", onCall: false, need: "anything for jazz" }) && CL.jobBacked("I'll text you the caterers I find.", J) && !CL.jobBacked("I'll text you what I find.", { ...J, need: "and a photographer?" }) && CL.jobBacked("I'll text you what I find.", { ...J, need: "the caterer, sixty people now" }) && !CL.jobBacked("I'll text you the caterers.", { ...J, onCall: false }));
+  b.tw.close();
+}
+{
+  // A retry inside the window, reworded, is the same job.
+  const ASK = "Look for a DJ for the launch please.";
+  const b = bridge([
+    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find a DJ for the launch", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("On it."),
+    [...text("Sure."), ...tool("s2", "startTask", { goal: "Book-able disc jockeys for the studio opening", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("Still on it."),
+  ]);
+  await b.start();
+  await b.turn(ASK, "d1", 1);
+  await b.turn(ASK, "d2", 2);
+  check("12. a reworded start of the same job seconds later (a re-sent delegation) is that job: one row", db.tasks.length === 1, db.tasks.map((t) => t.goal));
+  b.tw.close();
+}
+
+// ---------------------------------------------------------------- 13. review of #365: the safety cap, and tools only with a person
+{
+  const P = await import("../../src/services/callLlmProxy.js");
+  const LONG = "If you're thinking about ending your life, please call or text 988 right now, because the people there are trained for exactly this moment and will stay on the line with you for as long as you need, day or night.";
+  const STEPS = ["First, put some distance between you and anything you could use to hurt yourself.", "Second, call or text 988, or a friend you trust, and tell them what you told me.", "Third, if you're in danger right now, call 911.", "Fourth, stay somewhere with other people tonight if you can.", "Fifth, text me when you've done the first two, so I know you're okay.", "Sixth, I'll be here, and we can keep talking as long as you want."];
+  const answer = [LONG, ...STEPS, ...STEPS.map((x) => x.replace(/^(\w+),/, "Again, $1,"))].join(" ");
+  let out = "";
+  const ev = text(answer);
+  for await (const c of P.runCallLlm({ messages: [{ role: "system", content: "You are Cue." }, { role: "user", content: "Honestly I don't want to be here anymore." }] } as any, { stream: () => (async function* () { for (const e of ev) yield e as any; })(), clean: true })) out += c.choices[0].delta.content ?? "";
+  check("13. a safety turn's answer is never capped: past 90 words, every step is said", SP.wordCount(out) > SP.MAX_REPLY_WORDS + 25 && STEPS.every((x) => out.includes(x)), SP.wordCount(out));
+  check("13. ...and a long crisis sentence goes whole, never split at a comma", out.includes(LONG), out.slice(0, 260));
+}
+{
+  // Outbound, AMD "unknown": answers may be released, but no tool runs (nothing acts on what a recording could produce).
+  const b = bridge([text("Hi Jordan.")], { outbound: true });
+  await b.start();
+  G.noteAnsweredBy(b.call.callSid!, "unknown");
+  b.ai.in({ type: "session.input_transcript.delta", delta: "Hello?", start_ms: 0, end_ms: 600 });
+  b.ai.in({ type: "session.delegation.created", offset_ms: 700, delegation: { id: "d1", target: "client" } });
+  await until(() => !!b.lat(1));
+  check("13. AMD 'unknown' releases the answer but never the tools", b.builds() === 0 && /Hi Jordan/.test(b.said("d1")), { builds: b.builds(), said: b.said("d1") });
+  b.tw.close();
+}
+{
+  // Outbound, AMD human: tools are given; a voicemail found while the turn is running stops the tool before it acts.
+  const b = bridge([
+    [...text("One sec."), ...tool("s1", "startTask", { goal: "Find a caterer", theirWords: "a caterer", steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("Okay."),
+  ], { outbound: true, settleMs: 20, gaps: { 1: 250 } });
+  await b.start();
+  G.noteAnsweredBy(b.call.callSid!, "human");
+  b.ai.in({ type: "session.input_transcript.delta", delta: "Hello?", start_ms: 0, end_ms: 600 });
+  b.ai.in({ type: "session.delegation.created", offset_ms: 700, delegation: { id: "d1", target: "client" } });
+  await sleep(60);
+  // The tool hasn't been called yet: the line turns out to be a machine whose greeting just ended.
+  G.noteAnsweredBy(b.call.callSid!, "machine_end_beep");
+  await until(() => !!b.lat(1));
+  check("13. AMD human: tools given; voicemail found mid-turn: the tool is refused, nothing written", b.builds() === 1 && db.tasks.length === 0 && b.ai.sent.some((m: any) => m.event_id === "voicemail"), { builds: b.builds(), tasks: db.tasks.length });
+  b.tw.close();
+}
+{
+  // The turn's own notes go after their words, never into the cached system prompt; the cap note is never on a safety turn.
+  const b = bridge([text("Okay.")]);
+  await b.start();
+  const out = await G.thinkOnCall(b.call, [{ who: "member", text: "Honestly I don't want to be here anymore.", startMs: 0, endMs: 900 }], (r: any) => { b.reqs.push(r); return (async function* () { for (const e of text("I'm here. Call or text 988 right now.")) yield e as any; })(); }, undefined, undefined, undefined, undefined, { carry: ["Ninth, check the shelf."], tools: async () => null });
+  const r = b.reqs[b.reqs.length - 1];
+  const last = JSON.stringify(r.messages[r.messages.length - 1]);
+  check("13. no-tools note after their words (system unchanged); no cap note on a safety turn", !JSON.stringify(r.system).includes(G.NOTHING_ON_THIS_CALL) && last.includes(G.NOTHING_ON_THIS_CALL) && !JSON.stringify(r).includes("your last answer stopped") && /988/.test(out.text), last.slice(0, 200));
+  b.tw.close();
 }
 
 console.log(`gptLiveHelpers: ${total - failed}/${total} passed`);
