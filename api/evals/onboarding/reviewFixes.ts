@@ -110,19 +110,22 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
   check("a lost race on the unique email: treated as taken, nothing saved", race.r.action === "taken" && !race.writes.length);
   // Re-review: only a reply to the confirmation text itself; the last address that differs; never someone else's.
   const named = await run({ text: "oh and the right one is jordan.lee@gmail.com", lastCo: "Sent the plan to jordan.lea@gmail.com.", confirm: CONFIRM });
-  check("Cue's last line named their address but wasn't the confirmation: nothing changes", named.r.action === "not_a_correction" && !named.writes.length);
+  check("Cue's last line named their address but wasn't the confirmation: nothing changes", named.r.action === "not_saved" && !named.writes.length);
   const noConfirm = await run({ text: "jordan.lee@gmail.com", lastCo: CONFIRM, confirm: null });
-  check("no confirmation text on record: nothing changes", noConfirm.r.action === "not_a_correction" && !noConfirm.writes.length);
+  check("no confirmation text on record: nothing changes", noConfirm.r.action === "not_saved" && !noConfirm.writes.length);
   const cofounder = await run({ text: "can you also invite my cofounder sam@acme.com?", lastCo: CONFIRM });
-  check("'invite my cofounder sam@acme.com' right after the confirmation: never their email", cofounder.r.action === "not_a_correction" && !cofounder.writes.length);
+  check("'invite my cofounder sam@acme.com' right after the confirmation: never their email", cofounder.r.action === "not_saved" && !cofounder.writes.length);
   const forward = await run({ text: "great, forward it to priya@shah.co too", lastCo: CONFIRM });
-  check("asking Cue to forward to someone: never their email", forward.r.action === "not_a_correction" && !forward.writes.length);
+  check("asking Cue to forward to someone: never their email", forward.r.action === "not_saved" && !forward.writes.length);
   const typo = await run({ text: "it's not jordan.lea@gmail.com, it's jordan.lee@gmail.com", lastCo: CONFIRM });
   check("'it's not X, it's Y': the last address that differs is saved", typo.r.action === "updated" && typo.writes[0]?.args[1] === "jordan.lee@gmail.com", typo);
   const bad = await run({ text: "jordan.lee@gmail", lastCo: CONFIRM });
   check("an incomplete address: nothing written, the reply says so and never says updated", bad.r.action === "invalid" && !bad.writes.length && /Never say it was updated/.test(bad.note.instruction ?? ""));
   const unrelated = await run({ text: "can you email noor@studio.co the deck?", lastCo: "Here's the deck you asked for." });
-  check("an address in a text that isn't right after Cue said their email back changes nothing", unrelated.r.action === "not_a_correction" && !unrelated.writes.length && !unrelated.note.fact && !unrelated.note.instruction);
+  check("an address in a text that isn't a reply to the confirmation changes nothing", unrelated.r.action === "not_saved" && !unrelated.writes.length && !unrelated.note.fact);
+  // Final review: a missed correction isn't silent: the reply is told it wasn't saved, never to say updated, and to ask once if they meant it.
+  check("a missed correction: the reply gets the not-saved note, word for word", cofounder.note.instruction === "The email in their text was not saved; their email on file is still jordan.lea@gmail.com. Never say it was updated. If it looks like they meant to change their own email, ask once." && named.note.instruction === cofounder.note.instruction && !cofounder.note.fact);
+  check("no address in their text: no note at all", (await run({ text: "sounds good", lastCo: CONFIRM })).note.instruction === null);
   const pending = await run({ text: "jordan@x.co", lastCo: CONFIRM, email: "pending-ab12@copatible.pending" });
   check("no real email on file: left to the intake path (which already holds a newer address)", pending.r.action === "not_a_correction" && !pending.writes.length);
   const sb = src("src/routes/sendblue.ts");
@@ -205,7 +208,46 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
   // The same-turn reply knows who got what (re-review finding 3).
   check("reply note: a member with no email is never told to check their email", /Never tell them to check their email or inbox/.test(IT.introHowNote(jordan, noor)) && /to them by email and to Jordan by text/.test(IT.introHowNote(noor, jordan)) && /Never mention email/.test(IT.introHowNote(jordan, ellis)));
   check("network same-turn lines carry the note and never say 'intro email'", !/intro email/.test(src("src/services/networkIntroNudge.ts").slice(src("src/services/networkIntroNudge.ts").indexOf("export function alreadyIntroducedLine"))) && /you've already sent the intro\. \$\{how\}/.test(src("src/services/networkIntroNudge.ts")));
-  check("sendblue's fact for a sent network intro says how it went", /introHowNote\(\{ user_id: user\.id/.test(src("src/routes/sendblue.ts")) && !/Cue sent an intro email to both of them/.test(src("src/routes/sendblue.ts")));
+  // Final review: the reply's fact comes from what happened (the state), never from the instruction's wording.
+  const N = await import("../../src/services/networkIntroNudge.js");
+  const facts: Record<string, RegExp> = {
+    sent: /^Noor had already said yes, so Cue sent the intro\. HOW$/,
+    held: /hasn't gone out yet; Cue will send it\. HOW$/,
+    failed: /didn't go through yet; Cue will try again\. HOW$/,
+    already: /^They and Noor were already introduced earlier\. No new intro went this turn\. HOW$/,
+    pending: /on its way and isn't confirmed sent yet\. HOW$/,
+    unconfirmed: /can't confirm the intro went through\. HOW$/,
+    asked: /^Asked Noor whether they're open to an intro\. Waiting to hear back; no intro has been made\./,
+    declined: /^Recorded that they passed on an intro to Noor\.$/,
+  };
+  for (const [state, re] of Object.entries(facts)) check(`network intro fact, ${state}`, re.test(N.networkIntroFact(state as any, "Noor", "HOW")), N.networkIntroFact(state as any, "Noor", "HOW"));
+  check("only 'sent' says Cue sent the intro this turn; no other state says no intro was made except 'asked'", Object.keys(facts).filter((k) => /Cue sent the intro/.test(N.networkIntroFact(k as any, "Noor", ""))).join() === "sent" && Object.keys(facts).filter((k) => /no intro has been made/.test(N.networkIntroFact(k as any, "Noor", ""))).join() === "asked");
+  // A repeat yes through the real resolver: the pair is already introduced, and the state says so (it used to fall to "no intro").
+  const repeat = async (row: Record<string, unknown>) => {
+    (pool as any).query = async (sql: string) => (/INSERT INTO network_introductions/.test(sql) ? { rows: [{ status: "introduced", both_interested: true, match_reason: "x", ...row }] } : { rows: [] });
+    const r = await N.resolveNetworkIntroReplyState({ user_id: "a-jordan", first_name: "Jordan", phone_number: "+14155550101", email: "pending-ab12@copatible.pending" } as any, { askId: null, candidate: { candidate_id: "b-noor", first_name: "Noor", phone_number: "+14155550102", email: "noor@studio.co", match_reason: "x" } as any }, "interested").catch((e: any) => ({ state: `threw ${e?.message}` }) as any);
+    (pool as any).query = realQuery;
+    return r;
+  };
+  check("repeat yes, intro recorded sent: state 'already'", (await repeat({ email_sent: true, email_outcome: null }))?.state === "already");
+  check("repeat yes, intro claimed and in flight: state 'pending'", (await repeat({ email_sent: false, email_outcome: null }))?.state === "pending");
+  check("repeat yes, intro can't be confirmed: state 'unconfirmed'", (await repeat({ email_sent: false, email_outcome: "unknown" }))?.state === "unconfirmed");
+  const dec = await (async () => { (pool as any).query = async () => ({ rows: [] }); const r = await N.resolveNetworkIntroReplyState({ user_id: "a-jordan", first_name: "Jordan" } as any, { askId: null, candidate: { candidate_id: "b-noor", first_name: "Noor", match_reason: "x" } as any }, "not_interested"); (pool as any).query = realQuery; return r; })();
+  check("a no: state 'declined'", dec?.state === "declined");
+  check("sendblue picks the fact from the state", /networkIntroFact\(resolved\.state, /.test(src("src/routes/sendblue.ts")) && !/\/you've already sent the intro\/\.test\(context\)/.test(src("src/routes/sendblue.ts")));
+  // Final review: every text recipient passes the preflight before any text goes; one that can't means none go.
+  {
+    const sent: string[] = [];
+    const r = await IT.textIntro({ to: [jordan, ellis], pair: [jordan, ellis], why: { event: "Supper" }, relayOn: true, key: "k" }, async (s) => { sent.push(s.userId); return { sent: true, queued: false }; }, async (p) => (p.user_id === "c-ellis" ? "opted out of texts" : null));
+    check("two members with no email, one opted out: nothing is sent to either", !r.ok && sent.length === 0 && r.results.some((x) => x.reason === "opted out of texts"), { r, sent });
+    const sent2: string[] = [];
+    const r2 = await IT.textIntro({ to: [jordan, ellis], pair: [jordan, ellis], why: { event: "Supper" }, relayOn: true, key: "k" }, async (s) => { sent2.push(s.userId); return { sent: true, queued: false }; }, async () => null);
+    check("both can get it: both are sent", r2.ok && sent2.join() === "a-jordan,c-ellis");
+    const sent3: string[] = [];
+    const r3 = await IT.textIntro({ to: [jordan], pair: [jordan, noor], why: { event: "  " }, relayOn: true, key: "k" }, async (s) => { sent3.push(s.userId); return { sent: true, queued: false }; }, async () => null);
+    check("no real body (no event name): nothing is sent", !r3.ok && !sent3.length && r3.results[0]?.reason === "no real body");
+  }
+  check("the resolver's 'how' (who got a text, who an email) rides on every state's fact", /const how = \(await import\("\.\/introByText\.js"\)\)\.introHowNote\(person/.test(src("src/services/networkIntroNudge.ts")) && /networkIntroFact\(resolved\.state, resolvedIntro\.item\.ref\.pending\.candidate\.first_name, resolved\.how\)/.test(src("src/routes/sendblue.ts")) && !/Cue sent an intro email to both of them/.test(src("src/routes/sendblue.ts")));
 
   // The real event intro path (sendHeldIntro -> sendIntroEmail) on a fake database: the email goes to Noor only, Jordan gets the same
   // content by text, and the pair is saved as introduced only once both went.
@@ -222,7 +264,7 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
       if (/^(INSERT|UPDATE|DELETE)\b/.test(q)) { writes.push(q.slice(0, 120)); return { rows: [], rowCount: 1 }; }
       return { rows: [], rowCount: 0 };
     };
-    IT.setIntroTextSendForTests(async (s) => { texts.push(s); return o.textOk ? { sent: true, queued: false } : { sent: false, queued: false, reason: "opted out" }; });
+    IT.setIntroTextSendForTests(async (s) => { texts.push(s); return o.textOk ? { sent: true, queued: false } : { sent: false, queued: false, reason: "opted out" }; }, async () => null);
     const log = console.log, err = console.error;
     console.log = (...a: any[]) => { logs.push(a.join(" ")); };
     console.error = () => {};

@@ -61,7 +61,7 @@ import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendati
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { walkinAskDue, noteWalkinAsked, walkinAskNoted } from "../services/eventWalkinCheckin.js";
 import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
-import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
+import { networkIntroFact, resolveNetworkTeaseReply, resolveNetworkIntroReplyState } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { ackAllowed, describeTapbacks, reactionFor, tapbackHistory } from "../services/tapbacks.js";
@@ -2366,7 +2366,7 @@ export function sendblueRouter(io: Server): Router {
             }
             // Already knowing them is no preference about intros (review of #359): recorded as no signal, labelled as known, never "declined".
             await recordSuggestionOutcome(user.id, "intro", `intro:${introCandidate.candidate_id}`, alreadyKnewIntro ? `an intro to ${introCandidate.first_name} (they already know each other)` : `an intro to ${introCandidate.first_name}`, alreadyKnewIntro ? "no_signal" : classification === "interested" ? "interested" : "declined");
-            const context = await resolveNetworkIntroReply(
+            const resolved = await resolveNetworkIntroReplyState(
               { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
               resolvedIntro.item.ref.pending,
               classification,
@@ -2375,14 +2375,10 @@ export function sendblueRouter(io: Server): Router {
               const other = introCandidate.first_name;
               addFact(replyFacts, "did_this_turn", `Noted that they already know ${other}, so Cue won't make an intro between them.`);
               addInstruction(replyFacts, `They already know ${other}, so there's no intro to make. Acknowledge it naturally and briefly. Don't say anything about ${other}'s side.`);
-            } else if (context) {
-              addInstruction(replyFacts, context);
-              const other = resolvedIntro.item.ref.pending.candidate.first_name;
-              if (classification === "not_interested") addFact(replyFacts, "did_this_turn", `Recorded that they passed on an intro to ${other}.`);
-              // Sent only when it really went ("you've already sent the intro"), and how: a member with no email got it by text.
-              else if (/you've already sent the intro/.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes, so Cue sent the intro. ${(await import("../services/introByText.js")).introHowNote({ user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email }, { user_id: resolvedIntro.item.ref.pending.candidate.candidate_id, first_name: other, phone_number: resolvedIntro.item.ref.pending.candidate.phone_number, email: resolvedIntro.item.ref.pending.candidate.email })}`);
-              else if (/both of you are in/.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes too. The intro hasn't gone out yet.`);
-              else addFact(replyFacts, "did_this_turn", `Asked ${other} whether they're open to an intro. Waiting to hear back; no intro has been made. If ${other} says yes, Cue introduces them.`);
+            } else if (resolved) {
+              addInstruction(replyFacts, resolved.context);
+              // The fact comes from what happened (the state), never from the instruction's wording (final review of the onboarding branch).
+              addFact(replyFacts, "did_this_turn", networkIntroFact(resolved.state, resolvedIntro.item.ref.pending.candidate.first_name, resolved.how));
             }
           } catch (err: any) {
             console.error("sendblue: network intro-offer reply handling failed (non-fatal):", err?.message ?? err);

@@ -739,6 +739,35 @@ export async function resolveNetworkIntroReply(
   pending: PendingNetworkIntroOffer,
   classification: TeaseReplyClassification,
 ): Promise<string | null> {
+  return (await resolveNetworkIntroReplyState(person, pending, classification))?.context ?? null;
+}
+
+// What happened to the intro on this reply, as data (final review: the reply's fact was picked by matching this file's wording, and a
+// repeated yes was told no intro had been made). sendblue picks the fact from `state` (networkIntroFact), never from the words.
+export type NetworkIntroState = "declined" | "asked" | "sent" | "held" | "failed" | "already" | "pending" | "unconfirmed";
+export type NetworkIntroResult = { context: string; state: NetworkIntroState; how: string };
+const ALREADY_STATE: Record<NetworkEmailState, NetworkIntroState> = { sent: "already", pending: "pending", unknown: "unconfirmed" };
+
+// Pure: the reply's fact for each state. Only "sent" says the intro went this turn; "already" says it went earlier.
+export function networkIntroFact(state: NetworkIntroState, other: string, how: string): string {
+  const h = how ? ` ${how}` : "";
+  switch (state) {
+    case "declined": return `Recorded that they passed on an intro to ${other}.`;
+    case "asked": return `Asked ${other} whether they're open to an intro. Waiting to hear back; no intro has been made. If ${other} says yes, Cue introduces them.`;
+    case "sent": return `${other} had already said yes, so Cue sent the intro.${h}`;
+    case "held": return `${other} had already said yes too. The intro hasn't gone out yet; Cue will send it.${h}`;
+    case "failed": return `${other} had already said yes too. The intro didn't go through yet; Cue will try again.${h}`;
+    case "already": return `They and ${other} were already introduced earlier. No new intro went this turn.${h}`;
+    case "pending": return `They and ${other} both said yes; the intro is on its way and isn't confirmed sent yet.${h}`;
+    case "unconfirmed": return `They and ${other} both said yes, but Cue can't confirm the intro went through.${h}`;
+  }
+}
+
+export async function resolveNetworkIntroReplyState(
+  person: MatchNudgeCandidate,
+  pending: PendingNetworkIntroOffer,
+  classification: TeaseReplyClassification,
+): Promise<NetworkIntroResult | null> {
   if (classification === "unrelated") return null;
 
   const candidateId = pending.candidate.candidate_id;
@@ -757,7 +786,7 @@ export async function resolveNetworkIntroReply(
         [aId, bId, pending.candidate.match_reason, pending.askId],
       )
       .catch((err: any) => console.error("resolveNetworkIntroReply: decline write failed (non-fatal):", err?.message ?? err));
-    return `\nThey just passed on being connected with ${pending.candidate.first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`;
+    return { state: "declined", how: "", context: `\nThey just passed on being connected with ${pending.candidate.first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.` };
   }
 
   const { rows } = await pool.query(
@@ -774,7 +803,10 @@ export async function resolveNetworkIntroReply(
   // Already introduced (a repeated reply, a retried turn): no second intro. Said as sent only when the send was recorded.
   // How the intro reaches each of them, for every line below (a member with no email gets it by text: never "check your email").
   const how = (await import("./introByText.js")).introHowNote(person as any, { user_id: pending.candidate.candidate_id, first_name: pending.candidate.first_name, phone_number: pending.candidate.phone_number, email: pending.candidate.email });
-  if (rows[0]?.status === "introduced") return alreadyIntroducedLine(pending.candidate.first_name, networkEmailState(rows[0]), how);
+  if (rows[0]?.status === "introduced") {
+    const st = networkEmailState(rows[0]);
+    return { state: ALREADY_STATE[st], how, context: alreadyIntroducedLine(pending.candidate.first_name, st, how) };
+  }
   // The body comes from the pair's stored reason (the first one written), the same one a retry reads: one body per key.
   const storedReason = String(rows[0]?.match_reason ?? pending.candidate.match_reason);
 
@@ -785,7 +817,10 @@ export async function resolveNetworkIntroReply(
       .then((r) => r.rows.length > 0)
       // A failed mark keeps the old behaviour (send); only a confirmed "already introduced" stops it.
       .catch((err: any) => { console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err); return null; });
-    if (claimed === false) return alreadyIntroducedLine(pending.candidate.first_name, await networkEmailSent(aId, bId), how);
+    if (claimed === false) {
+      const st = await networkEmailSent(aId, bId);
+      return { state: ALREADY_STATE[st], how, context: alreadyIntroducedLine(pending.candidate.first_name, st, how) };
+    }
     const candidateInfo: MatchNudgeCandidate = {
       user_id: pending.candidate.candidate_id,
       first_name: pending.candidate.first_name,
@@ -794,7 +829,7 @@ export async function resolveNetworkIntroReply(
     };
     const emailed = await sendNetworkIntroEmail(person, candidateInfo, storedReason);
     if (emailed === "held") {
-      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro hasn't gone out yet; Cue will send it. ${how} Tell them plainly that both of you are in and the intro is coming. Don't say it was sent, and don't say when.`;
+      return { state: "held", how, context: `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro hasn't gone out yet; Cue will send it. ${how} Tell them plainly that both of you are in and the intro is coming. Don't say it was sent, and don't say when.` };
     }
     if (emailed !== "sent") {
       // Not introduced: the pair goes back to waiting on its email, counted, and retryHeldNetworkIntros tries again (before this, a
@@ -802,10 +837,10 @@ export async function resolveNetworkIntroReply(
       await pool
         .query(`UPDATE network_introductions SET status = 'both_interested', introduced_at = NULL, email_attempts = email_attempts + 1 WHERE person_a_id = $1 AND person_b_id = $2 AND email_sent_at IS NULL`, [aId, bId])
         .catch((err: any) => console.error("resolveNetworkIntroReply: failed-send revert failed (non-fatal):", err?.message ?? err));
-      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro failed to send. ${how} Tell them plainly that both of you are in, but the intro didn't go through yet. Don't say it was sent.`;
+      return { state: "failed", how, context: `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro failed to send. ${how} Tell them plainly that both of you are in, but the intro didn't go through yet. Don't say it was sent.` };
     }
     await scheduleIntroFollowUps([[person.user_id, pending.candidate.first_name], [pending.candidate.candidate_id, person.first_name]] as const);
-    return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too — you've already sent the intro. ${how} Acknowledge warmly and briefly, don't repeat the intro back.`;
+    return { state: "sent", how, context: `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too — you've already sent the intro. ${how} Acknowledge warmly and briefly, don't repeat the intro back.` };
   }
 
   const candidateInfo: MatchNudgeCandidate = {
@@ -815,7 +850,7 @@ export async function resolveNetworkIntroReply(
     email: pending.candidate.email,
   };
   await askCandidateDirectly(candidateInfo, person, pending.candidate.match_reason, pending.askId);
-  return `\nThey just said yes to being connected with ${pending.candidate.first_name}. Acknowledge it warmly and briefly — you're now waiting to hear back from ${pending.candidate.first_name}, don't promise a specific thing is happening yet.`;
+  return { state: "asked", how, context: `\nThey just said yes to being connected with ${pending.candidate.first_name}. Acknowledge it warmly and briefly — you're now waiting to hear back from ${pending.candidate.first_name}, don't promise a specific thing is happening yet.` };
 }
 
 // Exported so evals/intro can run the exact production prompt.

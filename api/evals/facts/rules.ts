@@ -374,7 +374,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("4: a place the facts don't have is still caught", !TW.placesBacked("It's in Oakland.", "Cue Founders Supper, 2026-10-02, San Francisco").ok);
   // 5. One intro per pair.
   const ni = src("services/networkIntroNudge.ts");
-  check("5: 'introduced' and 'declined' survive a repeated yes; only the call that marks it introduced sends", /WHEN network_introductions\.status IN \('introduced', 'declined'\) THEN network_introductions\.status/.test(ni) && /AND status <> 'introduced' RETURNING 1/.test(ni) && /if \(claimed === false\) return/.test(ni) && /if \(rows\[0\]\?\.status === "introduced"\)/.test(ni));
+  check("5: 'introduced' and 'declined' survive a repeated yes; only the call that marks it introduced sends", /WHEN network_introductions\.status IN \('introduced', 'declined'\) THEN network_introductions\.status/.test(ni) && /AND status <> 'introduced' RETURNING 1/.test(ni) && /if \(claimed === false\) \{/.test(ni) && /if \(rows\[0\]\?\.status === "introduced"\)/.test(ni));
 }
 // ------------------------------------------------ second pass (2026-10-01)
 {
