@@ -206,7 +206,7 @@ type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> }
 
 // A member row from the audience query. The query already leaves these out; this is the same rule in code, so a wrong row is still
 // never queued.
-export type AudienceRow = { id: string; created_at: Date | string; archived_at: Date | string | null; sms_opted_out: boolean | null; has_phone: boolean; identity_captured: boolean | null; told: boolean; queued: boolean; phone_number?: string | null; simulated?: boolean | null };
+export type AudienceRow = { id: string; created_at: Date | string; archived_at: Date | string | null; sms_opted_out: boolean | null; has_phone: boolean; invite_verified: boolean | null; told: boolean; queued: boolean; phone_number?: string | null; simulated?: boolean | null };
 // Why a member is left out, or null when they are in. The first reason that applies, in this order.
 export type Exclusion = "joined_after" | "archived" | "opted_out" | "no_phone" | "test_number" | "unfinished" | "told" | "queued";
 export function exclusionOf(r: AudienceRow, cutoff: Date): Exclusion | null {
@@ -216,7 +216,8 @@ export function exclusionOf(r: AudienceRow, cutoff: Date): Exclusion | null {
   if (!r.has_phone) return "no_phone";
   // A 555-01xx number is fiction on any server (services/testNumbers.ts), so the env switch is ignored here.
   if (r.simulated === true || isTestNumber(r.phone_number ?? null, {})) return "test_number";
-  if (r.identity_captured !== true) return "unfinished";
+  // "unfinished" is no invite: a verified member gets it with or without a name or email on file (Royce, 2026-11-03; ruling A).
+  if (r.invite_verified !== true) return "unfinished";
   if (r.told) return "told";
   if (r.queued) return "queued";
   return null;
@@ -288,13 +289,13 @@ export async function queueAnnouncement(a: Announcement, now: Date = new Date(),
     return 0;
   }
   const { rows } = await d.db.query(
-    `SELECT u.id, u.created_at, u.archived_at, u.sms_opted_out, (u.phone_number IS NOT NULL) AS has_phone, u.identity_captured,
+    `SELECT u.id, u.created_at, u.archived_at, u.sms_opted_out, (u.phone_number IS NOT NULL) AS has_phone, u.invite_verified,
             u.phone_number, COALESCE((to_jsonb(u)->>'is_simulated')::boolean, false) AS simulated,
             EXISTS (SELECT 1 FROM proactive_sends s WHERE s.user_id = u.id AND s.target_key = $2) AS told,
             EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = u.id AND c.target_key = $2) AS queued
        FROM users u
       WHERE u.created_at < $1 AND u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false
-        AND u.phone_number IS NOT NULL AND u.identity_captured = true
+        AND u.phone_number IS NOT NULL AND u.invite_verified = true
         AND NOT EXISTS (SELECT 1 FROM proactive_sends s WHERE s.user_id = u.id AND s.target_key = $2)
         AND NOT EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = u.id AND c.target_key = $2)`,
     [cutoff, a.key],

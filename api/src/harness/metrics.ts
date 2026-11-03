@@ -31,8 +31,8 @@ export type Metrics = {
   };
 };
 
-// Real members only: through intake, not archived, not a simulated test user.
-const MEMBER = `u.identity_captured = true AND u.archived_at IS NULL AND coalesce(u.is_simulated, false) = false`;
+// Real members only: invite-verified (name or email on file or not: Royce, 2026-11-03, ruling A), not archived, not a simulated test user.
+const MEMBER = `u.invite_verified = true AND u.archived_at IS NULL AND coalesce(u.is_simulated, false) = false`;
 
 // Below this many, a percentage reads as a trend it isn't, so it's just "n of d".
 export const MIN_FOR_PERCENT = 20;

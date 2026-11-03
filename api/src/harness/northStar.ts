@@ -25,7 +25,8 @@ import { rate } from "./metrics.js";
 
 // Test members use the fictional 555-01xx range (feedback: live tests never use a real number): never counted.
 export const TEST_NUMBER = "^\\+1[0-9]{3}55501[0-9]{2}$";
-export const MEMBER = (alias: string) => `${alias}.identity_captured = true AND ${alias}.archived_at IS NULL AND coalesce(${alias}.is_simulated, false) = false AND ${alias}.phone_number IS NOT NULL AND ${alias}.phone_number !~ '${TEST_NUMBER}'`;
+// Every verified member (invite-verified, not archived), name or email on file or not (Royce, 2026-11-03; ruling A).
+export const MEMBER = (alias: string) => `${alias}.invite_verified = true AND ${alias}.archived_at IS NULL AND coalesce(${alias}.is_simulated, false) = false AND ${alias}.phone_number IS NOT NULL AND ${alias}.phone_number !~ '${TEST_NUMBER}'`;
 
 export type NorthStar = {
   days: number;
