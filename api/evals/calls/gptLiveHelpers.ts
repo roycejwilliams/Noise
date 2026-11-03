@@ -570,13 +570,13 @@ let jobRow: any = null;
   const a4 = await b.turn("Actually caterers and a band.", "d4", 4);
   check("12. 'caterers and a band' inside 20 s of 'Find caterers' starts its own job (the band isn't lost)", db.tasks.length === 3 && db.tasks.some((t) => /band/i.test(t.goal)) && /bands I find/.test(a4), { tasks: db.tasks.map((t) => t.goal), a4 });
   const same = (a: string, b: string) => CT.sameNeed(a, b, "k");
-  check("12. sameNeed: a reworded retry of the same need is the same job (place, time, filler and action words don't count)",
-    same("find a florist", "florists nearby") && same("Find caterers", "caterer options in Oakland") && same("Book a photographer", "a photographer for Saturday") &&
-    same("Find caterers for the launch party", "Caterers for the launch party, find some") && same("Find vegan caterers in Oakland", "Vegan caterer options in Oakland"),
-    { florist: same("find a florist", "florists nearby"), oakland: same("Find caterers", "caterer options in Oakland"), saturday: same("Book a photographer", "a photographer for Saturday") });
-  check("12. sameNeed: a new subject is a new need; never the tool alone",
-    !same("Find caterers", "caterers and a band") && !same("Find caterers for the launch party", "Caterers and a band for the launch party") &&
-    !same("Find caterers for the launch party", "Find a florist for the launch party") && !same("Find caterers", "And a florist") && !same("Find caterers", "find some"));
+  check("12. sameNeed: a retry that adds no subject is the same job (action and filler words don't count)",
+    same("find a florist", "florists nearby") && same("Find caterers for the launch party", "Caterers for the launch party, find some") &&
+    same("Find vegan caterers in Oakland", "Vegan caterer options in Oakland") && same("Book a photographer", "a photographer"),
+    { florist: same("find a florist", "florists nearby") });
+  const pairs: [string, string][] = [["Find caterers", "caterers and a band"], ["golf club", "book club"], ["farmers market", "Saturday market"], ["pottery classes", "yoga classes"], ["tutor in Spanish", "tutor in math"],
+    ["Find caterers for the launch party", "Caterers and a band for the launch party"], ["Find caterers for the launch party", "Find a florist for the launch party"], ["Find caterers", "And a florist"], ["Find caterers", "find some"]];
+  check("12. sameNeed: any new subject is a new job (a duplicate over a lost request); never the tool alone", pairs.every(([a, b]) => !same(a, b)), pairs.filter(([a, b]) => same(a, b)));
   b.tw.close();
 }
 {

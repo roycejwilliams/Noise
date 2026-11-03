@@ -46,36 +46,35 @@ const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
 export const START_RETRY_MS = 20_000;
 // What a start is for: its goal (startTask) or what's looked for (researchBrief, saveAsk).
 const needOf = (input: unknown): string => { const d = (input ?? {}) as { goal?: unknown; what?: unknown }; return String(d.goal ?? d.what ?? "").trim(); };
-// Words that never name what's needed: the action, filler, the occasion, when, and how many. A place is dropped by its position (the
-// word after "in", "near", "around", "at", "by"), so any city reads the same as none.
-const NEED_PLAIN = new Set(("find look looking search get book booking reserve hire need want please some more any other another option options " +
-  "nearby near local around close closest best good great cheap affordable launch party event thing things help " +
-  "today tonight tomorrow weekend week month morning afternoon evening night next this " +
-  "monday tuesday wednesday thursday friday saturday sunday people person guest guests").split(" "));
-const PLACE_AFTER = new Set(["in", "near", "around", "at", "by"]);
-// A word stemmed: lowercased, a plural's s dropped (florists -> florist, caterers -> caterer).
-const stem = (w: string) => w.replace(/(?<=\w{3})s$/, "");
-// Pure: the subject words of a need: stemmed, without the plain words above or a place.
+// Words that never name what's needed: pure action and filler only (losing a request is worse than a duplicate job, and the thread
+// grouping folds duplicate finds about one thing). Day words, places ("in Oakland", "in Spanish") and occasion words stay subjects.
+const NEED_FILLER = new Set(("find finding look looking search searching get getting want need please help " +
+  "some any more other another option options nearby near local around close closest thing things " +
+  "a an the for and or of to on with me us my our your their them it this that these those can could you").split(" "));
+// "book" is the action only when it's the verb ("Book a photographer", "book me ..."); in "book club" it's the subject.
+const BOOK_VERB_NEXT = new Set(["a", "an", "the", "me", "us", "some", "my", "our", "it", "them"]);
+// A word stemmed: lowercased, a plural's ending dropped (florists -> florist, classes -> class), "class" itself kept.
+const stem = (w: string) => /(ss|x|ch|sh)es$/.test(w) ? w.slice(0, -2) : /(ss|us|is)$/.test(w) || w.length <= 3 ? w : w.replace(/s$/, "");
+// Pure: the subject words of a need: stemmed, without action and filler words.
 export function needSubjects(t: string): Set<string> {
   const words = t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
   const out = new Set<string>();
   words.forEach((w, k) => {
-    if (k > 0 && PLACE_AFTER.has(words[k - 1])) return;
-    const s = stem(w);
-    if (s.length >= 4 && !NEED_PLAIN.has(w) && !NEED_PLAIN.has(s)) out.add(s);
+    if (NEED_FILLER.has(w)) return;
+    if (w === "book" && (k === words.length - 1 || BOOK_VERB_NEXT.has(words[k + 1]))) return;
+    out.add(stem(w));
   });
   return out;
 }
-// Pure: whether a new start (b) is the need an earlier one (a) already started: the same need key (coTasks.ts dispatchKeyFor), or
-// their subject words (needSubjects) overlap and b adds no subject a doesn't have. "find a florist" / "florists nearby", "Find caterers"
-// / "caterer options in Oakland", "Book a photographer" / "a photographer for Saturday": the same. "Find caterers" / "caterers and a
-// band": a new need ("band" is a new subject, and folding them lost the band; review of #365). "Find caterers" / "And a florist": new.
+// Pure: whether a new start (b) is the need an earlier one (a) already started: the same need key (coTasks.ts dispatchKeyFor), or b's
+// subject words (needSubjects) are all among a's. "find a florist" / "florists nearby": the same. Anything b adds is a new subject and
+// a new job, erring toward a duplicate over a lost request: "Find caterers" / "caterers and a band" (review of #365), "golf club" /
+// "book club", "farmers market" / "Saturday market", "pottery classes" / "yoga classes", "tutor in Spanish" / "tutor in math".
 export function sameNeed(a: string, b: string, callKey: string): boolean {
   if (!a || !b) return false;
   if (dispatchKeyFor(callKey, a) === dispatchKeyFor(callKey, b)) return true;
   const x = needSubjects(a), y = needSubjects(b);
-  if (!x.size || !y.size) return false;
-  return [...y].some((w) => x.has(w)) && [...y].every((w) => x.has(w));
+  return y.size > 0 && [...y].every((w) => x.has(w));
 }
 // The call subset is the registry's onCall entries on the allow-list (services/capabilities.ts), the same entries the call
 // briefing's list is written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
