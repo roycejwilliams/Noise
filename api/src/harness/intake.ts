@@ -304,7 +304,9 @@ export async function textIntakeProposal(o: { text: string | null; state: Intake
 // text said their email back (the confirmation always carries the exact address), an address in their text replaces the one on file,
 // with the intake's checks: well formed, never the placeholder, not on another account. Cue never says "updated" unless it was.
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
-export type EmailCorrection = { action: "updated" | "taken" | "invalid" | "same" | "not_a_correction"; email?: string; was?: string };
+// not_saved: an address in their text that isn't taken as a correction (about someone else, or not a reply to the confirmation): the
+// reply is told it wasn't saved, so a member who meant it is asked once instead of left thinking it changed (final review).
+export type EmailCorrection = { action: "updated" | "taken" | "invalid" | "same" | "not_saved" | "not_a_correction"; email?: string; was?: string };
 const EMAIL_IN_TEXT = /[^\s@<>()"',;:]+@[^\s@<>()"',;:]+/g;
 // About someone else, or asking Cue to send to someone: never a correction of their own email (re-review: "can you also invite my
 // cofounder sam@acme.com?").
@@ -314,13 +316,15 @@ const NOT_THEIRS = /\b(?:invite|send|forward|introduce|intro|cc|share|loop in|ad
 export async function correctEmailFromText(o: { userId: string; text: string | null; email: string | null | undefined }, db: Db = pool): Promise<EmailCorrection> {
   const was = o.email && !hasPendingEmail(String(o.email)) ? String(o.email) : null;
   const found = [...(o.text ?? "").matchAll(EMAIL_IN_TEXT)].map((m) => m[0].replace(/[.!?]+$/, ""));
-  if (!was || !found.length || NOT_THEIRS.test(o.text ?? "")) return { action: "not_a_correction" };
+  if (!was || !found.length) return { action: "not_a_correction" };
+  const notSaved: EmailCorrection = { action: "not_saved", email: found[found.length - 1], was };
+  if (NOT_THEIRS.test(o.text ?? "")) return notSaved;
   const [{ rows: last }, { rows: confirm }] = await Promise.all([
     db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT 1`, [o.userId]),
     db.query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND target_key LIKE 'call_email:%' ORDER BY sent_at DESC LIMIT 1`, [o.userId]),
   ]);
   const lastLine = String(last[0]?.content ?? "").replace(/^Co replied: /, "").trim();
-  if (!lastLine || !confirm[0]?.message || lastLine !== String(confirm[0].message).trim()) return { action: "not_a_correction" };
+  if (!lastLine || !confirm[0]?.message || lastLine !== String(confirm[0].message).trim()) return notSaved;
   // The last address that isn't the one on file ("it's not jo@gmial.com, it's jo@gmail.com" reads the second).
   const email = [...found].reverse().find((e) => e.toLowerCase() !== was.toLowerCase()) ?? null;
   if (!email) return { action: "same", email: found[found.length - 1], was };
@@ -328,7 +332,7 @@ export async function correctEmailFromText(o: { userId: string; text: string | n
   if (await isEmailOnOtherAccount(email, o.userId, db)) return { action: "taken", email, was };
   try {
     const r = await db.query(`UPDATE users SET email = $2 WHERE id = $1 AND email = $3 RETURNING id`, [o.userId, email, was]);
-    if (!r.rows.length) return { action: "not_a_correction" };
+    if (!r.rows.length) return notSaved;
   } catch (err: any) {
     if (err?.code === "23505") return { action: "taken", email, was };
     throw err;
@@ -342,6 +346,7 @@ export function emailCorrectionNote(c: EmailCorrection): { fact: string | null; 
   if (c.action === "same") return { fact: `The email they sent, ${c.email}, is already the one on file. Nothing changed.`, instruction: null };
   if (c.action === "taken") return { fact: null, instruction: `The email they just sent (${c.email}) is already on another account, so it was not saved and their email on file is still ${c.was}. After answering anything else they said, say so in a few words and ask if there's another one they use. Never say it was updated.` };
   if (c.action === "invalid") return { fact: null, instruction: `The email they just sent (${c.email}) doesn't look complete, so it was not saved and their email on file is still ${c.was}. After answering anything else they said, say so in a few words, once. Never say it was updated.` };
+  if (c.action === "not_saved") return { fact: null, instruction: `The email in their text was not saved; their email on file is still ${c.was}. Never say it was updated. If it looks like they meant to change their own email, ask once.` };
   return { fact: null, instruction: null };
 }
 

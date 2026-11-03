@@ -59,16 +59,33 @@ export function introHowNote(me: IntroPerson, other: IntroPerson): string {
     : `They have no email on file, so their intro comes by text (${other.first_name}'s by email). Never tell them to check their email or inbox.`;
 }
 
-// Sends the text to each member in `to`. ok only when every one went (now or before) or is queued for when it may go.
-export async function textIntro(o: { to: IntroPerson[]; pair: [IntroPerson, IntroPerson]; why: IntroWhy; relayOn: boolean; key: string }, send: Send = sendForTests ?? gatedSend): Promise<{ ok: boolean; results: { userId: string; sent: boolean; queued: boolean; reason?: string }[] }> {
+// Whether one member can get the intro text at all, checked for EVERY recipient before any text goes (final review: two members with no
+// email, half-sent): a phone, not opted out, not archived, the pause off. Null when they can.
+type Preflight = (p: IntroPerson) => Promise<string | null>;
+const realPreflight: Preflight = async (p) => {
+  if (!p.phone_number) return "no email and no phone on file";
+  if ((await import("./proactivePause.js")).proactivePaused()) return "outreach paused";
+  const { default: pool } = await import("../db/db.js");
+  const { rows } = await pool.query(`SELECT COALESCE(sms_opted_out, false) AS opted_out, archived_at FROM users WHERE id = $1`, [p.user_id]);
+  if (!rows[0]) return "no account";
+  if (rows[0].opted_out) return "opted out of texts";
+  if (rows[0].archived_at) return "archived";
+  return null;
+};
+
+// Sends the text to each member in `to`, only after every one of them passed the preflight and has a real body: if any can't get it,
+// nothing is sent (the pair stays retryable). ok only when every one went (now or before) or is queued for when it may go.
+export async function textIntro(o: { to: IntroPerson[]; pair: [IntroPerson, IntroPerson]; why: IntroWhy; relayOn: boolean; key: string }, send: Send = sendForTests ?? gatedSend, preflight: Preflight = preflightForTests ?? realPreflight): Promise<{ ok: boolean; results: { userId: string; sent: boolean; queued: boolean; reason?: string }[] }> {
+  const planned = o.to.map((me) => ({ me, text: introText(me, o.pair[0].user_id === me.user_id ? o.pair[1] : o.pair[0], o.why, o.relayOn) }));
+  const blocked: { userId: string; sent: boolean; queued: boolean; reason?: string }[] = [];
+  for (const { me, text } of planned) {
+    const why = !text.trim() || ("event" in o.why ? !o.why.event.trim() : !o.why.reason.trim()) ? "no real body" : await preflight(me).catch((err: any) => `couldn't check: ${String(err?.message ?? err)}`);
+    if (why) blocked.push({ userId: me.user_id, sent: false, queued: false, reason: why });
+  }
+  if (blocked.length) return { ok: false, results: blocked };
   const results: { userId: string; sent: boolean; queued: boolean; reason?: string }[] = [];
-  for (const me of o.to) {
-    const other = o.pair[0].user_id === me.user_id ? o.pair[1] : o.pair[0];
-    if (!me.phone_number) {
-      results.push({ userId: me.user_id, sent: false, queued: false, reason: "no email and no phone on file" });
-      continue;
-    }
-    const r = await send({ userId: me.user_id, phoneNumber: me.phone_number, targetKey: `${o.key}:text:${me.user_id}`, text: introText(me, other, o.why, o.relayOn) }).catch((err: any) => ({ sent: false, queued: false, reason: String(err?.message ?? err) }));
+  for (const { me, text } of planned) {
+    const r = await send({ userId: me.user_id, phoneNumber: me.phone_number!, targetKey: `${o.key}:text:${me.user_id}`, text }).catch((err: any) => ({ sent: false, queued: false, reason: String(err?.message ?? err) }));
     results.push({ userId: me.user_id, ...r });
   }
   // "already sent": a retry of an intro whose text went the first time (the target key is claimed once, harness/proactive.ts sendExempt).
@@ -83,6 +100,8 @@ const gatedSend: Send = async ({ userId, phoneNumber, targetKey, text }) => {
 
 // Layer 1 only: the send the intro paths use, stubbed (evals/onboarding/reviewFixes.ts). Never set in the app.
 let sendForTests: Send | null = null;
-export function setIntroTextSendForTests(fn: Send | null): void {
+let preflightForTests: Preflight | null = null;
+export function setIntroTextSendForTests(fn: Send | null, pre: Preflight | null = null): void {
   sendForTests = fn;
+  preflightForTests = pre;
 }
