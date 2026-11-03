@@ -25,18 +25,18 @@ for (const chosen of [pitch, fleet, chess]) {
   const order = [lead, ...sibs].map((c: any) => c.payload.match.name);
   check(`whichever pick Cue chose (${chosen.payload.match.name}), Fleet Week leads and no second tier-3 pick rides with it: ${order.join(" > ")}`, order.length === 1 && order[0].startsWith("San Francisco Fleet Week"));
 }
-// One pick from each tier: all three go together, most time-bound first.
+// One pick from each tier: two go together (the notification grouping plan: two find links a message), most time-bound first.
 const tiered = (c: any, tier: number) => ({ ...c, payload: { ...c.payload, match: { ...c.payload.match, tier } } });
 const [p1, p2, p3] = [tiered(pitch, 1), tiered(chess, 2), fleet];
 const three = [P.leadPick(p1, [p1, p2, p3]), ...P.pickSiblingOffers(P.leadPick(p1, [p1, p2, p3]), [p1, p2, p3])].map((c: any) => c.payload.match.tier);
-check(`a pick from each tier goes together, one per tier (${three.join(",")})`, three.length === 3 && new Set(three).size === 3 && three[0] === 3);
+check(`picks from different tiers go together, one per tier, two at most (${three.join(",")})`, three.length === 2 && new Set(three).size === 2 && three[0] === 3);
 // A morning's picks go with that morning's, ahead of an earlier pick still waiting in the same tier.
 const morning = (c: any, day: string | null) => ({ ...c, payload: { ...c.payload, ...(day ? { morningDay: day } : {}) } });
 const old2 = morning({ ...tiered(cand("o2", "Older tier-2 pick", 95, "2026-10-10T00:00:00Z"), 2) }, null);
 const m1 = morning(p1, "2026-10-09"), m2 = morning(p2, "2026-10-09"), m3 = morning(p3, "2026-10-09");
 const mLead = P.leadPick(m1, [m1, m2, m3, old2]);
 const mOut = [mLead, ...P.pickSiblingOffers(mLead, [m1, m2, m3, old2])].map((c: any) => c.id);
-check(`a morning bundle is that morning's finds, one per tier, never an older pick in their place (${mOut.join(",")})`, mOut.length === 3 && !mOut.includes("o2"));
+check(`a morning bundle is that morning's finds, one per tier, never an older pick in their place (${mOut.join(",")})`, mOut.length === 2 && !mOut.includes("o2"));
 // Picks bundle across one tier; anything not picked keeps the old one-per-tier rule.
 const t2a = { ...cand("a", "Event A", 60, "2026-10-20T00:00:00Z", false), payload: { match: { name: "Event A", tier: 2 } } };
 const t2b = { ...cand("b", "Event B", 60, "2026-10-20T00:00:00Z", false), payload: { match: { name: "Event B", tier: 2 } } };

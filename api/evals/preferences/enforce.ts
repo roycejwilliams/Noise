@@ -270,7 +270,7 @@ const third = cand("event_offer", { askId: "profile", fromProfile: true, picked:
 const evAll = PR.evaluateCandidates({ now: at910, timezone: "America/Los_Angeles", optedOut: false, candidates: [ask8, morn, third], sends: [], lastInboundAt: null, joinedAt: joined } as any);
 const lead = PR.leadPick(PR.codePick(evAll.eligible)!, evAll.eligible);
 const sibs = PR.pickSiblingOffers(lead, evAll.eligible);
-check("three sources ready in one window go as one bundle: one lead, the other two ride in it", evAll.eligible.length === 3 && sibs.length === 2 && new Set([lead.id, ...sibs.map((s) => s.id)]).size === 3);
+check("three sources ready in one window: one bundle of two finds (the plan's two-link limit), the third waits", evAll.eligible.length === 3 && sibs.length === 1 && new Set([lead.id, ...sibs.map((s) => s.id)]).size === 2);
 const after = PR.evaluateCandidates({ now: new Date(at910.getTime() + 15 * 60_000), timezone: "America/Los_Angeles", optedOut: false, candidates: [cand("event_offer", { askId: "ask-2" })], sends: [{ type: "event_offer", targetKey: "event_offer:bundle", topicKey: "b", sentAt: at910, exempt: true }], lastInboundAt: null, joinedAt: joined } as any);
 check("and nothing else proactive goes in that window", !after.eligible.length);
 
