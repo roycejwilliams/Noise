@@ -6,6 +6,7 @@
     "evals/reply/stateClaims.ts",
     "evals/reply/askedFor.ts",
     "evals/reply/threadWindow.ts",
+    "evals/reply/wholeExchange.ts",
     "evals/profile/lists.ts",
     "evals/matching/run.ts",
     "evals/matching/memberSafe.ts",

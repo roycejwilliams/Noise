@@ -23,7 +23,7 @@ import type { OaiRequest } from "./callLlmProxy.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
 import { anthropicStream, SAFETY_LINE, safetyCall } from "./callLlmProxy.js";
 import { stripCues } from "./voiceCues.js";
-import { delegationRequest, failClassOf, liveCallTools, type LiveToolsFor, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
+import { cachedCallExchange, delegationRequest, failClassOf, liveCallTools, type ThinkOptions, type LiveToolsFor, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -76,6 +76,8 @@ export type LiveDeps = {
   // Cue's helpers for a delegated turn (gptLive.ts liveCallTools): the call allow-list under the texting tools' guard. Given only once a
   // person is confirmed on the line and never while the voicemail message is being left: nothing acts on what a recording said.
   callTools: LiveToolsFor;
+  // The whole exchange's record for a delegated turn (gptLive.ts cachedCallExchange): the move note and the sentence check.
+  callExchange?: ThinkOptions["exchange"];
 };
 const defaults = (): LiveDeps => ({
   connectOpenAI: (key) => new WebSocket(GPT_LIVE.url, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: GPT_LIVE.startTimeoutMs, perMessageDeflate: false }) as unknown as SocketLike,
@@ -103,6 +105,7 @@ const defaults = (): LiveDeps => ({
   voiceLine: (callKey, req) => import("../routes/callLlm.js").then((m) => m.voiceLineForTurn(callKey, req)),
   readRules: (o) => void import("./callPreferences.js").then((m) => m.readCallTurn(o)).catch(() => {}),
   callTools: liveCallTools,
+  callExchange: cachedCallExchange,
   safetyCut: async (call) => {
     const S = await import("./safety.js");
     await S.recordSafetyConcern(call.userId, call.firstName || null, "co", "a GPT-Live call was cut by OpenAI's safety filter during a safety moment");
@@ -341,6 +344,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
     }, guard, d.voiceLine, personAt != null ? onSentence : undefined, {
       tools: toolsAllowed() ? liveTools : null,
+      exchange: d.callExchange ?? null,
       carry: carry.splice(0),
       onCapped: (unsaid) => { carry = unsaid; },
       onTool: (t) => { toolRuns.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" }); },

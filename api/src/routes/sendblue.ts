@@ -1583,10 +1583,17 @@ export function sendblueRouter(io: Server): Router {
         const tapbacksP = hasText ? tapbackHistory(user.id).catch(() => null) : Promise.resolve(null);
         // One read of a text (services/readTurn.ts): the router's read, how it feels, whether they want an answer, the moment,
         // coverage and feedback. A voice memo or photo alone has no text read; the router reads it (below).
+        // The whole exchange (services/exchangeRecord.ts): what Cue already did in this window, what's open or closed for them, what
+        // "that" meant lately. The read picks the move against it; a failed load leaves the read without it, never the turn.
+        let exchangeBase: import("../services/exchangeRecord.js").ExchangeBase | null = null;
         const readP: Promise<TurnRead> | null =
           hasText && turnP
             ? propagateAttributes({ userId: user.id, traceName: "sendblue.readTurn" }, () =>
-                Promise.all([turnP!.catch(() => null), tapbacksP]).then(([t, h]) => readTurn(routeInput, t, coveragePriorContext(profile), { reactions: h ? describeTapbacks(h) : null })),
+                Promise.all([turnP!.catch(() => null), tapbacksP])
+                  .then(async ([t, h]) => {
+                    exchangeBase = await import("../services/exchangeRecord.js").then((X) => X.loadExchangeBase(user.id, { recentConversation, ctx: t })).catch(() => null);
+                    return readTurn(routeInput, t, coveragePriorContext(profile), { reactions: h ? describeTapbacks(h) : null, record: exchangeBase });
+                  }),
               )
             : null;
         readP?.catch(() => {});
@@ -1950,6 +1957,23 @@ export function sendblueRouter(io: Server): Router {
         // Co's judgment of this text (brain/index.ts): feedback to save, the list or where their work stands when they ask about
         // Co, a repeated text answered once, the walk-in ask, the clarifying question, and the decision (act, ask, deliver), logged
         // with the guards in force. The facts are assembled around it; the guards (grounding, tool limits, privacy) still veto.
+        // The record and the move, in this reply's tail (never the cached prefix), and handed to the draft check (agent/conversationTools.ts
+        // sendReply, harness/moveCheck.ts). The move's reason is logged only; what "that" meant is kept briefly as Cue's own item labels.
+        if (exchangeBase) {
+          const X = await import("../services/exchangeRecord.js");
+          const record = { ...(exchangeBase as import("../services/exchangeRecord.js").ExchangeBase), read: turnRead?.exchange ?? null };
+          replyFacts.exchange = record;
+          const lines = X.recordLines(record);
+          if (lines) addInstruction(replyFacts, lines);
+          const r = record.read;
+          if (r) {
+            recordDecision({ layer: 3, decision: "turn.move_read", userId: user.id, outcome: "act", action: r.move, reason: r.why, proposal: { told: r.told.length, closes: r.closes.map((c) => `${c.item}:${c.how}`), meant: r.meant ? { item: r.meant.item, notItem: r.meant.notItem } : null, again: r.again, done: record.done.length, open: record.unresolved.length } }).catch(() => {});
+            // Only a thing Cue sent (a link, find, document or card) is kept, by its label: never a question of Cue's, which can carry a
+            // name or their words.
+            const thing = (id: string | null) => !!id && ["link", "find", "document", "card"].includes(record.done.find((d) => d.id === id)?.kind ?? "");
+            if (r.meant && (thing(r.meant.item) || thing(r.meant.notItem))) recordDecision({ layer: 3, decision: "turn.meant", userId: user.id, outcome: "act", action: r.meant.item ?? "none", proposal: { phrase: r.meant.phrase.split(/\s+/).filter((w) => w === w.toLowerCase()).slice(0, 3).join(" "), label: thing(r.meant.item) ? r.meant.label : null, notLabel: thing(r.meant.notItem) ? r.meant.notLabel : null } }).catch(() => {});
+          }
+        }
         const brainDecision = planTextReply({ userId: user.id, read: turnRead, owed: owesReply, safetyConcern: crisisWording, clarify: decision.clarifyContext ?? null, repeat: repeatContext || null, walkinAsk: walkinAskInstruction || null, turn }, replyFacts);
 
         // Same strings downstream code (and the reply agent) already key on.

@@ -186,6 +186,14 @@ export function registerJobs(io: Server) {
       .then((b) => { if (b.length) console.log(`rule check: ${b.length} send(s) flagged`); })
       .catch((err: any) => console.error("rule check failed:", err?.name ?? "Error"));
   }, { timezone: "America/Los_Angeles" });
+  // The nightly whole-exchange count (harness/exchangeCount.ts): repeats, re-asks, reopenings, double asks and questions after a close in
+  // the last 24h of what Cue sent. No model; counts and ids only, flags on the review.
+  cron.schedule("20 5 * * *", () => {
+    import("../harness/exchangeCount.js")
+      .then((m) => m.runNightlyExchangeCount())
+      .then((t) => { const n = Object.values(t).reduce((a, b) => a + b, 0); if (n) console.log(`exchange count: ${n} miss(es)`); })
+      .catch((err: any) => console.error("exchange count failed:", err?.name ?? "Error"));
+  }, { timezone: "America/Los_Angeles" });
   // Member assets unused for 90 days lose their bytes (services/memberAssets.ts).
   cron.schedule("25 4 * * *", () => {
     import("../services/memberAssets.js")

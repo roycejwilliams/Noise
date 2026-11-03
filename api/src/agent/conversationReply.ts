@@ -277,6 +277,7 @@ export async function runConversationReplyAgent(
   let stepsDone = 0;
   const { tools, state, flushLinks } = createConversationTools(tapToolContext({
     redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
+    exchange: input.facts.exchange ?? null,
     onFirstRead: (p) => {
       firstRead = p;
     },
