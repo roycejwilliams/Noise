@@ -297,7 +297,7 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   const now = new Date();
   const soon = await PR.sendExempt({ userId: ELI, phoneNumber: PHONE, type: "event_change", targetKey: "stale:x:moved", messages: ["Heads up: the meetup moved to 7."], timezone: ZONE, soonAt: new Date(now.getTime() + 2 * HOUR), door: { summary: "a heads-up", validUntil: DR.doorValidUntil("requested", now, ZONE) } });
   check("notice: about something within hours, it bypasses the door and goes now", soon.sent === true && !soon.door && db.outbox.some((m) => m.content.includes("moved to 7")) && !db.candidates.length);
-  check("notice: and still passes the member's own rule first (sendExempt's gate, inside the lock)", /const rule = await memberRuleGate\(client, \{ userId: opts\.userId, now, cls, channel: "text", soonAt: opts\.soonAt \?\? null \}\);/.test(src("harness/proactive.ts")));
+  check("notice: and still passes the member's own rule first (sendExempt's gate, inside the lock)", /const rule = await memberRuleGate\(client, \{ userId: opts\.userId, now, cls, channel: "text", soonAt: opts\.soonAt \?\? null(?:, throughTeamHold: isRelayKey\(opts\.targetKey\))? \}\);/.test(src("harness/proactive.ts")));
   check("route: R2 notices, safety, a reply, a delivery answering their latest message and a time-sensitive one bypass", [
     DR.doorRoute({ cls: "requested", now, soonAt: new Date(now.getTime() + HOUR) }),
     DR.doorRoute({ cls: "checkin", now, safety: true }),
