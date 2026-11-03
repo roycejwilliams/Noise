@@ -6,7 +6,7 @@ import "../../lib/requireMeter.js";
 import { AWAITING_RECORDING, result, type GoldenCase, type GoldenStatus } from "../types.js";
 import { DAY, NONE, judge, observed, reply, type Line } from "./checkins.js";
 
-const NEW: GoldenStatus = { live: false, until: AWAITING_RECORDING, why: "added with the whole-exchange record (11-03); not recorded yet" };
+const NEW: GoldenStatus = { live: true }; // recorded 2026-11-03 after #371 ($0.48)
 const at = (min: number) => new Date(DAY.getTime() - min * 60_000);
 const QUESTION = /\?\s*$/m;
 
