@@ -17,7 +17,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
-import { doorValidUntil } from "../harness/door.js";
+import { doorValidUntil, earliestDated } from "../harness/door.js";
 import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { capToFinal, isDoorLook, unspendWake } from "./coTasks.js";
@@ -60,7 +60,8 @@ export type TaskTurnDeps = {
   // held one says when it's worth another look (retryAt).
   // key: a fixed send key (a slip text's, so it can only go once); otherwise each send gets its own.
   // queued: it waits at the door for Cue's next message (harness/door.ts); the task's text count moves when the pick sends it.
-  send: (messages: string[], o?: { owed: boolean; key?: string }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date; queued?: boolean }>;
+  // endsAt: when the earliest dated thing in it is moot (harness/door.ts earliestDated): a queued text never outlives it.
+  send: (messages: string[], o?: { owed: boolean; key?: string; endsAt?: Date | null }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date; queued?: boolean }>;
   // The slip exception's one read (goalOwnership.ts pieceNeededFor); a test stands in for it.
   pieceNeeded?: (piece: string, goalTitle: string, m: { date: string; words: string }) => Promise<{ needed: boolean; read: boolean }>;
   markTexted: () => Promise<void>;
@@ -463,7 +464,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           const messages = assembleMessages(good, closing);
           const whole = await wholeDelivery(messages);
           if (whole) return { ok: false, error: whole };
-          const sent = await deps.send(messages, { owed: owed || task.source !== "lookout" });
+          // Its earliest dated thing (an event's day): a text queued at the door never outlives it (harness/door.ts).
+          const endsAt = earliestDated(good.flatMap((g) => items.find((i) => i.url === g.url)?.facts ?? []), deps.now(), deps.zone);
+          const sent = await deps.send(messages, { owed: owed || task.source !== "lookout", endsAt });
           if (sent.reason === "opted out") optedOut = true;
           if (!sent.sent && !sent.queued) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
           // Queued at the door: texted only once the pick sends it (the door's onSent marks it), never at queue time.
@@ -1109,7 +1112,7 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
       // A slip text (slipException) has its own fixed key, so the same slip can only ever go once.
       // One door (harness/door.ts): a result waits for Cue's next message, ranked and gathered with whatever else is ready, unless it
       // answers their latest message. A slip text (its own key) says a time will be missed: it can't wait, it goes now.
-      const door = o?.key ? undefined : { summary: `${coInitiated ? "A find Cue's own look-out turned up" : "Results of work they asked for"}: ${task.goal.slice(0, 120)}`, validUntil: doorValidUntil(coInitiated ? "unsolicited" : "requested", clock(), zone), taskId: task.id, awaitingReply: true };
+      const door = o?.key ? undefined : { summary: `${coInitiated ? "A find Cue's own look-out turned up" : "Results of work they asked for"}: ${task.goal.slice(0, 120)}`, validUntil: doorValidUntil(coInitiated ? "unsolicited" : "requested", clock(), zone, o?.endsAt ?? null), taskId: task.id, awaitingReply: true };
       const r = o?.key
         ? await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: o.key, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers })
         : await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers, door });

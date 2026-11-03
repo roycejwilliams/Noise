@@ -328,6 +328,8 @@ export const BRIEF_DOOR_LOOK_HOURS = 12;
 export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boolean; queued?: boolean }, wakes: number): "told" | "hold" | "untold" | "queued" {
   // Waiting at the door for Cue's next message (harness/door.ts): not told yet; the task stays open until the pick sends it.
   if (r.door && r.queued) return "queued";
+  // Its line ended at the door without going (past its valid-until): never told, and no more looks.
+  if (r.door && /^ended at the door/.test(r.reason ?? "")) return "untold";
   if (r.sent || r.reason === "already sent") return "told";
   // Held by their own rule or the spacing (harness/notifyGate.ts) waits the same way: it's work they asked for, never dropped for it.
   // Held by their own rule or the spacing (harness/notifyGate.ts): it's work they asked for, it waits however long, never dropped for it

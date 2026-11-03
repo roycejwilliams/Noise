@@ -104,16 +104,39 @@ export function gatherUntil(eligible: Gatherable[], now: Date, o: { minutes?: nu
 
 // ---------------------------------------------------------------- valid-until
 
-// How long a door item stays worth sending. Requested results (something they asked for): no clock at all. Their own rule or the
-// spacing may hold it as long as it takes; it ends only when the thing itself is moot (cap: an event's start), never by waiting
-// (review of #361). An intro ask: through the end of the next local day. A find: the end of its own day. A check-in: two days. A cap
-// (an event's start, the hour before it) always wins when it comes first.
-export function doorValidUntil(cls: SendClass | "intro", now: Date, zone: string | null, cap?: Date | null): Date | null {
-  if (cls === "requested") return cap ?? null;
+// How long a door item stays worth sending. Requested results (something they asked for): their own rule or the spacing may hold it
+// as long as the thing in it is still live: it ends when the earliest dated thing inside it is moot (cap: an event's start, a date's
+// end), and in any case after REQUESTED_BACKSTOP_DAYS, so nothing waits forever and goes out stale (review of #361, round 2). A drop is
+// noted on the task as never told. An intro ask: through the end of the next local day. A find: the end of its own day. A check-in:
+// two days. A cap always wins when it comes first.
+export const REQUESTED_BACKSTOP_DAYS = 14;
+export function doorValidUntil(cls: SendClass | "intro", now: Date, zone: string | null, cap?: Date | null): Date {
+  if (cls === "requested") {
+    const backstop = new Date(now.getTime() + REQUESTED_BACKSTOP_DAYS * 86_400_000);
+    return cap && cap.getTime() < backstop.getTime() ? cap : backstop;
+  }
   const local = DateTime.fromJSDate(now).setZone(zone || "America/Los_Angeles");
   const base = cls === "intro" ? local.plus({ days: 1 }).endOf("day") : cls === "checkin" ? local.plus({ hours: 48 }) : local.endOf("day");
   const at = base.toJSDate();
   return cap && cap.getTime() < at.getTime() ? cap : at;
+}
+
+// Pure: the earliest dated thing in a text's facts ("date: 2026-11-04", "a date its page mentions: ...", "deadline: ..."), as the end
+// of that day in their zone; days already past are ignored (the item is judged by what's still ahead in it). Null: nothing dated.
+export function earliestDated(facts: string[], now: Date, zone: string | null): Date | null {
+  const z = zone || "America/Los_Angeles";
+  const ends = facts
+    .flatMap((f) => [...String(f).matchAll(/\b(?:date|deadline)\b[^:]*:\s*(\d{4}-\d{2}-\d{2})/gi)].map((m) => DateTime.fromISO(m[1], { zone: z }).endOf("day")))
+    .filter((d) => d.isValid && d.toMillis() > now.getTime())
+    .map((d) => d.toJSDate().getTime());
+  return ends.length ? new Date(Math.min(...ends)) : null;
+}
+
+// Pure: a deferred door item's valid-until (a paused intro ask): never ending before a day past where it was deferred to, so however
+// long matching stays paused, the pause itself never makes it expire (the asker is never told it failed because of a pause).
+export function deferredDoorExpiry(expiresAt: Date | null, deferTo: Date): Date | null {
+  if (!expiresAt) return null;
+  return new Date(Math.max(expiresAt.getTime(), deferTo.getTime() + 86_400_000));
 }
 
 // What a door item carries for the picker: the text as its own path wrote and checked it, its class, and what it does once it went.
@@ -142,7 +165,7 @@ export type DoorPayload = {
 
 // Queue a written text at the door: one candidate under its own type and target key (the same key the direct send would have used, so
 // the ledger and every reader of it are unchanged, and queueing twice is one candidate).
-export async function enterDoor(o: { userId: string; type: DoorType; targetKey: string; messages: string[]; cls: SendClass; summary: string; validUntil: Date | null; now?: Date; restraintKind?: string | null; intro?: boolean; soonAt?: Date | null; after?: DoorPayload["after"]; taskId?: number | null; close?: DoorPayload["close"]; awaitingReply?: boolean; priority?: number }): Promise<{ queued: boolean }> {
+export async function enterDoor(o: { userId: string; type: DoorType; targetKey: string; messages: string[]; cls: SendClass; summary: string; validUntil: Date; now?: Date; restraintKind?: string | null; intro?: boolean; soonAt?: Date | null; after?: DoorPayload["after"]; taskId?: number | null; close?: DoorPayload["close"]; awaitingReply?: boolean; priority?: number }): Promise<{ queued: boolean }> {
   const P = await import("./proactive.js");
   const now = o.now ?? new Date();
   const payload: DoorPayload = {
