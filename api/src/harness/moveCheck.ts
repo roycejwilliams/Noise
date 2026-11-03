@@ -1,9 +1,9 @@
 // The draft against the move and the whole exchange (Royce, 2026-11-03: "judge its next move against the whole exchange, not just
 // whether the next sentence sounds reasonable"). The move and the record come from services/exchangeRecord.ts; this reads only Cue's own
-// draft against them (facts: what was sent, what they answered, what "that" was resolved to, what they closed). It never reads their
-// words for intent: that's the turn read's job. On a miss the reply gets one rewrite toward the move (agent/conversationTools.ts
-// sendReply), in its own words, never a canned line; on a call the sentence is held and Cue answers again in its own words
-// (services/callLlmProxy.ts, the #365 hold). Pure.
+// draft against them (facts: what was sent, what they answered, what "that" was resolved to, what they closed). It reads their words for
+// one thing only: a plain request for something already delivered (askedAgain), which lifts a resend hold; the rest is the turn read's.
+// On a miss the reply gets one rewrite toward the move (agent/conversationTools.ts sendReply), in its own words, never a canned line; on
+// a call the sentence is held and Cue answers again in its own words (services/callLlmProxy.ts, the #365 hold). Pure.
 import { ALWAYS_ASKABLE, questionsIn, sameQuestion } from "./repeatAsk.js";
 import { namesItem } from "../services/callClaims.js";
 import { INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeBase, type ExchangeRecord } from "../services/exchangeRecord.js";
@@ -37,6 +37,54 @@ export function about(draft: string, label: string, not = ""): boolean {
   return w.length <= 2 ? hit === w.length : hit >= 3 || hit / w.length >= 0.5;
 }
 
+// Their own latest words plainly asking for something Cue already delivered (Royce, 2026-11-03: "a useful new request is never
+// suppressed because it resembles an old one"; a direct request in the member's own words always wins over the turn read, which can
+// miss a plain one: "Can you send me a vCard" after a card that afternoon came back as not asked). Only lifts a hold (a card not sent
+// twice, a resend miss): it never sends anything by itself. Words that only mention the item ("thanks for the card", "got your card",
+// "that rooftop place was great") are not a request. Pure.
+const REQ = String.raw`(?:send|resend|re-send|text|share|forward|give|drop|shoot|get|need|want|(?:can|could|may) i have)`;
+const CARD_NOUN = String.raw`(?:v-?\s?cards?|vcf|contact (?:card|info|details)|your (?:\w+ )?(?:card|contact|number)|(?:the|that|a) (?:new |updated |latest )?card)`;
+// A refusal attached to the ask ("don't send the card again", "no need to resend"); "not sure I saved it, send it again" still asks.
+const NEG = new RegExp(String.raw`\b(?:don'?t|do not|never|stop|not)\s+(?:\w+\s+)?${REQ}\b|\bno (?:more|need)\b`, "i");
+const CARD_ASK = [
+  new RegExp(String.raw`\b${REQ}\b[^.?!]{0,30}?\b${CARD_NOUN}\b`, "i"),
+  new RegExp(String.raw`\b${CARD_NOUN}\b[^.?!]{0,15}\bagain\b`, "i"),
+  /\bwhat(?:'s| is| was) your (?:number|contact)\b/i,
+  /^\s*(?:your |a |the )?(?:v-?\s?card|contact card|card)\s*\?+\s*$/i,
+];
+// A plain re-ask that names nothing: their newest delivered thing (a link, find or document, or the card for "it").
+const AGAIN_ASK = [
+  /\b(?:resend|re-send)\b/i,
+  new RegExp(String.raw`\b${REQ}\b[^.?!]{0,30}\bagain\b`, "i"),
+  /\bwhat (?:was|were|is|'s) (?:that|the) (?:\w+ )?(?:link|url|site|website|page|place|spot|one|event|restaurant|bar)\b/i,
+  /\b(?:lost|can'?t find|missed|didn'?t get|never got) (?:the|that|your) (?:link|url)\b/i,
+];
+const LINK_NOUN = /\b(?:link|url|site|website|page)\b/i;
+// A named item: some word of the request points back at what was sent, and their words carry a distinctive word of its label.
+const POINTS_BACK = /\b(?:again|that|those|the one|you (?:sent|mentioned|shared|texted|gave|found)|earlier|before|last time|remind me)\b/i;
+const NAMED_REQ = new RegExp(String.raw`\b${REQ}\b|\b(?:what|where|which) (?:was|were|is|'s)\b|\bremind me\b|\?`, "i");
+const GENERIC_ITEM = new Set("place spot bar restaurant event night show club link page site thing one party venue".split(" "));
+type Deliverable = { kind?: DoneItem["kind"]; label: string; url: string | null };
+const kindOf = (d: Deliverable) => d.kind ?? (/contact card/i.test(d.label) ? "card" : "link");
+export function askedAgain<T extends Deliverable>(theirs: string, items: readonly T[]): T[] {
+  const t = (theirs ?? "").replace(/[’‘]/g, "'").trim();
+  if (!t || !items.length) return [];
+  // A clause that refuses asks for nothing.
+  const asks = (re: RegExp) => t.split(/[.!;\n]+|,\s*(?:but|and)\b/).some((c) => { const m = c.match(re); return !!m && !NEG.test(c.slice(0, (m.index ?? 0) + m[0].length)); });
+  const deliverable = items.filter((d) => ["link", "find", "document", "card"].includes(kindOf(d)));
+  const out = new Set<T>();
+  if (CARD_ASK.some(asks)) deliverable.filter((d) => kindOf(d) === "card").forEach((d) => out.add(d));
+  const named = asks(NAMED_REQ) && asks(POINTS_BACK)
+    ? deliverable.filter((d) => kindOf(d) !== "card" && topicWords(d.label).some((w) => w.length >= 4 && !GENERIC_ITEM.has(w) && new RegExp(`\\b${w.replace(/[^a-z0-9'-]/g, "")}`, "i").test(t)))
+    : [];
+  named.forEach((d) => out.add(d));
+  if (!out.size && AGAIN_ASK.some(asks)) {
+    const newest = LINK_NOUN.test(t) ? deliverable.find((d) => kindOf(d) !== "card") : deliverable[0];
+    if (newest) out.add(newest);
+  }
+  return items.filter((d) => out.has(d));
+}
+
 // What the record alone can say about a draft, with no read of their latest message: the part a reply and a queued send share
 // (Royce, 2026-11-03: what Cue already did and what they closed carry into "any queued work", not just the next reply).
 //   again    the done item they asked for again this turn (never a resend)
@@ -53,7 +101,8 @@ export function about(draft: string, label: string, not = ""): boolean {
 //   theirsAt when their words in `theirs` were said (queued work). They lift a closed item only when said AFTER it closed: the message
 //            that dropped it ("no need for the DJ") never counts as a new request for it. Unset: their message this turn (the reply),
 //            newer than every stored close, but never for what this turn's read says it closes
-export type RecordOpts = { theirsAt?: Date | string | null; again?: DoneItem | null; closing?: ReadonlySet<string>; back?: ReadonlySet<string>; theirs?: string; resendOk?: boolean; noReopen?: boolean; droppedOnly?: boolean; optIn?: boolean };
+//   asked    done items their own latest words plainly ask for again (askedAgain, a reply's turn): never a resend, like again
+export type RecordOpts = { theirsAt?: Date | string | null; again?: DoneItem | null; asked?: readonly DoneItem[]; closing?: ReadonlySet<string>; back?: ReadonlySet<string>; theirs?: string; resendOk?: boolean; noReopen?: boolean; droppedOnly?: boolean; optIn?: boolean };
 // A consent question for an intro or a match, in Cue's own words: never a double "interested?" (the double opt-in is its own ask).
 export const OPT_IN_Q = /\b(?:introduce you|an? (?:intro|introduction)\b|connect (?:you|the two of you)|put you (?:two )?in touch|(?:meet|say hi to) (?:him|her|them)\b|want (?:to )?meet)/i;
 export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "unresolved">, o: RecordOpts = {}): MoveMiss[] {
@@ -62,13 +111,14 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
   const qs = questionsIn(draft.replace(URL, "")).filter((q) => !askable(q));
   const urls = (draft.match(URL) ?? []).map(normUrl);
   const again = o.again ?? null;
+  const asked = o.asked ?? [];
   // Done: a link, find or card already sent, sent again with no ask for it.
   if (!o.resendOk) {
     for (const d of base.done.filter((x) => x.url && (x.kind === "link" || x.kind === "find"))) {
-      if (urls.includes(normUrl(d.url!)) && d !== again) out.push({ name: "resend", why: `re-sends ${d.id} (${d.label}), already sent and not asked for again` });
+      if (urls.includes(normUrl(d.url!)) && d !== again && !asked.includes(d)) out.push({ name: "resend", why: `re-sends ${d.id} (${d.label}), already sent and not asked for again` });
     }
   }
-  if (/\[sent (?:Cue|Co)'s contact card\]/i.test(draft) && base.done.some((d) => d.kind === "card") && again?.kind !== "card") out.push({ name: "resend", why: "sends the contact card again, already sent and not asked for" });
+  if (/\[sent (?:Cue|Co)'s contact card\]/i.test(draft) && base.done.some((d) => d.kind === "card") && again?.kind !== "card" && !asked.some((d) => d.kind === "card")) out.push({ name: "resend", why: "sends the contact card again, already sent and not asked for" });
   // Done: an offer or question already made and answered, made again (reworded counts, as after a yes).
   for (const q of qs) {
     const prior = base.done.find((d) => (d.kind === "offer" || d.kind === "question") && d.replied && sameQuestion(q, d.label, true));
@@ -106,7 +156,9 @@ export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined
   const qs = questionsIn(draft.replace(URL, "")).filter((q) => !askable(q));
   const urls = (draft.match(URL) ?? []).map(normUrl);
   const again = r.again ? rec.done.find((d) => d.id === r.again) ?? null : null;
-  const out = recordMisses(draft, rec, { again, closing: new Set(r.closes.map((c) => c.item)), back: new Set(r.reopens), theirs });
+  // Their own words asking for something again count even when the read missed it.
+  const theirsAsked = askedAgain(theirs, rec.done);
+  const out = recordMisses(draft, rec, { again, asked: theirsAsked, closing: new Set(r.closes.map((c) => c.item)), back: new Set(r.reopens), theirs });
   // Told: a question they already answered.
   for (const q of qs) {
     const t = r.told.find((x) => sameQuestion(q, x.q, true));
@@ -131,7 +183,7 @@ export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined
   if (r.move === "close") {
     const asked = qs.filter((q) => !WELLBEING_Q.test(q));
     if (asked.length) out.push({ name: "question_after_close", why: `adds a question after they closed: "${asked[0].slice(0, 80)}"` });
-    if (urls.some((u) => !again?.url || normUrl(again.url) !== u)) out.push({ name: "find_after_close", why: "brings a new link or find after they closed" });
+    if (urls.some((u) => ![again, ...theirsAsked].some((d) => d?.url && normUrl(d.url) === u))) out.push({ name: "find_after_close", why: "brings a new link or find after they closed" });
   } else if (r.move === "summarize" && qs.length) out.push({ name: "off_move", why: "asks a question in a summary they asked for" });
   else if (r.move === "feeling" && urls.length) out.push({ name: "off_move", why: "brings a link or find while they're with a feeling" });
   return out;
@@ -157,7 +209,10 @@ export function callSentenceMiss(sentence: string, o: { rec: ExchangeRecord | nu
   }
   // An offer to text something already delivered on this call or already sent in the exchange, unless they asked for it again.
   if (OFFER_Q.test(s) || /\b(?:i'?ll|let me) (?:text|send|shoot)\b/i.test(s)) {
-    const sent = callSentItems(o.rec, o.delivered).filter((d) => !o.read!.again.includes(d.label));
+    // What the read says they asked for again, and what their own last words plainly ask for again (askedAgain), is never held.
+    const all = callSentItems(o.rec, o.delivered);
+    const theirsAsked = askedAgain([...o.callTurns].reverse().find((t) => t.from === "them")?.text ?? "", all);
+    const sent = all.filter((d) => !o.read!.again.includes(d.label) && !theirsAsked.includes(d));
     const hit = sent.find((d) => mentions(s, d));
     if (hit) return { name: "reoffer", why: `offers to send ${hit.label.slice(0, 80)} again, already sent` };
   }

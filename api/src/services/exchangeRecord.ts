@@ -30,8 +30,9 @@ export const MOVE_MEANINGS: Record<ExchangeMove, string> = {
 export const MOVES_GUIDE = `Pick the move from the whole exchange, not from their last line alone: what they asked and corrected, what Cue already did or asked, what's still open, how they feel, and their rules. Their latest message always wins over the record: if they ask for something again, bring a closed thing back, or didn't catch what you asked, that's what you answer. "close" only when their latest message closes and asks nothing: a thanks with a question or a request is "answer" or "act", and closing words that carry distress ("I'm done with all of it") are "feeling", never "close". The moves: ${EXCHANGE_MOVES.map((m) => `${m} (${MOVE_MEANINGS[m]})`).join("; ")}.`;
 
 export type DoneKind = "link" | "find" | "card" | "document" | "question" | "offer";
-// replied: they wrote back after it (a question or offer they've had the chance to answer).
-export type DoneItem = { id: string; kind: DoneKind; label: string; url: string | null; replied: boolean };
+// replied: they wrote back after it (a question or offer they've had the chance to answer). version: the card's version, when the
+// send line carries it (agent/conversationTools.ts sendContactCard).
+export type DoneItem = { id: string; kind: DoneKind; label: string; url: string | null; replied: boolean; version?: number };
 export type UnresolvedState = "open" | "delivered" | "solved" | "dropped";
 // closedAt: when it closed (closed items read from the stores): their words lift it only when said after that (see moveCheck.ts).
 export type UnresolvedItem = { id: string; label: string; state: UnresolvedState; closedAt?: string | null };
@@ -69,8 +70,8 @@ export function doneFrom(recentConversation: string, sent: { name: string; url: 
     const t = turns[i];
     if (t.from !== "co") continue;
     const replied = turns.slice(i + 1).some((x) => x.from === "them" && x.text.trim());
-    const card = t.text.match(/\[sent (?:Cue|Co)'s contact card\]/i);
-    if (card) raw.push({ kind: "card", label: "Cue's contact card", url: null, replied });
+    const card = t.text.match(/\[sent (?:Cue|Co)'s contact card\](?: \(version (\d+)\))?/i);
+    if (card) raw.push({ kind: "card", label: "Cue's contact card", url: null, replied, ...(card[1] ? { version: Number(card[1]) } : {}) });
     const doc = t.text.match(/\[sent a document: ([^\]]+)\]/i);
     if (doc) raw.push({ kind: "document", label: doc[1].trim().slice(0, 120), url: null, replied });
     for (const u of t.text.match(URL) ?? []) {
