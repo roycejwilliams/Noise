@@ -22,6 +22,8 @@ import { isOpenAsk } from "../harness/profileWrite.js";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
+import { briefPairBlocks, namedYes, pickNamed, rankingFor } from "./eventBrief.js";
+import type { RankedCandidate } from "./eventScoring.js";
 
 export const PRE_ARRIVAL = { fromBeforeStartMs: 3 * 3_600_000, untilBeforeStartMs: 60 * 60_000, strongScore: 60, minCrowd: 2, farMeters: 3000, farNoteFromMs: 10 * 60_000, farNoteUntilMs: 30 * 60_000 };
 
@@ -94,11 +96,31 @@ export async function statedAsk(userId: string): Promise<string | null> {
   return open.length ? String(open[open.length - 1].text) : null;
 }
 
-// How many people coming fit their ask strongly (a count only).
-export async function strongFits(eventId: string, userId: string): Promise<number> {
-  const { rows } = await pool.query(`SELECT ranked_candidates FROM event_guest_rankings WHERE event_id = $1 AND person_id = $2`, [eventId, userId]).catch(() => ({ rows: [] as any[] }));
-  const ranked = Array.isArray(rows[0]?.ranked_candidates) ? rows[0].ranked_candidates : [];
-  return ranked.filter((r: any) => typeof r?.score === "number" && r.score >= PRE_ARRIVAL.strongScore && r.shareReason).length;
+// How many people coming fit their ask strongly (a count only). The same guests the member brief may count, by its own rules
+// (services/eventBrief.ts pickNamed with nobody named): still registered, haven't said they can't make it, at the strong bar, with a
+// reason that is one of their asks shareable right now, and no pair record against it (declined, introduced, blocked: briefPairBlocks).
+// It counted every stored ranking before (2026-11-03): a guest who cancelled, or one whose pair was declined, made "a few people coming
+// fit what you're after" when fewer did. A read that fails counts nobody (the text then says nothing about who fits), never a guess.
+export async function strongFits(eventId: string, userId: string, members: { user_id: string; first_name: string }[]): Promise<number> {
+  try {
+    const others = members.filter((m) => m.user_id !== userId);
+    const rankedAll = await rankingFor(eventId, userId);
+    if (!rankedAll.length || !others.length) return 0;
+    const blocks = await briefPairBlocks(eventId, userId, rankedAll.map((r) => r.candidate_id));
+    if (!blocks) return 0;
+    const { notGoing } = await namedYes(eventId, others.map((m) => m.user_id));
+    const { shareableAsks } = await import("./matching.js");
+    const { rows } = await pool.query(`SELECT user_id, intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [others.map((m) => m.user_id)]);
+    const stillShareable = new Map<string, string[]>(rows.map((r: any) => [String(r.user_id), shareableAsks(r.intent).map((a: any) => String(a.text))]));
+    return countStrongFits({ ranked: rankedAll.filter((r) => !blocks.has(r.candidate_id)), recipientId: userId, members: others, notGoing, stillShareable });
+  } catch {
+    return 0;
+  }
+}
+
+// Pure: the count, through the brief's own picker with nobody allowed a name (so every fit is a count).
+export function countStrongFits(p: { ranked: RankedCandidate[]; recipientId: string; members: { user_id: string; first_name: string }[]; notGoing: Set<string>; stillShareable: Map<string, string[]> }): number {
+  return pickNamed({ ranked: p.ranked, recipientId: p.recipientId, members: p.members, nameOk: new Set(), notGoing: p.notGoing, stillShareable: p.stillShareable }).unnamedFits;
 }
 
 export async function presenceRow(eventId: string, userId: string): Promise<any | null> {
