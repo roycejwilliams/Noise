@@ -488,7 +488,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // that touches their safety. Past that, the draft goes on to the fact check as before.
         if (ctx.exchange?.read && canRedraft && !state.moveNudged && !ctx.safetyConcern && !state.safetyFlagged) {
           const { moveMisses, moveRedraftNote } = await import("../harness/moveCheck.js");
-          const misses = moveMisses(draft, ctx.exchange);
+          const misses = moveMisses(draft, ctx.exchange, ctx.resolvedContent ?? "");
           if (misses.length) {
             state.moveNudged = true;
             if (!ctx.dryRun) {

@@ -36,7 +36,9 @@ export type UnresolvedState = "open" | "delivered" | "solved" | "dropped";
 export type UnresolvedItem = { id: string; label: string; state: UnresolvedState };
 export type Told = { q: string; a: string };
 // item / notItem: done ids this turn. label / notLabel: their labels (what carries to the next turn).
-export type Meant = { phrase: string; item: string | null; label: string | null; notItem: string | null; notLabel: string | null };
+// between: when their words and the exchange don't settle which item it is, the two or more it could equally be (then item is null):
+// the one case Cue asks which. A "that" the exchange settles is never asked about.
+export type Meant = { phrase: string; item: string | null; label: string | null; notItem: string | null; notLabel: string | null; between?: string[] };
 // Kept between turns: Cue's own item labels only, never their words (review of #368).
 export type StoredMeant = { label: string | null; notLabel: string | null };
 export type ExchangeBase = { done: DoneItem[]; unresolved: UnresolvedItem[]; priorMeant: StoredMeant[] };
@@ -119,7 +121,7 @@ What's open or closed for them (by id; only their word makes something solved or
 ${open}
 ${prior}
 "move": the one move for Cue's reply. ${MOVES_GUIDE} One of: ${EXCHANGE_MOVES.map((m) => `"${m}"`).join(", ")}.
-"refers_to": when their message points at something with "that", "it", "this one", "the second one", "him" or similar, {"phrase": "their pointing word or two", "item": the D id it means, or null when it isn't on the list, "not_item": the D id they say they did NOT mean (a correction like "no, the other one"), or null}; otherwise null.
+"refers_to": when their message points at something with "that", "it", "this one", "the second one", "him" or similar, {"phrase": "their pointing word or two", "item": the D id it means, or null when it isn't on the list or the exchange doesn't settle which, "not_item": the D id they say they did NOT mean (a correction like "no, the other one"), or null, "between": only when two or more D ids fit equally and nothing in the exchange (what was last discussed, what they reacted to, what they asked about) settles which, those ids; otherwise []}; otherwise null. Resolve it from the exchange whenever you can: "between" is for a real tie, not for caution.
 "answered": Cue's questions in the conversation above (or offers in the list) that they have already answered, each {"q": "Cue's question, word for word", "a": "their answer, in a few of their words"}; [] if none. Count an answer even if it came several texts later or in other words.
 "closes": items on the open list their latest message says are done, solved or dropped, each {"item": "U id", "how": "solved" | "dropped"}; [] if none. Only their own words close something.
 "reopens": U ids of items marked solved or dropped that their latest message brings back or asks about again; [] if none.
@@ -135,7 +137,10 @@ export function parseExchangeRead(obj: any, b: ExchangeBase | null | undefined):
   const doneId = (v: unknown) => { const id = s(v, 8)?.toUpperCase() ?? null; return id && b.done.some((d) => d.id === id) ? id : null; };
   const labelOf = (id: string | null) => (id ? b.done.find((d) => d.id === id)?.label ?? null : null);
   const r = obj?.refers_to;
-  const meant: Meant | null = r && typeof r === "object" && s(r.phrase, 40) ? { phrase: s(r.phrase, 40)!, item: doneId(r.item), label: labelOf(doneId(r.item)), notItem: doneId(r.not_item), notLabel: labelOf(doneId(r.not_item)) } : null;
+  const item = r && typeof r === "object" ? doneId(r.item) : null;
+  // A tie only when no one item was named, and only between real, distinct ids (two or more).
+  const between = !item && r && typeof r === "object" && Array.isArray(r.between) ? [...new Set(r.between.map((v: unknown) => doneId(v)).filter((v: string | null): v is string => !!v))].slice(0, 4) as string[] : [];
+  const meant: Meant | null = r && typeof r === "object" && s(r.phrase, 40) ? { phrase: s(r.phrase, 40)!, item, label: labelOf(item), notItem: doneId(r.not_item), notLabel: labelOf(doneId(r.not_item)), ...(between.length >= 2 ? { between } : {}) } : null;
   const told: Told[] = (Array.isArray(obj?.answered) ? obj.answered : []).map((t: any) => ({ q: s(t?.q, 200), a: s(t?.a, 200) })).filter((t: any): t is Told => !!t.q && !!t.a).slice(0, 6);
   const reopens = (Array.isArray(obj?.reopens) ? obj.reopens : []).map((v: unknown) => s(v, 8)?.toUpperCase() ?? "").filter((id: string) => b.unresolved.some((u) => u.id === id && (u.state === "solved" || u.state === "dropped"))).slice(0, 6);
   const closes = (Array.isArray(obj?.closes) ? obj.closes : [])
@@ -145,12 +150,12 @@ export function parseExchangeRead(obj: any, b: ExchangeBase | null | undefined):
   const again = doneId(obj?.asks_again);
   // A close that also asks for something again, or brings something back, is a request: answered, never closed over (review of #368).
   const asked = move === "close" && (again || reopens.length) ? "act" : move;
-  return { move: asked, meant: meant && (meant.item || meant.notItem) ? meant : null, told, closes, reopens, again };
+  return { move: asked, meant: meant && (meant.item || meant.notItem || meant.between?.length) ? meant : null, told, closes, reopens, again };
 }
 
 // Pure: the move's logged reason, built by code from the read's fields (review of #368: never the model's free text).
 export function moveReason(r: ExchangeRead, closeHeld = false): string {
-  return [`move=${r.move}`, closeHeld ? "close held: safety or a heavy moment" : null, r.again ? "asked for something again" : null, r.reopens.length ? `brought back ${r.reopens.length}` : null, r.closes.length ? `closed ${r.closes.length}` : null, r.told.length ? `answered ${r.told.length} earlier` : null, r.meant?.notItem ? "corrected a referent" : r.meant?.item ? "pointed at an item" : null].filter(Boolean).join("; ");
+  return [`move=${r.move}`, closeHeld ? "close held: safety or a heavy moment" : null, r.again ? "asked for something again" : null, r.reopens.length ? `brought back ${r.reopens.length}` : null, r.closes.length ? `closed ${r.closes.length}` : null, r.told.length ? `answered ${r.told.length} earlier` : null, r.meant?.notItem ? "corrected a referent" : r.meant?.item ? "pointed at an item" : r.meant?.between?.length ? "referent unclear" : null].filter(Boolean).join("; ");
 }
 
 // Pure: the record as the reply's per-turn lines (the uncached tail: harness/replyGrounding.ts renderReplyFacts), or null when there's
@@ -164,7 +169,9 @@ export function recordLines(rec: ExchangeRecord | null | undefined, o: { call?: 
   const lines: string[] = [];
   if (rec.done.length) lines.push(`Already done in this exchange (never send or offer these again unless they ask, and then say it's again): ${rec.done.map(itemLine).join("; ")}.`);
   if (r?.told.length) lines.push(`They already told you (never ask these again; build on the answer): ${r.told.map((t) => `"${t.q}" → "${t.a}"`).join("; ")}.`);
-  if (r?.meant?.item || r?.meant?.notItem) lines.push(`"${r.meant.phrase}" in their message means ${r.meant.item ? `${r.meant.item} (${r.meant.label})` : "something not on the list: ask which"}${r.meant.notItem ? `, not ${r.meant.notItem} (${r.meant.notLabel}); they corrected that, so act on the correction` : ""}.`);
+  const tie = r?.meant?.between?.length ? r.meant.between.map((id) => rec.done.find((d) => d.id === id)).filter((d): d is DoneItem => !!d) : [];
+  if (r?.meant && tie.length >= 2) lines.push(`"${r.meant.phrase}" in their message could mean ${tie.map((d) => `${d.id} (${d.label})`).join(" or ")}, and nothing in the exchange settles which: ask which one, in one short question, and do nothing else with it until they say.`);
+  else if (r?.meant?.item || r?.meant?.notItem) lines.push(`"${r.meant.phrase}" in their message means ${r.meant.item ? `${r.meant.item} (${r.meant.label})` : "something not on the list: ask which"}${r.meant.notItem ? `, not ${r.meant.notItem} (${r.meant.notLabel}); they corrected that, so act on the correction` : ""}.`);
   else if (rec.priorMeant[0]) lines.push(`Earlier their pointing words meant ${rec.priorMeant[0].label ?? "something unclear"}${rec.priorMeant[0].notLabel ? `, not ${rec.priorMeant[0].notLabel}` : ""}; that still stands unless they changed it.`);
   const closed = rec.unresolved.filter((u) => !back.has(u.id) && (closing.has(u.id) || u.state === "solved" || u.state === "dropped"));
   if (closed.length) lines.push(`Closed at their word (don't bring these up yourself: no finds, offers or questions about them, unless they bring one back): ${closed.map((u) => `${u.id} ${u.label} (${closing.get(u.id) ?? u.state})`).join("; ")}.`);
@@ -181,11 +188,15 @@ export function recordLines(rec: ExchangeRecord | null | undefined, o: { call?: 
 
 type Q = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
 
-// What they closed in the last 14 days at their word: loops, Cue's tasks and threads closed as done or dropped, never by staleness or
-// an archive. Labels only (Cue's own titles).
+// What they closed in the last 14 days at their word: their asks, loops, Cue's tasks and threads closed as done or dropped, never by
+// staleness, expiry or an archive. Labels only (Cue's own titles, and the ask as Cue filed it). Their asks are where most of the 11-03
+// reopenings came from (venue, DJ, weekend finds after the ask was dropped or solved): an ask closes at their word when they said it's
+// done or found (member: the turn's learning read), off (moved_on, moved), or Cue's closeAsk ran on their word in that turn.
 export async function closedLately(userId: string, db: Q): Promise<ClosedRow[]> {
   const { rows } = await db.query(
-    `(SELECT title AS label, status, closed_at FROM open_loops WHERE user_id = $1 AND status IN ('done','dropped') AND COALESCE(closed_reason,'') NOT IN ('stale','archived') AND closed_at > NOW() - INTERVAL '14 days')
+    `(SELECT ask_text AS label, CASE WHEN closed_reason IN ('moved_on','moved') THEN 'dropped' ELSE 'done' END AS status, resolved_at AS closed_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NOT NULL AND expired_at IS NULL AND (closed_reason IN ('member','moved_on','moved') OR closed_reason ~* '^closed by (cue|co):') AND resolved_at > NOW() - INTERVAL '14 days')
+     UNION ALL
+     (SELECT title AS label, status, closed_at FROM open_loops WHERE user_id = $1 AND status IN ('done','dropped') AND COALESCE(closed_reason,'') NOT IN ('stale','archived') AND closed_at > NOW() - INTERVAL '14 days')
      UNION ALL
      (SELECT goal AS label, status, closed_at FROM co_tasks WHERE user_id = $1 AND status IN ('done','dropped') AND closed_at > NOW() - INTERVAL '14 days' AND COALESCE(outcome,'') ~* 'their word|they said|no longer|dropped:')
      UNION ALL

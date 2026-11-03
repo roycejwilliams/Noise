@@ -50,6 +50,8 @@ import { MODELS } from "../models.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { repeatQuestionCheck } from "./repeatAsk.js";
+import { recordMisses } from "./moveCheck.js";
+import { normUrl, type ClosedRow, type DoneItem, type ExchangeBase } from "../services/exchangeRecord.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext, STRETCH_LOOKBACK_HOURS } from "./emotion.js";
@@ -61,7 +63,7 @@ import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
 import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, type ClosedSet, type ClosedSubject } from "./closedSubject.js";
-import { attentionChecks, deliveredItems, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
+import { attentionChecks, deliveredItems, threadIds, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
 
 // How soon a check-in whose feeling read couldn't answer is tried again (harness/attention.ts feelingCheck infra).
 export const FEELING_READ_RETRY_MINUTES = 30;
@@ -1329,6 +1331,42 @@ ${lines.length ? lines.join("\n") : "- (nothing more on file)"}
 
 MEMBER RULES (they hold for this member everywhere; code already cleared this text to go, so none of them is a reason to SKIP it)
 ${memberRules}`;
+}
+
+// ---------- the whole exchange, for queued work (services/exchangeRecord.ts, harness/moveCheck.ts)
+
+// The record's base for a send Cue starts: the thread as stored, what's on file as sent (with links), their open asks and what Cue
+// carries, and what they closed lately at their word (closedLately: loops, tasks and threads, never by staleness).
+export async function queuedExchangeBase(userId: string, recent: string, k: Pick<MemberKnowledge, "delivered" | "asks" | "carrying">, db?: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> }): Promise<ExchangeBase | null> {
+  try {
+    const X = await import("../services/exchangeRecord.js");
+    const closed = await X.closedLately(userId, db ?? pool).catch(() => [] as ClosedRow[]);
+    return X.baseFrom(recent, { sent: k.delivered.filter((d) => d.url).map((d) => ({ name: d.what, url: d.url })), asks: k.asks.map((a) => ({ text: a.text })), carrying: k.carrying.map((c) => ({ label: c.what, state: c.state })) }, { closed, meant: [] });
+  } catch {
+    return null;
+  }
+}
+export const WHOLE_EXCHANGE = "whole_exchange";
+// Pure: the done item a find's link already went out as, unless it's a reminder or marked to resurface (again).
+export function alreadySentLink(url: string | null | undefined, base: ExchangeBase | null, payload: unknown): DoneItem | null {
+  if (!url || !base) return null;
+  const p = (payload ?? {}) as { reminder?: boolean; again?: boolean };
+  if (p.reminder === true || p.again === true) return null;
+  const k = normUrl(url);
+  return base.done.find((d) => d.url && (d.kind === "link" || d.kind === "find") && normUrl(d.url) === k) ?? null;
+}
+// Pure: a queued draft against the record. A reminder, a find marked to resurface or something they asked for may carry its link again; a send that serves an
+// open subject of its own (an ask, goal, task, thread, loop or ask check-in, by id) is never held for resembling something closed:
+// a new ask like a dropped one gets its finds (its own subject's state is read by id where the send is decided).
+export function exchangeCheck(text: string, base: ExchangeBase | null, c: Pick<Candidate, "type" | "targetKey" | "payload">): GateCheck {
+  if (!base) return { name: WHOLE_EXCHANGE, pass: true, reason: "no record read" };
+  const p = (c.payload ?? {}) as { reminder?: boolean; again?: boolean; loopId?: unknown; askCheckinId?: unknown };
+  const ids = threadIds({ type: c.type, targetKey: c.targetKey, payload: c.payload ?? {} });
+  const ownSubject = !!(ids.ask || ids.goal || ids.task || ids.thread || p.loopId != null || p.askCheckinId != null);
+  // Something they asked for (a requested delivery, an answer to them) may carry a link again: they asked.
+  const cls = candidateClass(c.type, isAnswering(c as Candidate), c.payload);
+  const misses = recordMisses(text, base, { resendOk: p.reminder === true || p.again === true || cls === "requested" || cls === "reply", noReopen: ownSubject });
+  return misses.length ? { name: WHOLE_EXCHANGE, pass: false, reason: misses.map((m) => m.why).join("; ") } : { name: WHOLE_EXCHANGE, pass: true };
 }
 
 // A test seam: a fake model for draftProactive, so the guard below can be exercised with zero tokens.
@@ -2973,6 +3011,10 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // As stored, for the code that parses the thread (repeat question, payload first); stamped in their zone for the model reads.
   const recent = known ? exchangeTranscript(known) : "";
   const recentStamped = known ? exchangeTranscript(known, { stamped: true }) : "";
+  // The whole exchange for what goes out now (services/exchangeRecord.ts, Royce 2026-11-03: what Cue already did and what they closed
+  // carry into queued work, not only the next reply): what Cue sent in the thread and on file, what's open, what they closed lately at
+  // their word. Read here, right before drafting. A read that fails leaves it out (drafts as before).
+  const exBase = known ? await queuedExchangeBase(userId, recent, known) : null;
   // How what Co sent landed, and, apart from it, the kind of room they've said they want (services/roomTaste.ts).
   const taste = known?.preferences.filter((p) => p.source !== "stated").map((p) => p.text).join(" ") || null;
   const statedTaste = known?.preferences.filter((p) => p.source === "stated").map((p) => p.text).join(" ") || null;
@@ -3119,6 +3161,20 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
         // A sibling its page re-read exited (its fact written) or held is archived, never left waiting (Phase B).
         if ((prep.exited || prep.held) && !opts.dryRun) await dropCandidate(registry, x, "skipped", prep.skip);
         if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: prep.exited ? "exited" : prep.held ? "held" : "not_ready", reason: prep.skip, proposal: { candidate: x.id } }).catch(() => {});
+        continue;
+      }
+      // A find whose link already went to them in this thread (the 11-03 baseline: the same venue-list link re-sent a day later by the
+      // daily finds), not a reminder or one marked to resurface: it isn't sent again. Dropped like a find that can't be prepared.
+      const sentAlready = alreadySentLink(prep.item.url, exBase, x.payload);
+      if (sentAlready) {
+        const why = `its link already went to them (${sentAlready.label.slice(0, 80)})`;
+        if (!opts.dryRun) await dropCandidate(registry, x, "skipped", why);
+        if (x.id === c.id) {
+          if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${why}` });
+          done(c.type);
+          return;
+        }
+        if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "already_sent", reason: why, proposal: { candidate: x.id } }).catch(() => {});
         continue;
       }
       const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string; tierPick?: boolean } }).pick;
@@ -3294,8 +3350,15 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     const again = repeatQuestionCheck(text, recent);
     return again.pass ? checks : [...checks, again as GateCheck];
   };
+  // And against the whole exchange (harness/moveCheck.ts recordMisses, the same check a reply gets): a link already sent, a question or
+  // offer they already answered, a second interest question while the last has no answer, or something they closed brought back. A
+  // miss gets the one rewrite below, told what it was; then it's dropped like any failed draft.
+  const withRecord = (checks: GateCheck[], messages: string[]): GateCheck[] => {
+    const k = exchangeCheck(messages.join("\n"), exBase, c);
+    return k.pass ? checks : [...checks, k];
+  };
   // A composed bundle's checks ran inside the composer: its record says so, with how many calls it took and what was left out.
-  let draftChecks: GateCheck[] = asWritten ? [{ name: "producer_checks", pass: true, reason: "written and checked by the path that made it" }] : composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
+  let draftChecks: GateCheck[] = asWritten ? [{ name: "producer_checks", pass: true, reason: "written and checked by the path that made it" }] : composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRecord(withRepeat(checkDraft(draft.text, draft.rules), draft.text), draft.messages);
   // A check-in never asserts a feeling they didn't share (harness/attention.ts feelingCheck): Cue's own draft, read against their own
   // words only. Never a safety follow-up or the check-in after a heavy moment (feelingCheckApplies). A draft that asserts one gets the
   // one rewrite, read again; a check-in a door text carries (written by its own path) goes without the sentence the read named. When
@@ -3338,7 +3401,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
       .catch(() => null);
     if (second && "messages" in second) {
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
-      const fixedChecks = await withFeeling(withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text), fixed.text);
+      const fixedChecks = await withFeeling(withRecord(withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text), fixed.messages), fixed.text);
       if (infraOf(fixedChecks)) return holdForFeelingRead(infraOf(fixedChecks)!.reason ?? "the feeling read couldn't answer");
       const fg = gate(fixedChecks);
       if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});

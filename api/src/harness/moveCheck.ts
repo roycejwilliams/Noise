@@ -6,9 +6,11 @@
 // (services/callLlmProxy.ts, the #365 hold). Pure.
 import { ALWAYS_ASKABLE, questionsIn, sameQuestion } from "./repeatAsk.js";
 import { namesItem } from "../services/callClaims.js";
-import { INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeRecord } from "../services/exchangeRecord.js";
+import { INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeBase, type ExchangeRecord } from "../services/exchangeRecord.js";
 
-export type MoveMiss = { name: "resend" | "reoffer" | "double_ask" | "reask" | "wrong_referent" | "ignores_correction" | "reopen" | "question_after_close" | "find_after_close" | "off_move"; why: string };
+export type MoveMiss = { name: "resend" | "reoffer" | "double_ask" | "reask" | "wrong_referent" | "ignores_correction" | "referent_tie" | "asks_which" | "reopen" | "question_after_close" | "find_after_close" | "off_move"; why: string };
+// A question asking which thing they meant, in Cue's own words.
+export const WHICH_Q = /\b(?:which (?:one|of (?:these|those|them|the two|the))|which (?:\w+ )?(?:do|did) you mean|(?:do|did) you mean (?:the|that)|are you (?:asking|talking) about (?:the|that))\b/i;
 
 const URL = /https?:\/\/[^\s)>\]"']+/g;
 // A question a safety or consent check may always ask again (harness/repeatAsk.ts).
@@ -23,39 +25,73 @@ export function mentions(draft: string, d: Pick<DoneItem, "label" | "url">): boo
 }
 // Words that say what kind of ask it is, never what it's about.
 const ASK_FRAME = new Set("find found finding look looking search searching seeking option options some few couple two three four any get got want wants need needs for the and with near into from about your their his her our my you they them this that these those one ones more another also new good great best real just still week weekend".split(" "));
-const topicWords = (t: string) => [...new Set((t.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9][a-z0-9'-]+/g) ?? []).map((w) => w.replace(/'s$/, "").replace(/(?<=[a-z]{3})s$/, "")).filter((w) => w.length >= 2 && !ASK_FRAME.has(w) && !/^https?$|^example$|^www$|^com$/.test(w)))];
-// Pure: the draft is about an open or closed item: three of its topic words, or most of them for a short label.
-export function about(draft: string, label: string): boolean {
-  const w = topicWords(label);
+const topicWords = (t: string) => [...new Set((t.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9][a-z0-9'-]+/g) ?? []).map((w) => w.replace(/'s$/, "").replace(/(?<=[a-z]{2})(?<![su])s$/, "")).filter((w) => w.length >= 2 && !ASK_FRAME.has(w) && !/^https?$|^example$|^www$|^com$/.test(w)))];
+// Pure: the draft is about an open or closed item: three of its topic words, or most of them for a short label. Words in `not` never
+// count (the over-suppression guard: what they raised in their latest message, or what's still open for them, belongs to that).
+export function about(draft: string, label: string, not = ""): boolean {
+  const theirs = new Set(not ? topicWords(not) : []);
+  const w = topicWords(label).filter((x) => !theirs.has(x));
   if (!w.length) return false;
   const said = new Set(topicWords(draft));
   const hit = w.filter((x) => said.has(x)).length;
   return w.length <= 2 ? hit === w.length : hit >= 3 || hit / w.length >= 0.5;
 }
 
-// Pure: what the draft gets wrong against the move and the record. Empty when nothing does (or when there's no read to judge from).
-export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined): MoveMiss[] {
-  if (!rec?.read || !draft.trim()) return [];
-  const r = rec.read;
+// What the record alone can say about a draft, with no read of their latest message: the part a reply and a queued send share
+// (Royce, 2026-11-03: what Cue already did and what they closed carry into "any queued work", not just the next reply).
+//   again    the done item they asked for again this turn (never a resend)
+//   closing  unresolved ids their latest message closes (a reply's read)
+//   back     unresolved ids their latest message brings back (a reply's read): theirs again
+//   theirs   words that belong to something live: their latest message, and what's still open for them. A closed item's topic words
+//            that are also there never make a reopening, so a NEW ask that resembles a dropped one still gets its answer or its find
+//   resendOk a reminder or a find marked to resurface: its link going again is the point
+//   noReopen the send serves a subject of its own (an ask, goal, task, thread or loop, by id), whose state is read by id where the
+//            send is decided: resemblance to something closed never holds it
+export type RecordOpts = { again?: DoneItem | null; closing?: ReadonlySet<string>; back?: ReadonlySet<string>; theirs?: string; resendOk?: boolean; noReopen?: boolean };
+export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "unresolved">, o: RecordOpts = {}): MoveMiss[] {
+  if (!draft.trim()) return [];
   const out: MoveMiss[] = [];
   const qs = questionsIn(draft.replace(URL, "")).filter((q) => !askable(q));
   const urls = (draft.match(URL) ?? []).map(normUrl);
-  const again = r.again ? rec.done.find((d) => d.id === r.again) : null;
-
+  const again = o.again ?? null;
   // Done: a link, find or card already sent, sent again with no ask for it.
-  for (const d of rec.done.filter((x) => x.url && (x.kind === "link" || x.kind === "find"))) {
-    if (urls.includes(normUrl(d.url!)) && d !== again) out.push({ name: "resend", why: `re-sends ${d.id} (${d.label}), already sent and not asked for again` });
+  if (!o.resendOk) {
+    for (const d of base.done.filter((x) => x.url && (x.kind === "link" || x.kind === "find"))) {
+      if (urls.includes(normUrl(d.url!)) && d !== again) out.push({ name: "resend", why: `re-sends ${d.id} (${d.label}), already sent and not asked for again` });
+    }
   }
-  if (/\[sent (?:Cue|Co)'s contact card\]/i.test(draft) && rec.done.some((d) => d.kind === "card") && again?.kind !== "card") out.push({ name: "resend", why: "sends the contact card again, already sent and not asked for" });
+  if (/\[sent (?:Cue|Co)'s contact card\]/i.test(draft) && base.done.some((d) => d.kind === "card") && again?.kind !== "card") out.push({ name: "resend", why: "sends the contact card again, already sent and not asked for" });
   // Done: an offer or question already made and answered, made again (reworded counts, as after a yes).
   for (const q of qs) {
-    const prior = rec.done.find((d) => (d.kind === "offer" || d.kind === "question") && d.replied && sameQuestion(q, d.label, true));
+    const prior = base.done.find((d) => (d.kind === "offer" || d.kind === "question") && d.replied && sameQuestion(q, d.label, true));
     if (prior) out.push({ name: prior.kind === "offer" ? "reoffer" : "reask", why: `asks again what ${prior.id} already asked ("${prior.label.slice(0, 80)}"), and they answered` });
   }
   // Two interest questions in one draft, or a new one while one of Cue's is still unanswered.
   const interest = qs.filter((q) => INTEREST_Q.test(q) || OFFER_Q.test(q));
   if (interest.length > 1) out.push({ name: "double_ask", why: "asks whether they're interested (or want something) more than once in one reply" });
-  else if (interest.length === 1 && rec.done.some((d) => (d.kind === "question" || d.kind === "offer") && !d.replied && INTEREST_Q.test(d.label))) out.push({ name: "double_ask", why: "asks again whether they're interested while the last such question still has no answer" });
+  else if (interest.length === 1 && base.done.some((d) => (d.kind === "question" || d.kind === "offer") && !d.replied && INTEREST_Q.test(d.label))) out.push({ name: "double_ask", why: "asks again whether they're interested while the last such question still has no answer" });
+  // Unresolved: something they closed, reopened (a find, an offer or a question about it).
+  if (!o.noReopen) {
+    const closing = o.closing ?? new Set<string>();
+    const back = o.back ?? new Set<string>();
+    const live = [o.theirs ?? "", ...base.unresolved.filter((u) => !closing.has(u.id) && (u.state === "open" || u.state === "delivered")).map((u) => u.label)].join(" ");
+    for (const u of base.unresolved.filter((x) => !back.has(x.id) && (closing.has(x.id) || x.state === "solved" || x.state === "dropped"))) {
+      const reopens = (urls.length || qs.length || /\b(?:found|another one|still (?:looking|on it)|i'?ll (?:keep|look|send|find))\b/i.test(draft)) && about(draft, u.label, live);
+      if (reopens) out.push({ name: "reopen", why: `reopens ${u.id} (${u.label.slice(0, 80)}), which they closed` });
+    }
+  }
+  return out;
+}
+
+// Pure: what the draft gets wrong against the move and the record. Empty when nothing does (or when there's no read to judge from).
+// theirs: their latest message (its topic words never make a reopening: they raised it).
+export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined, theirs = ""): MoveMiss[] {
+  if (!rec?.read || !draft.trim()) return [];
+  const r = rec.read;
+  const qs = questionsIn(draft.replace(URL, "")).filter((q) => !askable(q));
+  const urls = (draft.match(URL) ?? []).map(normUrl);
+  const again = r.again ? rec.done.find((d) => d.id === r.again) ?? null : null;
+  const out = recordMisses(draft, rec, { again, closing: new Set(r.closes.map((c) => c.item)), back: new Set(r.reopens), theirs });
   // Told: a question they already answered.
   for (const q of qs) {
     const t = r.told.find((x) => sameQuestion(q, x.q, true));
@@ -68,17 +104,13 @@ export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined
     const other = rec.done.find((d) => d.id !== m.item && (d.kind === "link" || d.kind === "find" || d.kind === "document") && mentions(draft, d));
     if (other && !mentions(draft, it)) out.push({ name: "wrong_referent", why: `"${m.phrase}" means ${it.id} (${it.label}), but the draft is about ${other.id} (${other.label})` });
   }
+  // A "that" the exchange settles is answered, never asked about; a real tie gets one question, and the draft doesn't go ahead on a guess.
+  if (m?.item && qs.some((q) => WHICH_Q.test(q))) out.push({ name: "asks_which", why: `asks which one they mean, but "${m.phrase}" is clear from the exchange: ${m.item} (${m.label})` });
+  const tie = !m?.item && m?.between?.length ? m.between.filter((id) => rec.done.some((d) => d.id === id)) : [];
+  if (tie.length >= 2 && qs.length !== 1) out.push({ name: "referent_tie", why: qs.length ? `"${m!.phrase}" could mean ${tie.join(" or ")}: ask which in one question, not ${qs.length}` : `"${m!.phrase}" could mean ${tie.join(" or ")} and the draft goes ahead without asking which` });
   if (m?.notItem) {
     const not = rec.done.find((d) => d.id === m.notItem)!;
     if (mentions(draft, not) && !(m.item && mentions(draft, rec.done.find((d) => d.id === m.item)!))) out.push({ name: "ignores_correction", why: `they said they didn't mean ${not.id} (${not.label}), and the draft is still about it` });
-  }
-  // Unresolved: something they closed, reopened (a find, an offer or a question about it).
-  const closing = new Set(r.closes.map((c) => c.item));
-  // What they bring back this turn is theirs again: their latest message wins over the 14-day closed record (review of #368).
-  const back = new Set(r.reopens);
-  for (const u of rec.unresolved.filter((x) => !back.has(x.id) && (closing.has(x.id) || x.state === "solved" || x.state === "dropped"))) {
-    const reopens = (urls.length || qs.length || /\b(?:found|another one|still (?:looking|on it)|i'?ll (?:keep|look|send|find))\b/i.test(draft)) && about(draft, u.label);
-    if (reopens) out.push({ name: "reopen", why: `reopens ${u.id} (${u.label.slice(0, 80)}), which they closed` });
   }
   // The move itself.
   if (r.move === "close") {
@@ -114,9 +146,11 @@ export function callSentenceMiss(sentence: string, o: { rec: ExchangeRecord | nu
     const hit = sent.find((d) => mentions(s, d));
     if (hit) return { name: "reoffer", why: `offers to send ${hit.label.slice(0, 80)} again, already sent` };
   }
+  // What they just said and what's still open for them: a closed item's words there never make a reopening (a new ask like a dropped one).
+  const live = [[...o.callTurns].reverse().find((t) => t.from === "them")?.text ?? "", ...(o.rec?.unresolved ?? []).filter((u) => u.state === "open" || u.state === "delivered").map((u) => u.label)].join(" ");
   for (const label of callClosedItems(o.rec)) {
     if (o.read.back.includes(label)) continue;
-    if ((isQ || OFFER_Q.test(s)) && about(s, label)) return { name: "reopen", why: `reopens ${label.slice(0, 80)}, which they closed` };
+    if ((isQ || OFFER_Q.test(s)) && about(s, label, live)) return { name: "reopen", why: `reopens ${label.slice(0, 80)}, which they closed` };
   }
   return null;
 }
