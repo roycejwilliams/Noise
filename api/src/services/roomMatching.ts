@@ -1048,13 +1048,17 @@ export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
       `UPDATE deferred_sends SET due_at = $2 WHERE status = 'queued' AND after_kind = 'event_direct_ask' AND after_payload->>'eventId' = $1 RETURNING id`,
       [eventId, now],
     );
-    const pairs = await pool.query(`UPDATE co_pairs SET state = 'expired', expired_at = $2, updated_at = NOW() WHERE event_id = $1 AND state IN ('suggested', 'asked') RETURNING id, origin, a_id, b_id, a_answer, b_answer`, [eventId, now]);
+    const pairs = await pool.query(`UPDATE co_pairs SET state = 'expired', expired_at = $2, updated_at = NOW() WHERE event_id = $1 AND state IN ('suggested', 'asked') RETURNING id`, [eventId, now]);
     // Every Cue-suggested intro from this event that one side said yes to and didn't happen: that side hears the same thing whether the
     // other never got the ask (held for their hours or their own rule), got it and didn't answer, or said no (2026-11-02 and its review:
     // nothing hints where the other member's thread stood, and a "no" reads like silence). Written once, here, at the close; the held ask
     // adds no note when it's dropped (deferredSends.ts EVENT_OVER), and a decline adds none when it's said.
-    const declined = await pool.query(`SELECT id, origin, a_id, b_id, a_answer, b_answer FROM co_pairs WHERE event_id = $1 AND state = 'declined'`, [eventId]).catch(() => ({ rows: [] as any[] }));
-    for (const p of [...pairs.rows, ...declined.rows]) {
+    // Claimed once per pair (close_noted_at), all in one statement, before any note: a close run again after a crash adds no note to
+    // anyone, so a re-run never sets a "no" (or a silence) apart (review of #363, round 2).
+    const ended = await pool
+      .query(`UPDATE co_pairs SET close_noted_at = $2 WHERE event_id = $1 AND state IN ('expired', 'declined') AND close_noted_at IS NULL RETURNING id, origin, a_id, b_id, a_answer, b_answer`, [eventId, now])
+      .catch(() => ({ rows: [] as any[] }));
+    for (const p of ended.rows) {
       const yesSide = closeNoteFor(p);
       if (yesSide) await noteIntroDidntHappen(yesSide.to, yesSide.about, r.event_name ?? null).catch(() => {});
     }

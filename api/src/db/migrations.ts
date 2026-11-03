@@ -2868,6 +2868,10 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("team_holds init failed:", err));
+  // The room close's note on a Cue-suggested pair that didn't happen is written once per pair (services/roomMatching.ts runRoomCloses).
+  await pool
+    .query(`ALTER TABLE co_pairs ADD COLUMN IF NOT EXISTS close_noted_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("co_pairs.close_noted_at init failed:", err));
   // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
   // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.
