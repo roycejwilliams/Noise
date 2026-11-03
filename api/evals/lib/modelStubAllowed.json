@@ -1,0 +1,33 @@
+{
+  "_why": "Layer 1 test files allowed to lean on evals/lib/modelGuard.mjs's canned model answer (a one-word 'stub' reply, a zero embedding), as they did when the rule landed (2026-11-03). Any other file's model call is refused and fails the run: a new test fakes its own (a writer or client seam, e.g. voiceLine.ts setLineWriterForTests, embeddings.ts setEmbeddingsClientForTests). Shrink this list; never grow it.",
+  "files": [
+    "evals/asks/split.ts",
+    "evals/calls/callLink.ts",
+    "evals/calls/correctionInFollowUp.ts",
+    "evals/calls/correctionProbes.ts",
+    "evals/calls/dashboardIntakeCall.ts",
+    "evals/calls/gptLive.ts",
+    "evals/calls/gptLiveEveryone.ts",
+    "evals/calls/gptLiveOutbound.ts",
+    "evals/calls/noElevenLabsCalls.ts",
+    "evals/calls/postCall.ts",
+    "evals/calls/recapMoodHold.ts",
+    "evals/corrections/dropRelated.ts",
+    "evals/delivery/receipts.ts",
+    "evals/docs/memberFiles.ts",
+    "evals/langfuse/noText.ts",
+    "evals/langfuse/traceText.ts",
+    "evals/ledger/dualWrite.ts",
+    "evals/ledger/shareFindsRecord.ts",
+    "evals/llmUsage/attribution.ts",
+    "evals/loop/probes.ts",
+    "evals/memory/claims.ts",
+    "evals/preferences/enforce.ts",
+    "evals/proactive/durableSends.ts",
+    "evals/proactive/moodDraftSkips.ts",
+    "evals/review/neverLoseText.ts",
+    "evals/review/outsideActions.ts",
+    "evals/search/lumaViaExa.ts",
+    "evals/testmember/searchSpend.ts"
+  ]
+}

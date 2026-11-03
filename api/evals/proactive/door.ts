@@ -19,6 +19,13 @@ const RB = await import("../../src/services/researchBrief.js");
 const { proactiveRegistry } = await import("../../src/harness/proactiveRegistry.js");
 const { default: pool } = await import("../../src/db/db.js");
 const { default: sendblue } = await import("../../src/services/sendblue.js");
+// No model call from this file, under the runner or run alone (#361 follow-up: staleWatch.tell's voice line went to a live model and
+// only failed on the placeholder key): the voice line is written by a fake, and memory embeddings answer with a zero vector.
+const VL = await import("../../src/services/voiceLine.js");
+const EMB = await import("../../src/services/embeddings.js");
+const lineAsks: string[] = [];
+VL.setLineWriterForTests(async (ask) => { lineAsks.push(ask.purpose); return null; });
+EMB.setEmbeddingsClientForTests({ embeddings: { create: async (b: any) => ({ data: (Array.isArray(b.input) ? b.input : [b.input]).map((_: unknown, index: number) => ({ index, embedding: new Array(1536).fill(0) })) }) } } as any);
 type Candidate = import("../../src/harness/proactive.js").Candidate;
 type SendRecord = import("../../src/harness/proactive.js").SendRecord;
 type Preference = import("../../src/services/memberPreferences.js").Preference;
@@ -404,6 +411,7 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   await SW.tell(row, { kind: "sold_out", detail: "it's sold out now", startAt: later.toISOString() });
   const hc = db.candidates.find((c) => c.target_key === "stale:luma:x:sold_out");
   check("door: a heads-up about something days out waits at the door, good until it starts (moot after)", !!hc && new Date(hc.expires_at).getTime() === later.getTime() && db.outbox.length === 0);
+  check("staleWatch: the voice line is the test's fake (no model call), and the stock line goes when it writes nothing", lineAsks.length === 2 && db.candidates.some((c) => /Heads up on Personal AI Agents Meetup/.test(JSON.stringify(c))));
   check("staleWatch reads the thing's start from its page (verified only)", SW.staleChange({ status: "ok", fields: { start: { value: "2026-11-04T16:00:00-08:00", verified: true } } } as any, { status: "ok", fields: { start: { value: "2026-11-04T19:00:00-08:00", verified: true } } } as any)?.startAt === "2026-11-04T19:00:00-08:00");
   // An announcement the door already decided is given up, never redrafted.
   check("announcement: one the door didn't take is given up cleanly, and any door row for it keeps it from being drafted again", /if \(!\(result as \{ queued\?: boolean \}\)\.queued\) await pool\.query\(`UPDATE co_event_announcements SET gave_up_at = NOW\(\)/.test(src("services/coEventAnnouncement.ts")) && /AND NOT EXISTS \(SELECT 1 FROM proactive_candidates pc WHERE pc\.user_id = a\.user_id AND pc\.target_key = 'co_event:' \|\| a\.event_api_id\)\)?/.test(src("services/coEventAnnouncement.ts")));

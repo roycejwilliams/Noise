@@ -14,6 +14,9 @@ delete process.env.EXA_API_KEY;
 import { readFileSync } from "fs";
 
 const V = await import("../../src/services/lumaViaExa.js");
+// Google's geocoder never answers in layer 1 (it used to reach maps.googleapis.com with the placeholder key and fail there; the
+// outside-socket guard now refuses that): it fails the same way here, with no network.
+(await import("../../src/services/geocoding.js")).geoDeps.google = async () => { throw new Error("layer 1: no geocoder"); };
 const T = await import("../../src/services/tieredRecommendation.js");
 const X = await import("../../src/services/exaSearch.js");
 const D = await import("../../src/services/eventDetails.js");

@@ -150,11 +150,32 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
     const e = await (await fetch("https://api.openai.com/v1/embeddings", { method: "POST", body: JSON.stringify({ input: ["a", "b"] }) })).json();
     let refused = false; try { await fetch("https://api.resend.com/emails", { method: "POST" }); } catch { refused = true; }
     console.log("OUT " + JSON.stringify({ text: j.content[0].text, tokens: j.usage.input_tokens + j.usage.output_tokens, vecs: e.data.length, dim: e.data[0].embedding.length, refused }));`;
-  const r = spawnSync("node", ["--import", join(root, "evals/lib/modelGuard.mjs"), "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, MODEL_GUARD_LOG: "" } });
+  const guarded = (code: string, file: string) => spawnSync("node", ["--import", join(root, "evals/lib/modelGuard.mjs"), "--input-type=module", "-e", code], { encoding: "utf8", env: { ...process.env, MODEL_GUARD_LOG: "", MODEL_GUARD_FILE: file } });
+  // A file on the allow-list (evals/lib/modelStubAllowed.json) still gets the canned answer.
+  const allowed = JSON.parse(read("evals/lib/modelStubAllowed.json")).files as string[];
+  const r = guarded(script, allowed[0] ?? "");
   const o = JSON.parse((r.stdout.match(/OUT (.*)/) ?? [])[1] ?? "{}");
   check("layer 1 answers a model call with a canned stub that costs zero tokens", o.text === "stub" && o.tokens === 0);
   check("layer 1 answers an embedding call with a zero vector per input", o.vecs === 2 && o.dim === 1536);
   check("layer 1 refuses every other outside call", o.refused === true);
+  // Any other file's model call is refused: a new test fakes its own (follow-up to #361: door.ts's voice line reached a model).
+  const strict = guarded(`
+    const tryIt = async (u) => { try { await fetch(u, { method: "POST", body: "{}" }); return "answered"; } catch (e) { return /LAYER 1/.test(e.message) ? "refused" : "other"; } };
+    console.log("OUT " + JSON.stringify({ a: await tryIt("https://api.anthropic.com/v1/messages"), e: await tryIt("https://api.openai.com/v1/embeddings") }));`, "evals/not/on/the/list.ts");
+  const so = JSON.parse((strict.stdout.match(/OUT (.*)/) ?? [])[1] ?? "{}");
+  check("layer 1 refuses a model call from a test not on the stub allow-list (it must fake its own)", so.a === "refused" && so.e === "refused", JSON.stringify(so));
+  check("the stub allow-list never holds door.ts (it fakes its voice line and embeddings)", !allowed.includes("evals/proactive/door.ts"));
+  // Below fetch: an SDK on node https (Twilio, Sendblue, Google Maps...) or a websocket never reaches the network either.
+  const sock = guarded(`
+    const https = await import("node:https"); const net = await import("node:net");
+    const viaHttps = await new Promise((res) => { const q = https.request({ host: "api.twilio.com", port: 443, method: "POST", path: "/" }, () => res("connected")); q.on("error", (e) => res(/LAYER 1/.test(e.message) ? "refused" : "other: " + e.message)); q.end(); });
+    const viaNet = await new Promise((res) => { const s = net.connect(443, "api.elevenlabs.io", () => res("connected")); s.on("error", (e) => res(/LAYER 1/.test(e.message) ? "refused" : "other")); });
+    const local = await new Promise((res) => { const s = net.connect(1, "127.0.0.1", () => res("connected")); s.on("error", (e) => res(/LAYER 1/.test(e.message) ? "refused" : "local error")); });
+    console.log("OUT " + JSON.stringify({ viaHttps, viaNet, local }));`, "evals/not/on/the/list.ts");
+  const ko = JSON.parse((sock.stdout.match(/OUT (.*)/) ?? [])[1] ?? "{}");
+  check("layer 1 refuses an outside socket (node https to Twilio, a raw connection to ElevenLabs), and loudly", ko.viaHttps === "refused" && ko.viaNet === "refused" && /LAYER 1: a logic test tried a real connection to api\.twilio\.com:443 \(a paid model, voice, telephony or texting host\)/.test(sock.stderr), JSON.stringify(ko));
+  check("layer 1 still lets a loopback socket connect (a local postgres)", ko.local === "local error", JSON.stringify(ko));
+  check("the layer 1 runner fails a run with any refused outside call", /process\.exit\(bad\.length \|\| refused\.length \? 1 : 0\)/.test(read("evals/runLayer1.mjs")));
 }
 
 // ---- layer 2: the meter, exercised against a fake network (no tokens)

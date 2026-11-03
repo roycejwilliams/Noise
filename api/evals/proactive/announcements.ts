@@ -436,28 +436,38 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
   // A multi-bubble send whose second bubble fails. Retried only when Sendblue's record says it didn't go; never a 4xx or the send layer's
   // refusal; never when it can't be told. Sendblue's record here is the fake outbox (what was really accepted).
   const texts = [...AN.UPDATE_1102_TEXTS];
-  type Mode = { failTimes: number; err: () => any; acceptThenThrow?: boolean; unreadable?: boolean };
+  // lagMs: Sendblue's record shows an accepted send only this long after it took it. settleMs / retryMs: the send's own waits.
+  type Mode = { failTimes: number; err: () => any; acceptThenThrow?: boolean; unreadable?: boolean; lagMs?: number; settleMs?: number; retryMs?: number[] };
   const run = async (m: Mode, name: string, n: number) => {
     const f = installFakeLedger(pool, sendblue);
     const real = sendblue.messages.send;
-    let fails = 0, tries2 = 0;
+    let fails = 0, tries2 = 0, reads = 0;
+    const acceptedAt = new Map<string, number>();
     (sendblue.messages as any).send = async (b: any) => {
       if (b.content === texts[1]) {
         tries2++;
         if (fails < m.failTimes) {
           fails++;
-          if (m.acceptThenThrow) await real.call(sendblue.messages, b); // Sendblue took it, then the call timed out
+          if (m.acceptThenThrow) { await real.call(sendblue.messages, b); acceptedAt.set(b.content, Date.now()); } // Sendblue took it, then the call timed out
           throw m.err();
         }
       }
-      return real.call(sendblue.messages, b);
+      const r = await real.call(sendblue.messages, b);
+      if (!acceptedAt.has(b.content)) acceptedAt.set(b.content, Date.now());
+      return r;
     };
-    P.setBubbleTimingForTests({ gapMs: 0, retryMs: [0, 0], went: async (q) => (m.unreadable ? null : f.ledger.outbox.some((o: any) => o.to === q.number && o.content === q.content)) });
+    const went = async (q: { number: string; content: string }) => {
+      reads++;
+      if (m.unreadable) return null;
+      const at = acceptedAt.get(q.content);
+      return f.ledger.outbox.some((o: any) => o.to === q.number && o.content === q.content) && at !== undefined && Date.now() - at >= (m.lagMs ?? 0);
+    };
+    P.setBubbleTimingForTests({ gapMs: 0, retryMs: m.retryMs ?? [0, 0], settleMs: m.settleMs ?? 0, went });
     try {
       const p = person(name, `+1415555${String(600 + n).padStart(4, "0")}`);
       const c = cand({ id: `b${n}`, userId: p.userId, type: "announcement", targetKey: AN.UPDATE_1102_KEY });
       const r = await P.sendWithLedgerForTests(c, p, texts);
-      return { r, out: f.ledger.outbox.filter((o: any) => o.to === p.phoneNumber).map((o: any) => o.content), tries2, sends: f.ledger.sends.length };
+      return { r, out: f.ledger.outbox.filter((o: any) => o.to === p.phoneNumber).map((o: any) => o.content), tries2, sends: f.ledger.sends.length, reads };
     } finally {
       (sendblue.messages as any).send = real;
       f.restore();
@@ -478,10 +488,20 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
   check("bubbles: the send layer's refusal is never retried", refused.tries2 === 1 && JSON.stringify(refused.out) === JSON.stringify([texts[0]]), refused);
   const unknown = await run({ failTimes: 9, err: timeout, unreadable: true }, "Kai B", 6);
   check("bubbles: can't tell whether it went: not retried, the rest don't go", unknown.tries2 === 1 && JSON.stringify(unknown.out) === JSON.stringify([texts[0]]) && delivered(unknown.r) === 1, unknown);
+  // Sendblue took message 2, then the call timed out, and its record lags the send by 150 ms.
+  const lagged = await run({ failTimes: 1, err: timeout, acceptThenThrow: true, lagMs: 150, settleMs: 250, retryMs: [0, 0] }, "Rafa B", 7);
+  check("bubbles: a lagging record is read after the settle wait: no duplicate, counted delivered, message 3 goes", lagged.tries2 === 1 && JSON.stringify(lagged.out) === JSON.stringify(texts) && delivered(lagged.r) === 3 && lagged.reads === 1, lagged);
+  // The record lags past the settle wait too: it says "didn't go" on the first read, and has caught up by the read before the retry.
+  const lateRecord = await run({ failTimes: 1, err: timeout, acceptThenThrow: true, lagMs: 150, settleMs: 0, retryMs: [250, 250] }, "Mina B", 8);
+  check("bubbles: a record still lagging at the first read is read again before the retry: no duplicate, message 3 goes", lateRecord.tries2 === 1 && JSON.stringify(lateRecord.out) === JSON.stringify(texts) && delivered(lateRecord.r) === 3 && lateRecord.reads === 2, lateRecord);
+  // Without the waits (the old order: read at once, then send again), the same lag sends message 2 twice: what the waits prevent.
+  const noWait = await run({ failTimes: 1, err: timeout, acceptThenThrow: true, lagMs: 150, settleMs: 0, retryMs: [0, 0] }, "Theo B", 9);
+  check("bubbles: (control) with no settle and no wait before the retry, a lagging record reads 'didn't go' and message 2 goes twice", noWait.tries2 === 2 && noWait.out.filter((o: string) => o === texts[1]).length === 2, noWait);
+  check("bubbles: the settle wait before reading Sendblue's record is a few seconds", P.BUBBLE_RECORD_SETTLE_MS_DEFAULT >= 2000 && P.BUBBLE_RECORD_SETTLE_MS_DEFAULT <= 10_000);
   const pr3 = src("harness/proactive.ts");
   check("bubbles: a miss is recorded with its state (refused, unknown, failed)", /decision: "proactive\.bubbleMissed"[\s\S]{0,260}state: outcome/.test(pr3));
   check("bubbles: the went check is Sendblue's record (outboundSentSince), as relay.ts does", /const BUBBLE_WENT_DEFAULT: BubbleWent = \(q\) => outboundSentSince\(q\);/.test(pr3));
-  P.setBubbleTimingForTests({ gapMs: P.BUBBLE_GAP_MS_DEFAULT, retryMs: [1000, 3000], went: null });
+  P.setBubbleTimingForTests({ gapMs: P.BUBBLE_GAP_MS_DEFAULT, retryMs: [1000, 3000], settleMs: P.BUBBLE_RECORD_SETTLE_MS_DEFAULT, went: null });
 }
 
 console.log(`announcements: ${total - failed}/${total} passed`);

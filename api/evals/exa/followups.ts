@@ -13,6 +13,9 @@ delete process.env.PROACTIVE_PAUSED;
 import { readFileSync } from "fs";
 
 const { default: pool } = await import("../../src/db/db.js");
+// Google's geocoder never answers in layer 1 (it used to reach maps.googleapis.com with the placeholder key and fail there; the
+// outside-socket guard now refuses that): it fails the same way here, with no network.
+(await import("../../src/services/geocoding.js")).geoDeps.google = async () => { throw new Error("layer 1: no geocoder"); };
 const X = await import("../../src/services/exaSearch.js");
 const T = await import("../../src/services/taskWeb.js");
 const O = await import("../../src/services/webOpportunitySearch.js");
