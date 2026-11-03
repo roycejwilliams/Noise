@@ -154,6 +154,67 @@ const THREAD = [
   check("7. the same link again with no ask: a resend", names(M.moveMisses("Here it is: https://example.test/harbor-jazz", r)).includes("resend"));
   check("7. asked for again: not a resend", M.moveMisses("Same one again: https://example.test/harbor-jazz", rec({ done }, { move: "act", again: "D2" })).length === 0);
 }
+// ------------------------------------------------------------------ 7b. a plain re-ask the read missed (co-test, 2026-11-03: card at
+// 16:16, "Can you send me a vCard" at 21:39, the read said not asked, Cue said there was no card). Their own words win.
+{
+  const card = (version?: number) => ({ id: "D1", kind: "card" as const, label: "Cue's contact card", url: null, replied: true, ...(version ? { version } : {}) });
+  const jazz = { id: "D2", kind: "link" as const, label: "Harbor Jazz Night", url: "https://example.test/harbor-jazz", replied: true };
+  const roof = { id: "D3", kind: "find" as const, label: "Alder Rooftop Lounge", url: "https://example.test/alder-rooftop", replied: true };
+  const cardTool = (said: string, done: any[], read: any = { move: "answer" }) => {
+    const facts: string[] = [];
+    const t = createConversationTools({ userId: "u1", phoneNumber: "+15555550100", resolvedContent: said, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true, exchange: rec({ done }, read), facts: { add: (_k: string, v: string) => facts.push(v), text: () => "" } } as any);
+    return { tools: t.tools as any, facts };
+  };
+  process.env.CO_VCARD_URL ||= "https://example.test/card.vcf";
+  const log = console.log; console.log = () => {};
+  const VC = await import("../../src/utils/vcard.js");
+  const live = VC.liveVersion().version;
+  const vcard = await cardTool("Can you send me a vCard", [card(live), jazz]).tools.sendContactCard.execute({ theirWords: "Can you send me a vCard" });
+  const thanks = await cardTool("thanks for the card", [card(live)]).tools.sendContactCard.execute({ theirWords: "thanks for the card" });
+  const unprompted = await cardTool("sounds good, see you thursday", [card(live)]).tools.sendContactCard.execute({ theirWords: "sounds good" });
+  const nv = cardTool("can I get your new card?", [card(live - 1)]);
+  const newer = await nv.tools.sendContactCard.execute({ theirWords: "can I get your new card?" });
+  console.log = log;
+  check("7b. \"Can you send me a vCard\" after an earlier card, read missed it: it sends, as the same card", vcard.ok === true && /same card/.test(vcard.note ?? ""), vcard);
+  check("7b. \"thanks for the card\": no send, and the refusal never says there's no card", thanks.ok === false && /Not sent again/.test(thanks.error) && /never say or imply there's no card/.test(thanks.error), thanks);
+  check("7b. an unprompted re-send: still not sent", unprompted.ok === false, unprompted);
+  check("7b. a new card version, asked: it sends, as the updated card", newer.ok === true && /updated/.test(newer.note ?? "") && nv.facts.some((f) => /updated card/.test(f)), { newer, facts: nv.facts });
+  const rd = X.doneFrom(["Co replied: [sent Cue's contact card] (version 2)", "User said: thanks"].join("\n"));
+  check("7b. the send line's version is read back onto the card", rd[0]?.kind === "card" && rd[0].version === 2, rd);
+  const src = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  check("7b. the card's send line keeps the old form (other readers match it) and adds its version", src.includes("[sent Cue's contact card] (version ${live})") && /\[sent \(\?:Cue\|Co\)'s contact card\\\]/.test(fs.readFileSync(new URL("../../src/harness/exchangeCount.ts", import.meta.url), "utf8")));
+
+  // The shared rule: precision.
+  const items = [card(), jazz, roof];
+  const ids = (said: string) => M.askedAgain(said, items).map((d) => d.id).join(",");
+  const want: [string, string][] = [
+    ["Can you send me a vCard", "D1"], ["send me your contact card", "D1"], ["what's your number again?", "D1"], ["v card?", "D1"], ["I never got your card, can you resend it", "D1"],
+    ["thanks for the card", ""], ["got your card", ""], ["got your card, thanks!", ""], ["don't send the card again", ""], ["that rooftop place was great", ""],
+    ["send me that link again", "D2"], ["can you resend that", "D1"], ["what was that link?", "D2"], ["send it again", "D1"],
+    ["what was that rooftop place you sent?", "D3"], ["send the harbor jazz one again", "D2"], ["not sure I saved it, send me the jazz link again", "D2"],
+    ["any jazz this weekend?", ""], ["sounds good, see you thursday", ""],
+  ];
+  for (const [said, exp] of want) check(`askedAgain: "${said}" -> ${exp || "nothing"}`, ids(said) === exp, ids(said));
+
+  // Text: the read missed it, their words asked: no resend miss. Unprompted: still a resend.
+  const r = rec({ done: items }, { move: "answer" });
+  check("7b. text: \"send me that link again\", read missed: not a resend", !names(M.moveMisses("Here it is again: https://example.test/harbor-jazz", r, "send me that link again")).includes("resend"));
+  check("7b. text: \"what was that rooftop place you sent?\": its find again is allowed", !names(M.moveMisses("Alder Rooftop Lounge: https://example.test/alder-rooftop", r, "what was that rooftop place you sent?")).includes("resend"));
+  check("7b. text: the card in the draft after \"Can you send me a vCard\": not a resend", !names(M.moveMisses("[sent Cue's contact card] Same card again.", r, "Can you send me a vCard")).includes("resend"));
+  check("7b. text: nobody asked: the same link is still a resend", names(M.moveMisses("Here it is: https://example.test/harbor-jazz", r, "sounds good")).includes("resend"));
+  check("7b. text: a close with a plain re-ask: the link isn't a find after close", !names(M.moveMisses("Sure: https://example.test/harbor-jazz", rec({ done: items }, { move: "close" }), "thanks! send me that link again")).includes("find_after_close"));
+  // Calls: their last words, the same rule.
+  const none = { answered: [], again: [], back: [] };
+  const cr = rec({ done: items }, null);
+  const turns = (said: string) => [{ from: "co" as const, text: "That one's on Friday." }, { from: "them" as const, text: said }];
+  check("7b. call: \"send me that link again\", read missed: offering it is never held", M.callSentenceMiss("Want me to text you the Harbor Jazz Night link?", { rec: cr, callTurns: turns("send me that link again"), delivered: [], read: none }) === null);
+  check("7b. call: \"what was that rooftop place you sent?\": offering it again is said", M.callSentenceMiss("Want me to text you Alder Rooftop Lounge again?", { rec: cr, callTurns: turns("what was that rooftop place you sent?"), delivered: [], read: none }) === null);
+  check("7b. call: nobody asked: the offer is still held", M.callSentenceMiss("Want me to text you the Harbor Jazz Night link?", { rec: cr, callTurns: turns("sounds good"), delivered: [], read: none })?.name === "reoffer");
+  // Queued work never re-sends on its own: exchangeCheck passes no words of theirs as an ask.
+  const PR = await import("../../src/harness/proactive.js");
+  const q = PR.exchangeCheck("Here's that again: https://example.test/harbor-jazz", { done: items, unresolved: [], priorMeant: [] }, { type: "nudge", targetKey: null, payload: {} } as any, { text: "send me that link again", at: new Date().toISOString() });
+  check("7b. queued work: an unrequested re-send is still held, whatever their last words were", q.pass === false && /re-sends D2/.test(q.reason ?? ""), q);
+}
 
 // ------------------------------------------------------------------ over-blocking on text (review of #368): their latest message wins
 {
