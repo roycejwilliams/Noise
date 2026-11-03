@@ -501,6 +501,32 @@ const X = "00000000-0000-4000-8000-0000000000f6";
   check("the enqueue hold's log reason is the rule's reference", /reason: held/.test(src("harness/proactive.ts")) && /topicRef\(rules\.find/.test(src("services/prefTopics.ts")));
 }
 
+// ---------------------------------------------------------------- 12. a time-bound rule never resets an area set for good
+{
+  const { DateTime } = await import("luxon");
+  const today = DateTime.now().setZone(NY).toISODate()!;
+  const clear = (u: string, place: string) => A.clearSearchArea(u, { because: "ended", onlyPlace: place }, areaDeps);
+  // SF set for good first, then "only SF this week": the week ends, SF stays.
+  const K1 = "00000000-0000-4000-8000-0000000000c1";
+  homes[K1] = "Sacramento";
+  await learn(K1, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, quote: "search SF from now on" }, "search SF from now on");
+  await learn(K1, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, expires_on: today, quote: "only SF this week" }, "only SF this week");
+  const weekly = (await active(K1)).find((p) => p.expiresAt);
+  check("a time-bound rule over an area that already was its place isn't linked to it", !!weekly && !weekly.areaPlace && areas[K1]?.place === "SF");
+  await P.expireAreaRules({ now: new Date(Date.parse(weekly!.expiresAt!) + 60_000), userId: K1, clear }, db as any);
+  check("SF for good, then 'only SF this week' ends: the area stays SF", areas[K1]?.place === "SF");
+  // "only SF this week", then the tool sets SF going forward: after the week, SF stays.
+  const K2 = "00000000-0000-4000-8000-0000000000c2";
+  homes[K2] = "Sacramento";
+  await learn(K2, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, expires_on: today, quote: "only SF this week" }, "only SF this week");
+  const wk = (await active(K2))[0];
+  const r = await A.setSearchArea(K2, { place: "SF", theirWords: "SF going forward", message: "actually keep it on SF going forward" }, areaDeps);
+  const synced = await P.syncAreaRules(K2, r.ok && r.changed === "set" ? { place: r.place } : null, db as any);
+  check("the tool setting SF for good retires the time-bound rule instead of linking it", synced.linked === 0 && synced.retired === 1 && !(await active(K2)).length);
+  await P.expireAreaRules({ now: new Date(Date.parse(wk.expiresAt!) + 60_000), clear }, db as any);
+  check("'only SF this week', then SF going forward: after the week, the area stays SF", areas[K2]?.place === "SF");
+}
+
 P.setRuleEffectsForTests(null);
 console.log(`preferences decisions: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

@@ -406,7 +406,7 @@ export async function withdrawPreference(db: Db, userId: string, id: string, now
   // A where-to-search rule that set their area: the area goes back to home with it (only while it's still that place), and what was
   // found there goes, in the same transaction (PR C).
   const was = rowToPref({ id, object_label: "", happened_at: now, retired_at: null, meta });
-  if (was && areaRuleAppliable(was)) await (await import("./searchArea.js")).clearAreaIn(db, userId, { because: "the rule that set their search area was removed", onlyPlace: rulePlaceOf(was) });
+  if (was && areaRuleAppliable(was) && was.areaPlace) await (await import("./searchArea.js")).clearAreaIn(db, userId, { because: "the rule that set their search area was removed", onlyPlace: was.areaPlace });
   return true;
 }
 // The same learning read wrote a call cadence from the words that set these rules: they're one thing, withdrawn together.
@@ -486,14 +486,17 @@ export async function applyRuleEffects(userId: string, ch: PrefChanges, stored: 
   for (const r of ch.retire) {
     if (r.state !== "withdrawn" || !stored.retired.includes(r.id)) continue;
     const was = o.onFile.find((p) => p.id === r.id);
-    if (was && areaRuleAppliable(was) && !added.some((x) => areaRuleAppliable(x.p))) out.cleared = (await fx.clearArea(userId, rulePlaceOf(was), "the rule that set their search area was withdrawn")) || out.cleared;
+    if (was && areaRuleAppliable(was) && was.areaPlace && !added.some((x) => areaRuleAppliable(x.p))) out.cleared = (await fx.clearArea(userId, was.areaPlace, "the rule that set their search area was withdrawn")) || out.cleared;
   }
   // The newest where-to-search rule for everything is their area (a correction, "SF, not Sacramento", is merged into one rule first).
   const area = [...added].reverse().find((x) => areaRuleAppliable(x.p));
   if (area) {
+    // The area before the rule: when it already was this place, the rule didn't set it, so it isn't linked (its withdrawal or end
+    // never resets an area set before it).
+    const before = await (await import("./searchArea.js")).searchAreaOf(userId).catch(() => null);
     const r = await fx.setArea(userId, { place: area.p.rule.place!, theirWords: area.p.words[area.p.words.length - 1] ?? "", message: o.message });
     out.area = r.ok ? "set" : "ask" in r ? "ambiguous" : "not_set";
-    if (r.ok && r.changed === "set") await linkAreaPlace(pool, userId, area.id, r.place);
+    if (r.ok && r.changed === "set" && !(before && areaIsRulePlace(before.place, r.place))) await linkAreaPlace(pool, userId, area.id, r.place);
   }
   for (const x of added) {
     if (x.p.area !== "avoid_topic" || x.p.basis !== "explicit" || !x.p.rule.topic) continue;
@@ -516,7 +519,8 @@ export async function syncAreaRules(userId: string, now: { place: string } | nul
   let linked = 0;
   let retired = 0;
   for (const p of (await loadPreferences(userId, db)).filter((x) => areaRuleAppliable(x))) {
-    if (now && areaIsRulePlace(now.place, p.rule.place!)) {
+    // A time-bound rule is never linked to an area the tool set for good: its end would reset that area. It's superseded instead.
+    if (now && !p.expiresAt && areaIsRulePlace(now.place, p.rule.place!)) {
       if (p.areaPlace !== now.place) await linkAreaPlace(db, userId, p.id, now.place);
       linked++;
       continue;
@@ -553,7 +557,8 @@ export async function expireAreaRules(o: { now?: Date; userId?: string; clear?: 
     const u = await db.query(`UPDATE co_facts SET retired_at = $3, meta = meta || '{"state":"expired"}'::jsonb WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}' AND retired_at IS NULL`, [p.id, userId, at]);
     if (!u.rowCount) continue;
     expired++;
-    if (areaRuleAppliable(p) && (await clear(userId, rulePlaceOf(p)).catch(() => false))) cleared++;
+    // Only an area this rule set (linked): one set before it or since stays.
+    if (areaRuleAppliable(p) && p.areaPlace && (await clear(userId, p.areaPlace).catch(() => false))) cleared++;
   }
   if (expired) await recordDecision({ layer: 4, decision: "member.preference.expired", userId: o.userId ?? null, outcome: "act", action: "area", proposal: { expired, cleared } }).catch(() => {});
   return { expired, cleared };
