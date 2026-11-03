@@ -340,9 +340,10 @@ async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskD
   return { ok: true, task: rowTo(rows[0]) };
 }
 
-export async function noteOnTask(userId: string, id: number, note: string, doneStep?: string | null): Promise<CoTask | null> {
+// evenClosed: a record that must land whatever the task's state (a text queued at the door that never went, harness/door.ts).
+export async function noteOnTask(userId: string, id: number, note: string, doneStep?: string | null, opts: { evenClosed?: boolean } = {}): Promise<CoTask | null> {
   const t = await getTask(userId, id);
-  if (!t || t.status !== "open") return null;
+  if (!t || (t.status !== "open" && !opts.evenClosed)) return null;
   const steps = doneStep ? t.steps.map((s) => (norm(s.text) === norm(doneStep) || norm(s.text).includes(norm(doneStep)) ? { ...s, done: true } : s)) : t.steps;
   const notes = [...t.notes, { at: new Date().toISOString(), text: note.trim().slice(0, 300) }].slice(-30);
   const { rows } = await pool.query(`UPDATE co_tasks SET steps = $3::jsonb, notes = $4::jsonb, updated_at = NOW() WHERE user_id = $1 AND id = $2 RETURNING *`, [userId, id, JSON.stringify(steps), JSON.stringify(notes)]);
@@ -451,6 +452,10 @@ export async function taskTextsToday(userId: string): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
+// The same, once a text the door held actually went (harness/door.ts); awaiting: whether that text asked them something.
+export async function markTextedAt(userId: string, id: number, awaiting: boolean): Promise<void> {
+  await pool.query(`UPDATE co_tasks SET texts_sent = texts_sent + 1, last_texted_at = NOW(), awaiting_reply = $3 WHERE user_id = $1 AND id = $2`, [userId, id, awaiting]);
+}
 export async function markTexted(userId: string, id: number): Promise<void> {
   await pool.query(`UPDATE co_tasks SET texts_sent = texts_sent + 1, last_texted_at = NOW(), awaiting_reply = true WHERE user_id = $1 AND id = $2`, [userId, id]);
 }

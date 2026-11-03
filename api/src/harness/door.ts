@@ -18,7 +18,7 @@ import { DateTime } from "luxon";
 import { NOTICE_SOON_HOURS, type SendClass } from "./notifyGate.js";
 
 // How long a ready candidate waits for others before the pick composes (about 20-30 minutes, Royce). The dispatch runs every 15
-// minutes (jobs/index.ts), so a ready candidate goes 20-35 minutes after it arrived, with whatever else arrived meanwhile.
+// minutes (jobs/index.ts, at :10, :25, :40, :55), so a ready candidate goes 20-35 minutes after it arrived, with whatever else arrived meanwhile.
 export const GATHER_MINUTES = 20;
 
 // The exempt texts that now enter the door instead of sending themselves (ledgered under their own type, so every reader of the
@@ -104,12 +104,14 @@ export function gatherUntil(eligible: Gatherable[], now: Date, o: { minutes?: nu
 
 // ---------------------------------------------------------------- valid-until
 
-// How long a door item stays worth sending when its caller names nothing sooner. Requested results: through the end of the next local
-// day (a delivery held by a once-a-day rule still reaches them tomorrow; anything older is re-read for relevance before it goes,
-// proactive.ts needsRelevanceCheck). A find: the end of its own day. A check-in: two days.
-export function doorValidUntil(cls: SendClass, now: Date, zone: string | null, cap?: Date | null): Date {
+// How long a door item stays worth sending. Requested results (something they asked for): no clock at all. Their own rule or the
+// spacing may hold it as long as it takes; it ends only when the thing itself is moot (cap: an event's start), never by waiting
+// (review of #361). An intro ask: through the end of the next local day. A find: the end of its own day. A check-in: two days. A cap
+// (an event's start, the hour before it) always wins when it comes first.
+export function doorValidUntil(cls: SendClass | "intro", now: Date, zone: string | null, cap?: Date | null): Date | null {
+  if (cls === "requested") return cap ?? null;
   const local = DateTime.fromJSDate(now).setZone(zone || "America/Los_Angeles");
-  const base = cls === "requested" ? local.plus({ days: 1 }).endOf("day") : cls === "checkin" ? local.plus({ hours: 48 }) : local.endOf("day");
+  const base = cls === "intro" ? local.plus({ days: 1 }).endOf("day") : cls === "checkin" ? local.plus({ hours: 48 }) : local.endOf("day");
   const at = base.toJSDate();
   return cap && cap.getTime() < at.getTime() ? cap : at;
 }
@@ -127,15 +129,20 @@ export type DoorPayload = {
   soonAt?: string | null;
   // What sending (or dropping) it means for the record (services/deferredSends.ts AfterSend).
   after?: { kind: string; payload: Record<string, unknown> } | null;
-  // The task that wrote it (services/taskTurn.ts): its links are recorded as sent, and a drop is noted on the task.
+  // The task that wrote it (services/taskTurn.ts): it's marked texted, and its links recorded, once the pick sends it; a drop is noted
+  // on the task (open or closed) so nothing later says it went.
   taskId?: number | null;
+  // Close the task once it went (a research brief's last line): the task stays open until then (review of #361).
+  close?: { status: "done" | "dropped"; outcome: string } | null;
+  // Whether the text asks them something (a goal check-in's question): the task waits on their reply once it went.
+  awaitingReply?: boolean;
   // When it was written, in their zone's day (a text from an earlier day is re-read before it goes).
   writtenAt: string;
 };
 
 // Queue a written text at the door: one candidate under its own type and target key (the same key the direct send would have used, so
 // the ledger and every reader of it are unchanged, and queueing twice is one candidate).
-export async function enterDoor(o: { userId: string; type: DoorType; targetKey: string; messages: string[]; cls: SendClass; summary: string; validUntil: Date; now?: Date; restraintKind?: string | null; intro?: boolean; soonAt?: Date | null; after?: DoorPayload["after"]; taskId?: number | null; priority?: number }): Promise<{ queued: boolean }> {
+export async function enterDoor(o: { userId: string; type: DoorType; targetKey: string; messages: string[]; cls: SendClass; summary: string; validUntil: Date | null; now?: Date; restraintKind?: string | null; intro?: boolean; soonAt?: Date | null; after?: DoorPayload["after"]; taskId?: number | null; close?: DoorPayload["close"]; awaitingReply?: boolean; priority?: number }): Promise<{ queued: boolean }> {
   const P = await import("./proactive.js");
   const now = o.now ?? new Date();
   const payload: DoorPayload = {
@@ -147,6 +154,8 @@ export async function enterDoor(o: { userId: string; type: DoorType; targetKey: 
     ...(o.soonAt ? { soonAt: o.soonAt.toISOString() } : {}),
     ...(o.after ? { after: o.after } : {}),
     ...(o.taskId != null ? { taskId: o.taskId } : {}),
+    ...(o.close ? { close: o.close } : {}),
+    ...(o.awaitingReply !== undefined ? { awaitingReply: o.awaitingReply } : {}),
     writtenAt: now.toISOString(),
   };
   return P.enqueueCandidate({ userId: o.userId, type: o.type, targetKey: o.targetKey, summary: o.summary, payload, dueAt: now, expiresAt: o.validUntil, ...(o.priority !== undefined ? { priority: o.priority } : {}) });

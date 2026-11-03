@@ -239,44 +239,56 @@ export async function prepareOffer(c: Candidate, person: Person): Promise<Prepar
 // A text waiting at the door (harness/door.ts): written and checked by the path that made it, sent as written by the pick. What it
 // means for the record runs once it went (its after step, a task's sent links), or, when it never goes, the after step hears so and
 // the task gets a note: never silent.
-async function doorStillStands(c: Candidate): Promise<string | null> {
+// While matching is paused an intro ask waits (it moves out by DOOR_PAUSE_RETRY_MINUTES, never dropped, so the asker is never told it
+// failed); a pair that no longer stands (both said yes meanwhile, declined, introduced) is dropped, as the direct send did.
+export const DOOR_PAUSE_RETRY_MINUTES = 30;
+async function doorStillStands(c: Candidate, now: Date = new Date()): Promise<{ skip: string } | { defer: Date; reason: string } | null> {
   const after = (c.payload as DoorPayload).after;
-  // An intro ask waited: read the pair again (both may have said yes meanwhile, or matching may be paused), as the direct send did.
   if (after?.kind === "network_intro_ask") {
     const p = after.payload as { candidateId?: string; askerId?: string };
+    if (await (await import("../services/roomMatching.js")).matchingPause(null)) return { defer: new Date(now.getTime() + DOOR_PAUSE_RETRY_MINUTES * 60_000), reason: "matching is paused: the intro ask waits" };
     const NI = await import("../services/networkIntroNudge.js");
     const stale = await NI.networkAskStale(String(p.candidateId ?? ""), String(p.askerId ?? ""));
-    if (stale) return `the intro ask no longer stands: ${stale}`;
-    if (await (await import("../services/roomMatching.js")).matchingPause(null)) return "matching is paused";
+    if (stale) return { skip: `the intro ask no longer stands: ${stale}` };
   }
   return null;
 }
+export const DOOR_DROPPED_NOTE = "The text queued for them never went";
 const doorEntry: TypeSpec = {
   async draft(c) {
     const p = (c.payload ?? {}) as DoorPayload;
     const messages = Array.isArray(p.messages) ? p.messages.filter((m) => typeof m === "string" && m.trim()) : [];
     if (p.door !== true || !messages.length) return skip("nothing written to send");
-    const stale = await doorStillStands(c);
-    if (stale) return skip(stale);
+    const stands = await doorStillStands(c);
+    if (stands) return stands;
     return { messages, text: messages.filter((m) => !/^https?:\/\/\S+$/.test(m.trim())).join("\n"), rules: {} };
   },
+  // Only now is it texted: the task's count and last-texted time move when it went, never when it was queued (review of #361).
   async onSent(c, _person, delivered) {
     const p = (c.payload ?? {}) as DoorPayload;
     const D = await import("../services/deferredSends.js");
     if (p.after) await D.runAfter(p.after as import("../services/deferredSends.js").AfterSend, "sent");
-    const urls = delivered.filter((m) => /^https?:\/\/\S+$/.test(m.trim()));
-    if (p.taskId != null && urls.length) {
-      const { recordSentItems } = await import("../services/coFacts.js");
-      await recordSentItems(c.userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
+    if (p.taskId != null) {
+      const T = await import("../services/coTasks.js");
+      await T.markTextedAt(c.userId, Number(p.taskId), p.awaitingReply ?? true).catch(() => {});
+      const urls = delivered.filter((m) => /^https?:\/\/\S+$/.test(m.trim()));
+      if (urls.length) {
+        const { recordSentItems } = await import("../services/coFacts.js");
+        await recordSentItems(c.userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
+      }
+      if (p.close) await T.closeTask(c.userId, Number(p.taskId), p.close.status, p.close.outcome).catch(() => false);
     }
   },
+  // Never silent: the after step hears it never went, and the task gets the note even when it's already closed, so nothing that reads
+  // the task later says it was delivered. A task kept open for this line closes as not told.
   async onDropped(c, status, reason) {
     const p = (c.payload ?? {}) as DoorPayload;
     const D = await import("../services/deferredSends.js");
     if (p.after) await D.runAfter(p.after as import("../services/deferredSends.js").AfterSend, "skipped", undefined, reason ?? status);
     if (p.taskId != null) {
-      const { noteOnTask } = await import("../services/coTasks.js");
-      await noteOnTask(c.userId, Number(p.taskId), `The text queued for them never went (${status}${reason ? `: ${reason.slice(0, 120)}` : ""}). If it still matters, tell them again when you next can.`).catch(() => null);
+      const T = await import("../services/coTasks.js");
+      await T.noteOnTask(c.userId, Number(p.taskId), `${DOOR_DROPPED_NOTE} (${status}${reason ? `: ${reason.slice(0, 120)}` : ""}). If it still matters, tell them again when you next can.`, null, { evenClosed: true }).catch(() => null);
+      if (p.close) await T.closeTask(c.userId, Number(p.taskId), "dropped", `${p.close.outcome}; never told them (${status})`.slice(0, 300)).catch(() => false);
     }
   },
 };

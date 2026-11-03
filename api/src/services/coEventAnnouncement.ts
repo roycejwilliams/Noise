@@ -132,8 +132,8 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
      JOIN users u ON u.id = a.user_id
      LEFT JOIN co_profiles p ON p.user_id = u.id
      WHERE a.sent_at IS NULL AND a.gave_up_at IS NULL AND ($1::text IS NULL OR a.event_api_id = $1)
-       -- Already waiting at the door for the pick (harness/door.ts): not drafted again.
-       AND NOT EXISTS (SELECT 1 FROM proactive_candidates pc WHERE pc.user_id = a.user_id AND pc.target_key = 'co_event:' || a.event_api_id AND pc.status = 'pending')
+       -- Already handed to the door for the pick (harness/door.ts), waiting or decided there: never drafted again.
+       AND NOT EXISTS (SELECT 1 FROM proactive_candidates pc WHERE pc.user_id = a.user_id AND pc.target_key = 'co_event:' || a.event_api_id)
      ORDER BY a.created_at`,
     [onlyEventId ?? null],
   );
@@ -201,8 +201,10 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
     if (result.sent) {
       sent++;
       await afterAnnounced({ announcementId: r.id, userId: r.user_id, name: event.name, eventApiId: event.api_id }, "sent");
-    } else if ((result as { door?: boolean }).door) {
-      // At the door: the pick sends it (or gives it up past the hour before it starts).
+    } else if ((result as { door?: boolean; queued?: boolean }).door) {
+      // At the door: the pick sends it (or gives it up past the hour before it starts). Not taken there (the door already decided this
+      // one, sent or dropped): given up here, cleanly, so it's never drafted again.
+      if (!(result as { queued?: boolean }).queued) await pool.query(`UPDATE co_event_announcements SET gave_up_at = NOW() WHERE id = $1 AND sent_at IS NULL`, [r.id]);
     } else if ((result as any).reason === "already sent") {
       await pool.query(`UPDATE co_event_announcements SET sent_at = NOW() WHERE id = $1`, [r.id]);
     }
