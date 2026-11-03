@@ -530,11 +530,16 @@ export const proactiveRegistry: ProactiveRegistry = {
     async draft(c, person) {
       const P = await import("../services/preArrival.js");
       const p = c.payload;
-      const [ask, fits, members] = await Promise.all([
-        P.statedAsk(c.userId),
-        P.strongFits(p.eventId, c.userId),
-        import("../services/eventPresence.js").then((e) => e.eventMembers(p.eventId)).catch(() => [] as { first_name: string; user_id: string }[]),
-      ]);
+      // Read again now, as the brief and the name question are (2026-11-03): queued up to 3 hours before the start, it went to someone
+      // who had since said they can't make it ("Cue won't send them anything more about it"), or who had left the list.
+      const row = await P.presenceRow(p.eventId, c.userId);
+      if (row?.not_going_at) return skip("they said they can't make it");
+      if (row?.pre_arrival_sent_at) return skip("already sent for this event");
+      const members = await import("../services/eventPresence.js").then((e) => e.eventMembers(p.eventId)).catch(() => null);
+      // A guest-list outage is not "no longer registered", and with no list the no-names check below would have nothing to check.
+      if (!members) return { defer: new Date(Date.now() + 10 * 60_000), reason: "couldn't read the guest list just now" };
+      if (!members.some((m) => m.user_id === c.userId)) return skip("no longer registered");
+      const [ask, fits] = await Promise.all([P.statedAsk(c.userId), P.strongFits(p.eventId, c.userId, members)]);
       const text = await draftProactive({
         functionId: "agent.preArrival",
         firstName: person.firstName,
@@ -554,7 +559,6 @@ export const proactiveRegistry: ProactiveRegistry = {
       if (!text) return skip("model chose SKIP");
       const named = P.namesAnyone(text, members.filter((m) => m.user_id !== c.userId).map((m) => m.first_name));
       if (named) return skip(`named another guest (${named})`);
-      const row = await P.presenceRow(p.eventId, c.userId);
       const offer = p.canUseLocation && !row?.location_yes_at ? [P.LOCATION_OFFER] : [];
       return { messages: [text, ...offer], text, rules: { maxSentences: 3, maxChars: 420, mustIncludeAny: nameTokens(p.name) } };
     },

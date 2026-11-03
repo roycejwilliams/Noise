@@ -148,6 +148,7 @@
     "evals/tasks/followups.ts",
     "evals/tasks/memberKnowledge.ts",
     "evals/presence/preArrival.ts",
+    "evals/presence/preArrivalRecheck.ts",
     "evals/presence/brief.ts",
     "evals/presence/followThrough.ts",
     "evals/presence/readout.ts",
