@@ -99,6 +99,9 @@ export type IntroFact = {
   hasOutcomeFollowup: boolean;
   // The other member is still a member (archived members are never named back).
   otherActive: boolean;
+  // They already told Cue, in their own words, how it went with this person since the intro (noteMetAgain or noteRoomMeeting on a
+  // text, the call's read): the "did you two connect?" question is answered, so it isn't asked (2026-11-03). Their side only.
+  outcomeSaid?: boolean;
 };
 export type CaredItem = {
   itemKey: string;
@@ -197,7 +200,7 @@ export const INTRO_STATUS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
 export function detectIntroNudges(s: Snapshot): NudgeEntry[] {
   const out: NudgeEntry[] = [];
   for (const i of s.intros) {
-    if (!i.otherActive || i.hasOutcomeFollowup || !i.otherFirstName.trim()) continue;
+    if (!i.otherActive || i.hasOutcomeFollowup || i.outcomeSaid || !i.otherFirstName.trim()) continue;
     const age = s.now.getTime() - i.introducedAt.getTime();
     // An event intro can go out ahead of the event: wait long enough that the event has come and gone.
     const after = i.how === "event" ? Math.max(NUDGE.introAfterDays, NUDGE.eventIntroAfterDays) : NUDGE.introAfterDays;
@@ -435,9 +438,30 @@ async function introsOf(userId: string): Promise<IntroFact[]> {
       .query(`SELECT 1 FROM recommendation_outcome_followups WHERE user_id = $1 AND lower(match_name) = lower($2) LIMIT 1`, [userId, `your intro to ${first}`])
       .then((r) => r.rows.length > 0)
       .catch(() => true);
-    out.push({ otherId: String(p.id), otherFirstName: first, introducedAt: i.at, how: i.how, eventName: ev, reasonAsEmailed: i.how === "network" ? i.reason : null, hasOutcomeFollowup: follow, otherActive: !p.archived_at });
+    // A read that fails is treated as answered, like the follow-up read above: never a second ask on a guess.
+    const said = await outcomeSaidSince(userId, String(p.id), i.at).catch(() => true);
+    out.push({ otherId: String(p.id), otherFirstName: first, introducedAt: i.at, how: i.how, eventName: ev, reasonAsEmailed: i.how === "network" ? i.reason : null, hasOutcomeFollowup: follow, otherActive: !p.archived_at, outcomeSaid: said });
   }
   return out;
+}
+
+// Pure: whether their own side of a pair record holds something they said (not inferred) after the intro.
+export function statedSince(mine: Record<string, { how?: string; at?: string } | undefined> | null | undefined, since: Date): boolean {
+  return Object.values(mine ?? {}).some((e) => e?.how === "stated" && !!e.at && new Date(e.at).getTime() > since.getTime());
+}
+// Their own word since the intro: a second-contact fact about this person (their record, owner-only), or their side of the pair record.
+async function outcomeSaidSince(userId: string, otherId: string, since: Date): Promise<boolean> {
+  const fact = await pool.query(
+    `SELECT 1 FROM co_facts WHERE owner_user_id = $1 AND relation = 'second_contact' AND retired_at IS NULL AND meta->>'otherId' = $2 AND happened_at > $3 LIMIT 1`,
+    [userId, otherId, since],
+  );
+  if (fact.rows.length) return true;
+  const { rows } = await pool.query(
+    `SELECT CASE WHEN a_id = $1 THEN a_evidence ELSE b_evidence END AS mine FROM co_pairs
+     WHERE ((a_id = $1 AND b_id = $2) OR (a_id = $2 AND b_id = $1)) AND intro_sent_at IS NOT NULL`,
+    [userId, otherId],
+  );
+  return rows.some((r: any) => statedSince(r.mine, since));
 }
 
 async function caredOf(userId: string, zone: string | null): Promise<CaredItem[]> {

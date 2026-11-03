@@ -52,17 +52,35 @@ async function removeNetworkBacklogItem(userId: string, askId: string, candidate
 // (requestEventIntro, co_pairs origin 'member') isn't Cue pointing them anywhere, and it exists only when that person was found:
 // named in the debrief, it told them so. Left out until the intro email went (2026-10-28, Royce: "found/not-found results
 // shouldn't leak through later memory or replies").
-export const PEOPLE_POINTED_TO_SQL = `SELECT DISTINCT u.first_name FROM event_guest_match_nudges n JOIN users u ON u.id = n.candidate_id
+export const PEOPLE_POINTED_TO_SQL = `SELECT DISTINCT u.id, u.first_name FROM event_guest_match_nudges n JOIN users u ON u.id = n.candidate_id
      WHERE n.event_id = $1 AND n.person_id = $2 AND u.first_name <> ''
      UNION
-     SELECT DISTINCT u.first_name FROM event_guest_match_opt_ins o JOIN users u ON u.id = o.candidate_id
+     SELECT DISTINCT u.id, u.first_name FROM event_guest_match_opt_ins o JOIN users u ON u.id = o.candidate_id
      WHERE o.event_id = $1 AND o.person_id = $2 AND o.status = 'interested' AND u.first_name <> ''
        AND NOT EXISTS (SELECT 1 FROM co_pairs p WHERE p.event_id = o.event_id AND p.a_id = LEAST(o.person_id, o.candidate_id)
          AND p.b_id = GREATEST(o.person_id, o.candidate_id) AND p.origin = 'member' AND p.intro_sent_at IS NULL)`;
-async function peopleCoPointedTo(userId: string, eventApiId: string | null): Promise<string[]> {
+// Pure: the people still worth asking about. One they already told Cue about (their own side of that night's pair says, in their
+// words, whether they met: noteRoomMeeting on a text, the call's read) is never asked again (2026-11-03: "met Ellis, great talk" at
+// 10pm, then "did you and Ellis end up talking?" the next morning). Inferred evidence doesn't count; the other side's never does.
+export function stillToAsk(people: { id: string; first_name: string }[], pairs: { a_id: string; b_id: string; a_evidence?: any; b_evidence?: any }[], userId: string): string[] {
+  const told = new Set<string>();
+  for (const r of pairs) {
+    const mine = r.a_id === userId ? r.a_evidence : r.b_id === userId ? r.b_evidence : null;
+    if (mine?.met?.how === "stated" || mine?.useful?.how === "stated") told.add(String(r.a_id === userId ? r.b_id : r.a_id));
+  }
+  return [...new Set(people.filter((p) => !told.has(String(p.id))).map((p) => p.first_name))];
+}
+export async function peopleCoPointedTo(userId: string, eventApiId: string | null): Promise<string[]> {
   if (!eventApiId) return [];
   const { rows } = await pool.query(PEOPLE_POINTED_TO_SQL, [eventApiId, userId]);
-  return rows.map((r: any) => r.first_name);
+  if (!rows.length) return [];
+  // A pair read that fails asks about nobody by name (the debrief then asks who they met), never someone they may have answered.
+  const pairs = await pool
+    .query(`SELECT a_id, b_id, a_evidence, b_evidence FROM co_pairs WHERE event_id = $1 AND (a_id = $2 OR b_id = $2)`, [eventApiId, userId])
+    .then((r) => r.rows)
+    .catch(() => null);
+  if (!pairs) return [];
+  return stillToAsk(rows.map((r: any) => ({ id: String(r.id), first_name: r.first_name })), pairs, userId);
 }
 
 // What Co actually sent them about it, and when: the link as its own text,

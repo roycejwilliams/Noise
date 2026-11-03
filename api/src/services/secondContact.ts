@@ -33,6 +33,15 @@ export function pickIntro(list: Introduced[], name: string): Introduced | null |
   return hits[0] ?? null;
 }
 
+// Pure: what to record when they gave a day. A meeting or talk dated after today (their own day) hasn't happened: "we're meeting
+// Tuesday" is not yet, never a second contact (2026-11-03: no completion invented from a plan). The day is dropped with it, since it
+// is when they plan to meet, not when they met.
+export function plannedNotHappened(outcome: SecondContactOutcome, metOn: string | null | undefined, today: string): { outcome: SecondContactOutcome; metOn: string | null; planned: boolean } {
+  const day = metOn && /^\d{4}-\d{2}-\d{2}$/.test(metOn) ? metOn : null;
+  if (day && MET.has(outcome) && day > today) return { outcome: "not_yet", metOn: null, planned: true };
+  return { outcome, metOn: day, planned: false };
+}
+
 // Pure: the fact's label, in the member's record. Their side only.
 export function secondContactLabel(firstName: string, outcome: SecondContactOutcome, on: Date): string {
   const day = on.toISOString().slice(0, 10);

@@ -1738,8 +1738,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue introduced them to.`);
           return { ok: false, error: "That isn't someone Cue introduced them to (only Cue's own introductions count)." };
         }
-        await SC.recordSecondContact(ctx.userId, pick, outcome, note ?? null, new Date(), metOn ?? null, ctx.onCall ? "call" : "text");
-        ctx.facts?.add("did_this_turn", `Noted that they ${outcome === "met_again" ? "saw" : outcome === "talked_again" ? "talked with" : outcome === "not_yet" ? "haven't seen" : "don't plan to see"} ${pick.firstName} again.`);
+        const { localDay, memberZone } = await import("../services/memberTime.js");
+        const today = localDay(new Date(), await memberZone(ctx.userId).catch(() => null));
+        const said = SC.plannedNotHappened(outcome, metOn, today);
+        await SC.recordSecondContact(ctx.userId, pick, said.outcome, note ?? null, new Date(), said.metOn, ctx.onCall ? "call" : "text");
+        if (said.planned) {
+          ctx.facts?.add("did_this_turn", `Noted that they plan to see ${pick.firstName} on ${metOn}; it hasn't happened yet, so it isn't recorded as a meeting.`);
+          return { ok: true, recorded: "not_yet", note: `${metOn} is still ahead, so this is recorded as planned, not as having met. Never say they met.` };
+        }
+        ctx.facts?.add("did_this_turn", `Noted that they ${said.outcome === "met_again" ? "saw" : said.outcome === "talked_again" ? "talked with" : said.outcome === "not_yet" ? "haven't seen" : "don't plan to see"} ${pick.firstName} again.`);
         return { ok: true };
       },
     }),
