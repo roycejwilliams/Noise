@@ -63,7 +63,7 @@ import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
 import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, type ClosedSet, type ClosedSubject } from "./closedSubject.js";
-import { attentionChecks, deliveredItems, threadIds, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
+import { attentionChecks, deliveredItems, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
 
 // How soon a check-in whose feeling read couldn't answer is tried again (harness/attention.ts feelingCheck infra).
 export const FEELING_READ_RETRY_MINUTES = 30;
@@ -1358,15 +1358,23 @@ export function alreadySentLink(url: string | null | undefined, base: ExchangeBa
 // Pure: a queued draft against the record. A reminder, a find marked to resurface or something they asked for may carry its link again; a send that serves an
 // open subject of its own (an ask, goal, task, thread, loop or ask check-in, by id) is never held for resembling something closed:
 // a new ask like a dropped one gets its finds (its own subject's state is read by id where the send is decided).
-export function exchangeCheck(text: string, base: ExchangeBase | null, c: Pick<Candidate, "type" | "targetKey" | "payload">): GateCheck {
+export function exchangeCheck(text: string, base: ExchangeBase | null, c: Pick<Candidate, "type" | "targetKey" | "payload">, theirs = ""): GateCheck {
   if (!base) return { name: WHOLE_EXCHANGE, pass: true, reason: "no record read" };
-  const p = (c.payload ?? {}) as { reminder?: boolean; again?: boolean; loopId?: unknown; askCheckinId?: unknown };
-  const ids = threadIds({ type: c.type, targetKey: c.targetKey, payload: c.payload ?? {} });
-  const ownSubject = !!(ids.ask || ids.goal || ids.task || ids.thread || p.loopId != null || p.askCheckinId != null);
-  // Something they asked for (a requested delivery, an answer to them) may carry a link again: they asked.
+  const p = (c.payload ?? {}) as { reminder?: boolean; again?: boolean; safetyFollowUp?: boolean };
+  // A safety follow-up is never held by it (the reply path skips the check on a safety turn the same way).
+  if (p.safetyFollowUp === true) return { name: WHOLE_EXCHANGE, pass: true, reason: "safety follow-up: not checked" };
+  // Its own subject, by id (harness/closedSubject.ts subjectRefs: ask, goal, task, thread, loop, ask check-in, a nudge's entryKey, a
+  // task's key): that subject's state is read by id where the send is decided, so resemblance to something closed never holds it.
+  const ownSubject = subjectRefs({ type: c.type, targetKey: c.targetKey, payload: c.payload }).length > 0;
+  // Something they asked for (a requested delivery, an answer to them) may carry a link again, and is never held as a reopening: they asked.
   const cls = candidateClass(c.type, isAnswering(c as Candidate), c.payload);
-  const misses = recordMisses(text, base, { resendOk: p.reminder === true || p.again === true || cls === "requested" || cls === "reply", noReopen: ownSubject });
+  const asked = cls === "requested" || cls === "reply";
+  const misses = recordMisses(text, base, { resendOk: p.reminder === true || p.again === true || asked, noReopen: ownSubject || asked, droppedOnly: true, optIn: isPossibleIntro(c), theirs });
   return misses.length ? { name: WHOLE_EXCHANGE, pass: false, reason: misses.map((m) => m.why).join("; ") } : { name: WHOLE_EXCHANGE, pass: true };
+}
+// Pure: their latest words in the dispatch's exchanges (a new request not yet on file as an ask still counts as theirs).
+export function latestTheirs(k: Pick<MemberKnowledge, "exchanges"> | null): string {
+  return [...(k?.exchanges ?? [])].reverse().find((e) => e.from === "member")?.text ?? "";
 }
 
 // A test seam: a fake model for draftProactive, so the guard below can be exercised with zero tokens.
@@ -3354,7 +3362,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // offer they already answered, a second interest question while the last has no answer, or something they closed brought back. A
   // miss gets the one rewrite below, told what it was; then it's dropped like any failed draft.
   const withRecord = (checks: GateCheck[], messages: string[]): GateCheck[] => {
-    const k = exchangeCheck(messages.join("\n"), exBase, c);
+    const k = exchangeCheck(messages.join("\n"), exBase, c, latestTheirs(known));
     return k.pass ? checks : [...checks, k];
   };
   // A composed bundle's checks ran inside the composer: its record says so, with how many calls it took and what was left out.

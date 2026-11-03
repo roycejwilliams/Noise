@@ -372,7 +372,10 @@ const THREAD = [
   check("queued: the jazz link again with no ask is held", /re-sends/.test(chk(["https://example.test/harbor-jazz", "Harbor Jazz Night is Thursday."]).reason ?? ""));
   check("queued: ...unless it's a reminder or marked to resurface", chk(["https://example.test/harbor-jazz", "Harbor Jazz Night is tonight."], cand({ reminder: true })).pass && chk(["https://example.test/harbor-jazz", "Back on Thursday."], cand({ again: true })).pass);
   check("queued: a delivery they asked for may carry the link again; one Cue starts on its own may not", chk(["https://example.test/harbor-jazz", "Here's the jazz night again."], cand({ cls: "requested", door: true }, "task_update")).pass && !chk(["https://example.test/harbor-jazz", "Here's the jazz night again."], cand({}, "direct_ask")).pass);
-  check("queued: a find about the venue they got (no subject of its own) is held as a reopening", /reopens/.test(chk(["Found another private dining room near Hayes Valley that seats twelve: https://example.test/room2"]).reason ?? ""));
+  check("queued: a find about the venue they got (solved) is no longer held by resemblance: solved leaves what it was for ahead (the picker still drops a find for that ask by id)", chk(["Found another private dining room near Hayes Valley that seats twelve: https://example.test/room2"]).pass);
+  const droppedBase = X.baseFrom(thread, { sent: [], asks: [] }, { closed: [{ label: "Find two DJ options for the October party", how: "dropped" }], meant: [] });
+  const dj = PR.exchangeCheck("Found another DJ for the October party: https://example.test/dj-2", droppedBase, cand());
+  check("queued: a subject-less find about what they DROPPED is held, logged as the whole_exchange check with its reason", !dj.pass && dj.name === "whole_exchange" && /reopens U1 \(Find two DJ options for the October party\), which they closed/.test(dj.reason ?? ""), dj);
   check("queued: a send for its own open ask (by id) is never held for resembling a closed one", chk(["Found a private dining room near Hayes Valley for twelve: https://example.test/room3"], cand({ askId: "a-new" }, "event_offer")).pass);
   check("queued: a DJ find for the new wedding ask (subject-less) isn't held for the dropped \"a DJ\"", chk(["Found a DJ for the wedding: https://example.test/dj-ari"]).pass);
   check("queued: no record read: nothing held", PR.exchangeCheck("Worth a look?", null, cand()).pass);
@@ -383,11 +386,57 @@ const THREAD = [
   const db = { query: async (sql: string) => (sqls.push(sql), { rows: [{ label: "Find a private dining room for twelve near Hayes Valley", status: "done" }, { label: "a DJ", status: "dropped" }] }) };
   const qb = await PR.queuedExchangeBase("u1", thread, { delivered: [{ what: "Harbor Jazz Night", kind: "event", at: "2026-11-02T00:00:00Z", via: ["ledger"], url: "https://example.test/harbor-jazz", reaction: null, verifiedAt: "" }], asks: [], carrying: [] } as any, db);
   check("queued: the base carries what was sent and what they closed", !!qb && qb.done.some((d) => d.url === "https://example.test/harbor-jazz") && qb.unresolved.some((u) => u.label === "a DJ" && u.state === "dropped") && qb.unresolved.some((u) => /Hayes Valley/.test(u.label) && u.state === "solved"), qb);
-  check("queued: closed lately reads their asks closed at their word (never expired), with loops, tasks and threads", /FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NOT NULL AND expired_at IS NULL AND \(closed_reason IN \('member','moved_on','moved'\)/.test(sqls[0] ?? "") && /FROM open_loops/.test(sqls[0] ?? ""), sqls[0]);
+  check("queued: closed lately reads their asks closed at their word (never expired), with loops, tasks and threads", /FROM ask_checkins ac/.test(sqls[0] ?? "") && /ac\.expired_at IS NULL AND ac\.closed_reason IN \('member','moved_on'\)/.test(sqls[0] ?? "") && /FROM open_loops/.test(sqls[1] ?? ""), sqls);
   check("queued: a failed read leaves the record out (drafts as before), never the send", (await PR.queuedExchangeBase("u1", thread, { delivered: [], asks: [], carrying: [] } as any, { query: async () => { throw new Error("down"); } }))?.unresolved.length === 0);
   const ps = fs.readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
   check("queued: dispatch reads the record right before drafting, and both the draft and its one rewrite are checked against it", /const exBase = known \? await queuedExchangeBase\(userId, recent, known\) : null;/.test(ps) && /withRecord\(withRepeat\(checkDraft\(draft\.text, draft\.rules\), draft\.text\), draft\.messages\)/.test(ps) && /withRecord\(withRepeat\(checkDraft\(fixed\.text, fixed\.rules\), fixed\.text\), fixed\.messages\)/.test(ps));
   check("queued: a bundle find whose link already went out is dropped before the composer writes", /const sentAlready = alreadySentLink\(prep\.item\.url, exBase, x\.payload\);/.test(ps) && ps.indexOf("const sentAlready") < ps.indexOf("B.composeBundle({"));
+}
+
+// ------------------------------------------------------------------ review of fix/exchange-carry: nothing new is held for looking like the old
+{
+  const PR = await import("../../src/harness/proactive.js");
+  const unansweredThread = ["User said: anything this weekend?", "Co replied: https://example.test/rooftop", "Co replied: Rooftop at the Ivy, Saturday 9pm. Worth a look?"].join("\n");
+  const base = (closed: { label: string; how: "solved" | "dropped" }[] = [], asks: { text: string }[] = []) => X.baseFrom(unansweredThread, { sent: [], asks }, { closed, meant: [] });
+  const cand = (type: string, payload: Record<string, unknown> = {}, targetKey = `${type}:x`) => ({ type, targetKey, payload } as any);
+  // 1. The double opt-in: an intro or match ask after an unanswered "worth a look?".
+  for (const type of ["network_tease", "event_match_nudge", "intro_nudge"]) {
+    const k = PR.exchangeCheck("Dana's going Friday too. Want me to introduce you?", base(), cand(type, { eventId: "e1" }));
+    check(`1. ${type}: the opt-in question goes after an unanswered "worth a look?" (never held, never stripped)`, k.pass, k);
+  }
+  check("1. any send whose question is the opt-in itself goes too (a companion line asking to connect them)", PR.exchangeCheck("Ellis is in that room too. Want an intro?", base(), cand("companion")).pass);
+  check("1. ...and the reply path: an intro ask isn't a second interest question", !names(M.moveMisses("Ellis will be there too. Want me to introduce you?", rec({ done: [{ id: "D1", kind: "question", label: "Worth a look?", url: null, replied: false }] }, { move: "act" }))).includes("double_ask"));
+  check("1. a plain second interest question is still held", /still has no answer/.test(PR.exchangeCheck("Another one Sunday. Worth a look?", base(), cand("companion")).reason ?? ""));
+  // 2. Solved never holds the live thing it served; requested sends and nudges with their own entry aren't held by resemblance.
+  const solvedParty = base([{ label: "find me a rooftop party", how: "solved" }]);
+  check("2. event_brief (only an eventId) about Saturday's rooftop party, after a SOLVED \"find me a rooftop party\": goes", PR.exchangeCheck("Saturday's rooftop party is set: doors at 9. Want an intro to the host?", solvedParty, cand("event_brief", { eventId: "e-roof" })).pass);
+  const droppedParty = base([{ label: "find me a rooftop party", how: "dropped" }]);
+  check("2. event_brief is requested: never held as a reopening even against a DROPPED look-alike", PR.exchangeCheck("Found a rooftop party Saturday: https://example.test/roof2", droppedParty, cand("event_brief", { eventId: "e-roof" })).pass);
+  for (const [type, entryKey] of [["deadline_nudge", "deadline:goal:g7"], ["commitment_nudge", "commitment:th-9"]] as const) {
+    const k = PR.exchangeCheck("Still finding a rooftop party for Saturday? I can look tonight.", droppedParty, cand(type, { entryKey }));
+    check(`2. ${type}: its subject is read from payload.entryKey (subjectRefs), so resemblance never holds it`, k.pass, k);
+  }
+  check("2. ...a companion check-in on Maya's birthday dinner after \"got the venue\" (solved) goes", PR.exchangeCheck("How's the plan for Maya's birthday dinner coming together at the venue?", base([{ label: "a venue for Maya's birthday dinner", how: "solved" }]), cand("companion")).pass);
+  check("2. ...the same check-in after they DROPPED the dinner is held", !PR.exchangeCheck("Still planning Maya's birthday dinner? I found another venue for it.", base([{ label: "a venue for Maya's birthday dinner", how: "dropped" }]), cand("companion")).pass);
+  // 3. The safety follow-up is never checked.
+  const safety = PR.exchangeCheck("Thinking of you today. How are you holding up? Worth a look?", base([{ label: "how they're doing", how: "dropped" }]), cand("companion", { safetyFollowUp: true, thread: { text: "how they're doing today" } }));
+  check("3. the safety follow-up goes, unchecked, and says why", safety.pass && /safety follow-up/.test(safety.reason ?? ""), safety);
+  // 6a. Their latest words, for a new request not on file yet.
+  const djBase = X.baseFrom("", { sent: [], asks: [] }, { closed: [{ label: "a DJ", how: "dropped" }], meant: [] });
+  const djFind = "Found a DJ for your birthday: https://example.test/dj-bday";
+  check("6a. a DJ find for their birthday, asked in their latest words (no ask on file yet), goes", PR.exchangeCheck(djFind, djBase, cand("companion"), "can you find me a DJ for my birthday?").pass);
+  check("6a. ...without their words it would be held (what the latest words protect)", !PR.exchangeCheck(djFind, djBase, cand("companion")).pass);
+  check("6a. the dispatch passes their latest words from its exchanges", PR.latestTheirs({ exchanges: [{ from: "member", text: "old" }, { from: "co", text: "x" }, { from: "member", text: "a DJ for my birthday?" }, { from: "co", text: "on it" }] } as any) === "a DJ for my birthday?" && /exchangeCheck\(messages\.join\("\\n"\), exBase, c, latestTheirs\(known\)\)/.test(fs.readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8")));
+  // 4, 5, 6b, 6c: what closedLately reads.
+  const sqls: string[] = [];
+  const rowsFor = (sql: string) => (/FROM ask_checkins/.test(sql) ? [{ label: "a rooftop party", status: "dropped" }] : [{ label: "loop: book tickets", status: "done" }]);
+  const got = await X.closedLately("u1", { query: async (sql: string) => (sqls.push(sql), { rows: rowsFor(sql) }) });
+  const askSql = sqls.find((q) => /FROM ask_checkins/.test(q)) ?? "";
+  check("4. 'moved' (moved lanes at their yes) is never read as closed", !/'moved'[,)]/.test(askSql) && /closed_reason IN \('member','moved_on'\)/.test(askSql), askSql);
+  check("5. an ask they REMOVED in what Cue knows is never read back (profile_corrections item_ref ask:<id>, removed)", /NOT EXISTS \(SELECT 1 FROM profile_corrections pc WHERE pc\.user_id = ac\.user_id AND to_jsonb\(pc\)->>'item_ref' = 'ask:' \|\| ac\.ask_id AND to_jsonb\(pc\)->>'removed' = 'true'\)/.test(askSql));
+  check("5. ...and the removal really writes that marker (whatCoKnows: a profile_corrections row with item_ref and removed)", /item_ref/.test(fs.readFileSync(new URL("../../src/services/whatCoKnows.ts", import.meta.url), "utf8")) && /removed: r\.removed === "true"/.test(fs.readFileSync(new URL("../../src/services/whatCoKnows.ts", import.meta.url), "utf8")));
+  check("6b. Cue's own closeAsk ('closed by Cue: ...') never counts as their word", !/closed by/.test(askSql));
+  check("6c. asks get their own share (own query and limit), apart from loops, tasks and threads", sqls.length === 2 && new RegExp(`LIMIT ${X.CLOSED_ASKS_MAX}`).test(askSql) && got.some((g) => g.label === "a rooftop party" && g.how === "dropped") && got.some((g) => g.label === "loop: book tickets"), { sqls, got });
 }
 
 console.log(`whole exchange: ${total - failed}/${total} passed`);
