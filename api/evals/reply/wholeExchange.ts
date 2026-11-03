@@ -311,5 +311,84 @@ const THREAD = [
   check("nightly: scheduled beside the rule check, and on the morning review", /runNightlyExchangeCount\(\)/.test(jobs) && /exchangeCount\.js"\)\.then\(\(E\) => E\.exchangeCounts/.test(review));
 }
 
+// ------------------------------------------------------------------ over-suppression: a NEW request like a closed one still goes (fix/exchange-carry)
+{
+  const dropped = [{ id: "U1", label: "Find two DJ options for the October party", state: "dropped" as const }];
+  // Text: their latest asks for a DJ for something else; the read didn't mark anything brought back.
+  const r = rec({ unresolved: dropped }, { move: "act" });
+  const latest = "do you know any DJs free for my sister's wedding in May?";
+  const find = "Found one for the wedding: https://example.test/dj-ari. DJ Ari plays soul and disco.";
+  check("guard: a DJ find for the wedding they just asked about is not a reopening of the dropped party DJ", M.moveMisses(find, r, latest).length === 0, M.moveMisses(find, r, latest));
+  check("guard: ...and the dropped party itself is still held (their new ask never reopens the old one)", names(M.moveMisses("Found another DJ for the October party: https://example.test/dj-2. Want it?", r, latest)).includes("reopen"));
+  const short = rec({ unresolved: [{ id: "U1", label: "a DJ", state: "dropped" }] }, { move: "act" });
+  check("guard: a short closed label (\"a DJ\") never holds a DJ find they just asked for", M.moveMisses(find, short, latest).length === 0 && names(M.moveMisses(find, short)).includes("reopen"));
+  const openToo = rec({ unresolved: [{ id: "U1", label: "a DJ", state: "dropped" }, { id: "U2", label: "a DJ for the wedding", state: "open" }] }, { move: "act" });
+  check("guard: a closed item whose words belong to something still open never holds it", M.moveMisses(find, openToo).length === 0);
+  // The reply path end to end: the draft goes on the first try.
+  const sent: string[] = [];
+  const made = createConversationTools({ userId: "u1", phoneNumber: "+15555550100", resolvedContent: latest, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async (o: any) => (sent.push(o.message), true), exchange: short, facts: { add: () => {}, text: () => "" } } as any);
+  const log = console.log; console.log = () => {};
+  const first = await (made.tools as any).sendReply.execute({ message: find }, { toolCallId: "g1" });
+  console.log = log;
+  check("guard: through sendReply, the new request's answer isn't sent back for a rewrite", first.ok === true, first);
+  // Calls: the same guard from their latest words on the call.
+  const callRec = rec({ unresolved: [{ id: "U1", label: "a DJ", state: "dropped" }] }, null);
+  const none = { answered: [], again: [], back: [] };
+  const turns = [{ from: "co" as const, text: "What's on your plate?" }, { from: "them" as const, text: latest }];
+  check("guard (call): offering DJs for the wedding they just asked about is said", M.callSentenceMiss("Want me to find a few DJs for the wedding?", { rec: callRec, callTurns: turns, delivered: [], read: none }) === null);
+  check("guard (call): ...the same offer with nothing of theirs about it is still held", M.callSentenceMiss("Want me to find a few DJs for the wedding?", { rec: callRec, callTurns: [], delivered: [], read: none })?.name === "reopen");
+}
+// ------------------------------------------------------------------ "that": one question only for a real tie, none when it's clear
+{
+  const done = [{ id: "D1", kind: "link" as const, label: "Harbor Jazz Night", url: "https://example.test/harbor-jazz", replied: true }, { id: "D2", kind: "link" as const, label: "Mission Book Fair", url: "https://example.test/mission-book-fair", replied: true }];
+  const base = { done, unresolved: [], priorMeant: [] };
+  const RB = { reason: "r", answers: null, ambiguousBetween: [], call: "none", wantsRecommendation: false, confidence: "high" };
+  const tieRead = RT.parseTurnRead({ ...RB, move: "answer", refers_to: { phrase: "that", item: null, not_item: null, between: ["d1", "D2", "D9"] } }, [], base).exchange!;
+  check("that: a real tie is kept as the two real ids", JSON.stringify(tieRead.meant?.between) === '["D1","D2"]', tieRead.meant);
+  const clearRead = RT.parseTurnRead({ ...RB, move: "answer", refers_to: { phrase: "that", item: "D1", not_item: null, between: ["D1", "D2"] } }, [], base).exchange!;
+  check("that: a named item wins over a tie (no tie kept)", clearRead.meant?.item === "D1" && !clearRead.meant?.between, clearRead.meant);
+  const oneRead = RT.parseTurnRead({ ...RB, move: "answer", refers_to: { phrase: "that", item: null, not_item: null, between: ["D1", "D7"] } }, [], base).exchange!;
+  check("that: one real id is no tie (nothing kept, nothing to ask)", oneRead.meant === null, oneRead.meant);
+  check("that: the read is told a tie is for a real tie, not caution", X.exchangeAddendum(base).includes('"between": only when two or more D ids fit equally') && X.exchangeAddendum(base).includes("not for caution"));
+  const tie = { ...base, read: tieRead };
+  check("that (tie): the reply's lines say ask which, once", /could mean D1 \(Harbor Jazz Night\) or D2 \(Mission Book Fair\)[^\n]*ask which one, in one short question/.test(X.recordLines(tie)!), X.recordLines(tie));
+  check("that (tie): going ahead on a guess is a miss", names(M.moveMisses("Harbor Jazz Night starts at 8pm.", tie)).includes("referent_tie"));
+  check("that (tie): one short question is the move", M.moveMisses("The jazz night or the book fair?", tie).length === 0, M.moveMisses("The jazz night or the book fair?", tie));
+  check("that (tie): two questions is not one", names(M.moveMisses("Which one, the jazz night or the book fair? Want both?", tie)).includes("referent_tie"));
+  const clear = { ...base, read: clearRead };
+  check("that (clear): asking which one is a miss", names(M.moveMisses("Which one do you mean?", clear)).includes("asks_which"));
+  check("that (clear): answering it is clean", M.moveMisses("Harbor Jazz Night starts at 8pm at the pier.", clear).length === 0);
+  check("that (clear): the lines name it, never ask", /means D1 \(Harbor Jazz Night\)/.test(X.recordLines(clear)!) && !/ask which/.test(X.recordLines(clear)!));
+}
+// ------------------------------------------------------------------ queued work reads the record before it goes (fix/exchange-carry)
+{
+  const PR = await import("../../src/harness/proactive.js");
+  const cand = (payload: Record<string, unknown> = {}, type = "companion") => ({ type, targetKey: `${type}:x`, payload } as any);
+  const thread = ["User said: any jazz this week?", "Co replied: https://example.test/harbor-jazz", "Co replied: Harbor Jazz Night, Thursday 8pm. Does this one interest you?"].join("\n");
+  const closed = [{ label: "Find a private dining room for twelve near Hayes Valley", how: "solved" as const }, { label: "a DJ", how: "dropped" as const }];
+  const base = X.baseFrom(thread, { sent: [{ name: "Harbor Jazz Night", url: "https://example.test/harbor-jazz" }], asks: [{ text: "a DJ for the wedding" }] }, { closed, meant: [] });
+  const chk = (msgs: string[], c = cand()) => PR.exchangeCheck(msgs.join("\n"), base, c);
+  check("queued: a second interest question while the first has no answer is held", !chk(["Mission Book Fair is Saturday. Worth a look?"]).pass && /still has no answer/.test(chk(["Mission Book Fair is Saturday. Worth a look?"]).reason ?? ""));
+  check("queued: the jazz link again with no ask is held", /re-sends/.test(chk(["https://example.test/harbor-jazz", "Harbor Jazz Night is Thursday."]).reason ?? ""));
+  check("queued: ...unless it's a reminder or marked to resurface", chk(["https://example.test/harbor-jazz", "Harbor Jazz Night is tonight."], cand({ reminder: true })).pass && chk(["https://example.test/harbor-jazz", "Back on Thursday."], cand({ again: true })).pass);
+  check("queued: a delivery they asked for may carry the link again; one Cue starts on its own may not", chk(["https://example.test/harbor-jazz", "Here's the jazz night again."], cand({ cls: "requested", door: true }, "task_update")).pass && !chk(["https://example.test/harbor-jazz", "Here's the jazz night again."], cand({}, "direct_ask")).pass);
+  check("queued: a find about the venue they got (no subject of its own) is held as a reopening", /reopens/.test(chk(["Found another private dining room near Hayes Valley that seats twelve: https://example.test/room2"]).reason ?? ""));
+  check("queued: a send for its own open ask (by id) is never held for resembling a closed one", chk(["Found a private dining room near Hayes Valley for twelve: https://example.test/room3"], cand({ askId: "a-new" }, "event_offer")).pass);
+  check("queued: a DJ find for the new wedding ask (subject-less) isn't held for the dropped \"a DJ\"", chk(["Found a DJ for the wedding: https://example.test/dj-ari"]).pass);
+  check("queued: no record read: nothing held", PR.exchangeCheck("Worth a look?", null, cand()).pass);
+  check("queued: an ordinary check-in passes", chk(["Thinking of you before Thursday. How's the week shaping up?"]).pass);
+  check("queued: a bundle find whose link already went out is found; a reminder's is not", PR.alreadySentLink("https://www.example.test/harbor-jazz/", base, {})?.label === "Harbor Jazz Night" && PR.alreadySentLink("https://example.test/harbor-jazz", base, { reminder: true }) === null && PR.alreadySentLink("https://example.test/new", base, {}) === null);
+  // The record's base for queued work, with a fake reader: their closed asks are in it (the 11-03 reopenings were mostly asks).
+  const sqls: string[] = [];
+  const db = { query: async (sql: string) => (sqls.push(sql), { rows: [{ label: "Find a private dining room for twelve near Hayes Valley", status: "done" }, { label: "a DJ", status: "dropped" }] }) };
+  const qb = await PR.queuedExchangeBase("u1", thread, { delivered: [{ what: "Harbor Jazz Night", kind: "event", at: "2026-11-02T00:00:00Z", via: ["ledger"], url: "https://example.test/harbor-jazz", reaction: null, verifiedAt: "" }], asks: [], carrying: [] } as any, db);
+  check("queued: the base carries what was sent and what they closed", !!qb && qb.done.some((d) => d.url === "https://example.test/harbor-jazz") && qb.unresolved.some((u) => u.label === "a DJ" && u.state === "dropped") && qb.unresolved.some((u) => /Hayes Valley/.test(u.label) && u.state === "solved"), qb);
+  check("queued: closed lately reads their asks closed at their word (never expired), with loops, tasks and threads", /FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NOT NULL AND expired_at IS NULL AND \(closed_reason IN \('member','moved_on','moved'\)/.test(sqls[0] ?? "") && /FROM open_loops/.test(sqls[0] ?? ""), sqls[0]);
+  check("queued: a failed read leaves the record out (drafts as before), never the send", (await PR.queuedExchangeBase("u1", thread, { delivered: [], asks: [], carrying: [] } as any, { query: async () => { throw new Error("down"); } }))?.unresolved.length === 0);
+  const ps = fs.readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+  check("queued: dispatch reads the record right before drafting, and both the draft and its one rewrite are checked against it", /const exBase = known \? await queuedExchangeBase\(userId, recent, known\) : null;/.test(ps) && /withRecord\(withRepeat\(checkDraft\(draft\.text, draft\.rules\), draft\.text\), draft\.messages\)/.test(ps) && /withRecord\(withRepeat\(checkDraft\(fixed\.text, fixed\.rules\), fixed\.text\), fixed\.messages\)/.test(ps));
+  check("queued: a bundle find whose link already went out is dropped before the composer writes", /const sentAlready = alreadySentLink\(prep\.item\.url, exBase, x\.payload\);/.test(ps) && ps.indexOf("const sentAlready") < ps.indexOf("B.composeBundle({"));
+}
+
 console.log(`whole exchange: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
