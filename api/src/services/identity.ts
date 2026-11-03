@@ -7,7 +7,7 @@ import pool from "../db/db.js";
 export const PENDING_EMAIL_DOMAIN = "@copatible.pending";
 
 export function hasPendingEmail(email: string): boolean {
-  return email.endsWith(PENDING_EMAIL_DOMAIN);
+  return email.trim().toLowerCase().endsWith(PENDING_EMAIL_DOMAIN);
 }
 
 // An address Cue may send to: well formed and never the placeholder. The placeholder is no email (review of the onboarding branch,

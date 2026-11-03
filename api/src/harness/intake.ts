@@ -234,13 +234,17 @@ export function intakeInstruction(ask: ("name" | "email")[], correction: "email_
 
 // Pure: Cue's line asked for their email, or their name, in any of its usual shapes (review of the onboarding branch, finding 7:
 // "best address to send event details to?" and "what should I call you?" are asks too). The same reads on texts and calls.
+// Only a question about THEIR email or name counts (re-review: "What's the address of the venue?", "reach out to the host's contact?",
+// "I'll email you the plan" and "name of the bakery?" are not asks): a question sentence about your email, the best email or address
+// for you, what to call you, or your name.
+const questions = (line: string) => line.split(/(?<=[.!?])\s+/).filter((s) => /\?\s*$/.test(s));
+const ASK_EMAIL = /\byour (?:best |preferred |work |personal )?(?:e-?mail|address|contact)\b|\b(?:best|good|right) e-?mail\b|\b(?:best|good|right) (?:address|contact)(?: address)? (?:for you|to (?:send|reach|use))\b|\be-?mail (?:for you|should I use)\b|\bname and (?:best |your )?e-?mail\b/i;
+const ASK_NAME = /\byour (?:full |first |last )?name\b|\bwhat name (?:should|do|can|shall) I use\b|\bwhat (?:should|shall|do|can) I call you\b|\bwhat do you go by\b|\bwho am I (?:talking|speaking) (?:to|with)\b/i;
 export function askedForEmail(line: string | null | undefined): boolean {
-  if (!line) return false;
-  return /\be-?mail\b/i.test(line) || line.split(/(?<=[.!?])\s+/).some((s) => /\?\s*$/.test(s) && /\b(address|contact)\b/i.test(s));
+  return !!line && questions(line).some((s) => ASK_EMAIL.test(s));
 }
 export function askedForName(line: string | null | undefined): boolean {
-  if (!line) return false;
-  return /\bname\b/i.test(line) || /\bwhat (?:should|shall|do|can) I call you\b|\bwhat do you go by\b|\bwho am I (?:talking|speaking) (?:to|with)\b/i.test(line);
+  return !!line && questions(line).some((s) => ASK_NAME.test(s));
 }
 
 // Pure: whether a reply that went out asked for what was missing (so it's never asked again).
@@ -301,18 +305,25 @@ export async function textIntakeProposal(o: { text: string | null; state: Intake
 // with the intake's checks: well formed, never the placeholder, not on another account. Cue never says "updated" unless it was.
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
 export type EmailCorrection = { action: "updated" | "taken" | "invalid" | "same" | "not_a_correction"; email?: string; was?: string };
-const EMAIL_IN_TEXT = /[^\s@<>()"',;:]+@[^\s@<>()"',;:]+/;
+const EMAIL_IN_TEXT = /[^\s@<>()"',;:]+@[^\s@<>()"',;:]+/g;
+// About someone else, or asking Cue to send to someone: never a correction of their own email (re-review: "can you also invite my
+// cofounder sam@acme.com?").
+const NOT_THEIRS = /\b(?:invite|send|forward|introduce|intro|cc|share|loop in|add|email (?:him|her|them)|text (?:him|her|them))\b|\b(?:his|her|their)(?: \w+)? (?:e-?mail|address)\b|\bmy (?:co-?founder|friend|wife|husband|partner|boss|colleague|coworker|co-worker|sister|brother|mom|dad|mother|father|assistant|manager|team|client)\b/i;
+// The call's confirmation text, recorded when it went (services/callEmail.ts sends it under a 'call_email:' key): a correction is only
+// ever a reply to that text.
 export async function correctEmailFromText(o: { userId: string; text: string | null; email: string | null | undefined }, db: Db = pool): Promise<EmailCorrection> {
   const was = o.email && !hasPendingEmail(String(o.email)) ? String(o.email) : null;
-  const m = o.text?.match(EMAIL_IN_TEXT);
-  if (!was || !m) return { action: "not_a_correction" };
-  const { rows } = await db.query(
-    `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT 1`,
-    [o.userId],
-  );
-  if (!String(rows[0]?.content ?? "").toLowerCase().includes(was.toLowerCase())) return { action: "not_a_correction" };
-  const email = m[0].replace(/[.!?]+$/, "");
-  if (email.toLowerCase() === was.toLowerCase()) return { action: "same", email, was };
+  const found = [...(o.text ?? "").matchAll(EMAIL_IN_TEXT)].map((m) => m[0].replace(/[.!?]+$/, ""));
+  if (!was || !found.length || NOT_THEIRS.test(o.text ?? "")) return { action: "not_a_correction" };
+  const [{ rows: last }, { rows: confirm }] = await Promise.all([
+    db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT 1`, [o.userId]),
+    db.query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND target_key LIKE 'call_email:%' ORDER BY sent_at DESC LIMIT 1`, [o.userId]),
+  ]);
+  const lastLine = String(last[0]?.content ?? "").replace(/^Co replied: /, "").trim();
+  if (!lastLine || !confirm[0]?.message || lastLine !== String(confirm[0].message).trim()) return { action: "not_a_correction" };
+  // The last address that isn't the one on file ("it's not jo@gmial.com, it's jo@gmail.com" reads the second).
+  const email = [...found].reverse().find((e) => e.toLowerCase() !== was.toLowerCase()) ?? null;
+  if (!email) return { action: "same", email: found[found.length - 1], was };
   if (!isValidEmail(email)) return { action: "invalid", email, was };
   if (await isEmailOnOtherAccount(email, o.userId, db)) return { action: "taken", email, was };
   try {
