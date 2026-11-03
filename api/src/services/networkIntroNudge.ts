@@ -677,7 +677,7 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
     after: { kind: "network_intro_ask" as const, payload: after },
     // Through the door (harness/door.ts): ranked as a possible intro (above any find), gathered with what else is ready for them, the
     // pair read again before it goes; good through tomorrow, and the asker hears plainly if it never went.
-    door: { summary: "An intro ask: someone Cue knows would like to meet them", validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), await timezoneFor(candidate.user_id)), intro: true },
+    door: { summary: "An intro ask: someone Cue knows would like to meet them", validUntil: (await import("../harness/door.js")).doorValidUntil("intro", new Date(), await timezoneFor(candidate.user_id)), intro: true },
   };
   // The matching kill switch: the asker was told Co would check, so the ask waits in deferred_sends (held while the
   // pause is on) instead of being dropped.

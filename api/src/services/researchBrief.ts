@@ -323,10 +323,12 @@ export async function deliverBrief(
   await (deps.record ?? D.recordDocumentSent)(o.task.userId, doc, via, `task:${o.task.id}`).catch(() => {});
   return { sent: true, via, pdfPending: rd.sentOk.some((r) => r.pdfPending), line: rd.line };
 }
-export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boolean; queued?: boolean }, wakes: number): "told" | "hold" | "untold" {
+// How long a brief whose line waits at the door goes before it looks again (only to hand the same line over again; the door's send closes it).
+export const BRIEF_DOOR_LOOK_HOURS = 12;
+export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boolean; queued?: boolean }, wakes: number): "told" | "hold" | "untold" | "queued" {
+  // Waiting at the door for Cue's next message (harness/door.ts): not told yet; the task stays open until the pick sends it.
+  if (r.door && r.queued) return "queued";
   if (r.sent || r.reason === "already sent") return "told";
-  // Waiting at the door for Cue's next message (harness/door.ts): handed over, the pick delivers it.
-  if (r.door && r.queued) return "told";
   // Held by their own rule or the spacing (harness/notifyGate.ts) waits the same way: it's work they asked for, never dropped for it.
   // Held by their own rule or the spacing (harness/notifyGate.ts): it's work they asked for, it waits however long, never dropped for it
   // (its wake is given back, below).
@@ -361,10 +363,17 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // to their morning with the task kept open; never told for any other reason, closed as dropped and saying so.
   const tellThenClose = async (text: string, status: "done" | "dropped", outcome: string) => {
     // Through the door (harness/door.ts) unless it answers their latest message: it goes with Cue's next message, as a delivery they
-    // asked for. Queued there is told: the pick sends it (or, past its valid-until, drops it and logs why).
-    const door = { summary: `The research brief they asked for: ${String(p.what ?? "").slice(0, 120)}`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone) };
+    // asked for, with no clock (requested work ends only when moot). The task stays open until the pick sends it: the door closes it
+    // then, with this status and outcome, or, if it never goes, closes it as not told and notes why (review of #361).
+    const door = { summary: `The research brief they asked for: ${String(p.what ?? "").slice(0, 120)}`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone), taskId: task.id, close: { status, outcome }, awaitingReply: false };
     const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, door }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; door?: boolean; queued?: boolean });
     const next = briefLineOutcome(r, task.wakes);
+    if (next === "queued") {
+      // Waiting at the door: the task stays open, looking again later only to re-hand the same line (the same key, so never twice).
+      const { holdBriefLine, unspendWake } = await import("./coTasks.js");
+      if (await holdBriefLine(task.userId, task.id, { text, status, outcome }, new Date(Date.now() + BRIEF_DOOR_LOOK_HOURS * 3_600_000))) await unspendWake(task.userId, task.id).catch(() => {});
+      return;
+    }
     if (next === "hold") {
       const { holdBriefLine, unspendWake } = await import("./coTasks.js");
       const { nextSendable } = await import("./memberTime.js");

@@ -1670,12 +1670,15 @@ async function loadSends(db: Queryable, userId: string): Promise<SendRecord[]> {
   ];
 }
 
-// The calls Cue started on its own in the last day, as ledger rows (a check-in call, an intake call; inferred ones too).
+// The calls Cue started on its own in the last day, as ledger rows (a check-in call, an intake call; inferred ones too). Only dials
+// that went out: the gate's place_call is written before the dial, so it counts only with the dial's own record right after it
+// (services/callTrigger.ts recordCallPlaced, "Co initiated call ..."); a refused dial or a held GPT-Live call has none (review of #361).
 const CUE_CALL_REASONS = ["checkin_cadence", "inferred checkin_cadence", "auto_intake", "inferred auto_intake"];
 async function cueCalls(db: Queryable, userId: string): Promise<SendRecord[]> {
   const { rows } = await db
     .query(
-      `SELECT id, created_at FROM harness_decisions WHERE user_id = $1 AND decision = 'call.gate' AND action = 'place_call' AND reason = ANY($2::text[]) AND created_at > NOW() - INTERVAL '1 day'`,
+      `SELECT d.id, d.created_at FROM harness_decisions d WHERE d.user_id = $1 AND d.decision = 'call.gate' AND d.action = 'place_call' AND d.reason = ANY($2::text[]) AND d.created_at > NOW() - INTERVAL '1 day'
+         AND EXISTS (SELECT 1 FROM co_memories m WHERE m.user_id = d.user_id AND m.memory_type = 'call_transcript' AND m.content LIKE 'Co initiated call%' AND m.created_at BETWEEN d.created_at AND d.created_at + INTERVAL '3 minutes')`,
       [userId, CUE_CALL_REASONS],
     )
     .catch(() => ({ rows: [] as any[] }));
@@ -1839,12 +1842,14 @@ export const RELEVANCE_RECHECK_HOURS = 24;
 // Every find too, goal finds included (Phase B, B6, 2026-10-10): a find for where they're headed waited as long as one for an ask and
 // was never re-judged; now both are, against their page as it is now (stillRelevant reads the source first).
 export function needsRelevanceCheck(c: Candidate, now: Date): boolean {
-  // A text at the door was written for the moment it was written: one that waited past the night is read again before it goes. (The
-  // day is Pacific's: a candidate doesn't carry their zone.)
+  // A text at the door was written for the moment it was written: one Cue started that has waited a day since it was written is read
+  // again before it goes. Never something they asked for: a re-read could drop it, and requested work ends only when it's moot (review
+  // of #361).
   if (isDoorType(c.type)) {
-    const zone = hoursZone(null);
-    const written = DateTime.fromJSDate(c.createdAt).setZone(zone).toISODate();
-    if (written === DateTime.fromJSDate(now).setZone(zone).toISODate()) return false;
+    const p = (c.payload ?? {}) as { cls?: string; writtenAt?: string };
+    if (p.cls === "requested") return false;
+    const written = Date.parse(String(p.writtenAt ?? "")) || c.createdAt.getTime();
+    if (now.getTime() - written < RELEVANCE_RECHECK_HOURS * HOUR) return false;
     const checked = Date.parse(String((c.payload as { relevantAt?: string })?.relevantAt ?? ""));
     return !(checked && now.getTime() - checked < RELEVANCE_RECHECK_HOURS * HOUR);
   }
@@ -2087,16 +2092,16 @@ export const sendWithLedgerForTests = sendWithLedger;
 
 // The door's routing for one exempt send (harness/door.ts): null when it goes straight out (no door spec, a type the door doesn't take,
 // or a bypass); otherwise it's queued as a candidate for the pick, and recorded.
-type DoorSpec = { summary: string; validUntil: Date; timeSensitive?: boolean; intro?: boolean; after?: { kind: string; payload: Record<string, unknown> } | null; taskId?: number | null };
+type DoorSpec = { summary: string; validUntil: Date | null; timeSensitive?: boolean; safety?: boolean; intro?: boolean; after?: { kind: string; payload: Record<string, unknown> } | null; taskId?: number | null; close?: { status: "done" | "dropped"; outcome: string } | null; awaitingReply?: boolean };
 async function atTheDoor(opts: { userId: string; type: ExemptType; targetKey: string; messages: string[]; now?: Date; coInitiated?: { kind: ProactiveKind | null }; answers?: { askedAt: Date | null }; soonAt?: Date | null; cls?: SendClass; door?: DoorSpec }): Promise<{ queued: boolean; reason: string } | null> {
   if (!opts.door || !isDoorType(opts.type)) return null;
   const now = opts.now ?? new Date();
   const cls: SendClass = opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
   const lastIn = opts.answers ? await loadLastInbound(pool, opts.userId).catch(() => null) : null;
-  const route = doorRoute({ cls, now, soonAt: opts.soonAt ?? null, answersLast: !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now), timeSensitive: opts.door.timeSensitive });
+  const route = doorRoute({ cls, now, soonAt: opts.soonAt ?? null, answersLast: !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now), timeSensitive: opts.door.timeSensitive, safety: opts.door.safety });
   if (!route.door) return null;
-  const q = await enterDoor({ userId: opts.userId, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, cls, summary: opts.door.summary, validUntil: opts.door.validUntil, now, restraintKind: opts.coInitiated?.kind ?? null, intro: opts.door.intro, soonAt: opts.soonAt ?? null, after: opts.door.after ?? null, taskId: opts.door.taskId ?? null });
-  await recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: opts.userId, outcome: q.queued ? "act" : "skip", action: q.queued ? "at_door" : "door_decided", reason: q.queued ? `waits for the pick (${cls}, valid until ${opts.door.validUntil.toISOString()})` : "already sent or decided", proposal: { type: opts.type, targetKey: opts.targetKey } }).catch(() => {});
+  const q = await enterDoor({ userId: opts.userId, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, cls, summary: opts.door.summary, validUntil: opts.door.validUntil, now, restraintKind: opts.coInitiated?.kind ?? null, intro: opts.door.intro, soonAt: opts.soonAt ?? null, after: opts.door.after ?? null, taskId: opts.door.taskId ?? null, close: opts.door.close ?? null, awaitingReply: opts.door.awaitingReply });
+  await recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: opts.userId, outcome: q.queued ? "act" : "skip", action: q.queued ? "at_door" : "door_decided", reason: q.queued ? `waits for the pick (${cls}, ${opts.door.validUntil ? `valid until ${opts.door.validUntil.toISOString()}` : "no clock: until it goes"})` : "already sent or decided", proposal: { type: opts.type, targetKey: opts.targetKey } }).catch(() => {});
   return q.queued ? { queued: true, reason: "at the door: it goes with Cue's next message" } : { queued: false, reason: "already sent" };
 }
 
@@ -2312,7 +2317,9 @@ export async function sendExemptWhenAllowed(opts: {
   // Its class when its type's isn't it (a reminder they set is requested, not Cue's own).
   cls?: SendClass;
   // May wait at the door for the pick (sendExempt door): its `after` runs when the pick sends it (or drops it), day or night.
-  door?: { summary: string; validUntil: Date; timeSensitive?: boolean; intro?: boolean };
+  door?: { summary: string; validUntil: Date | null; timeSensitive?: boolean; intro?: boolean };
+  // When what it's about happens (sendExempt soonAt): within hours of it, it goes now (R2).
+  soonAt?: Date | null;
 }): Promise<{ sent: boolean; queued: boolean; reason?: string; dueAt?: Date; door?: boolean }> {
   const D = await import("../services/deferredSends.js");
   const now = opts.now ?? new Date();
@@ -2966,8 +2973,9 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
 
   if ("defer" in draft) {
     // A find's defer (a re-read held it, Phase B) never pushes it past its own expiry: a dated row would outlive its date.
+    // A door text (harness/door.ts) keeps its own.
     if (!opts.dryRun) await pool.query(
-      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type = 'event_offer' AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type IN ('task_update', 'co_event', 'event_change', 'direct_ask') THEN expires_at WHEN type = 'event_offer' AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
       [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000)],
     );
     if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });

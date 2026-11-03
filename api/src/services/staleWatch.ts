@@ -13,7 +13,9 @@ import { regionFor } from "./areaCodes.js";
 import { humanTime, timeFact, readLink, REREAD_AFTER_MS, VOLATILE_AFTER_MS, savedRead, type LinkRead } from "./linkReader.js";
 import { lineInVoice } from "./voiceLine.js";
 
-export type Change = { kind: "sold_out" | "moved" | "gone"; detail: string };
+// startAt: when the thing starts, as its page says now (verified), when known: a heads-up about something tonight goes now (R2), and
+// a heads-up is moot once it has started.
+export type Change = { kind: "sold_out" | "moved" | "gone"; detail: string; startAt?: string | null };
 
 // Weekly, Mondays 10:40 Pacific (jobs/index.ts). It ran hourly and, from 09-29 to 10-29, made 365 runs that found 0 changes and told
 // 0 members (efficiency audit, 2026-10-29), while paying for the page re-reads behind them.
@@ -32,18 +34,19 @@ export function staleChange(prev: LinkRead | null, next: LinkRead): Change | nul
   if (next.status === "failed" && /\b(404|410)\b/.test(next.why ?? "")) return { kind: "gone", detail: "its page is gone, so it may have been canceled" };
   if (next.status !== "ok") return null;
   const soldNow = next.fields.sold_out;
-  if (soldNow?.verified && soldNow.value === "yes" && prev.fields.sold_out?.value !== "yes") return { kind: "sold_out", detail: "it's sold out now" };
   const a = prev.fields.start;
   const b = next.fields.start;
+  const startAt = b?.verified && b.value ? b.value : null;
+  if (soldNow?.verified && soldNow.value === "yes" && prev.fields.sold_out?.value !== "yes") return { kind: "sold_out", detail: "it's sold out now", startAt };
   if (a?.verified && b?.verified && minutesApart(a.value, b.value) >= 15) {
     // Its new time as Cue may say it (linkReader.ts timeFact): with the zone it assumes, or no time when the listing's zone is unclear.
     const t = timeFact(b.value, next.fields.timezone, "it");
-    return { kind: "moved", detail: t.said ? `it now starts ${t.said}${t.note ? ` (${t.note.replace(/\.$/, "").replace(/^The/, "the")})` : ""}` : "its start time changed, and the listing doesn't say what time zone it's in. Check the page before you plan around it" };
+    return { kind: "moved", startAt, detail: t.said ? `it now starts ${t.said}${t.note ? ` (${t.note.replace(/\.$/, "").replace(/^The/, "the")})` : ""}` : "its start time changed, and the listing doesn't say what time zone it's in. Check the page before you plan around it" };
   }
   return null;
 }
 
-type Row = { user_id: string; item_key: string; item_name: string; url: string; phone_number: string; first_name: string | null; city: string | null };
+export type Row = { user_id: string; item_key: string; item_name: string; url: string; phone_number: string; first_name: string | null; city: string | null };
 
 async function interested(row: Row): Promise<boolean> {
   const { rows } = await pool
@@ -57,7 +60,13 @@ async function interested(row: Row): Promise<boolean> {
   return rows[0]?.yes === true && rows[0]?.no !== true;
 }
 
-async function tell(row: Row, change: Change): Promise<boolean> {
+// Pure: when the changed thing starts, as a date, when its page said (null otherwise).
+export function startOf(change: Change): Date | null {
+  const ms = change.startAt ? Date.parse(change.startAt) : NaN;
+  return Number.isFinite(ms) ? new Date(ms) : null;
+}
+
+export async function tell(row: Row, change: Change): Promise<boolean> {
   const stock = `Heads up on ${row.item_name}: ${change.detail}.`;
   const line = await lineInVoice({
     purpose: "Tell them plainly, in one or two short sentences, that something they said they were interested in has changed. No question and no pitch.",
@@ -76,7 +85,9 @@ async function tell(row: Row, change: Change): Promise<boolean> {
     timezone,
     // Through the door (harness/door.ts): a heads-up about something they were interested in (not something they're in) goes with
     // Cue's next message, good through tomorrow.
-    door: { summary: `A heads-up: something they were interested in changed (${row.item_name.slice(0, 80)})`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), timezone) },
+    // Something happening within hours (tonight) goes now instead (R2); a heads-up is moot once the thing has started.
+    soonAt: startOf(change),
+    door: { summary: `A heads-up: something they were interested in changed (${row.item_name.slice(0, 80)})`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), timezone, startOf(change)) },
   }).catch(() => ({ sent: false, queued: false }));
   return sent.sent || sent.queued;
 }

@@ -36,9 +36,17 @@ const SRC = new URL("../../src/", import.meta.url).pathname;
 const src = (f: string) => readFileSync(SRC + f, "utf8");
 
 // ---------------------------------------------------------------- an in-memory store (only what these paths read and write)
-const db = { sends: [] as any[], candidates: [] as any[], decisions: [] as any[], outbox: [] as { to: string; content: string }[], inbound: new Map<string, Date>(), calls: [] as any[] };
+const db = { sends: [] as any[], candidates: [] as any[], decisions: [] as any[], outbox: [] as { to: string; content: string }[], inbound: new Map<string, Date>(), calls: [] as any[], tasks: [] as any[], sql: [] as { sql: string; a: any[] }[], paused: false, dispatched: [] as string[] };
 const run = async (raw: string, a: any[] = []) => {
   const sql = raw.replace(/\s+/g, " ").trim();
+  db.sql.push({ sql, a });
+  if (/FROM matching_pauses/.test(sql)) return { rows: db.paused ? [{ scope: "all", reason: "" }] : [] };
+  if (/^SELECT \* FROM co_tasks WHERE user_id = \$1 AND id = \$2/.test(sql)) return { rows: db.tasks.filter((t) => t.user_id === a[0] && Number(t.id) === Number(a[1])) };
+  if (/^SELECT DISTINCT user_id FROM proactive_candidates WHERE status = 'pending' AND due_at <= NOW\(\)/.test(sql)) {
+    const ids = [...new Set(db.candidates.filter((c) => c.status === "pending" && new Date(c.due_at).getTime() <= Date.now()).map((c) => c.user_id))];
+    db.dispatched.push(...ids);
+    return { rows: ids.map((user_id) => ({ user_id })) };
+  }
   if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
   if (/sms_opted_out/.test(sql) && /FROM users/.test(sql)) return { rows: [{ opted_out: false }] };
   if (/^SELECT MAX\(created_at\) AS at FROM co_memories/.test(sql)) return { rows: [{ at: db.inbound.get(a[0]) ?? null }] };
@@ -46,7 +54,8 @@ const run = async (raw: string, a: any[] = []) => {
     db.decisions.push({ layer: a[0], decision: a[1], user_id: a[2], outcome: a[3], action: a[4], proposal: a[5] ? JSON.parse(a[5]) : null, reason: a[8] });
     return { rows: [{ id: String(db.decisions.length), created_at: new Date() }] };
   }
-  if (/FROM harness_decisions WHERE user_id = \$1 AND decision = 'call.gate' AND action = 'place_call' AND reason = ANY/.test(sql)) return { rows: db.calls.filter((c) => c.user_id === a[0] && a[1].includes(c.reason)) };
+  // A Cue call counts only when its dial went (the dial's own "Co initiated call" record right after the gate's place_call).
+  if (/FROM harness_decisions d WHERE d\.user_id = \$1 AND d\.decision = 'call\.gate' AND d\.action = 'place_call' AND d\.reason = ANY/.test(sql) && /Co initiated call/.test(sql)) return { rows: db.calls.filter((c) => c.user_id === a[0] && a[1].includes(c.reason) && c.dialed !== false) };
   if (/^SELECT id, status, payload, expires_at FROM proactive_candidates WHERE user_id = \$1 AND target_key = \$2 FOR UPDATE/.test(sql)) return { rows: db.candidates.filter((c) => c.user_id === a[0] && c.target_key === a[1]) };
   if (/^SELECT 1 FROM proactive_sends WHERE user_id = \$1 AND target_key = \$2/.test(sql)) return { rows: db.sends.filter((s) => s.user_id === a[0] && s.target_key === a[1]) };
   if (/^INSERT INTO proactive_candidates/.test(sql)) {
@@ -75,7 +84,7 @@ const run = async (raw: string, a: any[] = []) => {
   db.outbox.push({ to: b.number, content: b.content });
   return { message_handle: `fake-${db.outbox.length}` };
 };
-const reset = () => { db.sends = []; db.candidates = []; db.decisions = []; db.outbox = []; db.inbound.clear(); db.calls = []; };
+const reset = () => { db.sends = []; db.candidates = []; db.decisions = []; db.outbox = []; db.inbound.clear(); db.calls = []; db.tasks = []; db.sql = []; db.paused = false; db.dispatched = []; };
 
 const ZONE = "America/Los_Angeles";
 // 2026-11-02 is a Monday, the day after daylight time ended: Pacific is UTC-8.
@@ -104,7 +113,8 @@ type Sim = { sends: { at: Date; lead: Candidate; riding: Candidate[] }[]; expire
 function simulate(o: { candidates: (Candidate & { arrives: Date })[]; from: Date; to: Date; inbound?: Date[]; lastInboundAt?: Date | null; joinedAt?: Date | null; prefs?: (now: Date) => Preference[]; tickMinutes?: number[] }): Sim {
   const sim: Sim = { sends: [], expired: [], gathered: [], ledger: [] };
   const pending = new Map<string, Candidate & { arrives: Date }>();
-  const minutes = o.tickMinutes ?? [5, 20, 35, 50];
+  // The dispatch cron's minutes (jobs/index.ts).
+  const minutes = o.tickMinutes ?? [10, 25, 40, 55];
   for (let t = o.from.getTime(); t <= o.to.getTime(); t += MIN) {
     const now = new Date(t);
     if (!minutes.includes(now.getUTCMinutes())) continue;
@@ -154,9 +164,9 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   const withRule = simulate({ candidates: eliSet(), ...eliDay, prefs: ONCE_A_DAY });
   const morning = withRule.sends.filter((s) => s.at.getTime() < pt("2026-11-02T12:00:00").getTime());
   console.log(`  Eli 11-02, his once-a-day rule from 9:11: ${describe(withRule)}`);
-  check("Eli: one composed send in the morning window", morning.length === 1 && morning[0].at.getTime() > pt("2026-11-02T08:15:00").getTime() && morning[0].at.getTime() <= pt("2026-11-02T08:35:00").getTime());
+  check("Eli: one composed send in the morning window", morning.length === 1 && morning[0].at.getTime() > pt("2026-11-02T08:15:00").getTime() && morning[0].at.getTime() <= pt("2026-11-02T08:40:00").getTime());
   check("Eli: nothing at 8:15 (the task's results wait at the door) and nothing at 9:10 (the morning picks wait their turn)", !withRule.sends.some((s) => ["8:15", "9:10", "08:15", "09:10"].includes(hhmm(s.at))));
-  check("Eli: the morning send gathered first (8:05 waited for what else was coming)", withRule.gathered.some((g) => hhmm(g) === "08:05"));
+  check("Eli: the morning send gathered first (8:10 waited for what else was coming)", withRule.gathered.some((g) => hhmm(g) === "08:10"));
   check("Eli: with his rule in force, that one send is the whole day", withRule.sends.length === 1);
   check("Eli: the morning send leads with what he asked for (requested results), not a find", G.candidateClass(morning[0].lead.type, PR.isAnswering(morning[0].lead), morning[0].lead.payload) === "requested");
   const noRule = simulate({ candidates: eliSet(), ...eliDay });
@@ -177,10 +187,10 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   const s = simulate({ candidates: burst, from: pt("2026-11-03T09:50:00"), to: pt("2026-11-03T12:00:00"), lastInboundAt: pt("2026-11-03T07:00:00"), joinedAt: pt("2026-10-01T10:00:00") });
   console.log(`  burst of three (10:00, 10:04, 10:09): ${describe(s)}`);
   check("burst: one send for three sources inside the gathering window", s.sends.length === 1);
-  check("burst: it waited the window (gathered at 10:05, sent at 10:20)", s.gathered.some((g) => hhmm(g) === "10:05") && hhmm(s.sends[0].at) === "10:20");
+  check("burst: it waited the window (gathered at 10:10, sent at 10:25)", s.gathered.some((g) => hhmm(g) === "10:10") && hhmm(s.sends[0].at) === "10:25");
   check("burst: the delivery they asked for leads (requested results over a find over a check-in)", s.sends[0].lead.id === "b-task");
   check("gather: the window is a constant of about 20-30 minutes, not an env switch", DR.GATHER_MINUTES >= 20 && DR.GATHER_MINUTES <= 30 && !/process\.env/.test(src("harness/door.ts")));
-  check("gather: the dispatch runs every 15 minutes, so a ready item goes 20-35 minutes after it arrived", /cron\.schedule\("5,20,35,50 \* \* \* \*", runDispatch\)/.test(src("jobs/index.ts")));
+  check("gather: the dispatch runs every 15 minutes, so a ready item goes 20-35 minutes after it arrived", /cron\.schedule\("10,25,40,55 \* \* \* \*", runDispatch\)/.test(src("jobs/index.ts")));
   check("gather: something already waiting past the window goes at once", DR.gatherUntil([{ id: "x", createdAt: pt("2026-11-03T08:00:00"), dueAt: pt("2026-11-03T08:00:00"), expiresAt: null, payload: {} }], pt("2026-11-03T11:00:00")) === null);
   check("gather: a safety follow-up never waits", DR.gatherUntil([{ id: "x", createdAt: at, dueAt: at, expiresAt: null, payload: { safetyFollowUp: true } }], at) === null);
   check("gather: something that would expire inside the window never waits", DR.gatherUntil([{ id: "x", createdAt: at, dueAt: at, expiresAt: new Date(at.getTime() + 25 * MIN), payload: {} }], at) === null);
@@ -227,10 +237,22 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   check("expiry: the log carries ids, type and target only (never the text)", logged.every((d) => !JSON.stringify(d).includes('"messages"')));
   check("expiry: each one's drop step runs (a task hears its text never went)", dropped.includes("41:expired") && dropped.includes("42:expired"));
   check("expiry: nothing went out for them", db.outbox.length === 0);
+  check("expiry, the real entry point (runProactiveDispatch, the cron's): the rows are expired before any member is dispatched, so the dispatch is never handed them", db.candidates.filter((c) => [41, 42].includes(c.id)).every((c) => c.status === "expired") && !db.dispatched.includes(ELI));
   check("expiry: a door text's drop is noted on its task, never silent", /The text queued for them never went/.test(src("harness/proactiveRegistry.ts")));
-  check("valid-until: a find is good to the end of its day, requested results through tomorrow, a check-in two days", DR.doorValidUntil("unsolicited", at, ZONE).getTime() === pt("2026-11-03T23:59:59.999").getTime() && DR.doorValidUntil("requested", at, ZONE).getTime() === pt("2026-11-04T23:59:59.999").getTime() && DR.doorValidUntil("checkin", at, ZONE).getTime() === at.getTime() + 48 * HOUR);
-  check("valid-until: an event's own start caps it", DR.doorValidUntil("requested", at, ZONE, pt("2026-11-03T18:00:00")).getTime() === pt("2026-11-03T18:00:00").getTime());
-  check("held work: a door text that waited past the night is read again before it goes", PR.needsRelevanceCheck({ ...doorText("requested", { arrives: pt("2026-11-02T15:00:00") }), createdAt: pt("2026-11-02T15:00:00") }, pt("2026-11-03T09:00:00")) && !PR.needsRelevanceCheck({ ...doorText("requested", { arrives: pt("2026-11-03T08:00:00") }), createdAt: pt("2026-11-03T08:00:00") }, pt("2026-11-03T09:00:00")));
+  check("valid-until: requested results have no clock (only moot ends them); an intro ask through tomorrow; a find to the end of its day; a check-in two days", DR.doorValidUntil("requested", at, ZONE) === null && DR.doorValidUntil("intro", at, ZONE)!.getTime() === pt("2026-11-04T23:59:59.999").getTime() && DR.doorValidUntil("unsolicited", at, ZONE)!.getTime() === pt("2026-11-03T23:59:59.999").getTime() && DR.doorValidUntil("checkin", at, ZONE)!.getTime() === at.getTime() + 48 * HOUR);
+  check("valid-until: requested work ends when the thing is moot (an event's own start)", DR.doorValidUntil("requested", at, ZONE, pt("2026-11-03T18:00:00"))!.getTime() === pt("2026-11-03T18:00:00").getTime());
+  const unsol = (written: Date) => ({ ...doorText("unsolicited", { arrives: written }, { writtenAt: written.toISOString() }), createdAt: written });
+  const req = (written: Date) => ({ ...doorText("requested", { arrives: written }, { writtenAt: written.toISOString() }), createdAt: written });
+  check("re-read: a door text Cue started is read again a day after it was written (24h from writtenAt, not a zone's midnight)", PR.needsRelevanceCheck(unsol(pt("2026-11-02T08:00:00")), pt("2026-11-03T09:00:00")) && !PR.needsRelevanceCheck(unsol(pt("2026-11-02T23:00:00")), pt("2026-11-03T09:00:00")));
+  check("re-read: requested work is never re-read (a re-read could drop it), however long it waited", !PR.needsRelevanceCheck(req(pt("2026-11-01T08:00:00")), pt("2026-11-04T09:00:00")));
+  // Requested work held by a "none this week" rule: still there days later, and it goes the morning the rule allows.
+  {
+    const noneUntil = pt("2026-11-05T00:00:00");
+    const weekRule = (now: Date): Preference[] => [{ id: "w", area: "contact", channel: "all", covers: "all", rule: { none: true }, basis: "explicit", type: "standing", words: ["nothing this week"], source: { via: "text", ref: null }, startsAt: null, expiresAt: noneUntil.toISOString(), zone: ZONE, state: "active", setAt: pt("2026-11-01T08:00:00").toISOString() } as any].filter((p) => now.getTime() < Date.parse(p.expiresAt));
+    const t0 = pt("2026-11-02T10:00:00");
+    const s3 = simulate({ candidates: [doorText("requested", { id: "r-1", arrives: t0, expiresAt: DR.doorValidUntil("requested", t0, ZONE) })], from: pt("2026-11-02T09:55:00"), to: pt("2026-11-05T12:00:00"), lastInboundAt: pt("2026-11-02T07:00:00"), joinedAt: pt("2026-10-01T10:00:00"), prefs: weekRule });
+    check("requested held by their rule for days: never expires, arrives the morning the rule lifts", s3.expired.length === 0 && s3.sends.length === 1 && s3.sends[0].lead.id === "r-1" && s3.sends[0].at.getTime() >= noneUntil.getTime() && s3.sends[0].at.getTime() < pt("2026-11-05T09:00:00").getTime());
+  }
   // Held by the member's rule: it stays a candidate and comes back through the pick (never a burst): the next day, one send.
   const held = [doorText("requested", { id: "h-1", arrives: pt("2026-11-02T10:00:00"), expiresAt: DR.doorValidUntil("requested", pt("2026-11-02T10:00:00"), ZONE) }), cand("event_offer", { id: "h-2", arrives: pt("2026-11-02T10:00:00"), expiresAt: pt("2026-11-09T10:00:00"), payload: { askId: "profile", fromProfile: true, picked: true, match: { tier: 2 } } }), cand("companion", { id: "h-3", arrives: pt("2026-11-02T10:00:00"), expiresAt: pt("2026-11-06T10:00:00") })];
   const already = pt("2026-11-02T08:30:00");
@@ -254,8 +276,9 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   const row = db.candidates.find((c) => c.target_key === "research_brief:77");
   check("brief: a requested brief waits at the door (queued, not sent this minute)", r.sent === false && r.door === true && r.queued === true && db.outbox.length === 0);
   check("brief: as a candidate under its own type and key, requested, with its words as written", !!row && row.type === "task_update" && row.payload.door === true && row.payload.cls === "requested" && row.payload.messages[0].startsWith("The venue brief"));
-  check("brief: the research brief counts a queued line as told (the pick delivers it)", RB.briefLineOutcome({ sent: false, door: true, queued: true }, 0) === "told");
-  const asCand: Candidate = { id: "b", userId: ELI, type: "task_update", targetKey: row.target_key, topicKey: row.target_key, summary: row.summary, priority: row.priority, dueAt: new Date(row.due_at), expiresAt: new Date(row.expires_at), payload: row.payload, attempts: 0, createdAt: new Date(row.due_at) };
+  check("brief: a queued line is not told: the task stays open until the pick sends it", RB.briefLineOutcome({ sent: false, door: true, queued: true }, 0) === "queued" && /if \(next === "queued"\) \{[\s\S]{0,400}holdBriefLine\([\s\S]{0,200}return;/.test(src("services/researchBrief.ts")));
+  check("brief: the line carries its task and how to close it when it goes", /taskId: task\.id, close: \{ status, outcome \}/.test(src("services/researchBrief.ts")));
+  const asCand: Candidate = { id: "b", userId: ELI, type: "task_update", targetKey: row.target_key, topicKey: row.target_key, summary: row.summary, priority: row.priority, dueAt: new Date(row.due_at), expiresAt: row.expires_at ? new Date(row.expires_at) : null, payload: row.payload, attempts: 0, createdAt: new Date(row.due_at) };
   const draft = await proactiveRegistry.task_update.draft(asCand, { userId: ELI, firstName: "Eli", phoneNumber: PHONE, city: "San Francisco", timezone: ZONE });
   check("brief: the pick sends it exactly as written (no second draft, no model)", "messages" in draft && draft.messages.join("|") === row.payload.messages.join("|"));
   // It arrives: in a day with a find and a check-in also waiting, the brief is what goes, and it's requested, uncapped by the lanes.
@@ -305,9 +328,10 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   check("calls: past the spacing, the call goes", CG.decideCall(callState(PR.callBudgetCheck({ now: new Date(textAt.getTime() + 3 * HOUR + MIN), sends: [{ type: "event_offer", targetKey: "event_offer:1", topicKey: null, sentAt: textAt, exempt: false }] })), { kind: "checkin_cadence" }, now).allowed);
   check("calls: the gate reads the pick's own ledger for it (one budget)", /pickerBudget: kind && CUE_STARTED_CALLS\.has\(kind\) \? await import\("\.\/proactive\.js"\)\.then\(async \(P\) => P\.callBudgetCheck\(\{ now, sends: await P\.pickerSends\(userId\) \}\)\)/.test(src("harness/callGate.ts")));
   // The other way: a call Cue placed is in the ledger the pick reads, and a text Cue starts waits after it.
-  db.calls.push({ id: 5, user_id: ELI, reason: "checkin_cadence", created_at: pt("2026-11-03T14:00:00") }, { id: 6, user_id: ELI, reason: "user_initiated", created_at: pt("2026-11-03T14:30:00") });
+  db.calls.push({ id: 5, user_id: ELI, reason: "checkin_cadence", created_at: pt("2026-11-03T14:00:00") }, { id: 6, user_id: ELI, reason: "user_initiated", created_at: pt("2026-11-03T14:30:00") }, { id: 7, user_id: ELI, reason: "auto_intake", created_at: pt("2026-11-03T14:10:00"), dialed: false });
   const calls = await PR.cueCallsForTests(pool as any, ELI);
-  check("calls: a call Cue started is read into the ledger (one they asked for isn't)", calls.length === 1 && calls[0].type === PR.CUE_CALL_TYPE && calls[0].exempt === true);
+  check("calls: a call Cue started and dialed is read into the ledger (one they asked for isn't, a refused dial isn't)", calls.length === 1 && calls[0].type === PR.CUE_CALL_TYPE && calls[0].exempt === true && calls[0].targetKey === "call:5");
+  check("calls: only dials that went count (the gate's place_call joined to the dial's own record)", /AND EXISTS \(SELECT 1 FROM co_memories m WHERE m\.user_id = d\.user_id AND m\.memory_type = 'call_transcript' AND m\.content LIKE 'Co initiated call%'/.test(src("harness/proactive.ts")) && /INSERT INTO co_memories \(user_id, memory_type, content\) VALUES \(\$1, 'call_transcript', \$2\)/.test(src("services/callTrigger.ts")));
   const ev = PR.evaluateCandidates({ now, timezone: ZONE, optedOut: false, candidates: [cand("companion", { id: "c" }), cand("event_offer", { id: "f", payload: { askId: "profile", fromProfile: true } }), cand("post_call", { id: "p" })], sends: calls, lastInboundAt: pt("2026-11-03T14:40:00"), joinedAt: pt("2026-10-01T10:00:00") } as any);
   const held = (id: string) => ev.perCandidate.find((p) => p.candidate.id === id)!.checks.some((c) => c.name === "call_spacing" && !c.pass);
   check("calls: a check-in or a find Cue starts waits the spacing after a call Cue placed", held("c") && held("f"));
@@ -330,6 +354,58 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   check("gates: a door text goes as written (no tidying, no second check, no hand-off to a task)", /const asWritten = isDoorType\(c\.type\);/.test(src("harness/proactive.ts")) && DR.DOOR_TYPES.every((t) => (PF.PAYLOAD_FIRST_EXEMPT as Set<string>).has(t)));
   check("gates: a door text's class rides with it (a goal check-in is a check-in for 'no check-ins')", G.candidateClass("task_update", false, { door: true, cls: "checkin" }) === "checkin" && G.candidateClass("task_update", false, {}) === "requested");
   check("gates: a task's waiting text counts as its own (never written a second time)", /status = 'pending' AND starts_with\(target_key, \$2\)/.test(src("services/followThrough.ts")));
+}
+
+// ================================================================ 9. review of #361: never silent, texted only when sent, pauses wait
+{
+  reset();
+  const person = { userId: ELI, firstName: "Eli", phoneNumber: PHONE, city: "San Francisco", timezone: ZONE };
+  const taskRow = (status: string) => ({ id: 9, user_id: ELI, goal: "venue brief", their_words: "find me a room", steps: [], plan_next: null, next_check_at: null, status, wakes: 1, notes: [], texts_sent: 0, last_texted_at: null, created_at: new Date(), kind: "research_brief", followup: {}, source: "ask" });
+  const doorCand = (payload: any): Candidate => ({ id: "d", userId: ELI, type: "task_update", targetKey: "research_brief:9", topicKey: "research_brief:9", summary: "s", priority: 50, dueAt: new Date(), expiresAt: null, payload: { door: true, messages: ["The brief came to three rooms."], cls: "requested", writtenAt: new Date().toISOString(), ...payload }, attempts: 0, createdAt: new Date() });
+  // A dropped door text on a task that is already closed (a goal check-in closes its task when it hands the text over).
+  db.tasks.push(taskRow("done"));
+  await proactiveRegistry.task_update.onDropped!(doorCand({ taskId: 9 }), "expired", "its event passed");
+  const noted = db.sql.find((q) => /^UPDATE co_tasks SET steps = \$3::jsonb, notes = \$4::jsonb/.test(q.sql));
+  check("dropped: the note lands on the task even after it closed, so nothing later says it went", !!noted && JSON.parse(noted.a[3]).some((n: any) => /The text queued for them never went \(expired: its event passed\)/.test(n.text)));
+  check("dropped: nothing was marked texted", !db.sql.some((q) => /texts_sent = texts_sent \+ 1/.test(q.sql)));
+  // A brief's line kept its task open: dropped, the task closes as not told; sent, it closes with its own outcome and is marked texted.
+  reset();
+  db.tasks.push(taskRow("open"));
+  await proactiveRegistry.task_update.onDropped!(doorCand({ taskId: 9, close: { status: "done", outcome: "no brief: nothing fit" } }), "expired");
+  const closedAs = db.sql.find((q) => /^UPDATE co_tasks SET status = \$3, outcome = \$4/.test(q.sql));
+  check("dropped: a brief kept open for its line closes as dropped, saying it never told them", !!closedAs && closedAs.a[2] === "dropped" && /never told them/.test(closedAs.a[3]));
+  reset();
+  db.tasks.push(taskRow("open"));
+  await proactiveRegistry.task_update.onSent!(doorCand({ taskId: 9, close: { status: "done", outcome: "no brief: nothing fit" }, awaitingReply: false }), person, ["The brief came to three rooms."]);
+  const marked = db.sql.find((q) => /^UPDATE co_tasks SET texts_sent = texts_sent \+ 1, last_texted_at = NOW\(\), awaiting_reply = \$3/.test(q.sql));
+  const closedDone = db.sql.find((q) => /^UPDATE co_tasks SET status = \$3, outcome = \$4/.test(q.sql));
+  check("sent: the task is marked texted only now (when the pick sent it), with whether it asked them something", !!marked && marked.a[2] === false);
+  check("sent: the brief's task closes with its own outcome once its line went", !!closedDone && closedDone.a[2] === "done" && closedDone.a[3] === "no brief: nothing fit");
+  check("queue time never marks texted (task results and goal check-ins)", /if \(sent\.sent\) await deps\.markTexted\(\);/.test(src("services/taskTurn.ts")) && !/\n\s+await deps\.markTexted\(\);/.test(src("services/taskTurn.ts")) && /if \(!queued\) await pool\.query\(`UPDATE co_tasks SET texts_sent = texts_sent \+ 1/.test(src("services/goalOwnership.ts")));
+  // The matching pause holds an intro ask at the door (moved out, never dropped): the asker is never told it failed.
+  reset();
+  db.paused = true;
+  const ask: Candidate = { id: "i", userId: ELI, type: "direct_ask", targetKey: "network_direct_ask:a:b", topicKey: "network_direct_ask:a:b", summary: "s", priority: 50, dueAt: new Date(), expiresAt: DR.doorValidUntil("intro", new Date(), ZONE), payload: { door: true, intro: true, messages: ["Someone I know would like to meet you."], cls: "unsolicited", after: { kind: "network_intro_ask", payload: { candidateId: "a", askerId: "b" } }, writtenAt: new Date().toISOString() }, attempts: 0, createdAt: new Date() };
+  const paused = await proactiveRegistry.direct_ask.draft(ask, person);
+  check("pause: an intro ask while matching is paused waits (a defer, never a skip)", "defer" in paused && paused.defer.getTime() > Date.now());
+  check("pause: the deferral keeps the door text's own valid-until", /WHEN type IN \('task_update', 'co_event', 'event_change', 'direct_ask'\) THEN expires_at/.test(src("harness/proactive.ts")));
+  // The safety and soon bypasses fire.
+  reset();
+  const safe = await PR.sendExempt({ userId: ELI, phoneNumber: PHONE, type: "task_update", targetKey: "task:safe:1", messages: ["Checking you're okay."], timezone: ZONE, door: { summary: "s", validUntil: null, safety: true } });
+  check("bypass: a safety message never waits at the door", safe.sent === true && !safe.door && !db.candidates.length);
+  const SW = await import("../../src/services/staleWatch.js");
+  const row = { user_id: ELI, item_key: "luma:x", item_name: "Personal AI Agents Meetup", url: "https://lu.ma/x", phone_number: PHONE, first_name: "Eli", city: null };
+  reset();
+  await SW.tell(row, { kind: "moved", detail: "it now starts at 7pm", startAt: new Date(Date.now() + 2 * HOUR).toISOString() });
+  check("bypass: a heads-up about something within hours (tonight) goes now, never at the door", !db.candidates.length && (db.outbox.length === 1 || db.sql.some((q) => /^INSERT INTO deferred_sends/.test(q.sql))));
+  reset();
+  const later = new Date(Date.now() + 3 * 86_400_000);
+  await SW.tell(row, { kind: "sold_out", detail: "it's sold out now", startAt: later.toISOString() });
+  const hc = db.candidates.find((c) => c.target_key === "stale:luma:x:sold_out");
+  check("door: a heads-up about something days out waits at the door, good until it starts (moot after)", !!hc && new Date(hc.expires_at).getTime() === later.getTime() && db.outbox.length === 0);
+  check("staleWatch reads the thing's start from its page (verified only)", SW.staleChange({ status: "ok", fields: { start: { value: "2026-11-04T16:00:00-08:00", verified: true } } } as any, { status: "ok", fields: { start: { value: "2026-11-04T19:00:00-08:00", verified: true } } } as any)?.startAt === "2026-11-04T19:00:00-08:00");
+  // An announcement the door already decided is given up, never redrafted.
+  check("announcement: one the door didn't take is given up cleanly, and any door row for it keeps it from being drafted again", /if \(!\(result as \{ queued\?: boolean \}\)\.queued\) await pool\.query\(`UPDATE co_event_announcements SET gave_up_at = NOW\(\)/.test(src("services/coEventAnnouncement.ts")) && /AND NOT EXISTS \(SELECT 1 FROM proactive_candidates pc WHERE pc\.user_id = a\.user_id AND pc\.target_key = 'co_event:' \|\| a\.event_api_id\)\)?/.test(src("services/coEventAnnouncement.ts")));
 }
 
 console.log(`\none door: ${total - failed}/${total} passed`);

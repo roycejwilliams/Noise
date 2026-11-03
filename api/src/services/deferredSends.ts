@@ -272,7 +272,7 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
       const enter = deps.door ?? (await import("../harness/door.js")).enterDoor;
       const H = await import("../harness/door.js");
       const cls = row.type === "co_event" || row.after_kind === "network_intro_ask" ? ("unsolicited" as const) : ("requested" as const);
-      const q = await enter({ userId: row.user_id, type: row.type as import("../harness/door.js").DoorType, targetKey: row.target_key, messages, cls, summary: row.after_kind === "network_intro_ask" ? "An intro ask: someone Cue knows would like to meet them" : `A held ${row.type === "co_event" ? "event announcement" : "task result"}`, validUntil: H.doorValidUntil("requested", now, row.timezone), now, intro: row.after_kind === "network_intro_ask", after }).catch((err: any) => ({ queued: false, error: String(err?.message ?? err) }));
+      const q = await enter({ userId: row.user_id, type: row.type as import("../harness/door.js").DoorType, targetKey: row.target_key, messages, cls, summary: row.after_kind === "network_intro_ask" ? "An intro ask: someone Cue knows would like to meet them" : `A held ${row.type === "co_event" ? "event announcement" : "task result"}`, validUntil: H.doorValidUntil(row.after_kind === "network_intro_ask" ? "intro" : cls, now, row.timezone), now, intro: row.after_kind === "network_intro_ask", after }).catch((err: any) => ({ queued: false, error: String(err?.message ?? err) }));
       if (q.queued) {
         await finish("skipped", "handed to the door: the pick sends it with Cue's next message", null);
         out.skipped++;

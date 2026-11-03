@@ -59,7 +59,7 @@ export type TaskTurnDeps = {
   // owed: a text the member is owed (owedText) goes out exempt; any other waits on the pacing every Co-started text does, and a
   // held one says when it's worth another look (retryAt).
   // key: a fixed send key (a slip text's, so it can only go once); otherwise each send gets its own.
-  // queued: it waits at the door for Cue's next message (harness/door.ts), counted as texted here; the pick sends it.
+  // queued: it waits at the door for Cue's next message (harness/door.ts); the task's text count moves when the pick sends it.
   send: (messages: string[], o?: { owed: boolean; key?: string }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date; queued?: boolean }>;
   // The slip exception's one read (goalOwnership.ts pieceNeededFor); a test stands in for it.
   pieceNeeded?: (piece: string, goalTitle: string, m: { date: string; words: string }) => Promise<{ needed: boolean; read: boolean }>;
@@ -466,7 +466,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           const sent = await deps.send(messages, { owed: owed || task.source !== "lookout" });
           if (sent.reason === "opted out") optedOut = true;
           if (!sent.sent && !sent.queued) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
-          await deps.markTexted();
+          // Queued at the door: texted only once the pick sends it (the door's onSent marks it), never at queue time.
+          if (sent.sent) await deps.markTexted();
           await deps.note(`${sent.queued ? QUEUED_NOTE : "Texted them"} ${good.length} thing(s): ${good.map((g) => items.find((i) => i.url === g.url)?.name).join(", ")}${closing ? `, then: ${closing.slice(0, 120)}` : ""}${droppedCaptions.length ? ` (left out: ${droppedCaptions.join("; ")})` : ""}`, null);
           texts.push(...messages);
           did.push(`texted them ${good.length} link(s), each with its caption`);
@@ -514,7 +515,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         const sent = await deps.send([text], { owed });
         if (sent.reason === "opted out") optedOut = true;
         if (!sent.sent && !sent.queued) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
-        await deps.markTexted();
+        if (sent.sent) await deps.markTexted();
         await deps.note(`${sent.queued ? `${QUEUED_NOTE}:` : "Texted them:"} ${text.slice(0, 200)}`, null);
         texts.push(text);
         did.push("texted them");
@@ -1108,7 +1109,7 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
       // A slip text (slipException) has its own fixed key, so the same slip can only ever go once.
       // One door (harness/door.ts): a result waits for Cue's next message, ranked and gathered with whatever else is ready, unless it
       // answers their latest message. A slip text (its own key) says a time will be missed: it can't wait, it goes now.
-      const door = o?.key ? undefined : { summary: `${coInitiated ? "A find Cue's own look-out turned up" : "Results of work they asked for"}: ${task.goal.slice(0, 120)}`, validUntil: doorValidUntil(coInitiated ? "unsolicited" : "requested", clock(), zone), taskId: task.id };
+      const door = o?.key ? undefined : { summary: `${coInitiated ? "A find Cue's own look-out turned up" : "Results of work they asked for"}: ${task.goal.slice(0, 120)}`, validUntil: doorValidUntil(coInitiated ? "unsolicited" : "requested", clock(), zone), taskId: task.id, awaitingReply: true };
       const r = o?.key
         ? await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: o.key, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers })
         : await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated, answers, door });

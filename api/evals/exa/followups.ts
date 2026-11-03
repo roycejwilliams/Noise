@@ -68,6 +68,8 @@ let budget: number[] = [];
     if (/COUNT\(\*\)::int AS today/.test(sql)) return { rows: [{ today: budget.length ? budget.shift()! : 0 }] };
     // A text's ledger row (harness/proactive.ts sendExempt): claimed, so the stood-in send runs.
     if (/INSERT INTO proactive_sends/.test(sql)) return { rows: [{ id: 1 }] };
+    // A line queued at the door (harness/door.ts): the candidate's row is written.
+    if (/INSERT INTO proactive_candidates/.test(sql)) return { rows: [{ id: 1 }] };
     return { rows: rowsFor(sql) };
   },
   release: () => {},
@@ -231,26 +233,29 @@ try {
     const holds = sqlLog.filter((l) => /UPDATE co_tasks SET followup = jsonb_set/.test(l.sql));
     const exaCalls = sqlLog.filter((l) => /INSERT INTO web_search_log/.test(l.sql)).length;
     // A line that doesn't answer their latest message waits at the door for Cue's next message (harness/door.ts): its words, as queued.
-    // One per target key (the stand-in database never returns the inserted row, so the enqueue tries its insert twice).
+    // One per target key.
     const doorRows = new Map(sqlLog.filter((l) => /INSERT INTO proactive_candidates/.test(l.sql)).map((l) => [String(l.p[2]), l]));
-    const atDoor = [...doorRows.values()].flatMap((l) => (JSON.parse(String(l.p[5] ?? "{}")).messages ?? []) as string[]);
-    return { texts: [...texts, ...atDoor], closes: closes.map((c) => ({ status: c.p[2], outcome: c.p[3] })), holds: holds.length, exaCalls };
+    const queued = [...doorRows.values()].map((l) => JSON.parse(String(l.p[5] ?? "{}")) as { messages?: string[]; close?: { status: string; outcome: string }; taskId?: number });
+    // Sent (texts) and queued at the door (queued) are kept apart: a queued line hasn't reached them yet, and its task stays open.
+    return { texts: [...texts], queued: queued.flatMap((q) => q.messages ?? []), queuedClose: queued.map((q) => q.close ?? null), queuedTask: queued.map((q) => q.taskId ?? null), closes: closes.map((c) => ({ status: c.p[2], outcome: c.p[3] })), holds: holds.length, exaCalls };
   };
   rowsFor = (sql) => (/SELECT u\.first_name, u\.phone_number, cp\.city/.test(sql) ? [{ first_name: "Jordan", phone_number: "+15550100001", city: "San Francisco" }] : []);
   exa = DOWN;
   const w1 = await runBrief(1);
-  check("the brief, search down, wake 1: the find ran, then nothing sent, nothing closed, nothing held (left for the next wake)", w1.exaCalls > 0 && w1.texts.length === 0 && w1.closes.length === 0 && w1.holds === 0, w1);
+  check("the brief, search down, wake 1: the find ran, then nothing sent, nothing closed, nothing held (left for the next wake)", w1.exaCalls > 0 && w1.texts.length === 0 && w1.queued.length === 0 && w1.closes.length === 0 && w1.holds === 0, w1);
   const w2 = await runBrief(2);
-  check("... wake 2 (its second try): still nothing sent and nothing closed", w2.exaCalls > 0 && w2.texts.length === 0 && w2.closes.length === 0 && w2.holds === 0, w2);
+  check("... wake 2 (its second try): still nothing sent and nothing closed", w2.exaCalls > 0 && w2.texts.length === 0 && w2.queued.length === 0 && w2.closes.length === 0 && w2.holds === 0, w2);
   const w3 = await runBrief(3);
-  check("... wake 3: exactly one text, the approved line, and the task closed once as dropped saying the search didn't run", w3.texts.length === 1 && w3.texts[0] === RB.SEARCH_FAILED_LINE && w3.closes.length === 1 && w3.closes[0].status === "dropped" && /search didn't run/.test(w3.closes[0].outcome ?? ""), w3);
+  // The line doesn't answer a fresh message of theirs, so it waits at the door for Cue's next message (harness/door.ts): nothing is sent
+  // this minute, the task stays open (held to look again), and the door closes it as dropped, saying the search didn't run, once it went.
+  check("... wake 3: exactly one line, the approved one, queued at the door (not sent yet); the task stays open and closes as dropped once it goes", w3.texts.length === 0 && w3.queued.length === 1 && w3.queued[0] === RB.SEARCH_FAILED_LINE && w3.closes.length === 0 && w3.holds === 1 && w3.queuedTask[0] === 42 && w3.queuedClose[0]?.status === "dropped" && /search didn't run/.test(w3.queuedClose[0]?.outcome ?? ""), w3);
   budget = [FULL, FULL, FULL];
   exa = () => ({ status: 200, body: { results: [] } });
   const b1 = await runBrief(1);
-  check("the brief, every search blocked by the budget, wake 1: nothing sent, nothing closed (a retry, the same as a failure)", b1.texts.length === 0 && b1.closes.length === 0, b1);
+  check("the brief, every search blocked by the budget, wake 1: nothing sent, nothing closed (a retry, the same as a failure)", b1.texts.length === 0 && b1.queued.length === 0 && b1.closes.length === 0, b1);
   budget = [];
   const ok2 = await runBrief(2);
-  check("a retry where the search works: the normal path (the find runs; with nothing found it's the brief's own 'no venues' line, never the failure line)", ok2.exaCalls > 0 && ok2.texts.length === 1 && ok2.texts[0] !== RB.SEARCH_FAILED_LINE && /couldn't verify any venues that fit/.test(ok2.texts[0]) && ok2.closes.length === 1, ok2);
+  check("a retry where the search works: the normal path (the find runs; with nothing found it's the brief's own 'no venues' line, never the failure line)", ok2.exaCalls > 0 && ok2.texts.length === 0 && ok2.queued.length === 1 && ok2.queued[0] !== RB.SEARCH_FAILED_LINE && /couldn't verify any venues that fit/.test(ok2.queued[0]) && ok2.closes.length === 0 && ok2.queuedClose[0]?.status === "done", ok2);
   rowsFor = () => [];
 } finally {
   globalThis.fetch = realFetch;
