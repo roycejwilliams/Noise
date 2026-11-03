@@ -40,7 +40,7 @@ import { DateTime } from "luxon";
 import type { PoolClient } from "pg";
 import pool from "../db/db.js";
 import { recordProactiveText } from "../services/coFacts.js";
-import sendblue, { cleanCoMessage } from "../services/sendblue.js";
+import sendblue, { cleanCoMessage, outboundSentSince, refusedBySendLayer } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { hoursZone, isReasonableLocalHour, REASONABLE_HOUR_START, REASONABLE_HOUR_END } from "../services/localHours.js";
 import { localStamp, memberZone } from "../services/memberTime.js";
@@ -1959,9 +1959,21 @@ export function placeholderCandidate(index: number, c: Candidate, messages: stri
 export const BUBBLE_GAP_MS_DEFAULT = 2000;
 let BUBBLE_GAP_MS = BUBBLE_GAP_MS_DEFAULT;
 const BUBBLE_RETRY_MS: number[] = [1000, 3000];
-export function setBubbleTimingForTests(o: { gapMs: number; retryMs: number[] }): void {
+// Whether a bubble whose send threw went anyway, by Sendblue's own record (services/sendblue.ts outboundSentSince): null when unreadable.
+type BubbleWent = (q: { number: string; since: Date; content: string }) => Promise<boolean | null>;
+const BUBBLE_WENT_DEFAULT: BubbleWent = (q) => outboundSentSince(q);
+let bubbleWent: BubbleWent = BUBBLE_WENT_DEFAULT;
+export function setBubbleTimingForTests(o: { gapMs: number; retryMs: number[]; went?: BubbleWent | null }): void {
   BUBBLE_GAP_MS = o.gapMs;
   BUBBLE_RETRY_MS.splice(0, BUBBLE_RETRY_MS.length, ...o.retryMs);
+  bubbleWent = o.went ?? BUBBLE_WENT_DEFAULT;
+}
+// Pure: an HTTP status on a send error (the SDK's status, else a leading "503 ..." in its message), or null.
+export function bubbleErrorStatus(err: unknown): number | null {
+  const e = err as { status?: unknown; message?: unknown } | null;
+  if (typeof e?.status === "number") return e.status;
+  const m = String(e?.message ?? "").trim().match(/^(?:error:\s*)?(?:[A-Za-z]*Error:\s*)?(\d{3})\b/);
+  return m ? Number(m[1]) : null;
 }
 async function sendWithLedger(
   c: Candidate,
@@ -2080,29 +2092,40 @@ async function sendWithLedger(
     client.release();
   }
 
-  // Claim is durable now. Remaining messages are sent outside the transaction, in order. A bubble that fails is retried on its own
-  // (BUBBLE_RETRY_MS: at most 3 tries, short backoff), never one before it: each index goes at most once, so a retry can't repeat a
-  // bubble that already went. One that never goes stops the rest (a later bubble alone reads wrong), and what didn't go is recorded.
+  // Claim is durable now. Remaining messages are sent outside the transaction, in order, each index at most once. A bubble whose send
+  // throws is retried only when Sendblue's own record says it didn't go (the services/relay.ts rule): a timeout or 5xx can come back
+  // after Sendblue took it, and the SDK already retried inside the call. Never retried: a 4xx, or the send layer's own refusal. Can't
+  // tell whether it went: never retried. At most BUBBLE_RETRY_MS.length + 1 calls per bubble. One that doesn't go (or might not have)
+  // stops the rest (a later bubble alone reads wrong), and is recorded (proactive.bubbleMissed).
   for (let i = 1; i < messages.length; i++) {
     await new Promise((r) => setTimeout(r, BUBBLE_GAP_MS));
-    let went = false;
+    let outcome: "sent" | "refused" | "unknown" | "failed" = "failed";
     let lastErr: any = null;
-    for (let attempt = 0; attempt <= BUBBLE_RETRY_MS.length && !went; attempt++) {
+    for (let attempt = 0; attempt <= BUBBLE_RETRY_MS.length; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, BUBBLE_RETRY_MS[attempt - 1]));
+      const since = new Date(Date.now() - 60_000);
       try {
         await sendblue.messages.send({ number: person.phoneNumber, content: messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-        went = true;
+        outcome = "sent";
+        break;
       } catch (err: any) {
         lastErr = err;
+        const status = bubbleErrorStatus(err);
+        if (refusedBySendLayer(err) || (status !== null && status >= 400 && status < 500)) { outcome = "refused"; break; }
+        const went = await bubbleWent({ number: person.phoneNumber, since, content: messages[i] }).catch(() => null);
+        if (went === true) { outcome = "sent"; break; }
+        if (went === null) { outcome = "unknown"; break; }
+        outcome = "failed";
       }
     }
-    if (went) {
+    if (outcome === "sent") {
       delivered.push(messages[i]);
       continue;
     }
     const missed = messages.length - i;
-    console.error(`proactive: sendWithLedger message ${i + 1}/${messages.length} failed for ${person.userId} after ${BUBBLE_RETRY_MS.length + 1} tries (ledger already claimed; ${delivered.length} delivered, ${missed} not sent):`, lastErr?.message ?? lastErr);
-    await recordDecision({ layer: 7, decision: "proactive.bubbleMissed", userId: person.userId, outcome: "skip", action: `send:${c.type}`, proposal: { candidate: c.id, targetKey: c.targetKey, failedBubble: i + 1, of: messages.length, delivered: delivered.length, notSent: missed }, reason: `bubble ${i + 1} of ${messages.length} never went after ${BUBBLE_RETRY_MS.length + 1} tries (${String(lastErr?.message ?? lastErr).slice(0, 80)}); the rest were not sent` }).catch(() => {});
+    const why = outcome === "refused" ? "refused (4xx or the send layer), not retried" : outcome === "unknown" ? "unknown: it can't be told whether it went, not retried" : `didn't go after ${BUBBLE_RETRY_MS.length + 1} tries`;
+    console.error(`proactive: sendWithLedger message ${i + 1}/${messages.length} for ${person.userId}: ${why} (ledger already claimed; ${delivered.length} delivered, ${missed} not sent):`, lastErr?.message ?? lastErr);
+    await recordDecision({ layer: 7, decision: "proactive.bubbleMissed", userId: person.userId, outcome: "skip", action: `send:${c.type}`, proposal: { candidate: c.id, targetKey: c.targetKey, failedBubble: i + 1, of: messages.length, delivered: delivered.length, notSent: missed, state: outcome }, reason: `bubble ${i + 1} of ${messages.length}: ${why} (${String(lastErr?.message ?? lastErr).slice(0, 80)}); the rest were not sent` }).catch(() => {});
     break;
   }
   return { sent: true, delivered };

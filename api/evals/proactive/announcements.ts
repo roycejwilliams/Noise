@@ -433,41 +433,55 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
 }
 
 {
-  // A multi-bubble send whose second bubble fails: retried on its own (at most 3 tries), never repeating the first; given up, the rest
-  // don't go and the miss is recorded.
-  P.setBubbleTimingForTests({ gapMs: 0, retryMs: [0, 0] });
+  // A multi-bubble send whose second bubble fails. Retried only when Sendblue's record says it didn't go; never a 4xx or the send layer's
+  // refusal; never when it can't be told. Sendblue's record here is the fake outbox (what was really accepted).
   const texts = [...AN.UPDATE_1102_TEXTS];
-  const run = async (failTimes: number, name: string) => {
+  type Mode = { failTimes: number; err: () => any; acceptThenThrow?: boolean; unreadable?: boolean };
+  const run = async (m: Mode, name: string, n: number) => {
     const f = installFakeLedger(pool, sendblue);
     const real = sendblue.messages.send;
     let fails = 0, tries2 = 0;
     (sendblue.messages as any).send = async (b: any) => {
       if (b.content === texts[1]) {
         tries2++;
-        if (fails < failTimes) { fails++; throw new Error("sendblue 503"); }
+        if (fails < m.failTimes) {
+          fails++;
+          if (m.acceptThenThrow) await real.call(sendblue.messages, b); // Sendblue took it, then the call timed out
+          throw m.err();
+        }
       }
       return real.call(sendblue.messages, b);
     };
-    const decisions: any[] = [];
+    P.setBubbleTimingForTests({ gapMs: 0, retryMs: [0, 0], went: async (q) => (m.unreadable ? null : f.ledger.outbox.some((o: any) => o.to === q.number && o.content === q.content)) });
     try {
-      const p = person(name, `+1415555${String(500 + failTimes).padStart(4, "0")}`);
-      const c = cand({ id: `b${failTimes}`, userId: p.userId, type: "announcement", targetKey: AN.UPDATE_1102_KEY });
+      const p = person(name, `+1415555${String(600 + n).padStart(4, "0")}`);
+      const c = cand({ id: `b${n}`, userId: p.userId, type: "announcement", targetKey: AN.UPDATE_1102_KEY });
       const r = await P.sendWithLedgerForTests(c, p, texts);
-      return { r, out: f.ledger.outbox.filter((m: any) => m.to === p.phoneNumber).map((m: any) => m.content), tries2, sends: f.ledger.sends.length, decisions };
+      return { r, out: f.ledger.outbox.filter((o: any) => o.to === p.phoneNumber).map((o: any) => o.content), tries2, sends: f.ledger.sends.length };
     } finally {
       (sendblue.messages as any).send = real;
       f.restore();
     }
   };
-  const once = await run(1, "Jordan B");
-  check("bubbles: message 2 fails once, retried, all three go once each, in order", once.r.sent === true && JSON.stringify(once.out) === JSON.stringify(texts) && once.tries2 === 2 && "delivered" in once.r && once.r.delivered.length === 3, once);
-  const twice = await run(2, "Noor B");
-  check("bubbles: fails twice, the third try goes; message 1 never repeated", JSON.stringify(twice.out) === JSON.stringify(texts) && twice.tries2 === 3 && twice.out.filter((m: string) => m === texts[0]).length === 1, twice);
-  const never = await run(5, "Ellis B");
-  check("bubbles: never goes: 3 tries, message 1 once, message 3 not sent alone, one ledger row (told once)", never.tries2 === 3 && JSON.stringify(never.out) === JSON.stringify([texts[0]]) && "delivered" in never.r && never.r.delivered.length === 1 && never.sends === 1, never);
+  const timeout = () => Object.assign(new Error("Request timed out."), { name: "APIConnectionTimeoutError" });
+  const s503 = () => Object.assign(new Error("503 Service Unavailable"), { status: 503 });
+  const delivered = (r: any) => ("delivered" in r ? r.delivered.length : -1);
+  const accepted = await run({ failTimes: 1, err: timeout, acceptThenThrow: true }, "Jordan B", 1);
+  check("bubbles: timeout after Sendblue took message 2: no duplicate, counted delivered, message 3 goes", accepted.tries2 === 1 && JSON.stringify(accepted.out) === JSON.stringify(texts) && delivered(accepted.r) === 3, accepted);
+  const once = await run({ failTimes: 1, err: s503 }, "Noor B", 2);
+  check("bubbles: a 503 that didn't go (by Sendblue's record) is retried: all three once each, in order", once.tries2 === 2 && JSON.stringify(once.out) === JSON.stringify(texts) && delivered(once.r) === 3, once);
+  const never = await run({ failTimes: 9, err: s503 }, "Ellis B", 3);
+  check("bubbles: never goes: 3 calls at most, message 1 once, message 3 not sent alone, one ledger row", never.tries2 === 3 && JSON.stringify(never.out) === JSON.stringify([texts[0]]) && delivered(never.r) === 1 && never.sends === 1, never);
+  const four = await run({ failTimes: 9, err: () => Object.assign(new Error("400 Bad Request"), { status: 400 }) }, "Sarah B", 4);
+  check("bubbles: a 4xx is never retried", four.tries2 === 1 && JSON.stringify(four.out) === JSON.stringify([texts[0]]), four);
+  const refused = await run({ failTimes: 9, err: () => new Error("send breaker open") }, "Hao B", 5);
+  check("bubbles: the send layer's refusal is never retried", refused.tries2 === 1 && JSON.stringify(refused.out) === JSON.stringify([texts[0]]), refused);
+  const unknown = await run({ failTimes: 9, err: timeout, unreadable: true }, "Kai B", 6);
+  check("bubbles: can't tell whether it went: not retried, the rest don't go", unknown.tries2 === 1 && JSON.stringify(unknown.out) === JSON.stringify([texts[0]]) && delivered(unknown.r) === 1, unknown);
   const pr3 = src("harness/proactive.ts");
-  check("bubbles: a bubble that never went is recorded (proactive.bubbleMissed)", /decision: "proactive\.bubbleMissed"[\s\S]{0,200}notSent: missed/.test(pr3));
-  P.setBubbleTimingForTests({ gapMs: P.BUBBLE_GAP_MS_DEFAULT, retryMs: [1000, 3000] });
+  check("bubbles: a miss is recorded with its state (refused, unknown, failed)", /decision: "proactive\.bubbleMissed"[\s\S]{0,260}state: outcome/.test(pr3));
+  check("bubbles: the went check is Sendblue's record (outboundSentSince), as relay.ts does", /const BUBBLE_WENT_DEFAULT: BubbleWent = \(q\) => outboundSentSince\(q\);/.test(pr3));
+  P.setBubbleTimingForTests({ gapMs: P.BUBBLE_GAP_MS_DEFAULT, retryMs: [1000, 3000], went: null });
 }
 
 console.log(`announcements: ${total - failed}/${total} passed`);
