@@ -6,7 +6,8 @@ import { isStated } from "../services/provenance.js";
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
-import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type Person, type ProactiveRegistry } from "./proactive.js";
+import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type Person, type ProactiveRegistry, type TypeSpec } from "./proactive.js";
+import type { DoorPayload } from "./door.js";
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, recentAskCheckins, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
@@ -234,6 +235,51 @@ export async function prepareOffer(c: Candidate, person: Person): Promise<Prepar
   const { revealItem } = await import("../agent/eventDiscoverySurfacing.js");
   return { dots, why, item: revealItem(p.askText, p.fromProfile, p.match, { dots, why }) };
 }
+
+// A text waiting at the door (harness/door.ts): written and checked by the path that made it, sent as written by the pick. What it
+// means for the record runs once it went (its after step, a task's sent links), or, when it never goes, the after step hears so and
+// the task gets a note: never silent.
+async function doorStillStands(c: Candidate): Promise<string | null> {
+  const after = (c.payload as DoorPayload).after;
+  // An intro ask waited: read the pair again (both may have said yes meanwhile, or matching may be paused), as the direct send did.
+  if (after?.kind === "network_intro_ask") {
+    const p = after.payload as { candidateId?: string; askerId?: string };
+    const NI = await import("../services/networkIntroNudge.js");
+    const stale = await NI.networkAskStale(String(p.candidateId ?? ""), String(p.askerId ?? ""));
+    if (stale) return `the intro ask no longer stands: ${stale}`;
+    if (await (await import("../services/roomMatching.js")).matchingPause(null)) return "matching is paused";
+  }
+  return null;
+}
+const doorEntry: TypeSpec = {
+  async draft(c) {
+    const p = (c.payload ?? {}) as DoorPayload;
+    const messages = Array.isArray(p.messages) ? p.messages.filter((m) => typeof m === "string" && m.trim()) : [];
+    if (p.door !== true || !messages.length) return skip("nothing written to send");
+    const stale = await doorStillStands(c);
+    if (stale) return skip(stale);
+    return { messages, text: messages.filter((m) => !/^https?:\/\/\S+$/.test(m.trim())).join("\n"), rules: {} };
+  },
+  async onSent(c, _person, delivered) {
+    const p = (c.payload ?? {}) as DoorPayload;
+    const D = await import("../services/deferredSends.js");
+    if (p.after) await D.runAfter(p.after as import("../services/deferredSends.js").AfterSend, "sent");
+    const urls = delivered.filter((m) => /^https?:\/\/\S+$/.test(m.trim()));
+    if (p.taskId != null && urls.length) {
+      const { recordSentItems } = await import("../services/coFacts.js");
+      await recordSentItems(c.userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
+    }
+  },
+  async onDropped(c, status, reason) {
+    const p = (c.payload ?? {}) as DoorPayload;
+    const D = await import("../services/deferredSends.js");
+    if (p.after) await D.runAfter(p.after as import("../services/deferredSends.js").AfterSend, "skipped", undefined, reason ?? status);
+    if (p.taskId != null) {
+      const { noteOnTask } = await import("../services/coTasks.js");
+      await noteOnTask(c.userId, Number(p.taskId), `The text queued for them never went (${status}${reason ? `: ${reason.slice(0, 120)}` : ""}). If it still matters, tell them again when you next can.`).catch(() => null);
+    }
+  },
+};
 
 export const proactiveRegistry: ProactiveRegistry = {
   event_offer: {
@@ -1068,4 +1114,9 @@ export const proactiveRegistry: ProactiveRegistry = {
       );
     },
   },
+  // At the door (harness/door.ts): texts their own paths wrote, waiting for the pick.
+  task_update: doorEntry,
+  co_event: doorEntry,
+  event_change: doorEntry,
+  direct_ask: doorEntry,
 };

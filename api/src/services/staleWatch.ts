@@ -74,6 +74,9 @@ async function tell(row: Row, change: Change): Promise<boolean> {
     targetKey: `stale:${row.item_key}:${change.kind}`,
     messages: [line.text],
     timezone,
+    // Through the door (harness/door.ts): a heads-up about something they were interested in (not something they're in) goes with
+    // Cue's next message, good through tomorrow.
+    door: { summary: `A heads-up: something they were interested in changed (${row.item_name.slice(0, 80)})`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), timezone) },
   }).catch(() => ({ sent: false, queued: false }));
   return sent.sent || sent.queued;
 }

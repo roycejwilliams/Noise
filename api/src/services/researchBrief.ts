@@ -323,8 +323,10 @@ export async function deliverBrief(
   await (deps.record ?? D.recordDocumentSent)(o.task.userId, doc, via, `task:${o.task.id}`).catch(() => {});
   return { sent: true, via, pdfPending: rd.sentOk.some((r) => r.pdfPending), line: rd.line };
 }
-export function briefLineOutcome(r: { sent: boolean; reason?: string }, wakes: number): "told" | "hold" | "untold" {
+export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boolean; queued?: boolean }, wakes: number): "told" | "hold" | "untold" {
   if (r.sent || r.reason === "already sent") return "told";
+  // Waiting at the door for Cue's next message (harness/door.ts): handed over, the pick delivers it.
+  if (r.door && r.queued) return "told";
   // Held by their own rule or the spacing (harness/notifyGate.ts) waits the same way: it's work they asked for, never dropped for it.
   // Held by their own rule or the spacing (harness/notifyGate.ts): it's work they asked for, it waits however long, never dropped for it
   // (its wake is given back, below).
@@ -358,7 +360,10 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // dropped while the task closed as done, so they never heard (2026-10-07). Now: told, then closed; outside their hours, held
   // to their morning with the task kept open; never told for any other reason, closed as dropped and saying so.
   const tellThenClose = async (text: string, status: "done" | "dropped", outcome: string) => {
-    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null } }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+    // Through the door (harness/door.ts) unless it answers their latest message: it goes with Cue's next message, as a delivery they
+    // asked for. Queued there is told: the pick sends it (or, past its valid-until, drops it and logs why).
+    const door = { summary: `The research brief they asked for: ${String(p.what ?? "").slice(0, 120)}`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone) };
+    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, door }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; door?: boolean; queued?: boolean });
     const next = briefLineOutcome(r, task.wakes);
     if (next === "hold") {
       const { holdBriefLine, unspendWake } = await import("./coTasks.js");

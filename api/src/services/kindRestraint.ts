@@ -58,6 +58,14 @@ export function kindOf(type: string, payload: unknown = null): ProactiveKind | n
       return "member_commitment";
     case "window_followup":
       return p.kind === "commitment" ? "member_commitment" : null;
+    // A text waiting at the door (harness/door.ts) counts as the kind its own path gave it (a look-out Cue started: a find).
+    case "task_update":
+    case "co_event":
+    case "event_change":
+    case "direct_ask": {
+      const k = (payload as { door?: boolean; restraintKind?: string | null } | null)?.restraintKind;
+      return (payload as { door?: boolean } | null)?.door === true && k ? (k as ProactiveKind) : null;
+    }
     default:
       return null;
   }

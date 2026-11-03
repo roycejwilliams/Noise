@@ -20,7 +20,11 @@
 //
 // Transactional texts (event change notices, call reminders, missed-call
 // texts) don't compete for the daily pick; they go through sendExempt, which
-// still enforces the idempotency key and, where asked, local hours. Layer 6
+// still enforces the idempotency key and, where asked, local hours. Since the
+// one door (harness/door.ts, 2026-11-02), what sendExempt carried that isn't
+// tied to a time (a task's results, Cue's own event announcement, a heads-up,
+// an intro ask) enters the pick as a candidate instead, and the pick gathers
+// for a few minutes, ranks matching first and drops what expired. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
@@ -55,6 +59,7 @@ import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js"
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
 import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
+import { BAND_NAME, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
 export const GOAL_SEASON_DAYS = 56;
@@ -154,7 +159,10 @@ export type ProactiveType =
   | "voice_read_ask"
   // The one neutral close for an intro they asked for by name, 7 days on, when no intro email went (services/introRequestClose.ts,
   // 2026-10-28): fixed words, the same whatever happened.
-  | "intro_close";
+  | "intro_close"
+  // Texts another path wrote that wait at the door for the pick instead of sending themselves (harness/door.ts, Royce 2026-11-02): a
+  // task's results or check-in, Cue's own event announcement, a heads-up about something they were interested in, an intro ask.
+  | DoorType;
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -242,6 +250,11 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   commitment_nudge: { priority: 40, typeGapDays: 2 },
   // Shares the seasonal window with goal_checkin (goal_season in candidateChecks): never a drumbeat.
   goal_nudge: { priority: 11, typeGapDays: 21 },
+  // At the door (harness/door.ts): their band ranks them; within it, the default.
+  task_update: { priority: 50 },
+  co_event: { priority: 50 },
+  event_change: { priority: 50 },
+  direct_ask: { priority: 50 },
 };
 
 export const RULES = {
@@ -595,6 +608,7 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
       { name: "weekly_cap", pass: week < effectiveWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days${effectiveWeek < maxWeek ? ` (${tier}: ${effectiveWeek} a week)` : ""}` },
       { name: "engagement_pace", pass: sinceLast >= cadence.minGapHours, reason: `${tier}: at least ${Math.round(cadence.minGapHours / 24)} days between texts; the last was ${Math.round(sinceLast)}h ago` },
       spacing,
+      callSpacingCheck(state),
       {
         name: "unanswered_pause",
         pass: !pauseActive,
@@ -624,8 +638,29 @@ export function answersLastText(askedAt: Date | null, lastInboundAt: Date | null
   if (!askedAt || !lastInboundAt) return false;
   return askedAt.getTime() >= lastInboundAt.getTime() - 2 * 60_000 && now.getTime() - lastInboundAt.getTime() <= ANSWER_WINDOW_MINUTES * 60_000;
 }
+// What now comes through the door (harness/door.ts) spaces like any text the pick sends, by its key: an intro ask to the other side and a
+// heads-up about something they were interested in (Cue's own event announcement is counted, so it spaces already).
+const DOOR_SPACED_KEYS = /^(?:network_direct_ask|stale):/;
 function spaces(s: SendRecord): boolean {
-  return !s.exempt || ANSWERING_TYPES.has(s.type) || s.type === "event_offer" || TASK_TEXT_TYPES.has(s.type);
+  return s.type !== CUE_CALL_TYPE && (!s.exempt || ANSWERING_TYPES.has(s.type) || s.type === "event_offer" || TASK_TEXT_TYPES.has(s.type) || DOOR_SPACED_KEYS.test(s.targetKey ?? ""));
+}
+// Calls Cue starts and texts are one budget (Royce, 2026-11-02, notification grouping): a call Cue placed on its own (a check-in call,
+// an intake call) is read from the call gate's record into the send ledger (loadSends) as this type. A text Cue starts waits the same
+// spacing after it (call_spacing; what answers them, like the text after the call, doesn't), and the call gate waits the spacing after
+// any text (callBudgetCheck).
+export const CUE_CALL_TYPE = "call";
+export function callSpacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck {
+  const last = state.sends.filter((s) => s.type === CUE_CALL_TYPE && s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  return {
+    name: "call_spacing",
+    pass: !last || state.now.getTime() - last.sentAt.getTime() >= RULES.minHoursBetweenTexts * HOUR,
+    reason: last ? `Cue placed a call less than ${RULES.minHoursBetweenTexts}h ago` : undefined,
+  };
+}
+// Pure: the budget a call Cue starts on its own reads (harness/callGate.ts): no call within the spacing of a text Cue sent first.
+export function callBudgetCheck(state: Pick<PickState, "now" | "sends">): GateCheck {
+  const sp = spacingCheck(state);
+  return { name: "picker_spacing", pass: sp.pass, reason: sp.pass ? undefined : `${sp.reason}: a call Cue starts waits like a text` };
 }
 export function spacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck {
   const lastAny = state.sends
@@ -789,7 +824,8 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
       reason: unansweredTopic ? `already asked about ${c.topicKey} and they never replied` : undefined,
     },
   ];
-  if (PROACTIVE_PURPOSE_MAP[c.type] === "companion" && (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp !== true && state.joinedAt) {
+  // A text at the door (a task's results) is never the first-day check-in this guards against.
+  if (PROACTIVE_PURPOSE_MAP[c.type] === "companion" && !isDoorType(c.type) && (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp !== true && state.joinedAt) {
     checks.push({
       name: "new_member_quiet",
       pass: state.now.getTime() - state.joinedAt.getTime() >= NEW_MEMBER_QUIET_HOURS * HOUR,
@@ -870,12 +906,13 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
 }
 
 const PERSON_CHECKS = new Set(["not_opted_out", "local_hours"]);
-// A safety follow-up is never held for a conversation going on (review of the concurrency fix: dispatch runs every 30 minutes, so a
+// A safety follow-up is never held for a conversation going on (review of the concurrency fix: dispatch runs every 15 minutes, so a
 // hold could delay it that long). Every other proactive text waits.
 const isSafetyFollowUp = (c: Pick<Candidate, "payload">) => (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true;
 const safetyPassesHold = (k: GateCheck, c: Pick<Candidate, "payload">) => k.name === "mid_conversation" && isSafetyFollowUp(c);
 // The quota an answer skips. Spacing is not in it: every text keeps it.
-const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "engagement_pace"]);
+// call_spacing too: what answers them (the text after a call above all) never waits on the call.
+const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "engagement_pace", "call_spacing"]);
 // A morning find (Royce, 2026-10-13: after the 9am sweep, "members get their finds" right away, the usual send limits not applying):
 // a find the picker chose right after their 9am sweep, marked by services/dailySweep.ts with that day (payload.morningDay). On that
 // day it skips the pacing (the caps, the unanswered pause, the engagement pace and the spacing) and doesn't count against the caps.
@@ -909,10 +946,28 @@ export function morningFind(c: Pick<Candidate, "type" | "payload">, now: Date, t
 // 2026-10-08: three yeses in a weekend meant three heads-ups in a day).
 const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call", "event_followthrough", "goal_closed"]);
 export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
-  const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean; again?: boolean };
+  const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean; again?: boolean; door?: boolean; cls?: string; intro?: boolean };
   if (ANSWERING_TYPES.has(c.type)) return true;
+  // At the door (harness/door.ts): a delivery they asked for keeps its old footing (no quota, never counted, the spacing kept), and
+  // so does an intro ask to the other side (matching first: never starved by the lane's caps). Cue's own texts there are quota'd.
+  if (p.door === true) return p.cls === "requested" || p.intro === true;
   if (c.type === "event_offer") return !!p.askId && p.askId !== "profile" && p.fromProfile !== true && p.again !== true;
   return false;
+}
+
+// Pure: a candidate's band at the door (harness/door.ts doorBand): requested and within hours > a possible intro > requested results >
+// a find > a check-in, a safety follow-up above all. The pick only sees the highest band ready; within it, its own ranking decides.
+export function bandOfCandidate(c: Pick<Candidate, "type" | "payload" | "expiresAt">, now: Date): Band {
+  return doorBand({ type: c.type, payload: c.payload, expiresAt: c.expiresAt, cls: candidateClass(c.type, isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type] ?? null }, now);
+}
+
+// Pure: what the pick does at this moment (harness/door.ts), from what's eligible: wait for the gathering window to close (gather), or
+// pick among the highest band ready (pick). ignorePacing (a hand-run dispatch) doesn't wait.
+export function doorPlan(eligible: Candidate[], now: Date, o: { ignorePacing?: boolean } = {}): { kind: "gather"; until: Date } | { kind: "pick"; band: Band | null; pool: Candidate[] } {
+  const until = gatherUntil(eligible, now, { skip: o.ignorePacing });
+  if (until) return { kind: "gather", until };
+  const top = topBand(eligible, (c) => bandOfCandidate(c, now));
+  return { kind: "pick", band: top.band, pool: top.items };
 }
 
 // What the engagement pace never holds: a safety follow-up. (The ask sent to an event guest with no stated ask was exempt too, until
@@ -943,7 +998,7 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering, recapApproved: opts.recapApproved })];
     // The member's own rules (harness/notifyGate.ts), before any draft is written. A safety follow-up keeps its precedence.
     if (state.memberRules && !isSafetyFollowUp(candidate)) {
-      const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: candidateClass(candidate.type, answering), channel: "text", sent: state.memberRules.sent });
+      const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: candidateClass(candidate.type, answering, candidate.payload), channel: "text", sent: state.memberRules.sent });
       checks.push(rule);
     }
     return { candidate, checks, ok: gate(checks).ok };
@@ -1600,13 +1655,36 @@ async function loadSends(db: Queryable, userId: string): Promise<SendRecord[]> {
      ORDER BY type, topic_key, sent_at DESC`,
     [userId],
   );
-  return [...rows, ...older].map((r: any) => ({
-    type: r.type,
-    targetKey: r.target_key,
-    topicKey: r.topic_key,
-    sentAt: new Date(r.sent_at),
-    exempt: r.exempt,
-  }));
+  // Calls Cue placed on its own (the call gate's record, harness/callGate.ts): one budget with texts (CUE_CALL_TYPE). Exempt, so they
+  // never count against a lane's caps or its unanswered pause.
+  const calls = await cueCalls(db, userId);
+  return [
+    ...[...rows, ...older].map((r: any) => ({
+      type: r.type,
+      targetKey: r.target_key,
+      topicKey: r.topic_key,
+      sentAt: new Date(r.sent_at),
+      exempt: r.exempt,
+    })),
+    ...calls,
+  ];
+}
+
+// The calls Cue started on its own in the last day, as ledger rows (a check-in call, an intake call; inferred ones too).
+const CUE_CALL_REASONS = ["checkin_cadence", "inferred checkin_cadence", "auto_intake", "inferred auto_intake"];
+async function cueCalls(db: Queryable, userId: string): Promise<SendRecord[]> {
+  const { rows } = await db
+    .query(
+      `SELECT id, created_at FROM harness_decisions WHERE user_id = $1 AND decision = 'call.gate' AND action = 'place_call' AND reason = ANY($2::text[]) AND created_at > NOW() - INTERVAL '1 day'`,
+      [userId, CUE_CALL_REASONS],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return (rows ?? []).map((r: any) => ({ type: CUE_CALL_TYPE, targetKey: `call:${r.id}`, topicKey: null, sentAt: new Date(r.created_at), exempt: true }));
+}
+export const cueCallsForTests = cueCalls;
+// The ledger as the pick reads it, for the call gate's budget check (harness/callGate.ts).
+export async function pickerSends(userId: string): Promise<SendRecord[]> {
+  return loadSends(pool, userId);
 }
 
 // Their stamp (written the moment a text arrives, before its turn runs), Co's last reply to them, and whether a turn for one of their
@@ -1761,6 +1839,15 @@ export const RELEVANCE_RECHECK_HOURS = 24;
 // Every find too, goal finds included (Phase B, B6, 2026-10-10): a find for where they're headed waited as long as one for an ask and
 // was never re-judged; now both are, against their page as it is now (stillRelevant reads the source first).
 export function needsRelevanceCheck(c: Candidate, now: Date): boolean {
+  // A text at the door was written for the moment it was written: one that waited past the night is read again before it goes. (The
+  // day is Pacific's: a candidate doesn't carry their zone.)
+  if (isDoorType(c.type)) {
+    const zone = hoursZone(null);
+    const written = DateTime.fromJSDate(c.createdAt).setZone(zone).toISODate();
+    if (written === DateTime.fromJSDate(now).setZone(zone).toISODate()) return false;
+    const checked = Date.parse(String((c.payload as { relevantAt?: string })?.relevantAt ?? ""));
+    return !(checked && now.getTime() - checked < RELEVANCE_RECHECK_HOURS * HOUR);
+  }
   if (!(isAnswering(c) || c.type === "event_offer") || now.getTime() - c.createdAt.getTime() <= RELEVANCE_RECHECK_HOURS * HOUR) return false;
   const checked = Date.parse(String((c.payload as { relevantAt?: string })?.relevantAt ?? ""));
   return !(checked && now.getTime() - checked < RELEVANCE_RECHECK_HOURS * HOUR);
@@ -1903,7 +1990,7 @@ async function sendWithLedger(
     ];
     // The member's own rules, read inside the lock with what's been sent (harness/notifyGate.ts): two sends at once can't both pass a
     // cap, and a rule set after this was queued still decides it. A safety follow-up keeps its precedence (it goes, and counts).
-    const cls = candidateClass(c.type, answering);
+    const cls = candidateClass(c.type, answering, c.payload);
     if (!isSafetyFollowUp(c)) {
       const { retryAt: _r, ...rule } = await memberRuleGate(client, { userId: person.userId, now, cls, channel: "text" });
       checks.push(rule);
@@ -1998,6 +2085,21 @@ async function sendWithLedger(
 // Tests drive the send-time ledger directly (evals/proactive/nameChange.ts, golden case 52), with a fake store.
 export const sendWithLedgerForTests = sendWithLedger;
 
+// The door's routing for one exempt send (harness/door.ts): null when it goes straight out (no door spec, a type the door doesn't take,
+// or a bypass); otherwise it's queued as a candidate for the pick, and recorded.
+type DoorSpec = { summary: string; validUntil: Date; timeSensitive?: boolean; intro?: boolean; after?: { kind: string; payload: Record<string, unknown> } | null; taskId?: number | null };
+async function atTheDoor(opts: { userId: string; type: ExemptType; targetKey: string; messages: string[]; now?: Date; coInitiated?: { kind: ProactiveKind | null }; answers?: { askedAt: Date | null }; soonAt?: Date | null; cls?: SendClass; door?: DoorSpec }): Promise<{ queued: boolean; reason: string } | null> {
+  if (!opts.door || !isDoorType(opts.type)) return null;
+  const now = opts.now ?? new Date();
+  const cls: SendClass = opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
+  const lastIn = opts.answers ? await loadLastInbound(pool, opts.userId).catch(() => null) : null;
+  const route = doorRoute({ cls, now, soonAt: opts.soonAt ?? null, answersLast: !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now), timeSensitive: opts.door.timeSensitive });
+  if (!route.door) return null;
+  const q = await enterDoor({ userId: opts.userId, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, cls, summary: opts.door.summary, validUntil: opts.door.validUntil, now, restraintKind: opts.coInitiated?.kind ?? null, intro: opts.door.intro, soonAt: opts.soonAt ?? null, after: opts.door.after ?? null, taskId: opts.door.taskId ?? null });
+  await recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: opts.userId, outcome: q.queued ? "act" : "skip", action: q.queued ? "at_door" : "door_decided", reason: q.queued ? `waits for the pick (${cls}, valid until ${opts.door.validUntil.toISOString()})` : "already sent or decided", proposal: { type: opts.type, targetKey: opts.targetKey } }).catch(() => {});
+  return q.queued ? { queued: true, reason: "at the door: it goes with Cue's next message" } : { queued: false, reason: "already sent" };
+}
+
 // For transactional texts outside the daily pick. Still idempotent per
 // target, still logged in the ledger (exempt = true, so they don't count
 // toward caps or the unanswered pause).
@@ -2041,7 +2143,11 @@ export async function sendExempt(opts: {
   queueIfHeld?: boolean;
   // Its class when its type's isn't it (harness/notifyGate.ts): a goal check-in sent as a task update is a check-in.
   cls?: SendClass;
-}): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date; queued?: boolean }> {
+  // One door (harness/door.ts, Royce 2026-11-02): a caller whose text may wait for the pick says what it is. Unless it bypasses (it
+  // answers their latest message, it's about something within hours, or the caller marks it time-sensitive), it's queued as a
+  // candidate and goes with Cue's next message, under the pick's ranking, gathering window and the same gates (door: true back).
+  door?: DoorSpec;
+}): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date; queued?: boolean; door?: boolean }> {
   if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
@@ -2055,6 +2161,8 @@ export async function sendExempt(opts: {
     await recordDecision({ layer: 7, decision: "proactive.sentinelBody", userId: opts.userId, outcome: "skip", action: opts.type, reason: placeholder.rule, proposal: { kind: opts.type, targetKey: opts.targetKey, rule: placeholder.rule, message: placeholder.index + 1 } }).catch(() => {});
     return { sent: false, reason: `sentinel body: message ${placeholder.index + 1} is ${placeholder.rule}` };
   }
+  const at = await atTheDoor(opts);
+  if (at) return { sent: false, queued: at.queued, door: true, reason: at.reason };
   if (opts.respectHours && !localHourOk(opts.now ?? new Date(), opts.timezone ?? null)) {
     await record("skip", "blocked_hours", "outside local hours");
     return { sent: false, reason: "outside local hours" };
@@ -2203,10 +2311,17 @@ export async function sendExemptWhenAllowed(opts: {
   now?: Date;
   // Its class when its type's isn't it (a reminder they set is requested, not Cue's own).
   cls?: SendClass;
-}): Promise<{ sent: boolean; queued: boolean; reason?: string; dueAt?: Date }> {
+  // May wait at the door for the pick (sendExempt door): its `after` runs when the pick sends it (or drops it), day or night.
+  door?: { summary: string; validUntil: Date; timeSensitive?: boolean; intro?: boolean };
+}): Promise<{ sent: boolean; queued: boolean; reason?: string; dueAt?: Date; door?: boolean }> {
   const D = await import("../services/deferredSends.js");
   const now = opts.now ?? new Date();
-  const { after, ...send } = opts;
+  const { after, door, ...send } = opts;
+  if (door && isDoorType(opts.type)) {
+    const at = await atTheDoor({ ...send, now, door: { ...door, after: after ?? null } });
+    if (at) return { sent: false, queued: at.queued, door: true, reason: at.reason };
+    // Bypassed the door (it answers them, or it's about something within hours): as before, below.
+  }
   if (localHourOk(now, opts.timezone)) {
     const result: { sent: boolean; reason?: string; retryAt?: Date } = await sendExempt({ ...send, now }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
     // Held by their own rule (or the spacing): queued for when it may go, with what the send means for the record, never dropped.
@@ -2574,6 +2689,15 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     return;
   }
 
+  // One door (harness/door.ts, Royce 2026-11-02): when something became ready, the pick waits the gathering window for anything else
+  // to arrive, then composes once. Said, not silent: once per window.
+  const plan = doorPlan(ev.eligible, state.now, { ignorePacing: opts.ignorePacing });
+  if (plan.kind === "gather") {
+    if (opts.dryRun) console.log(`[dispatch dryRun] gathering until ${plan.until.toISOString()}`);
+    else await recordSkipOnce(userId, `gather:${plan.until.toISOString()}`, { layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: "gather", proposal, checks: ev.userChecks, reason: `gathering: ${ev.eligible.length} ready; the pick composes once at ${plan.until.toISOString()} with whatever else arrives` });
+    return;
+  }
+
   // What Co knows about them, read once for this dispatch (services/memberKnowledge.ts), with another member's details already
   // stripped inside it. The gates above keep their own reads, exactly as they were. A read that fails (a failed name lookup fails
   // closed) leaves the transcript empty and the drafts as they were, never unstripped.
@@ -2602,7 +2726,13 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // and then carries it.
   const nameNotice = ev.eligible.find((x) => x.type === "name_change") ?? null;
   const withoutName = nameNotice && ev.eligible.length > 1 ? ev.eligible.filter((x) => x.type !== "name_change") : ev.eligible;
-  const pickable = (await import("../services/announcements.js")).quietDayOnly(withoutName);
+  // Matching first (harness/door.ts): only the highest band ready goes to the pick; the rest wait their turn (or their expiry).
+  const quiet = (await import("../services/announcements.js")).quietDayOnly(withoutName);
+  const banded = topBand(quiet, (x) => bandOfCandidate(x, state.now));
+  const pickable = banded.items;
+  if (banded.band !== null && banded.items.length < quiet.length && !opts.dryRun) {
+    recordDecision({ layer: 7, decision: "proactive.door_band", userId, outcome: "act", action: `band:${banded.band}`, reason: `the pick sees ${BAND_NAME[banded.band]} first; ${quiet.length - banded.items.length} lower wait`, proposal: { band: banded.band, picking: banded.items.map((x) => x.id), waiting: quiet.filter((x) => !banded.items.includes(x)).map((x) => x.id) } }).catch(() => {});
+  }
   const urgent = expiringFind(pickable, { now: state.now, zone: person.timezone, sends: state.sends });
   const chosen = urgent ? null : await choosePick(pickable, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null, zone: person.timezone, now: state.now });
   let decision: DraftDecision = judgeDailyPick({
@@ -2868,8 +2998,10 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     return;
   }
 
+  // A text at the door (harness/door.ts) goes exactly as its own path wrote and checked it: no tidying, no second check, no hand-off.
+  const asWritten = isDoorType(c.type);
   // Co texts first here, so there's no lowercase style to mirror. (A composed bundle was tidied and checked inside the composer.)
-  if (!composed) draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
+  if (!composed && !asWritten) draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
   // The draft's own rules plus: never a question Co already asked after which
   // they wrote back (harness/repeatAsk.ts).
   const withRepeat = (checks: GateCheck[], text: string): GateCheck[] => {
@@ -2877,7 +3009,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     return again.pass ? checks : [...checks, again as GateCheck];
   };
   // A composed bundle's checks ran inside the composer: its record says so, with how many calls it took and what was left out.
-  let draftChecks: GateCheck[] = composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
+  let draftChecks: GateCheck[] = asWritten ? [{ name: "producer_checks", pass: true, reason: "written and checked by the path that made it" }] : composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
   let dg = gate(draftChecks);
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
@@ -2948,7 +3080,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // bundle: what goes out there is what the composer wrote.
   let rideNote: import("../services/askRetire.js").StopNote | null = null;
   let sending = outgoing;
-  if (!composed) {
+  if (!composed && !asWritten) {
     const A = await import("../services/askRetire.js");
     // Never a heavy check-in, never while a hard day holds it; through the member fence, the first owed note that passes it whole.
     // The dispatch's one restraint read (memberSendState): a hard day waits until they're okay, at most the cap (services/moodHold.ts).
@@ -2970,7 +3102,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   }
   // The name notice rides in this text when no stopped-looking line does: one note a text, on the same terms (services/nameChange.ts).
   let nameRide: { candidate: Candidate; without: string[] } | null = null;
-  if (!composed && !rideNote && nameNotice && c.type !== "name_change") {
+  if (!composed && !asWritten && !rideNote && nameNotice && c.type !== "name_change") {
     const A = await import("../services/askRetire.js");
     const N = await import("../services/nameChange.js");
     if (A.noteMayRide(c, heldForMood(member.state)) && !N.carriesNameChange(sending.join("\n"))) {
@@ -3074,6 +3206,8 @@ export async function runProactiveDispatch(registry: ProactiveRegistry): Promise
   );
   for (const r of expired.rows) {
     const c = rowToCandidate(r);
+    // Never sent late or in a burst (harness/door.ts): logged by id, type and target only.
+    await recordDecision({ layer: 7, decision: "proactive.expired", userId: c.userId, outcome: "skip", action: `expired:${c.type}`, reason: `its valid-until (${c.expiresAt?.toISOString() ?? "?"}) passed before the pick sent it`, proposal: { candidate: c.id, targetKey: c.targetKey } }).catch(() => {});
     await registry[c.type]?.onDropped?.(c, "expired").catch((err: any) =>
       console.error(`proactive: onDropped(${c.type}) failed (non-fatal):`, err?.message ?? err),
     );

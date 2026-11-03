@@ -162,8 +162,12 @@ export const PROACTIVE_CLASS: Record<string, SendClass> = {
 };
 
 // Pure: a candidate's class. An event offer for an open ask they made is a requested delivery; any other find is Cue's own.
-export function candidateClass(type: string, answering: boolean): SendClass {
+// A text waiting at the door (harness/door.ts) carries the class its own path gave it (a look-out Cue started is its own, a task they
+// asked for is requested, a goal check-in a check-in).
+export function candidateClass(type: string, answering: boolean, payload?: unknown): SendClass {
   if (type === "event_offer") return answering ? "requested" : "unsolicited";
+  const own = (payload as { door?: boolean; cls?: string } | null | undefined);
+  if (own?.door === true && (["requested", "unsolicited", "checkin"] as const).some((c) => c === own.cls)) return own.cls as SendClass;
   return PROACTIVE_CLASS[type] ?? "unsolicited";
 }
 

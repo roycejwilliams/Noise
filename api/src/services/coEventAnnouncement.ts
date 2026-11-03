@@ -132,6 +132,8 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
      JOIN users u ON u.id = a.user_id
      LEFT JOIN co_profiles p ON p.user_id = u.id
      WHERE a.sent_at IS NULL AND a.gave_up_at IS NULL AND ($1::text IS NULL OR a.event_api_id = $1)
+       -- Already waiting at the door for the pick (harness/door.ts): not drafted again.
+       AND NOT EXISTS (SELECT 1 FROM proactive_candidates pc WHERE pc.user_id = a.user_id AND pc.target_key = 'co_event:' || a.event_api_id AND pc.status = 'pending')
      ORDER BY a.created_at`,
     [onlyEventId ?? null],
   );
@@ -179,6 +181,11 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
       continue;
     }
     const messages = await draftAnnouncement({ id: r.user_id, first_name: r.first_name, phone_number: r.phone_number, city: r.city }, event);
+    // Through the door (harness/door.ts): Cue's own event is a find like any other, ranked and gathered with what else is ready, good
+    // until the hour before it starts; what it means for the record is written when the pick sends it (afterAnnounced), and a drop
+    // gives the row up.
+    const startMs = event.start_at ? Date.parse(event.start_at) : NaN;
+    const door = { summary: `Noise's own event, announced to members nearby: ${event.name}`, validUntil: Number.isFinite(startMs) ? new Date(startMs - START_LEAD_MINUTES * 60_000) : new Date(Date.now() + 24 * 3_600_000), after: { kind: "co_event_announce", payload: { announcementId: r.id, userId: r.user_id, name: event.name, eventApiId: event.api_id } } };
     const result = await sendExempt({
       userId: r.user_id,
       phoneNumber: r.phone_number,
@@ -189,22 +196,13 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
       respectHours: true,
       // Held by their own rule: queued for when it may go (harness/notifyGate.ts), rechecked then.
       queueIfHeld: true,
-    }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+      door,
+    }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; door?: boolean; queued?: boolean });
     if (result.sent) {
       sent++;
-      await pool.query(`UPDATE co_event_announcements SET sent_at = NOW() WHERE id = $1`, [r.id]);
-      // So the ask path and the sweep don't pitch the same Co event again.
-      await pool
-        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation_offered', $2) RETURNING id, created_at`, [r.user_id, JSON.stringify({ name: event.name, event_api_id: event.api_id })])
-        .then(async (m: any) => {
-          // One act in the action ledger (services/ledger.ts) with the surfacing line below, written in the background.
-          const row = m?.rows?.[0];
-          if (!row) return;
-          const L = await import("./ledger.js");
-          L.ledgerWrite(L.recommendationRow({ userId: r.user_id, memoryId: String(row.id), at: new Date(row.created_at), name: event.name, eventApiId: event.api_id, tier: "1" }));
-        })
-        .catch(() => {});
-      await writeMemory(r.user_id, "event_discovery_surfacing", `Announced Noise's own event "${event.name}" when it was created`).catch(() => {});
+      await afterAnnounced({ announcementId: r.id, userId: r.user_id, name: event.name, eventApiId: event.api_id }, "sent");
+    } else if ((result as { door?: boolean }).door) {
+      // At the door: the pick sends it (or gives it up past the hour before it starts).
     } else if ((result as any).reason === "already sent") {
       await pool.query(`UPDATE co_event_announcements SET sent_at = NOW() WHERE id = $1`, [r.id]);
     }
@@ -218,6 +216,27 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
     }).catch(() => {});
   }
   return sent;
+}
+
+// What an announcement that went means for the record: the row is sent, and the ask path and the sweep don't pitch the same Co event
+// again. One that never went (dropped at the door, past its time) is given up. Idempotent enough to run twice (a re-claimed row).
+export async function afterAnnounced(p: { announcementId: number | string; userId: string; name: string; eventApiId: string }, outcome: "sent" | "skipped" | "failed"): Promise<void> {
+  if (outcome !== "sent") {
+    await pool.query(`UPDATE co_event_announcements SET gave_up_at = NOW() WHERE id = $1 AND sent_at IS NULL`, [p.announcementId]);
+    return;
+  }
+  await pool.query(`UPDATE co_event_announcements SET sent_at = NOW() WHERE id = $1`, [p.announcementId]);
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation_offered', $2) RETURNING id, created_at`, [p.userId, JSON.stringify({ name: p.name, event_api_id: p.eventApiId })])
+    .then(async (m: any) => {
+      // One act in the action ledger (services/ledger.ts) with the surfacing line below, written in the background.
+      const row = m?.rows?.[0];
+      if (!row) return;
+      const L = await import("./ledger.js");
+      L.ledgerWrite(L.recommendationRow({ userId: p.userId, memoryId: String(row.id), at: new Date(row.created_at), name: p.name, eventApiId: p.eventApiId, tier: "1" }));
+    })
+    .catch(() => {});
+  await writeMemory(p.userId, "event_discovery_surfacing", `Announced Noise's own event "${p.name}" when it was created`).catch(() => {});
 }
 
 // The link first, then a short caption from the event's own page.
