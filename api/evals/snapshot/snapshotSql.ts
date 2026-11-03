@@ -80,7 +80,9 @@ if ("skip" in started) {
     const clear = () => q(`DELETE FROM member_snapshot_dirty`);
     const INSERTS: Record<string, string> = {
       co_facts: `INSERT INTO co_facts (owner_user_id, subject, relation, object_label, object_key, visibility, source) VALUES ('${A}', 'co', 'texted', 'hi', 'k-${Math.random()}', 'owner', 't')`,
-      co_profiles: `INSERT INTO co_profiles (user_id, city) VALUES ('${A}', 'Oakland') ON CONFLICT (user_id) DO NOTHING`,
+      // Their zone already on file for that city, as for a member whose zone was derived (memberTime.ts): with none, the first build
+      // derives and stores it (now offline, from the local place table), and that write marks the snapshot stale once.
+      co_profiles: `INSERT INTO co_profiles (user_id, city, timezone, timezone_city) VALUES ('${A}', 'Oakland', 'America/Los_Angeles', 'Oakland') ON CONFLICT (user_id) DO NOTHING`,
       profile_corrections: `INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote) VALUES ('${A}', 'city', 'Berkeley', 'Oakland', 'I moved')`,
       member_claims: `INSERT INTO member_claims (user_id, text, provenance, kind, said_on, confirmed_on) VALUES ('${A}', 'Runs on Sundays', 'user_said', 'routine', CURRENT_DATE, CURRENT_DATE)`,
       member_threads: `INSERT INTO member_threads (user_id, text, opened_quote, opened_at) VALUES ('${A}', 'the move', 'we move in May', NOW())`,
