@@ -47,7 +47,12 @@ export function about(draft: string, label: string, not = ""): boolean {
 //   resendOk a reminder or a find marked to resurface: its link going again is the point
 //   noReopen the send serves a subject of its own (an ask, goal, task, thread or loop, by id), whose state is read by id where the
 //            send is decided: resemblance to something closed never holds it
-export type RecordOpts = { again?: DoneItem | null; closing?: ReadonlySet<string>; back?: ReadonlySet<string>; theirs?: string; resendOk?: boolean; noReopen?: boolean };
+//   droppedOnly  only what they DROPPED counts for resemblance (queued work): a solved ask leaves what it was for still ahead (the
+//            party after "got the venue"), the same rule services/callReason.ts keeps for calls
+//   optIn    the send is an intro or match opt-in (the double opt-in): its consent question is never held as a second interest question
+export type RecordOpts = { again?: DoneItem | null; closing?: ReadonlySet<string>; back?: ReadonlySet<string>; theirs?: string; resendOk?: boolean; noReopen?: boolean; droppedOnly?: boolean; optIn?: boolean };
+// A consent question for an intro or a match, in Cue's own words: never a double "interested?" (the double opt-in is its own ask).
+export const OPT_IN_Q = /\b(?:introduce you|an? (?:intro|introduction)\b|connect (?:you|the two of you)|put you (?:two )?in touch|(?:meet|say hi to) (?:him|her|them)\b|want (?:to )?meet)/i;
 export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "unresolved">, o: RecordOpts = {}): MoveMiss[] {
   if (!draft.trim()) return [];
   const out: MoveMiss[] = [];
@@ -67,7 +72,7 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
     if (prior) out.push({ name: prior.kind === "offer" ? "reoffer" : "reask", why: `asks again what ${prior.id} already asked ("${prior.label.slice(0, 80)}"), and they answered` });
   }
   // Two interest questions in one draft, or a new one while one of Cue's is still unanswered.
-  const interest = qs.filter((q) => INTEREST_Q.test(q) || OFFER_Q.test(q));
+  const interest = o.optIn ? [] : qs.filter((q) => (INTEREST_Q.test(q) || OFFER_Q.test(q)) && !OPT_IN_Q.test(q));
   if (interest.length > 1) out.push({ name: "double_ask", why: "asks whether they're interested (or want something) more than once in one reply" });
   else if (interest.length === 1 && base.done.some((d) => (d.kind === "question" || d.kind === "offer") && !d.replied && INTEREST_Q.test(d.label))) out.push({ name: "double_ask", why: "asks again whether they're interested while the last such question still has no answer" });
   // Unresolved: something they closed, reopened (a find, an offer or a question about it).
@@ -75,7 +80,7 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
     const closing = o.closing ?? new Set<string>();
     const back = o.back ?? new Set<string>();
     const live = [o.theirs ?? "", ...base.unresolved.filter((u) => !closing.has(u.id) && (u.state === "open" || u.state === "delivered")).map((u) => u.label)].join(" ");
-    for (const u of base.unresolved.filter((x) => !back.has(x.id) && (closing.has(x.id) || x.state === "solved" || x.state === "dropped"))) {
+    for (const u of base.unresolved.filter((x) => !back.has(x.id) && (o.droppedOnly ? x.state === "dropped" : closing.has(x.id) || x.state === "solved" || x.state === "dropped"))) {
       const reopens = (urls.length || qs.length || /\b(?:found|another one|still (?:looking|on it)|i'?ll (?:keep|look|send|find))\b/i.test(draft)) && about(draft, u.label, live);
       if (reopens) out.push({ name: "reopen", why: `reopens ${u.id} (${u.label.slice(0, 80)}), which they closed` });
     }

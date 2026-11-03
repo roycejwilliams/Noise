@@ -190,21 +190,34 @@ type Q = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
 
 // What they closed in the last 14 days at their word: their asks, loops, Cue's tasks and threads closed as done or dropped, never by
 // staleness, expiry or an archive. Labels only (Cue's own titles, and the ask as Cue filed it). Their asks are where most of the 11-03
-// reopenings came from (venue, DJ, weekend finds after the ask was dropped or solved): an ask closes at their word when they said it's
-// done or found (member: the turn's learning read), off (moved_on, moved), or Cue's closeAsk ran on their word in that turn.
+// reopenings came from (venue, DJ, weekend finds after the ask was dropped or solved). An ask counts only when they closed it: done or
+// found (member: the turn's learning read) or off (moved_on, quoted from their words). Never 'moved' (it moved lanes at their yes, to a
+// goal or a look-out: still live), never Cue's own closeAsk (its reason can be "replaced by a newer ask"), and never one they REMOVED in
+// what Cue knows (whatCoKnows.ts writes closed 'member' plus a profile_corrections row, item_ref ask:<id>, removed): removed is gone,
+// never shown back. Asks get their own share, so loops and tasks never crowd them out.
+export const CLOSED_ASKS_MAX = 6;
+export const CLOSED_OTHER_MAX = 8;
 export async function closedLately(userId: string, db: Q): Promise<ClosedRow[]> {
-  const { rows } = await db.query(
-    `(SELECT ask_text AS label, CASE WHEN closed_reason IN ('moved_on','moved') THEN 'dropped' ELSE 'done' END AS status, resolved_at AS closed_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NOT NULL AND expired_at IS NULL AND (closed_reason IN ('member','moved_on','moved') OR closed_reason ~* '^closed by (cue|co):') AND resolved_at > NOW() - INTERVAL '14 days')
-     UNION ALL
-     (SELECT title AS label, status, closed_at FROM open_loops WHERE user_id = $1 AND status IN ('done','dropped') AND COALESCE(closed_reason,'') NOT IN ('stale','archived') AND closed_at > NOW() - INTERVAL '14 days')
+  const [asks, other] = await Promise.all([
+    db.query(
+      `SELECT ac.ask_text AS label, CASE WHEN ac.closed_reason = 'moved_on' THEN 'dropped' ELSE 'done' END AS status, ac.resolved_at AS closed_at
+       FROM ask_checkins ac
+       WHERE ac.user_id = $1 AND ac.resolved_at IS NOT NULL AND ac.expired_at IS NULL AND ac.closed_reason IN ('member','moved_on') AND ac.resolved_at > NOW() - INTERVAL '14 days'
+         AND NOT EXISTS (SELECT 1 FROM profile_corrections pc WHERE pc.user_id = ac.user_id AND to_jsonb(pc)->>'item_ref' = 'ask:' || ac.ask_id AND to_jsonb(pc)->>'removed' = 'true')
+       ORDER BY ac.resolved_at DESC LIMIT ${CLOSED_ASKS_MAX}`,
+      [userId],
+    ),
+    db.query(
+      `(SELECT title AS label, status, closed_at FROM open_loops WHERE user_id = $1 AND status IN ('done','dropped') AND COALESCE(closed_reason,'') NOT IN ('stale','archived') AND closed_at > NOW() - INTERVAL '14 days')
      UNION ALL
      (SELECT goal AS label, status, closed_at FROM co_tasks WHERE user_id = $1 AND status IN ('done','dropped') AND closed_at > NOW() - INTERVAL '14 days' AND COALESCE(outcome,'') ~* 'their word|they said|no longer|dropped:')
      UNION ALL
      (SELECT text AS label, 'done' AS status, closed_at FROM member_threads WHERE user_id = $1 AND status = 'resolved' AND closed_at > NOW() - INTERVAL '14 days')
-     ORDER BY closed_at DESC LIMIT 8`,
-    [userId],
-  );
-  return rows.filter((r) => typeof r.label === "string" && r.label.trim()).map((r) => ({ label: String(r.label), how: r.status === "dropped" ? "dropped" : "solved" }));
+     ORDER BY closed_at DESC LIMIT ${CLOSED_OTHER_MAX}`,
+      [userId],
+    ),
+  ]);
+  return [...asks.rows, ...other.rows].filter((r) => typeof r.label === "string" && r.label.trim()).map((r) => ({ label: String(r.label), how: r.status === "dropped" ? "dropped" : "solved" }));
 }
 
 // What "that" meant in their last turns (MEANT_HOURS), from the decision log (Cue's own item labels, never their words).
