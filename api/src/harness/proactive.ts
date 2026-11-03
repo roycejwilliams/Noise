@@ -1368,6 +1368,9 @@ export type OutputRules = {
   forbidden?: { pattern: RegExp; reason: string }[];
   // The record a find's caption was drafted from (Phase B, B4): every price and count it states must be on it (services/sendCheck.ts).
   backedBy?: string;
+  // Whole sentences of fixed wording Royce approved by hand (services/announcements.ts), admitted by the narration check as written.
+  // Exact match only: a model draft never carries one, and nothing else in the text is excused.
+  approvedSentences?: readonly string[];
 };
 
 const ALWAYS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
@@ -1472,7 +1475,8 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
     checks.push({ name: "draft_numbers_backed", pass: b.ok, reason: b.problems.join("; ") || "ok" });
   }
   // One voice standard with calls (services/speakable.ts): no "Starting the…", "working on", "once it's worth sending".
-  const narration = narratesInternalState(text);
+  const approved = rules.approvedSentences ?? [];
+  const narration = narratesInternalState(text, approved.length ? { allow: (sentence) => approved.includes(sentence) } : {});
   checks.push({ name: "draft_narrates_state", pass: !narration, reason: narration ?? "narrates Cue's own state" });
   return checks;
 }
