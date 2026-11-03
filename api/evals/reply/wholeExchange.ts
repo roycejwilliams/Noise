@@ -51,7 +51,7 @@ const check = (label: string, ok: boolean, detail: unknown = "") => {
 const names = (ms: { name: string }[]) => ms.map((m) => m.name);
 const rec = (base: Partial<import("../../src/services/exchangeRecord.js").ExchangeBase>, read: Partial<import("../../src/services/exchangeRecord.js").ExchangeRead> | null): import("../../src/services/exchangeRecord.js").ExchangeRecord => ({
   done: base.done ?? [], unresolved: base.unresolved ?? [], priorMeant: base.priorMeant ?? [],
-  read: read ? { move: "answer", why: null, meant: null, told: [], closes: [], again: null, ...read } : null,
+  read: read ? { move: "answer", meant: null, told: [], closes: [], reopens: [], again: null, ...read } : null,
 });
 
 // ------------------------------------------------------------------ the record's parts
@@ -76,7 +76,7 @@ const THREAD = [
 {
   const base = { done: X.doneFrom(THREAD), unresolved: [{ id: "U1", label: "jazz in Oakland", state: "open" as const }, { id: "U2", label: "old dinner", state: "dropped" as const }], priorMeant: [] };
   const add = RT.turnReadAddendum(null, null) + X.exchangeAddendum(base);
-  check("the read is asked for the move, its reason, refers_to, answered, closes and asks_again", ["\"move\"", "\"move_why\"", "\"refers_to\"", "\"answered\"", "\"closes\"", "\"asks_again\""].every((k) => add.includes(k)));
+  check("the read is asked for the move, refers_to, answered, closes, reopens and asks_again", ["\"move\"", "\"reopens\"", "\"refers_to\"", "\"answered\"", "\"closes\"", "\"asks_again\""].every((k) => add.includes(k)));
   const RB = { reason: "r", answers: null, ambiguousBetween: [], call: "none", wantsRecommendation: false, confidence: "high" };
   const r = RT.parseTurnRead({ ...RB, mode: "reacting", move: "close", move_why: "they're wrapping up", refers_to: { phrase: "that", item: "d2", not_item: "D99" }, answered: [{ q: "Does this one interest you?", a: "maybe" }, { q: "" }], closes: [{ item: "U1", how: "solved" }, { item: "U2", how: "dropped" }, { item: "U9" }], asks_again: "D7" }, [], base).exchange;
   check("parsed: the move, the D id case-folded, an unknown id dropped, empty answers dropped, only open items close", !!r && r.move === "close" && r.meant?.item === "D2" && r.meant?.notItem === null && r.told.length === 1 && r.closes.length === 1 && r.closes[0].item === "U1" && r.again === null, r);
@@ -155,6 +155,31 @@ const THREAD = [
   check("7. asked for again: not a resend", M.moveMisses("Same one again: https://example.test/harbor-jazz", rec({ done }, { move: "act", again: "D2" })).length === 0);
 }
 
+// ------------------------------------------------------------------ over-blocking on text (review of #368): their latest message wins
+{
+  const unresolved = [{ id: "U1", label: "Find an apartment in the Mission under 3k", state: "dropped" as const }];
+  const r = rec({ unresolved }, { move: "act", reopens: ["U1"] });
+  check("text: they bring a dropped ask back (\"looking for an apartment again\"): helping with it is not a reopening", M.moveMisses("Back on it. Here's one in the Mission under 3k: https://example.test/apt. Want more like it?", r).length === 0, M.moveMisses("Back on it. Here's one in the Mission under 3k: https://example.test/apt. Want more like it?", r));
+  const lines = X.recordLines(r)!;
+  check("text: ...and the tail says it's theirs to reopen, never \"don't reopen\" for it", lines.includes("They're bringing back what they had closed: U1") && !/Closed at their word[^\n]*U1/.test(lines), lines);
+  const base = { done: [], unresolved, priorMeant: [] };
+  const RB = { reason: "r", answers: null, ambiguousBetween: [], call: "none", wantsRecommendation: false, confidence: "high" };
+  check("text: the read's reopens are held to closed items", JSON.stringify(RT.parseTurnRead({ ...RB, move: "act", reopens: ["u1", "U7"] }, [], base).exchange?.reopens) === '["U1"]');
+  // A distressed close: the safety and heavy reads win over "close".
+  check("text: a well-being question after a close is never held", M.moveMisses("Glad it helped. Are you doing okay?", rec({}, { move: "close" })).length === 0 && M.moveMisses("Okay. How are you holding up?", rec({}, { move: "close" })).length === 0);
+  const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  check("text: a close on a safety turn or a heavy moment (the capped heavyHold) becomes the feeling move", /read0\?\.move === "close" && \(crisisWording \|\| heavyHold\(emotional, new Date\(\)\)\.hold\)/.test(sb) && /move: "feeling" as const/.test(sb));
+  check("text: the moves guide says distress is never a close, and a thanks with a question isn't one", X.MOVES_GUIDE.includes("closing words that carry distress") && X.MOVES_GUIDE.includes("a thanks with a question or a request is"));
+  check("text: on a turn that touches safety, the draft check never runs (sendReply skips it)", /!ctx\.safetyConcern && !state\.safetyFlagged\) \{\s*const \{ moveMisses/.test(fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8")));
+  // "thanks! what time does it start?": answer, not close; a link they asked for again is never dropped.
+  const done = [{ id: "D1", kind: "link" as const, label: "Harbor Jazz Night", url: "https://example.test/harbor-jazz", replied: true }];
+  check("text: a close that also asks for something again is a request (act)", RT.parseTurnRead({ ...RB, move: "close", asks_again: "D1" }, [], { done, unresolved: [], priorMeant: [] }).exchange?.move === "act");
+  check("text: \"thanks! what time does it start?\" read as answer: the answer with a question goes", M.moveMisses("Glad you liked it. It starts at 8. Want me to save you a reminder?", rec({ done }, { move: "answer" })).length === 0);
+  check("text: the link they asked for again goes, even on a close", M.moveMisses("Same one again: https://example.test/harbor-jazz", rec({ done }, { move: "close", again: "D1" })).length === 0);
+  check("text: only Cue's own item labels are kept between turns, never their pointing words", !/phrase:/.test(sb.slice(sb.indexOf('decision: "turn.meant"'), sb.indexOf('decision: "turn.meant"') + 400)) && /label: thing\(r\.meant\.item\)/.test(sb));
+  check("text: the record's database reads start beside the turn's picture", /const exchangeFactsP = hasText \?/.test(sb) && /Promise\.all\(\[turnP!\.catch\(\(\) => null\), tapbacksP, exchangeFactsP\]\)/.test(sb));
+}
+
 // ------------------------------------------------------------------ the reply path: one rewrite toward the move, then it goes
 {
   const sent: string[] = [];
@@ -198,7 +223,8 @@ const THREAD = [
   check("tail: the cached prefix (every block before the turn's own) is byte-identical with and without the record", a.slice(0, -1).every((blk, i) => blk.text === b[i].text));
   const last = b[b.length - 1].text;
   check("tail: the record and the move are in the turn's own block", last.includes("The whole exchange (Cue's record") && last.includes("This turn's move: close") && last.includes('"Thursday or Friday?" → "Thursday"'), last.slice(-900));
-  check("tail: the move's reason is never in the prompt (logged only)", !/move_why|why:/i.test(X.recordLines(rec({}, { move: "close", why: "SECRET-REASON" }))!) && !X.recordLines(rec({}, { move: "close", why: "SECRET-REASON" }))!.includes("SECRET-REASON"));
+  check("tail: the move's logged reason is built by code from the read's fields, never the model's words", X.moveReason({ move: "act", meant: null, told: [{ q: "a", b: "" } as any], closes: [], reopens: ["U1"], again: "D1" }) === "move=act; asked for something again; brought back 1; answered 1 earlier" && !RT.turnReadAddendum(null, null).includes("move_why") && !X.exchangeAddendum({ done: [], unresolved: [], priorMeant: [] }).includes("move_why"));
+  check("tail: a text turn whose read failed gets no record lines (no \"never again\" or \"don't reopen\" without a read); a call keeps its note", X.recordLines(rec({ done: [{ id: "D1", kind: "link", label: "Harbor Jazz Night", url: "https://example.test/harbor-jazz", replied: true }] }, null)) === null && !!X.recordLines(rec({ done: [{ id: "D1", kind: "link", label: "Harbor Jazz Night", url: "https://example.test/harbor-jazz", replied: true }] }, null), { call: true }));
 }
 
 // ------------------------------------------------------------------ calls: the same check before speech (the #365 hold), and the note
@@ -210,12 +236,12 @@ const THREAD = [
   const answers = ["How'd the meeting with Theo go?", "Not much on my side. Want to plan the next step with Theo?"];
   const dropped: string[] = [];
   let said = "";
-  for await (const c of P.runCallLlm(body as any, { stream: (r: any) => { reqs.push(r); const a = answers[Math.min(n++, answers.length - 1)]; return (async function* () { for (const e of text(a)) yield e as any; })(); }, clean: true, exchange: rec({}, null), onDropped: (s, w) => dropped.push(`${w}: ${s}`) })) {
+  for await (const c of P.runCallLlm(body as any, { stream: (r: any) => { reqs.push(r); const a = answers[Math.min(n++, answers.length - 1)]; return (async function* () { for (const e of text(a)) yield e as any; })(); }, clean: true, exchange: rec({}, null), callRead: (i) => X.readCallTurn(i, async () => JSON.stringify({ answered: ["Q1"], again: [], back: [] })), onDropped: (s, w) => dropped.push(`${w}: ${s}`) })) {
     const d = c.choices[0].delta as any;
     if (typeof d.content === "string") said += d.content;
   }
   check("call: asking again what they answered on this call is held before it's spoken", dropped.some((x) => /^move held: asks again what they answered on this call/.test(x)), dropped);
-  check("call: ...and Cue answers again in its own words (the held-turn retry), never silence or a fixed line", /Not much on my side/.test(said) && reqs.length === 2 && JSON.stringify(reqs[1]).includes("move held"), said);
+  check("call: ...and Cue answers again in its own words (the held-turn retry, with its own note), never silence or a fixed line", /Not much on my side/.test(said) && reqs.length === 2 && JSON.stringify(reqs[1]).includes("repeated something already said, sent or closed") && !JSON.stringify(reqs[1]).includes("can't back here"), said);
   // Without the record (deps.exchange undefined), nothing changes on the call.
   const dropped2: string[] = []; n = 0; said = "";
   for await (const c of P.runCallLlm(body as any, { stream: () => { const a = answers[Math.min(n++, 1)]; return (async function* () { for (const e of text(a)) yield e as any; })(); }, clean: true, onDropped: (s, w) => dropped2.push(w) })) { const d = c.choices[0].delta as any; if (typeof d.content === "string") said += d.content; }
@@ -223,24 +249,40 @@ const THREAD = [
   // A safety call is never held by it.
   const safetyBody = { ...body, messages: [...body.messages.slice(0, -1), { role: "user", content: "Honestly I don't want to be here anymore." }] };
   const dropped3: string[] = []; n = 0;
-  for await (const _ of P.runCallLlm(safetyBody as any, { stream: () => (async function* () { for (const e of text("I'm here with you. How'd the meeting with Theo go?")) yield e as any; })(), clean: true, exchange: rec({}, null), onDropped: (s, w) => dropped3.push(w) })) { /* drain */ }
+  for await (const _ of P.runCallLlm(safetyBody as any, { stream: () => (async function* () { for (const e of text("I'm here with you. How'd the meeting with Theo go?")) yield e as any; })(), clean: true, exchange: rec({}, null), callRead: async () => ({ answered: ["How'd the meeting with Theo go?"], again: [], back: [] }), onDropped: (s, w) => dropped3.push(w) })) { /* drain */ }
   check("call: never on a safety call", !dropped3.some((w) => /move held/.test(w)), dropped3);
   // Offering to text a link already sent.
   const r = rec({ done: [{ id: "D1", kind: "link", label: "Harbor Jazz Night", url: "https://example.test/harbor-jazz", replied: true }], unresolved: [{ id: "U1", label: "Find a private dining room near Hayes Valley", state: "solved" }] }, null);
-  check("call: offering again to text what was already sent", M.callSentenceMiss("Want me to text you the Harbor Jazz Night link?", { rec: r, callTurns: [], delivered: [] })?.name === "reoffer");
-  check("call: asking about something they closed", M.callSentenceMiss("Still want me looking for a private dining room near Hayes Valley?", { rec: r, callTurns: [], delivered: [] })?.name === "reopen");
-  check("call: an ordinary answer passes", M.callSentenceMiss("Thursday at eight works.", { rec: r, callTurns: [], delivered: [] }) === null);
+  const none = { answered: [], again: [], back: [] };
+  check("call: offering again to text what was already sent", M.callSentenceMiss("Want me to text you the Harbor Jazz Night link?", { rec: r, callTurns: [], delivered: [], read: none })?.name === "reoffer");
+  check("call: asking about something they closed", M.callSentenceMiss("Still want me looking for a private dining room near Hayes Valley?", { rec: r, callTurns: [], delivered: [], read: none })?.name === "reopen");
+  check("call: an ordinary answer passes", M.callSentenceMiss("Thursday at eight works.", { rec: r, callTurns: [], delivered: [], read: none }) === null);
+  // Over-blocking (review of #368): their latest words win.
+  check("call: \"send me the jazz link again\": offering it is never held", M.callSentenceMiss("Want me to text you the Harbor Jazz Night link?", { rec: r, callTurns: [], delivered: [], read: { ...none, again: ["Harbor Jazz Night"] } }) === null);
+  check("call: \"I'm looking for a dining room again\": asking about it is never held", M.callSentenceMiss("Still want me looking for a private dining room near Hayes Valley?", { rec: r, callTurns: [], delivered: [], read: { ...none, back: ["Find a private dining room near Hayes Valley"] } }) === null);
+  check("call: no read yet (or it failed): nothing is held for repeating", M.callSentenceMiss("Want me to text you the Harbor Jazz Night link?", { rec: r, callTurns: [], delivered: [], read: null }) === null);
+  check("call: a well-being question is never held as a re-ask", M.callSentenceMiss("Are you doing okay?", { rec: r, callTurns: [], delivered: [], read: { ...none, answered: ["Are you doing okay?"] } }) === null);
+  // "what?": the read is what decides whether their reply answered.
+  const whatTurns = [{ from: "co" as const, text: "How'd the meeting with Theo go?" }, { from: "them" as const, text: "what?" }];
+  const inp = M.callReadInput(whatTurns, null, []);
+  check("call: the read gets Cue's question with their reply, and their latest words", inp.questions.length === 1 && inp.questions[0].reply === "what?" && inp.latest === "what?" && X.callReadPrompt(inp).includes('"what?", "sorry?", "huh", a mishear'), inp);
+  const notAnswered = await X.readCallTurn(inp, async () => JSON.stringify({ answered: [], again: [], back: [] }));
+  check("call: \"what?\" isn't an answer: asking it again is said", M.callSentenceMiss("How'd the meeting with Theo go?", { rec: null, callTurns: whatTurns, delivered: [], read: notAnswered }) === null);
+  const wentWell = await X.readCallTurn({ ...inp, questions: [{ q: "How'd the meeting with Theo go?", reply: "went well" }] }, async () => '{"answered": ["q1"], "again": ["T9"], "back": []}');
+  check("call: an answered question asked again is held; unknown ids are dropped", M.callSentenceMiss("How'd the meeting with Theo go?", { rec: null, callTurns: whatTurns, delivered: [], read: wentWell })?.name === "reask" && wentWell!.again.length === 0, wentWell);
+  check("call: nothing to read, no model call", (await X.readCallTurn({ questions: [], sent: [], closed: [], latest: "hi" }, async () => { throw new Error("called"); }))?.answered.length === 0);
   const note = X.callTurnNote(r)!;
   check("call: the turn note carries the moves and the record (after their words, never the cached prompt)", note.includes("Pick the move from the whole exchange") && note.includes("Harbor Jazz Night") && note.includes("Closed at their word"));
   const src = fs.readFileSync(new URL("../../src/services/gptLive.ts", import.meta.url), "utf8");
-  check("call: GPT-Live thinking puts the note in turnNotes and passes the record to runCallLlm", /callTurnNote\(exchange\)/.test(src) && /turnNotes, \.\.\.\(exchange !== undefined \? \{ exchange \} : \{\}\)/.test(src));
+  check("call: GPT-Live thinking puts the note in turnNotes and passes the record to runCallLlm", /callTurnNote\(exchange\)/.test(src) && /turnNotes, \.\.\.\(exchange !== undefined \? \{ exchange, callRead: o\.callRead \?\?/.test(src));
   const bridge = fs.readFileSync(new URL("../../src/services/gptLiveBridge.ts", import.meta.url), "utf8");
-  check("call: the bridge hands every delegated turn the cached record", /callExchange: cachedCallExchange/.test(bridge) && /exchange: d\.callExchange \?\? null/.test(bridge));
+  check("call: the bridge hands every delegated turn the cached record, and logs a held move as its own decision", /callExchange: cachedCallExchange/.test(bridge) && /exchange: d\.callExchange \?\? null/.test(bridge) && /"call\.move_held"/.test(bridge));
+  check("call: the record waits at most a moment, then the turn goes on without it (fails open)", /CALL_EXCHANGE_WAIT_MS = \d+/.test(src) && /Promise\.race\(\[p, new Promise<null>/.test(src));
 }
 // ------------------------------------------------------------------ the text path is wired (source shape)
 {
   const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
-  check("text: the record is loaded before the read and handed to it", /loadExchangeBase\(user\.id, \{ recentConversation, ctx: t \}\)/.test(sb) && /record: exchangeBase \}/.test(sb));
+  check("text: the record is built for the read and handed to it", /X\.baseFrom\(recentConversation, t, xf \?\? null\)/.test(sb) && /record: exchangeBase \}/.test(sb));
   check("text: the record's lines go in as this turn's instruction, and the record to the tools", /replyFacts\.exchange = record/.test(sb) && /addInstruction\(replyFacts, lines\)/.test(sb));
   check("text: the move is logged with its reason; only Cue's own sent things are kept as what \"that\" meant", /decision: "turn\.move_read"/.test(sb) && /\["link", "find", "document", "card"\]/.test(sb));
   const cr = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");

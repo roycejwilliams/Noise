@@ -6,13 +6,15 @@
 // (services/callLlmProxy.ts, the #365 hold). Pure.
 import { ALWAYS_ASKABLE, questionsIn, sameQuestion } from "./repeatAsk.js";
 import { namesItem } from "../services/callClaims.js";
-import { INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type DoneItem, type ExchangeRecord } from "../services/exchangeRecord.js";
+import { INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeRecord } from "../services/exchangeRecord.js";
 
 export type MoveMiss = { name: "resend" | "reoffer" | "double_ask" | "reask" | "wrong_referent" | "ignores_correction" | "reopen" | "question_after_close" | "find_after_close" | "off_move"; why: string };
 
 const URL = /https?:\/\/[^\s)>\]"']+/g;
 // A question a safety or consent check may always ask again (harness/repeatAsk.ts).
 const askable = (q: string) => ALWAYS_ASKABLE.test(q);
+// A question about how they are, in Cue's own words: never held as a question after a close (review of #368).
+export const WELLBEING_Q = /\b(?:are you (?:doing |feeling )?(?:ok|okay|alright|all right|safe|good)|how are you (?:doing|holding up|feeling)|how(?:'s| is) (?:your heart|it sitting|everything)|you (?:ok|okay|good)\b|anyone (?:with you|you can (?:call|talk to)))/i;
 
 // Pure: the draft mentions this item (its link, or most of its words).
 export function mentions(draft: string, d: Pick<DoneItem, "label" | "url">): boolean {
@@ -72,13 +74,16 @@ export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined
   }
   // Unresolved: something they closed, reopened (a find, an offer or a question about it).
   const closing = new Set(r.closes.map((c) => c.item));
-  for (const u of rec.unresolved.filter((x) => closing.has(x.id) || x.state === "solved" || x.state === "dropped")) {
+  // What they bring back this turn is theirs again: their latest message wins over the 14-day closed record (review of #368).
+  const back = new Set(r.reopens);
+  for (const u of rec.unresolved.filter((x) => !back.has(x.id) && (closing.has(x.id) || x.state === "solved" || x.state === "dropped"))) {
     const reopens = (urls.length || qs.length || /\b(?:found|another one|still (?:looking|on it)|i'?ll (?:keep|look|send|find))\b/i.test(draft)) && about(draft, u.label);
     if (reopens) out.push({ name: "reopen", why: `reopens ${u.id} (${u.label.slice(0, 80)}), which they closed` });
   }
   // The move itself.
   if (r.move === "close") {
-    if (qs.length) out.push({ name: "question_after_close", why: `adds a question after they closed: "${qs[0].slice(0, 80)}"` });
+    const asked = qs.filter((q) => !WELLBEING_Q.test(q));
+    if (asked.length) out.push({ name: "question_after_close", why: `adds a question after they closed: "${asked[0].slice(0, 80)}"` });
     if (urls.some((u) => !again?.url || normUrl(again.url) !== u)) out.push({ name: "find_after_close", why: "brings a new link or find after they closed" });
   } else if (r.move === "summarize" && qs.length) out.push({ name: "off_move", why: "asks a question in a summary they asked for" });
   else if (r.move === "feeling" && urls.length) out.push({ name: "off_move", why: "brings a link or find while they're with a feeling" });
@@ -91,31 +96,44 @@ export function moveRedraftNote(misses: MoveMiss[], rec: ExchangeRecord): string
   return `Not sent. Judged against the whole exchange, this draft ${misses.map((x) => x.why).join("; ")}. ${move ? `This turn's move is ${move}: ${MOVE_MEANINGS[move]}. ` : ""}Rewrite it in your own words so it does that and none of the above, then call sendReply again.`;
 }
 
-// Calls: a sentence the call brain is about to say, against the call so far and the record. Questions of Cue's already answered on the
-// call (harness/repeatAsk.ts over the call's own turns), a link or item already sent offered or sent again, a question about something
-// they closed. Pure.
-export function callSentenceMiss(sentence: string, o: { rec: ExchangeRecord | null; callTurns: { from: "co" | "them"; text: string }[]; delivered: string[] }): MoveMiss | null {
+// Calls: a sentence the call brain is about to say, against the call so far, the record and the read of their latest words
+// (services/exchangeRecord.ts readCallTurn). Their latest words win (review of #368): with no read (not back yet, or failed) nothing is
+// held; a question is a re-ask only when the read says their reply answered it ("what?" never does); what they ask for again or bring
+// back is never held. Pure.
+export function callSentenceMiss(sentence: string, o: { rec: ExchangeRecord | null; callTurns: { from: "co" | "them"; text: string }[]; delivered: string[]; read: CallTurnRead | null }): MoveMiss | null {
+  if (!o.read) return null;
   const s = sentence.trim();
-  const isQ = /\?["')\]]*\s*$/.test(s) && !askable(s);
+  const isQ = /\?["')\]]*\s*$/.test(s) && !askable(s) && !WELLBEING_Q.test(s);
   if (isQ) {
-    const recent = o.callTurns.slice(-14);
-    for (let i = 0; i < recent.length; i++) {
-      if (recent[i].from !== "co") continue;
-      if (!recent.slice(i + 1).some((t) => t.from === "them" && t.text.trim())) continue;
-      const e = questionsIn(recent[i].text).find((q) => sameQuestion(s, q, true));
-      if (e) return { name: "reask", why: `asks again what they answered on this call ("${e.slice(0, 80)}")` };
-    }
-    const t = o.rec?.read?.told.find((x) => sameQuestion(s, x.q, true));
-    if (t) return { name: "reask", why: `asks what they already told you ("${t.q.slice(0, 80)}")` };
+    const answered = o.read.answered.find((q) => sameQuestion(s, q, true));
+    if (answered) return { name: "reask", why: `asks again what they answered on this call ("${answered.slice(0, 80)}")` };
   }
-  // An offer to text something already delivered on this call or already sent in the exchange.
+  // An offer to text something already delivered on this call or already sent in the exchange, unless they asked for it again.
   if (OFFER_Q.test(s) || /\b(?:i'?ll|let me) (?:text|send|shoot)\b/i.test(s)) {
-    const sent = [...o.delivered.map((label) => ({ label, url: /^https?:/.test(label) ? label : null })), ...(o.rec?.done ?? []).filter((d) => d.kind === "link" || d.kind === "find" || d.kind === "card" || d.kind === "document")];
+    const sent = callSentItems(o.rec, o.delivered).filter((d) => !o.read!.again.includes(d.label));
     const hit = sent.find((d) => mentions(s, d));
     if (hit) return { name: "reoffer", why: `offers to send ${hit.label.slice(0, 80)} again, already sent` };
   }
-  for (const u of o.rec?.unresolved.filter((x) => x.state === "solved" || x.state === "dropped") ?? []) {
-    if ((isQ || OFFER_Q.test(s)) && about(s, u.label)) return { name: "reopen", why: `reopens ${u.label.slice(0, 80)}, which they closed` };
+  for (const label of callClosedItems(o.rec)) {
+    if (o.read.back.includes(label)) continue;
+    if ((isQ || OFFER_Q.test(s)) && about(s, label)) return { name: "reopen", why: `reopens ${label.slice(0, 80)}, which they closed` };
   }
   return null;
+}
+// The read's input from the call so far (pure): Cue's questions that got a reply, with that reply; what was sent; what they closed.
+export function callSentItems(rec: ExchangeRecord | null, delivered: string[]): { label: string; url: string | null }[] {
+  return [...delivered.map((label) => ({ label, url: /^https?:/.test(label) ? label : null })), ...(rec?.done ?? []).filter((d) => d.kind === "link" || d.kind === "find" || d.kind === "card" || d.kind === "document").map((d) => ({ label: d.label, url: d.url }))];
+}
+export const callClosedItems = (rec: ExchangeRecord | null): string[] => (rec?.unresolved ?? []).filter((x) => x.state === "solved" || x.state === "dropped").map((x) => x.label);
+export function callReadInput(callTurns: { from: "co" | "them"; text: string }[], rec: ExchangeRecord | null, delivered: string[]): CallReadInput {
+  const recent = callTurns.slice(-15);
+  const questions: { q: string; reply: string }[] = [];
+  for (let i = 0; i < recent.length - 1; i++) {
+    if (recent[i].from !== "co") continue;
+    const reply = recent.slice(i + 1).find((t) => t.from === "them" && t.text.trim());
+    if (!reply) continue;
+    for (const q of questionsIn(recent[i].text)) if (!askable(q)) questions.push({ q, reply: reply.text.slice(0, 300) });
+  }
+  const latest = [...callTurns].reverse().find((t) => t.from === "them")?.text ?? "";
+  return { questions: questions.slice(-6), sent: callSentItems(rec, delivered).map((d) => d.label).slice(0, 10), closed: callClosedItems(rec).slice(0, 8), latest: latest.slice(0, 500) };
 }

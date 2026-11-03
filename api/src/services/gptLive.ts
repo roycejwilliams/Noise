@@ -397,16 +397,21 @@ export type ThinkOptions = {
   // The whole exchange for this call's member (services/exchangeRecord.ts loadCallExchange, cached per call): its lines go in the turn's
   // note and its facts hold what the answer may say (harness/moveCheck.ts callSentenceMiss). Absent: neither.
   exchange?: ((call: LiveCall) => Promise<import("./exchangeRecord.js").ExchangeRecord | null>) | null;
+  // The read of their latest words the sentence check waits for (exchangeRecord.ts readCallTurn); the real Haiku read when not given.
+  callRead?: (i: import("./exchangeRecord.js").CallReadInput) => Promise<import("./exchangeRecord.js").CallTurnRead | null>;
 };
+// How long a turn waits for the call's record before going on without it (fails open: no record, the call as before).
+export const CALL_EXCHANGE_WAIT_MS = 400;
 // The call's record, read at most once a minute per call (a turn never waits on more than one read of it).
 const exchangeCache = new Map<string, { at: number; p: Promise<import("./exchangeRecord.js").ExchangeRecord | null> }>();
 export const cachedCallExchange = (call: LiveCall, now = Date.now()): Promise<import("./exchangeRecord.js").ExchangeRecord | null> => {
   for (const [k, v] of exchangeCache) if (now - v.at > 10 * 60_000) exchangeCache.delete(k);
   const hit = exchangeCache.get(call.callKey);
-  if (hit && now - hit.at < 60_000) return hit.p;
+  const wait = <T>(p: Promise<T>) => Promise.race([p, new Promise<null>((r) => { const t = setTimeout(() => r(null), CALL_EXCHANGE_WAIT_MS); (t as any).unref?.(); })]);
+  if (hit && now - hit.at < 60_000) return wait(hit.p);
   const p = import("./exchangeRecord.js").then((X) => X.loadCallExchange(call.userId)).catch(() => null);
   exchangeCache.set(call.callKey, { at: now, p });
-  return p;
+  return wait(p);
 };
 // voiceLine: the live voice read's line for this turn (services/mediaStreamBridge.ts voiceReadLineFor, through routes/callLlm.ts
 // voiceLineForTurn), to Claude only, never to GPT-Live; runCallLlm puts it after their words and drops it on a safety call.
@@ -437,7 +442,7 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
   const ran: string[] = [];
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange } : {}), onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange, callRead: o.callRead ?? ((i) => import("./exchangeRecord.js").then((X) => X.readCallTurn(i))) } : {}), onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") {
       text += d.content;
