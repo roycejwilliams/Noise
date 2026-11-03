@@ -586,9 +586,10 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 2 },
     use: 'When they say they don\'t want a KIND of thing anymore ("no more hackathons", "stop sending me crypto stuff", "I\'m not into big conferences"), save it so Cue stops suggesting that kind of thing everywhere. Also use it with undo=true when they say they\'re open to that kind of thing again. Not for turning down one specific event.',
   },
-  // Where Cue searches for them from now on (services/searchArea.ts, 2026-10-31). On a call too (Royce, 2026-11-02: every
-  // conversational change goes to both mediums): a quick save, and on a GPT-Live call (no tools mid-call) the same rule said on the call
-  // is set right after it by the call's learning read (services/memberPreferences.ts applyRuleEffects).
+  // Where Cue searches for them from now on (services/searchArea.ts, 2026-10-31). Calls too (Royce, 2026-11-02: every conversational
+  // change goes to both mediums). onCall/CALL_RUN reach only the tool-running call path (services/callTools.ts). GPT-Live calls run no
+  // tools today, so nothing is set mid-call there: a rule said on the call is set right after it by the call's learning read
+  // (services/memberPreferences.ts applyRuleEffects). Mid-call setting on GPT-Live comes with its thinking's tools (feat/gptlive-helpers).
   {
     id: "search_area",
     sheet: null,

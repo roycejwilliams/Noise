@@ -155,26 +155,30 @@ export function askNamesATime(askText: string | null | undefined): boolean {
 // The keep, held to their limits: a kind they ruled out is out, and so is an event that starts outside when they're free (unless the ask
 // itself names a day or time). `out` says why, in words fit for the log and the record.
 // Subjects they asked Cue not to bring up (services/prefTopics.ts, member preferences PR C): read against each thing by a model read of
-// what it's about, never words matched in code; when that read can't be had, nothing is kept (never shown unread).
-export async function limitsGate<M>(matches: M[], limits: Limits | null, o: { askText?: string | null; deps?: JudgeDeps; topicDeps?: JudgeDeps } = {}): Promise<{ kept: M[]; out: { match: M; why: string }[]; read: "model" | "words" | null }> {
-  if (!limits || !matches.length) return { kept: matches, out: [], read: null };
+// what it's about, never words matched in code. When that read can't be had, nothing it would judge is shown unread, and nothing is
+// lost either: onTopicReadFail "keep" (a search they asked for: a reply's search, an open ask of theirs) keeps the finds, "hold" (a
+// search Cue runs on its own) holds them back this run without counting them as passed over (held), so the next run reads them again.
+// The why for a subject names its rule, never the subject (it's logged).
+export async function limitsGate<M>(matches: M[], limits: Limits | null, o: { askText?: string | null; deps?: JudgeDeps; topicDeps?: JudgeDeps; onTopicReadFail?: "keep" | "hold" } = {}): Promise<{ kept: M[]; out: { match: M; why: string }[]; held: M[]; read: "model" | "words" | null }> {
+  if (!limits || !matches.length) return { kept: matches, out: [], held: [], read: null };
   const avoid = avoidFor(limits.avoid, o.askText);
   const T = limits.rules?.length ? await import("./prefTopics.js") : null;
-  const topics = T ? T.topicsToAvoid(limits.rules) : [];
+  const rules = T ? T.topicRules(limits.rules) : [];
   const [{ kinds, read }, topicKinds] = await Promise.all([
     avoid.length ? judgeAvoided(matches.map(judgedOf), avoid, o.deps) : Promise.resolve({ kinds: matches.map(() => null), read: null as null }),
-    T && topics.length ? T.judgeTopics(matches.map(judgedOf), topics, { ask: o.askText, deps: o.topicDeps ?? o.deps }) : Promise.resolve(matches.map(() => null) as (string | null)[]),
+    T && rules.length ? T.judgeTopics(matches.map(judgedOf), rules.map((r) => r.topic), { ask: o.askText, deps: o.topicDeps ?? o.deps }) : Promise.resolve(matches.map(() => null) as (string | null)[]),
   ]);
   const kept: M[] = [];
   const out: { match: M; why: string }[] = [];
+  const held: M[] = [];
   matches.forEach((m, i) => {
     if (kinds[i]) return out.push({ match: m, why: `they asked Cue to stop suggesting ${kinds[i]}` });
-    if (!topicKinds) return out.push({ match: m, why: "a subject they asked Cue not to bring up couldn't be checked just now" });
-    if (topicKinds[i]) return out.push({ match: m, why: `they asked Cue not to bring up ${topicKinds[i]}` });
+    if (!topicKinds && (o.onTopicReadFail ?? "hold") === "hold") return held.push(m);
+    if (topicKinds?.[i]) return out.push({ match: m, why: T!.topicRef(rules.find((r) => r.topic === topicKinds[i])?.id) });
     const d = (m as any)?.details;
     const conflict = askNamesATime(o.askText) ? null : availabilityConflict(limits.availability, d?.startAt ?? null, d?.timezone ?? null);
     if (conflict) return out.push({ match: m, why: conflict });
     kept.push(m);
   });
-  return { kept, out, read };
+  return { kept, out, held, read };
 }

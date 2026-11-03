@@ -32,6 +32,7 @@ import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { wordsZone } from "./memberTime.js";
+import { normName, parseQualified } from "./placeResolve.js";
 
 export type PrefArea = "contact" | "checkins" | "search_area" | "reply_style" | "avoid_topic" | "other";
 export type PrefChannel = "text" | "call" | "all";
@@ -77,6 +78,9 @@ export type Preference = {
   setAt: string;
   // A vague "less": whether Cue has asked how often works (asked once, never again).
   askedAt?: string | null;
+  // A where-to-search rule: the exact place their search area was set to for it (searchArea.ts), once it was ("Springfield,
+  // Missouri" for "Springfield" after they said which). What it's held against and what its withdrawal clears.
+  areaPlace?: string | null;
 };
 
 export const PREF_AREAS: readonly PrefArea[] = ["contact", "checkins", "search_area", "reply_style", "avoid_topic", "other"];
@@ -212,7 +216,7 @@ export function parsePreferenceReads(raw: unknown, message: string, localToday: 
 
 // ---------------------------------------------------------------- resolving a read against what's on file
 
-export type NewPref = Omit<Preference, "id" | "state" | "setAt" | "askedAt">;
+export type NewPref = Omit<Preference, "id" | "state" | "setAt" | "askedAt" | "areaPlace">;
 export type PrefChanges = {
   add: NewPref[];
   // Rows retired by this turn: superseded by a new version (merged), or withdrawn.
@@ -320,6 +324,7 @@ function rowToPref(r: any): Preference | null {
     state,
     setAt: new Date(r.happened_at).toISOString(),
     askedAt: m.askedAt ?? null,
+    areaPlace: typeof m.areaPlace === "string" ? m.areaPlace : null,
   };
 }
 // The rule as stored: the model's field names, so ruleFrom reads it back through the same validation.
@@ -401,7 +406,7 @@ export async function withdrawPreference(db: Db, userId: string, id: string, now
   // A where-to-search rule that set their area: the area goes back to home with it (only while it's still that place), and what was
   // found there goes, in the same transaction (PR C).
   const was = rowToPref({ id, object_label: "", happened_at: now, retired_at: null, meta });
-  if (was && areaRuleAppliable(was)) await (await import("./searchArea.js")).clearAreaIn(db, userId, { because: "the rule that set their search area was removed", onlyPlace: was.rule.place! });
+  if (was && areaRuleAppliable(was)) await (await import("./searchArea.js")).clearAreaIn(db, userId, { because: "the rule that set their search area was removed", onlyPlace: rulePlaceOf(was) });
   return true;
 }
 // The same learning read wrote a call cadence from the words that set these rules: they're one thing, withdrawn together.
@@ -452,7 +457,7 @@ export type RuleEffects = {
   // Back to home, only while the area is still that place.
   clearArea: (userId: string, place: string, because: string) => Promise<boolean>;
   // services/prefTopics.ts dropTopicWork: what's waiting about the subject leaves.
-  dropTopic: (userId: string, topic: string) => Promise<unknown>;
+  dropTopic: (userId: string, topic: string, ruleId: string) => Promise<unknown>;
 };
 const realEffects: RuleEffects = {
   setArea: async (userId, input) => {
@@ -463,7 +468,7 @@ const realEffects: RuleEffects = {
     const A = await import("./searchArea.js");
     return A.clearSearchArea(userId, { because, onlyPlace: place }, A.realSetAreaDeps());
   },
-  dropTopic: async (userId, topic) => (await import("./prefTopics.js")).dropTopicWork(userId, topic),
+  dropTopic: async (userId, topic, ruleId) => { const T = await import("./prefTopics.js"); return T.dropTopicWork(userId, topic, T.realDropDeps, ruleId); },
 };
 let effectsForTests: Partial<RuleEffects> | null = null;
 export function setRuleEffectsForTests(e: Partial<RuleEffects> | null): void {
@@ -481,21 +486,77 @@ export async function applyRuleEffects(userId: string, ch: PrefChanges, stored: 
   for (const r of ch.retire) {
     if (r.state !== "withdrawn" || !stored.retired.includes(r.id)) continue;
     const was = o.onFile.find((p) => p.id === r.id);
-    if (was && areaRuleAppliable(was) && !added.some((x) => areaRuleAppliable(x.p))) out.cleared = (await fx.clearArea(userId, was.rule.place!, "the rule that set their search area was withdrawn")) || out.cleared;
+    if (was && areaRuleAppliable(was) && !added.some((x) => areaRuleAppliable(x.p))) out.cleared = (await fx.clearArea(userId, rulePlaceOf(was), "the rule that set their search area was withdrawn")) || out.cleared;
   }
   // The newest where-to-search rule for everything is their area (a correction, "SF, not Sacramento", is merged into one rule first).
   const area = [...added].reverse().find((x) => areaRuleAppliable(x.p));
   if (area) {
     const r = await fx.setArea(userId, { place: area.p.rule.place!, theirWords: area.p.words[area.p.words.length - 1] ?? "", message: o.message });
     out.area = r.ok ? "set" : "ask" in r ? "ambiguous" : "not_set";
+    if (r.ok && r.changed === "set") await linkAreaPlace(pool, userId, area.id, r.place);
   }
   for (const x of added) {
     if (x.p.area !== "avoid_topic" || x.p.basis !== "explicit" || !x.p.rule.topic) continue;
-    await fx.dropTopic(userId, x.p.rule.topic);
+    await fx.dropTopic(userId, x.p.rule.topic, x.id);
     out.topics++;
   }
   if (out.area || out.cleared || out.topics) await recordDecision({ layer: 4, decision: "member.preference.applied", userId, outcome: "act", action: out.area ?? (out.cleared ? "area_cleared" : "topic"), proposal: { ids: added.map((x) => x.id), area: out.area, cleared: out.cleared, topics: out.topics } }).catch(() => {});
   return out;
+}
+
+// The exact place their area was set to for a rule (see Preference.areaPlace).
+export async function linkAreaPlace(db: Db, userId: string, id: string, place: string): Promise<void> {
+  await db.query(`UPDATE co_facts SET meta = meta || jsonb_build_object('areaPlace', $3::text) WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}' AND retired_at IS NULL`, [id, userId, place]);
+}
+
+// Their search area changed through the setSearchArea tool (agent/conversationTools.ts), not a rule: the rule and the area never
+// disagree. A where-to-search rule naming the place it's now set to is linked to it ("Springfield" once they said "the Missouri one");
+// every other one is superseded by the change (or, set back home, withdrawn), as a change in what-Cue-knows does (retireAreaRules).
+export async function syncAreaRules(userId: string, now: { place: string } | null, db: Db = pool, at: Date = new Date()): Promise<{ linked: number; retired: number }> {
+  let linked = 0;
+  let retired = 0;
+  for (const p of (await loadPreferences(userId, db)).filter((x) => areaRuleAppliable(x))) {
+    if (now && areaIsRulePlace(now.place, p.rule.place!)) {
+      if (p.areaPlace !== now.place) await linkAreaPlace(db, userId, p.id, now.place);
+      linked++;
+      continue;
+    }
+    const u = await db.query(`UPDATE co_facts SET retired_at = $3, meta = meta || jsonb_build_object('state', $4::text) WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}' AND retired_at IS NULL`, [p.id, userId, at, now ? "superseded" : "withdrawn"]);
+    if (u.rowCount) retired++;
+  }
+  if (linked || retired) await recordDecision({ layer: 4, decision: "member.preference.area_sync", userId, outcome: "act", action: now ? "set" : "home", proposal: { linked, retired } }).catch(() => {});
+  return { linked, retired };
+}
+
+// A time-bound where-to-search rule ("only SF this week") ends at its expiry: retired as expired, and their area set back to home if
+// it's still that rule's place (an area set since by anything else stays). Never announced (a quiet-hours or no-text rule may be in
+// force; the next reply's facts simply no longer carry it). jobs/index.ts runs it every 10 minutes; userId: one member's only.
+export async function expireAreaRules(o: { now?: Date; userId?: string; clear?: (userId: string, place: string) => Promise<boolean> } = {}, db: Db = pool): Promise<{ expired: number; cleared: number }> {
+  const at = o.now ?? new Date();
+  const { rows } = await db.query(
+    `SELECT id, owner_user_id, object_label, happened_at, retired_at, meta FROM co_facts
+     WHERE relation = '${PREF_RELATION}' AND subject = 'member' AND retired_at IS NULL AND meta->>'area' = 'search_area'
+       AND meta->>'expiresAt' IS NOT NULL AND (meta->>'expiresAt')::timestamptz <= $1 AND ($2::uuid IS NULL OR owner_user_id = $2::uuid)
+     LIMIT 200`,
+    [at, o.userId ?? null],
+  );
+  const clear = o.clear ?? (async (userId: string, place: string) => {
+    const A = await import("./searchArea.js");
+    return A.clearSearchArea(userId, { because: "the time they gave for searching there ended", onlyPlace: place }, A.realSetAreaDeps());
+  });
+  let expired = 0;
+  let cleared = 0;
+  for (const r of rows) {
+    const p = rowToPref(r);
+    if (!p || inForce({ ...p, state: "active" }, at)) continue;
+    const userId = String(r.owner_user_id);
+    const u = await db.query(`UPDATE co_facts SET retired_at = $3, meta = meta || '{"state":"expired"}'::jsonb WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}' AND retired_at IS NULL`, [p.id, userId, at]);
+    if (!u.rowCount) continue;
+    expired++;
+    if (areaRuleAppliable(p) && (await clear(userId, rulePlaceOf(p)).catch(() => false))) cleared++;
+  }
+  if (expired) await recordDecision({ layer: 4, decision: "member.preference.expired", userId: o.userId ?? null, outcome: "act", action: "area", proposal: { expired, cleared } }).catch(() => {});
+  return { expired, cleared };
 }
 
 // What-Cue-knows changed their search area itself (corrected or removed there): the where-to-search rules that set it are retired with
@@ -561,22 +622,34 @@ const clock = (hm: string) => DateTime.fromFormat(hm, "HH:mm").toFormat("h:mm a"
 // home: their home city; a rule naming it set searches back to home (searchArea.ts), so it's applied while no area is set.
 export type ApplyCtx = { area?: { place: string } | null; home?: string | null };
 const placeKey = (t: string) => squash(t.trim().replace(/[.,;:!?]+$/, ""));
+// Pure: whether an area place is the place a rule names: the same place by name (aliases too: SF is San Francisco), with no region or
+// country of the rule's that the area contradicts. "Springfield, Missouri" is what "Springfield" named once they said which; "Portland,
+// OR" is never "Portland, ME". Read from the place's parts (placeResolve.ts), not its raw string.
+export function areaIsRulePlace(areaPlace: string, rulePlace: string): boolean {
+  const a = parseQualified(areaPlace);
+  const r = parseQualified(rulePlace);
+  if (!a.name || normName(a.name) !== normName(r.name)) return false;
+  return (!r.region || !a.region || r.region === a.region) && (!r.country || !a.country || r.country === a.country);
+}
+// Pure: the place a rule's search area is (or would be): the exact one it was set to, else what the rule names.
+export const rulePlaceOf = (p: Pick<Preference, "rule" | "areaPlace">): string => p.areaPlace || p.rule.place || "";
 // Pure: a where-to-search rule that becomes their search area: said outright, standing, for everything with no place of its own (no
-// subject of its own), with a place.
+// subject of its own), with a place. Time-bound ones too ("only SF this week"): expireAreaRules sets searches back when it ends.
 export function areaRuleAppliable(p: Pick<Preference, "area" | "basis" | "type" | "rule">): boolean {
   return p.area === "search_area" && p.basis === "explicit" && p.type === "standing" && !p.rule.topic && !!p.rule.place;
 }
 // Pure: whether a path applies this rule now. Send rules: the send gate (harness/notifyGate.ts). A search area: only while their area
 // really is that place (a lookup that failed, or a place that could be more than one, left it unset). How to reply and what not to bring
 // up: their own words only (an inferred read stays tentative: spec, section 2).
-export function ruleApplied(p: Pick<Preference, "area" | "basis" | "type" | "rule">, ctx: ApplyCtx = {}): boolean {
+export function ruleApplied(p: Pick<Preference, "area" | "basis" | "type" | "rule"> & { areaPlace?: string | null }, ctx: ApplyCtx = {}): boolean {
   if (ENFORCED_AREAS.has(p.area)) return true;
   if (p.area === "reply_style") return p.basis === "explicit" && !!p.rule.style;
   if (p.area === "avoid_topic") return p.basis === "explicit" && !!p.rule.topic;
   if (p.area === "search_area") {
     if (!areaRuleAppliable(p)) return false;
-    if (ctx.area?.place) return placeKey(ctx.area.place) === placeKey(p.rule.place!);
-    return ctx.area === null && !!ctx.home && placeKey(ctx.home.split(",")[0]) === placeKey(p.rule.place!.split(",")[0]);
+    const linked = (p as Pick<Preference, "areaPlace">).areaPlace;
+    if (ctx.area?.place) return linked ? placeKey(ctx.area.place) === placeKey(linked) : areaIsRulePlace(ctx.area.place, p.rule.place!);
+    return ctx.area === null && !!ctx.home && areaIsRulePlace(ctx.home, p.rule.place!);
   }
   return false;
 }
@@ -597,7 +670,8 @@ export function describePreference(p: Pick<Preference, "area" | "covers" | "chan
   if (r.latest) parts.push(`nothing after ${clock(r.latest)}`);
   if (r.less && !parts.length) parts.push(`fewer ${what} (you haven't said how many yet)`);
   if (r.place) parts.push(`look for things in ${r.place}${r.topic ? ` (for ${r.topic})` : ""}`);
-  if (r.style) parts.push(`replies: ${r.style}${r.topic ? ` (for ${r.topic})` : ""}`);
+  // Style is followed, not enforced in code: said so ("I'll keep to this"), never as a hard rule.
+  if (r.style) parts.push(`replies: ${r.style}${r.topic ? ` (for ${r.topic})` : ""}${p.area === "reply_style" && (o.applied ?? ruleApplied(p)) ? " (I'll keep to this)" : ""}`);
   if (p.area === "avoid_topic" && r.topic) parts.push(`don't bring up ${r.topic} unless you do`);
   if (!parts.length && r.topic) parts.push(r.topic);
   let line = parts.join("; ");
@@ -626,7 +700,7 @@ function appliedLine(p: Preference, applied: boolean): string {
 }
 
 // The rules the reply check reads (services/prefTopics.ts judgeReplyRules): how to reply, by subject, and what not to bring up.
-export type ReplyRules = { style: { style: string; topic: string | null; words: string }[]; avoid: string[] };
+export type ReplyRules = { style: { id?: string; style: string; topic: string | null; words: string }[]; avoid: string[] };
 
 // Facts for the reply (harness/replyGrounding.ts) and the call (services/callContext.ts callFitLines): what's in force and what it's
 // applied to, so a reply never says a rule is applied when its path ignores it, and the one ask for a vague "less". Internal prompt
@@ -650,7 +724,7 @@ export function replyPreferenceFacts(prefs: Preference[], now: Date, ctx: ApplyC
     if (!applied) continue;
     const words = p.words[p.words.length - 1] ?? "";
     if (p.area === "reply_style" && p.rule.style) {
-      rules.style.push({ style: p.rule.style, topic: p.rule.topic ?? null, words });
+      rules.style.push({ id: p.id, style: p.rule.style, topic: p.rule.topic ?? null, words });
       instructions.push(
         p.rule.topic
           ? `How they asked you to reply when the subject is ${p.rule.topic}: ${p.rule.style} (their words: "${words.slice(0, 200)}"). It applies only to that subject; other replies stay as they'd be.`

@@ -1504,7 +1504,7 @@ export async function enqueueCandidate(input: EnqueueInput, retried = false): Pr
   // what was waiting); what they asked for themselves never is.
   if (!retried) {
     const isNew = () => pool.query(`SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2`, [input.userId, input.targetKey]).then((r) => !r.rows[0]);
-    const held = await import("../services/prefTopics.js").then((T) => T.candidateTopicHold(input, T.realTopicDeps, isNew)).catch(() => null);
+    const held = await import("../services/prefTopics.js").then((T) => T.candidateTopicHold({ ...input, answering: isAnswering(input) }, T.realTopicDeps, isNew)).catch(() => null);
     if (held) {
       await recordDecision({ layer: 7, decision: "proactive.topic_hold", userId: input.userId, outcome: "skip", action: input.type, reason: held }).catch(() => {});
       return { queued: false };

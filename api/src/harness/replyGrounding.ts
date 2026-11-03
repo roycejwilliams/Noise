@@ -2218,7 +2218,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
   // Their own rules for replies (member preferences PR C): one small read, only when they have such rules. A sentence raising a subject
   // they asked Cue not to bring up is cut like an unsupported claim; a clear style break is flagged (logged, never a cut: style isn't
   // guaranteed in code). A read that fails flags nothing.
-  const ruleRead: Promise<GateCheck[]> = rf.prefRules ? import("../services/prefTopics.js").then((T) => T.judgeReplyRules(draft, rf.prefRules!, src.message)).catch(() => []) : Promise.resolve([]);
+  const ruleRead: Promise<GateCheck[]> = rf.prefRules ? import("../services/prefTopics.js").then((T) => T.judgeReplyRules(draft, rf.prefRules!, src.message, undefined, src.recentConversation.split("\n").slice(-8).join("\n"))).catch(() => []) : Promise.resolve([]);
   // With a failure of Cue's own in the facts, a line about it ("It didn't go through on my end") is read for claims even when it isn't
   // claim-shaped, so it can stand on that fact instead of being cut as machinery talk unread.
   if (!force && !needsClaimCheck(draft) && !(failureInView(rf.facts).inView && narratesInternalState(draft))) {

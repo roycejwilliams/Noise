@@ -662,7 +662,10 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   for (const g of gatedOut) if (g.url && !passReasons.has(g.url)) passReasons.set(g.url, `kept, then the fact gate: ${g.reasons.join("; ")}`);
   // Their limits, for every member (Phase A2): a kind they ruled out, judged by its main activity, and an event outside when they're free.
   // The ask itself, so a day or time it names isn't overruled by when they're usually free (re-review of #134).
-  const limits = await limitsGate(factGated, k.limits ? { avoid: record.avoid, availability: record.availability, rules: k.limits.rules } : null, { askText: c.askText }).catch(() => ({ kept: [] as TierMatch[], out: factGated.map((m) => ({ match: m, why: "their limits couldn't be checked" })), read: null }));
+  // A subject they asked Cue not to bring up (member preferences PR C): when its read fails, finds for an ask they made are kept (they
+  // asked), and finds for their profile and goals are held this run, never counted as passed over (held), so the next run reads them.
+  const limits = await limitsGate(factGated, k.limits ? { avoid: record.avoid, availability: record.availability, rules: k.limits.rules } : null, { askText: c.askText, onTopicReadFail: c.fromProfile ? "hold" : "keep" }).catch(() => ({ kept: [] as TierMatch[], out: factGated.map((m) => ({ match: m, why: "their limits couldn't be checked" })), held: [] as TierMatch[], read: null }));
+  const heldUrls = new Set(limits.held.flatMap((m) => ("url" in m && m.url ? [String(m.url)] : [])));
   for (const o of limits.out) {
     const url = "url" in o.match && o.match.url ? String(o.match.url) : "";
     if (url) passReasons.set(url, `kept, then their limits: ${o.why}`);
@@ -671,7 +674,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   const rankOf = (m: TierMatch) => ((m as any).taste === "matches" ? 0 : (m as any).taste === "clashes" ? 2 : 1);
   const gated = limits.kept.map((m, i) => ({ m, i })).sort((a, b) => rankOf(a.m) - rankOf(b.m) || a.i - b.i).map((x) => x.m);
   const keptUrls = new Set(gated.flatMap((m) => ("url" in m && m.url ? [String(m.url), postOf.get(String(m.url)) ?? ""] : [])).filter(Boolean));
-  const passed = passedOver(lookedAt, keptUrls, passReasons);
+  const passed = passedOver(lookedAt.filter((l) => !heldUrls.has(l.url)), keptUrls, passReasons);
   // Each query beside what became of its results, and each keep with the query that found it (the tuning log, sweepQuery.ts).
   const { queries, keptBy } = ledger.finish(lookedAt, keptUrls, gated.map((m) => ({ name: m.name, url: "url" in m && m.url ? String(m.url) : "" })), postOf);
   // A place the daily sweep never reached (the loop ended first) is a failure with its reason too.

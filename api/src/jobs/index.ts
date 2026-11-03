@@ -369,6 +369,12 @@ export function registerJobs(io: Server) {
     enqueueDuePostCallFollowUps().catch((err: any) => console.error("postCallFollowUp: enqueue failed:", err?.message ?? err));
   });
 
+  // Every 10 min — a time-bound where-to-search rule ("only SF this week") that ended sets their searches back to home, only while
+  // the area is still its place (services/memberPreferences.ts expireAreaRules). Nothing is sent.
+  cron.schedule("*/10 * * * *", () => {
+    import("../services/memberPreferences.js").then((P) => P.expireAreaRules()).catch((err: any) => console.error("memberPreferences: area rule expiry failed (non-fatal):", err?.message ?? err));
+  });
+
   // Every 5 min — place calls booked via the schedule-a-call text flow, and
   // send the ~15-min heads-up reminder for one coming up soon.
   cron.schedule("*/5 * * * *", () => {
