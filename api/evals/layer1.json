@@ -204,6 +204,7 @@
     "evals/coPages/security.ts",
     "evals/coPages/tools.ts",
     "evals/intros/secondContact.ts",
+    "evals/intros/connectionAfter.ts",
     "evals/docs/memberFiles.ts",
     "evals/presence/readoutFlow.ts",
     "evals/inroom/rules.ts",
