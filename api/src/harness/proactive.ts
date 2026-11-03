@@ -1358,7 +1358,7 @@ export function alreadySentLink(url: string | null | undefined, base: ExchangeBa
 // Pure: a queued draft against the record. A reminder, a find marked to resurface or something they asked for may carry its link again; a send that serves an
 // open subject of its own (an ask, goal, task, thread, loop or ask check-in, by id) is never held for resembling something closed:
 // a new ask like a dropped one gets its finds (its own subject's state is read by id where the send is decided).
-export function exchangeCheck(text: string, base: ExchangeBase | null, c: Pick<Candidate, "type" | "targetKey" | "payload">, theirs = ""): GateCheck {
+export function exchangeCheck(text: string, base: ExchangeBase | null, c: Pick<Candidate, "type" | "targetKey" | "payload">, theirs: { text: string; at: string | null } | string = ""): GateCheck {
   if (!base) return { name: WHOLE_EXCHANGE, pass: true, reason: "no record read" };
   const p = (c.payload ?? {}) as { reminder?: boolean; again?: boolean; safetyFollowUp?: boolean };
   // A safety follow-up is never held by it (the reply path skips the check on a safety turn the same way).
@@ -1369,12 +1369,16 @@ export function exchangeCheck(text: string, base: ExchangeBase | null, c: Pick<C
   // Something they asked for (a requested delivery, an answer to them) may carry a link again, and is never held as a reopening: they asked.
   const cls = candidateClass(c.type, isAnswering(c as Candidate), c.payload);
   const asked = cls === "requested" || cls === "reply";
-  const misses = recordMisses(text, base, { resendOk: p.reminder === true || p.again === true || asked, noReopen: ownSubject || asked, droppedOnly: true, optIn: isPossibleIntro(c), theirs });
+  const misses = recordMisses(text, base, { resendOk: p.reminder === true || p.again === true || asked, noReopen: ownSubject || asked, droppedOnly: true, optIn: isPossibleIntro(c), ...theirWords(theirs) });
   return misses.length ? { name: WHOLE_EXCHANGE, pass: false, reason: misses.map((m) => m.why).join("; ") } : { name: WHOLE_EXCHANGE, pass: true };
 }
+// Queued work always knows when they said it; words with no time never lift a closed item (theirsAt unknown = not after the close).
+const theirWords = (t: { text: string; at: string | null } | string) => (typeof t === "string" ? { theirs: t, theirsAt: new Date(0) } : { theirs: t.text, theirsAt: t.at ?? new Date(0) });
 // Pure: their latest words in the dispatch's exchanges (a new request not yet on file as an ask still counts as theirs).
-export function latestTheirs(k: Pick<MemberKnowledge, "exchanges"> | null): string {
-  return [...(k?.exchanges ?? [])].reverse().find((e) => e.from === "member")?.text ?? "";
+// With when they said it: it lifts a closed item only when said after that item closed (moveCheck.ts recordMisses theirsAt).
+export function latestTheirs(k: Pick<MemberKnowledge, "exchanges"> | null): { text: string; at: string | null } {
+  const e = [...(k?.exchanges ?? [])].reverse().find((x) => x.from === "member");
+  return { text: e?.text ?? "", at: e?.verifiedAt ?? null };
 }
 
 // A test seam: a fake model for draftProactive, so the guard below can be exercised with zero tokens.
