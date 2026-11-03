@@ -100,7 +100,7 @@ const permBefore = facts.length;
 await learn(A, read({ type: "permission", area: "other", quote: "you can buy the tickets on my card" }), "you can buy the tickets on my card whenever");
 await learn(A, read({ type: "permission", area: "other", quote: "share my number with anyone you match me with" }), "share my number with anyone you match me with");
 check("a preference never grants spending or sharing: a permission is refused, nothing stored", facts.length === permBefore);
-check("no rule has an area that could authorize spending, sharing, access or acting as them", P.PREF_AREAS.every((x) => ["contact", "checkins", "search_area", "reply_style", "other"].includes(x)));
+check("no rule has an area that could authorize spending, sharing, access or acting as them", P.PREF_AREAS.every((x) => ["contact", "checkins", "search_area", "reply_style", "avoid_topic", "other"].includes(x)));
 // Only these modules read the rules; none of them spends, shares, grants access or acts as the member.
 const readers: string[] = [];
 const walk = (d: string) => {
@@ -111,7 +111,7 @@ const walk = (d: string) => {
   }
 };
 walk(new URL("../../src", import.meta.url).pathname);
-const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts"];
+const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts", "services/prefTopics.ts"];
 check(`the rules are read only where they restrict or are shown (${readers.join(", ")})`, readers.every((r) => ALLOWED_READERS.includes(r)));
 
 // ---------------------------------------------------------------- precedence and changes
@@ -194,7 +194,7 @@ check("the GPT-Live call reads that context (buildCallContextSummary), and the r
   check("GPT-Live's thinking prompt carries the rule lines and the call prompt's instruction to keep to them", textFacts.known.every((k) => live.backendSystem.includes(k)) && /The rules they set for how you treat them are listed there too/.test(live.backendSystem) && live.backendSystem.includes(GL.BACKEND_NOTE));
 }
 check("the call prompt tells the call to keep to them", /The rules they set for how you treat them are listed there too/.test(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8")));
-check("the text reply reads them (replyGrounding)", /replyPreferenceFacts\(prefs, new Date\(\)\)/.test(src("harness/replyGrounding.ts")));
+check("the text reply reads them (replyGrounding)", /replyPreferenceFacts\(prefs, new Date\(\), area\)/.test(src("harness/replyGrounding.ts")));
 
 // ---------------------------------------------------------------- whose words: quotes of every style, photo and file notes, merged links
 check("double, curly, single and guillemet quotes are someone else's", ["say \"stop texting me\" to them", "she said “stop texting me” lol", "he wrote 'stop texting me' again", "she said ‘stop texting me’", "«stop texting me»"].every((m) => !P.quoteIsTheirs("stop texting me", m)));
@@ -204,13 +204,16 @@ check("the turn reads rules only from what they typed or said in a voice memo (n
 
 // ---------------------------------------------------------------- the read before the reply, through the real path
 facts.length = 0;
+// PR C applies a where-to-search rule through setSearchArea (evals/preferences/decisions.ts tests it); here it couldn't be set.
+P.setRuleEffectsForTests({ setArea: async () => ({ ok: false, error: "where SF is couldn't be checked just now" }) });
 let seenPrompt = "";
 P.setPreferenceModelForTests(async (prompt) => { seenPrompt = prompt; return read({ type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, quote: "only suggest events in SF" }).replace('"profile":{},', ""); });
 const got = await P.capturePreferencesNow(A, "Only suggest events in SF, even though I live elsewhere. [sent a photo showing: a map]", { zone: NY, source: { via: "text", ref: "h9" } });
 P.setPreferenceModelForTests(null);
 check("the read sees their words only (the photo note is stripped before the model reads it)", !/a map/.test(seenPrompt) && /Only suggest events in SF/.test(seenPrompt));
 const fresh = P.replyPreferenceFacts(await active(A, new Date()), new Date());
-check("a rule set in this message reaches this turn's reply, honestly: noted, not applied yet", got.added.length === 1 && fresh.known.some((k) => /set in this message/.test(k) && /not applied yet/.test(k) && /never say it's applied/.test(k)));
+P.setRuleEffectsForTests(null);
+check("a rule set in this message reaches this turn's reply, honestly: noted, not applied yet (its search area couldn't be set)", got.added.length === 1 && fresh.known.some((k) => /set in this message/.test(k) && /not applied yet/.test(k) && /Never say it changed/.test(k)));
 check("the turn waits for that read before the reply's facts (bounded), and the send confirms a vague ask", /const prefStored = prefCaptureP \? await Promise\.race\(\[prefCaptureP/.test(src("routes/sendblue.ts")) && src("routes/sendblue.ts").indexOf("const prefStored") < src("routes/sendblue.ts").indexOf("const replyFacts = await gatherReplyFacts") && /if \(ok\) import\("\.\.\/services\/memberPreferences\.js"\)\.then\(\(P\) => P\.confirmLessAsked\(user\.id\)\)/.test(src("routes/sendblue.ts")));
 
 // ---------------------------------------------------------------- the read before the reply failed: the learning read takes the rules

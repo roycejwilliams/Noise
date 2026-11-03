@@ -93,7 +93,7 @@ function isWithinLookaheadWindow(startAt: string, maxDays: number): boolean {
 // comment. No userCity means no filter (nothing to be near); an
 // ungeocodable city on either side also passes through rather than
 // dropping a real candidate to a geocoding gap (see withinRadius).
-async function filterByRadius<T extends { city?: string | null; online?: boolean }>(
+export async function filterByRadius<T extends { city?: string | null; online?: boolean }>(
   candidates: T[],
   userCity: string | null,
   near: (a: string, b: string) => Promise<boolean> = withinRadius,

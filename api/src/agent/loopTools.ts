@@ -257,7 +257,7 @@ export function loopTools(
   // What they ruled out and when they're free, from the record's one reader (services/memberKnowledge.ts limits), read once a turn
   // (Phase A2: "I'll stop suggesting it in every search and sweep" held for no live search). A kind they name in this text is theirs
   // again for this turn. A dry run reads nothing.
-  let limitsRead: Promise<{ avoid: string[]; availability: string | null } | null> | null = null;
+  let limitsRead: Promise<import("../services/memberLimits.js").Limits | null> | null = null;
   const limits = () => (limitsRead ??= ctx.dryRun ? Promise.resolve(null) : import("../services/memberKnowledge.js").then((M) => M.realKnowledgeDeps.limits(ctx.userId)).catch(() => null));
   // The words an ask is judged on: a text's message (with the text it replies to), or on a call their last three lines (an ask is often
   // built over a few turns: "I'd love a hackathon again", "which weekend?", "the 20th"), never the whole call (review of #139).
@@ -606,7 +606,7 @@ export function loopTools(
         const foundFor = (link: string) => loop.found.get(link) ?? (notes?.shortlist ?? []).map((s) => ({ name: s.name, url: s.url, facts: s.note ?? "", match: null, blocked: null }) as Found).find((s) => s.url === link);
         const lim = await limits();
         const outByLink = new Map<string, string>();
-        if (lim && (lim.avoid.length || lim.availability)) {
+        if (lim && (lim.avoid.length || lim.availability || lim.rules?.some((r) => r.area === "avoid_topic"))) {
           const { limitsGate } = await import("../services/memberLimits.js");
           const known = items.map((it) => ({ link: it.link, f: foundFor(it.link) })).filter((x) => x.f);
           const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: askWords() }).catch(() => null);

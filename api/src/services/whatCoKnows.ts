@@ -666,7 +666,12 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     docs: await import("./cueGrants.js").then((C) => C.docsConnected(userId, db as any)).catch(() => null),
     voiceRead: await import("./voiceReadConsent.js").then((V) => V.voiceReadOnSince(userId, db as any)).catch(() => null),
     // Never guessed: a read that fails fails the view, so a rule they set is never shown as gone.
-    prefs: await import("./memberPreferences.js").then(async (P) => (await P.activePreferences(userId, new Date(), db as any)).map((x) => ({ id: x.id, text: P.describePreference(x), quote: x.words[x.words.length - 1] ?? null }))),
+    // Applied or "noted, not applied yet" by what a path really does (PR C): a where-to-search rule is applied only while their area is its place.
+    prefs: await import("./memberPreferences.js").then(async (P) => {
+      const live = await P.activePreferences(userId, new Date(), db as any);
+      const ctx = live.some((x) => x.area === "search_area") ? await import("./searchArea.js").then((A) => A.areaCtxOf(userId, db as any)) : {};
+      return live.map((x) => ({ id: x.id, text: P.describePreference(x, { applied: P.ruleApplied(x, ctx) }), quote: x.words[x.words.length - 1] ?? null }));
+    }),
     files,
     ...designKnown(signals),
     alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
@@ -928,6 +933,9 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const { setPlace } = await import("./wantPlace.js");
       const r = await setPlace(db, userId, key, v ? v.trim().slice(0, 40) : null, theirWords);
       if (!r.rowCount) throw new NotApplied();
+      // Their search area changed here: the where-to-search rules that set it go with the old area (PR C), so none is left shown as
+      // "noted" beside an area it no longer is, and nothing rebuilds it.
+      if (key === "area:search") await (await import("./memberPreferences.js")).retireAreaRules(db as any, userId);
       const was = (key === "area:search" ? raw.area?.place : (raw.places ?? []).find((x) => x.key === key)?.place) ?? "near home";
       return { ref: item.ref, source: "place", was, now: v ? v.trim().slice(0, 40) : null };
     }

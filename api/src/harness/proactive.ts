@@ -1499,6 +1499,17 @@ export async function enqueueCandidate(input: EnqueueInput, retried = false): Pr
     const F = await import("../services/followUps.js");
     if (F.followUpsByCo() && F.handedToCo(input)) return F.startFollowUp(input);
   }
+  // A subject they asked Cue not to bring up (services/prefTopics.ts, member preferences PR C): a new candidate Cue starts on its own
+  // that's about it is never queued. Only a new one is read (a pending one was read when it was queued, and setting the rule took
+  // what was waiting); what they asked for themselves never is.
+  if (!retried) {
+    const isNew = () => pool.query(`SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2`, [input.userId, input.targetKey]).then((r) => !r.rows[0]);
+    const held = await import("../services/prefTopics.js").then((T) => T.candidateTopicHold(input, T.realTopicDeps, isNew)).catch(() => null);
+    if (held) {
+      await recordDecision({ layer: 7, decision: "proactive.topic_hold", userId: input.userId, outcome: "skip", action: input.type, reason: held }).catch(() => {});
+      return { queued: false };
+    }
+  }
   const client = await pool.connect();
   let released = false;
   try {

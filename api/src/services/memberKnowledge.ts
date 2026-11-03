@@ -288,11 +288,13 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     const r = (await rows(`SELECT avoid, availability_pattern, intent, updated_at FROM co_profiles WHERE user_id = $1`, [userId]))[0];
     // Their rules (services/memberPreferences.ts): one member's rows, in force now. A failed read leaves them out of this read only.
     const rules = await import("./memberPreferences.js").then((P) => P.activePreferences(userId)).catch(() => undefined);
-    if (!r) return { avoid: [], availability: null, at: null, ...(rules?.length ? { rules } : {}) };
+    // Their search area, only when a rule is about where to search (a failed read: the rule is said not applied).
+    const area = rules?.some((p) => p.area === "search_area") ? await import("./searchArea.js").then((A) => A.areaCtxOf(userId)).catch(() => undefined) : undefined;
+    if (!r) return { avoid: [], availability: null, at: null, ...(rules?.length ? { rules } : {}), ...(area !== undefined ? { area } : {}) };
     const { latestAskEntry } = await import("../harness/profileWrite.js");
     const latestAsk = latestAskEntry(r.intent);
     const availability = (latestAsk?.availability && String(latestAsk.availability).trim()) || (r.availability_pattern && String(r.availability_pattern).trim()) || null;
-    return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()).map((a: string) => a.trim()) : [], availability, at: dateOrNull(r.updated_at), ...(rules?.length ? { rules } : {}) };
+    return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()).map((a: string) => a.trim()) : [], availability, at: dateOrNull(r.updated_at), ...(rules?.length ? { rules } : {}), ...(area !== undefined ? { area } : {}) };
   },
   roomTaste: async (userId) => {
     const R = await import("./roomTaste.js");

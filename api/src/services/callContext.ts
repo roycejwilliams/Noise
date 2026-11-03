@@ -100,7 +100,7 @@ export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" |
   const said = held ? [...held.theySaid, ...held.enduring].slice(0, CALL_CLAIMS_LIMIT) : [];
   const read = held ? held.coInferred.slice(0, 3) : [];
   // Their rules (services/memberPreferences.ts replyPreferenceFacts): the text reply's own lines, so a call and a text say the same.
-  const ruleFacts = k.limits?.rules?.length ? replyPreferenceFacts(k.limits.rules, new Date()) : null;
+  const ruleFacts = k.limits?.rules?.length ? replyPreferenceFacts(k.limits.rules, new Date(), k.limits.area ?? {}) : null;
   const rules = ruleFacts && (ruleFacts.known.length || ruleFacts.instructions.length) ? ruleFacts : null;
   return [
     stated.length ? `Their room taste, newest first (when you suggest anything, lean this way, and never pitch what clashes with it):\n${stated.map((t) => `- ${t}`).join("\n")}` : null,

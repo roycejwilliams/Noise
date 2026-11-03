@@ -16,7 +16,9 @@ import { recordAnthropicUsage } from "./llmUsage.js";
 
 // rules: the standing rules they set for how Cue treats them (services/memberPreferences.ts), in force now, read with the rest of their
 // limits so every reader of the record (calls, tasks, dispatch drafts, sweeps in PR C) gets them from the same read.
-export type Limits = { avoid: string[]; availability: string | null; rules?: import("./memberPreferences.js").Preference[] };
+// area: their search area (services/searchArea.ts), read with the rules when one is about where to search, so a call says such a rule
+// is applied only while it really is.
+export type Limits = { avoid: string[]; availability: string | null; rules?: import("./memberPreferences.js").Preference[]; area?: import("./memberPreferences.js").ApplyCtx };
 
 // Words that name the shape of a thing, not its kind ("crypto events" is the kind "crypto").
 const SHAPE = new Set(["event", "events", "thing", "things", "stuff", "kind", "kinds", "type", "types", "anything", "any", "more", "the", "a", "an", "of", "to", "for", "and", "or"]);
@@ -152,14 +154,23 @@ export function askNamesATime(askText: string | null | undefined): boolean {
 
 // The keep, held to their limits: a kind they ruled out is out, and so is an event that starts outside when they're free (unless the ask
 // itself names a day or time). `out` says why, in words fit for the log and the record.
-export async function limitsGate<M>(matches: M[], limits: Limits | null, o: { askText?: string | null; deps?: JudgeDeps } = {}): Promise<{ kept: M[]; out: { match: M; why: string }[]; read: "model" | "words" | null }> {
+// Subjects they asked Cue not to bring up (services/prefTopics.ts, member preferences PR C): read against each thing by a model read of
+// what it's about, never words matched in code; when that read can't be had, nothing is kept (never shown unread).
+export async function limitsGate<M>(matches: M[], limits: Limits | null, o: { askText?: string | null; deps?: JudgeDeps; topicDeps?: JudgeDeps } = {}): Promise<{ kept: M[]; out: { match: M; why: string }[]; read: "model" | "words" | null }> {
   if (!limits || !matches.length) return { kept: matches, out: [], read: null };
   const avoid = avoidFor(limits.avoid, o.askText);
-  const { kinds, read } = avoid.length ? await judgeAvoided(matches.map(judgedOf), avoid, o.deps) : { kinds: matches.map(() => null), read: null as null };
+  const T = limits.rules?.length ? await import("./prefTopics.js") : null;
+  const topics = T ? T.topicsToAvoid(limits.rules) : [];
+  const [{ kinds, read }, topicKinds] = await Promise.all([
+    avoid.length ? judgeAvoided(matches.map(judgedOf), avoid, o.deps) : Promise.resolve({ kinds: matches.map(() => null), read: null as null }),
+    T && topics.length ? T.judgeTopics(matches.map(judgedOf), topics, { ask: o.askText, deps: o.topicDeps ?? o.deps }) : Promise.resolve(matches.map(() => null) as (string | null)[]),
+  ]);
   const kept: M[] = [];
   const out: { match: M; why: string }[] = [];
   matches.forEach((m, i) => {
     if (kinds[i]) return out.push({ match: m, why: `they asked Cue to stop suggesting ${kinds[i]}` });
+    if (!topicKinds) return out.push({ match: m, why: "a subject they asked Cue not to bring up couldn't be checked just now" });
+    if (topicKinds[i]) return out.push({ match: m, why: `they asked Cue not to bring up ${topicKinds[i]}` });
     const d = (m as any)?.details;
     const conflict = askNamesATime(o.askText) ? null : availabilityConflict(limits.availability, d?.startAt ?? null, d?.timezone ?? null);
     if (conflict) return out.push({ match: m, why: conflict });
