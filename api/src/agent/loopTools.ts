@@ -609,7 +609,8 @@ export function loopTools(
         if (lim && (lim.avoid.length || lim.availability || lim.rules?.some((r) => r.area === "avoid_topic"))) {
           const { limitsGate } = await import("../services/memberLimits.js");
           const known = items.map((it) => ({ link: it.link, f: foundFor(it.link) })).filter((x) => x.f);
-          const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: askWords() }).catch(() => null);
+          // A reply's search is theirs: a subject read that fails keeps its finds (onTopicReadFail "keep").
+          const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: askWords(), onTopicReadFail: "keep" }).catch(() => null);
           for (const o of g?.out ?? []) outByLink.set(String((o.match as any).link), o.why);
         }
         const postLinks = items.map((it) => it.link).filter((l) => foundFor(l)?.viaPost);

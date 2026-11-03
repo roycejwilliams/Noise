@@ -53,8 +53,10 @@ const areas: Record<string, { place: string; quote: string; label: string | null
 const backlogs: Record<string, { ask_id: string; items: any[] }[]> = {};
 const cands: Record<string, { id: number; type: string; summary: string; payload: any; status: string; skip_reason?: string }[]> = {};
 const profileWrites: unknown[][] = [];
+const writes: { sql: string; args: any[] }[] = [];
 const handle = async (raw: string, a: any[] = []): Promise<{ rows: any[]; rowCount: number }> => {
   const sql = raw.replace(/\s+/g, " ").trim();
+  if (/^(INSERT|UPDATE)/.test(sql)) writes.push({ sql, args: a });
   if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 };
   // co_facts: their rules
   if (/^SELECT id, object_label, happened_at, retired_at, meta FROM co_facts/.test(sql)) {
@@ -66,6 +68,13 @@ const handle = async (raw: string, a: any[] = []): Promise<{ rows: any[]; rowCou
     facts.push({ id, owner_user_id: a[0], object_label: a[1], happened_at: a[4], retired_at: null, meta: JSON.parse(a[5]) });
     return { rows: [{ id }], rowCount: 1 };
   }
+  if (/^UPDATE co_facts SET retired_at = \$3, meta = meta \|\| '\{"state":"expired"\}'/.test(sql)) {
+    const r = facts.find((x) => String(x.id) === String(a[0]) && x.owner_user_id === a[1] && !x.retired_at);
+    if (!r) return { rows: [], rowCount: 0 };
+    r.retired_at = a[2];
+    r.meta.state = "expired";
+    return { rows: [], rowCount: 1 };
+  }
   if (/^UPDATE co_facts SET retired_at = \$3/.test(sql)) {
     const r = facts.find((x) => String(x.id) === String(a[0]) && x.owner_user_id === a[1] && !x.retired_at);
     if (!r) return { rows: [], rowCount: 0 };
@@ -73,6 +82,15 @@ const handle = async (raw: string, a: any[] = []): Promise<{ rows: any[]; rowCou
     r.meta.state = /withdrawn/.test(sql) ? "withdrawn" : a[3];
     if (/object_label = ''/.test(sql)) { r.object_label = ""; r.meta.words = []; }
     return { rows: [{ meta: r.meta }], rowCount: 1 };
+  }
+  if (/^UPDATE co_facts SET meta = meta \|\| jsonb_build_object\('areaPlace'/.test(sql)) {
+    const r = facts.find((x) => String(x.id) === String(a[0]) && x.owner_user_id === a[1] && !x.retired_at);
+    if (r) r.meta.areaPlace = a[2];
+    return { rows: [], rowCount: r ? 1 : 0 };
+  }
+  if (/^SELECT id, owner_user_id, object_label, happened_at, retired_at, meta FROM co_facts/.test(sql)) {
+    const rows = facts.filter((r) => !r.retired_at && r.meta.area === "search_area" && r.meta.expiresAt && Date.parse(r.meta.expiresAt) <= a[0].getTime() && (!a[1] || r.owner_user_id === a[1]));
+    return { rows: rows.map((r) => ({ ...r, meta: JSON.parse(JSON.stringify(r.meta)) })), rowCount: rows.length };
   }
   if (/^UPDATE co_facts SET retired_at = \$2/.test(sql)) {
     const hit = facts.filter((r) => r.owner_user_id === a[0] && !r.retired_at && r.meta.area === "search_area" && !r.meta.ruleRaw?.topic);
@@ -132,7 +150,12 @@ const PLACES: Record<string, C> = {
 const resolve: import("../../src/services/placeResolve.js").ResolveDeps = {
   home: async (city) => { const c = PLACES[R.normName(R.parseQualified(city).name)]; return c ? { lat: c.lat, lng: c.lng } : null; },
   homeCountry: async () => "US",
-  lookup: async (place) => { const c = PLACES[R.normName(R.parseQualified(place).name)]; return { google: [], local: c ? [c] : [] }; },
+  lookup: async (place) => {
+    const n = R.normName(R.parseQualified(place).name);
+    if (n === "springfield") return { google: [], local: [om("Springfield", "Missouri", 37.21533, -93.29824, 170188), om("Springfield", "Illinois", 39.80172, -89.64371, 114394)] };
+    const c = PLACES[n];
+    return { google: [], local: c ? [c] : [] };
+  },
   row: async () => null,
   store: async () => {},
   log: async () => {},
@@ -299,7 +322,7 @@ const S = "00000000-0000-4000-8000-0000000000e5";
   const workLine = text.instructions.find((i) => /subject is work: a few sentences/.test(i));
   const techLine = text.instructions.find((i) => /subject is technical things: explain fully/.test(i));
   check("the text reply gets each as a standing instruction, scoped to its subject", !!workLine && !!techLine && /applies only to that subject/.test(workLine!), text.instructions);
-  check("... and both are shown applied in what-Cue-knows (in force in every reply path)", live.every((p) => !P.describePreference(p, { applied: P.ruleApplied(p) }).includes("not applied")));
+  check("... and both are shown in what-Cue-knows as followed, not enforced: \"(I'll keep to this)\"", live.every((p) => { const d = P.describePreference(p, { applied: P.ruleApplied(p) }); return !d.includes("not applied") && d.endsWith("(I'll keep to this)"); }));
   // The call: the member record's limits carry the same rules into callFitLines, and GPT-Live's thinking prompt is filled from it.
   const lines = CC.callFitLines({ preferences: [], claims: [], identity: { zone: NY } as any, limits: { avoid: [], availability: null, rules: live, verifiedAt: new Date().toISOString() } } as any);
   const callBlock = lines.find((l) => /The rules they set/.test(l)) ?? "";
@@ -313,7 +336,8 @@ const S = "00000000-0000-4000-8000-0000000000e5";
   const rules = text.rules;
   const longWork = "Here is the whole plan for the board meeting, every step. First the deck. Then the numbers. Then the asks. Then the follow-ups. Then the hiring plan.";
   const flagged = T.readReplyRulesAnswer(JSON.stringify({ style: [rules.style.findIndex((x) => x.topic === "work") + 1, 9], raises: [] }), longWork, rules);
-  check("the reply check flags a reply that clearly breaks a scoped style rule (a rule number not listed is ignored)", flagged.length === 1 && flagged[0].name === T.PREF_STYLE && /about work/.test(flagged[0].reason ?? ""), flagged);
+  const workId = live.find((p) => p.rule.topic === "work")!.id;
+  check("the reply check flags a reply that clearly breaks a scoped style rule (a rule number not listed is ignored; logged by rule id)", flagged.length === 1 && flagged[0].name === T.PREF_STYLE && flagged[0].reason === `style: the reply clearly breaks one of their reply rules (rule ${workId})`, flagged);
   check("a style flag never cuts the reply (style can't be guaranteed in code; it's logged)", /c\.name !== "pref_style"/.test(src("harness/replyGrounding.ts")) && G.stripUnsupported(longWork, []) === longWork);
   check("an unreadable answer flags nothing", T.readReplyRulesAnswer("not json", longWork, rules).length === 0);
   const prompt = T.replyRulesPrompt(longWork, rules, "can you send the board plan?");
@@ -337,39 +361,53 @@ const X = "00000000-0000-4000-8000-0000000000f6";
   // Finds: the keep gate (sweeps and reply searches alike).
   const finds = [{ name: "Bitcoin Builders Happy Hour", details: { description: "web3 founders" } }, { name: "Climbing Social", details: { description: "bouldering night" } }];
   const kept = await L.limitsGate(finds, { avoid: [], availability: null, rules: await active(X) }, { askText: "anything fun this week", topicDeps: asModel });
-  check("a find about the subject is dropped at the keep; the rest stay", kept.kept.map((k) => k.name).join() === "Climbing Social" && /not to bring up crypto/.test(kept.out[0]?.why ?? ""), kept);
+  const xRule = (await active(X))[0].id;
+  check("a find about the subject is dropped at the keep; the rest stay (the why names the rule, never the subject)", kept.kept.map((k) => k.name).join() === "Climbing Social" && kept.out[0]?.why === T.topicRef(xRule), kept);
   const failedRead = await L.limitsGate(finds, { avoid: [], availability: null, rules: await active(X) }, { askText: "anything fun", topicDeps: { model: async () => "sorry" } });
-  check("a read that fails keeps nothing (never shown unread), and never falls back to word matching", failedRead.kept.length === 0 && failedRead.out.length === 2 && !/avoidHits|kindWords|new RegExp/.test(src("services/prefTopics.ts")));
+  check("a failed read on a search Cue runs on its own holds the finds this run: not shown, not dropped, not passed over", failedRead.kept.length === 0 && failedRead.out.length === 0 && failedRead.held.length === 2 && !/avoidHits|kindWords|new RegExp/.test(src("services/prefTopics.ts")));
+  const keptOnFail = await L.limitsGate(finds, { avoid: [], availability: null, rules: await active(X) }, { askText: "anything fun", topicDeps: { model: async () => "sorry" }, onTopicReadFail: "keep" });
+  check("... on a search they asked for (a reply's search, their own ask), the finds are kept: a failed read never starves them", keptOnFail.kept.length === 2 && !keptOnFail.held.length);
+  check("the sweep keeps on a failed read for their own ask, holds for profile and goals, and never logs held finds as passed over; a reply's search keeps", /onTopicReadFail: c\.fromProfile \? "hold" : "keep"/.test(src("services/sweepFind.ts")) && /passedOver\(lookedAt\.filter\(\(l\) => !heldUrls\.has\(l\.url\)\)/.test(src("services/sweepFind.ts")) && /onTopicReadFail: "keep"/.test(src("agent/loopTools.ts")));
   check("the sweep's keep and the reply search's keep both carry their rules", /rules: k\.limits\.rules/.test(src("services/sweepFind.ts")) && /lim\.rules\?\.some\(\(r\) => r\.area === "avoid_topic"\)/.test(src("agent/loopTools.ts")));
   const theirAsk = T.topicPrompt([{ name: "Crypto Night", details: "" }], ["crypto"], "any crypto meetups this week?");
   check("when their own ask is about it, the read is told they raised it", /A subject their own request is about is theirs to raise/.test(theirAsk));
   // Proactive candidates: Cue's own are held at enqueue; what they asked for never is.
   const deps: import("../../src/services/prefTopics.js").TopicDeps = { prefs: (u) => P.activePreferences(u), judge: async (items, topics) => canned(items, topics) };
-  check("a new offer about the subject is never queued", (await T.candidateTopicHold({ userId: X, type: "event_offer", summary: "Bitcoin Builders Happy Hour", payload: { match: { name: "Bitcoin Builders Happy Hour" } } }, deps)) === "they asked Cue not to bring up crypto");
+  check("a new offer about the subject is never queued (the reason names the rule, not the subject)", (await T.candidateTopicHold({ userId: X, type: "event_offer", summary: "Bitcoin Builders Happy Hour", payload: { match: { name: "Bitcoin Builders Happy Hour" } } }, deps)) === T.topicRef(xRule));
+  check("an offer answering an open ask of theirs is never held by a subject (it's a requested delivery)", (await T.candidateTopicHold({ userId: X, type: "event_offer", summary: "Bitcoin Builders Happy Hour", payload: { askId: "a9", match: { name: "Bitcoin Builders Happy Hour" } } }, deps)) === null && (await T.candidateTopicHold({ userId: X, type: "event_offer", summary: "Bitcoin Builders Happy Hour", payload: {}, answering: true }, deps)) === null);
+  check("enqueue passes the send gate's own answering read", /candidateTopicHold\(\{ \.\.\.input, answering: isAnswering\(input\) \}/.test(src("harness/proactive.ts")));
   check("a check-in about it isn't either", !!(await T.candidateTopicHold({ userId: X, type: "ask_checkin", summary: "how the crypto fund raise is going", payload: {} }, deps)));
   check("something else queues as usual", (await T.candidateTopicHold({ userId: X, type: "event_offer", summary: "Climbing Social", payload: {} }, deps)) === null);
   check("a requested delivery is never held (they asked for it)", (await T.candidateTopicHold({ userId: X, type: "pre_arrival", summary: "your crypto night starts at 7", payload: {} }, deps)) === null);
   check("a read that fails holds Cue's own offer (never queued unread)", /couldn't be checked/.test((await T.candidateTopicHold({ userId: X, type: "event_offer", summary: "Climbing Social", payload: {} }, { ...deps, judge: async () => null })) ?? ""));
   let judged = 0;
   check("a member with no such rule costs no read", (await T.candidateTopicHold({ userId: MEMBER_B, type: "event_offer", summary: "Bitcoin Builders Happy Hour", payload: {} }, { ...deps, judge: async (i, t) => (judged++, canned(i, t)) })) === null && judged === 0);
-  check("enqueueCandidate asks before a new candidate is queued", /T\.candidateTopicHold\(input, T\.realTopicDeps, isNew\)/.test(src("harness/proactive.ts")));
   // What's already waiting when the rule is set.
   const waiting = [
     { id: "1", type: "event_offer", summary: "Bitcoin Builders Happy Hour", payload: { match: { name: "Bitcoin Builders Happy Hour" } } },
     { id: "2", type: "companion", summary: "checking in on the running plan", payload: {} },
     { id: "3", type: "event_brief", summary: "brief for the crypto night you're going to", payload: {} },
+    { id: "4", type: "event_offer", summary: "Crypto Founders Night", payload: { askId: "a9", match: { name: "Crypto Founders Night" } } },
   ];
   const skipped: string[] = [];
+  const reasons: string[] = [];
   const removed: string[] = [];
+  const asks: (string | null | undefined)[] = [];
   const res = await T.dropTopicWork(X, "crypto", {
-    judge: async (items, topics) => canned(items, topics),
+    judge: async (items, topics, ask) => (asks.push(ask), canned(items, topics)),
     pending: async (u) => (u === X ? waiting : []),
-    skipPending: async (_u, id) => (skipped.push(id), true),
-    backlogs: async () => [{ ask_id: "x1", items: [{ match: { name: "Web3 Demo Day", details: { description: "crypto demos" } } }, { match: { name: "Climbing Social" } }] }],
+    skipPending: async (_u, id, why) => (skipped.push(id), reasons.push(why), true),
+    backlogs: async () => [
+      { ask_id: "profile", items: [{ askText: "founder events", match: { name: "Web3 Demo Day", details: { description: "crypto demos" } } }, { match: { name: "Climbing Social" } }] },
+      { ask_id: "a9", items: [{ askText: "crypto meetups", match: { name: "Crypto Founders Night", details: { description: "crypto" } } }] },
+    ],
     removeFromBacklog: async (_u, _a, names) => (removed.push(...names), names.size),
-  });
+  }, xRule);
   check("setting the rule drops what's waiting about it: Cue's own offer skipped, the backlog find removed", res.skipped === 1 && skipped.join() === "1" && removed.join() === "Web3 Demo Day", { res, skipped, removed });
   check("... never a requested brief, never anything else", !skipped.includes("2") && !skipped.includes("3") && !removed.includes("Climbing Social"));
+  check("the skip reason names the rule, never the subject", reasons.length === 1 && reasons[0] === T.topicRef(xRule) && !/crypto/i.test(reasons[0]));
+  check("... and never an offer or a find answering an open ask of theirs", !skipped.includes("4") && !removed.includes("Crypto Founders Night"));
+  check("... the profile's finds are judged with the words they were searched for", asks.includes("founder events"));
   // Replies: told not to raise it, and the check cuts a sentence that does.
   const rf = P.replyPreferenceFacts(await active(X), new Date(), {});
   check("the reply (and call) is told not to raise it unless they do", rf.instructions.some((i) => /not to bring up crypto/.test(i) && /If they bring it up themselves, follow their lead/.test(i)) && rf.rules.avoid.join() === "crypto");
@@ -377,7 +415,13 @@ const X = "00000000-0000-4000-8000-0000000000f6";
   const cut = T.readReplyRulesAnswer(JSON.stringify({ style: [], raises: [{ topic: "crypto", sentence: "Saw a wild bitcoin rally today." }, { topic: "crypto", sentence: "a sentence that isn't in the reply" }, { topic: "politics", sentence: "Anyway, Climbing Social is Thursday at 7." }] }), draft, rf.rules);
   check("the reply check flags only a real sentence of the reply, on a subject on their list", cut.length === 1 && cut[0].name === T.PREF_TOPIC, cut);
   check("... and that sentence is cut, the rest goes", G.stripUnsupported(draft, cut).trim() === "Anyway, Climbing Social is Thursday at 7.", G.stripUnsupported(draft, cut));
-  check("the read is told their own message bringing it up makes it theirs", /when their message didn't bring it up/.test(T.replyRulesPrompt(draft, rf.rules, "how's crypto looking?")));
+  // "They raise X, then say thanks": the read sees the exchange before their last message, so X is still theirs.
+  const thanks = T.replyRulesPrompt("Glad the crypto fund close went well.", rf.rules, "thanks!", "User said: the crypto fund closed today!\nCo replied: congrats, that's huge");
+  check("the read sees the exchange just before (a subject they raised a turn or two ago is theirs)", /The conversation just before:\nUser said: the crypto fund closed today!/.test(thanks) && /in their message or in their own lines just before/.test(thanks));
+  check("the text reply passes that exchange to the read", /T\.judgeReplyRules\(draft, rf\.prefRules!, src\.message, undefined, src\.recentConversation\.split\("\\n"\)\.slice\(-8\)/.test(src("harness/replyGrounding.ts")));
+  let seen = "";
+  await T.judgeReplyRules("Glad the crypto fund close went well.", rf.rules, "thanks!", { model: async (pr) => ((seen = pr), JSON.stringify({ style: [], raises: [] })) }, "User said: the crypto fund closed today!");
+  check("... through the real call", /the crypto fund closed today/.test(seen));
 }
 
 // ---------------------------------------------------------------- 7. cross-member isolation
@@ -398,6 +442,63 @@ const X = "00000000-0000-4000-8000-0000000000f6";
   check("said on a call (the call's learning read, right after it), it sets their area the same way", areas[V]?.place === "SF" && (await active(V))[0].source.via === "call");
   check("the call's learning stores rules through learnPreferences (which applies them)", /learnPreferences\(input\.userId, learned\.preferences/.test(src("services/callLearning.ts")) && /await applyRuleEffects\(userId, changes, stored/.test(src("services/memberPreferences.ts")));
   check("setSearchArea is on the call's allow-list (both mediums)", CAP.callToolNames().includes("setSearchArea") && CAP.callRunFor("setSearchArea")?.run === "now");
+}
+
+// ---------------------------------------------------------------- 9. "only SF this week": it ends, and searches go back home
+{
+  const Y = "00000000-0000-4000-8000-0000000000a8";
+  const Y2 = "00000000-0000-4000-8000-0000000000a9";
+  homes[Y] = "Sacramento";
+  homes[Y2] = "Sacramento";
+  const { DateTime } = await import("luxon");
+  const today = DateTime.now().setZone(NY).toISODate()!;
+  await learn(Y, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, expires_on: today, quote: "only SF this week" }, "only SF this week");
+  const rule = (await active(Y))[0];
+  check("a time-bound where-to-search rule is set as their area, with its end", areas[Y]?.place === "SF" && !!rule.expiresAt && (await where(Y)).city === "San Francisco, California");
+  const clear = (u: string, place: string) => A.clearSearchArea(u, { because: "ended", onlyPlace: place }, areaDeps);
+  const early = await P.expireAreaRules({ now: new Date(Date.parse(rule.expiresAt!) - 60_000), userId: Y, clear }, db as any);
+  check("before it ends, nothing changes", early.expired === 0 && areas[Y]?.place === "SF");
+  const ended = await P.expireAreaRules({ now: new Date(Date.parse(rule.expiresAt!) + 60_000), clear }, db as any);
+  check("when it ends: the rule is retired as expired and their searches are back at home", ended.expired === 1 && ended.cleared === 1 && !areas[Y] && (await where(Y)).city === "Sacramento" && facts.find((f) => String(f.id) === rule.id)?.meta.state === "expired");
+  check("... and it never comes back (it ran once; a second pass does nothing)", (await P.expireAreaRules({ now: new Date(Date.parse(rule.expiresAt!) + 120_000), clear }, db as any)).expired === 0);
+  // An area set since by something else is never undone by the old rule ending.
+  await learn(Y2, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, expires_on: today, quote: "only SF this week" }, "only SF this week");
+  const r2 = (await active(Y2))[0];
+  areas[Y2] = { place: "Oakland", quote: "Oakland now", label: "Oakland, California" };
+  await P.expireAreaRules({ now: new Date(Date.parse(r2.expiresAt!) + 60_000), userId: Y2, clear }, db as any);
+  check("an area set since (Oakland) stays when the old SF rule ends", areas[Y2]?.place === "Oakland");
+  check("the expiry runs on a schedule and sends nothing", /P\.expireAreaRules\(\)/.test(readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8")) && !/send|enqueue/i.test(src("services/memberPreferences.ts").slice(src("services/memberPreferences.ts").indexOf("export async function expireAreaRules"), src("services/memberPreferences.ts").indexOf("// What-Cue-knows changed their search area itself"))));
+}
+
+// ---------------------------------------------------------------- 10. "which Springfield?": the rule follows the place they settle on
+{
+  const Z = "00000000-0000-4000-8000-0000000000b9";
+  homes[Z] = "Sacramento";
+  await learn(Z, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "Springfield" }, quote: "search Springfield from now on" }, "search Springfield from now on");
+  check("an ambiguous place changes nothing yet", !areas[Z]);
+  // Their answer goes through the setSearchArea tool, which then syncs their rules (agent/conversationTools.ts).
+  const r = await A.setSearchArea(Z, { place: "Springfield, Missouri", theirWords: "the Missouri one", message: "the Missouri one", recent: "Co replied: which Springfield, Missouri or Illinois?" }, areaDeps);
+  check("their answer sets the area", r.ok && areas[Z]?.place === "Springfield, Missouri", r);
+  const synced = await P.syncAreaRules(Z, { place: "Springfield, Missouri" }, db as any);
+  const p = (await active(Z))[0];
+  check("the rule is linked to the place it now is, and shown applied", synced.linked === 1 && p.areaPlace === "Springfield, Missouri" && P.ruleApplied(p, await A.areaCtxOf(Z, db)));
+  check("places are compared by their parts, not the raw string (Springfield is Springfield, Missouri; never Portland, OR for Portland, ME)", P.areaIsRulePlace("Springfield, Missouri", "Springfield") && P.areaIsRulePlace("San Francisco, California", "SF") && !P.areaIsRulePlace("Portland, OR", "Portland, ME") && !P.areaIsRulePlace("Oakland", "SF"));
+  const item = W.knownItems({ profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], prefs: [{ id: p.id, text: "x", quote: null }] }).find((i) => i.source === "pref")!;
+  await W.applyOne(db as any, Z, { prefs: [] } as any, item, "remove", null, "remove it");
+  check("withdrawing it clears the area it set", !areas[Z]);
+  // The tool moving the area somewhere else retires the rule (the rule and the area never disagree).
+  await learn(Z, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "SF" }, quote: "search SF from now on" }, "search SF from now on");
+  await A.setSearchArea(Z, { place: "Oakland", theirWords: "switch to Oakland", message: "switch to Oakland going forward" }, areaDeps);
+  const moved = await P.syncAreaRules(Z, { place: "Oakland" }, db as any);
+  check("the tool moving the area elsewhere retires the old rule", moved.retired === 1 && !(await active(Z)).length);
+  check("the setSearchArea tool syncs their rules after every change", /await A\.syncAreaRulesAfter\(ctx\.userId, r\)/.test(src("agent/conversationTools.ts")) && /syncAreaRules\(userId, r\.changed === "home" \? null : \{ place: r\.place \}\)/.test(src("services/searchArea.ts")));
+}
+
+// ---------------------------------------------------------------- 11. privacy: no log carries a subject in their words
+{
+  const leaked = writes.filter((w) => !/co_facts/.test(w.sql)).filter((w) => /crypto/i.test(JSON.stringify(w.args)));
+  check("no write outside their own record (decision log, skip reasons) carries the subject", leaked.length === 0, leaked.map((w) => w.sql.slice(0, 80)));
+  check("the enqueue hold's log reason is the rule's reference", /reason: held/.test(src("harness/proactive.ts")) && /topicRef\(rules\.find/.test(src("services/prefTopics.ts")));
 }
 
 P.setRuleEffectsForTests(null);

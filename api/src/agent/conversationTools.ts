@@ -1832,6 +1832,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "it couldn't be saved just now" };
         });
         if (r.ok) {
+          // Their where-to-search rules follow the area (services/memberPreferences.ts syncAreaRules): one naming this place is linked
+          // to it, any other is retired, so a rule and the area never disagree. Non-fatal: the area changed either way.
+          await A.syncAreaRulesAfter(ctx.userId, r).catch((err: any) => console.error("setSearchArea: syncing their rules failed (non-fatal):", err?.message ?? err));
           ctx.facts?.add("did_this_turn", A.areaReceipt(r));
           return { ok: true, searchesIn: r.changed === "home" ? r.home : (r.label ?? r.place), ...(r.changed === "home" ? { backToHome: true } : {}) };
         }

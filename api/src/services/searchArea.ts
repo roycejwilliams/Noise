@@ -177,6 +177,12 @@ export async function dropFallbackFinds(db: Db, userId: string, because: string)
   return { dropped, cancelled };
 }
 
+// After the setSearchArea tool changed their area: their where-to-search rules follow it (services/memberPreferences.ts syncAreaRules),
+// so a rule and the area never disagree. Rules are only linked or retired here; nothing is spent, shared or sent.
+export async function syncAreaRulesAfter(userId: string, r: Extract<SetAreaResult, { ok: true }>): Promise<unknown> {
+  return (await import("./memberPreferences.js")).syncAreaRules(userId, r.changed === "home" ? null : { place: r.place });
+}
+
 // The turn's receipt for a change that went through (the reply check's DONE THIS TURN): what changed, what didn't.
 export function areaReceipt(r: Extract<SetAreaResult, { ok: true }>): string {
   if (r.changed === "home") return `Set where Cue searches for them back to their home, ${r.home}, from now on: asks and goals that name no place of their own, and their daily search, look there again.`;
