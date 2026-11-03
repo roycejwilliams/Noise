@@ -2841,15 +2841,16 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE proactive_sends ADD COLUMN IF NOT EXISTS notify_class TEXT`)
     .catch((err: Error) => console.error("proactive_sends.notify_class init failed:", err));
-  // A team-side hold (services/teamHold.ts, 2026-11-02): the team quiets one member for a reason, until it expires. Who set it and why
-  // are the team's, never the member's words: nothing member-facing reads this table. lifted_at: lifted early.
+  // A team-side hold (services/teamHold.ts, 2026-11-02): the team quiets one member's Cue-started outreach until it expires. Who set it
+  // and a fixed category (no free text about the member: never a hidden dossier, review of #363). Nothing member-facing reads this
+  // table. lifted_at: lifted early. The 30-day cap is a CHECK too (added once, NOT VALID: additive, never rewrites a row).
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS team_holds (
         id BIGSERIAL PRIMARY KEY,
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         set_by TEXT NOT NULL,
-        reason TEXT NOT NULL,
+        category TEXT NOT NULL CHECK (category IN ('tester', 'hard_moment', 'member_asked_offline', 'other')),
         set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         expires_at TIMESTAMPTZ NOT NULL,
         lifted_at TIMESTAMPTZ,
@@ -2857,6 +2858,15 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_team_holds_user ON team_holds (user_id, expires_at)`))
+    .then(() =>
+      pool.query(
+        `DO $$ BEGIN
+           IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'team_holds_max_30_days') THEN
+             ALTER TABLE team_holds ADD CONSTRAINT team_holds_max_30_days CHECK (expires_at > set_at AND expires_at <= set_at + INTERVAL '30 days') NOT VALID;
+           END IF;
+         END $$`,
+      ),
+    )
     .catch((err: Error) => console.error("team_holds init failed:", err));
   // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until

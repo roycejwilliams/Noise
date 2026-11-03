@@ -59,6 +59,28 @@ type Db = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
 // table can't settle it (no such place, or same-named places in different zones with none clearly the one).
 const lookupCity = async (city: string, region: string | null = null) => (await localZoneFor(city, region)) ?? (await import("./geocoding.js")).getTimezoneForCity(city, { region });
 
+// A bare city's zone, what they stated first (review of #363: "Dallas" with a 412 number is Dallas, Texas). Their stated state, when
+// there is one, decides. With none, the city alone (the local table, then the geocoder) wins over the phone's area code; the area
+// code only settles a city the local table can't (two comparable same-named places). When both were read and disagree, it's logged.
+export async function cityZone(
+  city: string,
+  regions: { stated: string | null; phone: string | null },
+  onDisagree: (d: { stated: string; phone: string }) => void = () => {},
+): Promise<string | null> {
+  if (regions.stated) return lookupCity(city, regions.stated);
+  const plain = await localZoneFor(city, null);
+  if (!regions.phone) return plain ?? lookupCity(city, null);
+  const byPhone = await localZoneFor(city, regions.phone);
+  if (plain && byPhone && plain !== byPhone) onDisagree({ stated: plain, phone: byPhone });
+  return plain ?? byPhone ?? lookupCity(city, regions.phone);
+}
+// Zones and nothing else (never the city or the number).
+function recordZoneDisagreement(userId: string, d: { stated: string; phone: string }): void {
+  void import("../harness/core.js")
+    .then((C) => C.recordDecision({ layer: 4, decision: "member.zone", userId, outcome: "skip", action: "phone_state_disagrees", proposal: { kept: d.stated, phoneSuggested: d.phone } }))
+    .catch(() => {});
+}
+
 // The zone of their home city from the local place table, or null when it can't say (Royce, 2026-11-02: "derive each member's zone
 // from their home city, which Cue already resolves"). Deterministic, no outside call: the same-named places that fit what the city
 // says ("Portland, ME" is Maine) and their state when one is known (region: the 2-letter code from areaCodes.ts regionFor); the
@@ -107,10 +129,11 @@ export async function memberZone(userId: string, deps: { db?: Db; lookup?: (city
         q(`SELECT snapshot->>'place' AS place FROM person_snapshots WHERE user_id = $1`),
         q(`SELECT text FROM member_claims WHERE user_id = $1 AND kind = 'city' ORDER BY confirmed_on DESC LIMIT 3`),
       ]);
-      const { regionFor } = await import("./areaCodes.js");
-      return regionFor({ city: rows[0].city, places: [snap[0]?.place, ...claims.map((c: any) => c.text)], phone: u[0]?.phone_number });
+      const { regionFor, stateForPhone } = await import("./areaCodes.js");
+      // Stated: their city and the places they named (no phone). Phone: the area code's state, only a guess.
+      return { stated: regionFor({ city: rows[0].city, places: [snap[0]?.place, ...claims.map((c: any) => c.text)] }), phone: stateForPhone(u[0]?.phone_number) };
     };
-    const r = await zoneFromProfile(rows[0], deps.lookup ?? (async (city: string) => lookupCity(city, await regionOf())));
+    const r = await zoneFromProfile(rows[0], deps.lookup ?? (async (city: string) => cityZone(city, await regionOf(), (d) => recordZoneDisagreement(userId, d))));
     if (r.store) {
       // Only if the city is still the one it came from (a concurrent city write re-derives on its own).
       await db
