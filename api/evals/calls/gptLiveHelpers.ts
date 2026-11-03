@@ -231,7 +231,10 @@ let jobRow: any = null;
     now: () => new Date("2026-11-03T18:00:00Z"), sentSince: async () => sends.flat().map((t) => ({ at: new Date("2026-11-03T18:00:00Z"), text: t, kind: /^https?:/.test(t) ? "link" : "text" })),
     onFile: async () => [CATER], rejected: async () => [],
   };
-  const t = (await T.getTask(USER, jobRow.id))!;
+  // The job was written on the call a moment before this pinned clock: its row's created_at is the real wall clock (the stub's
+  // new Date()), so pin it too, or once the real time passes 18:00 UTC on 2026-11-03 every send stamped at the pinned clock reads as
+  // older than the job and "done" is (rightly) refused.
+  const t = { ...(await T.getTask(USER, jobRow.id))!, createdAt: "2026-11-03T17:45:00Z" };
   // A job dispatched on a call closes as done only after a send about it went: finishing first is refused.
   script.push({ tool: "finish", input: { status: "done", outcome: "found caterers" } }, { text: "ok" });
   await TT.runTaskTurnWith(t, { ...deps, sentSince: async () => [] });
@@ -303,7 +306,7 @@ let jobRow: any = null;
   check("4. two starts of the same job at once: one row, the second gets it back", db.tasks.filter((t) => t.dispatch_key === key).length === 1 && both.every((r) => r.ok) && both.some((r: any) => r.existing), both.map((r: any) => r.existing ?? false));
   b.tw.close();
   // A delivery whose send failed is retried by the next wake, and only one text goes.
-  const t = (await T.getTask(USER, db.tasks[0].id))!;
+  const t = { ...(await T.getTask(USER, db.tasks[0].id))!, createdAt: "2026-11-03T17:45:00Z" }; // pinned with the clock, as in 2
   const sends: string[][] = [];
   let fail = true;
   const VENUE = { name: "The Lodge on 18th", url: "https://lodge18.example/private", tier: 2, facts: ["holds 60 standing"] };
