@@ -215,13 +215,22 @@ export function callClassOf(reason: string): SendClass {
   return ({ user_initiated: "reply", router_decision: "reply", scheduled_call: "requested", checkin_cadence: "checkin", auto_intake: "unsolicited" } as Record<string, SendClass>)[kind] ?? "unsolicited";
 }
 
+// Pure: a team hold's answer for a send that isn't a reply (memberRuleGate returns before this for a reply). Its id only, never the
+// reason's words; it may go once the hold expires.
+export const TEAM_HOLD = "team_hold";
+export function teamHoldCheck(h: { id: string; expiresAt: Date }): GateCheck & { retryAt?: Date } {
+  return { name: MEMBER_RULE, pass: false, reason: `${TEAM_HOLD} ${h.id} holds it`, retryAt: h.expiresAt };
+}
+
 // The whole gate for one send, read fresh: their rules and what's been sent. A rules read that fails holds the send (it can't know a
 // rule isn't there) and says so; it's retried like any hold.
 export async function memberRuleGate(db: Q, o: { userId: string; now: Date; cls: SendClass; channel: NotifyChannel; soonAt?: Date | null; rulesAfter?: Date | null }): Promise<GateCheck & { retryAt?: Date }> {
   if (o.cls === "reply") return { name: MEMBER_RULE, pass: true };
   const { activePreferences } = await import("../services/memberPreferences.js");
   try {
-    const [prefs, sent, zone] = await Promise.all([activePreferences(o.userId, o.now, db), loadCounted(db, o.userId), import("../services/memberTime.js").then((M) => M.memberZone(o.userId)).catch(() => null)]);
+    const [prefs, sent, zone, hold] = await Promise.all([activePreferences(o.userId, o.now, db), loadCounted(db, o.userId), import("../services/memberTime.js").then((M) => M.memberZone(o.userId)).catch(() => null), import("../services/teamHold.js").then((T) => T.activeTeamHold(o.userId, o.now, db))]);
+    // The team's hold (services/teamHold.ts), apart from their own rules: everything but the turn's reply, until it expires.
+    if (hold) return teamHoldCheck(hold);
     return memberRuleCheck(prefs, { now: o.now, cls: o.cls, channel: o.channel, sent, zone, soonAt: o.soonAt, rulesAfter: o.rulesAfter });
   } catch (err: any) {
     return { name: MEMBER_RULE, pass: false, reason: `couldn't read their rules (${String(err?.message ?? err).slice(0, 60)})`, retryAt: new Date(o.now.getTime() + 15 * 60_000) };

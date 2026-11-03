@@ -22,6 +22,7 @@
     "evals/preferences/capture.ts",
     "evals/preferences/enforce.ts",
     "evals/preferences/decisions.ts",
+    "evals/preferences/hardening.ts",
     "evals/proactive/durableSends.ts",
     "evals/proactive/nameChange.ts",
     "evals/proactive/moodHolds.ts",

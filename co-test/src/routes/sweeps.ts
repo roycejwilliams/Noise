@@ -72,6 +72,24 @@ router.get("/failures", requireTesterLoginApi, requireTeam, async (req, res) => 
     res.status(500).json({ success: false, error: "The failures view couldn't be read." });
   }
 });
+// The rule check (api/src/harness/ruleCompliance.ts): sends that went against a member's own rule or a team hold, with the send path
+// that caused it. Ids, paths and rule ids only, never anyone's words. Team only, read-only: it fixes nothing.
+router.get("/rule-checks", requireTesterLoginApi, requireTeam, async (req, res) => {
+  try {
+    const days = Math.min(14, Math.max(1, Number(req.query.days ?? 7) || 7));
+    const R = await import("../../../api/src/harness/ruleCompliance.js");
+    const until = new Date();
+    const breaks = await R.ruleBreaks(new Date(until.getTime() - days * 86_400_000), until);
+    const { default: pool } = await import("../../../api/src/db/db.js");
+    const ids = [...new Set(breaks.map((b) => b.userId))];
+    const { rows } = ids.length ? await pool.query(`SELECT id, first_name FROM users WHERE id = ANY($1::uuid[])`, [ids]) : { rows: [] as any[] };
+    const names = new Map<string, string>(rows.map((r: any) => [String(r.id), String(r.first_name ?? "")]));
+    res.json({ success: true, rows: breaks.map(({ userId, ...b }) => ({ name: names.get(userId) ?? "?", ...b })) });
+  } catch (err: any) {
+    console.error("rule checks failed:", err?.name ?? "Error");
+    res.status(500).json({ success: false, error: "The rule check couldn't be read." });
+  }
+});
 // One trace's exact prompt and answer (api/src/services/llmTraceText.ts): Langfuse shows the trace id with no text, and this
 // reads our own 14-day copy. Team only, read-only: it holds members' own words. An id that isn't a trace id answers 400.
 router.get("/trace/:traceId", requireTesterLoginApi, requireTeam, async (req, res) => {

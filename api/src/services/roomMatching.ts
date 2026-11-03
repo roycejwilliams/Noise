@@ -1009,6 +1009,23 @@ export async function scheduleRoomCloses(now = new Date()): Promise<number> {
 export type CloseResult = { eventId: string; expiredOffers: number; droppedAsks: number; expiredPairs: number; checkins: number };
 
 // The durable end-of-night job: claims each due room once (a claim older than 10 minutes is taken again after a crash).
+// Pure: whom an expiring pair's close note goes to (the one side that said yes to a Cue-suggested intro the other never answered), or
+// null. A pair a member asked for by name gets none (deferredSends.ts: "found" must never leak through a later note).
+export function closeNoteFor(p: { origin?: string | null; a_id: string; b_id: string; a_answer?: string | null; b_answer?: string | null }): { to: string; about: string } | null {
+  if (p.origin !== "co") return null;
+  if (p.a_answer === "yes" && !p.b_answer) return { to: String(p.a_id), about: String(p.b_id) };
+  if (p.b_answer === "yes" && !p.a_answer) return { to: String(p.b_id), about: String(p.a_id) };
+  return null;
+}
+// Written on the yes side's record: the intro didn't happen, never why and never whether the other side saw it (internal fact).
+export const introDidntHappenNote = (name: string, eventName: string | null): string =>
+  `The intro with ${name} that Cue suggested${eventName ? ` at ${eventName}` : ""} didn't happen this time. If they ask, say so plainly. Never say whether ${name} got the ask, saw it or answered, or why.`;
+export async function noteIntroDidntHappen(to: string, about: string, eventName: string | null): Promise<void> {
+  const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [about]).catch(() => ({ rows: [] as any[] }));
+  const name = String(rows[0]?.first_name ?? "").trim() || "them";
+  await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`, [to, introDidntHappenNote(name, eventName)]);
+}
+
 export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
   const out: CloseResult[] = [];
   const { rows } = await pool.query(
@@ -1024,13 +1041,20 @@ export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
     // An ask that never went out (queued, or stuck mid-send) loses its opened_at as it expires: the member-names read counts an expired
     // ask with an opened_at as one that reached them, so a stuck send must not put the candidate's name on their list (review of #295).
     const offers = await pool.query(`UPDATE event_match_offers SET status = 'expired', answered_at = NULL, opened_at = CASE WHEN status IN ('queued', 'sending') THEN NULL ELSE opened_at END WHERE event_id = $1 AND status IN ('open', 'queued', 'sending') RETURNING person_id`, [eventId]);
-    // Asks held for someone's morning: brought due now, so the deferred runner drops them as "event over" and tells the
-    // asker only that it didn't go out.
+    // Asks held for someone's morning or their own rule: brought due now, so the deferred runner drops them as "event over" (no note
+    // of their own: the asker's note is the pair's, below, the same as for an ask that went and wasn't answered).
     const held = await pool.query(
       `UPDATE deferred_sends SET due_at = $2 WHERE status = 'queued' AND after_kind = 'event_direct_ask' AND after_payload->>'eventId' = $1 RETURNING id`,
       [eventId, now],
     );
-    const pairs = await pool.query(`UPDATE co_pairs SET state = 'expired', expired_at = $2, updated_at = NOW() WHERE event_id = $1 AND state IN ('suggested', 'asked') RETURNING id`, [eventId, now]);
+    const pairs = await pool.query(`UPDATE co_pairs SET state = 'expired', expired_at = $2, updated_at = NOW() WHERE event_id = $1 AND state IN ('suggested', 'asked') RETURNING id, origin, a_id, b_id, a_answer, b_answer`, [eventId, now]);
+    // A Cue-suggested intro one side said yes to and the night ended on: that side hears the same thing whether the other never got the
+    // ask (held for their hours or their own rule) or got it and didn't answer (2026-11-02: nothing hints where the other member's
+    // thread stood). The held ask itself adds no note when it's dropped (deferredSends.ts EVENT_OVER).
+    for (const p of pairs.rows) {
+      const yesSide = closeNoteFor(p);
+      if (yesSide) await noteIntroDidntHappen(yesSide.to, yesSide.about, r.event_name ?? null).catch(() => {});
+    }
     // The follow-up path: each member who was there gets their "how was tonight" check-in (eventCheckinFollowUp.ts), a few
     // hours after the end. Idempotent: a row the scoring pass already scheduled stays as it was.
     let checkins = 0;

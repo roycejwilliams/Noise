@@ -21,9 +21,9 @@ import { guardCallMessages } from "./whatCoKnows.js";
 import { startVoiceTee, type VoiceTee } from "./mediaStreamBridge.js";
 import type { OaiRequest } from "./callLlmProxy.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
-import { anthropicStream, SAFETY_LINE } from "./callLlmProxy.js";
+import { anthropicStream, SAFETY_LINE, safetyCall } from "./callLlmProxy.js";
 import { stripCues } from "./voiceCues.js";
-import { failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
+import { delegationRequest, failClassOf, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -71,6 +71,8 @@ export type LiveDeps = {
   startTee: (o: { userId: string; callKey: string; callSid: string | null }) => VoiceTee;
   // Its line for a delegated turn (routes/callLlm.ts voiceLineForTurn), Claude only.
   voiceLine: (callKey: string, req: OaiRequest) => Promise<string | null>;
+  // Rules said on this call, read beside each delegated turn and applied to the rest of it (services/callPreferences.ts). Never awaited.
+  readRules: (o: { callKey: string; userId: string; turns: LiveTurn[]; safety: boolean }) => void;
 };
 const defaults = (): LiveDeps => ({
   connectOpenAI: (key) => new WebSocket(GPT_LIVE.url, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: GPT_LIVE.startTimeoutMs, perMessageDeflate: false }) as unknown as SocketLike,
@@ -96,6 +98,7 @@ const defaults = (): LiveDeps => ({
   guardMessages: (messages, rows) => guardCallMessages(messages, rows),
   startTee: (o) => startVoiceTee(o),
   voiceLine: (callKey, req) => import("../routes/callLlm.js").then((m) => m.voiceLineForTurn(callKey, req)),
+  readRules: (o) => void import("./callPreferences.js").then((m) => m.readCallTurn(o)).catch(() => {}),
   safetyCut: async (call) => {
     const S = await import("./safety.js");
     await S.recordSafetyConcern(call.userId, call.firstName || null, "co", "a GPT-Live call was cut by OpenAI's safety filter during a safety moment");
@@ -267,11 +270,17 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const seenUpTo = Math.max(offsetMs, ...turns.filter((t) => t.who === "member").map((t) => t.startMs));
     let dropped = 0, error = false;
     const c = call;
-    // The live guards, read at most every guardCacheMs: a correction or removal texted during the call reaches this turn.
+    // Rules in what they've said since the last read (services/callPreferences.ts): read beside this turn, never before it, and never
+    // on a turn that touches their safety (the crisis path is as it was).
+    const rulesKey = `gpt-live:${sessionId}`;
+    d.readRules({ callKey: rulesKey, userId: c.userId, turns, safety: safetyCall(delegationRequest(c, turns)) });
+    // The live guards, read at most every guardCacheMs: a correction or removal texted during the call reaches this turn. And what they
+    // set on this call so far (callRuleNote: none on a safety turn).
     const guard: MessageGuard = async (messages) => {
       if (!guardRowsP || d.now() - guardAt > GPT_LIVE.guardCacheMs) { guardAt = d.now(); guardRowsP = d.guardRows(c.userId).catch(() => []); }
       const rows = await guardRowsP;
-      return rows.length ? d.guardMessages(messages, rows) : messages;
+      const guarded = rows.length ? d.guardMessages(messages, rows) : messages;
+      return (await import("./callPreferences.js")).withCallRuleNote(rulesKey, guarded);
     };
     // The caller has moved on (said something new since this turn was handed over): the answer, or what's left of it, is to a
     // question no longer asked.

@@ -2841,6 +2841,23 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE proactive_sends ADD COLUMN IF NOT EXISTS notify_class TEXT`)
     .catch((err: Error) => console.error("proactive_sends.notify_class init failed:", err));
+  // A team-side hold (services/teamHold.ts, 2026-11-02): the team quiets one member for a reason, until it expires. Who set it and why
+  // are the team's, never the member's words: nothing member-facing reads this table. lifted_at: lifted early.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS team_holds (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        set_by TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        lifted_at TIMESTAMPTZ,
+        lifted_by TEXT
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_team_holds_user ON team_holds (user_id, expires_at)`))
+    .catch((err: Error) => console.error("team_holds init failed:", err));
   // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
   // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.

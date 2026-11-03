@@ -398,6 +398,8 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
 
   // The member's own rules and what's been sent (harness/notifyGate.ts): this world's members set none.
   if (has("FROM co_facts WHERE owner_user_id = $1 AND relation = 'prefers'")) return R([]);
+  // The team's holds (services/teamHold.ts): none in the simulated room.
+  if (has("FROM team_holds")) return R([]);
   if (has("SELECT type, sent_at, notify_class FROM proactive_sends WHERE user_id = $1")) return R(W.proactiveSends.filter((s) => s.user_id === p[0]).map((s) => ({ type: s.type, sent_at: new Date(), notify_class: null })));
   if (has("SELECT created_at, reason FROM harness_decisions WHERE user_id = $1 AND decision = 'call.gate'")) return R([]);
   // in-room sends cap / ledger

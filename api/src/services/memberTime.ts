@@ -55,7 +55,38 @@ export async function zoneFromProfile(
 type Db = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
 // A bare city is read in their own state (from their phone's area code, services/areaCodes.ts) when it's known: "Cambridge" for a
 // 617 number is Cambridge, Massachusetts, not England (2026-10-12 intelligence audit).
-const lookupCity = async (city: string, region: string | null = null) => (await import("./geocoding.js")).getTimezoneForCity(city, { region });
+// The local place table first (services/placeResolve.ts: GeoNames' populated places, offline and free), then the geocoder when the
+// table can't settle it (no such place, or same-named places in different zones with none clearly the one).
+const lookupCity = async (city: string, region: string | null = null) => (await localZoneFor(city, region)) ?? (await import("./geocoding.js")).getTimezoneForCity(city, { region });
+
+// The zone of their home city from the local place table, or null when it can't say (Royce, 2026-11-02: "derive each member's zone
+// from their home city, which Cue already resolves"). Deterministic, no outside call: the same-named places that fit what the city
+// says ("Portland, ME" is Maine) and their state when one is known (region: the 2-letter code from areaCodes.ts regionFor); the
+// zone is the one every clearly-sized candidate agrees on. Two comparable places in different zones (Portland, OR and Portland, ME
+// for a member with no state) is the geocoder's to settle, never a guess.
+export async function localZoneFor(city: string, region: string | null = null): Promise<string | null> {
+  try {
+    const P = await import("./placeResolve.js");
+    const { STATE_NAMES } = await import("./areaCodes.js");
+    const q = P.parseQualified(city);
+    if (!q.name) return null;
+    if (!q.region && region && STATE_NAMES[region]) {
+      q.region = STATE_NAMES[region].toLowerCase();
+      q.country = q.country ?? "US";
+    }
+    const all = P.localLookup(q.name).filter((c) => P.matchesQualifier(c, q));
+    if (!all.length) return null;
+    const { find } = await import("geo-tz");
+    const top = all[0].population ?? 0;
+    // Every candidate within the dominance ratio of the biggest must agree on the zone.
+    const contenders = all.filter((c) => (c.population ?? 0) * P.PLACE_RESOLVE.dominance >= top);
+    const zones = new Set(contenders.map((c) => find(c.lat, c.lng)[0] ?? null));
+    if (zones.size !== 1) return null;
+    return validZone([...zones][0]);
+  } catch {
+    return null;
+  }
+}
 
 // Their zone, or null when none is known (a time decision then measures in FALLBACK_ZONE: wordsZone / memberZoneOrFallback).
 // Reads the stored zone; derives and stores it when it's missing or the city changed. Never throws.

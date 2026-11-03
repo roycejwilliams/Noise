@@ -584,8 +584,12 @@ let prefModelForTests: ((prompt: string) => Promise<string>) | null = null;
 export function setPreferenceModelForTests(fn: typeof prefModelForTests): void {
   prefModelForTests = fn;
 }
-export function preferenceReadPrompt(o: { words: string; onFile: Preference[]; localToday: string }): string {
-  return `Read the last message a person texted Cue (an assistant). Find only standing instructions about how Cue should treat them.
+// via "call": their words since the last read on a phone call they're on (services/callPreferences.ts), from speech recognition.
+export function preferenceReadPrompt(o: { words: string; onFile: Preference[]; localToday: string; via?: "text" | "call" }): string {
+  const opening = o.via === "call"
+    ? `Read what a person just said to Cue (an assistant) on a phone call they're on now (from speech recognition, so it can hold small mistakes). Find only standing instructions about how Cue should treat them. "This call" and "now" mean the call they're on.`
+    : `Read the last message a person texted Cue (an assistant). Find only standing instructions about how Cue should treat them.`;
+  return `${opening}
 
 Their message: "${o.words.slice(0, 1500)}"
 
@@ -593,12 +597,12 @@ ${preferencePromptItem({ n: 1, onFile: o.onFile, localToday: o.localToday })}
 
 Return ONLY valid JSON, no preamble: {${PREFERENCE_JSON_SHAPE}}. An empty list when there's none.`;
 }
-export async function capturePreferencesNow(userId: string, words: string, o: { zone: string | null; source: Preference["source"]; now?: Date }): Promise<{ added: string[]; retired: string[] }> {
+export async function capturePreferencesNow(userId: string, words: string, o: { zone: string | null; source: Preference["source"]; now?: Date; via?: "text" | "call" }): Promise<{ added: string[]; retired: string[] }> {
   const now = o.now ?? new Date();
   const own = ownWords(words).trim();
   if (own.length < 4) return { added: [], retired: [] };
   const onFile = await activePreferences(userId, now);
-  const prompt = preferenceReadPrompt({ words: own, onFile, localToday: DateTime.fromJSDate(now).setZone(wordsZone(o.zone)).toISODate()! });
+  const prompt = preferenceReadPrompt({ words: own, onFile, localToday: DateTime.fromJSDate(now).setZone(wordsZone(o.zone)).toISODate()!, via: o.via });
   const text = prefModelForTests
     ? await prefModelForTests(prompt)
     : await (async () => {

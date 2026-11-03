@@ -2084,8 +2084,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(r.reason === "not_reachable" ? "No message was passed along: Cue can't reach that person." : `No message was passed along (${r.reason}).`);
           return { ok: false, error: r.error };
         }
-        ctx.facts?.add("did_this_turn", r.queued ? `Queued their words for ${r.to}: "${message.slice(0, 200)}". ${r.note}` : `Passed their words to ${r.to}: "${message.slice(0, 200)}". ${r.note}`);
-        return { ok: true, note: r.queued ? `${r.note} Say it will reach ${r.to} in their morning, not that it went through; don't promise ${r.to} will reply.` : `${r.note} Say it went through; don't promise ${r.to} will reply.` };
+        // The same words whether it went now or waits for the other member (their hours or their own rule): nothing about where their
+        // thread stands reaches this member (2026-11-02).
+        ctx.facts?.add("did_this_turn", `Took their words for ${r.to}: "${message.slice(0, 200)}". ${r.note}`);
+        return { ok: true, note: `${r.note} Say you'll pass it to ${r.to}; don't promise ${r.to} will reply.` };
       },
     }),
   };
