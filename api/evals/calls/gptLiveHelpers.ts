@@ -330,6 +330,15 @@ let jobRow: any = null;
   await TT.runTaskTurnWith(t, deps);
   script.length = 0;
   check("4. the retry delivers it once, and only then is it done", sends.length === 1 && closed.join() === "done", { sends, closed });
+  // A later result from the same call job (it has texted before): still a requested result, so it goes through the door's requested
+  // band and the member's rules as one. A call job is an "ask" task, and taskTurn sends every non-lookout task's text as owed
+  // (services/taskTurn.ts tellThem: owed || source !== "lookout"), so no coInitiated, class "requested" (notifyGate PROACTIVE_CLASS).
+  const owedFlags: unknown[] = [];
+  const again = { ...t, lastTextedAt: "2026-11-01T17:00:00Z", textsSent: 1, theirReplyAt: null };
+  script.push({ tool: "tellThem", input: { what: "One more venue for the after-party", links: [VENUE.url] } }, { text: JSON.stringify({ captions: [{ n: 1, caption: "The Lodge on 18th holds 60 standing." }], closing: null }) }, { text: "ok" });
+  await TT.runTaskTurnWith(again as any, { ...deps, send: async (m: string[], o: any) => { owedFlags.push(o?.owed); return { sent: true }; } });
+  script.length = 0;
+  check("4. a call job's later result is still sent as requested (owed), not as Cue's own find", owedFlags.length >= 1 && owedFlags.every((x) => x === true), owedFlags);
 }
 
 // ---------------------------------------------------------------- 5. a dispatch that fails, said honestly
