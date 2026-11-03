@@ -227,7 +227,7 @@ const send = (id: string, extra: Record<string, unknown> = {}) => ({ id, verdict
   const ds = readFileSync(new URL("../../src/services/dailySweep.ts", import.meta.url), "utf8");
   check("pin: the morning send still marks only this run's picks and skips pacing on its own day only", /payload->>'picked' = 'true'\s+AND \(created_at >= \$3 OR \(payload->>'pickedAt'\)::timestamptz >= \$3\)/.test(ds) && /S\.runPickerAfterSweep\(userId, "daily"\)/.test(ds));
   const px = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
-  check("pin: MAX_PICKED_TOGETHER is 3, one per tier", /export const MAX_PICKED_TOGETHER = 3;/.test(px) && /const taken = new Set\(\[pickTier\(primary\)\]\);/.test(px));
+  check("pin: MAX_PICKED_TOGETHER is 2 (two find links a message, the notification grouping plan), one per tier", /export const MAX_PICKED_TOGETHER = 2;/.test(px) && /const taken = new Set\(\[pickTier\(primary\)\]\);/.test(px));
 }
 
 console.log(`one find per tier: ${total - failed}/${total} passed`);

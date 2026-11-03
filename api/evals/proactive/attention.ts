@@ -64,13 +64,22 @@ const names = (ks: { name: string; pass: boolean }[]) => ks.filter((k) => !k.pas
   const otherCheckin = cand("companion", { threadId: "t-9" }, { id: "k5" });
   const requestedDoor = cand("task_update", { door: true, cls: "requested", taskId: 7, messages: ["Your draft is ready."], threadRead: { thread: "t-1", at: "x" } }, { id: "d1" });
   const classOf = (x: Candidate) => G.candidateClass(x.type, PR.isAnswering(x), x.payload);
-  const folds = A.foldPlan({ lead: t1, riders: [t2], pending: [checkin, heavy, safety, askCheckin, otherCheckin, requestedDoor, t3], leadCarriesFinds: true, classOf });
+  // Review of #367: only from what went, and never a requested find. t1 and t3 are finds for asks they made (requested); a resurfaced
+  // find for the same ask (again) is Cue's own.
+  const ownSameAsk = find("ask-1", { again: true, threadRead: { thread: "t-1", at: "x" } }, { id: "g4" });
+  const ownOtherAsk = find("ask-7", { again: true, threadRead: { thread: "t-1", at: "x" } }, { id: "g5" });
+  const folds = A.foldPlan({ included: [t1, t2], pending: [checkin, heavy, safety, askCheckin, otherCheckin, requestedDoor, t3, ownSameAsk, ownOtherAsk], classOf });
   const folded = folds.map((f) => f.candidate.id).sort().join();
-  check("fold: the check-in about the same thread and the one about the same ask are covered by the find; the same-ask find too", folded === "g3,k1,k4", folded);
+  check("fold: the check-ins about the same thing and Cue's own find for the same ask are covered", folded === "g4,k1,k4", folded);
+  check("fold: never a requested find (it waits and goes as itself), never Cue's own find for another ask", !/g3|g5/.test(folded));
   check("fold: never the day-after check-in after a heavy moment, never a safety follow-up, never another thread's check-in, never a requested delivery", !/k2|k3|k5|d1/.test(folded));
-  check("fold: says why, by id", folds.every((f) => /same thing/.test(f.why)));
-  // A door text with links carries finds; one without (a question from a task) doesn't.
-  check("fold: a task's results with links carry finds; a task's plain line doesn't", A.carriesFinds(cand("task_update", { door: true, messages: ["https://lu.ma/x", "A room this Friday."] })) && !A.carriesFinds(requestedDoor));
+  check("fold: says why, by id", folds.every((f) => /same (thing|ask)/.test(f.why)));
+  check("fold: nothing delivered, nothing covered", A.foldPlan({ included: [], pending: [checkin, ownSameAsk], classOf }).length === 0);
+  // A partial send covers only what arrived: an extra counts only when every one of its bubbles went.
+  const di = A.deliveredItems("lead", [{ candidate: "x1", messages: ["https://a", "cap a"] }, { candidate: "x2", messages: ["https://b", "cap b"] }], ["lead text", "https://a", "cap a", "https://b"]);
+  check("fold: a partial send covers only the items whose words all went", di.join() === "lead,x1");
+  check("fold: a send where nothing went covers nothing", A.deliveredItems("lead", [], []).length === 0);
+  check("fold: the dispatch folds from what was delivered (deliveredItems over result.delivered)", /foldPlan\(\{ included: deliveredItems\(c, extras, result\.delivered\)/.test(src("harness/proactive.ts")));
   // Different topics wait for different days; one message about a thing a day.
   const sentToday = [find("ask-1", {}, { id: "s1" })];
   check("thread_today: a find for another thing waits for another day once something went today", names(checksFor({ item: a2, att: att({ sentToday }) })).includes("thread_today"));
@@ -89,7 +98,7 @@ const names = (ks: { name: string; pass: boolean }[]) => ks.filter((k) => !k.pas
   check("read: stored on the item it answered for; an item it didn't answer stays unread (read again later)", got.get("f1")?.thread === "t-1" && (items[0].payload as any).threadRead?.thread === "t-1" && !(items[1].payload as any).threadRead);
   const failedRead = await A.readThreads({ userId: "u-1", items: [{ ...a1, payload: {} }], threads: [{ id: "t-1", text: "x" }], write: false, generate: async () => { throw new Error("down"); } });
   check("read: a read that fails stores nothing (the item groups by its ids)", failedRead.size === 0);
-  check("read: never a regex over their words: the thread is decided by ids, then the model read", !/RegExp\(|\.test\(.*(?:askText|text)/.test(src("harness/attention.ts").split("// ---------------------------------------------------------------- 6 and 7")[0].replace(/carriesFinds[\s\S]*?\n}\n/, "")));
+  check("read: never a regex over their words: the thread is decided by ids, then the model read", !/RegExp\(|\.test\(.*(?:askText|text)/.test(src("harness/attention.ts").split("// ---------------------------------------------------------------- 6 and 7")[0].replace(/export function withoutPhrase[\s\S]*?\n}\n/, "")));
 }
 
 // ================================================================ 6. back off when they're quiet
@@ -182,8 +191,42 @@ const names = (ks: { name: string; pass: boolean }[]) => ks.filter((k) => !k.pas
   check("feeling: a check-in that only asks passes", (await A.feelingCheck({ userId: "u-1", draft: "How's the partner search going?", ownWords: ELI_WORDS, generate: async () => '{"asserts": false, "phrase": ""}' })).pass);
   check("feeling: a read that can't answer fails closed (the check-in waits; it never goes unchecked)", !(await A.feelingCheck({ userId: "u-1", draft: ELI_DRAFT, ownWords: ELI_WORDS, generate: async () => "not json" })).pass && !(await A.feelingCheck({ userId: "u-1", draft: ELI_DRAFT, ownWords: ELI_WORDS, generate: async () => { throw new Error("down"); } })).pass);
   const P = src("harness/proactive.ts");
-  check("feeling: the dispatch runs it on every check-in draft Cue writes (not a door text, not a find bundle), and again on the rewrite", /const isCheckin = !composed && !asWritten && candidateClass\(c\.type, isAnswering\(c\), c\.payload\) === "checkin";/.test(P) && /draftChecks = await withFeeling\(draftChecks, draft\.text\);/.test(P) && /const fixedChecks = await withFeeling\(withRepeat\(checkDraft\(fixed\.text, fixed\.rules\), fixed\.text\), fixed\.text\);/.test(P));
+  check("feeling: the dispatch runs it on every check-in Cue writes (a door text's too, never a find bundle), and again on the rewrite", /const checkinFeeling = !composed && feelingCheckApplies\(candidateClass\(c\.type, isAnswering\(c\), c\.payload\), c\.payload\);/.test(P) && /draftChecks = await withFeeling\(draftChecks, draft\.text\);/.test(P) && /const fixedChecks = await withFeeling\(withRepeat\(checkDraft\(fixed\.text, fixed\.rules\), fixed\.text\), fixed\.text\);/.test(P));
   check("feeling: their words come from their own lines only (memberThreads.ownLines: texts and their call lines, never Cue's)", /T\.ownLines\(userId\)\)\.then\(\(ls\) => ls\.map\(\(l\) => l\.text\)\)/.test(P));
+}
+
+// ================================================================ review of #367
+{
+  // Intros first: a possible intro is never held by the defaults, the back-off or the one-thread day.
+  const busy = att({ sent: [{ at: pt("2026-11-03T09:00:00"), cls: "unsolicited", channel: "text" }, { at: pt("2026-11-02T09:00:00"), cls: "unsolicited", channel: "text" }], sentToday: [find("ask-9", {}, { id: "z9" })] });
+  const introAsk = cand("direct_ask", { door: true, cls: "unsolicited", intro: true, messages: ["x"] }, { id: "i1" });
+  const nudge = cand("event_match_nudge", {}, { id: "i2" });
+  check("intro: an intro ask Cue sends to the other side reads none of the defaults, the back-off or the one-thread day", checksFor({ item: introAsk, att: busy, joinedAt: pt("2026-11-03T09:00:00") }).length === 0 && checksFor({ item: nudge, att: busy }).length === 0);
+  check("intro: a find on the same day still does (only intros are exempt)", names(checksFor({ item: find("profile"), att: busy })).length > 0);
+  const evI = PR.evaluateCandidates({ now: NOW, timezone: ZONE, optedOut: false, sends: [], lastInboundAt: pt("2026-11-03T08:00:00"), joinedAt: OLD_MEMBER, needsCare: true, moodHold: { state: "held", hold: true, heldHours: 2 }, memberRules: { prefs: [], sent: busy.sent }, attention: busy, candidates: [introAsk] } as any);
+  check("intro: a hard day still times it (it waits)", evI.perCandidate[0].checks.some((k) => k.name === "hard_day" && !k.pass));
+  check("intro: held by a hard day, it never expires inside the hold (valid-until moves to a day past now)", A.introHeldExpiry(pt("2026-11-03T15:00:00"), NOW)?.getTime() === NOW.getTime() + 24 * HOUR && A.introHeldExpiry(pt("2026-11-09T15:00:00"), NOW) === null);
+  check("intro: the dispatch moves it while a hard day holds it", /if \(!isPossibleIntro\(p\.candidate\) \|\| !p\.checks\.some\(\(k\) => k\.name === "hard_day" && !k\.pass\)\) continue;\n    const to = introHeldExpiry\(p\.candidate\.expiresAt, state\.now\);/.test(src("harness/proactive.ts")));
+  // The feeling read: never a safety follow-up or a heavy-moment check-in; a read that can't answer waits, never counted.
+  check("feeling: never read on a safety follow-up or the check-in after a heavy or hard moment", !A.feelingCheckApplies("checkin", { safetyFollowUp: true }) && !A.feelingCheckApplies("checkin", { heavy: { endedAt: "x" } }) && !A.feelingCheckApplies("checkin", { hardMoment: true }) && A.feelingCheckApplies("checkin", { threadId: "t" }) && !A.feelingCheckApplies("unsolicited", {}));
+  const down = await A.feelingCheck({ userId: "u", draft: "x", ownWords: ["y"], generate: async () => { throw new Error("down"); } });
+  const unreadable = await A.feelingCheck({ userId: "u", draft: "x", ownWords: null, generate: async () => '{"asserts": false}' });
+  const asserted = await A.feelingCheck({ userId: "u", draft: "x", ownWords: ["y"], generate: async () => '{"asserts": true, "phrase": "still heavy"}' });
+  check("feeling: the model down, or their words unreadable: infra (it waits), never a failed draft", down.infra === true && unreadable.infra === true && !asserted.infra && asserted.phrase === "still heavy");
+  const P = src("harness/proactive.ts");
+  check("feeling: an infra failure holds the check-in for a retry without counting an attempt (first draft and rewrite)", (P.match(/if \(infraOf\((?:draftChecks|fixedChecks)\)\) return holdForFeelingRead\(/g) ?? []).length === 2 && /const holdForFeelingRead = async \(why: string\): Promise<void> => \{\n    const at = new Date\(state\.now\.getTime\(\) \+ FEELING_READ_RETRY_MINUTES \* 60_000\);\n    if \(!opts\.dryRun\) \{\n      await pool\.query\(`UPDATE proactive_candidates SET due_at/.test(P) && !/holdForFeelingRead[\s\S]{0,400}attempts = attempts \+ 1/.test(P.slice(P.indexOf("const holdForFeelingRead"), P.indexOf("const holdForFeelingRead") + 600)));
+  check("feeling: a check-in at the door is read too, and goes without the sentence the read named", /if \(checkinFeeling && asWritten\) \{\n    const read = await feelingCheck\(/.test(P) && /const cut = withoutPhrase\(draft\.messages, read\.phrase \?\? ""\);/.test(P));
+  check("feeling: the cut takes out only that sentence", JSON.stringify(A.withoutPhrase(["Still thinking about the partner search. Both still open, both still heavy. How's that sitting with you today?"], "both still heavy")) === JSON.stringify(["Still thinking about the partner search. How's that sitting with you today?"]));
+  check("feeling: a phrase it can't find, or nothing left, is no cut", A.withoutPhrase(["How's it going?"], "heavy") === null && A.withoutPhrase(["It's heavy."], "heavy") === null);
+  // Calls: the spoken check-in carries the same rule (the GPT-Live thinking's prompt and the ElevenLabs agent's).
+  const EL = await import("../../src/services/elevenLabsCalls.js");
+  const GL = await import("../../src/services/gptLive.js");
+  check("calls: the thinking behind a GPT-Live call is told never to state a feeling they didn't share", GL.liveCallPrompt("You are Cue.").includes(EL.CALL_CHECKIN_FEELING) && EL.promptForElevenLabs("You are Cue.").includes(EL.CALL_CHECKIN_FEELING) && /unless they said so in their own words/.test(EL.CALL_CHECKIN_FEELING));
+  // The race: the defaults are read again inside the send's lock; one dispatch per member at a time, the morning sweep's included.
+  check("race: the day's default and the call/text rule are re-read inside sendWithLedger's lock", /if \(!isSafetyFollowUp\(c\) && isUnrequested\(cls\) && !isPossibleIntro\(c\) && !opts\.ignorePacing\) checks\.push\(\.\.\.\(await lockedDefaults\(client,/.test(P) && [...PR.LOCKED_DEFAULTS].sort().join() === "call_text_same_day,default_daily");
+  check("race: the morning sweep dispatches through dispatchForUser, which runs one pick per member at a time", /await P\.dispatchForUser\(R\.proactiveRegistry, userId\);/.test(src("services/dailySweep.ts")) && /if \(dispatchInFlight\.has\(userId\)\) return;\n  dispatchInFlight\.add\(userId\);/.test(P));
+  // Bundle size: two find links per message.
+  check("bundle: at most 2 finds in one message (the plan's limit)", PR.MAX_PICKED_TOGETHER === 2 && PR.pickSiblingOffers(find("profile", { match: { tier: 1 } }, { id: "b1" }), [find("profile", { match: { tier: 2 } }, { id: "b2" }), find("profile", { match: { tier: 3 } }, { id: "b3" })]).length === 1 && PR.pickSiblingOffers(cand("event_offer", { askId: "ask-1", match: { tier: 1 } }, { id: "n1" }), [cand("event_offer", { askId: "ask-2", match: { tier: 2 } }, { id: "n2" }), cand("event_offer", { askId: "ask-3", match: { tier: 3 } }, { id: "n3" })]).length === 1);
 }
 
 // ================================================================ requested items are never delayed by B
@@ -207,7 +250,7 @@ const names = (ks: { name: string; pass: boolean }[]) => ks.filter((k) => !k.pas
   check("requested: while what Cue started is held by every one of them", ["first_day_quiet", "default_daily", "call_text_same_day", "thread_today", "hard_day"].every((n) => why("q3").includes(n)), why("q3"));
   check("requested: a failed read holds only what Cue starts", (() => { const e = PR.evaluateCandidates({ ...state, needsCare: false, joinedAt: null, attention: null } as any); const w = (id: string) => e.perCandidate.find((p) => p.candidate.id === id)!.checks.filter((k) => !k.pass).map((k) => k.name); return w("q3").includes("attention_unread") && !w("q1").includes("attention_unread") && !w("q2").includes("attention_unread"); })());
   check("requested: a pure state without the attention read runs none of it (the existing tests' states)", !PR.evaluateCandidates({ ...state, needsCare: false, joinedAt: null, attention: undefined } as any).perCandidate.some((p) => p.checks.some((k) => B_CHECKS.includes(k.name))));
-  check("requested: the fold never covers a requested delivery that isn't a find", A.foldPlan({ lead: askFind, riders: [], pending: [doorReq], leadCarriesFinds: true, classOf: (x) => G.candidateClass(x.type, PR.isAnswering(x), x.payload) }).length === 0);
+  check("requested: the fold never covers a requested delivery or a requested find", A.foldPlan({ included: [find("ask-1", {}, { id: "q0" })], pending: [doorReq, askFind], classOf: (x) => G.candidateClass(x.type, PR.isAnswering(x), x.payload) }).length === 0);
 }
 
 console.log(`\nattention: ${total - failed}/${total} passed`);
