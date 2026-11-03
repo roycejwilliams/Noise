@@ -233,7 +233,7 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
     ({ id, userId: "u", type: "event_offer", targetKey: `event_offer:${id}`, topicKey: `t:${id}`, summary: "", priority, dueAt: new Date("2026-09-21T16:00:00Z"), expiresAt: new Date("2026-10-06T00:00:00Z"), status: "pending", attempts: 0, payload: { match: { tier }, ...extra } } as unknown as Candidate);
   const t1 = cand("a", 1), t2 = cand("b", 2), t3 = cand("c", 3), t3b = cand("d", 3, 55);
   const ids = (xs: Candidate[]) => xs.map((x) => x.id).join(",");
-  check("the other tiers ride along with the picked offer", ids(pickSiblingOffers(t2, [t1, t2, t3])) === "a,c");
+  check("another tier rides along with the picked offer, two finds a message at most (notification grouping plan)", ids(pickSiblingOffers(t2, [t1, t2, t3])) === "a");
   check("only one offer per tier goes out", ids(pickSiblingOffers(t2, [t2, t3, t3b])) === "c");
   check("a second offer from the picked tier waits", ids(pickSiblingOffers(t3, [t3, t3b])) === "");
   check("the best offer in a tier is the one that rides along", ids(pickSiblingOffers(t2, [t2, t3b, t3])) === "c");

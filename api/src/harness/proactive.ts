@@ -2772,21 +2772,20 @@ export function dispatchBusy(userId: string): boolean {
   return dispatchInFlight.has(userId);
 }
 export async function dispatchForUser(...a: Parameters<typeof dispatchForUserInScope>): ReturnType<typeof dispatchForUserInScope> {
-  const userId = a[1];
+  return withMember(a[1], () => oneDispatchAtATime(a[1], () => dispatchForUserInScope(...a)));
+}
+async function oneDispatchAtATime(userId: string, fn: () => Promise<void>): Promise<void> {
   if (dispatchInFlight.has(userId)) return;
   dispatchInFlight.add(userId);
   try {
-    return await dispatchForUserGuarded(...a);
+    await fn();
   } finally {
     dispatchInFlight.delete(userId);
   }
 }
-async function dispatchForUserGuarded(...a: Parameters<typeof dispatchForUserInScope>): ReturnType<typeof dispatchForUserInScope> {
-  return withMember(a[1], () => dispatchForUserInScope(...a));
-}
 async function dispatchForUserInScope(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
   // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
-  if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUserGuarded(registry, userId, opts));
+  if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUserInScope(registry, userId, opts));
   const person = await loadPerson(userId);
   // No phone on file: nothing can go. Said, not silent (Royce, 2026-10-13: "No silent skips anywhere in the chain").
   if (!person) {

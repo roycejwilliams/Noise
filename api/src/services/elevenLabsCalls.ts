@@ -298,15 +298,13 @@ const corePiece = (block: string, split: RegExp, start: string) => {
   if (!piece) throw new Error(`coCore lost the piece starting "${start}"`);
   return piece.replace(/^- /, "");
 };
-// Model-facing (copy in PR #367): a check-in on a call never states a feeling they didn't share.
+// Model-facing (copy in PR #367): a check-in on a call never states a feeling they didn't share. The spoken twin of the written
+// check-in's feeling read (harness/attention.ts feelingCheck, notification grouping PR B): on a call there's no draft to read first.
 export const CALL_CHECKIN_FEELING = "When you check in on something they're in the middle of, never say how they feel about it or how it weighs on them unless they said so in their own words: say back what they told you, or ask how it's going.";
 export const CALL_FROM_CORE = [
   corePiece(CO_CORE_PARTS.voice, /\n\n+/, "You know what time it is for them"),
   corePiece(CO_CORE_PARTS.voice, /\n\n+/, "When you advise"),
   corePiece(CO_CORE_PARTS.listening, /\n/, "Never announce a check-in"),
-  // The spoken twin of the written check-in's feeling read (harness/attention.ts feelingCheck, notification grouping PR B, review of
-  // #367): the same rule for a check-in said on a call, where there's no draft to read before it's spoken.
-  CALL_CHECKIN_FEELING,
 ].join("\n\n");
 
 // Pure: the agent's prompt from the voice layer (2026-10-08, Royce: "put what the Hume prompt had into ElevenLabs"). Hume's
@@ -318,7 +316,7 @@ export function promptForElevenLabs(voiceLayer: string): string {
   const withCues = voice.includes(SPOKEN_ALOUD)
     ? voice.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${voice}\n\n${CUE_GUIDE}`;
-  return `# On the phone\n${withCues}\n\n${CALL_CONTEXT_BLOCK}\n\n${CO_CORE_PARTS.grounding}\n\n${CALL_FROM_CORE}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${CALL_GUIDE}\n\n${CAPABILITY_SHEET}\n\n${CALL_NOW}\n\n${callGuardrails()}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
+  return `# On the phone\n${withCues}\n\n${CALL_CONTEXT_BLOCK}\n\n${CO_CORE_PARTS.grounding}\n\n${CALL_FROM_CORE}\n\n${CALL_CHECKIN_FEELING}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${CALL_GUIDE}\n\n${CAPABILITY_SHEET}\n\n${CALL_NOW}\n\n${callGuardrails()}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // Words the speech recognizer is told to expect (2026-10-05: "Co" was heard as "you" and "Coach", "Boardy" as "Boredy"). Names a
