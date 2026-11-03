@@ -46,20 +46,36 @@ const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
 export const START_RETRY_MS = 20_000;
 // What a start is for: its goal (startTask) or what's looked for (researchBrief, saveAsk).
 const needOf = (input: unknown): string => { const d = (input ?? {}) as { goal?: unknown; what?: unknown }; return String(d.goal ?? d.what ?? "").trim(); };
-const NEED_PLAIN = new Set("find look looking search some more options option please launch party event thing things help".split(" "));
-const needWords = (t: string) => new Set(t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).map((w) => w.replace(/(?<=\w{3})s$/, "")).filter((w) => w.length >= 4 && !NEED_PLAIN.has(w)));
-// Pure: two starts are the same need: the same need key (coTasks.ts dispatchKeyFor), or their goal words mostly the same (at least
-// two shared content words, and most of the shorter one's). One shared word is never enough: "Find caterers" / "caterers and a band"
-// share only "caterer", and folding them lost the band (review of #365). "Find vegan caterers in Oakland" / "Vegan caterer options in
-// Oakland": the same; "Find caterers" / "And a florist": never. A one-word need retried in other words is the open-task check's
-// (coTasks.ts dispatchKeyFor's note), not this one's.
-export const SAME_NEED_MIN_SHARED = 2;
+// Words that never name what's needed: the action, filler, the occasion, when, and how many. A place is dropped by its position (the
+// word after "in", "near", "around", "at", "by"), so any city reads the same as none.
+const NEED_PLAIN = new Set(("find look looking search get book booking reserve hire need want please some more any other another option options " +
+  "nearby near local around close closest best good great cheap affordable launch party event thing things help " +
+  "today tonight tomorrow weekend week month morning afternoon evening night next this " +
+  "monday tuesday wednesday thursday friday saturday sunday people person guest guests").split(" "));
+const PLACE_AFTER = new Set(["in", "near", "around", "at", "by"]);
+// A word stemmed: lowercased, a plural's s dropped (florists -> florist, caterers -> caterer).
+const stem = (w: string) => w.replace(/(?<=\w{3})s$/, "");
+// Pure: the subject words of a need: stemmed, without the plain words above or a place.
+export function needSubjects(t: string): Set<string> {
+  const words = t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
+  const out = new Set<string>();
+  words.forEach((w, k) => {
+    if (k > 0 && PLACE_AFTER.has(words[k - 1])) return;
+    const s = stem(w);
+    if (s.length >= 4 && !NEED_PLAIN.has(w) && !NEED_PLAIN.has(s)) out.add(s);
+  });
+  return out;
+}
+// Pure: whether a new start (b) is the need an earlier one (a) already started: the same need key (coTasks.ts dispatchKeyFor), or
+// their subject words (needSubjects) overlap and b adds no subject a doesn't have. "find a florist" / "florists nearby", "Find caterers"
+// / "caterer options in Oakland", "Book a photographer" / "a photographer for Saturday": the same. "Find caterers" / "caterers and a
+// band": a new need ("band" is a new subject, and folding them lost the band; review of #365). "Find caterers" / "And a florist": new.
 export function sameNeed(a: string, b: string, callKey: string): boolean {
   if (!a || !b) return false;
   if (dispatchKeyFor(callKey, a) === dispatchKeyFor(callKey, b)) return true;
-  const x = needWords(a), y = needWords(b);
-  const shared = [...x].filter((w) => y.has(w)).length;
-  return shared >= SAME_NEED_MIN_SHARED && shared / Math.max(1, Math.min(x.size, y.size)) >= 0.6;
+  const x = needSubjects(a), y = needSubjects(b);
+  if (!x.size || !y.size) return false;
+  return [...y].some((w) => x.has(w)) && [...y].every((w) => x.has(w));
 }
 // The call subset is the registry's onCall entries on the allow-list (services/capabilities.ts), the same entries the call
 // briefing's list is written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.

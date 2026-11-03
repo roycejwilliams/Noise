@@ -569,13 +569,14 @@ let jobRow: any = null;
   check("12. a different need inside 20 s starts its own job, and 'I'll text you the florists' stands on that one", db.tasks.length === 2 && db.tasks.some((t) => /florist/i.test(t.goal)) && /florists I find/.test(a3), { tasks: db.tasks.map((t) => t.goal), a3 });
   const a4 = await b.turn("Actually caterers and a band.", "d4", 4);
   check("12. 'caterers and a band' inside 20 s of 'Find caterers' starts its own job (the band isn't lost)", db.tasks.length === 3 && db.tasks.some((t) => /band/i.test(t.goal)) && /bands I find/.test(a4), { tasks: db.tasks.map((t) => t.goal), a4 });
-  check("12. sameNeed: same key or two shared content words (and most of the shorter one's); never one word, never the tool alone",
-    CT.sameNeed("Find caterers for the launch party", "Caterers for the launch party, find some", "k") &&
-    CT.sameNeed("Find vegan caterers in Oakland", "Vegan caterer options in Oakland", "k") &&
-    !CT.sameNeed("Find caterers", "caterers and a band", "k") &&
-    !CT.sameNeed("Find caterers for the launch party", "Caterers and a band for the launch party", "k") &&
-    !CT.sameNeed("Find caterers for the launch party", "Find a florist for the launch party", "k") &&
-    !CT.sameNeed("Find caterers", "And a florist", "k") && CT.SAME_NEED_MIN_SHARED === 2);
+  const same = (a: string, b: string) => CT.sameNeed(a, b, "k");
+  check("12. sameNeed: a reworded retry of the same need is the same job (place, time, filler and action words don't count)",
+    same("find a florist", "florists nearby") && same("Find caterers", "caterer options in Oakland") && same("Book a photographer", "a photographer for Saturday") &&
+    same("Find caterers for the launch party", "Caterers for the launch party, find some") && same("Find vegan caterers in Oakland", "Vegan caterer options in Oakland"),
+    { florist: same("find a florist", "florists nearby"), oakland: same("Find caterers", "caterer options in Oakland"), saturday: same("Book a photographer", "a photographer for Saturday") });
+  check("12. sameNeed: a new subject is a new need; never the tool alone",
+    !same("Find caterers", "caterers and a band") && !same("Find caterers for the launch party", "Caterers and a band for the launch party") &&
+    !same("Find caterers for the launch party", "Find a florist for the launch party") && !same("Find caterers", "And a florist") && !same("Find caterers", "find some"));
   b.tw.close();
 }
 {
