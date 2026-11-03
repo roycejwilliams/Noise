@@ -93,7 +93,8 @@ export function bringsItUp(sentence: string): boolean {
 // reminder due by then (round 2 review of #352: "bring up the lease" must not be kept by "pay rent"):
 //   - set in the same turn, the promise is Cue's own "I'll remind you / bring it up", and the promise names no other subject (only its
 //     verb and its time: "I'll remind you tomorrow at 3"), or shares one with the reminder; or
-//   - about the same thing: most of the promise's own subject words (not its verb or time) are in the reminder. Measured over the
+//   - about the same thing: every content word of the reminder is in the promise's subject, or half the promise's own subject words
+//     (not its verb or time) are in the reminder. Measured over the
 //     promise's subject only, never the member's whole message and never the smaller of two sets: their message also saying "rent"
 //     must not tie a "pay rent" reminder to a lease promise (final review of #352).
 // One rule for the promise binding (promiseBinding.ts reminderKeeping) and the task's backstop (taskTurn.ts reminderCoversTask).
@@ -101,10 +102,15 @@ const NOT_A_SUBJECT = new Set(significant("remind reminder reminding bring bring
 export function subjectWords(sentence: string): string[] {
   return significant(goalBody(sentence)).filter((w) => !NOT_A_SUBJECT.has(w) && !/^\d/.test(w) && !/^(?:am|pm)$/.test(w));
 }
+// Two ways to be about the same thing (review of #357): the reminder is short and every one of its content words is in the promise's
+// subject ("movers" for "the movers and the apartment hunt"), or half the promise's subject is in the reminder. A reminder word the
+// promise doesn't name ("pay rent" for a lease promise) ties neither way.
 export function reminderTiedTo(sentence: string, what: string, o: { sameTurn: boolean }): boolean {
   const subject = subjectWords(sentence);
-  const theirs = new Set(significant(what));
+  const reminderWords = subjectWords(what);
+  const theirs = new Set(reminderWords);
   const shared = subject.filter((w) => theirs.has(w)).length;
+  if (reminderWords.length && reminderWords.every((w) => subject.includes(w))) return true;
   if (subject.length && shared / subject.length >= 0.5) return true;
   if (!o.sameTurn || !bringsItUp(sentence)) return false;
   return !subject.length || shared > 0;
