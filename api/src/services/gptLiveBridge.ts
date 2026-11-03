@@ -325,12 +325,22 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       burst ??= setImmediate(flush);
       return true;
     };
+    // Cue's helpers act only with a person on the line (review of #365: AMD's "unknown" and its timeout release answers, never actions):
+    // an inbound call, AMD's human verdict, or their own real words (not a voicemail greeting) with no machine verdict. Re-checked
+    // inside each tool run, so a turn already running when the voicemail message is asked for acts on nothing.
+    const toolsAllowed = () => voicemailAt == null && !finished && (c.direction === "inbound" || amdVerdict === "human" || (turnsFrom(frags).some(realWords) && !/^machine/.test(amdVerdict ?? "")));
+    const liveTools: typeof d.callTools = async (call, req) => {
+      const ts = await d.callTools(call, req);
+      if (!ts) return null;
+      const run = ts.run;
+      return { ...ts, run: async (name, input, id) => (voicemailAt != null ? { ok: false, error: "The call reached voicemail: nothing is done on it. Don't say anything was." } : run(name, input, id)) };
+    };
     const out = await thinkOnCall(c, turns, d.upstream, (sentence, why) => {
       dropped++;
       const claim = /^claim held: /.test(why);
       d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
     }, guard, d.voiceLine, personAt != null ? onSentence : undefined, {
-      tools: personAt != null && voicemailAt == null ? d.callTools : null,
+      tools: toolsAllowed() ? liveTools : null,
       carry: carry.splice(0),
       onCapped: (unsaid) => { carry = unsaid; },
       onTool: (t) => { toolRuns.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" }); },

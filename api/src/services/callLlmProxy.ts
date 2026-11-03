@@ -16,7 +16,7 @@ import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.j
 import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
 import { classifyModelFailure, failureLabel, noteModelFailure } from "./modelKeyAlert.js";
 import { plainPunctuation } from "./safetyText.js";
-import { claimHeld, claimKind, emptyClaimState, jobBacked, jobClaimKind, jobOnRecord, SEND_TALK, type ClaimState, type JobState } from "./callClaims.js";
+import { claimHeld, claimKind, emptyClaimState, jobBacked, jobClaimKind, SEND_TALK, type ClaimState, type JobState } from "./callClaims.js";
 // After "texting it to you now" and a send that didn't go: approved copy (Royce, 2026-10-29), spoken by code so it's never missing.
 export const FAILED_SEND_LINE = "That didn't go through, so I'll text it to you right after the call.";
 // Said as coming right after the call.
@@ -61,6 +61,8 @@ export type CallToolset = {
   // Resolves once every send that didn't go is queued for after the call (its co_tasks row and ledger row written): true when all of
   // them were, false when one couldn't be. Only a queued one is promised aloud.
   owedDurable?: () => Promise<boolean>;
+  // Job text only (callClaims.ts JobState): what a spoken "started" or "I'll text you" may stand on, never finds or loops on record.
+  jobs?: { corpus: string; callJobs: string };
 };
 
 // Hume's brain (2026-10-08, Royce chose it over Haiku 5.5 for depth: ~1.4s to first words vs ~0.7s): Sonnet 4.6, temperature from the
@@ -317,6 +319,9 @@ export type ProxyDeps = {
   jobClaims?: boolean;
   // The sentences the word cap kept from the voice (services/speakable.ts unsaid), so the next turn can carry on from them.
   onCapped?: (unsaid: string[]) => void;
+  // This turn's own notes (no tools this turn, where the last answer stopped): after their words, past the cache breakpoint, like the
+  // turn note, so the call's cached prefix is untouched (review of #365).
+  turnNotes?: string[];
 };
 
 // What the member last said, for the safety check on the question rule.
@@ -370,7 +375,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const drained = clean && !voiceOnly && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
   if (drained) deps.onState?.();
   // A safety line is never held by the word cap (2026-11-02: a crisis instruction past 90 words was dropped like any sentence).
-  const mk = () => new SpeakableStream({ keep: (x) => SAFETY_LINE.test(plainPunctuation(x)) });
+  // On a safety call or turn the cap is lifted entirely (review of #365): no step and no crisis sentence dropped or split.
+  const mk = () => { const st = new SpeakableStream({ keep: (x) => SAFETY_LINE.test(plainPunctuation(x)) }); if (safetyTurn) st.lift(); return st; };
   // What the word cap kept from the voice this turn: said to the caller (onCapped), never lost silently.
   const capped: string[] = [];
   const endStream = (st: SpeakableStream): string[] => { const out = st.end(); capped.push(...st.unsaid()); return out; };
@@ -408,7 +414,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // Work Cue may say it started or will deliver (jobClaims): the jobs that back it, from Cue's records (its open tasks, what
   // it started earlier on the call) and, as tools come back, what they started this turn.
   const jobCheck = clean && !voiceOnly && !!deps.jobClaims;
-  const jobs: JobState = { thisTurn: 0, corpus: co?.records ?? "", onCall: jobOnRecord(co?.records ?? "") };
+  const jobs: JobState = { thisTurn: 0, corpus: co?.jobs?.corpus ?? "", callJobs: co?.jobs?.callJobs ?? "", onCall: !!co?.jobs?.callJobs.trim(), need: co?.turnFacts?.turnWords || theirLast };
   // A job line said before the tool that starts it, in this same reply: held until that tool comes back, then said if the job is real.
   let pendingJob: string[] = [];
   // A send that didn't go couldn't be queued for after the call: nothing may promise it later.
@@ -549,7 +555,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
     // Co checking on their safety makes the whole turn a safety turn: no question limit after it.
-    if (SAFETY_LINE.test(plainS) || (isQuestion && SAFETY_TURN.test(plainS))) safetyTurn = true;
+    if (SAFETY_LINE.test(plainS) || (isQuestion && SAFETY_TURN.test(plainS))) { safetyTurn = true; stream?.lift(); }
     if (isQuestion && countsAsQuestion(sentence)) asked = true;
     spokeAny = true;
     spokeSinceTools = true;
@@ -595,6 +601,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // The voice read goes after their words too, past the cache breakpoint, like the turn note. Voice-only mode adds nothing,
   // and on a safety call the voice is never used: it can't soften or outweigh serious words.
   if (deps.voiceRead && !voiceOnly && !safetyCall(b)) req.messages[req.messages.length - 1].content.push({ type: "text", text: deps.voiceRead });
+  for (const n of deps.turnNotes ?? []) if (n) req.messages[req.messages.length - 1].content.push({ type: "text", text: n });
   // What Co's tools returned this turn also backs what Co says (an event searchEvents found can be named).
   let toolCorpus = "";
   for (let step = 0; ; step++) {
@@ -710,7 +717,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       }
       // A job that started (durable work that texts them later) backs what Cue says about it.
       const meta = runMeta.get(id);
-      if (meta && !x.timedOut && raw && raw.ok !== false && co?.starts?.(meta.name)) { jobs.thisTurn++; jobs.corpus += `\n${JSON.stringify(meta.input ?? {})}\n${JSON.stringify(raw).slice(0, 2000)}`; }
+      if (meta && !x.timedOut && raw && raw.ok !== false && co?.starts?.(meta.name)) { const t = `\n${JSON.stringify(meta.input ?? {})}\n${JSON.stringify(raw).slice(0, 2000)}`; jobs.thisTurn++; jobs.corpus += t; jobs.callJobs += t; }
       if (tried && (raw as { owedAfterCall?: unknown } | null)?.owedAfterCall === true) owedThisRound.push(...(tried.length ? tried : ["it"]));
       if (x.timedOut || !raw || raw.ok === false) continue;
       if (raw.pending !== true) claims.acted = true;
@@ -720,7 +727,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (owedThisRound.length && jobCheck) {
       owedOk = co?.owedDurable ? await co.owedDurable().catch(() => false) : false;
       if (!owedOk) owedFailed = true;
-      if (owedOk) { jobs.thisTurn++; jobs.corpus += `\nOwed right after the call: ${owedThisRound.join(", ")}`; }
+      if (owedOk) { const t = `\nOwed right after the call: ${owedThisRound.join(", ")}`; jobs.thisTurn++; jobs.corpus += t; jobs.callJobs += t; }
     }
     // What the tools returned backs what Co says next (an event searchEvents found can be named, a task it started can be promised).
     if (clean) sources = callSources(b, co?.records ?? "", toolCorpus);

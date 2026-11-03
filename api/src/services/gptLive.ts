@@ -411,14 +411,15 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   const voiceRead = call.voiceOn && voiceLine ? await voiceLine(call.callKey, req).catch(() => null) : null;
   // A safety turn runs no helpers: nothing is built, so nothing can slow or fail it.
   const tools = !safety0 && o.tools ? await o.tools(call, req).catch(() => null) : null;
-  if (!tools) req.messages.splice(1, 0, { role: "system", content: NOTHING_ON_THIS_CALL });
-  if (o.carry?.length) req.messages.splice(1, 0, { role: "system", content: capNote(o.carry) });
+  // After their words, past the cache breakpoint (runCallLlm turnNotes): the call's system prompt stays the same every turn. Never the
+  // cap note on a safety turn: nothing pulls it back to an earlier answer.
+  const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : ""].filter(Boolean);
   const streamed = !!onSentence && !safety0 && !callClosing(req);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
   const ran: string[] = [];
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") {
       text += d.content;
