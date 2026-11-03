@@ -1406,7 +1406,7 @@ export async function draftProactive(opts: {
   const redo = redraftFor.getStore();
   const build = (own: string | null) => `${CO_VOICE}
 
-${CO_TEXT_CHANNEL} You're texting ${opts.firstName}. Cue is reaching out first; they didn't just text you.
+${CO_TEXT_CHANNEL} You're texting ${opts.firstName?.trim() || "them"}. Cue is reaching out first; they didn't just text you.
 
 ${opts.maxSentences && opts.maxSentences !== 2 ? PROACTIVE_RULES.replace("Max 2 sentences", `Max ${opts.maxSentences} sentences`) : PROACTIVE_RULES}
 

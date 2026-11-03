@@ -12,6 +12,7 @@ import { recordDecision } from "../harness/core.js";
 import { MODELS } from "../models.js";
 import { callKey } from "./callKey.js";
 import { hasPendingEmail } from "./identity.js";
+import { askedForEmail } from "../harness/intake.js";
 
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
 
@@ -23,8 +24,9 @@ const linesOf = (transcript: string, who: "user" | "assistant") =>
     .map((l) => l.replace(/^\w+:\s*/, ""))
     .join("\n");
 export const theirCallLines = (transcript: string): string => linesOf(transcript, "user");
-// Pure: Cue asked for their email on this call.
-export const cueAskedForEmail = (transcript: string): boolean => /\be-?mail\b/i.test(linesOf(transcript, "assistant"));
+// Pure: Cue asked for their email on this call, in any of the shapes a text ask is counted by (harness/intake.ts askedForEmail:
+// "email", or a question about the best address or contact).
+export const cueAskedForEmail = (transcript: string): boolean => linesOf(transcript, "assistant").split("\n").some(askedForEmail);
 // Pure: their words could hold an address (written, or spoken "name at gmail dot com"): no model call otherwise.
 export const mayHoldEmail = (text: string): boolean => /@/.test(text) || /\bat\b[\s\S]{0,40}\bdot\b/i.test(text);
 

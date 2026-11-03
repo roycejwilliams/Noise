@@ -113,7 +113,7 @@ export async function queueHeavyCheckins(now = new Date()): Promise<number> {
     `SELECT u.id AS user_id, cp.city
      FROM users u
      JOIN co_profiles cp ON cp.user_id = u.id
-     WHERE u.sms_opted_out = false AND u.archived_at IS NULL AND u.identity_captured = true
+     WHERE u.sms_opted_out = false AND u.archived_at IS NULL AND u.invite_verified = true
        -- A safety hold means a person, not a text, is the response.
        AND (cp.safety_hold_until IS NULL OR cp.safety_hold_until <= NOW())
        AND EXISTS (SELECT 1 FROM emotion_signals e WHERE e.user_id = u.id AND e.valence = 'negative' AND e.created_at > $1)

@@ -220,7 +220,7 @@ export const MEMBERS_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_number
    FROM users u
    LEFT JOIN co_profiles cp ON cp.user_id = u.id
   WHERE u.archived_at IS NULL AND u.phone_number IS NOT NULL AND u.phone_number NOT LIKE '%#%'
-    AND u.identity_captured = true AND u.invite_verified = true`;
+    AND u.invite_verified = true`; // a verified member, name or email on file or not (ruling A, 2026-11-02)
 
 // The day's record, written so a failed write is known (recordDecision swallows its errors; a missing summary would re-run the
 // member every hour with nothing logged). Throws on failure, so the caller logs it as the member's failed run.
@@ -758,7 +758,7 @@ function rollupFloorDay(records: { outcome: string; action: string; reason: stri
 }
 
 export async function dailySweepRollup(days = 14, now = new Date()): Promise<RollupRow[]> {
-  const { rows: members } = await pool.query(`SELECT u.id, u.first_name, u.last_name FROM users u WHERE u.archived_at IS NULL AND u.phone_number IS NOT NULL AND u.phone_number NOT LIKE '%#%' AND u.identity_captured = true AND u.invite_verified = true ORDER BY u.created_at`);
+  const { rows: members } = await pool.query(`SELECT u.id, u.first_name, u.last_name FROM users u WHERE u.archived_at IS NULL AND u.phone_number IS NOT NULL AND u.phone_number NOT LIKE '%#%' AND u.invite_verified = true ORDER BY u.created_at`);
   const { rows: recs } = await pool.query(
     `SELECT user_id, outcome, action, reason, proposal FROM harness_decisions WHERE decision = 'sweep.daily' AND created_at > NOW() - ($1 || ' days')::interval ORDER BY created_at`,
     [String(days + 1)],

@@ -207,10 +207,11 @@ check("three pause a week, four or more two weeks (brand fix 3)", unansweredPaus
   const mc = readFileSync(new URL("../../src/services/memoryCompaction.ts", import.meta.url), "utf8");
   const recapSelect = mc.slice(mc.indexOf("export async function findUsersDueForRecap"), mc.indexOf("return rows.map", mc.indexOf("export async function findUsersDueForRecap")));
   check("recap selection starts from members, not only those with a profile row", /FROM users u\s+LEFT JOIN co_profiles cp/.test(recapSelect));
-  check("recap selection skips archived and pre-intake rows", /u\.identity_captured = true/.test(recapSelect) && /u\.archived_at IS NULL/.test(recapSelect));
+  // Members by invite, name or email on file or not (ruling A; review of the onboarding branch, finding 1).
+  check("recap selection skips archived rows and anyone without an invite, never one without an email", /u\.invite_verified = true/.test(recapSelect) && !/identity_captured/.test(recapSelect) && /u\.archived_at IS NULL/.test(recapSelect));
   check("a recap creates the profile row if it's missing", /INSERT INTO co_profiles \(user_id, last_recap_at, updated_at\)[\s\S]{0,120}ON CONFLICT \(user_id\) DO UPDATE SET last_recap_at = NOW\(\)/.test(mc));
   const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
-  const where = jobs.slice(jobs.indexOf("WHERE u.sms_opted_out = false\n           AND u.archived_at IS NULL\n           AND u.identity_captured"), jobs.indexOf("LIMIT 50", jobs.indexOf("No paid subscription needed")));
+  const where = jobs.slice(jobs.indexOf("WHERE u.sms_opted_out = false\n           AND u.archived_at IS NULL\n           AND u.invite_verified"), jobs.indexOf("LIMIT 50", jobs.indexOf("No paid subscription needed")));
   check("companion check-ins need a recap, not life chapters (text-only members qualify)", where.length > 0 && !/life_chapters/.test(where) && /cp\.last_recap_at IS NOT NULL/.test(where));
   const cc = readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8");
   check("a member Cue barely knows gets a warm check-in instead of SKIP", /if the recap shows Cue barely knows them yet[\s\S]{0,80}don't SKIP/.test(cc));

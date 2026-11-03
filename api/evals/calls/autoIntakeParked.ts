@@ -44,7 +44,7 @@ await (jobs as any).runAutoIntakeCalls?.({ to: () => ({ emit() {} }), emit() {} 
 check("called by hand, it still selects members with no intake yet, the same way", queries.some((q) => /FROM users u LEFT JOIN co_profiles cp ON cp\.user_id = u\.id WHERE u\.subscription_status = 'active'/.test(q) && /LIMIT 25/.test(q)), queries.slice(0, 2));
 
 // The call gate is unchanged: auto_intake is still a kind it knows (a call started with no kind can still be inferred as one).
-check("the call gate still knows the auto_intake kind", G.RECENT_CALL_MINUTES.auto_intake === 60 * 24 && G.decideAutoIntake({ subscriptionActive: true, identityCaptured: true, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, new Date()).eligible === true);
+check("the call gate still knows the auto_intake kind", G.RECENT_CALL_MINUTES.auto_intake === 60 * 24 && G.decideAutoIntake({ subscriptionActive: true, member: true, hadRealCall: false, hasRealProfile: false, attempts: 0, lastAttemptAt: null }, new Date()).eligible === true);
 
 console.log(`\nauto-intake parked: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

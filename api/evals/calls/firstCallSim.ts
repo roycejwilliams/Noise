@@ -5,7 +5,8 @@
 // Fictional members only (Nadia, Sam, Leo, Priya). Nothing is written or sent.
 //
 // 4 personas x base/branch x REPEAT (default 3) = 24 calls. Per call, code-only numbers: Cue turns, words per turn, turns over 40 words,
-// questions, stock lines, the email ask (count), location/availability asked before any read, a person named as a match, and for the
+// questions, stock lines, the email ask (count), location/availability asked before any read, a person named as a match, whether Cue said
+// the double opt-in (nobody is introduced until both say yes; counted, never a pass/fail), and for the
 // heavy-news persona any connection talk within two Cue turns after the hard news (fails the call). One Sonnet grade per call (--no-grade
 // skips it): did Cue say back one correctable read, did it end on a real next step, did it feel like a form (1-5).
 //
@@ -73,6 +74,8 @@ async function memberTurn(p: Persona, turns: Turn[]): Promise<string> {
 
 const words = (t: string) => t.split(/\s+/).filter(Boolean).length;
 const CONNECT = /\bintroduc\w*|\bconnect you\b|\bsomeone (?:you should|worth) meet|\bpeople (?:to|you should) meet|\bmatch\b/i;
+// Cue said the double opt-in out loud: nobody is introduced until both say yes (review of the onboarding branch, finding 8: counted only).
+const DOUBLE_OPT_IN = /\bdouble opt-?in\b|\bboth (?:of you |sides )?(?:say|said|want|agree|opt|are up for)\b|\bonly (?:if|when) (?:you(?:'re| are)? both|both of you|they(?:'re| are)? (?:up for|into) it too)\b|\b(?:ask|check with) them first\b|\bif they(?:'re| are) up for it too\b|\bnobody(?:'s| is) (?:named|introduced) until\b/i;
 const LOGISTICS = /\bwhere (?:are you|do you live|are you based)|\bwhat (?:city|neighborhood)|\bwhen are you (?:free|around)|\bavailab/i;
 function score(p: Persona, turns: Turn[]) {
   const cue = turns.filter((t) => t.who === "cue").map((t) => t.text);
@@ -93,6 +96,7 @@ function score(p: Persona, turns: Turn[]) {
     logisticsBeforeRead: cue.slice(0, firstRead < 0 ? cue.length : firstRead).filter((t) => LOGISTICS.test(t)).length,
     namedAPerson: cue.some((t) => /\b(?:meet|introduce you to|connect you with) [A-Z][a-z]+\b/.test(t)),
     inviterNamed: p.inviter ? cue.some((t) => t.includes(p.inviter!)) : null,
+    doubleOptInSaid: cue.some((t) => DOUBLE_OPT_IN.test(t)),
     heavyFail,
   };
 }
@@ -138,7 +142,7 @@ const avg = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b
 for (const arm of ["base", "branch"]) {
   const rs = results.filter((x) => x.arm === arm);
   const g = rs.map((x) => x.grade).filter(Boolean);
-  console.log(`\n${arm.toUpperCase()} (${rs.length} calls): turns ${avg(rs.map((x) => x.cueTurns))} | words/turn ${avg(rs.map((x) => x.wordsPerTurn))} | over 40 words ${avg(rs.map((x) => x.over40))} | questions ${avg(rs.map((x) => x.questions))} | stock ${avg(rs.map((x) => x.stock))} | email asks ${avg(rs.map((x) => x.emailAsks))} | logistics before the read ${avg(rs.map((x) => x.logisticsBeforeRead))} | named a person ${rs.filter((x) => x.namedAPerson).length} | heavy-news fails ${rs.filter((x) => x.heavyFail).length}${g.length ? ` | read ${g.filter((x: any) => x.read).length}/${g.length} | next step ${g.filter((x: any) => x.nextStep).length}/${g.length} | form-like ${avg(g.map((x: any) => x.formLike))}` : ""}`);
+  console.log(`\n${arm.toUpperCase()} (${rs.length} calls): turns ${avg(rs.map((x) => x.cueTurns))} | words/turn ${avg(rs.map((x) => x.wordsPerTurn))} | over 40 words ${avg(rs.map((x) => x.over40))} | questions ${avg(rs.map((x) => x.questions))} | stock ${avg(rs.map((x) => x.stock))} | email asks ${avg(rs.map((x) => x.emailAsks))} | logistics before the read ${avg(rs.map((x) => x.logisticsBeforeRead))} | named a person ${rs.filter((x) => x.namedAPerson).length} | double opt-in said ${rs.filter((x) => x.doubleOptInSaid).length}/${rs.length} | heavy-news fails ${rs.filter((x) => x.heavyFail).length}${g.length ? ` | read ${g.filter((x: any) => x.read).length}/${g.length} | next step ${g.filter((x: any) => x.nextStep).length}/${g.length} | form-like ${avg(g.map((x: any) => x.formLike))}` : ""}`);
 }
 console.log(`\nper call: ${out}\nTargets (proposal 1102): 12-14 turns, <=2 sentences a turn, read said once, next step, email asked at most once, no connection talk after hard news; the outside call's base was 25 turns, 34 words a turn.`);
 process.exit(0);

@@ -259,13 +259,13 @@ export async function runAdviceFollowUps(): Promise<void> {
 // Weekly: members who talked to Co or heard from it in the last two weeks.
 export async function runWeeklyReflections(): Promise<void> {
   const active = await pool.query(
-    `SELECT u.id FROM users u WHERE u.archived_at IS NULL AND u.sms_opted_out = false AND u.identity_captured = true LIMIT 500`,
+    `SELECT u.id FROM users u WHERE u.archived_at IS NULL AND u.sms_opted_out = false AND u.invite_verified = true LIMIT 500`,
   );
   const marked = new Set<string>();
   for (const r of active.rows) if ((await queueAdviceFollowUp(r.id)) || (await queueMilestone(r.id))) marked.add(r.id);
   const { rows } = await pool.query(
     `SELECT u.id FROM users u
-     WHERE u.archived_at IS NULL AND u.sms_opted_out = false AND u.identity_captured = true
+     WHERE u.archived_at IS NULL AND u.sms_opted_out = false AND u.invite_verified = true
        AND EXISTS (SELECT 1 FROM member_threads t WHERE t.user_id = u.id AND t.status IN ('open', 'waiting'))
      LIMIT 200`,
   );

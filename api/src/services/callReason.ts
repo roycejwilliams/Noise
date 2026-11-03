@@ -48,8 +48,10 @@ export function needsMemberReason(kind: CallAuthKind | null): boolean {
 
 // Sensitive topics (moved here from callOpening.ts so the reason and the opening share one list): a real reason to call, never
 // something the first line says out loud (whoever picks up hears it).
+// Extended 2026-11-03 (review of the onboarding branch, finding 5: the first call's opening words): breakups and separation, layoffs
+// and job loss, sobriety and addiction, mental health, and fear or distress.
 export const SENSITIVE =
-  /\b(?:biops\w*|diagnos\w*|cancer|surgery|hospital\w*|chemo\w*|therap\w*|pregnan\w*|miscarr\w*|passed away|funeral|grie\w+|died|death|divorc\w*|breakup|break-up|lawsuit|lawyer|attorney|bankrupt\w*|debt|eviction|rehab|diagnosed|medical|illness)\b/i;
+  /\b(?:biops\w*|diagnos\w*|cancer|surgery|hospital\w*|chemo\w*|therap\w*|pregnan\w*|miscarr\w*|passed away|funeral|grie\w+|died|death|divorc\w*|breakup|break-up|lawsuit|lawyer|attorney|bankrupt\w*|debt|eviction|rehab|diagnosed|medical|illness|split(?:ting)? up|broke up|break(?:ing)? up|separat(?:ed|ing|ion)|laid off|lay-?offs?|let go|fired|lost (?:my|his|her|their|our) job|job loss|unemploy\w*|redundan\w*|sober\w*|sobriety|addict\w*|alcohol\w*|drinking|relaps\w*|in recovery|anxi\w*|depress\w*|panic\w*|mental health|burn(?:ed|t)? ?out|suicid\w*|self-harm|ptsd|bipolar|psychiatr\w*|scared|afraid|terrified|frightened|distress\w*|overwhelm\w*|devastat\w*|heartbr\w*|desperate|crying|falling apart)\b/i;
 
 const DELIVERABLE = String.raw`(?:pdf|doc|docs|document|brief|briefing|write-?up|one-?pager|plan|draft|shortlist|list|summary|research|notes|options|recap|deck|email|link|file|sheet|report)`;
 

@@ -19,7 +19,7 @@ import { getEmotionalContext, recordEmotionSignals, renderEmotionalContext } fro
 import { findOrCreateUserByPhone, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
 import { countRecentGateReplies, decideGateReply } from "../services/gateGuard.js";
-import { claimJoinNotice, invitesLeftFor, inviterFirstName, releaseJoinNotice } from "../services/invites.js";
+import { claimJoinNotice, invitesLeftFor, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
 import { firstSendTimes } from "../services/turnLatency.js";
@@ -35,19 +35,21 @@ import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, thre
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage, readableImage } from "../services/imageRead.js";
 import { fileKindOf, fileRecordNote, isKeepable, keptFileFact, unreadableFileFact, type FileKind } from "../services/inboundFile.js";
-import { GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
+import { GATE_ASK, INVITE_JOINED, WELCOME, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
-  buildIntakeExtractionPrompt,
   decideIntake,
   gatherIntakeState,
+  correctEmailFromText,
+  emailCorrectionNote,
+  intakeAlreadyAsked,
   intakeAskFor,
   intakeCorrection,
   intakeInstruction,
+  textIntakeProposal,
   isEmailOnOtherAccount,
   isValidEmail,
-  parseIntakeProposal,
   replyAskedFor,
   type IntakeProposal,
 } from "../harness/intake.js";
@@ -407,18 +409,18 @@ async function owedAnswer(userId: string): Promise<{ text: string; afterFailure:
 // code was a member's invite (services/invites.ts). Sends it and records the
 // claim it makes (who it names, if anyone) so the morning review can check
 // it against the invite log, the same as the join-note below.
-async function welcomeLineFor(userId: string, phone: string, invitedBy: string | null | undefined): Promise<boolean> {
-  const inviter = await inviterFirstName(invitedBy).catch(() => null);
-  // pickLine returns "" when a line's variable is missing; the plain welcome
-  // needs no variables, so it's always a safe fallback.
-  const stock = (inviter ? pickLine(WELCOME_INVITED, { inviter }) : "") || pickLine(WELCOME);
+// The welcome never names the inviter (Royce, 2026-11-03, review of the onboarding branch, finding 6): the inviter is named only when
+// the member wrote that name themselves, and at welcome time they haven't written anything to Cue. The plain WELCOME lines are the
+// examples and the fallback; the inviter's name isn't given to the draft at all.
+export const WELCOME_FACTS = ["They're in. Someone invited them."];
+async function welcomeLineFor(userId: string, phone: string, _invitedBy: string | null | undefined): Promise<boolean> {
   // Co writes it (services/voiceLine.ts); the stock line is the fallback.
   const { text: line, written } = await lineInVoice({
     purpose: "Welcome someone who just got into Noise with a good invite code.",
-    facts: inviter ? [`${inviter}, a member, invited them.`, "They're in."] : ["They're in. Someone invited them."],
-    examples: inviter ? WELCOME_INVITED.map((l) => l.replace("{inviter}", inviter)) : WELCOME,
-    mustInclude: inviter ? [inviter] : [],
-    fallback: stock,
+    facts: WELCOME_FACTS,
+    examples: WELCOME,
+    mustInclude: [],
+    fallback: pickLine(WELCOME),
   });
   const sent = await sendAndLog(userId, phone, line);
   await recordDecision({
@@ -426,8 +428,8 @@ async function welcomeLineFor(userId: string, phone: string, invitedBy: string |
     decision: "account.inviteWelcome",
     userId,
     outcome: sent ? "act" : "skip",
-    action: inviter ? "named_inviter" : "no_inviter",
-    proposal: { ...(inviter ? { inviter } : {}), written },
+    action: "no_inviter",
+    proposal: { written },
   }).catch(() => {});
   return sent;
 }
@@ -460,7 +462,7 @@ async function tellInviterTheyJoined(newUser: { id: string; first_name?: string 
   } else {
     const { rows } = await pool.query(
       `SELECT first_name, phone_number FROM users
-       WHERE id = $1 AND identity_captured = true AND NOT sms_opted_out`,
+       WHERE id = $1 AND invite_verified = true AND archived_at IS NULL AND NOT sms_opted_out`, // a member, email on file or not (ruling A)
       [claimedInviterId],
     );
     // Archived test accounts (co-test) are opted out, so they drop out here too.
@@ -923,6 +925,7 @@ export function sendblueRouter(io: Server): Router {
         let intakeAsk: ("name" | "email")[] = [];
         let intakeFix: "email_taken" | "email_invalid" | null = null;
         let intakeSaved: { name: string; email: string } | null = null;
+        let emailFix: Awaited<ReturnType<typeof correctEmailFromText>> | null = null;
         if (!user.invite_verified) {
           // Even on the very first-ever message, try it as a code first
           // (2026-09-17: a website deep link pre-fills the code as the
@@ -1036,14 +1039,19 @@ export function sendblueRouter(io: Server): Router {
           // email, and never re-asks for something already on file.
           const intakeState = await gatherIntakeState(user);
           let extracted: IntakeProposal = { full_name: null, email: null };
+          // Read only when the text could carry their name or email (an "@", a self-introduction, or just after an ask), and a name
+          // only when it's theirs: "introduce me to Priya Shah" never renames them (harness/intake.ts textIntakeProposal; the call
+          // side takes no name at all).
           if (hasText) {
             try {
-              const { text: rawExtraction } = await generateText({
-                model: anthropic(INTAKE_EXTRACT_MODEL),
-                experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
-                prompt: buildIntakeExtractionPrompt(intakeState, content),
+              const read = await textIntakeProposal({
+                text: content,
+                state: intakeState,
+                extract: async (prompt) =>
+                  (await generateText({ model: anthropic(INTAKE_EXTRACT_MODEL), experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" }, prompt })).text,
               });
-              extracted = parseIntakeProposal(rawExtraction);
+              extracted = read.proposal;
+              if (read.nameDropped) await recordDecision({ layer: 1, decision: "intake.name", userId: user.id, outcome: "skip", action: "not_their_name", proposal: { name: read.nameDropped } }).catch(() => {});
             } catch (err: any) {
               console.error("sendblue intake: identity extraction failed (non-fatal, the reply still answers):", err?.message ?? err);
             }
@@ -1122,9 +1130,20 @@ export function sendblueRouter(io: Server): Router {
               knownName: intake.name ?? intakeState.knownName,
               knownEmail: intakeState.knownEmail,
               partialEmail: intake.savePartialEmail ?? intakeState.partialEmail,
-              asked: intakeState.retries > 0,
+              asked: intakeAlreadyAsked(intakeState),
             });
             intakeFix = intakeCorrection(intake);
+          }
+        } else if (hasText) {
+          // Their email on file, corrected by text right after Cue said it back (the call's confirmation: "If that's not right, just
+          // text me the right one"). Saved with the intake's checks; the reply is told only what really happened.
+          emailFix = await correctEmailFromText({ userId: user.id, text: content, email: user.email }).catch((err: any) => {
+            console.error("sendblue: email correction failed (non-fatal):", err?.message ?? err);
+            return null;
+          });
+          if (emailFix && emailFix.action !== "not_a_correction") {
+            if (emailFix.action === "updated") user = { ...user, email: emailFix.email! };
+            await recordDecision({ layer: 1, decision: "intake.emailCorrection", userId: user.id, outcome: emailFix.action === "updated" ? "act" : "skip", action: emailFix.action, proposal: { email: emailFix.email ?? null } }).catch(() => {});
           }
         }
 
@@ -1708,6 +1727,11 @@ export function sendblueRouter(io: Server): Router {
         if (intakeSaved) addFact(replyFacts, "did_this_turn", `Saved their name and email from this text: ${intakeSaved.name}, ${intakeSaved.email}.`);
         const intakeNote = intakeInstruction(intakeAsk, intakeFix);
         if (intakeNote) addInstruction(replyFacts, intakeNote);
+        if (emailFix) {
+          const fixNote = emailCorrectionNote(emailFix);
+          if (fixNote.fact) addFact(replyFacts, "did_this_turn", fixNote.fact);
+          if (fixNote.instruction) addInstruction(replyFacts, fixNote.instruction);
+        }
         const pendingLook = await (await import("../services/designSystem.js")).pendingLookInstruction(user.id).catch(() => null);
         if (pendingLook) addInstruction(replyFacts, pendingLook);
         // A photo sent as the look they want is read before anything is said about using it (design audit: a "this is the vibe" image
@@ -2543,16 +2567,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           );
         }
 
-        // Two independent reasons Co might fold in a secondary call-offer
-        // gesture: content-driven (would_benefit, from the classifier above)
-        // or channel-driven — someone with no profile yet, on their first
-        // real message, regardless of what that message actually is (a real
-        // voice call produces a far richer initial profile than short texts
-        // ever will). Fires at most once per person (isFirstRealMessage is
-        // only ever true for message #1). Eligibility (this signal +
-        // hasPendingOffer/recentOfferBurstActive as hard gates) is now
-        // weighed by the reply agent below, not pre-decided here — see
-        // agent/conversationReply.ts.
+        // Passed along but no longer read: a call offer is folded in only when what they shared would benefit from a call
+        // (would_benefit, from the classifier above). The channel-driven default offer to a thin profile's first message is gone
+        // (Royce, 2026-11-02, onboarding ruling 3; agent/conversationReply.ts callOfferEligibleFor).
         const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
 
         // Step 4.7 — Debounce the free-form reply only. Every deterministic

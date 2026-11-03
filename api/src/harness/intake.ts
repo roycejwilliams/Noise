@@ -14,6 +14,7 @@ import { hasPendingEmail } from "../services/identity.js";
 import type { GateCheck, Outcome } from "./core.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
+import { NAME_EMAIL } from "../services/onboardingLines.js";
 
 // Narrow extraction checked by code below, so Haiku (Royce's model policy).
 export const INTAKE_EXTRACT_MODEL = MODELS.haiku;
@@ -55,6 +56,10 @@ export type IntakeState = {
   // Consecutive retry messages already sent.
   retries: number;
   lastCoLine: string | null;
+  // Cue's last few texts, newest first (the extraction runs within INTAKE_EXTRACT_WINDOW of an ask). Missing: lastCoLine alone.
+  recentCoLines?: string[];
+  // The old door's name-and-email line (NAME_EMAIL) went out before the 2026-11-02 change: that counts as the one ask.
+  oldLineAsked?: boolean;
 };
 
 export type IntakeProposal = {
@@ -227,10 +232,106 @@ export function intakeInstruction(ask: ("name" | "email")[], correction: "email_
   return parts.length ? parts.join(" ") : null;
 }
 
+// Pure: Cue's line asked for their email, or their name, in any of its usual shapes (review of the onboarding branch, finding 7:
+// "best address to send event details to?" and "what should I call you?" are asks too). The same reads on texts and calls.
+export function askedForEmail(line: string | null | undefined): boolean {
+  if (!line) return false;
+  return /\be-?mail\b/i.test(line) || line.split(/(?<=[.!?])\s+/).some((s) => /\?\s*$/.test(s) && /\b(address|contact)\b/i.test(s));
+}
+export function askedForName(line: string | null | undefined): boolean {
+  if (!line) return false;
+  return /\bname\b/i.test(line) || /\bwhat (?:should|shall|do|can) I call you\b|\bwhat do you go by\b|\bwho am I (?:talking|speaking) (?:to|with)\b/i.test(line);
+}
+
 // Pure: whether a reply that went out asked for what was missing (so it's never asked again).
 export function replyAskedFor(ask: ("name" | "email")[], replyText: string | null | undefined): boolean {
   if (!ask.length || !replyText) return false;
-  return ask.includes("email") ? /\be-?mail\b/i.test(replyText) : /\bname\b/i.test(replyText);
+  return ask.includes("email") ? askedForEmail(replyText) : askedForName(replyText);
+}
+
+// Pure: the one ask already happened: counted asks (users.intake_retries), or the old door's line for members mid-intake when the
+// 2026-11-02 change shipped (they only ever got NAME_EMAIL, which never counted).
+export function intakeAlreadyAsked(s: Pick<IntakeState, "retries" | "oldLineAsked">): boolean {
+  return s.retries > 0 || s.oldLineAsked === true;
+}
+
+// ---- whose name, and when to read for one (review of the onboarding branch, finding 3) -------------------------------------
+// A name is only ever theirs when they name themselves: a reply to Cue's ask, or a self-introduction ("I'm ...", "it's ...", "my
+// name is ..."). "Can you introduce me to Priya Shah?" names someone else. The call side takes no name at all (services/callEmail.ts).
+// The extraction (a model call) runs only when the text could carry their name or email: an "@", a self-introduction, or within
+// INTAKE_EXTRACT_WINDOW of Cue's texts after an ask. A member who declined isn't read on every text forever.
+export const INTAKE_EXTRACT_WINDOW = 2;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// "my name is", "name's", "call me", "I go by": unambiguous in any case. "I'm", "it's", "this is": only before a capitalized word.
+const SELF_INTRO_STRONG = /\b(?:my name(?:'s|\u2019s| is)|name(?:'s|\u2019s)|call me|i go by)\s+\S/i;
+const SELF_INTRO_WEAK = /(?<!\p{L})(?:[Ii](?:'|\u2019)?m|I am|[Ii]t(?:'|\u2019)?s|[Tt]his is)\s+\p{Lu}\p{L}/u;
+export function selfIntroduces(text: string | null | undefined): boolean {
+  return !!text && (SELF_INTRO_STRONG.test(text) || SELF_INTRO_WEAK.test(text));
+}
+export function shouldExtractIdentity(text: string | null | undefined, recentCoLines: (string | null)[]): boolean {
+  if (!text) return false;
+  if (/@/.test(text) || selfIntroduces(text)) return true;
+  return recentCoLines.slice(0, INTAKE_EXTRACT_WINDOW).some((l) => askedForName(l) || askedForEmail(l));
+}
+export function nameIsTheirs(name: string | null | undefined, text: string | null | undefined, lastCoLine: string | null | undefined): boolean {
+  const first = name?.trim().split(/\s+/)[0];
+  if (!first || !text) return false;
+  // Letter boundaries that work past ASCII ("Émile"), with "u".
+  const f = `(?<!\\p{L})${escapeRe(first)}(?!\\p{L})`;
+  // Someone else's name: it follows "to", "with", "meet", "introduce me to" and the like.
+  if (new RegExp(`(?<!\\p{L})(?:to|with|meet|meeting|met|introduce|and|for|from|about|know|knows|ask|tell|email|text|call)\\s+${f}`, "iu").test(text) && !new RegExp(`(?<!\\p{L})call me\\s+${f}`, "iu").test(text)) return false;
+  const selfNamed = new RegExp(`(?<!\\p{L})(?:i(?:'|\u2019)?m|i am|it(?:'|\u2019)?s|this is|my name(?:'s|\u2019s| is)|name(?:'s|\u2019s)|call me|i go by)\\s+${f}|^\\s*${f}\\s+here(?!\\p{L})`, "iu");
+  if (selfNamed.test(text)) return true;
+  return askedForName(lastCoLine);
+}
+
+// The extraction step on a text, gated: whether to read the text at all, then their name only when it's theirs.
+export async function textIntakeProposal(o: { text: string | null; state: IntakeState; extract: (prompt: string) => Promise<string> }): Promise<{ proposal: IntakeProposal; extracted: boolean; nameDropped: string | null }> {
+  const none = { proposal: { full_name: null, email: null }, extracted: false, nameDropped: null };
+  const recent = o.state.recentCoLines ?? [o.state.lastCoLine];
+  if (!shouldExtractIdentity(o.text, recent)) return none;
+  const p = parseIntakeProposal(await o.extract(buildIntakeExtractionPrompt(o.state, o.text)));
+  if (p.full_name && !nameIsTheirs(p.full_name, o.text, o.state.lastCoLine)) return { proposal: { ...p, full_name: null }, extracted: true, nameDropped: p.full_name };
+  return { proposal: p, extracted: true, nameDropped: null };
+}
+
+// ---- a texted email correction, after identity is captured (review of the onboarding branch, finding 2) ---------------------
+// The call's confirmation text says "If that's not right, just text me the right one": this makes that true. Right after Cue's last
+// text said their email back (the confirmation always carries the exact address), an address in their text replaces the one on file,
+// with the intake's checks: well formed, never the placeholder, not on another account. Cue never says "updated" unless it was.
+type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
+export type EmailCorrection = { action: "updated" | "taken" | "invalid" | "same" | "not_a_correction"; email?: string; was?: string };
+const EMAIL_IN_TEXT = /[^\s@<>()"',;:]+@[^\s@<>()"',;:]+/;
+export async function correctEmailFromText(o: { userId: string; text: string | null; email: string | null | undefined }, db: Db = pool): Promise<EmailCorrection> {
+  const was = o.email && !hasPendingEmail(String(o.email)) ? String(o.email) : null;
+  const m = o.text?.match(EMAIL_IN_TEXT);
+  if (!was || !m) return { action: "not_a_correction" };
+  const { rows } = await db.query(
+    `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT 1`,
+    [o.userId],
+  );
+  if (!String(rows[0]?.content ?? "").toLowerCase().includes(was.toLowerCase())) return { action: "not_a_correction" };
+  const email = m[0].replace(/[.!?]+$/, "");
+  if (email.toLowerCase() === was.toLowerCase()) return { action: "same", email, was };
+  if (!isValidEmail(email)) return { action: "invalid", email, was };
+  if (await isEmailOnOtherAccount(email, o.userId, db)) return { action: "taken", email, was };
+  try {
+    const r = await db.query(`UPDATE users SET email = $2 WHERE id = $1 AND email = $3 RETURNING id`, [o.userId, email, was]);
+    if (!r.rows.length) return { action: "not_a_correction" };
+  } catch (err: any) {
+    if (err?.code === "23505") return { action: "taken", email, was };
+    throw err;
+  }
+  return { action: "updated", email, was };
+}
+
+// Pure: what the reply is told about a correction. Only "updated" lets it say the change was made.
+export function emailCorrectionNote(c: EmailCorrection): { fact: string | null; instruction: string | null } {
+  if (c.action === "updated") return { fact: `Updated their email on file to ${c.email} (it was ${c.was}).`, instruction: null };
+  if (c.action === "same") return { fact: `The email they sent, ${c.email}, is already the one on file. Nothing changed.`, instruction: null };
+  if (c.action === "taken") return { fact: null, instruction: `The email they just sent (${c.email}) is already on another account, so it was not saved and their email on file is still ${c.was}. After answering anything else they said, say so in a few words and ask if there's another one they use. Never say it was updated.` };
+  if (c.action === "invalid") return { fact: null, instruction: `The email they just sent (${c.email}) doesn't look complete, so it was not saved and their email on file is still ${c.was}. After answering anything else they said, say so in a few words, once. Never say it was updated.` };
+  return { fact: null, instruction: null };
 }
 
 export function buildIntakeExtractionPrompt(state: Pick<IntakeState, "knownName" | "knownEmail" | "partialEmail">, reply: string | null): string {
@@ -266,12 +367,17 @@ export async function gatherIntakeState(user: {
   intake_partial_email?: string | null;
   intake_retries?: number | null;
 }): Promise<IntakeState> {
-  const lastCo = await pool
-    .query(
-      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT 1`,
-      [user.id],
-    )
-    .catch(() => ({ rows: [] as { content: string }[] }));
+  const [lastCo, oldLine] = await Promise.all([
+    pool
+      .query(
+        `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT ${INTAKE_EXTRACT_WINDOW}`,
+        [user.id],
+      )
+      .catch(() => ({ rows: [] as { content: string }[] })),
+    pool
+      .query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = ANY($2::text[]) LIMIT 1`, [user.id, NAME_EMAIL.map((l) => `Co replied: ${l}`)])
+      .catch(() => ({ rows: [] as unknown[] })),
+  ]);
   return {
     userId: user.id,
     knownName: knownNameOf(user),
@@ -279,11 +385,13 @@ export async function gatherIntakeState(user: {
     partialEmail: user.intake_partial_email ?? null,
     retries: user.intake_retries ?? 0,
     lastCoLine: lastCo.rows[0]?.content?.replace(/^Co replied: /, "") ?? null,
+    recentCoLines: lastCo.rows.map((r: { content: string }) => r.content.replace(/^Co replied: /, "")),
+    oldLineAsked: oldLine.rows.length > 0,
   };
 }
 
-export async function isEmailOnOtherAccount(email: string, userId: string): Promise<boolean> {
-  const { rows } = await pool.query(`SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2 LIMIT 1`, [email.trim(), userId]);
+export async function isEmailOnOtherAccount(email: string, userId: string, db: Db = pool): Promise<boolean> {
+  const { rows } = await db.query(`SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2 LIMIT 1`, [email.trim(), userId]);
   return rows.length > 0;
 }
 

@@ -33,15 +33,15 @@ Object.defineProperty((twilio as any).Twilio.prototype, "calls", { configurable:
 (await import("../../src/services/callTrigger.js")).setPreflightForTests(async () => ({ ok: true }));
 
 // One member, the shape a brand-new member has: identity captured, subscription active, no profile content, no call yet.
-const member = { profile: false, realCall: false, attempts: 0 };
+const member = { profile: false, realCall: false, attempts: 0, invite: true, archived: null as string | null, identity: true };
 const gate: any[] = [];
 const writes: string[] = [];
 (pool as any).query = async (sql: string, params: any[] = []) => {
   const q = String(sql).replace(/\s+/g, " ").trim();
   if (/^INSERT INTO harness_decisions/i.test(q)) { gate.push(params); return { rows: [], rowCount: 1 }; }
-  if (/^SELECT identity_captured FROM users WHERE id = \$1/i.test(q)) return { rows: [{ identity_captured: true }] };
+  if (/^SELECT invite_verified, archived_at FROM users WHERE id = \$1/i.test(q)) return { rows: [{ invite_verified: member.invite, archived_at: member.archived }] };
   if (/SELECT u\.first_name, u\.phone_number, u\.subscription_status, u\.call_status/i.test(q)) return { rows: [{ first_name: "Ellis", phone_number: "+14150110142", subscription_status: "active", call_status: null, call_status_updated_at: null }] };
-  if (/AS has_real_profile/i.test(q)) return { rows: [{ sms_opted_out: false, identity_captured: true, city: "San Francisco", checkin_call_cadence_days: null, has_real_profile: member.profile, had_real_call: member.realCall }] };
+  if (/AS has_real_profile/i.test(q)) return { rows: [{ sms_opted_out: false, identity_captured: member.identity, member: /invite_verified/.test(q) ? member.invite && !member.archived : member.identity, city: "San Francisco", checkin_call_cadence_days: null, has_real_profile: member.profile, had_real_call: member.realCall }] };
   if (/COUNT\(\*\)::int AS n, MAX\(created_at\) AS at FROM harness_decisions/i.test(q)) return { rows: [{ n: member.attempts, at: null }] };
   if (/^WITH prev AS \(SELECT call_status/i.test(q)) { writes.push("dial claim"); return { rows: [{ prev_status: null, prev_at: null }] }; }
   if (/^INSERT INTO co_memories/i.test(q)) { writes.push("call record"); return { rows: [{ id: 1 }] }; }
@@ -80,6 +80,23 @@ const press = async () => {
   const { res } = await press();
   check("a member whose intake call already happened: nothing authorizes it, no dial", res.code !== 200 && dials.length === 0, { code: res.code, body: res.body });
   member.realCall = false;
+}
+
+// Ruling A (2026-11-02): a member whose name and email aren't on file yet (identity_captured false) is still a member; the button
+// works for them. Someone who never got in with an invite, or an archived account, gets no call (review of the onboarding branch).
+{
+  dials.length = 0; gate.length = 0;
+  member.identity = false;
+  const { res, err } = await press();
+  check("a member with no name or email on file: the call is still placed", res.code === 200 && dials.length === 1, { code: res.code, body: res.body, err: err?.message });
+  member.identity = true;
+}
+for (const [label, o] of [["no invite", { invite: false }], ["archived", { archived: "2026-10-01" }]] as const) {
+  dials.length = 0;
+  Object.assign(member, o);
+  const { res } = await press();
+  check(`${label}: refused before the gate, no dial`, res.code === 403 && dials.length === 0, { code: res.code, body: res.body });
+  member.invite = true; member.archived = null;
 }
 
 // Nothing here ran the jobs: the button path never reaches jobs/index.ts.

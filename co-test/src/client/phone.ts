@@ -235,7 +235,8 @@ async function pollStatus() {
     if (!json.success) return;
     const d = json.data;
 
-    if (!d.identity_captured) {
+    // Ready once they're a member (invite-verified, not archived); name and email aren't a condition (ruling A).
+    if (!(d.call_ready ?? d.identity_captured)) {
       showStep(stepTextIn);
       statusEl.textContent = "Waiting for text-in";
     } else {

@@ -49,6 +49,7 @@ export const NAME_EMAIL = ["First, your full name and email.", "Let's start simp
 
 // Right after a good code that came from a member's invite. {inviter} is
 // that member's first name.
+// Not sent since 2026-11-03 (Royce, finding 6): the welcome never names the inviter; the plain WELCOME lines go instead.
 export const WELCOME_INVITED = [
   "You're in. {inviter} brought you, so you're in good company.",
   "You're in. Any friend of {inviter}'s is welcome here.",

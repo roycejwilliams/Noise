@@ -57,7 +57,7 @@ router.post("/session", async (req: Request, res: Response, next: NextFunction) 
 router.get("/:user_id/status", requireOwnOrTeam("user_id"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      `SELECT u.identity_captured, u.call_sid, u.call_status, u.test_case,
+      `SELECT u.identity_captured, (COALESCE(u.invite_verified, false) AND u.archived_at IS NULL) AS call_ready, u.call_sid, u.call_status, u.test_case,
               u.smoke_test_tool_call_at, u.smoke_test_tool_response_at,
               EXISTS (
                 SELECT 1 FROM co_memories cm WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
@@ -105,18 +105,19 @@ router.post("/:user_id/tag", requireOwnOrTeam("user_id"), async (req: Request, r
 // Twilio dials out through api/src/services/callTrigger.ts, the leg is
 // answered by GPT-Live (api/src/routes/co.ts gptLiveAnswer), and its
 // post-call steps run in THIS service, writing to co-test's own DB. Gated on
-// identity_captured — text-in-first, then name/email, only then a real call
-// unlocks (no separate OTP step anymore, matching production).
+// membership: invite-verified and not archived. Name and email on file aren't
+// a condition (ruling A, 2026-11-02: asked once, never held hostage), the same
+// line production's inbound calls use (api/src/harness/callGate.ts inboundCallMember).
 router.post("/:user_id/call", requireOwnOrTeam("user_id"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userResult = await pool.query(
-      `SELECT identity_captured FROM users WHERE id = $1`,
+      `SELECT invite_verified, archived_at FROM users WHERE id = $1`,
       [req.params.user_id],
     );
     const user = userResult.rows[0];
     if (!user) return res.status(404).json({ success: false, error: "Session not found." });
-    if (!user.identity_captured) {
-      return res.status(403).json({ success: false, error: "Complete name/email intake before requesting a call." });
+    if (user.invite_verified !== true || user.archived_at) {
+      return res.status(403).json({ success: false, error: "Text in with an invite code before requesting a call." });
     }
 
     // io is null here — this dashboard has its own live-call view

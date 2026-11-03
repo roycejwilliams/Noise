@@ -10,6 +10,13 @@ export function hasPendingEmail(email: string): boolean {
   return email.endsWith(PENDING_EMAIL_DOMAIN);
 }
 
+// An address Cue may send to: well formed and never the placeholder. The placeholder is no email (review of the onboarding branch,
+// 2026-11-03): a member who declined email has only the placeholder, and nothing is ever sent to it.
+export function usableEmail(email: string | null | undefined): string | null {
+  const e = String(email ?? "").trim();
+  return /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(e) && !hasPendingEmail(e.toLowerCase()) ? e : null;
+}
+
 // Finds the user row for a phone number, creating a bare placeholder if this
 // number has never been seen before. CoPatible no longer collects name/email
 // through a separate form (Framer or otherwise) before someone starts

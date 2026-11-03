@@ -136,7 +136,7 @@ check("a window that already ended: silence", B.pickProposal({ ...want, until: D
   const links: string[] = [];
   const sent: string[] = [];
   const notDone: string[] = [];
-  (pool as any).query = async (q: string) => (/INSERT INTO google_oauth_states/.test(q) && links.push(q), /FROM users WHERE id = \$1 AND invite_verified = true AND identity_captured = true AND archived_at IS NULL/.test(q) ? { rows: [{ x: 1 }] } : { rows: [], rowCount: 1 });
+  (pool as any).query = async (q: string) => (/INSERT INTO google_oauth_states/.test(q) && links.push(q), /FROM users WHERE id = \$1 AND invite_verified = true AND archived_at IS NULL/.test(q) ? { rows: [{ x: 1 }] } : { rows: [], rowCount: 1 });
   const envWas = { id: process.env.GOOGLE_CUE_CLIENT_ID, sec: process.env.GOOGLE_CUE_CLIENT_SECRET, key: process.env.GOOGLE_TOKEN_KEY, url: process.env.API_URL };
   Object.assign(process.env, { GOOGLE_CUE_CLIENT_ID: "c", GOOGLE_CUE_CLIENT_SECRET: "s", GOOGLE_TOKEN_KEY: Buffer.alloc(32, 3).toString("base64"), API_URL: "https://api.example.test" });
   try {
