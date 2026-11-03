@@ -16,6 +16,7 @@ import pool from "../db/db.js";
 import { localHourOk, nextLocalHour, RULES, sendExempt, type ExemptType } from "../harness/proactive.js";
 import { dropStaleAck } from "./speakable.js";
 import { recordDecision } from "../harness/core.js";
+import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, SUBJECT_CLOSED } from "../harness/closedSubject.js";
 
 export type AfterKind = "relay" | "reminder" | "network_intro_ask" | "event_direct_ask" | "call_confirm" | "co_event_announce";
 export type AfterSend = { kind: AfterKind; payload: Record<string, unknown> };
@@ -86,6 +87,8 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
   if (/^sentinel body:/.test(r.reason ?? "")) return "skipped";
   // It says something they corrected since it was queued (runDueDeferredSends' recheck): skipped, never retried.
   if (/^corrected since queued:/.test(r.reason ?? "")) return "skipped";
+  // What it served closed at their word since it was queued (harness/closedSubject.ts): skipped, never retried.
+  if ((r.reason ?? "").startsWith(SUBJECT_CLOSED)) return "skipped";
   return "failed";
 }
 
@@ -162,7 +165,18 @@ export type DeferredDeps = {
   judge?: CorrectionJudge;
   // Tests: the door's enqueue (default: harness/door.ts enterDoor).
   door?: typeof import("../harness/door.js").enterDoor;
+  // Tests: the member's closed subjects (default: harness/closedSubject.ts loadClosedSubjects).
+  closed?: typeof loadClosedSubjects;
 };
+
+// Pure-ish: whether a held row's subject closed at their word since it was queued (harness/closedSubject.ts): a task's result keyed
+// task:<id>:... for a task they closed or dropped. Only rows that serve something are read; a read that fails holds nothing back.
+export async function deferredRowClosed(row: Pick<DeferredRow, "user_id" | "type" | "target_key" | "after_kind">, read: typeof loadClosedSubjects = loadClosedSubjects): Promise<ReturnType<typeof closedSubjectFor>> {
+  const item = { type: row.type, targetKey: row.target_key, payload: {} };
+  if (!subjectRefs(item).length) return null;
+  const set = await read(row.user_id).catch(() => null);
+  return closedSubjectFor(item, set, row.type === "co_event" || row.after_kind === "network_intro_ask" ? "unsolicited" : "requested");
+}
 
 // Pure: a held row the door takes when it comes due instead of sending it (harness/door.ts, Royce 2026-11-02: "held work released by
 // the gate flows back through the picker, never as a burst"): an intro ask, a task's results, Cue's own event announcement. What's
@@ -255,7 +269,11 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     if (verdict?.send) recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "act", action: "sent_as_written", proposal: { id: row.id, type: row.type }, reason: verdict.why }).catch(() => {});
 
     let result: { sent: boolean; reason?: string; retryAt?: Date };
+    // What it serves, read again before it goes or enters the door (harness/closedSubject.ts): closed at their word, it never goes.
+    const closedHit = row.archived ? null : await deferredRowClosed(row, deps.closed);
+    if (closedHit) recordDecision(droppedClosedDecision({ userId: row.user_id, stage: "deferred", candidate: { id: String(row.id), type: row.type, targetKey: row.target_key }, hit: closedHit })).catch(() => {});
     if (row.archived) result = { sent: false, reason: "archived" };
+    else if (closedHit) result = { sent: false, reason: closedReason(closedHit) };
     else if (stale) {
       result = { sent: false, reason: `corrected since queued: "${stale.correction.was}" is now "${stale.correction.now}" (${stale.why})`.slice(0, 300) };
       await recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "skip", action: "wrong_after_correction", proposal: { id: row.id, type: row.type, correction: stale.correction, message: String(messages[0] ?? "").slice(0, 200) }, reason: stale.why }).catch(() => {});

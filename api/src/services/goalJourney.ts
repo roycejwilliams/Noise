@@ -15,6 +15,7 @@
 //                   the arc), not a status flip. Closed goals are kept: goal history is the autobiography; asks are disposable.
 import pool from "../db/db.js";
 import { goalEntries, isActiveGoal, type IntentEntry } from "../harness/profileWrite.js";
+import { notToTeammate } from "./teamLines.js";
 
 export const GOAL_CHECKIN = {
   // A goal is asked about only after it has gone this long without being confirmed (set, restated, or last checked in on).
@@ -128,6 +129,56 @@ export async function closeGoal(userId: string, goalId: string, quote: string | 
     console.error("goalJourney: closing a goal failed (non-fatal):", err?.message ?? err);
     return false;
   }
+}
+
+// ---- one acknowledgment (Royce, 2026-11-03: "got the venue" / "perfect, thanks" become the close: acknowledge once)
+// The goal_closed moment goes 5 minutes after the close, and the reply in the turn that closed it may already have said it. Decided from
+// Cue's own reply in that turn, never their words: the turn's move was close (#368: the reply was checked to acknowledge it once), or
+// Cue's reply said so. A warm word ("congrats", "so glad", "you did it") is enough; a plain one ("got it", "makes sense") counts only
+// when the line also names the goal (most of its words).
+export const ACK_WARM = /\b(?:congrat\w*|you did it|you made it|well done|nice work|great work|so (?:glad|happy) for you|happy for you|proud of you|well earned|that's (?:huge|great news|amazing|wonderful|a big (?:one|step|deal))|big (?:step|win|deal)|love (?:that|this|to hear)|good for you)\b/i;
+export const ACK_PLAIN = /\b(?:got it|noted|understood|makes sense|fair enough|good call|no problem|i'll stop|stop(?:ping)? (?:looking|searching)|let(?:ting)? (?:it|that) go|off (?:the|your) list|closing (?:it|that))\b/i;
+const goalWords = (t: string) => new Set(String(t).toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter((w) => w.length > 3));
+export function namesGoal(line: string, goal: string): boolean {
+  const g = goalWords(goal);
+  if (!g.size) return false;
+  const l = goalWords(line);
+  let n = 0;
+  for (const w of g) if (l.has(w) || l.has(w.replace(/s$/, "")) || l.has(`${w}s`)) n++;
+  return n / g.size >= 0.5;
+}
+// Pure: the reply in the closing turn already acknowledged the close. moves: that turn's logged moves (turn.move_read); lines: Cue's own
+// sent lines in that turn (text bubbles, or Cue's side of the call that closed it).
+export function replyAcknowledgedClose(o: { moves: string[]; lines: string[]; goal: string }): { acknowledged: boolean; why: string } {
+  if (o.moves.includes("close")) return { acknowledged: true, why: "the reply's move was close" };
+  // Only Cue's statements: a line that ends in a question isn't an acknowledgment.
+  const said = o.lines.flatMap((l) => String(l).split(/(?<=[.!?])\s+/)).filter((x) => x.trim() && !/\?\s*$/.test(x));
+  if (said.some((x) => ACK_WARM.test(x))) return { acknowledged: true, why: "the reply said it warmly" };
+  if (said.some((x) => ACK_PLAIN.test(x) && namesGoal(x, o.goal))) return { acknowledged: true, why: "the reply named it and let it go" };
+  return { acknowledged: false, why: "the reply didn't acknowledge it" };
+}
+export const ACKNOWLEDGED_IN_REPLY = "the reply that closed it already acknowledged it";
+type DbQ = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
+// Cue's own reply in the turn that closed the goal at closedAt (the goal_closed candidate's own time): their last text up to then (within
+// two hours), and what Cue sent and decided after it until their next text. With no text, the call that closed it (Cue's lines).
+export async function closingTurnReply(userId: string, closedAt: Date, db: DbQ = pool): Promise<{ moves: string[]; lines: string[] }> {
+  const since = new Date(closedAt.getTime() - 2 * 3_600_000);
+  const { rows: inb } = await db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at <= $2 AND created_at > $3 ORDER BY created_at DESC LIMIT 1`, [userId, closedAt, since]);
+  if (inb[0]?.created_at) {
+    const from = new Date(inb[0].created_at);
+    const { rows: next } = await db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > $2 ORDER BY created_at LIMIT 1`, [userId, from]);
+    const to = next[0]?.created_at ? new Date(next[0].created_at) : new Date();
+    const [replies, moves] = await Promise.all([
+      db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} AND created_at > $2 AND created_at < $3 ORDER BY created_at`, [userId, from, to]),
+      db.query(`SELECT action FROM harness_decisions WHERE user_id = $1 AND decision = 'turn.move_read' AND created_at >= $2 AND created_at < $3`, [userId, from, to]),
+    ]);
+    // Cue's own bubbles (the stored prefix), never their words.
+    const cue = replies.rows.map((r: any) => String(r.content ?? "")).filter((t: string) => /^Co replied:/i.test(t));
+    return { moves: moves.rows.map((r: any) => String(r.action ?? "")), lines: cue.map((t: string) => t.replace(/^Co replied:\s*/i, "")) };
+  }
+  const { rows: call } = await db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND created_at <= $2 AND created_at > $3 ORDER BY created_at DESC LIMIT 1`, [userId, new Date(closedAt.getTime() + 60_000), since]);
+  const cue = String(call[0]?.content ?? "").split(/\n+/).filter((l) => /^\s*(?:agent|assistant|co|cue|ai)\s*:/i.test(l)).map((l) => l.replace(/^\s*\w+\s*:\s*/, ""));
+  return { moves: [], lines: cue.slice(-6) };
 }
 
 // A profile goal that came off their list at their word (profileExtraction.ts applyRetirements) takes its goal state with it, so it
