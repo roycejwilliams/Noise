@@ -27,7 +27,7 @@ export const MOVE_MEANINGS: Record<ExchangeMove, string> = {
   ask: "ask the one question you can't go on without, and nothing they already told you",
   quiet: "say nothing more than a reaction",
 };
-export const MOVES_GUIDE = `Pick the move from the whole exchange, not from their last line alone: what they asked and corrected, what Cue already did or asked, what's still open, how they feel, and their rules. The moves: ${EXCHANGE_MOVES.map((m) => `${m} (${MOVE_MEANINGS[m]})`).join("; ")}.`;
+export const MOVES_GUIDE = `Pick the move from the whole exchange, not from their last line alone: what they asked and corrected, what Cue already did or asked, what's still open, how they feel, and their rules. Their latest message always wins over the record: if they ask for something again, bring a closed thing back, or didn't catch what you asked, that's what you answer. "close" only when their latest message closes and asks nothing: a thanks with a question or a request is "answer" or "act", and closing words that carry distress ("I'm done with all of it") are "feeling", never "close". The moves: ${EXCHANGE_MOVES.map((m) => `${m} (${MOVE_MEANINGS[m]})`).join("; ")}.`;
 
 export type DoneKind = "link" | "find" | "card" | "document" | "question" | "offer";
 // replied: they wrote back after it (a question or offer they've had the chance to answer).
@@ -37,9 +37,12 @@ export type UnresolvedItem = { id: string; label: string; state: UnresolvedState
 export type Told = { q: string; a: string };
 // item / notItem: done ids this turn. label / notLabel: their labels (what carries to the next turn).
 export type Meant = { phrase: string; item: string | null; label: string | null; notItem: string | null; notLabel: string | null };
-export type StoredMeant = { phrase: string; label: string | null; notLabel: string | null };
+// Kept between turns: Cue's own item labels only, never their words (review of #368).
+export type StoredMeant = { label: string | null; notLabel: string | null };
 export type ExchangeBase = { done: DoneItem[]; unresolved: UnresolvedItem[]; priorMeant: StoredMeant[] };
-export type ExchangeRead = { move: ExchangeMove; why: string | null; meant: Meant | null; told: Told[]; closes: { item: string; how: "solved" | "dropped" }[]; again: string | null };
+// reopens: closed items (solved or dropped) their latest message brings back; for this turn they're theirs again (review of #368: the
+// member's latest message always wins over the record).
+export type ExchangeRead = { move: ExchangeMove; meant: Meant | null; told: Told[]; closes: { item: string; how: "solved" | "dropped" }[]; reopens: string[]; again: string | null };
 export type ExchangeRecord = ExchangeBase & { read: ExchangeRead | null };
 
 export const DONE_MAX = 16;
@@ -105,7 +108,7 @@ export function exchangeAddendum(b: ExchangeBase | null | undefined): string {
   if (!b) return "";
   const done = b.done.map((d) => `- ${itemLine(d)}`).join("\n") || "- (nothing yet)";
   const open = b.unresolved.map((u) => `- ${u.id} [${u.state}] ${u.label}`).join("\n") || "- (nothing)";
-  const prior = b.priorMeant.length ? `\nEarlier in this conversation, what their words pointed to (Cue's own items): ${b.priorMeant.map((m) => `"${m.phrase}" meant ${m.label ?? "unclear"}${m.notLabel ? `, not ${m.notLabel}` : ""}`).join("; ")}. A correction carries forward until they say otherwise.\n` : "";
+  const prior = b.priorMeant.length ? `\nEarlier in this conversation, what their pointing words meant (Cue's own items): ${b.priorMeant.map((m) => `${m.label ?? "unclear"}${m.notLabel ? `, not ${m.notLabel}` : ""}`).join("; ")}. A correction carries forward until they say otherwise.\n` : "";
 
   return `
 
@@ -116,10 +119,10 @@ What's open or closed for them (by id; only their word makes something solved or
 ${open}
 ${prior}
 "move": the one move for Cue's reply. ${MOVES_GUIDE} One of: ${EXCHANGE_MOVES.map((m) => `"${m}"`).join(", ")}.
-"move_why": a few words on why, from the exchange (no names, no quotes).
 "refers_to": when their message points at something with "that", "it", "this one", "the second one", "him" or similar, {"phrase": "their pointing word or two", "item": the D id it means, or null when it isn't on the list, "not_item": the D id they say they did NOT mean (a correction like "no, the other one"), or null}; otherwise null.
 "answered": Cue's questions in the conversation above (or offers in the list) that they have already answered, each {"q": "Cue's question, word for word", "a": "their answer, in a few of their words"}; [] if none. Count an answer even if it came several texts later or in other words.
 "closes": items on the open list their latest message says are done, solved or dropped, each {"item": "U id", "how": "solved" | "dropped"}; [] if none. Only their own words close something.
+"reopens": U ids of items marked solved or dropped that their latest message brings back or asks about again; [] if none.
 "asks_again": the D id they're asking Cue to send or say again, or null.`;
 }
 
@@ -134,26 +137,39 @@ export function parseExchangeRead(obj: any, b: ExchangeBase | null | undefined):
   const r = obj?.refers_to;
   const meant: Meant | null = r && typeof r === "object" && s(r.phrase, 40) ? { phrase: s(r.phrase, 40)!, item: doneId(r.item), label: labelOf(doneId(r.item)), notItem: doneId(r.not_item), notLabel: labelOf(doneId(r.not_item)) } : null;
   const told: Told[] = (Array.isArray(obj?.answered) ? obj.answered : []).map((t: any) => ({ q: s(t?.q, 200), a: s(t?.a, 200) })).filter((t: any): t is Told => !!t.q && !!t.a).slice(0, 6);
+  const reopens = (Array.isArray(obj?.reopens) ? obj.reopens : []).map((v: unknown) => s(v, 8)?.toUpperCase() ?? "").filter((id: string) => b.unresolved.some((u) => u.id === id && (u.state === "solved" || u.state === "dropped"))).slice(0, 6);
   const closes = (Array.isArray(obj?.closes) ? obj.closes : [])
     .map((c: any) => ({ item: s(c?.item, 8)?.toUpperCase() ?? "", how: c?.how === "dropped" ? ("dropped" as const) : ("solved" as const) }))
     .filter((c: { item: string }) => b.unresolved.some((u) => u.id === c.item && (u.state === "open" || u.state === "delivered")))
     .slice(0, 6);
-  return { move, why: s(obj?.move_why, 160), meant: meant && (meant.item || meant.notItem) ? meant : null, told, closes, again: doneId(obj?.asks_again) };
+  const again = doneId(obj?.asks_again);
+  // A close that also asks for something again, or brings something back, is a request: answered, never closed over (review of #368).
+  const asked = move === "close" && (again || reopens.length) ? "act" : move;
+  return { move: asked, meant: meant && (meant.item || meant.notItem) ? meant : null, told, closes, reopens, again };
+}
+
+// Pure: the move's logged reason, built by code from the read's fields (review of #368: never the model's free text).
+export function moveReason(r: ExchangeRead, closeHeld = false): string {
+  return [`move=${r.move}`, closeHeld ? "close held: safety or a heavy moment" : null, r.again ? "asked for something again" : null, r.reopens.length ? `brought back ${r.reopens.length}` : null, r.closes.length ? `closed ${r.closes.length}` : null, r.told.length ? `answered ${r.told.length} earlier` : null, r.meant?.notItem ? "corrected a referent" : r.meant?.item ? "pointed at an item" : null].filter(Boolean).join("; ");
 }
 
 // Pure: the record as the reply's per-turn lines (the uncached tail: harness/replyGrounding.ts renderReplyFacts), or null when there's
-// nothing to say. The move's reason is logged only, never put here.
-export function recordLines(rec: ExchangeRecord | null | undefined): string | null {
-  if (!rec) return null;
+// nothing to say. A text turn whose read failed gets none (review of #368: no "never again" or "don't reopen" without a read of their
+// latest message; the reply runs as before). A call has no turn read: its note keeps the record, softened by "unless they ask".
+export function recordLines(rec: ExchangeRecord | null | undefined, o: { call?: boolean } = {}): string | null {
+  if (!rec || (!rec.read && !o.call)) return null;
   const r = rec.read;
+  const back = new Set(r?.reopens ?? []);
   const closing = new Map((r?.closes ?? []).map((c) => [c.item, c.how]));
   const lines: string[] = [];
   if (rec.done.length) lines.push(`Already done in this exchange (never send or offer these again unless they ask, and then say it's again): ${rec.done.map(itemLine).join("; ")}.`);
   if (r?.told.length) lines.push(`They already told you (never ask these again; build on the answer): ${r.told.map((t) => `"${t.q}" → "${t.a}"`).join("; ")}.`);
   if (r?.meant?.item || r?.meant?.notItem) lines.push(`"${r.meant.phrase}" in their message means ${r.meant.item ? `${r.meant.item} (${r.meant.label})` : "something not on the list: ask which"}${r.meant.notItem ? `, not ${r.meant.notItem} (${r.meant.notLabel}); they corrected that, so act on the correction` : ""}.`);
-  else if (rec.priorMeant[0]) lines.push(`Earlier "${rec.priorMeant[0].phrase}" meant ${rec.priorMeant[0].label ?? "something unclear"}${rec.priorMeant[0].notLabel ? `, not ${rec.priorMeant[0].notLabel}` : ""}; that still stands unless they changed it.`);
-  const closed = rec.unresolved.filter((u) => closing.has(u.id) || u.state === "solved" || u.state === "dropped");
-  if (closed.length) lines.push(`Closed at their word (don't reopen: no finds, offers or questions about these): ${closed.map((u) => `${u.id} ${u.label} (${closing.get(u.id) ?? u.state})`).join("; ")}.`);
+  else if (rec.priorMeant[0]) lines.push(`Earlier their pointing words meant ${rec.priorMeant[0].label ?? "something unclear"}${rec.priorMeant[0].notLabel ? `, not ${rec.priorMeant[0].notLabel}` : ""}; that still stands unless they changed it.`);
+  const closed = rec.unresolved.filter((u) => !back.has(u.id) && (closing.has(u.id) || u.state === "solved" || u.state === "dropped"));
+  if (closed.length) lines.push(`Closed at their word (don't bring these up yourself: no finds, offers or questions about them, unless they bring one back): ${closed.map((u) => `${u.id} ${u.label} (${closing.get(u.id) ?? u.state})`).join("; ")}.`);
+  const reopened = rec.unresolved.filter((u) => back.has(u.id));
+  if (reopened.length) lines.push(`They're bringing back what they had closed: ${reopened.map((u) => `${u.id} ${u.label}`).join("; ")}. It's theirs to reopen: help with it.`);
   const open = rec.unresolved.filter((u) => !closing.has(u.id) && (u.state === "open" || u.state === "delivered"));
   if (open.length) lines.push(`Still open: ${open.map((u) => `${u.id} ${u.label}${u.state === "delivered" ? " (delivered, not confirmed solved)" : ""}`).join("; ")}.`);
   if (r?.again) lines.push(`They asked for ${r.again} again: send it, and say it's the same one again.`);
@@ -186,15 +202,25 @@ export async function priorMeant(userId: string, db: Q): Promise<StoredMeant[]> 
     `SELECT proposal FROM harness_decisions WHERE user_id = $1 AND decision = 'turn.meant' AND created_at > NOW() - ($2 || ' hours')::interval ORDER BY created_at DESC LIMIT 2`,
     [userId, String(MEANT_HOURS)],
   );
-  return rows.map((r) => r.proposal ?? {}).filter((p) => typeof p.phrase === "string").map((p) => ({ phrase: String(p.phrase).slice(0, 40), label: p.label ?? null, notLabel: p.notLabel ?? null }));
+  return rows.map((r) => r.proposal ?? {}).filter((p) => p.label || p.notLabel).map((p) => ({ label: p.label ?? null, notLabel: p.notLabel ?? null }));
 }
 
-// The base the turn read gets: done from the window and what's on file as sent, unresolved from the turn's picture plus what they closed
-// lately, and what "that" meant lately. A failed read leaves its part empty, never the turn.
+// The record's reads from the database (what they closed lately, what "that" meant lately), started as soon as the turn starts so the
+// turn read never waits on them (review of #368). A failed read leaves its part empty, never the turn.
+export type ExchangeFacts = { closed: ClosedRow[]; meant: StoredMeant[] };
+export async function loadExchangeFacts(userId: string, db?: Q): Promise<ExchangeFacts> {
+  const q = db ?? (await import("../db/db.js")).default;
+  const [closed, meant] = await Promise.all([closedLately(userId, q).catch(() => []), priorMeant(userId, q).catch(() => [])]);
+  return { closed, meant };
+}
+// Pure: the base the turn read gets, from the window, the turn's picture and those reads.
+export function baseFrom(recentConversation: string, ctx: { sent?: { name: string; url: string | null }[]; asks?: { text: string }[]; carrying?: { label: string; state: "due" | "outstanding" | "done" }[]; threads?: { text: string }[] } | null, f: ExchangeFacts | null): ExchangeBase {
+  return { done: doneFrom(recentConversation, (ctx?.sent ?? []).slice(0, 8)), unresolved: unresolvedFrom({ asks: ctx?.asks, carrying: ctx?.carrying, threads: ctx?.threads, closed: f?.closed ?? [] }), priorMeant: f?.meant ?? [] };
+}
+// The base in one call (calls, tests).
 export async function loadExchangeBase(userId: string, o: { recentConversation: string; ctx: { sent?: { name: string; url: string | null }[]; asks?: { text: string }[]; carrying?: { label: string; state: "due" | "outstanding" | "done" }[]; threads?: { text: string }[] } | null; db?: Q }): Promise<ExchangeBase> {
   const db = o.db ?? (await import("../db/db.js")).default;
-  const [closed, meant] = await Promise.all([closedLately(userId, db).catch(() => []), priorMeant(userId, db).catch(() => [])]);
-  return { done: doneFrom(o.recentConversation, (o.ctx?.sent ?? []).slice(0, 8)), unresolved: unresolvedFrom({ asks: o.ctx?.asks, carrying: o.ctx?.carrying, threads: o.ctx?.threads, closed }), priorMeant: meant };
+  return baseFrom(o.recentConversation, o.ctx, await loadExchangeFacts(userId, db));
 }
 
 // ---------------------------------------------------------------- calls
@@ -213,6 +239,53 @@ export async function loadCallExchange(userId: string, db?: Q): Promise<Exchange
 // Pure: the call turn's note (after their words, past the cache breakpoint): the record and how to pick the move.
 export function callTurnNote(rec: ExchangeRecord | null | undefined): string | null {
   if (!rec) return null;
-  const lines = recordLines(rec);
+  const lines = recordLines(rec, { call: true });
   return `(Cue's note, not their words.) ${MOVES_GUIDE} Say only what that move needs.${lines ? `\n${lines}` : ""}`;
+}
+
+// ---------------------------------------------------------------- the call's read of their latest words (review of #368)
+// A call has no turn read, so before a sentence is held for repeating something, one short read of what they said decides whether it
+// repeats at all: a question counts as answered only when their reply answers it ("what?", "sorry?", a mishear or a change of subject is
+// not an answer), and anything their latest words ask for again or bring back is theirs for this turn. Started with the turn, never
+// awaited by the voice: until it lands (or when it fails) nothing is held for repeating (the call runs as before).
+export type CallReadInput = { questions: { q: string; reply: string }[]; sent: string[]; closed: string[]; latest: string };
+export type CallTurnRead = { answered: string[]; again: string[]; back: string[] };
+export function callReadPrompt(i: CallReadInput): string {
+  const qs = i.questions.map((x, n) => `Q${n + 1}. Cue asked: "${x.q}" Their next words: "${x.reply}"`).join("\n") || "(none)";
+  const sent = i.sent.map((x, n) => `T${n + 1}. ${x}`).join("\n") || "(none)";
+  const closed = i.closed.map((x, n) => `C${n + 1}. ${x}`).join("\n") || "(none)";
+  return `On a phone call, Cue is about to answer the member. Read only what the member said.
+
+Questions Cue asked earlier on this call, each with the member's next words:
+${qs}
+
+Things Cue already sent them:
+${sent}
+
+Things they had said were done or dropped:
+${closed}
+
+Their latest words: "${i.latest}"
+
+Return ONLY JSON: {"answered": ["Q ids their next words actually answer; "what?", "sorry?", "huh", a mishear, a change of subject or no real answer is not an answer"], "again": ["T ids their latest words ask for again"], "back": ["C ids their latest words bring back or ask about again"]}`;
+}
+export function parseCallRead(raw: string, i: CallReadInput): CallTurnRead | null {
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  let j: any;
+  try { j = JSON.parse(m[0]); } catch { return null; }
+  const pick = (v: unknown, prefix: string, list: string[]) => (Array.isArray(v) ? v : []).map((x) => String(x).trim().toUpperCase()).filter((x) => new RegExp(`^${prefix}\\d+$`).test(x)).map((x) => list[Number(x.slice(1)) - 1]).filter((x): x is string => !!x);
+  return { answered: pick(j.answered, "Q", i.questions.map((x) => x.q)), again: pick(j.again, "T", i.sent), back: pick(j.back, "C", i.closed) };
+}
+export type CallReader = (prompt: string) => Promise<string>;
+export const CALL_READ_TIMEOUT_MS = 2500;
+const haikuCallReader: CallReader = async (prompt) => {
+  const [{ generateText }, { anthropic }, { MODELS }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js")]);
+  const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 200, abortSignal: AbortSignal.timeout(CALL_READ_TIMEOUT_MS), experimental_telemetry: { isEnabled: true, functionId: "call.exchangeRead" }, prompt });
+  return text;
+};
+// Nothing to read (no question answered, nothing sent or closed): no model call, an empty read.
+export async function readCallTurn(i: CallReadInput, reader: CallReader = haikuCallReader): Promise<CallTurnRead | null> {
+  if (!i.questions.length && !i.sent.length && !i.closed.length) return { answered: [], again: [], back: [] };
+  return parseCallRead(await reader(callReadPrompt(i)), i);
 }

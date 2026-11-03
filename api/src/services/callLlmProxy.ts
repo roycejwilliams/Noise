@@ -16,7 +16,7 @@ import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.j
 import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
 import { classifyModelFailure, failureLabel, noteModelFailure } from "./modelKeyAlert.js";
 import { plainPunctuation } from "./safetyText.js";
-import { callSentenceMiss } from "../harness/moveCheck.js";
+import { callReadInput, callSentenceMiss } from "../harness/moveCheck.js";
 import type { ExchangeRecord } from "./exchangeRecord.js";
 import { claimHeld, claimKind, emptyClaimState, jobBacked, jobClaimKind, SEND_TALK, type ClaimState, type JobState } from "./callClaims.js";
 // After "texting it to you now" and a send that didn't go: approved copy (Royce, 2026-10-29), spoken by code so it's never missing.
@@ -328,6 +328,9 @@ export type ProxyDeps = {
   // the record), offers again what was already sent, or reopens something they closed is held before it's spoken, and the turn answers
   // again in its own words (the #365 hold). Undefined: the check is off (the ElevenLabs path, tests that don't pass it).
   exchange?: ExchangeRecord | null;
+  // The read of their latest words that the check waits for (services/exchangeRecord.ts readCallTurn): started with the turn, never
+  // awaited by the voice. Until it lands, or when it fails or isn't given, nothing is held for repeating (review of #368).
+  callRead?: (i: import("./exchangeRecord.js").CallReadInput) => Promise<import("./exchangeRecord.js").CallTurnRead | null>;
 };
 
 // What the member last said, for the safety check on the question rule.
@@ -424,6 +427,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // The draft against the whole exchange (harness/moveCheck.ts callSentenceMiss): the call so far as turns, Cue's and theirs.
   const moveCheck = clean && !voiceOnly && deps.exchange !== undefined;
   const callTurns = b.messages.slice(0, lastAt + 1).filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ from: m.role === "user" ? ("them" as const) : ("co" as const), text: textOf(m.content ?? "") })).filter((t) => t.text.trim());
+  // The read of their latest words, started now; the check uses it only once it has landed.
+  let callRead: import("./exchangeRecord.js").CallTurnRead | null = null;
+  if (moveCheck && deps.callRead) deps.callRead(callReadInput(callTurns, deps.exchange ?? null, [])).then((r) => { callRead = r; }).catch(() => {});
   // A job line said before the tool that starts it, in this same reply: held until that tool comes back, then said if the job is real.
   let pendingJob: string[] = [];
   // A send that didn't go couldn't be queued for after the call: nothing may promise it later.
@@ -494,7 +500,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       return null;
     }
     if (moveCheck && !safetyTurn && !SAFETY_LINE.test(plainS) && !SAFETY_TURN.test(plainS)) {
-      const miss = callSentenceMiss(sentence, { rec: deps.exchange ?? null, callTurns: [...callTurns, ...spokenLines.map((t) => ({ from: "co" as const, text: t }))], delivered: claims.delivered });
+      const miss = callSentenceMiss(sentence, { rec: deps.exchange ?? null, callTurns: [...callTurns, ...spokenLines.map((t) => ({ from: "co" as const, text: t }))], delivered: claims.delivered, read: callRead });
       if (miss) {
         const why = `move held: ${miss.why}`;
         deps.onDropped?.(sentence, why);
@@ -806,7 +812,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   }
   if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools)) {
     const already = spokenLines.length ? ` You already said: "${spokenLines.join(" ")}". Carry on from it; don't repeat it.` : "";
-    const note = `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${already}`;
+    // A sentence held only for repeating what's done, asked or closed gets its own note (review of #368), never the "can't back" one.
+    const moveOnly = heldWhy.length > 0 && heldWhy.every((w) => w.startsWith("move held: "));
+    const note = moveOnly ? `What you were about to say repeated something already said, sent or closed in this exchange (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer what they last said, in your own words, without repeating it.${already}` : `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${already}`;
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
     inRetry = true;
     let rs: SpeakableStream | null = null;

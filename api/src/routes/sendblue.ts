@@ -65,7 +65,7 @@ import { describeNotes } from "../agent/loopTools.js";
 import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
-import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heavyHold, heldClaimsFrom } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, CALL_OFFER_EXPIRY_DAYS, firstArrival } from "../agent/conversationReply.js";
 import { callLine } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts, failureDetail, parseDialFailure } from "../services/callReasons.js";
@@ -1586,12 +1586,14 @@ export function sendblueRouter(io: Server): Router {
         // The whole exchange (services/exchangeRecord.ts): what Cue already did in this window, what's open or closed for them, what
         // "that" meant lately. The read picks the move against it; a failed load leaves the read without it, never the turn.
         let exchangeBase: import("../services/exchangeRecord.js").ExchangeBase | null = null;
+        // Its database reads start now, beside the turn's picture, so the read never waits on them (review of #368).
+        const exchangeFactsP = hasText ? import("../services/exchangeRecord.js").then((X) => X.loadExchangeFacts(user.id)).catch(() => null) : null;
         const readP: Promise<TurnRead> | null =
           hasText && turnP
             ? propagateAttributes({ userId: user.id, traceName: "sendblue.readTurn" }, () =>
-                Promise.all([turnP!.catch(() => null), tapbacksP])
-                  .then(async ([t, h]) => {
-                    exchangeBase = await import("../services/exchangeRecord.js").then((X) => X.loadExchangeBase(user.id, { recentConversation, ctx: t })).catch(() => null);
+                Promise.all([turnP!.catch(() => null), tapbacksP, exchangeFactsP])
+                  .then(async ([t, h, xf]) => {
+                    exchangeBase = await import("../services/exchangeRecord.js").then((X) => X.baseFrom(recentConversation, t, xf ?? null)).catch(() => null);
                     return readTurn(routeInput, t, coveragePriorContext(profile), { reactions: h ? describeTapbacks(h) : null, record: exchangeBase });
                   }),
               )
@@ -1958,20 +1960,23 @@ export function sendblueRouter(io: Server): Router {
         // Co, a repeated text answered once, the walk-in ask, the clarifying question, and the decision (act, ask, deliver), logged
         // with the guards in force. The facts are assembled around it; the guards (grounding, tool limits, privacy) still veto.
         // The record and the move, in this reply's tail (never the cached prefix), and handed to the draft check (agent/conversationTools.ts
-        // sendReply, harness/moveCheck.ts). The move's reason is logged only; what "that" meant is kept briefly as Cue's own item labels.
+        // sendReply, harness/moveCheck.ts). What "that" meant is kept briefly as Cue's own item labels. A close on a turn that touches
+        // their safety, or on a heavy moment (the capped heavyHold), is never the move: the feeling is (review of #368).
         if (exchangeBase) {
           const X = await import("../services/exchangeRecord.js");
-          const record = { ...(exchangeBase as import("../services/exchangeRecord.js").ExchangeBase), read: turnRead?.exchange ?? null };
+          const read0 = turnRead?.exchange ?? null;
+          const closeHeld = read0?.move === "close" && (crisisWording || heavyHold(emotional, new Date()).hold);
+          const record = { ...(exchangeBase as import("../services/exchangeRecord.js").ExchangeBase), read: read0 && closeHeld ? { ...read0, move: "feeling" as const } : read0 };
           replyFacts.exchange = record;
           const lines = X.recordLines(record);
           if (lines) addInstruction(replyFacts, lines);
           const r = record.read;
           if (r) {
-            recordDecision({ layer: 3, decision: "turn.move_read", userId: user.id, outcome: "act", action: r.move, reason: r.why, proposal: { told: r.told.length, closes: r.closes.map((c) => `${c.item}:${c.how}`), meant: r.meant ? { item: r.meant.item, notItem: r.meant.notItem } : null, again: r.again, done: record.done.length, open: record.unresolved.length } }).catch(() => {});
+            recordDecision({ layer: 3, decision: "turn.move_read", userId: user.id, outcome: "act", action: r.move, reason: X.moveReason(r, closeHeld), proposal: { told: r.told.length, closes: r.closes.map((c) => `${c.item}:${c.how}`), meant: r.meant ? { item: r.meant.item, notItem: r.meant.notItem } : null, again: r.again, done: record.done.length, open: record.unresolved.length } }).catch(() => {});
             // Only a thing Cue sent (a link, find, document or card) is kept, by its label: never a question of Cue's, which can carry a
             // name or their words.
             const thing = (id: string | null) => !!id && ["link", "find", "document", "card"].includes(record.done.find((d) => d.id === id)?.kind ?? "");
-            if (r.meant && (thing(r.meant.item) || thing(r.meant.notItem))) recordDecision({ layer: 3, decision: "turn.meant", userId: user.id, outcome: "act", action: r.meant.item ?? "none", proposal: { phrase: r.meant.phrase.split(/\s+/).filter((w) => w === w.toLowerCase()).slice(0, 3).join(" "), label: thing(r.meant.item) ? r.meant.label : null, notLabel: thing(r.meant.notItem) ? r.meant.notLabel : null } }).catch(() => {});
+            if (r.meant && (thing(r.meant.item) || thing(r.meant.notItem))) recordDecision({ layer: 3, decision: "turn.meant", userId: user.id, outcome: "act", action: r.meant.item ?? "none", proposal: { label: thing(r.meant.item) ? r.meant.label : null, notLabel: thing(r.meant.notItem) ? r.meant.notLabel : null } }).catch(() => {});
           }
         }
         const brainDecision = planTextReply({ userId: user.id, read: turnRead, owed: owesReply, safetyConcern: crisisWording, clarify: decision.clarifyContext ?? null, repeat: repeatContext || null, walkinAsk: walkinAskInstruction || null, turn }, replyFacts);

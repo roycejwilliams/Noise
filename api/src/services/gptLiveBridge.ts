@@ -341,7 +341,9 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const out = await thinkOnCall(c, turns, d.upstream, (sentence, why) => {
       dropped++;
       const claim = /^claim held: /.test(why);
-      d.record({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
+      // A sentence held for repeating what's done, asked or closed (harness/moveCheck.ts) is its own decision (review of #368).
+      const move = /^move held: /.test(why);
+      d.record({ layer: 8, decision: move ? "call.move_held" : claim ? "call.claim_held" : "call.offer_unsourced", userId: c.userId, outcome: "skip", action: move ? "held_move" : claim ? "held_claim" : "dropped_sentence", proposal: { provider: "gpt-live", sentence: sentence.slice(0, 240) }, reason: why });
     }, guard, d.voiceLine, personAt != null ? onSentence : undefined, {
       tools: toolsAllowed() ? liveTools : null,
       exchange: d.callExchange ?? null,
