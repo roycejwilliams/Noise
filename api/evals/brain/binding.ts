@@ -359,6 +359,8 @@ const NOW = new Date("2026-10-06T04:48:00Z");
       const log = console.log;
       console.log = (...a: any[]) => { printed.push(a.map(String).join(" ")); };
       P.setProactiveModelForTests(d.text as any);
+      // The check-in's feeling read (harness/attention.ts, PR B): it states nothing they didn't share.
+      (await import("../../src/harness/attention.js")).setAttentionModelForTests(async () => '{"asserts": false, "phrase": ""}');
       await P.dispatchForUser(proactiveRegistry, "dry-u", { dryRun: true, ignorePacing: true }).catch((e: any) => printed.push(`THREW ${e?.message}`));
       P.setProactiveModelForTests(null);
       console.log = log;

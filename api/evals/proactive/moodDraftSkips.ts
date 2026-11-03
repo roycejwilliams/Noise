@@ -90,6 +90,8 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   let prompts: string[] = [];
   let answer = "SKIP";
   P.setProactiveModelForTests((async (prompt: string) => { prompts.push(prompt); return answer; }) as any);
+  // The check-in's feeling read (harness/attention.ts feelingCheck, PR B): it states nothing they didn't share.
+  (await import("../../src/harness/attention.js")).setAttentionModelForTests(async () => '{"asserts": false, "phrase": ""}');
   const row = (payload: Record<string, unknown> = {}) => ({ id: "51", user_id: "u-jordan", type: "companion", target_key: "companion:51", topic_key: "companion:t", summary: `Check in on ${THEIR_WORDS}`, priority: 10, due_at: new Date(FIXED - HOUR), expires_at: new Date(FIXED + 5 * DAY), attempts: 0, created_at: new Date(FIXED - 2 * HOUR), payload: { recap: "", thread: { text: "the pitch to the second fund", quote: "pitching the second fund Thursday", dueDate: null, feeling: null }, ...payload } });
   MH.resetMoodHoldLog();
   const printed: string[] = [];

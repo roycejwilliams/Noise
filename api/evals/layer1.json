@@ -19,6 +19,7 @@
     "evals/proactive/rules.ts",
     "evals/proactive/cadence.ts",
     "evals/proactive/door.ts",
+    "evals/proactive/attention.ts",
     "evals/preferences/capture.ts",
     "evals/preferences/enforce.ts",
     "evals/preferences/decisions.ts",
