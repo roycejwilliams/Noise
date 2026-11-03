@@ -432,5 +432,43 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
   check("gate: applied to every candidate before the pick and again inside the send lock", /memberRuleCheck\(state\.memberRules\.prefs, \{ now: state\.now, cls: candidateClass\(candidate\.type, answering, candidate\.payload\)/.test(pr2) && /const cls = candidateClass\(c\.type, answering, c\.payload\);\s*if \(!isSafetyFollowUp\(c\)\) \{\s*const \{ retryAt: _r, \.\.\.rule \} = await memberRuleGate\(client, \{ userId: person\.userId, now, cls, channel: "text" \}\);/.test(pr2));
 }
 
+{
+  // A multi-bubble send whose second bubble fails: retried on its own (at most 3 tries), never repeating the first; given up, the rest
+  // don't go and the miss is recorded.
+  P.setBubbleTimingForTests({ gapMs: 0, retryMs: [0, 0] });
+  const texts = [...AN.UPDATE_1102_TEXTS];
+  const run = async (failTimes: number, name: string) => {
+    const f = installFakeLedger(pool, sendblue);
+    const real = sendblue.messages.send;
+    let fails = 0, tries2 = 0;
+    (sendblue.messages as any).send = async (b: any) => {
+      if (b.content === texts[1]) {
+        tries2++;
+        if (fails < failTimes) { fails++; throw new Error("sendblue 503"); }
+      }
+      return real.call(sendblue.messages, b);
+    };
+    const decisions: any[] = [];
+    try {
+      const p = person(name, `+1415555${String(500 + failTimes).padStart(4, "0")}`);
+      const c = cand({ id: `b${failTimes}`, userId: p.userId, type: "announcement", targetKey: AN.UPDATE_1102_KEY });
+      const r = await P.sendWithLedgerForTests(c, p, texts);
+      return { r, out: f.ledger.outbox.filter((m: any) => m.to === p.phoneNumber).map((m: any) => m.content), tries2, sends: f.ledger.sends.length, decisions };
+    } finally {
+      (sendblue.messages as any).send = real;
+      f.restore();
+    }
+  };
+  const once = await run(1, "Jordan B");
+  check("bubbles: message 2 fails once, retried, all three go once each, in order", once.r.sent === true && JSON.stringify(once.out) === JSON.stringify(texts) && once.tries2 === 2 && "delivered" in once.r && once.r.delivered.length === 3, once);
+  const twice = await run(2, "Noor B");
+  check("bubbles: fails twice, the third try goes; message 1 never repeated", JSON.stringify(twice.out) === JSON.stringify(texts) && twice.tries2 === 3 && twice.out.filter((m: string) => m === texts[0]).length === 1, twice);
+  const never = await run(5, "Ellis B");
+  check("bubbles: never goes: 3 tries, message 1 once, message 3 not sent alone, one ledger row (told once)", never.tries2 === 3 && JSON.stringify(never.out) === JSON.stringify([texts[0]]) && "delivered" in never.r && never.r.delivered.length === 1 && never.sends === 1, never);
+  const pr3 = src("harness/proactive.ts");
+  check("bubbles: a bubble that never went is recorded (proactive.bubbleMissed)", /decision: "proactive\.bubbleMissed"[\s\S]{0,200}notSent: missed/.test(pr3));
+  P.setBubbleTimingForTests({ gapMs: P.BUBBLE_GAP_MS_DEFAULT, retryMs: [1000, 3000] });
+}
+
 console.log(`announcements: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
