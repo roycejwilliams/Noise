@@ -42,44 +42,62 @@ export function about(draft: string, label: string, not = ""): boolean {
 // miss a plain one: "Can you send me a vCard" after a card that afternoon came back as not asked). Only lifts a hold (a card not sent
 // twice, a resend miss): it never sends anything by itself. Words that only mention the item ("thanks for the card", "got your card",
 // "that rooftop place was great") are not a request. Pure.
+// Verbs that ask for something to be sent or given.
 const REQ = String.raw`(?:send|resend|re-send|text|share|forward|give|drop|shoot|get|need|want|(?:can|could|may) i have)`;
-const CARD_NOUN = String.raw`(?:v-?\s?cards?|vcf|contact (?:card|info|details)|your (?:\w+ )?(?:card|contact|number)|(?:the|that|a) (?:new |updated |latest )?card)`;
-// A refusal attached to the ask ("don't send the card again", "no need to resend"); "not sure I saved it, send it again" still asks.
-const NEG = new RegExp(String.raw`\b(?:don'?t|do not|never|stop|not)\s+(?:\w+\s+)?${REQ}\b|\bno (?:more|need)\b`, "i");
+// What may follow "your number" / "your contact" and still be the whole ask ("your number one pick" is not the card).
+const TAIL = String.raw`(?=(?:\s+(?:again|please|pls|plz|lol|thanks|thx|ty|too|real quick|asap))*\s*[?!.]*\s*$)`;
+// Cue's card, in their words: a vcard, a contact card, YOUR (or Cue's) card; your number or contact only as the whole object.
+const CARD_TERM = String.raw`(?:v-?\s?cards?|vcf|contact card|(?:your|cue's) (?:new |updated |latest )?(?:contact )?card|(?:your|cue's) (?:number|digits|contact(?: info| details)?)${TAIL})`;
 const CARD_ASK = [
-  new RegExp(String.raw`\b${REQ}\b[^.?!]{0,30}?\b${CARD_NOUN}\b`, "i"),
-  new RegExp(String.raw`\b${CARD_NOUN}\b[^.?!]{0,15}\bagain\b`, "i"),
-  /\bwhat(?:'s| is| was) your (?:number|contact)\b/i,
-  /^\s*(?:your |a |the )?(?:v-?\s?card|contact card|card)\s*\?+\s*$/i,
+  new RegExp(String.raw`\b${REQ}\b[^.?!]{0,30}?\b${CARD_TERM}`, "i"),
+  new RegExp(String.raw`\bwhat(?:'s| is| was) ${CARD_TERM}`, "i"),
+  new RegExp(String.raw`\b(?:the|that) card\b\s+again\b`, "i"),
+  /^\s*(?:your |the |a )?(?:v-?\s?card|contact card|card)\s*\?+\s*$/i,
 ];
-// A plain re-ask that names nothing: their newest delivered thing (a link, find or document, or the card for "it").
+// A plain re-ask that names nothing: an object that points back (it, that, the link, that one) with "again", or a "what was that
+// place" / "remind me what that place was" / "the link from earlier". "I want to go again" asks for nothing.
+const THING = String.raw`(?:link|url|site|website|page|one|place|spot|bar|restaurant|event|party|venue|show|thing)`;
 const AGAIN_ASK = [
   /\b(?:resend|re-send)\b/i,
-  new RegExp(String.raw`\b${REQ}\b[^.?!]{0,30}\bagain\b`, "i"),
-  /\bwhat (?:was|were|is|'s) (?:that|the) (?:\w+ )?(?:link|url|site|website|page|place|spot|one|event|restaurant|bar)\b/i,
-  /\b(?:lost|can'?t find|missed|didn'?t get|never got) (?:the|that|your) (?:link|url)\b/i,
+  new RegExp(String.raw`\b(?:send|text|share|forward|give|drop|shoot)(?: (?:me|us))? (?:it|that|this|those|them|(?:the|that|this) (?:\w+ )?${THING})\b[^.?!]{0,15}\bagain\b`, "i"),
+  new RegExp(String.raw`\b(?:need|get|want)(?: (?:me|us))? (?:the|that|this) (?:\w+ )?${THING}\b[^.?!]{0,10}\bagain\b`, "i"),
+  new RegExp(String.raw`\bwhat (?:was|were|is|'s) (?:that|the) (?:\w+ )?${THING}\b`, "i"),
+  new RegExp(String.raw`\bremind me (?:what|which|where) (?:that|the) (?:\w+ )?${THING}\b`, "i"),
+  new RegExp(String.raw`\b${REQ}\b[^.?!]{0,20}\b(?:the|that) (?:\w+ )?${THING} (?:from|you sent|you shared)\b`, "i"),
+  /\b(?:lost|can't find|cant find|missed|didn't get|never got) (?:the|that|your) (?:link|url)\b/i,
 ];
-const LINK_NOUN = /\b(?:link|url|site|website|page)\b/i;
-// A named item: some word of the request points back at what was sent, and their words carry a distinctive word of its label.
+// Words that name a link, place or thing (never the card): the newest such item, not the card, is the one they mean.
+const NOT_CARD = new RegExp(String.raw`\b${THING}s?\b`, "i");
+// A named item: a request, some word pointing back at what was sent (or the label's word right before "link"/"one"), and a
+// distinctive word of its label in their words.
 const POINTS_BACK = /\b(?:again|that|those|the one|you (?:sent|mentioned|shared|texted|gave|found)|earlier|before|last time|remind me)\b/i;
 const NAMED_REQ = new RegExp(String.raw`\b${REQ}\b|\b(?:what|where|which) (?:was|were|is|'s)\b|\bremind me\b|\?`, "i");
 const GENERIC_ITEM = new Set("place spot bar restaurant event night show club link page site thing one party venue".split(" "));
+// A refusal in the same clause, before the ask ("don't send the card again", "no need to resend").
+const NEG = /\b(?:don't|dont|do not|never|stop|not|no need|no more)\b/i;
 type Deliverable = { kind?: DoneItem["kind"]; label: string; url: string | null };
 const kindOf = (d: Deliverable) => d.kind ?? (/contact card/i.test(d.label) ? "card" : "link");
+const esc = (w: string) => w.replace(/[^a-z0-9'-]/g, "");
 export function askedAgain<T extends Deliverable>(theirs: string, items: readonly T[]): T[] {
-  const t = (theirs ?? "").replace(/[’‘]/g, "'").trim();
+  const t = (theirs ?? "").toLowerCase().replace(/[’‘]/g, "'").replace(/\bwhats\b/g, "what's").replace(/\bur\b/g, "your").replace(/\bu\b/g, "you").trim();
   if (!t || !items.length) return [];
-  // A clause that refuses asks for nothing.
-  const asks = (re: RegExp) => t.split(/[.!;\n]+|,\s*(?:but|and)\b/).some((c) => { const m = c.match(re); return !!m && !NEG.test(c.slice(0, (m.index ?? 0) + m[0].length)); });
+  // Clauses: a refusal stays in its own ("I don't need the card, just send the link again").
+  const clauses = t.split(/(?<=[.!?;\n])|,|\b(?:just|but)\b/).map((c) => c.trim()).filter(Boolean);
+  const asks = (re: RegExp) => clauses.some((c) => { const m = c.match(re); return !!m && !NEG.test(c.slice(0, (m.index ?? 0) + m[0].length)); });
   const deliverable = items.filter((d) => ["link", "find", "document", "card"].includes(kindOf(d)));
+  const others = deliverable.filter((d) => kindOf(d) !== "card");
   const out = new Set<T>();
   if (CARD_ASK.some(asks)) deliverable.filter((d) => kindOf(d) === "card").forEach((d) => out.add(d));
-  const named = asks(NAMED_REQ) && asks(POINTS_BACK)
-    ? deliverable.filter((d) => kindOf(d) !== "card" && topicWords(d.label).some((w) => w.length >= 4 && !GENERIC_ITEM.has(w) && new RegExp(`\\b${w.replace(/[^a-z0-9'-]/g, "")}`, "i").test(t)))
-    : [];
-  named.forEach((d) => out.add(d));
+  if (asks(NAMED_REQ)) {
+    for (const d of others) {
+      const ws = topicWords(d.label).filter((w) => w.length >= 3 && !GENERIC_ITEM.has(w)).map(esc).filter(Boolean);
+      const said = ws.filter((w) => w.length >= 4 && new RegExp(`\\b${w}`).test(t));
+      const before = ws.some((w) => new RegExp(`\\b${w}(?: \\w+)? (?:link|one)\\b`).test(t));
+      if ((said.length && asks(POINTS_BACK)) || before) out.add(d);
+    }
+  }
   if (!out.size && AGAIN_ASK.some(asks)) {
-    const newest = LINK_NOUN.test(t) ? deliverable.find((d) => kindOf(d) !== "card") : deliverable[0];
+    const newest = NOT_CARD.test(t) ? others[0] : deliverable[0];
     if (newest) out.add(newest);
   }
   return items.filter((d) => out.has(d));

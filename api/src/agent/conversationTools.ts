@@ -633,11 +633,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (state.sentMessages.includes("[sent Cue's contact card]")) return { ok: true, note: "Already sent this turn." };
         // Already sent in this exchange: it goes again only when they ask (Royce, 2026-11-03: a direct request in their own words always
         // wins). Asked = their latest message plainly asks for it (harness/moveCheck.ts askedAgain) or the turn read's asks_again names it
-        // (services/exchangeRecord.ts). Asked, it goes, and the reply says whether it's the same card or the updated one (the live
-        // version changed since the last send, utils/vcard.ts liveVersion). Not asked: not sent twice.
+        // (services/exchangeRecord.ts). Asked, it goes: the link always serves the live card (utils/vcard.ts liveVersion), so a card that
+        // changed since the last send goes as the new one. Not asked: not sent twice. The send line stays "[sent Cue's contact card]":
+        // the history is read back as Cue's own words, so no version number goes in it.
         const cardDone = ctx.exchange?.read ? ctx.exchange.done.find((d) => d.kind === "card") : undefined;
-        const { liveVersion } = await import("../utils/vcard.js");
-        const live = liveVersion().version;
         if (cardDone) {
           const { askedAgain } = await import("../harness/moveCheck.js");
           const asked = ctx.exchange!.read!.again === cardDone.id || askedAgain(ctx.resolvedContent ?? "", ctx.exchange!.done).includes(cardDone);
@@ -646,8 +645,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: false, error: `Not sent again: your card already went to them earlier in this exchange (${cardDone.id}) and they haven't asked for it again. You do have a card and it's theirs whenever they ask; never say or imply there's no card. Answer what they said.` };
           }
         }
-        // Unknown when the earlier send line carries no version: then neither "same" nor "updated" is claimed.
-        const updated = cardDone?.version == null ? null : cardDone.version !== live;
         if (!process.env.CO_VCARD_URL) {
           notDone("Cue's contact card was not sent (it isn't available right now).");
           return { ok: false, error: "The card isn't available right now, so it was NOT sent. Tell them plainly." };
@@ -661,12 +658,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
             notDone("Cue's contact card was not sent (the send failed).");
             return { ok: false, error: "The card did NOT go through. Tell them plainly." };
           }
-          await logDelivered(`Co replied: [sent Cue's contact card] (version ${live})`);
+          await logDelivered("Co replied: [sent Cue's contact card]");
         }
         state.sentMessages.push("[sent Cue's contact card]");
-        const again = !cardDone ? "" : updated === true ? ", the updated card (it changed since the last one they got)" : updated === false ? ", the same card they got before" : ", again";
-        ctx.facts?.add("did_this_turn", `Sent Cue's contact card as its own message just before this reply${again}.`);
-        return cardDone ? { ok: true, note: updated === true ? "Sent: the updated card. Say it's the updated one." : updated === false ? "Sent: the same card as before. Say it's the same card again." : "Sent again." } : { ok: true };
+        ctx.facts?.add("did_this_turn", `Sent Cue's contact card as its own message just before this reply${cardDone ? ", again (they asked)" : ""}.`);
+        return cardDone ? { ok: true, note: "Sent again, as they asked." } : { ok: true };
       },
     }),
 

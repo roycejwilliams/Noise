@@ -157,7 +157,7 @@ const THREAD = [
 // ------------------------------------------------------------------ 7b. a plain re-ask the read missed (co-test, 2026-11-03: card at
 // 16:16, "Can you send me a vCard" at 21:39, the read said not asked, Cue said there was no card). Their own words win.
 {
-  const card = (version?: number) => ({ id: "D1", kind: "card" as const, label: "Cue's contact card", url: null, replied: true, ...(version ? { version } : {}) });
+  const card = () => ({ id: "D1", kind: "card" as const, label: "Cue's contact card", url: null, replied: true });
   const jazz = { id: "D2", kind: "link" as const, label: "Harbor Jazz Night", url: "https://example.test/harbor-jazz", replied: true };
   const roof = { id: "D3", kind: "find" as const, label: "Alder Rooftop Lounge", url: "https://example.test/alder-rooftop", replied: true };
   const cardTool = (said: string, done: any[], read: any = { move: "answer" }) => {
@@ -167,34 +167,43 @@ const THREAD = [
   };
   process.env.CO_VCARD_URL ||= "https://example.test/card.vcf";
   const log = console.log; console.log = () => {};
-  const VC = await import("../../src/utils/vcard.js");
-  const live = VC.liveVersion().version;
-  const vcard = await cardTool("Can you send me a vCard", [card(live), jazz]).tools.sendContactCard.execute({ theirWords: "Can you send me a vCard" });
-  const thanks = await cardTool("thanks for the card", [card(live)]).tools.sendContactCard.execute({ theirWords: "thanks for the card" });
-  const unprompted = await cardTool("sounds good, see you thursday", [card(live)]).tools.sendContactCard.execute({ theirWords: "sounds good" });
-  const nv = cardTool("can I get your new card?", [card(live - 1)]);
+  const vcard = await cardTool("Can you send me a vCard", [card(), jazz]).tools.sendContactCard.execute({ theirWords: "Can you send me a vCard" });
+  const thanks = await cardTool("thanks for the card", [card()]).tools.sendContactCard.execute({ theirWords: "thanks for the card" });
+  const unprompted = await cardTool("sounds good, see you thursday", [card()]).tools.sendContactCard.execute({ theirWords: "sounds good" });
+  const nv = cardTool("can I get your new card?", [card()]);
   const newer = await nv.tools.sendContactCard.execute({ theirWords: "can I get your new card?" });
   console.log = log;
-  check("7b. \"Can you send me a vCard\" after an earlier card, read missed it: it sends, as the same card", vcard.ok === true && /same card/.test(vcard.note ?? ""), vcard);
+  check("7b. \"Can you send me a vCard\" after an earlier card, read missed it: it sends", vcard.ok === true && /Sent again/.test(vcard.note ?? ""), vcard);
   check("7b. \"thanks for the card\": no send, and the refusal never says there's no card", thanks.ok === false && /Not sent again/.test(thanks.error) && /never say or imply there's no card/.test(thanks.error), thanks);
   check("7b. an unprompted re-send: still not sent", unprompted.ok === false, unprompted);
-  check("7b. a new card version, asked: it sends, as the updated card", newer.ok === true && /updated/.test(newer.note ?? "") && nv.facts.some((f) => /updated card/.test(f)), { newer, facts: nv.facts });
-  const rd = X.doneFrom(["Co replied: [sent Cue's contact card] (version 2)", "User said: thanks"].join("\n"));
-  check("7b. the send line's version is read back onto the card", rd[0]?.kind === "card" && rd[0].version === 2, rd);
+  check("7b. a new card, asked (\"can I get your new card?\"): it sends (the link serves the live version)", newer.ok === true && nv.facts.some((f) => /again \(they asked\)/.test(f)), { newer, facts: nv.facts });
   const src = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-  check("7b. the card's send line keeps the old form (other readers match it) and adds its version", src.includes("[sent Cue's contact card] (version ${live})") && /\[sent \(\?:Cue\|Co\)'s contact card\\\]/.test(fs.readFileSync(new URL("../../src/harness/exchangeCount.ts", import.meta.url), "utf8")));
+  check("7b. the send line Cue reads back as its own words carries no version number", src.includes(`logDelivered("Co replied: [sent Cue's contact card]")`) && !/contact card\] \(version/.test(src));
 
   // The shared rule: precision.
   const items = [card(), jazz, roof];
-  const ids = (said: string) => M.askedAgain(said, items).map((d) => d.id).join(",");
+  const cat = { id: "D4", kind: "find" as const, label: "Jazz night at Black Cat", url: "https://example.test/black-cat", replied: true };
+  const ids = (said: string, list: any[] = items) => M.askedAgain(said, list).map((d: any) => d.id).join(",");
   const want: [string, string][] = [
     ["Can you send me a vCard", "D1"], ["send me your contact card", "D1"], ["what's your number again?", "D1"], ["v card?", "D1"], ["I never got your card, can you resend it", "D1"],
     ["thanks for the card", ""], ["got your card", ""], ["got your card, thanks!", ""], ["don't send the card again", ""], ["that rooftop place was great", ""],
     ["send me that link again", "D2"], ["can you resend that", "D1"], ["what was that link?", "D2"], ["send it again", "D1"],
     ["what was that rooftop place you sent?", "D3"], ["send the harbor jazz one again", "D2"], ["not sure I saved it, send me the jazz link again", "D2"],
     ["any jazz this weekend?", ""], ["sounds good, see you thursday", ""],
+    // Review of #375: false positives that must not lift a hold.
+    ["what's your number one pick?", ""], ["send me your number one recommendation", ""], ["need a card for my mom's birthday", ""],
+    ["I want to go again", ""], ["we should get drinks again sometime", ""], ["your contact at the venue", ""], ["who was your contact there", ""],
+    ["card games tonight?", ""], ["send me something new, not that link again", ""], ["no need to resend", ""], ["please don't text me your number again", ""],
+    ["i don't want your card again", ""], ["don’t send that again", ""], ["can you get me a contact at the venue", ""],
+    // Still yes.
+    ["want your card", "D1"], ["Need your number again lol", "D1"], ["can i have your number", "D1"], ["shoot me your contact", "D1"], ["send the vcard again pls", "D1"],
+    // A place or thing named goes to the newest item that isn't the card, even when the card is newest.
+    ["what was that bar", "D2"], ["what was that bar again?", "D2"],
+    // False negatives from the review.
+    ["send me the link from earlier", "D2"], ["I don't need the card, just send the link again", "D2"], ["whats ur number", "D1"], ["remind me what that place was", "D2"],
   ];
   for (const [said, exp] of want) check(`askedAgain: "${said}" -> ${exp || "nothing"}`, ids(said) === exp, ids(said));
+  check(`askedAgain: "send me the black cat link" -> D4 (a label word right before "link")`, ids("send me the black cat link", [card(), jazz, cat]) === "D4", ids("send me the black cat link", [card(), jazz, cat]));
 
   // Text: the read missed it, their words asked: no resend miss. Unprompted: still a resend.
   const r = rec({ done: items }, { move: "answer" });
