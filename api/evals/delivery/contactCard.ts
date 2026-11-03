@@ -43,7 +43,7 @@ function oldCard(phone: string): string {
   };
   return ["BEGIN:VCARD", "VERSION:3.0", "FN:Cue", `TEL:${phone}`, "URL:https://app.copatible.com", "EMAIL:support@copatible.com", "NOTE:A personal AI that gets to know you and helps you move forward with what matters most.", `PHOTO;ENCODING=b;TYPE=PNG:${CO_ICON_PNG_BASE64}`, "END:VCARD"].map((l) => fold(l)).join("\r\n");
 }
-check("live: version 2, approved by Royce Williams (2026-11-02), its approval matching its content", VC.liveVersion().version === 2 && VC.isApproved(VC.V2) && VC.V2.approval !== "legacy" && VC.V2.approval?.by === "Royce Williams" && VC.V2.approval?.on === "2026-11-02");
+check("live: version 2, approved by Royce Williams (2026-11-03), its approval matching its content", VC.liveVersion().version === 2 && VC.isApproved(VC.V2) && VC.V2.approval !== "legacy" && VC.V2.approval?.by === "Royce Williams" && VC.V2.approval?.on === "2026-11-03");
 check("/co.vcf serves version 2", VC.buildCoVCard(TEXT, CALLS) === VC.renderCard(VC.V2, phones));
 check("version 1 still renders byte-for-byte the card served before", VC.renderCard(VC.V1, phones) === oldCard(TEXT));
 check("an unapproved or unknown version is never served on its own URL", VC.buildVersionedVCard(9, phones) === null && VC.buildVersionedVCard(2, phones) === VC.renderCard(VC.V2, phones));
@@ -54,7 +54,7 @@ check("an unapproved or unknown version is never served on its own URL", VC.buil
 check("version 2 renders the same every time (same content hash)", VC.renderCard(VC.V2, phones) === VC.renderCard(VC.V2, phones) && VC.cardSha(VC.V2) === VC.cardSha(VC.V2));
 check("one UID, a fixed urn:uuid", /^urn:uuid:[0-9a-f-]{36}$/.test(VC.CARD_UID) && VC.V2.fields.uid === VC.CARD_UID);
 check("the UID is on the card as written", lines(VC.renderCard(VC.V2, phones)).includes(`UID:${VC.CARD_UID}`));
-check("REV is the revision's date-time", lines(VC.renderCard(VC.V2, phones)).includes("REV:2026-11-02T00:00:00Z"));
+check("REV is the revision's date-time", lines(VC.renderCard(VC.V2, phones)).includes("REV:2026-11-03T00:00:00Z"));
 const truth = { ...VC.V2.fields, phones: VC.V2.fields.phones };
 const v3 = CR.prepareRevision(VC.V2, { ...truth, email: "hello@example.test" }, [{ kind: "contact", field: "EMAIL", detail: "x" }]);
 check("a prepared revision keeps the same UID, takes the next number", !!v3 && v3.version.fields.uid === VC.CARD_UID && v3.version.version === 3);
@@ -69,14 +69,14 @@ check("the numbers are never in code: read from the env names", !/\+1\d{10}/.tes
 
 // ---------------------------------------------------------------- 2. the approved mark, as-is
 
-const jpg = fs.readFileSync(new URL("../../src/assets/cue-mark-512.jpg", import.meta.url));
+const jpg = fs.readFileSync(new URL("../../src/assets/cue-mark-cream-512.jpg", import.meta.url));
 check("the committed mark is the approved JPEG (its hash)", createHash("sha256").update(jpg).digest("hex") === CUE_MARK_JPEG_SHA256);
 check("the base64 module is those exact bytes (never re-encoded)", Buffer.from(CUE_MARK_JPEG_BASE64, "base64").equals(jpg));
 check("it's a 512x512 JPEG", jpg[0] === 0xff && jpg[1] === 0xd8 && jpg.includes(Buffer.from([0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x00, 0x02, 0x00])) || jpg.includes(Buffer.from([0xff, 0xc2, 0x00, 0x11, 0x08, 0x02, 0x00, 0x02, 0x00])));
 const photoLine = v2Lines.find((l) => l.startsWith("PHOTO;"))!;
 check("v2's PHOTO is that JPEG inline, base64", photoLine === `PHOTO;ENCODING=b;TYPE=JPEG:${CUE_MARK_JPEG_BASE64}`);
 const size = Buffer.byteLength(VC.renderCard(VC.V2, phones));
-check("the card stays small: under 100 KB (SMS media limit is 5 MB)", size < 100_000, size);
+check("the card stays small: under 300 KB, the low end of carrier MMS limits (Sendblue allows 5 MB on SMS)", size < 300_000, size);
 
 // ---------------------------------------------------------------- 3. approval before any send
 
@@ -177,7 +177,7 @@ check("the send flag is never stored in code: only Royce passes it", !/--approve
 }
 check("a member already sent this version is excluded", CR.classify(row("jordan", { sent: true }), { liveSince: null }) === "already_sent");
 check("the ledger key is per version", CR.cardTargetKey(2) === "contact_card:v2" && CR.cardTargetKey(3) !== CR.cardTargetKey(2));
-check("the ledger refuses a key twice (sendExempt: unique user_id + target_key)", /INSERT INTO proactive_sends \(user_id, type, target_key, topic_key, message, exempt, kind\)[\s\S]{0,120}ON CONFLICT \(user_id, target_key\) DO NOTHING RETURNING id/.test(src("harness/proactive.ts")));
+check("the ledger refuses a key twice (sendExempt: unique user_id + target_key)", /INSERT INTO proactive_sends \(user_id, type, target_key, topic_key, message, exempt, kind[^)]*\)[\s\S]{0,160}ON CONFLICT \(user_id, target_key\) DO NOTHING RETURNING id/.test(src("harness/proactive.ts")));
 check("the record is one row per member per version", /PRIMARY KEY \(user_id, version\)/.test(src("db/migrations.ts")));
 
 // ---------------------------------------------------------------- 5. exclusions

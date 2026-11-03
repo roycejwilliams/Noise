@@ -35,7 +35,7 @@ export const CARD_UID = "urn:uuid:6b86f31c-2764-460b-9f98-984f91f7fa52";
 export type PhotoAsset = "co_wordmark_png" | "cue_mark_jpeg";
 const PHOTO: Record<PhotoAsset, { type: "PNG" | "JPEG"; base64: string; label: string }> = {
   co_wordmark_png: { type: "PNG", base64: CO_ICON_PNG_BASE64, label: "the pre-rename wordmark, black on white, 256x256 PNG (assets/coIcon.ts)" },
-  cue_mark_jpeg: { type: "JPEG", base64: CUE_MARK_JPEG_BASE64, label: '"Cue." mark, paper on claret, 512x512 JPEG (assets/cue-mark-512.jpg, Figma 344:5600)' },
+  cue_mark_jpeg: { type: "JPEG", base64: CUE_MARK_JPEG_BASE64, label: '"Cue." mark, ink on cream, 512x512 JPEG (assets/cue-mark-cream-512.jpg, Figma 344:5602)' },
 };
 
 // Where a phone number comes from: an env NAME, read when the card is served. The numbers themselves are never in code.
@@ -102,7 +102,7 @@ export const V1: CardVersion = {
 };
 
 // Version 2 (2026-11-02; the card and its note approved by Royce, the send not yet: see the approval below). What changes and why:
-//   PHOTO  the "Co." wordmark names an old identity; Royce's redesigned "Cue." mark replaces it (branding).
+//   PHOTO  the "Co." wordmark names an old identity; Royce's redesigned "Cue." mark, ink on cream (his 11-03 pick), replaces it (branding).
 //   TEL    the calling line is a different number from the texting one (services/capabilities.ts callLine), and calling the texting
 //          number doesn't reach Cue; v1 only had the texting number, so Cue's calls showed as an unknown number (contact).
 //   N/ORG  the structured name vCard 3.0 requires, and the company it belongs to now, Noise (identity).
@@ -123,7 +123,7 @@ export const V2: CardVersion = {
     ],
     photo: "cue_mark_jpeg",
     uid: CARD_UID,
-    rev: "2026-11-02T00:00:00Z",
+    rev: "2026-11-03T00:00:00Z",
   },
   // Approved as written by Royce, 2026-11-02, with the card (one record, below).
   memberNote: "A new card for your contacts, with the number I call from, so it shows as me when I ring. Tap it, then Add to Existing Contact.",
@@ -133,10 +133,10 @@ export const V2: CardVersion = {
   // last four digits (texting ...8080, calling ...1762); a send refuses if either has changed.
   approval: {
     by: "Royce Williams",
-    on: "2026-11-02",
-    contentSha: "5ba374a6402d6a9beaf565a7621fa1d36dd01cab9665db5b0c13d5022f0b9123",
+    on: "2026-11-03",
+    contentSha: "d928f0d1dd49f1de6def00bfc66a10cca1c887a741d03cb7efa93a3a7b98004c",
     telLast4: { SENDBLUE_PHONE_NUMBER: "8080", TWILIO_PHONE_NUMBER: "1762" },
-    ref: "PR #342 decision, relayed by the coordinator 2026-11-02: \"go with your recommendations on the card\"; the member note approved as written",
+    ref: "PR #342 decision, relayed by the coordinator 2026-11-02: \"go with your recommendations on the card\"; the member note approved as written; 2026-11-03: the cream mark for the photo (\"use either the cream or white\"), relayed by the coordinator",
   },
 };
 
