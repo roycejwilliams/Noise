@@ -57,7 +57,7 @@ import { HELD_RECAP_APPROVED, MOOD_FALLBACK_KEY, MOOD_FALLBACK_LINE, MOOD_FALLBA
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
-import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass } from "./notifyGate.js";
+import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass, isRelayKey } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
 
@@ -2221,7 +2221,8 @@ export async function sendExempt(opts: {
       }
     }
     // The member's own rules (harness/notifyGate.ts), inside the lock with what's been sent.
-    const rule = await memberRuleGate(client, { userId: opts.userId, now, cls, channel: "text", soonAt: opts.soonAt ?? null });
+    // A relay (another member's words) goes through a team hold, never through their own rules (notifyGate.ts throughTeamHold).
+    const rule = await memberRuleGate(client, { userId: opts.userId, now, cls, channel: "text", soonAt: opts.soonAt ?? null, throughTeamHold: isRelayKey(opts.targetKey) });
     if (!rule.pass) {
       held.push(rule);
       if (rule.retryAt && (!retryAt || rule.retryAt > retryAt)) retryAt = rule.retryAt;

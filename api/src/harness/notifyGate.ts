@@ -220,20 +220,24 @@ export function callClassOf(reason: string): SendClass {
 export const TEAM_HOLD = "team_hold";
 // Pure: the classes a team hold quiets: Cue's own outreach (unsolicited, check-ins). Never a reply or a requested delivery.
 export const teamHoldCovers = (cls: SendClass): boolean => cls === "unsolicited" || cls === "checkin";
+// Pure: a relay (another member's words, services/relay.ts) by its ledger key.
+export const isRelayKey = (targetKey: string | null | undefined): boolean => /^relay:/.test(String(targetKey ?? ""));
 export function teamHoldCheck(h: { id: string; expiresAt: Date }): GateCheck & { retryAt?: Date } {
   return { name: MEMBER_RULE, pass: false, reason: `${TEAM_HOLD} ${h.id} holds it`, retryAt: h.expiresAt };
 }
 
 // The whole gate for one send, read fresh: their rules and what's been sent. A rules read that fails holds the send (it can't know a
 // rule isn't there) and says so; it's retried like any hold.
-export async function memberRuleGate(db: Q, o: { userId: string; now: Date; cls: SendClass; channel: NotifyChannel; soonAt?: Date | null; rulesAfter?: Date | null }): Promise<GateCheck & { retryAt?: Date }> {
+// throughTeamHold: another member's own words passed along (a relay): stale if a team hold kept it for weeks, so it goes through the
+// hold, still under the receiving member's own rules (review of #363, round 2).
+export async function memberRuleGate(db: Q, o: { userId: string; now: Date; cls: SendClass; channel: NotifyChannel; soonAt?: Date | null; rulesAfter?: Date | null; throughTeamHold?: boolean }): Promise<GateCheck & { retryAt?: Date }> {
   if (o.cls === "reply") return { name: MEMBER_RULE, pass: true };
   const { activePreferences } = await import("../services/memberPreferences.js");
   try {
     const [prefs, sent, zone, hold] = await Promise.all([activePreferences(o.userId, o.now, db), loadCounted(db, o.userId), import("../services/memberTime.js").then((M) => M.memberZone(o.userId)).catch(() => null), import("../services/teamHold.js").then((T) => T.activeTeamHold(o.userId, o.now, db))]);
     // The team's hold (services/teamHold.ts), apart from their own rules: only what Cue starts on its own (review of #363). What they
     // asked for (a document, a reminder they set, a call they booked, a notice about something soon) still goes, under their own rules.
-    if (hold && teamHoldCovers(o.cls)) return teamHoldCheck(hold);
+    if (hold && teamHoldCovers(o.cls) && !o.throughTeamHold) return teamHoldCheck(hold);
     return memberRuleCheck(prefs, { now: o.now, cls: o.cls, channel: o.channel, sent, zone, soonAt: o.soonAt, rulesAfter: o.rulesAfter });
   } catch (err: any) {
     return { name: MEMBER_RULE, pass: false, reason: `couldn't read their rules (${String(err?.message ?? err).slice(0, 60)})`, retryAt: new Date(o.now.getTime() + 15 * 60_000) };

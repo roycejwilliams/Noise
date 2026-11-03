@@ -62,7 +62,7 @@ const run = async (raw: string, a: any[] = []) => {
   if (/FROM member_relays r JOIN users/.test(sql)) return { rows: db.relays.filter((r) => r.from_user === a[0] || r.to_user === a[0]) };
   if (/^UPDATE event_room_closures SET claimed_at/.test(sql)) { const e = db.closing; db.closing = null; return { rows: e ? [e] : [] }; }
   if (/^UPDATE co_pairs SET state = 'expired'/.test(sql)) { const out = db.pairs.filter((x) => x.event_id === a[0] && ["suggested", "asked"].includes(x.state)); out.forEach((x) => (x.state = "expired")); return { rows: out }; }
-  if (/FROM co_pairs WHERE event_id = \$1 AND state = 'declined'/.test(sql)) return { rows: db.pairs.filter((x) => x.event_id === a[0] && x.state === "declined") };
+  if (/^UPDATE co_pairs SET close_noted_at = \$2 WHERE event_id = \$1 AND state IN \('expired', 'declined'\) AND close_noted_at IS NULL/.test(sql)) { const out = db.pairs.filter((x) => x.event_id === a[0] && ["expired", "declined"].includes(x.state) && !x.close_noted_at); out.forEach((x) => (x.close_noted_at = a[1])); return { rows: out }; }
   if (/^SELECT .* FROM co_pairs/.test(sql)) return { rows: [] };
   return { rows: [] };
 };
@@ -99,7 +99,8 @@ const note = (d: { stated: string; phone: string }) => said.push(d);
 check("zone: their stated state decides (Dallas, TX with a 412 number is Central)", (await MT.cityZone("Dallas", { stated: "TX", phone: "PA" }, note)) === "America/Chicago" && said.length === 0);
 check("zone: no stated state: the city alone beats the phone (Dallas with a 412 number is still Central)", (await MT.cityZone("Dallas", { stated: null, phone: "PA" }, note)) === "America/Chicago");
 check("zone: the phone only settles a city the table can't (a bare Cambridge with a 617 number)", (await MT.cityZone("Cambridge", { stated: null, phone: "MA" }, note)) === "America/New_York" && said.length === 0);
-check("zone: when both are read and disagree, the stated city wins and the disagreement is logged (zones only)", (await MT.cityZone("Portland", { stated: null, phone: "ME" }, note)) === "America/Los_Angeles" && said.length === 1 && said[0].stated === "America/Los_Angeles" && said[0].phone === "America/New_York");
+check("zone: a real town by that name in the phone's state wins over a bigger one elsewhere (Portland with a 207 number is Maine), and the disagreement is logged (zones only)", (await MT.cityZone("Portland", { stated: null, phone: "ME" }, note)) === "America/New_York" && said.length === 1 && said[0].stated === "America/Los_Angeles" && said[0].phone === "America/New_York");
+check("zone: a phone state with no such town (or one under the floor) changes nothing: the city alone", (await MT.cityZone("Dallas", { stated: null, phone: "PA" }, note)) === "America/Chicago" && (await MT.localZoneFor("Portland", "ME", { minPopulation: 10_000_000 })) === null);
 check("zone: memberZone reads stated places apart from the phone", /stated: regionFor\(\{ city: rows\[0\]\.city, places: [\s\S]{0,80}\}\), phone: stateForPhone\(/.test(src("services/memberTime.ts")));
 
 // A non-Pacific member through the real gate (memberRuleGate reads their zone itself).
@@ -166,6 +167,15 @@ db.users.set(B, "Ellis");
 const heldClose = await closeWith("suggested", null);
 const silentClose = await closeWith("asked", null);
 const declinedClose = await closeWith("declined", "no");
+// A close run again after a crash (the room's claim went stale): no second note for anyone, so a re-run can't set a "no" apart.
+const twice = async (state: string, b_answer: string | null) => {
+  await closeWith(state, b_answer);
+  db.closing = { event_id: "evt-9", event_name: "Supper Club", ends_at: new Date("2026-11-03T06:00:00Z") };
+  await RM.runRoomCloses(new Date("2026-11-03T06:45:00Z"));
+  return JSON.stringify(db.memories);
+};
+const reHeld = await twice("suggested", null), reSilent = await twice("asked", null), reDeclined = await twice("declined", "no");
+check("room: a close run twice adds no note (held, silent and declined alike: one note each, identical)", reHeld === reSilent && reSilent === reDeclined && JSON.parse(reDeclined).length === 1);
 check("room: held, silent and declined leave the asker exactly the same record", heldClose === silentClose && silentClose === declinedClose && JSON.parse(heldClose).length === 1 && JSON.parse(heldClose)[0].user_id === A);
 check("room: that record says it didn't happen, never whether they got it, saw it, answered or why", /didn't happen this time/.test(heldClose) && /Never say whether Ellis got the ask/.test(heldClose) && !/held|rule|hours|didn't go out|queued|passed|declin|said no/i.test(JSON.parse(heldClose)[0].content.replace(/Never say[\s\S]*$/, "")));
 db.memories = [];
@@ -253,6 +263,8 @@ br = RC.checkMember({ userId: A, prefs: prefsH, holds: [], history: [], window: 
 check("rule check: what the record can't settle (a notice about something within hours) is flagged low with why", (() => { const b = RC.checkMember({ userId: A, prefs: [hp("24", { none: true }, "2026-11-02T12:00:00Z")], holds: [], history: [], window: [s("send 9", "2026-11-02T15:00:00Z", "call_reminder", "requested")], zone: "America/New_York" }); return b.length === 1 && b[0].severity === "low" && /time-sensitive/.test(b[0].caveat ?? ""); })());
 br = RC.checkMember({ userId: A, prefs: [], holds: [{ id: "5", setAt: at("2026-11-02T10:00:00Z"), expiresAt: at("2026-11-03T10:00:00Z"), liftedAt: null }], history: [], window: win, zone: null });
 check("rule check: Cue's own send inside a team hold is flagged; what they asked for, replies and safety aren't", br.length === 1 && br[0].ref === "send 1" && /team_hold 5/.test(br[0].why));
+br = RC.checkMember({ userId: A, prefs: [], holds: [{ id: "5", setAt: at("2026-11-02T10:00:00Z"), expiresAt: at("2026-11-03T10:00:00Z"), liftedAt: null }], history: [], window: [{ ...s("send 11", "2026-11-02T15:00:00Z", "direct_ask", "unsolicited"), relay: true }], zone: null });
+check("rule check: a relay inside a team hold isn't flagged (it goes through the hold)", br.length === 0);
 check("rule check: safety is read from the send's own candidate (its ledger row's candidate_id), not another with the same key", /LEFT JOIN proactive_candidates c ON c\.id = s\.candidate_id AND c\.user_id = s\.user_id/.test(src("harness/ruleCompliance.ts")) && !/ORDER BY pc\.id DESC LIMIT 1/.test(src("harness/ruleCompliance.ts")));
 const flag = RC.breakFlag({ userId: A, ref: "send 2", at: "2026-11-02T17:00:00.000Z", path: "text:task_update", cls: "requested", why: "rule 21: 1 of 1 today", severity: "high", caveat: null });
 check("rule check: the review flag carries ids and paths only", flag.type === "member_rule_broken" && flag.snippet === "send 2 via text:task_update (requested)" && /send path text:task_update/.test(flag.cause) && !/their words/.test(JSON.stringify(flag)));
@@ -276,6 +288,11 @@ for (const cls of ["unsolicited", "checkin"] as const) {
 }
 g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "requested", channel: "text" });
 check("hold: what they asked for (a document, a reminder they set) still goes", g.pass === true);
+g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "unsolicited", channel: "text", throughTeamHold: true });
+check("hold: a relay (another member's own words) goes through the hold", g.pass === true);
+check("hold: a relay is known by its ledger key, and sendExempt passes it through (in-room texts don't)", G.isRelayKey("relay:42") && !G.isRelayKey("in_room:match:evt:1") && /throughTeamHold: isRelayKey\(opts\.targetKey\)/.test(src("harness/proactive.ts")) && !/throughTeamHold/.test(src("harness/proactive.ts").slice(src("harness/proactive.ts").indexOf("export async function inRoomSendAllowed"))));
+g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "unsolicited", channel: "text" });
+check("hold: an in-room text (Cue's own, no pass-through) stays held", g.pass === false);
 g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "requested", channel: "call" });
 check("hold: a call they booked still goes", g.pass === true);
 g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "requested", channel: "text", soonAt: new Date(now.getTime() + 3600e3) });
@@ -283,6 +300,8 @@ check("hold: a notice about something soon still goes", g.pass === true);
 rule(A, { rule: { max_per_day: 0 } });
 g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "requested", channel: "text" });
 check("hold: what passes the hold still answers to their own rules", g.pass === false && /member's own rule/.test(String(g.reason)));
+g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "unsolicited", channel: "text", throughTeamHold: true });
+check("hold: a relay through the hold still answers to the receiving member's own rules", g.pass === false && /member's own rule/.test(String(g.reason)));
 db.prefs = [];
 g = await G.memberRuleGate(pool as any, { userId: A, now, cls: "checkin", channel: "call" });
 check("hold: holds calls Cue places", g.pass === false);

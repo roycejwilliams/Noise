@@ -60,8 +60,8 @@ type Db = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
 const lookupCity = async (city: string, region: string | null = null) => (await localZoneFor(city, region)) ?? (await import("./geocoding.js")).getTimezoneForCity(city, { region });
 
 // A bare city's zone, what they stated first (review of #363: "Dallas" with a 412 number is Dallas, Texas). Their stated state, when
-// there is one, decides. With none, the city alone (the local table, then the geocoder) wins over the phone's area code; the area
-// code only settles a city the local table can't (two comparable same-named places). When both were read and disagree, it's logged.
+// there is one, decides. With none, a real town by that name in the phone's state wins (Portland with a 207 number is Maine); with no
+// such town, the city alone (the local table, then the geocoder). When both were read and disagree, it's logged.
 export async function cityZone(
   city: string,
   regions: { stated: string | null; phone: string | null },
@@ -70,9 +70,11 @@ export async function cityZone(
   if (regions.stated) return lookupCity(city, regions.stated);
   const plain = await localZoneFor(city, null);
   if (!regions.phone) return plain ?? lookupCity(city, null);
-  const byPhone = await localZoneFor(city, regions.phone);
+  // A real town by that name in their phone's state (at least PHONE_TOWN_FLOOR people: Portland, Maine for a 207 number) is the one
+  // they mean, over a bigger same-named city elsewhere (review of #363, round 2). The disagreement is still logged.
+  const byPhone = await localZoneFor(city, regions.phone, { minPopulation: PHONE_TOWN_FLOOR });
   if (plain && byPhone && plain !== byPhone) onDisagree({ stated: plain, phone: byPhone });
-  return plain ?? byPhone ?? lookupCity(city, regions.phone);
+  return byPhone ?? plain ?? lookupCity(city, regions.phone);
 }
 // Zones and nothing else (never the city or the number).
 function recordZoneDisagreement(userId: string, d: { stated: string; phone: string }): void {
@@ -86,7 +88,8 @@ function recordZoneDisagreement(userId: string, d: { stated: string; phone: stri
 // says ("Portland, ME" is Maine) and their state when one is known (region: the 2-letter code from areaCodes.ts regionFor); the
 // zone is the one every clearly-sized candidate agrees on. Two comparable places in different zones (Portland, OR and Portland, ME
 // for a member with no state) is the geocoder's to settle, never a guess.
-export async function localZoneFor(city: string, region: string | null = null): Promise<string | null> {
+export const PHONE_TOWN_FLOOR = 5000;
+export async function localZoneFor(city: string, region: string | null = null, o: { minPopulation?: number } = {}): Promise<string | null> {
   try {
     const P = await import("./placeResolve.js");
     const { STATE_NAMES } = await import("./areaCodes.js");
@@ -96,7 +99,7 @@ export async function localZoneFor(city: string, region: string | null = null): 
       q.region = STATE_NAMES[region].toLowerCase();
       q.country = q.country ?? "US";
     }
-    const all = P.localLookup(q.name).filter((c) => P.matchesQualifier(c, q));
+    const all = P.localLookup(q.name).filter((c) => P.matchesQualifier(c, q) && (!o.minPopulation || (c.population ?? 0) >= o.minPopulation));
     if (!all.length) return null;
     const { find } = await import("geo-tz");
     const top = all[0].population ?? 0;
