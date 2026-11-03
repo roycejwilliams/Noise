@@ -20,7 +20,7 @@ async function main() {
     const block = await monthlyLimit(db, a, now);
     // Every member, unfiltered, with the queue's own columns: the same rule (exclusionOf) decides who is in and why the rest aren't.
     const { rows } = await db.query(
-      `SELECT u.id, u.created_at, u.archived_at, u.sms_opted_out, (u.phone_number IS NOT NULL) AS has_phone, u.identity_captured,
+      `SELECT u.id, u.created_at, u.archived_at, u.sms_opted_out, (u.phone_number IS NOT NULL) AS has_phone, u.invite_verified,
               u.phone_number, COALESCE((to_jsonb(u)->>'is_simulated')::boolean, false) AS simulated,
               EXISTS (SELECT 1 FROM proactive_sends s WHERE s.user_id = u.id AND s.target_key = $1) AS told,
               EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = u.id AND c.target_key = $1) AS queued

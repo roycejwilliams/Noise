@@ -163,7 +163,7 @@ check("send: the riding key is claimed inside the lock, and the text goes withou
 // The queue is the update announcements' (services/announcements.ts RENAME), the same SQL it always ran.
 const ncSrc = src("services/announcements.ts");
 check("queue: the rename's queue is the registry's rename entry", /return A\.queueAnnouncement\(A\.RENAME, now\);/.test(src("services/nameChange.ts")));
-check("queue: only members who knew it as Co, never archived, opted out, without a number or unfinished", /u\.created_at < \$1 AND u\.archived_at IS NULL AND COALESCE\(u\.sms_opted_out, false\) = false/.test(ncSrc) && /u\.phone_number IS NOT NULL AND u\.identity_captured = true/.test(ncSrc));
+check("queue: only members who knew it as Co, never archived, opted out, without a number or unfinished", /u\.created_at < \$1 AND u\.archived_at IS NULL AND COALESCE\(u\.sms_opted_out, false\) = false/.test(ncSrc) && /u\.phone_number IS NOT NULL AND u\.invite_verified = true/.test(ncSrc) && !/identity_captured/.test(ncSrc));
 check("queue: the cutoff is fixed by the first queued notice, so a member who joins later never gets it", /SELECT MIN\(created_at\) AS at FROM proactive_candidates WHERE type = 'name_change'/.test(ncSrc));
 check("queue: runs daily and once after start, through the normal dispatch", /queueNameChange\(\)/.test(src("jobs/index.ts")) && /cron\.schedule\("40 9 \* \* \*", queueNames/.test(src("jobs/index.ts")));
 check("archiving skips everything queued, the notice included", /UPDATE proactive_candidates SET status = 'skipped', skip_reason = 'account archived'/.test(src("services/accountArchive.ts")));

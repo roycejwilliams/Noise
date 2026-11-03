@@ -132,9 +132,9 @@ check("dispatch: the only thing an announcement claims with it is the rename it 
 }
 
 // ---------------------------------------------------------------- 7. the queue
-type Row = { id: string; created_at: Date; archived_at: Date | null; sms_opted_out: boolean | null; has_phone: boolean; identity_captured: boolean | null; told: boolean; queued: boolean };
+type Row = { id: string; created_at: Date; archived_at: Date | null; sms_opted_out: boolean | null; has_phone: boolean; invite_verified: boolean | null; told: boolean; queued: boolean };
 const cutoff = new Date("2026-10-14T17:00:00Z");
-const member = (id: string, o: Partial<Row> = {}): Row => ({ id, created_at: new Date("2026-09-01T00:00:00Z"), archived_at: null, sms_opted_out: false, has_phone: true, identity_captured: true, told: false, queued: false, ...o });
+const member = (id: string, o: Partial<Row> = {}): Row => ({ id, created_at: new Date("2026-09-01T00:00:00Z"), archived_at: null, sms_opted_out: false, has_phone: true, invite_verified: true, told: false, queued: false, ...o });
 // What a wrong query could hand back: every kind of member who must be left out, beside two who must be told.
 const ROWS: Row[] = [
   member("u-jordan"),
@@ -143,7 +143,7 @@ const ROWS: Row[] = [
   member("u-archived", { archived_at: new Date("2026-10-01T00:00:00Z") }),
   member("u-optout", { sms_opted_out: true }),
   member("u-nophone", { has_phone: false }),
-  member("u-unfinished", { identity_captured: false }),
+  member("u-unfinished", { invite_verified: false }),
   member("u-told", { told: true }),
   member("u-queued", { queued: true }),
 ];
@@ -212,7 +212,7 @@ const quiet = () => {};
   check("one member's queue failing never stops the others", e.calls.length === 2);
 }
 const an = src("services/announcements.ts");
-check("queue SQL: only members who knew Co, never archived, opted out, without a number or unfinished, never twice", /u\.created_at < \$1 AND u\.archived_at IS NULL AND COALESCE\(u\.sms_opted_out, false\) = false/.test(an) && /u\.phone_number IS NOT NULL AND u\.identity_captured = true/.test(an) && /NOT EXISTS \(SELECT 1 FROM proactive_sends s WHERE s\.user_id = u\.id AND s\.target_key = \$2\)/.test(an) && /NOT EXISTS \(SELECT 1 FROM proactive_candidates c WHERE c\.user_id = u\.id AND c\.target_key = \$2\)/.test(an));
+check("queue SQL: only members who knew Co, never archived, opted out, without a number or unfinished, never twice", /u\.created_at < \$1 AND u\.archived_at IS NULL AND COALESCE\(u\.sms_opted_out, false\) = false/.test(an) && /u\.phone_number IS NOT NULL AND u\.invite_verified = true/.test(an) && !/identity_captured/.test(an) && /NOT EXISTS \(SELECT 1 FROM proactive_sends s WHERE s\.user_id = u\.id AND s\.target_key = \$2\)/.test(an) && /NOT EXISTS \(SELECT 1 FROM proactive_candidates c WHERE c\.user_id = u\.id AND c\.target_key = \$2\)/.test(an));
 check("queue SQL: the cutoff is fixed by the rename's first queued notice", /SELECT MIN\(created_at\) AS at FROM proactive_candidates WHERE type = 'name_change'/.test(an));
 check("the rename's own queue is the registry's, unchanged", /return A\.queueAnnouncement\(A\.RENAME, now\);/.test(src("services/nameChange.ts")));
 check("job: the rename queues first, then the announcements, daily and once after start", /m\.queueNameChange\(\)[\s\S]{0,700}a\.queueUpdateAnnouncements\(\)/.test(src("jobs/index.ts")) && /cron\.schedule\("40 9 \* \* \*", queueNames/.test(src("jobs/index.ts")));
