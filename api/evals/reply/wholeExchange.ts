@@ -201,8 +201,13 @@ const THREAD = [
     ["what was that bar", "D2"], ["what was that bar again?", "D2"],
     // False negatives from the review.
     ["send me the link from earlier", "D2"], ["I don't need the card, just send the link again", "D2"], ["whats ur number", "D1"], ["remind me what that place was", "D2"],
+    // Final review of #375: a named item wins over the newest card; "not" refuses only right before the verb; small misses.
+    ["can you resend the rooftop", "D3"], ["not sure i saved your card can you send it again", "D1"], ["which bar was that", "D2"], ["tell me that place again", "D2"],
+    ["i never got the link", "D2"], ["never got it", "D1"], ["your number please", "D1"], ["get the card?", "D1"], ["never send me your card again", ""],
   ];
   for (const [said, exp] of want) check(`askedAgain: "${said}" -> ${exp || "nothing"}`, ids(said) === exp, ids(said));
+  check(`askedAgain: "not sure i saved your card can you send it again" with a link newest -> D1`, ids("not sure i saved your card can you send it again", [jazz, card(), roof]) === "D1", ids("not sure i saved your card can you send it again", [jazz, card(), roof]));
+  check(`askedAgain: "can you resend the rooftop" with the card newest -> the rooftop find, never the card`, ids("can you resend the rooftop", [card(), jazz, roof]) === "D3", ids("can you resend the rooftop", [card(), jazz, roof]));
   check(`askedAgain: "send me the black cat link" -> D4 (a label word right before "link")`, ids("send me the black cat link", [card(), jazz, cat]) === "D4", ids("send me the black cat link", [card(), jazz, cat]));
 
   // Text: the read missed it, their words asked: no resend miss. Unprompted: still a resend.

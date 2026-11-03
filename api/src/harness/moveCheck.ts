@@ -52,29 +52,35 @@ const CARD_ASK = [
   new RegExp(String.raw`\b${REQ}\b[^.?!]{0,30}?\b${CARD_TERM}`, "i"),
   new RegExp(String.raw`\bwhat(?:'s| is| was) ${CARD_TERM}`, "i"),
   new RegExp(String.raw`\b(?:the|that) card\b\s+again\b`, "i"),
-  /^\s*(?:your |the |a )?(?:v-?\s?card|contact card|card)\s*\?+\s*$/i,
+  // The card named first, then "send it again" in the same breath ("not sure I saved your card can you send it again").
+  new RegExp(String.raw`\b(?:v-?\s?cards?|vcf|contact card|(?:your|cue's) (?:\w+ )?card)\b[^.?!]{0,40}\b${REQ}\b(?: (?:me|us))? it\b`, "i"),
+  /^\s*(?:(?:get|send|resend)\s+)?(?:your |the |a )?(?:v-?\s?card|contact card|card)\s*\?+\s*$/i,
+  new RegExp(String.raw`^\s*(?:your|cue's) (?:number|digits|contact(?: info| details)?)${TAIL}`, "i"),
 ];
 // A plain re-ask that names nothing: an object that points back (it, that, the link, that one) with "again", or a "what was that
 // place" / "remind me what that place was" / "the link from earlier". "I want to go again" asks for nothing.
 const THING = String.raw`(?:link|url|site|website|page|one|place|spot|bar|restaurant|event|party|venue|show|thing)`;
 const AGAIN_ASK = [
   /\b(?:resend|re-send)\b/i,
-  new RegExp(String.raw`\b(?:send|text|share|forward|give|drop|shoot)(?: (?:me|us))? (?:it|that|this|those|them|(?:the|that|this) (?:\w+ )?${THING})\b[^.?!]{0,15}\bagain\b`, "i"),
+  new RegExp(String.raw`\b(?:send|text|share|forward|give|drop|shoot|tell)(?: (?:me|us))? (?:it|that|this|those|them|(?:the|that|this) (?:\w+ )?${THING})\b[^.?!]{0,15}\bagain\b`, "i"),
   new RegExp(String.raw`\b(?:need|get|want)(?: (?:me|us))? (?:the|that|this) (?:\w+ )?${THING}\b[^.?!]{0,10}\bagain\b`, "i"),
   new RegExp(String.raw`\bwhat (?:was|were|is|'s) (?:that|the) (?:\w+ )?${THING}\b`, "i"),
   new RegExp(String.raw`\bremind me (?:what|which|where) (?:that|the) (?:\w+ )?${THING}\b`, "i"),
+  new RegExp(String.raw`\b(?:which|what) (?:\w+ )?${THING} (?:was|is) (?:that|it)\b`, "i"),
   new RegExp(String.raw`\b${REQ}\b[^.?!]{0,20}\b(?:the|that) (?:\w+ )?${THING} (?:from|you sent|you shared)\b`, "i"),
-  /\b(?:lost|can't find|cant find|missed|didn't get|never got) (?:the|that|your) (?:link|url)\b/i,
+  /\b(?:lost|can't find|cant find|missed|didn't get|didnt get|never got) (?:the|that|your) (?:link|url)\b/i,
+  /\b(?:didn't get|didnt get|never got) it\b/i,
 ];
 // Words that name a link, place or thing (never the card): the newest such item, not the card, is the one they mean.
 const NOT_CARD = new RegExp(String.raw`\b${THING}s?\b`, "i");
 // A named item: a request, some word pointing back at what was sent (or the label's word right before "link"/"one"), and a
 // distinctive word of its label in their words.
-const POINTS_BACK = /\b(?:again|that|those|the one|you (?:sent|mentioned|shared|texted|gave|found)|earlier|before|last time|remind me)\b/i;
+const POINTS_BACK = /\b(?:again|resend|re-send|that|those|the one|you (?:sent|mentioned|shared|texted|gave|found)|earlier|before|last time|remind me)\b/i;
 const NAMED_REQ = new RegExp(String.raw`\b${REQ}\b|\b(?:what|where|which) (?:was|were|is|'s)\b|\bremind me\b|\?`, "i");
 const GENERIC_ITEM = new Set("place spot bar restaurant event night show club link page site thing one party venue".split(" "));
-// A refusal in the same clause, before the ask ("don't send the card again", "no need to resend").
-const NEG = /\b(?:don't|dont|do not|never|stop|not|no need|no more)\b/i;
+// A refusal in the same clause, before the ask ("don't send the card again", "no need to resend"). "not" and "never" refuse only right
+// before the verb: "not sure I saved your card, can you send it again" and "I never got the link" still ask.
+const NEG = new RegExp(String.raw`\b(?:don't|dont|do not|stop|no need|no more)\b|\b(?:not|never)\s+(?:to\s+)?${REQ}\b`, "i");
 type Deliverable = { kind?: DoneItem["kind"]; label: string; url: string | null };
 const kindOf = (d: Deliverable) => d.kind ?? (/contact card/i.test(d.label) ? "card" : "link");
 const esc = (w: string) => w.replace(/[^a-z0-9'-]/g, "");
@@ -87,17 +93,19 @@ export function askedAgain<T extends Deliverable>(theirs: string, items: readonl
   const deliverable = items.filter((d) => ["link", "find", "document", "card"].includes(kindOf(d)));
   const others = deliverable.filter((d) => kindOf(d) !== "card");
   const out = new Set<T>();
+  // A distinctive word of an item's label in their words.
+  const labelWords = (d: T) => topicWords(d.label).filter((w) => w.length >= 3 && !GENERIC_ITEM.has(w)).map(esc).filter(Boolean);
+  const namesIt = (d: T) => labelWords(d).some((w) => w.length >= 4 && new RegExp(`\\b${w}`).test(t));
   if (CARD_ASK.some(asks)) deliverable.filter((d) => kindOf(d) === "card").forEach((d) => out.add(d));
   if (asks(NAMED_REQ)) {
     for (const d of others) {
-      const ws = topicWords(d.label).filter((w) => w.length >= 3 && !GENERIC_ITEM.has(w)).map(esc).filter(Boolean);
-      const said = ws.filter((w) => w.length >= 4 && new RegExp(`\\b${w}`).test(t));
-      const before = ws.some((w) => new RegExp(`\\b${w}(?: \\w+)? (?:link|one)\\b`).test(t));
-      if ((said.length && asks(POINTS_BACK)) || before) out.add(d);
+      const before = labelWords(d).some((w) => new RegExp(`\\b${w}(?: \\w+)? (?:link|one)\\b`).test(t));
+      if ((namesIt(d) && asks(POINTS_BACK)) || before) out.add(d);
     }
   }
   if (!out.size && AGAIN_ASK.some(asks)) {
-    const newest = NOT_CARD.test(t) ? others[0] : deliverable[0];
+    // An item whose label they name wins; then a place or thing named means the newest that isn't the card; else the newest.
+    const newest = others.find(namesIt) ?? (NOT_CARD.test(t) ? others[0] : deliverable[0]);
     if (newest) out.add(newest);
   }
   return items.filter((d) => out.has(d));
