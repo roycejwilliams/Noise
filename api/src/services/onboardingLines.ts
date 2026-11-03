@@ -38,14 +38,11 @@ export const HOW_IT_WORKS = [
 // Goes out with Co's contact card attached.
 export const CARD = ["Save my number.", "Save me in your phone.", "Here's my card. Keep it close."];
 
+// Not sent by the text door since 2026-11-02 (ruling A: the reply asks once, in its own words); kept for otpActions.ts intake_ask.
 export const NAME_EMAIL = ["First, your full name and email.", "Let's start simple. Full name and email?", "What's your full name and best email?"];
 
-// After name and email: the first call offer.
-export const CALL_OFFER = [
-  "Good to meet you, {name}. Next, a quick five-minute call, just so I can get to know you properly. It's how I'll know who to introduce you to when you're in the room. Now, or should we pick a time? Texting's fine too.",
-  "{name}, good to have you. I'd love five minutes on the phone. I learn more in a quick call than a week of texts, and it's how I'll know who to put you next to. Call now, or pick a time? We can keep texting if you'd rather.",
-  "Nice to meet you, {name}. Easiest next step is a five-minute call so I actually know who you are. Now works, or tell me a time. Texting's fine too.",
-];
+// The automatic call offer after name and email (CALL_OFFER, modelled on Boardy's "quick five-minute call") is gone (Royce,
+// 2026-11-02, onboarding ruling 3): the reply's own call offer, when a call would help, stays (agent/conversationReply.ts).
 
 // Invites (Royce, 2026-09-19): each member gets 5, one only counts once
 // the friend joins, and unused ones never expire (services/invites.ts).

@@ -23,7 +23,7 @@ import type { OaiRequest } from "./callLlmProxy.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
 import { anthropicStream, SAFETY_LINE, safetyCall } from "./callLlmProxy.js";
 import { stripCues } from "./voiceCues.js";
-import { cachedCallExchange, delegationRequest, failClassOf, liveCallTools, type ThinkOptions, type LiveToolsFor, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, reasonNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
+import { cachedCallExchange, delegationRequest, failClassOf, liveCallTools, type ThinkOptions, type LiveToolsFor, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, heldOpeningNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -182,7 +182,9 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     personAt = d.now();
     d.record({ layer: 8, decision: "call.gpt_live_person", userId: call.userId, outcome: "act", action: via, proposal: { provider: "gpt-live", sessionId, via } });
     // The reason reaches GPT-Live only now, as silent context (never in its instructions, where any line of its own could carry it).
-    if (call.opening.reason) send(ai, { type: "session.thinking.append", event_id: "reason", delegation_id: null, content: reasonNote(call.opening.reason) });
+    // On a first call their texted words and the inviter wait for this too (gptLive.ts heldOpeningNote).
+    const held = heldOpeningNote(call.opening);
+    if (held) send(ai, { type: "session.thinking.append", event_id: "reason", delegation_id: null, content: held });
   };
 
   // Cue's audio to Twilio, never more than leadMs ahead of real time (8 bytes of mu-law per ms).

@@ -456,8 +456,10 @@ export function inboundCallerVerified(stirVerstat: string | null | undefined, al
 
 // Who an inbound call may reach (Royce, 2026-10-16): only a member. A users row alone isn't one: anyone who has ever texted Co has
 // a row (services/identity.ts findOrCreateUserByPhone), including partner-night guests, applicants and archived accounts, and a call
-// gets the full call agent with its helpers. A member is invite-verified, through intake, and not archived (the same line the reply
-// agent's tools sit behind on texts). Anyone else is treated exactly like an unrecognized number.
+// gets the full call agent with its helpers. A member is invite-verified and not archived. Since 2026-11-02 (ruling A: name and email
+// are asked once, inside the conversation, never as a condition) a member whose name or email isn't on file yet is still a member:
+// the reply agent already answers them by text, and a first call asks for the email once (prompts/co-system-prompt.md). Anyone else
+// is treated exactly like an unrecognized number.
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
 export async function inboundCallMember(from: string | null | undefined, db: Db = pool): Promise<{ userId: string | null; why: string | null }> {
   if (!from) return { userId: null, why: "no caller number" };
@@ -466,7 +468,6 @@ export async function inboundCallMember(from: string | null | undefined, db: Db 
   if (!u) return { userId: null, why: "no account" };
   if (u.archived_at) return { userId: null, why: "archived" };
   if (u.invite_verified !== true) return { userId: null, why: "not a member (no invite)" };
-  if (u.identity_captured !== true) return { userId: null, why: "intake not finished" };
   return { userId: String(u.id), why: null };
 }
 

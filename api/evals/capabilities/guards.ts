@@ -101,7 +101,8 @@ check("the old card-veto signal is gone", !keys.includes("card_misfire"));
   check("a link or placeholder is refused", !lineKeepsRules("Noor's in: https://x.co {name}", ask));
   check("an empty line is refused", !lineKeepsRules("  ", ask));
   const sb = (await import("fs")).readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
-  check("the welcome, friend-joined and first call offer are written by Cue", (sb.match(/await lineInVoice\(\{/g) ?? []).length === 3);
+  // The automatic first call offer is gone (Royce, 2026-11-02, onboarding ruling 3): the welcome and friend-joined lines remain.
+  check("the welcome and friend-joined lines are written by Cue, and no automatic call offer is", (sb.match(/await lineInVoice\(\{/g) ?? []).length === 2 && !/purpose: "Right after they gave their name and email: offer a quick five-minute call/.test(sb));
   check("the invite-code gate lines stay fixed", /pickLine\(GATE_ASK\)/.test(sb) && /pickLine\(WRONG_CODE\)/.test(sb));
 }
 

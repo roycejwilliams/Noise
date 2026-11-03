@@ -5,6 +5,7 @@
 // email, phone, city); company, role and LinkedIn are new and are saved only
 // from the member's own words.
 import pool from "../db/db.js";
+import { PENDING_EMAIL_DOMAIN } from "./identity.js";
 
 export type KitKey = "full_name" | "email" | "phone" | "city" | "company" | "role" | "linkedin";
 
@@ -32,7 +33,8 @@ export async function loadKit(userId: string): Promise<Kit> {
   const kit: Kit = {};
   const name = [account?.first_name, account?.last_name].filter((x) => typeof x === "string" && x.trim()).join(" ").trim();
   if (name && account?.last_name) kit.full_name = name;
-  if (account?.email) kit.email = String(account.email);
+  // The placeholder a new member has until they give theirs (services/identity.ts) is never their email (ruling A: Cue answers before it).
+  if (account?.email && !String(account.email).endsWith(PENDING_EMAIL_DOMAIN)) kit.email = String(account.email);
   if (account?.phone_number) kit.phone = String(account.phone_number);
   if (profile?.city) kit.city = String(profile.city);
   for (const r of saved) if (SAVED_KEYS.includes(r.key)) kit[r.key as KitKey] = String(r.value);

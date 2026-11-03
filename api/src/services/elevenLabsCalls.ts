@@ -252,12 +252,13 @@ export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
 export function callGuardrails(): string {
   return `# Guardrails\n${CO_CORE_PARTS.safety}\n\n${CO_CORE_PARTS.memberSafety}\n\nSafety comes before everything else on the call. This is important.`;
 }
-// What Co knows about them, filled per call (services/callContext.ts buildCallContextSummary).
+// What Co knows about them, filled per call (services/callContext.ts buildCallContextSummary). Whether it's their first call is a
+// real flag (services/firstCall.ts, the voice layer's first-call section), never read from an empty context (Royce, 2026-11-02).
 export const CALL_CONTEXT_BLOCK = `# What you know about {{first_name}}
 From your texts and earlier calls, the current situation first. Treat it as already established, the same as if they had just told you on this call, and never re-ask what it already tells you. The latest is where to pick up; older items are questions, not facts.
 {{context_summary}}
 
-If that's empty, this is your first real conversation with them: get to know them the way a person would, starting from what they're working on or what brought them to Cue.`;
+If that's empty, you have nothing from before: get to know them the way a person would, starting from what they're working on or what brought them to Cue.`;
 // The call-only guides (2026-10-08, after Royce's call: Co said "get some rest" and hung up when he said he'd been stressed). What
 // stays is what Hume's prompt doesn't have: the facts and how old they are, misheard names, offers and promises, help over days.
 // What went: the word caps ("under ten words", "15 words", "60 words, two to four sentences"), which made every turn the same

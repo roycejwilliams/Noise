@@ -100,6 +100,36 @@ export const ON_CALL_REWRITES: [string, string][] = [
 ];
 // What a GPT-Live call's prompts must never say (the layer-1 test reads both prompts for these).
 export const GPT_LIVE_FORBIDDEN = [/say it'?s set up/i, /look it up now/i, /set it up now, on the call/i, /then and there/i, /do it now, on the call/i, /\bend_call\b/, /link to any of them while you talk/i, /When you start something with a tool/i];
+// The call prompt's two call shapes (prompts/co-system-prompt.md, Royce 2026-11-02 onboarding ruling 1): a first call (no past call
+// transcript, services/firstCall.ts) gets "YOUR FIRST CONVERSATION" in place of the four phases; every later call keeps the four
+// phases and never sees the first-call section. A section runs from its header to the next "───" header.
+export const FIRST_CALL_SECTION = "─── YOUR FIRST CONVERSATION";
+export const LATER_CALL_SECTION = "─── THE FOUR PHASES";
+function dropSection(voice: string, header: string): string {
+  const at = voice.indexOf(header);
+  if (at < 0) return voice;
+  const next = voice.indexOf("\n───", at + header.length);
+  return next < 0 ? voice.slice(0, at).trimEnd() : voice.slice(0, at) + voice.slice(next + 1);
+}
+// Pure: the voice layer for this call. Without either section (an old or replaced prompt) it's returned unchanged.
+export function voiceForCall(voiceLayer: string, firstCall: boolean): string {
+  return dropSection(voiceLayer, firstCall ? LATER_CALL_SECTION : FIRST_CALL_SECTION);
+}
+export const FIRST_CALL = { wordsMax: 160 } as const;
+// Pure: on a first call, what the thinking needs for the first-call section's email and inviter lines, after what Cue knows.
+export const EMAIL_NOT_ON_FILE = "Their email isn't on file yet.";
+export const EMAIL_ON_FILE = "Their email is on file: never ask for it.";
+// How the first-call guidance sits with the per-turn moves (services/exchangeRecord.ts MOVES_GUIDE, #368): on a first call the thread
+// they're in the middle of is what Cue can't go on without, and the email ask comes before a close, never in one.
+export const FIRST_CALL_MOVES = "On this first call, a question on the one thread they're in the middle of counts as the question you can't go on without. If their email isn't on file, ask for it before they wrap up; once their latest words close the call, the move is close, so leave it.";
+export function withFirstCallFacts(contextSummary: string, o: { firstCall: boolean; emailOnFile?: boolean; emailAsked?: boolean; inviter?: string | null }): string {
+  if (!o.firstCall) return contextSummary;
+  // Asked once (ruling A): asked already, by text or on a call, it's never asked again here.
+  const email = o.emailOnFile ? EMAIL_ON_FILE : o.emailAsked ? "Their email isn't on file, and it was already asked for once: don't ask again." : EMAIL_NOT_ON_FILE;
+  const lines = [email, o.inviter ? inviterNote(o.inviter) : null, FIRST_CALL_MOVES].filter(Boolean).join("\n");
+  return contextSummary.trim() ? `${contextSummary.trim()}\n\n${lines}` : lines;
+}
+
 // Pure: the ElevenLabs agent's prompt in GPT-Live's format, for the thinking behind the voice: minus the bracketed voice cues
 // ([laughs], ElevenLabs v4 audio tags), with the act-on-the-call lines rewritten (ON_CALL_REWRITES).
 export function liveCallPrompt(voiceLayer: string): string {
@@ -155,12 +185,15 @@ export const LIVE_VOICE_RULES: { from: "call prompt" | "CO_VOICE" | "VARIETY_GUI
 // them, every event, place, time, person or link, every promise and every claim about what Cue knows or has done comes from the
 // thinking, whose answer passes the call brain's checks (claim hold, offer guard) before it is spoken.
 export const SAY_ON_YOUR_OWN = "On your own, say only conversational lines: acknowledging, saying back what they just said, a short warm response, or a clarifying question. Anything else comes from your thinking: any fact about their life, plans or history; any event, place, time, person or link; any promise or anything Cue will do; anything about what Cue knows or has done.";
+// The one exception (Royce, 2026-11-02, onboarding rulings 1-2): the opening may build on the background given for it (on a first
+// call, a line of their own texted words and, when they named them, who brought them in), never read out.
+export const OPENING_MAY_USE_BACKGROUND = "Your opening is the one exception: it may build on the background given for it, in your own words.";
 
 // GPT-Live's own headings (OpenAI's prompting guide keeps these three, in this order after role and style, and the literal
 // <|SpawnThinking|>). The extra backchannel and interruption lines are the call prompt's own.
 export const LIVE_POLICY = `# On this line
 You are speaking out loud and listening at the same time. Your thinking (what you know about them, what's true, what to say on anything that matters) runs behind you: when it answers, say that answer in your own words and keep its facts exactly. ${NOTHING_ON_THIS_CALL_LIVE} They hang up when they're done.
-${SAY_ON_YOUR_OWN}
+${SAY_ON_YOUR_OWN} ${OPENING_MAY_USE_BACKGROUND}
 ${SAFETY_FROM_THINKING}
 
 Backchannel policy: Light. A quiet "mm" or "yeah" while they work through something, never over their words when they pause to think. If their words stop mid-thought, they are likely still going: say very little and let them carry on.
@@ -196,7 +229,10 @@ Do not guess the result while waiting. Never name an event, place, time or perso
 // reason the call gate held. Nothing else about them: facts come from the thinking (SAY_ON_YOUR_OWN), so what they're in the middle
 // of is Claude's to bring up when it fits. The background is framed as background, never as words to say. The ElevenLabs path's opener (services/callOpening.ts, the
 // OPENINGS pool) is untouched and never reached from here.
-export type OpeningContext = { timeOfDay: string | null; reason: string | null };
+// On a first call (no past call transcript: services/firstCall.ts), the opening also gets the first-call line, one line of their own
+// texted words (work or plans only, through callReason.ts SENSITIVE, at most FIRST_CALL.wordsMax characters), and the member who
+// brought them in only when they wrote that name themselves (Royce, 2026-11-02, rulings 1-2).
+export type OpeningContext = { timeOfDay: string | null; reason: string | null; firstCall?: boolean; theirWords?: string | null; inviter?: string | null };
 // Outbound (review of #333): whoever picks up usually speaks first, so GPT-Live waits for them (the bridge opens it after openWaitMs if
 // nothing comes, or on AMD's human verdict).
 export const OPEN_WHEN_THEY_ANSWER = "When they answer, open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
@@ -215,10 +251,23 @@ export function timeOfDay(now: Date, zone: string): string | null {
 // the instructions, a fallback opening or any line of its own could carry it onto a voicemail recording).
 export const reasonNote = (reason: string): string => `Why you called them (background for how you open, never to read out): ${reason}`;
 // Pure: the opening's background lines (only the ones there are).
-export function openingBackground(c: OpeningContext): string {
+// Outbound, their words and the inviter wait with the reason until a person is confirmed (heldOpeningNote): whoever picks up, or a
+// voicemail, hears the opening. Inbound they called from their own verified number, so they're in the instructions.
+export const FIRST_CALL_LINE = "This is your first real conversation with them.";
+export const theirWordsNote = (w: string): string => `What they texted you before this call, in their own words (background for how you open, never to read out): "${w}"`;
+export const inviterNote = (name: string): string => `Who brought them in: ${name}, a member. They named ${name} themselves.`;
+const personalLines = (c: OpeningContext): string[] => [c.theirWords ? theirWordsNote(c.theirWords) : null, c.inviter ? inviterNote(c.inviter) : null].filter((x): x is string => !!x);
+export function openingBackground(c: OpeningContext, direction: "inbound" | "outbound" = "inbound"): string {
   return [
     c.timeOfDay ? `It's ${c.timeOfDay} for them.` : null,
+    c.firstCall ? FIRST_CALL_LINE : null,
+    ...(direction === "inbound" ? personalLines(c) : []),
   ].filter(Boolean).join("\n");
+}
+// Pure: what an outbound call's GPT-Live is told once a person is confirmed on the line (gptLiveBridge.ts confirmPerson): the reason,
+// then, on a first call, their words and the inviter. Empty when there's none.
+export function heldOpeningNote(c: OpeningContext): string {
+  return [c.reason ? reasonNote(c.reason) : null, ...personalLines(c)].filter(Boolean).join("\n");
 }
 
 // Outbound voicemail (the ElevenLabs agent's voicemail tool, done here with Twilio's async answering-machine detection, since GPT-Live
@@ -233,7 +282,7 @@ export const VOICEMAIL_NOW = "Their voicemail is recording now, and someone else
 // policies. Nothing about the member beyond their first name, the call's situation and the opening's background: what Cue knows
 // about them is the thinking's (BACKEND_NOTE).
 export function liveInstructions(o: { firstName: string; direction: "inbound" | "outbound"; team: boolean; opening?: OpeningContext; identity?: string }): string {
-  const bg = o.opening ? openingBackground(o.opening) : "";
+  const bg = o.opening ? openingBackground(o.opening, o.direction) : "";
   const vm = o.direction === "outbound" ? `\n${VOICEMAIL_WAIT}` : "";
   return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${o.direction === "outbound" ? OPEN_WHEN_THEY_ANSWER : OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK}${bg ? `\n${bg}` : ""}${vm}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n\n${LIVE_POLICY}`;
 }
@@ -249,12 +298,18 @@ export type LiveCall = { userId: string; callSid: string | null; firstName: stri
 
 // Pure: the call's two prompts: GPT-Live's short one, and the thinking's, which is the ElevenLabs agent's prompt filled with this
 // member's values (the same values registerElevenLabsCall sends, the call's situation first in the context).
-export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; callKey?: string; voiceOn?: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null }): LiveCall {
+export type FirstCallFacts = { firstCall: boolean; theirWords?: string | null; inviter?: string | null; emailOnFile?: boolean; emailAsked?: boolean };
+export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; callKey?: string; voiceOn?: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null; first?: FirstCallFacts }): LiveCall {
   const findsNow = o.findsNow || "Nothing to offer right now. Don't offer an event.";
+  const first = o.first?.firstCall ? o.first : null;
   // While the voice read is on for them, the thinking is told how a stop works on a call (VOICE_READ_CALL_RULE), as on ElevenLabs.
-  const contextSummary = withCallSituation(withVoiceReadRule(o.contextSummary, !!o.voiceOn), { direction: o.direction, team: o.team });
-  const opening: OpeningContext = { timeOfDay: o.timeOfDay, reason: o.direction === "outbound" ? o.callReason.replace(/\s+/g, " ").trim().slice(0, 300) || null : null };
-  const prompt = fillCallVars(liveCallPrompt(o.voiceLayer), { first_name: o.firstName || "there", context_summary: contextSummary, direction: o.direction, right_now: o.rightNow, finds_now: findsNow, call_reason: o.callReason, user_id: "", call_token: "" });
+  const contextSummary = withCallSituation(withVoiceReadRule(withFirstCallFacts(o.contextSummary, { firstCall: !!first, emailOnFile: first?.emailOnFile, emailAsked: first?.emailAsked, inviter: first?.inviter }), !!o.voiceOn), { direction: o.direction, team: o.team });
+  const opening: OpeningContext = {
+    timeOfDay: o.timeOfDay,
+    reason: o.direction === "outbound" ? o.callReason.replace(/\s+/g, " ").trim().slice(0, 300) || null : null,
+    ...(first ? { firstCall: true, theirWords: first.theirWords ? first.theirWords.slice(0, FIRST_CALL.wordsMax) : null, inviter: first.inviter ?? null } : {}),
+  };
+  const prompt = fillCallVars(liveCallPrompt(voiceForCall(o.voiceLayer, !!first)), { first_name: o.firstName || "there", context_summary: contextSummary, direction: o.direction, right_now: o.rightNow, finds_now: findsNow, call_reason: o.callReason, user_id: "", call_token: "" });
   return {
     userId: o.userId,
     callSid: o.callSid,

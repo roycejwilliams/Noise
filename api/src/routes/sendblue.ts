@@ -35,16 +35,20 @@ import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, thre
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage, readableImage } from "../services/imageRead.js";
 import { fileKindOf, fileRecordNote, isKeepable, keptFileFact, unreadableFileFact, type FileKind } from "../services/inboundFile.js";
-import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
+import { GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
   buildIntakeExtractionPrompt,
   decideIntake,
   gatherIntakeState,
+  intakeAskFor,
+  intakeCorrection,
+  intakeInstruction,
   isEmailOnOtherAccount,
   isValidEmail,
   parseIntakeProposal,
+  replyAskedFor,
   type IntakeProposal,
 } from "../harness/intake.js";
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
@@ -136,8 +140,9 @@ const REPLY_BUDGET_SEARCH_MS = 60_000;
 
 // Sent before a search so nobody waits in silence. Not a real reply: a copy
 // of the message sent after one of these is still a duplicate.
-// Marks the call-or-text question asked at the end of onboarding, so its
-// answer can be saved as their contact preference.
+// Marks the call-or-text question once asked at the end of onboarding, so its
+// answer can be saved as their contact preference. Nothing writes it since the
+// automatic call offer went (Royce, 2026-11-02); kept so an offer still pending resolves.
 const ONBOARDING_CALL_OFFER_PREFIX = "[onboarding]";
 
 // The fallback for the line sent while a search runs, when Co didn't write
@@ -914,7 +919,10 @@ export function sendblueRouter(io: Server): Router {
         // Set once the "You're in" welcome goes out, so intake doesn't greet
         // twice, and once their message is logged, so it isn't logged twice.
         let welcomedThisTurn = false;
-        let loggedInboundThisTurn = false;
+        // Ruling A (Step 1.2 below): what the reply asks for this turn, a correction to an email they sent, and what was saved.
+        let intakeAsk: ("name" | "email")[] = [];
+        let intakeFix: "email_taken" | "email_invalid" | null = null;
+        let intakeSaved: { name: string; email: string } | null = null;
         if (!user.invite_verified) {
           // Even on the very first-ever message, try it as a code first
           // (2026-09-17: a website deep link pre-fills the code as the
@@ -926,8 +934,7 @@ export function sendblueRouter(io: Server): Router {
           if (hasText) {
             const firstTryRedeemed = await redeemInviteCodeIn(content, user.id);
             if (firstTryRedeemed.ok) {
-              await logTextExchange(user.id, `User said: ${content}`);
-              loggedInboundThisTurn = true;
+              // Their message is logged once, by the main path below: the reply answers it (ruling A).
               await pool.query(`UPDATE users SET invite_verified = true, invite_asked = true WHERE id = $1`, [user.id]);
               user = { ...user, invite_verified: true, invite_asked: true };
               welcomedThisTurn = await welcomeLineFor(user.id, number, firstTryRedeemed.createdBy);
@@ -960,12 +967,9 @@ export function sendblueRouter(io: Server): Router {
             return res.status(200).send({ received: true, action: "invite_code_requested" });
           }
 
-          await logTextExchange(
-            user.id,
-            hasText ? `User said: ${content}` : "User sent a photo or voice memo (invite code expected)",
-          );
-          loggedInboundThisTurn = true;
           const redeemed = hasText ? await redeemInviteCodeIn(content, user.id) : { ok: false as const, createdBy: null };
+          // A good code falls through to the reply, which logs their message once (ruling A); a wrong one is answered here.
+          if (!redeemed.ok) await logTextExchange(user.id, hasText ? `User said: ${content}` : "User sent a photo or voice memo (invite code expected)");
           if (redeemed.ok) {
             await pool.query(`UPDATE users SET invite_verified = true WHERE id = $1`, [user.id]);
             // Reflected locally so the SAME turn falls through into real
@@ -1000,13 +1004,16 @@ export function sendblueRouter(io: Server): Router {
         // from findOrCreateUserByPhone above already exists by this point.
         // Texting in from their own number is itself proof of phone
         // ownership, so unlike Step 1.5 below there's no separate OTP here.
+        // Ruling A (Royce 2026-10-14, shipped 2026-11-02): Cue answers while it collects. Every text from here falls through to the
+        // reply agent below, which answers it; the name and email ask rides inside that reply, once (harness/intake.ts intakeAskFor),
+        // and is never a condition for anything. Their message is logged once, by the main path (Step 3).
         if (!user.identity_captured) {
           if (!user.intake_asked) {
-            // First contact ever from this number — greet, then ask. Nothing
-            // in this inbound message is treated as an answer, since Co
-            // hasn't asked the question yet.
-            if (hasText && !loggedInboundThisTurn) await logTextExchange(user.id, `User said: ${content}`);
+            // First text since they got in: the welcome (unless the code turn sent it), how Cue works and the contact card, then the
+            // reply below answers what they said. The automatic five-minute call offer (after Boardy's) is gone (Royce, 2026-11-02,
+            // onboarding ruling 3): the reply's own call offer, when a call would help, stays.
             await pool.query(`UPDATE users SET intake_asked = true WHERE id = $1`, [user.id]);
+            user = { ...user, intake_asked: true };
             // Onboarding lines are logged like any Co message, so the
             // conversation and the morning review can see them (they weren't).
             const onboardingSends = [
@@ -1016,34 +1023,30 @@ export function sendblueRouter(io: Server): Router {
               // a save_contact send with the vCard attached, but nothing ever
               // called it, so new people never got Co saved in their phone.
               { phone_number: number, save_contact: true },
-              { phone_number: number, intake_ask: true },
             ];
             for (const params of onboardingSends) {
               const result = await sendSMS(params);
               for (const text of result.sent) await logTextExchange(user.id, `Co replied: ${text}`);
             }
-            return res.status(200).send({ received: true, action: "intake_started" });
+            welcomedThisTurn = true;
           }
 
-          await logTextExchange(
-            user.id,
-            hasText ? `User said: ${content}` : "User sent a photo or voice memo (name/email intake)",
-          );
-
           // Layer 1 harness (src/harness/intake.ts): the model only proposes
-          // name/email; code decides whether to capture, hold a partial
-          // email, or ask, and never re-asks for something already on file.
+          // name/email; code decides whether to capture or hold a partial
+          // email, and never re-asks for something already on file.
           const intakeState = await gatherIntakeState(user);
           let extracted: IntakeProposal = { full_name: null, email: null };
-          try {
-            const { text: rawExtraction } = await generateText({
-              model: anthropic(INTAKE_EXTRACT_MODEL),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
-              prompt: buildIntakeExtractionPrompt(intakeState, hasText ? content : null),
-            });
-            extracted = parseIntakeProposal(rawExtraction);
-          } catch (err: any) {
-            console.error("sendblue intake: identity extraction failed (non-fatal, asking again):", err?.message ?? err);
+          if (hasText) {
+            try {
+              const { text: rawExtraction } = await generateText({
+                model: anthropic(INTAKE_EXTRACT_MODEL),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
+                prompt: buildIntakeExtractionPrompt(intakeState, content),
+              });
+              extracted = parseIntakeProposal(rawExtraction);
+            } catch (err: any) {
+              console.error("sendblue intake: identity extraction failed (non-fatal, the reply still answers):", err?.message ?? err);
+            }
           }
 
           const proposedEmail = extracted.email?.trim() || null;
@@ -1058,7 +1061,7 @@ export function sendblueRouter(io: Server): Router {
             const captureIdentity = (username: string) =>
               pool.query(
                 `UPDATE users SET first_name = $2, last_name = $3, email = $4, username = $5, identity_captured = true,
-                   intake_partial_email = NULL, intake_retries = 0
+                   intake_partial_email = NULL
                  WHERE id = $1 RETURNING *`,
                 [user.id, first_name, last_name, intake.email, username],
               );
@@ -1077,7 +1080,7 @@ export function sendblueRouter(io: Server): Router {
             } catch (err: any) {
               if (err?.code !== "23505") throw err;
               // Lost a race with another account for the same email (or a
-              // held partial email was taken since): drop it and ask again.
+              // held partial email was taken since): drop it; the reply says so.
               intake = decideIntake(
                 { ...intakeState, knownName: intake.name, partialEmail: null, knownEmail: null },
                 { full_name: intake.name, email: intake.email },
@@ -1098,62 +1101,31 @@ export function sendblueRouter(io: Server): Router {
           });
 
           if (intake.action === "capture") {
-            const first_name = user.first_name;
-            // Last step of onboarding: ask whether they'd rather text or talk
-            // (Royce, 2026-09-16: "We don't ask the user if they would prefer
-            // a call or text"). Recorded as a pending call offer, so their
-            // answer goes through the same router and call gates as any other
-            // call offer: "call me" places a call, "text is fine" keeps texting.
-            // The first call offer, from the approved lines (Royce,
-            // 2026-09-19, after Boardy's "quick 5-minute call" offer): why the
-            // call matters for the room, now or a time, texting still fine.
-            // Recorded as a pending call offer only once it really went out
-            // (2026-09-17 code review: a refused send still recorded it, so a
-            // later "yeah" could accept a call they were never offered).
-            const kickoffMsg = (
-              await lineInVoice({
-                purpose: "Right after they gave their name and email: offer a quick five-minute call to get to know them, now or at a time they pick, and make clear texting is fine too.",
-                facts: [
-                  `Their first name is ${first_name ?? "unknown"}.`,
-                  "A quick 5-minute call helps Cue know who to introduce them to when they're in the room at Noise events.",
-                  "They can take the call now, pick a time, or keep texting.",
-                ],
-                examples: CALL_OFFER.map((l) => l.replace("{name}", first_name ?? "there")),
-                mustInclude: first_name ? [first_name] : [],
-                fallback: pickLine(CALL_OFFER, { name: first_name }),
-              })
-            ).text;
-            let askedKickoff: string | null = null;
-            if (await sendAndLog(user.id, number, kickoffMsg)) askedKickoff = kickoffMsg;
-            if (askedKickoff) {
-              await pool
-                .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
-                  user.id,
-                  `${ONBOARDING_CALL_OFFER_PREFIX} Asked whether they'd rather keep texting or take a quick call to get started | Cue offered: ${askedKickoff}`,
-                ])
-                .catch((err: any) => console.error("sendblue: onboarding call-or-text offer write failed (non-fatal):", err?.message ?? err));
-            }
+            intakeSaved = { name: intake.name!, email: intake.email! };
             // They came in on a member's invite: tell that member, once.
             await tellInviterTheyJoined(user).catch((err: any) =>
               console.error("sendblue: invite joined note failed (non-fatal):", err?.message ?? err),
             );
-            return res.status(200).send({ received: true, action: "identity_captured" });
+          } else {
+            const nameChanged = intake.name && intake.name !== intakeState.knownName;
+            const nameParts = intake.name ? splitFullName(intake.name) : null;
+            await pool.query(
+              `UPDATE users SET
+                 first_name = COALESCE($2, first_name),
+                 last_name = COALESCE($3, last_name),
+                 intake_partial_email = COALESCE($4, intake_partial_email)
+               WHERE id = $1`,
+              [user.id, nameChanged ? nameParts!.first_name : null, nameChanged ? nameParts!.last_name : null, intake.savePartialEmail],
+            );
+            if (nameChanged) user = { ...user, first_name: nameParts!.first_name, last_name: nameParts!.last_name };
+            intakeAsk = intakeAskFor({
+              knownName: intake.name ?? intakeState.knownName,
+              knownEmail: intakeState.knownEmail,
+              partialEmail: intake.savePartialEmail ?? intakeState.partialEmail,
+              asked: intakeState.retries > 0,
+            });
+            intakeFix = intakeCorrection(intake);
           }
-
-          const nameChanged = intake.name && intake.name !== intakeState.knownName;
-          const nameParts = intake.name ? splitFullName(intake.name) : null;
-          await pool.query(
-            `UPDATE users SET
-               first_name = COALESCE($2, first_name),
-               last_name = COALESCE($3, last_name),
-               intake_partial_email = COALESCE($4, intake_partial_email),
-               intake_retries = intake_retries + 1
-             WHERE id = $1`,
-            [user.id, nameChanged ? nameParts!.first_name : null, nameChanged ? nameParts!.last_name : null, intake.savePartialEmail],
-          );
-          const missingReply = intake.reply!;
-          await sendAndLog(user.id, number, missingReply);
-          return res.status(200).send({ received: true, action: "intake_incomplete" });
         }
 
         // Step 1.5 — First contact from an unverified self-serve registration.
@@ -1731,6 +1703,11 @@ export function sendblueRouter(io: Server): Router {
         });
         // A look Co read from their image waits on their yes before anything is built from it (services/designSystem.ts): said to Co
         // so a "yes" builds in this turn instead of getting only an acknowledgment (design audit, 2026-10-12).
+        // Ruling A: the reply answers their first text after the welcome, and asks for name and email once, in its own words.
+        if (welcomedThisTurn) addFact(replyFacts, "did_this_turn", "Just before this reply, the welcome, how Cue works and Cue's contact card went out. Don't repeat them.");
+        if (intakeSaved) addFact(replyFacts, "did_this_turn", `Saved their name and email from this text: ${intakeSaved.name}, ${intakeSaved.email}.`);
+        const intakeNote = intakeInstruction(intakeAsk, intakeFix);
+        if (intakeNote) addInstruction(replyFacts, intakeNote);
         const pendingLook = await (await import("../services/designSystem.js")).pendingLookInstruction(user.id).catch(() => null);
         if (pendingLook) addInstruction(replyFacts, pendingLook);
         // A photo sent as the look they want is read before anything is said about using it (design audit: a "this is the vibe" image
@@ -2791,6 +2768,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // The walk-in ask went out (Cue's askedWalkin receipt, and a text delivered this turn): a pending ask for this event is
         // dropped and the event marked asked, so the scoring pass doesn't queue another. Not before: a reply that was held, failed or
         // didn't ask leaves the event unasked, and the scoring pass may still ask (review of #254).
+        // Asked once (ruling A): a text that went out this turn asked for their name or email, so it's never asked again.
+        if (intakeAsk.length && deliveredThisTurn.some((m) => replyAskedFor(intakeAsk, m))) {
+          await pool.query(`UPDATE users SET intake_retries = GREATEST(COALESCE(intake_retries, 0), 1) WHERE id = $1`, [user.id]).catch((err: any) => console.error("sendblue: noting the intake ask failed (non-fatal):", err?.message ?? err));
+        }
         if (walkinAskEvent && walkinAskNoted(walkinAskReceipt, deliveredThisTurn)) {
           await noteWalkinAsked(walkinAskEvent.id, walkinAskEvent.name, user.id).catch((err: any) => console.error("sendblue: noteWalkinAsked failed (non-fatal):", err?.message ?? err));
         }

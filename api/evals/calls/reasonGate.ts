@@ -261,9 +261,10 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
   const knowledge = await CC.buildCallKnowledge("u-closed").then(() => "resolved", () => "rejected");
   const summary = await CC.buildCallContextSummary("u-closed");
   check("names unreadable: the call context rejects, and the call opens with no member facts (nothing unstripped)", knowledge === "rejected" && summary === CC.CALL_NOTES_UNAVAILABLE && !summary.includes(secret), summary);
-  // Review of #122: "" reads as "your first real conversation" in the agent's prompt, so an existing member calling in got intake.
+  // Review of #122: "" read as "your first real conversation" in the agent's prompt, so an existing member calling in got intake. Since
+  // 2026-11-02 a first call is a real flag (services/firstCall.ts); the summary still says so when the notes can't be read.
   const E = await import("../../src/services/elevenLabsCalls.js");
-  check("...and never as a first conversation: the summary isn't empty and says not to run intake", summary.trim().length > 0 && /If that's empty, this is your first real conversation/.test(E.CALL_CONTEXT_BLOCK) && /not a first conversation/.test(summary) && /don't introduce yourself or run intake/.test(summary));
+  check("...and never as a first conversation: the summary isn't empty and says not to run intake", summary.trim().length > 0 && /If that's empty, you have nothing from before/.test(E.CALL_CONTEXT_BLOCK) && /not a first conversation/.test(summary) && /don't introduce yourself or run intake/.test(summary));
   const plain = await CC.buildContextSummary("u-closed");
   check("names unreadable: the text reply's summary is empty too", plain === "");
   const member = await CT.loadMemberOnCall("u-closed");
