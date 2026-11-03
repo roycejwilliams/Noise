@@ -60,7 +60,10 @@ import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services
 import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass, isRelayKey } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
-import { attentionChecks, carriesFinds, dropRepeatInterest, feelingCheck, foldPlan, hardDayHolds, isUnrequested, readThreads, threadReadDue, threadRiders, type AttentionState } from "./attention.js";
+import { attentionChecks, deliveredItems, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
+
+// How soon a check-in whose feeling read couldn't answer is tried again (harness/attention.ts feelingCheck infra).
+export const FEELING_READ_RETRY_MINUTES = 30;
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
 export const GOAL_SEASON_DAYS = 56;
@@ -1016,7 +1019,7 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     }
     // A member's attention (harness/attention.ts): the defaults with no rule of theirs, the back-off after silence, one thread a day.
     // Only what Cue starts on its own; never a requested delivery or a safety follow-up.
-    if (state.attention !== undefined && !isSafetyFollowUp(candidate)) {
+    if (state.attention !== undefined && !isSafetyFollowUp(candidate) && !opts.ignorePacing) {
       const cls = candidateClass(candidate.type, answering, candidate.payload);
       if (state.attention === null) {
         if (isUnrequested(cls)) checks.push({ name: "attention_unread", pass: false, reason: "couldn't read what went to them and when they replied; nothing Cue starts goes on a guess" });
@@ -1041,8 +1044,9 @@ export function sendIsExempt(primary: Candidate, extras: Candidate[], ignorePaci
 // Every tier that has something goes out together (2026-09-21): the picked
 // offer plus the best other waiting offer from each tier not yet in the group.
 // Reminders (a deadline heads-up) ride alone.
-// How many of the daily pick's choices go in one message (its own send limit).
-export const MAX_PICKED_TOGETHER = 3;
+// How many finds go in one message: two find links with their captions (Royce, 2026-11-02, the notification grouping plan's limit:
+// "at most 3 bubbles, or 2 find links with captions"; it was 3, one per tier).
+export const MAX_PICKED_TOGETHER = 2;
 // Up to three discovery finds a day, whatever sends them (Royce's ruling relayed 2026-10-14: "one per tier means up to 3 morning finds a
 // day"): the morning bundle counts toward it, a later pick that day goes only while the day's count is under it, and a retried morning
 // run never queues past it (services/sweepShadow.ts). Answers to what they asked for are never capped (#55: answers are uncapped), and
@@ -1117,7 +1121,7 @@ export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Ca
     seen.add(t);
     out.push(c);
   }
-  return out;
+  return out.slice(0, MAX_PICKED_TOGETHER - 1);
 }
 
 // Pure: what a failed bundle does to its lead. A lead the composer skipped is dropped (a skipped tier pick also queues its tier's next
@@ -1732,16 +1736,37 @@ async function midConversationNow(db: Queryable, userId: string, now: Date, last
 }
 // A member's attention (harness/attention.ts): their own messages' times (8 days, the window the gate's ledger read covers), what the
 // pick sent today as candidates (their thread ids on them), and whether Cue's last message closed with the interest question.
+async function loadInboundTimes(db: Queryable, userId: string): Promise<Date[]> {
+  const { rows } = await db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%') AND created_at > NOW() - INTERVAL '8 days'`, [userId]);
+  return rows.map((r: any) => new Date(r.created_at));
+}
+// The defaults read again inside the send's lock (review of #367): two sends at once (the cron and the morning sweep's own dispatch) can't
+// both pass the day's default or the call/text rule. Only those two: the rest can't change between the pick and the send. A read that
+// fails holds what Cue starts.
+export const LOCKED_DEFAULTS: ReadonlySet<string> = new Set(["default_daily", "call_text_same_day"]);
+async function lockedDefaults(db: Queryable, o: { userId: string; now: Date; zone: string | null; cls: SendClass; joinedAt: Date | null }): Promise<GateCheck[]> {
+  try {
+    const { activePreferences } = await import("../services/memberPreferences.js");
+    const { loadCounted } = await import("./notifyGate.js");
+    const [prefs, sent, inbound] = await Promise.all([activePreferences(o.userId, o.now, db as any), loadCounted(db, o.userId), loadInboundTimes(db, o.userId)]);
+    return attentionChecks({ now: o.now, zone: o.zone, cls: o.cls, channel: "text", joinedAt: o.joinedAt, att: { sent, inbound, sentToday: [], lastAsked: null }, prefs })
+      .filter((k) => LOCKED_DEFAULTS.has(k.name))
+      .map(({ retryAt: _r, ...k }) => k);
+  } catch (err: any) {
+    return [{ name: "attention_unread", pass: false, reason: `couldn't read what went to them inside the send's lock (${String(err?.message ?? err).slice(0, 60)})` }];
+  }
+}
+
 async function loadAttention(db: Queryable, userId: string, now: Date, zone: string | null, sent: Counted[]): Promise<AttentionState> {
   const dayStart = DateTime.fromJSDate(now).setZone(hoursZone(zone)).startOf("day").toJSDate();
-  const [{ rows: inbound }, { rows: today }, { rows: last }] = await Promise.all([
-    db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%') AND created_at > NOW() - INTERVAL '8 days'`, [userId]),
+  const [inbound, { rows: today }, { rows: last }] = await Promise.all([
+    loadInboundTimes(db, userId),
     db.query(`SELECT type, target_key, payload FROM proactive_candidates WHERE user_id = $1 AND status = 'sent' AND COALESCE(decided_at, updated_at) >= $2`, [userId, dayStart]),
     db.query(`SELECT COALESCE(payload->>'closingAsked', 'false') = 'true' AS asked, COALESCE(decided_at, updated_at) AS at FROM proactive_candidates WHERE user_id = $1 AND status = 'sent' ORDER BY COALESCE(decided_at, updated_at) DESC, (payload ? 'closingAsked') DESC LIMIT 1`, [userId]),
   ]);
   return {
     sent,
-    inbound: inbound.map((r: any) => new Date(r.created_at)),
+    inbound,
     sentToday: today.map((r: any) => ({ type: String(r.type), targetKey: String(r.target_key), payload: r.payload ?? {} })),
     lastAsked: last[0]?.at ? { at: new Date(last[0].at), asked: last[0].asked === true } : null,
   };
@@ -2085,6 +2110,8 @@ async function sendWithLedger(
       const { retryAt: _r, ...rule } = await memberRuleGate(client, { userId: person.userId, now, cls, channel: "text" });
       checks.push(rule);
     }
+    // PR B's defaults, read again here under the lock (harness/attention.ts): only what Cue starts, never a possible intro or a hand-run.
+    if (!isSafetyFollowUp(c) && isUnrequested(cls) && !isPossibleIntro(c) && !opts.ignorePacing) checks.push(...(await lockedDefaults(client, { userId: person.userId, now, zone: person.timezone, cls, joinedAt })));
     // The day's discovery cap, read again inside the lock, so two sends at once can't both pass it (review of the tier PR).
     const discovery = [c, ...extras.map((e) => e.candidate)].filter((x) => x.topicKey !== MOOD_FALLBACK_TOPIC && isDiscoveryFind(x)).length;
     if (discovery) {
@@ -2737,12 +2764,29 @@ export async function sweepHold(userId: string, kind: SweepKind, now = new Date(
 
 // dryRun drafts and composes what would go out, prints it, and stops before the ledger and the send.
 // Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+// One dispatch per member at a time, in this process, whoever calls it (review of #367): the cron (jobs/index.ts runDispatch) and the
+// morning sweep's own dispatch (services/dailySweep.ts) both come through here, so a member's two picks never overlap and both pass
+// the same defaults. The send's lock still covers other processes (lockedDefaults).
+const dispatchInFlight = new Set<string>();
+export function dispatchBusy(userId: string): boolean {
+  return dispatchInFlight.has(userId);
+}
 export async function dispatchForUser(...a: Parameters<typeof dispatchForUserInScope>): ReturnType<typeof dispatchForUserInScope> {
+  const userId = a[1];
+  if (dispatchInFlight.has(userId)) return;
+  dispatchInFlight.add(userId);
+  try {
+    return await dispatchForUserGuarded(...a);
+  } finally {
+    dispatchInFlight.delete(userId);
+  }
+}
+async function dispatchForUserGuarded(...a: Parameters<typeof dispatchForUserInScope>): ReturnType<typeof dispatchForUserInScope> {
   return withMember(a[1], () => dispatchForUserInScope(...a));
 }
 async function dispatchForUserInScope(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
   // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
-  if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUser(registry, userId, opts));
+  if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUserGuarded(registry, userId, opts));
   const person = await loadPerson(userId);
   // No phone on file: nothing can go. Said, not silent (Royce, 2026-10-13: "No silent skips anywhere in the chain").
   if (!person) {
@@ -2786,6 +2830,13 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     if (due.length) await readThreads({ userId, items: due, threads: threads.map((t) => ({ id: t.id, text: t.text })), write: !opts.dryRun }).catch(() => null);
   }
   const ev = evaluateCandidates(state, opts);
+  // A possible intro a hard day holds waits, never expires inside the hold (review of #367: matching first): its valid-until moves to a
+  // day past now while it's held, which the hold's own cap bounds.
+  if (!opts.dryRun) for (const p of ev.perCandidate) {
+    if (!isPossibleIntro(p.candidate) || !p.checks.some((k) => k.name === "hard_day" && !k.pass)) continue;
+    const to = introHeldExpiry(p.candidate.expiresAt, state.now);
+    if (to) await pool.query(`UPDATE proactive_candidates SET expires_at = $2, updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [p.candidate.id, to]).catch(() => {});
+  }
   // Each mood hold and release, once (services/moodHold.ts): the rule, the kind, the candidate's id; never member text.
   if (!opts.dryRun) for (const p of ev.perCandidate) {
     const ref = `${userId}:${p.candidate.id}`;
@@ -3162,11 +3213,39 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // A composed bundle's checks ran inside the composer: its record says so, with how many calls it took and what was left out.
   let draftChecks: GateCheck[] = asWritten ? [{ name: "producer_checks", pass: true, reason: "written and checked by the path that made it" }] : composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
   // A check-in never asserts a feeling they didn't share (harness/attention.ts feelingCheck): Cue's own draft, read against their own
-  // words only. Fails closed; a draft that fails it gets the one rewrite like any failed check, and is read again.
-  const isCheckin = !composed && !asWritten && candidateClass(c.type, isAnswering(c), c.payload) === "checkin";
-  const ownWords = isCheckin ? await import("./memberThreads.js").then((T) => T.ownLines(userId)).then((ls) => ls.map((l) => l.text)).catch(() => [] as string[]) : [];
-  const withFeeling = async (checks: GateCheck[], text: string): Promise<GateCheck[]> => (isCheckin ? [...checks, await feelingCheck({ userId, draft: text, ownWords })] : checks);
+  // words only. Never a safety follow-up or the check-in after a heavy moment (feelingCheckApplies). A draft that asserts one gets the
+  // one rewrite, read again; a check-in a door text carries (written by its own path) goes without the sentence the read named. When
+  // the read can't answer (the model, or their words unreadable), the check-in waits and is tried again: never a counted failure.
+  const checkinFeeling = !composed && feelingCheckApplies(candidateClass(c.type, isAnswering(c), c.payload), c.payload);
+  const ownWords = checkinFeeling ? await import("./memberThreads.js").then((T) => T.ownLines(userId)).then((ls) => ls.map((l) => l.text)).catch(() => null) : [];
+  const holdForFeelingRead = async (why: string): Promise<void> => {
+    const at = new Date(state.now.getTime() + FEELING_READ_RETRY_MINUTES * 60_000);
+    if (!opts.dryRun) {
+      await pool.query(`UPDATE proactive_candidates SET due_at = GREATEST(due_at, $2), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [c.id, at]);
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `feeling_read_wait:${c.type}`, proposal: { ...proposal, picked: c.id, retryAt: at.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: why });
+    }
+    done(c.type);
+  };
+  if (checkinFeeling && asWritten) {
+    const read = await feelingCheck({ userId, draft: draft.messages.join("\n"), ownWords });
+    if (read.infra) return holdForFeelingRead(read.reason ?? "the feeling read couldn't answer");
+    if (!read.pass) {
+      const cut = withoutPhrase(draft.messages, read.phrase ?? "");
+      if (!cut) {
+        if (!opts.dryRun) await dropCandidate(registry, c, "skipped", `the check-in says how they feel beyond their own words and the line couldn't be taken out: ${read.reason}`);
+        if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks, read], reason: read.reason ?? "" });
+        done(c.type);
+        return;
+      }
+      draft = { ...draft, messages: cut, text: cut.join("\n") };
+      draftChecks = [...draftChecks, { name: NO_ASSERTED_FEELING, pass: true, reason: `the line that said how they feel beyond their own words was taken out ("${read.phrase}")` }];
+    } else draftChecks = [...draftChecks, read];
+  }
+  const writtenHere = checkinFeeling && !asWritten;
+  const withFeeling = async (checks: GateCheck[], text: string): Promise<GateCheck[]> => (writtenHere ? [...checks, await feelingCheck({ userId, draft: text, ownWords })] : checks);
+  const infraOf = (checks: GateCheck[]) => checks.find((k) => (k as FeelingCheck).infra === true);
   draftChecks = await withFeeling(draftChecks, draft.text);
+  if (infraOf(draftChecks)) return holdForFeelingRead(infraOf(draftChecks)!.reason ?? "the feeling read couldn't answer");
   let dg = gate(draftChecks);
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
@@ -3176,6 +3255,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     if (second && "messages" in second) {
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
       const fixedChecks = await withFeeling(withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text), fixed.text);
+      if (infraOf(fixedChecks)) return holdForFeelingRead(infraOf(fixedChecks)!.reason ?? "the feeling read couldn't answer");
       const fg = gate(fixedChecks);
       if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});
       if (fg.ok) {
@@ -3332,12 +3412,12 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     const A = await import("../services/askRetire.js");
     if (A.noteCarried(result.delivered.join("\n"), rideNote)) await A.markNotesTold(userId, [rideNote], "text").catch((err: any) => console.error("proactive: marking the stopped-looking line told failed (non-fatal):", err?.message ?? err));
   }
-  // What this message covers (harness/attention.ts foldPlan): check-ins about the same thing, and finds for the same thing a better one
-  // answered, leave the queue with the reason; they never go as a second message about it. And whether it closed with the interest
+  // What this message covers (harness/attention.ts foldPlan), from what was actually delivered: check-ins Cue started about the same
+  // thing, and finds Cue started for the same ask as a find that went, leave the queue with the reason. A requested find never does. And whether it closed with the interest
   // question (so the next one doesn't ask it again while this one is unanswered).
   if (state.attention) {
     if (composed?.closing && result.delivered.includes(composed.closing)) await pool.query(`UPDATE proactive_candidates SET payload = payload || '{"closingAsked": true}'::jsonb WHERE id = $1`, [c.id]).catch(() => {});
-    const folds = foldPlan({ lead: c, riders: extras.map((e) => e.candidate), pending: all.filter((x) => !dead.includes(x)), leadCarriesFinds: carriesFinds(c), classOf: (x) => candidateClass(x.type, isAnswering(x), x.payload) });
+    const folds = foldPlan({ included: deliveredItems(c, extras, result.delivered), pending: all.filter((x) => !dead.includes(x)), classOf: (x) => candidateClass(x.type as ProactiveType, isAnswering(x as Candidate), x.payload) });
     for (const f of folds) {
       await dropCandidate(registry, f.candidate as Candidate, "skipped", `folded: ${f.why}`).catch(() => {});
       recordDecision({ layer: 7, decision: "proactive.thread_fold", userId, outcome: "skip", action: `fold:${f.candidate.type}`, reason: f.why, proposal: { candidate: f.candidate.id, into: c.id } }).catch(() => {});

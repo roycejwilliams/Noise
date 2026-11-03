@@ -4,7 +4,9 @@
 //   3  thread    Grouped by the member's thread, never by source. "Same thread" is the ask, goal, task or member thread an item serves,
 //                by id; only when the ids don't settle it, one model read maps the item onto their open threads (once per item,
 //                stored on it as payload.threadRead). Never a regex over their words. Two finds for one ask become the better one; a
-//                find and a check-in about the same thing become one message about that thing (the check-in is covered, foldPlan);
+//                find and a check-in about the same thing become one message about that thing (the check-in is covered, foldPlan,
+//                from what was delivered only). A requested find is never covered: it waits and goes as itself. Possible intros
+//                are never held by the defaults, the back-off or the one-thread day (matching first);
 //                a thread that already had its message today waits for another day, and so does another thread (unless they reply
 //                often: then their second message of the day may be about something else).
 //   6  back-off  If Cue's last unrequested message went unanswered, the next unrequested one waits longer: two days after one, four
@@ -112,36 +114,51 @@ export function threadRiders<T extends Item>(lead: T, sibs: T[]): { riders: T[];
   return { riders, sameAskLeft, otherThread };
 }
 
-// What a message covers once it went: the check-ins about the same thing, and the finds for the same thing that a better one
-// answered. Never a requested delivery that isn't a find, a safety follow-up, or the day-after check-in after a heavy moment.
+// What a message covers once it went (review of #367): only from what was actually delivered in it (included: the lead and the extras
+// whose words went). Covered: a check-in Cue started about the same thing (never a safety follow-up, never the day-after check-in after a
+// heavy moment), and an unrequested find for the same ask as a find that went. A requested find is never covered: unless its own words
+// went in this message, it waits and goes as itself. Nothing requested that isn't a find is ever touched.
 export type Fold = { candidate: Item & { id: string }; why: string };
-export function foldPlan<T extends Item & { id: string }>(o: { lead: T; riders: T[]; pending: T[]; leadCarriesFinds: boolean; classOf: (c: T) => SendClass }): Fold[] {
-  const inMessage = [o.lead, ...o.riders];
-  const ids = new Set(inMessage.map((x) => x.id));
+export function foldPlan<T extends Item & { id: string }>(o: { included: T[]; pending: T[]; classOf: (c: T) => SendClass }): Fold[] {
+  if (!o.included.length) return [];
+  const ids = new Set(o.included.map((x) => x.id));
   const out: Fold[] = [];
   for (const p of o.pending) {
     if (ids.has(p.id)) continue;
     const pay = (p.payload ?? {}) as { safetyFollowUp?: boolean; heavy?: unknown; reminder?: boolean; door?: boolean };
     if (pay.safetyFollowUp === true || pay.heavy) continue;
-    const on = inMessage.find((m) => sameThread(m, p));
-    if (!on) continue;
     const cls = o.classOf(p);
+    if (!isUnrequested(cls)) continue;
     if (cls === "checkin" && pay.door !== true) {
-      out.push({ candidate: p, why: `a check-in about the same thing: the message that went (${o.lead.id}) was about it` });
+      const on = o.included.find((m) => sameThread(m, p));
+      if (on) out.push({ candidate: p, why: `a check-in about the same thing: the message that went (${on.id}) was about it` });
       continue;
     }
-    if (p.type === "event_offer" && !pay.reminder && (inMessage.some((m) => sameAsk(m, p)) || o.leadCarriesFinds)) {
-      out.push({ candidate: p, why: `a find for the same thing: the better one went (${on.id})` });
-    }
+    const sameAskFind = p.type === "event_offer" && !pay.reminder ? o.included.find((m) => m.type === "event_offer" && sameAsk(m, p)) : undefined;
+    if (sameAskFind) out.push({ candidate: p, why: `a find Cue started for the same ask: the better one went (${sameAskFind.id})` });
   }
   return out;
 }
 
-// Pure: a door text carries finds when one of its bubbles is a bare link (Cue's own text, as its path wrote it).
-export function carriesFinds(c: Item): boolean {
-  if (c.type === "event_offer") return true;
-  const m = (c.payload as { door?: boolean; messages?: string[] } | null)?.messages;
-  return Array.isArray(m) && m.some((x) => /^https?:\/\/\S+$/.test(String(x).trim()));
+// Pure: what of a send was delivered: the lead when its first bubble went, an extra only when every one of its bubbles went (a partial
+// send never covers what didn't arrive).
+export function deliveredItems<T>(lead: T, extras: { candidate: T; messages: string[] }[], delivered: string[]): T[] {
+  if (!delivered.length) return [];
+  return [lead, ...extras.filter((e) => e.messages.length > 0 && e.messages.every((m) => delivered.includes(m))).map((e) => e.candidate)];
+}
+
+// Pure: a possible intro (harness/door.ts doorBand's intro band): matching comes first, so the defaults, the back-off and the one-thread
+// day never hold it. Their own rules and a hard day still time it (it waits, never dropped: introHeldExpiry).
+export const INTRO_ITEM_TYPES: ReadonlySet<string> = new Set(["network_tease", "event_match_nudge", "intro_nudge"]);
+export function isPossibleIntro(c: Item): boolean {
+  return INTRO_ITEM_TYPES.has(c.type) || (c.payload as { intro?: boolean } | null)?.intro === true;
+}
+// Pure: an intro held by a hard day never expires inside the hold: its valid-until moves to at least a day past now (the hold itself is
+// bounded by its cap, so this is too). Null: nothing to move.
+export function introHeldExpiry(expiresAt: Date | null, now: Date): Date | null {
+  if (!expiresAt) return null;
+  const floor = now.getTime() + DAY;
+  return expiresAt.getTime() < floor ? new Date(floor) : null;
 }
 
 // ---------------------------------------------------------------- 6 and 7. back-off and the defaults
@@ -198,6 +215,8 @@ export type AttentionCheck = GateCheck & { retryAt?: Date };
 // item: the candidate (its thread), absent for a call.
 export function attentionChecks(o: { now: Date; zone: string | null; cls: SendClass; channel: NotifyChannel; joinedAt: Date | null; att: AttentionState; prefs: Preference[]; safety?: boolean; item?: Item | null }): AttentionCheck[] {
   if (!isUnrequested(o.cls) || o.safety) return [];
+  // Matching first (review of #367): a possible intro is never held by the defaults, the back-off or the one-thread day.
+  if (o.item && isPossibleIntro(o.item)) return [];
   const local = DateTime.fromJSDate(o.now).setZone(zoneOf(o.zone));
   const dayStart = local.startOf("day").toJSDate().getTime();
   const tomorrow = local.plus({ days: 1 }).startOf("day").toJSDate();
@@ -354,13 +373,37 @@ export function readFeelingAnswer(text: string): { asserts: boolean; phrase: str
   }
 }
 export const NO_ASSERTED_FEELING = "no_asserted_feeling";
-// The check on Cue's own check-in draft. It fails closed: a read that can't answer holds the draft (counted like any failed check).
-export async function feelingCheck(o: { userId: string; draft: string; ownWords: string[]; generate?: (prompt: string) => Promise<string> }): Promise<GateCheck> {
+// Pure: which check-ins the feeling read covers: never a safety follow-up, never the check-in after a heavy or hard moment (their own
+// careful paths decide those words), never anything that isn't a check-in Cue started.
+export function feelingCheckApplies(cls: SendClass, payload: unknown): boolean {
+  const p = (payload ?? {}) as { safetyFollowUp?: boolean; heavy?: unknown; hardMoment?: unknown };
+  return cls === "checkin" && p.safetyFollowUp !== true && !p.heavy && !p.hardMoment;
+}
+// The check on Cue's own check-in draft. infra: the read couldn't answer (the model failed, or their words couldn't be read; ownWords
+// null): the caller holds the check-in and tries again later, never counting it as a failed draft (review of #367).
+export type FeelingCheck = GateCheck & { infra?: true; phrase?: string };
+export async function feelingCheck(o: { userId: string; draft: string; ownWords: string[] | null; generate?: (prompt: string) => Promise<string> }): Promise<FeelingCheck> {
+  if (o.ownWords === null) return { name: NO_ASSERTED_FEELING, pass: false, infra: true, reason: "couldn't read their own words to check the check-in against; it waits" };
   const gen = o.generate ?? modelForTests ?? (async (p: string) => {
     const [{ generateText }, { anthropic }, { MODELS }, { withMember }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js"), import("../services/llmUsage.js")]);
     return withMember(o.userId, () => generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 150, abortSignal: AbortSignal.timeout(15_000), experimental_telemetry: { isEnabled: true, functionId: "attention.feelingCheck" }, prompt: p })).then((r) => r.text);
   });
   const answer = readFeelingAnswer(await gen(feelingPrompt(o.draft, o.ownWords.slice(-30).map((w) => w.slice(0, 300)))).catch(() => ""));
-  if (!answer) return { name: NO_ASSERTED_FEELING, pass: false, reason: "couldn't check that the check-in states no feeling they didn't share" };
-  return answer.asserts ? { name: NO_ASSERTED_FEELING, pass: false, reason: `it says how they feel beyond their own words ("${answer.phrase}"); say only what they said, or ask` } : { name: NO_ASSERTED_FEELING, pass: true };
+  if (!answer) return { name: NO_ASSERTED_FEELING, pass: false, infra: true, reason: "couldn't check that the check-in states no feeling they didn't share; it waits" };
+  return answer.asserts ? { name: NO_ASSERTED_FEELING, pass: false, phrase: answer.phrase, reason: `it says how they feel beyond their own words ("${answer.phrase}"); say only what they said, or ask` } : { name: NO_ASSERTED_FEELING, pass: true };
+}
+// Pure: a check-in written elsewhere (a door text goes as its path wrote it) without the sentence the read named. Null: the phrase isn't
+// found in it as written, or nothing would be left.
+export function withoutPhrase(messages: string[], phrase: string): string[] | null {
+  const needle = phrase.trim().toLowerCase();
+  if (!needle) return null;
+  let hit = false;
+  const out = messages
+    .map((m) => {
+      if (!m.toLowerCase().includes(needle)) return m;
+      hit = true;
+      return m.split(/(?<=[.!?])\s+/).filter((sentence) => !sentence.toLowerCase().includes(needle)).join(" ").trim();
+    })
+    .filter((m) => m.length > 0);
+  return hit && out.length ? out : null;
 }
