@@ -327,5 +327,110 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
   check("race, 20 runs either way round: the rename line at most once, the name never lost, and only allowed texts", twice === 0 && never === 0 && wrong === 0, { twice, never, wrong });
 }
 
+// ---------------------------------------------------------------- 9. the 2026-11-02 update (Royce: "go with the list, drop the page")
+{
+  const U = AN.UPDATE_1102;
+  const APPROVED = [
+    "A few things changed on my side:",
+    '· Calls feel like a real conversation now, and I answer sooner\n· Tell me how often or when to reach you, like "once a day" or "not on Sundays", and I\'ll keep to it\n· Send a voice memo anytime. If I reply in kind, it\'s the same voice as my calls',
+    "Ask me to call you if you want to hear it.",
+  ];
+  check("11-02: in the registry, after the shift, approved by Royce (a code constant)", AN.ANNOUNCEMENTS.includes(U) && AN.ANNOUNCEMENTS.indexOf(U) > AN.ANNOUNCEMENTS.indexOf(AN.SHIFT) && AN.UPDATE_1102_APPROVED === true && U.approved === true);
+  check("11-02: its own key and type, ends 21 days after it starts", U.key === "announcement:update-2026-11" && U.type === "announcement" && "daysAfterFirstQueued" in U.expires && U.expires.daysAfterFirstQueued === 21 && AN.announcementByKey(U.key) === U);
+  check("11-02: Royce's approved copy, word for word, three texts in order", JSON.stringify(U.texts) === JSON.stringify(APPROVED), U.texts);
+  check("11-02: texts only: no link, no page, no try line, no rename fold", !/https?:|www\.|\.com|\/\//.test(APPROVED.join(" ")) && U.tryLines.length === 0 && !U.foldLead);
+  check("11-02: for members who joined before the first change landed (#345, 2026-11-02 18:45 UTC)", typeof U.audience === "object" && U.audience.joinedBefore.toISOString() === "2026-11-02T18:45:06.000Z");
+  let reads = 0;
+  const d = await AN.draftAnnouncement(cand({ id: "u1", userId: "u", type: "announcement", targetKey: U.key }), { told: async () => (reads++, false), situation: async () => { throw new Error("never read"); }, now: () => day });
+  check("11-02 draft: the three texts as separate messages, one told read, no situation read", "messages" in d && JSON.stringify(d.messages) === JSON.stringify(APPROVED) && reads === 1, d);
+  if ("messages" in d) {
+    const bad = P.checkDraft(d.text, d.rules).filter((k) => !k.pass);
+    check("11-02 draft: passes the proactive draft checks, and the dispatch's capitalizing leaves every word as approved", bad.length === 0 && d.messages.every((m) => capitalizeSentences(m) === m), bad);
+  }
+  check("11-02: the narration rule would refuse the opening ('on my side'); only that approved sentence is admitted, by exact match", P.checkDraft(APPROVED.join("\n"), AN.ANNOUNCEMENT_RULES).some((k) => k.name === "draft_narrates_state" && !k.pass) && JSON.stringify(U.narrationApproved) === JSON.stringify([APPROVED[0]]));
+  check("narration admission is exact: a model draft with the same words in another sentence still fails", P.checkDraft("Nothing new on my side today.", { ...AN.ANNOUNCEMENT_RULES, approvedSentences: [APPROVED[0]] }).some((k) => k.name === "draft_narrates_state" && !k.pass) && P.checkDraft("A few things changed on my side: calls.", { ...AN.ANNOUNCEMENT_RULES, approvedSentences: [APPROVED[0]] }).some((k) => k.name === "draft_narrates_state" && !k.pass));
+  const toldD = await AN.draftAnnouncement(cand({ id: "u2", userId: "u", type: "announcement", targetKey: U.key }), { told: async (_u, k) => k === U.key, now: () => day });
+  check("11-02 draft: told already, nothing goes", "skip" in toldD);
+  const unappr = await AN.draftAnnouncement(cand({ id: "u3", userId: "u", type: "announcement", targetKey: U.key }), { approved: false, told: async () => false, now: () => day });
+  check("11-02 draft: unapproved waits", "defer" in unappr);
+}
+{
+  // The queue: its own cutoff (no wait on the rename), test numbers and simulated members left out.
+  const at = new Date("2026-11-04T17:40:00Z");
+  const rows: Row[] = [
+    member("u-jordan", { created_at: new Date("2026-10-01T00:00:00Z") }),
+    member("u-after", { created_at: new Date("2026-11-03T01:00:00Z") }),
+    { ...member("u-test"), phone_number: "+14155550142" } as any,
+    { ...member("u-sim"), simulated: true } as any,
+    member("u-archived", { archived_at: new Date("2026-10-01T00:00:00Z") }),
+    member("u-optout", { sms_opted_out: true }),
+  ];
+  const e = enq(), f = fakeDb({ renameFirst: null, rows });
+  const n = await AN.queueAnnouncement(AN.UPDATE_1102, at, { db: f.db, enqueue: e.enqueue, log: quiet });
+  const users = f.seen.find((s) => /FROM users u/.test(s.sql));
+  check("11-02 queue: its own cutoff, even before any rename", (users?.args[0] as Date)?.getTime() === AN.UPDATE_1102_JOINED_BEFORE.getTime() && users?.args[1] === AN.UPDATE_1102_KEY);
+  check("11-02 queue: only the eligible member; joined after, test number, simulated, archived, opted out left out", n === 1 && e.calls.map((c) => c.userId).join() === "u-jordan" && e.calls[0].expiresAt.getTime() === at.getTime() + 21 * D, e.calls.map((c) => c.userId));
+  check("audience reasons: each excluded member has its reason", AN.exclusionOf(rows[1], AN.UPDATE_1102_JOINED_BEFORE) === "joined_after" && AN.exclusionOf(rows[2] as any, AN.UPDATE_1102_JOINED_BEFORE) === "test_number" && AN.exclusionOf(rows[3] as any, AN.UPDATE_1102_JOINED_BEFORE) === "test_number" && AN.exclusionOf(rows[0], AN.UPDATE_1102_JOINED_BEFORE) === null);
+  check("queue SQL reads the number and the simulated marker, so test members are left out in code", /u\.phone_number, COALESCE\(\(to_jsonb\(u\)->>'is_simulated'\)::boolean, false\) AS simulated/.test(src("services/announcements.ts")));
+}
+{
+  // The monthly limit: one announcement a calendar month (Pacific), across every key.
+  check("month: starts at Pacific midnight on the 1st", AN.monthStart(new Date("2026-11-04T17:40:00Z")).toISOString() === "2026-11-01T07:00:00.000Z" && AN.monthStart(new Date("2026-12-01T05:00:00Z")).toISOString() === "2026-11-01T07:00:00.000Z");
+  check("month: nothing else this month, no block", AN.monthlyBlock(AN.UPDATE_1102_KEY, []) === null);
+  check("month: its own sends never block it (it keeps going to the rest)", AN.monthlyBlock(AN.UPDATE_1102_KEY, [{ target_key: AN.UPDATE_1102_KEY, state: "sent", n: 3 }]) === null);
+  check("month: another sent this month blocks it", /one announcement a month: announcement:shift went to 2 member/.test(AN.monthlyBlock(AN.UPDATE_1102_KEY, [{ target_key: AN.SHIFT_KEY, state: "sent", n: "2" }]) ?? ""));
+  check("month: another still waiting to go blocks it", /still waits for 1/.test(AN.monthlyBlock(AN.UPDATE_1102_KEY, [{ target_key: AN.SHIFT_KEY, state: "pending", n: 1 }]) ?? ""));
+  const blocking = (others: any[]) => {
+    const seen: { sql: string; args: unknown[] }[] = [];
+    return {
+      seen,
+      db: {
+        query: async (sql: string, args: unknown[] = []) => {
+          seen.push({ sql: sql.replace(/\s+/g, " ").trim(), args });
+          if (/target_key <> \$1/.test(sql)) return { rows: others };
+          if (/FROM users u/.test(sql)) return { rows: [member("u-jordan")] };
+          return { rows: [] };
+        },
+      },
+    };
+  };
+  const at = new Date("2026-11-04T17:40:00Z");
+  {
+    const e = enq(), f = blocking([{ target_key: AN.SHIFT_KEY, state: "sent", n: 1 }]);
+    const lines: string[] = [];
+    const n = await AN.queueAnnouncement(AN.UPDATE_1102, at, { db: f.db, enqueue: e.enqueue, log: (l) => lines.push(l) });
+    const q2 = f.seen.find((s) => /target_key <> \$1/.test(s.sql))!;
+    check("month: another announcement went this month: nothing queued, said in the log, no member read", n === 0 && e.calls.length === 0 && !f.seen.some((s) => /FROM users u/.test(s.sql)) && lines.some((l) => /one announcement a month/.test(l)), lines);
+    check("month: the read is from the 1st (Pacific), every other announcement key, sent or pending", q2.args[0] === AN.UPDATE_1102_KEY && (q2.args[1] as Date).toISOString() === "2026-11-01T07:00:00.000Z" && /type = 'announcement'/.test(q2.sql) && /status = 'pending'/.test(q2.sql));
+  }
+  {
+    const e = enq(), f = blocking([]);
+    const n = await AN.queueAnnouncement(AN.UPDATE_1102, at, { db: f.db, enqueue: e.enqueue, log: quiet });
+    check("month: nothing else this month: queued", n === 1 && e.calls.length === 1);
+  }
+  {
+    const e = enq(), f = blocking([{ target_key: AN.SHIFT_KEY, state: "sent", n: 1 }]);
+    const n = await AN.queueAnnouncement(AN.RENAME, at, { db: f.db, enqueue: e.enqueue, log: quiet });
+    check("month: the rename is its own notice, never held by the monthly limit", n === 1 && !f.seen.some((s) => /target_key <> \$1/.test(s.sql)));
+  }
+}
+{
+  // The preference gate (harness/notifyGate.ts, #356): a member's "none" rule holds an announcement, at the pick and inside the send lock.
+  const NG = await import("../../src/harness/notifyGate.js");
+  const MP = await import("../../src/services/memberPreferences.js");
+  const none = { id: "7", area: "contact", covers: "all", channel: "all", basis: "explicit", type: "standing", words: ["no texts for now"], source: { via: "text", ref: null }, startsAt: null, expiresAt: null, zone: "America/Los_Angeles", state: "active", setAt: "", rule: MP.ruleFrom({ none: true }) } as any;
+  const cls = NG.candidateClass("announcement", false, {});
+  const held = NG.memberRuleCheck([none], { now: day, cls, channel: "text", sent: [] });
+  check("gate: an announcement is Cue's own (unsolicited)", cls === "unsolicited");
+  check("gate: a 'none' rule holds the 11-02 update", held.pass === false && /none while it lasts/.test(held.reason ?? ""), held);
+  const unsolNone = NG.memberRuleCheck([{ ...none, covers: "unsolicited" }], { now: day, cls, channel: "text", sent: [] });
+  check("gate: a 'none' rule on what Cue starts holds it too", unsolNone.pass === false);
+  const checkinsOnly = NG.memberRuleCheck([{ ...none, area: "checkins", covers: "checkins" }], { now: day, cls, channel: "text", sent: [] });
+  check("gate: a 'no check-ins' rule doesn't (an announcement isn't a check-in)", checkinsOnly.pass === true);
+  check("gate: no rule, it passes", NG.memberRuleCheck([], { now: day, cls, channel: "text", sent: [] }).pass === true);
+  const pr2 = src("harness/proactive.ts");
+  check("gate: applied to every candidate before the pick and again inside the send lock", /memberRuleCheck\(state\.memberRules\.prefs, \{ now: state\.now, cls: candidateClass\(candidate\.type, answering, candidate\.payload\)/.test(pr2) && /const cls = candidateClass\(c\.type, answering, c\.payload\);\s*if \(!isSafetyFollowUp\(c\)\) \{\s*const \{ retryAt: _r, \.\.\.rule \} = await memberRuleGate\(client, \{ userId: person\.userId, now, cls, channel: "text" \}\);/.test(pr2));
+}
+
 console.log(`announcements: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

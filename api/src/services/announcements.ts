@@ -9,9 +9,13 @@
 //   key       its ledger target_key: one proactive_sends row per member (unique on user_id + target_key) means once, ever.
 //   approved  a code constant, no env switch: an announcement whose wording Royce hasn't approved is never queued, and its draft,
 //             if it were ever reached, defers without reading anything.
-//   audience  members who knew what it changes: joined before the change (the rename's cutoff). Someone who joined after only ever
-//             knew the new behavior and is never told about a change they didn't live through. The rest of who is left out is the
-//             same for every announcement: no phone, archived, opted out, never finished joining, already told or already queued.
+//   audience  members who knew what it changes: joined before the change (the rename's cutoff, or a fixed moment for a later one).
+//             Someone who joined after only ever knew the new behavior and is never told about a change they didn't live through. The
+//             rest of who is left out is the same for every announcement: no phone, a test number (555-01xx) or simulated member,
+//             archived, opted out, never finished joining, already told or already queued.
+//   texts     fixed texts sent as separate messages, in order, in place of lead + body + try line (one send, one ledger row).
+//   monthly   at most one announcement a calendar month (Pacific), across every key: one is never queued while another went to a
+//             member this month or still waits to (monthlyLimit). The rename is its own notice and isn't counted.
 //   expiry    when what hasn't gone by then never goes: a fixed day, or a number of days after the first one was queued.
 //   tryLines  the one "thing to try" line, picked from approved lines by the member's situation, in code, at send time ($0). What
 //             Cue knows about them only picks among approved words; it never decides whether they get it.
@@ -23,7 +27,9 @@
 // the safety hold, the hold on a hard day (HOLD_WHILE_STRUGGLING), pacing, a quiet member's taper, archived accounts skipped. A full
 // announcement is too long to ride in another text and never does: it goes as its own text, at the lowest priority, only on a day
 // nothing else is ready (quietDayOnly), and nothing rides in it except the rename it carries.
+import { DateTime } from "luxon";
 import pool from "../db/db.js";
+import { isTestNumber } from "./testNumbers.js";
 import { goalTexts } from "./goalJourney.js";
 import { NAME_CHANGE_EXPIRES, NAME_CHANGE_KEY, NAME_CHANGE_TEXT, carriesNameChange } from "./nameChange.js";
 import type { Candidate, DraftResult, EnqueueInput, ProactiveType } from "../harness/proactive.js";
@@ -43,7 +49,13 @@ export type Announcement = {
   body: string;
   tryLines: TryLine[];
   foldLead?: string;
-  audience: "knew_co";
+  // Sentences of the approved wording the draft check's narration rule would otherwise refuse (harness/proactive.ts checkDraft,
+  // approvedSentences): admitted by exact match only, each named here so the exception is visible.
+  narrationApproved?: readonly string[];
+  // Separate fixed texts, in order, sent in place of lead + body + try line (one send).
+  texts?: readonly string[];
+  // "knew_co": joined before the rename's first notice. joinedBefore: joined before this change landed.
+  audience: "knew_co" | { joinedBefore: Date };
   expires: { at: Date } | { daysAfterFirstQueued: number };
 };
 
@@ -94,9 +106,39 @@ export const SHIFT: Announcement = {
   expires: { daysAfterFirstQueued: SHIFT_LIVE_DAYS },
 };
 
+// The 2026-11-02 update: calls, contact rules, voice memos. Wording approved by Royce 2026-11-02 ("go with the list, drop the page"):
+// version B, three texts, no link or page. UPDATE_1102_APPROVED false stops it. Every claim was checked against co-test on 2026-11-02
+// (see the PR): calls on GPT-Live with answers streamed sentence by sentence (#337, #345); the member's own contact rules enforced on
+// every text and call Cue starts (#355, #356, #362); voice memos transcribed and answered in kind in the calls' voice, marin (#360).
+// For members who joined before the first of those landed (#345, 2026-11-02 18:45 UTC): a later joiner only ever knew the new way.
+export const UPDATE_1102_APPROVED = true;
+export const UPDATE_1102_KEY = "announcement:update-2026-11";
+export const UPDATE_1102_JOINED_BEFORE = new Date("2026-11-02T18:45:06Z");
+export const UPDATE_1102_TEXTS = [
+  "A few things changed on my side:",
+  '· Calls feel like a real conversation now, and I answer sooner\n· Tell me how often or when to reach you, like "once a day" or "not on Sundays", and I\'ll keep to it\n· Send a voice memo anytime. If I reply in kind, it\'s the same voice as my calls',
+  "Ask me to call you if you want to hear it.",
+] as const;
+export const UPDATE_1102_LIVE_DAYS = 21;
+export const UPDATE_1102: Announcement = {
+  key: UPDATE_1102_KEY,
+  type: "announcement",
+  approved: UPDATE_1102_APPROVED,
+  summary: "Tell them, once, what changed on Cue's side: calls, when to reach them, voice memos",
+  lead: UPDATE_1102_TEXTS[0],
+  body: "",
+  tryLines: [],
+  texts: UPDATE_1102_TEXTS,
+  // "on my side" is on the narration rule's list (speakable.ts NARRATION_RULES, machinery talk). Royce approved this opening as written
+  // on 2026-11-02; without this the draft check would refuse it on every try and the update would never go. See the PR.
+  narrationApproved: [UPDATE_1102_TEXTS[0]],
+  audience: { joinedBefore: UPDATE_1102_JOINED_BEFORE },
+  expires: { daysAfterFirstQueued: UPDATE_1102_LIVE_DAYS },
+};
+
 // Every announcement, in the order they are queued. The rename is queued by its own job first (jobs/index.ts), so a member's rename
 // candidate exists before a follow-up that carries it.
-export const ANNOUNCEMENTS: readonly Announcement[] = [RENAME, SHIFT];
+export const ANNOUNCEMENTS: readonly Announcement[] = [RENAME, SHIFT, UPDATE_1102];
 export function announcementByKey(key: string): Announcement | null {
   return ANNOUNCEMENTS.find((a) => a.key === key) ?? null;
 }
@@ -117,6 +159,11 @@ export function pickTryLine(a: Pick<Announcement, "tryLines">, s: Situation): st
 export function announcementText(a: Announcement, s: Situation, o: { nameTold: boolean }): string {
   const lead = a.foldLead && !o.nameTold ? a.foldLead : a.lead;
   return [lead, a.body, pickTryLine(a, s)].filter((x): x is string => !!x && !!x.trim()).join(" ");
+}
+
+// The messages that go: an announcement's own separate texts when it has them, else its one text.
+export function announcementMessages(a: Announcement, s: Situation, o: { nameTold: boolean }): string[] {
+  return a.texts?.length ? [...a.texts] : [announcementText(a, s, o)];
 }
 
 // The same text as if the rename had already reached them: what goes if, inside the send lock, the rename's key was already taken
@@ -155,16 +202,56 @@ export function expiryOf(a: Pick<Announcement, "expires">, firstQueuedAt: Date |
   return new Date((firstQueuedAt ?? now).getTime() + a.expires.daysAfterFirstQueued * 86_400_000);
 }
 
+type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
+
 // A member row from the audience query. The query already leaves these out; this is the same rule in code, so a wrong row is still
 // never queued.
-export type AudienceRow = { id: string; created_at: Date | string; archived_at: Date | string | null; sms_opted_out: boolean | null; has_phone: boolean; identity_captured: boolean | null; told: boolean; queued: boolean };
+export type AudienceRow = { id: string; created_at: Date | string; archived_at: Date | string | null; sms_opted_out: boolean | null; has_phone: boolean; identity_captured: boolean | null; told: boolean; queued: boolean; phone_number?: string | null; simulated?: boolean | null };
+// Why a member is left out, or null when they are in. The first reason that applies, in this order.
+export type Exclusion = "joined_after" | "archived" | "opted_out" | "no_phone" | "test_number" | "unfinished" | "told" | "queued";
+export function exclusionOf(r: AudienceRow, cutoff: Date): Exclusion | null {
+  if (new Date(r.created_at).getTime() >= cutoff.getTime()) return "joined_after";
+  if (r.archived_at) return "archived";
+  if (r.sms_opted_out === true) return "opted_out";
+  if (!r.has_phone) return "no_phone";
+  // A 555-01xx number is fiction on any server (services/testNumbers.ts), so the env switch is ignored here.
+  if (r.simulated === true || isTestNumber(r.phone_number ?? null, {})) return "test_number";
+  if (r.identity_captured !== true) return "unfinished";
+  if (r.told) return "told";
+  if (r.queued) return "queued";
+  return null;
+}
 export function inAudience(r: AudienceRow, cutoff: Date): boolean {
-  return new Date(r.created_at).getTime() < cutoff.getTime() && !r.archived_at && r.sms_opted_out !== true && r.has_phone && r.identity_captured === true && !r.told && !r.queued;
+  return exclusionOf(r, cutoff) === null;
+}
+
+// ---------------------------------------------------------------- the monthly limit
+
+// The calendar month is Pacific's, as the queue job's (jobs/index.ts, 09:40 America/Los_Angeles).
+export const MONTH_ZONE = "America/Los_Angeles";
+export function monthStart(now: Date): Date {
+  return DateTime.fromJSDate(now).setZone(MONTH_ZONE).startOf("month").toJSDate();
+}
+// Pure: why this announcement can't be queued this month (another one went to a member this month, or still waits to go), or null.
+export type OtherAnnouncement = { target_key: string; state: "sent" | "pending"; n: number | string };
+export function monthlyBlock(key: string, others: OtherAnnouncement[]): string | null {
+  const o = others.filter((x) => x.target_key !== key && Number(x.n) > 0);
+  if (!o.length) return null;
+  return `one announcement a month: ${o.map((x) => `${x.target_key} ${x.state === "sent" ? "went to" : "still waits for"} ${Number(x.n)} member(s)`).join("; ")}`;
+}
+const OTHERS_SQL = `SELECT target_key, 'sent' AS state, COUNT(*) AS n FROM proactive_sends
+                     WHERE type = 'announcement' AND target_key <> $1 AND sent_at >= $2 GROUP BY target_key
+                    UNION ALL
+                    SELECT target_key, 'pending' AS state, COUNT(*) AS n FROM proactive_candidates
+                     WHERE type = 'announcement' AND target_key <> $1 AND status = 'pending' GROUP BY target_key`;
+export async function monthlyLimit(db: Db, a: Pick<Announcement, "key" | "type">, now: Date): Promise<string | null> {
+  if (a.type !== "announcement") return null;
+  const { rows } = await db.query(OTHERS_SQL, [a.key, monthStart(now)]);
+  return monthlyBlock(a.key, rows as OtherAnnouncement[]);
 }
 
 // ---------------------------------------------------------------- queue
 
-type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
 export type QueueDeps = { db: Db; enqueue: (input: EnqueueInput) => Promise<{ queued: boolean }>; log: (line: string) => void };
 const realQueueDeps = async (): Promise<QueueDeps> => ({ db: pool, enqueue: (await import("../harness/proactive.js")).enqueueCandidate, log: (l) => console.log(l) });
 
@@ -175,6 +262,12 @@ export async function renameCutoff(db: Db = pool): Promise<Date | null> {
   return rows[0]?.at ? new Date(rows[0].at) : null;
 }
 
+// The join cutoff: the rename's (it fixes its own the first time it runs; a follow-up waits until it has started), or the fixed moment.
+export async function audienceCutoff(a: Announcement, now: Date, db: Db): Promise<Date | null> {
+  if (a.audience !== "knew_co") return a.audience.joinedBefore;
+  return (await renameCutoff(db)) ?? (a.key === NAME_CHANGE_KEY ? now : null);
+}
+
 // Queues one announcement for everyone it is for. Idempotent: a member already queued or told is skipped (and enqueueCandidate
 // refuses a key that was sent, skipped or expired). Returns how many were queued.
 export async function queueAnnouncement(a: Announcement, now: Date = new Date(), deps?: Partial<QueueDeps> & { approved?: boolean }): Promise<number> {
@@ -183,14 +276,20 @@ export async function queueAnnouncement(a: Announcement, now: Date = new Date(),
     d.log(`announcement ${a.key}: its wording is waiting on Royce's approval; nothing queued`);
     return 0;
   }
-  // The rename fixes its own cutoff the first time it runs; a follow-up waits until the rename has started.
-  const cutoff = (await renameCutoff(d.db)) ?? (a.key === NAME_CHANGE_KEY ? now : null);
+  const cutoff = await audienceCutoff(a, now, d.db);
   if (!cutoff) return 0;
   const { rows: first } = await d.db.query(`SELECT MIN(created_at) AS at FROM proactive_candidates WHERE target_key = $1`, [a.key]);
   const expiresAt = expiryOf(a, first[0]?.at ? new Date(first[0].at) : null, now);
   if (expiresAt.getTime() <= now.getTime()) return 0;
+  // One a month: never while another announcement went to a member this calendar month or still waits to go.
+  const block = await monthlyLimit(d.db, a, now);
+  if (block) {
+    d.log(`announcement ${a.key}: ${block}; nothing queued`);
+    return 0;
+  }
   const { rows } = await d.db.query(
     `SELECT u.id, u.created_at, u.archived_at, u.sms_opted_out, (u.phone_number IS NOT NULL) AS has_phone, u.identity_captured,
+            u.phone_number, COALESCE((to_jsonb(u)->>'is_simulated')::boolean, false) AS simulated,
             EXISTS (SELECT 1 FROM proactive_sends s WHERE s.user_id = u.id AND s.target_key = $2) AS told,
             EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = u.id AND c.target_key = $2) AS queued
        FROM users u
@@ -253,6 +352,11 @@ export async function draftAnnouncement(c: Pick<Candidate, "userId" | "targetKey
   const ends = "at" in a.expires ? a.expires.at : c.expiresAt;
   if (ends && ends.getTime() <= now.getTime()) return { skip: "past its end" };
   if (await d.told(c.userId, a.key)) return { skip: "already told" };
+  // Separate fixed texts need no situation read (there is no try line to pick).
+  if (a.texts?.length) {
+    const messages = announcementMessages(a, { hasOwnGoal: false }, { nameTold: true });
+    return { messages, text: messages.join("\n"), rules: { ...ANNOUNCEMENT_RULES, ...(a.narrationApproved?.length ? { approvedSentences: a.narrationApproved } : {}) } };
+  }
   const nameTold = a.foldLead ? await d.told(c.userId, NAME_CHANGE_KEY) : true;
   const text = announcementText(a, await d.situation(c.userId), { nameTold });
   return { messages: [text], text, rules: { ...ANNOUNCEMENT_RULES } };
