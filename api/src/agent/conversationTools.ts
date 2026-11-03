@@ -744,7 +744,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const sameJob = dispatchKey && !ctx.dryRun ? await T.openCallJob(ctx.userId, dispatchKey).catch(() => null) : null;
         if (sameJob) {
           ctx.facts?.add("did_this_turn", `Already started on this call: task #${sameJob.id} "${sameJob.goal}" is this same job; nothing new was started.`);
-          return { ok: true, taskId: sameJob.id, state: "queued", alreadyStarted: true, nextCheckAt: sameJob.nextCheckAt, note: "This is the job you already started on this call, not a new one. If they changed something about it, write it on it with updateTask." };
+          return { ok: true, taskId: sameJob.id, goal: sameJob.goal, state: "queued", alreadyStarted: true, nextCheckAt: sameJob.nextCheckAt, note: "This is the job you already started on this call, not a new one. If they changed something about it, write it on it with updateTask." };
         }
         const recent = ctx.dryRun
           ? ""
@@ -811,7 +811,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         if (r.existing) {
           ctx.facts?.add("did_this_turn", `Already started on this call: task #${r.task.id} "${r.task.goal}" is this same job; nothing new was started.`);
-          return { ok: true, taskId: r.task.id, state: "queued", alreadyStarted: true, nextCheckAt: r.task.nextCheckAt, note: "This is the job you already started on this call, not a new one. If they changed something about it, write it on it with updateTask." };
+          return { ok: true, taskId: r.task.id, goal: r.task.goal, state: "queued", alreadyStarted: true, nextCheckAt: r.task.nextCheckAt, note: "This is the job you already started on this call, not a new one. If they changed something about it, write it on it with updateTask." };
         }
         ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Cue will work on it first around ${r.task.nextCheckAt ? localStamp(r.task.nextCheckAt, zone) : "soon"}: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Cue's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt ? localStamp(r.task.finalCheckAt, zone) : "the day before"}.` : ""}`);
         // state: queued (the row exists and nothing has run yet). It runs at nextCheckAt and texts them what comes of it.
