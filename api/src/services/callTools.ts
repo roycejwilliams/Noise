@@ -49,14 +49,17 @@ const needOf = (input: unknown): string => { const d = (input ?? {}) as { goal?:
 const NEED_PLAIN = new Set("find look looking search some more options option please launch party event thing things help".split(" "));
 const needWords = (t: string) => new Set(t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).map((w) => w.replace(/(?<=\w{3})s$/, "")).filter((w) => w.length >= 4 && !NEED_PLAIN.has(w)));
 // Pure: two starts are the same need: the same need key (coTasks.ts dispatchKeyFor), or their goal words mostly the same (at least
-// two shared, and most of the shorter one's). "Find caterers for the launch" / "Caterer options for the launch party": the same;
-// "Find caterers" / "And a florist": never.
+// two shared content words, and most of the shorter one's). One shared word is never enough: "Find caterers" / "caterers and a band"
+// share only "caterer", and folding them lost the band (review of #365). "Find vegan caterers in Oakland" / "Vegan caterer options in
+// Oakland": the same; "Find caterers" / "And a florist": never. A one-word need retried in other words is the open-task check's
+// (coTasks.ts dispatchKeyFor's note), not this one's.
+export const SAME_NEED_MIN_SHARED = 2;
 export function sameNeed(a: string, b: string, callKey: string): boolean {
   if (!a || !b) return false;
   if (dispatchKeyFor(callKey, a) === dispatchKeyFor(callKey, b)) return true;
   const x = needWords(a), y = needWords(b);
   const shared = [...x].filter((w) => y.has(w)).length;
-  return shared >= 1 && shared / Math.max(1, Math.min(x.size, y.size)) >= 0.6;
+  return shared >= SAME_NEED_MIN_SHARED && shared / Math.max(1, Math.min(x.size, y.size)) >= 0.6;
 }
 // The call subset is the registry's onCall entries on the allow-list (services/capabilities.ts), the same entries the call
 // briefing's list is written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.

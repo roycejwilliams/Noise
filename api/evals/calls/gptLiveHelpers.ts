@@ -550,12 +550,16 @@ let jobRow: any = null;
   const b = bridge([
     [...text("Sure."), ...tool("s1", "startTask", { goal: "Find caterers for the launch party", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
     text("On it."),
-    // The same need, reworded, seconds later (a re-sent delegation).
-    [...text("Sure."), ...tool("s2", "startTask", { goal: "Caterer options for the launch party", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    // The same need, reworded, seconds later (a re-sent delegation): its words in another order, "find" moved and "some" added.
+    [...text("Sure."), ...tool("s2", "startTask", { goal: "Caterers for the launch party, find some", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
     text("I'll text you the caterer options."),
     // A different need, seconds later.
     [...text("Sure."), ...tool("s3", "startTask", { goal: "Find a florist for the launch party", theirWords: "and a florist", steps: ["Search"], firstStep: "Search", inHours: 1 })],
     text("I'll text you the florists I find."),
+    // Caterers and a band: one shared word ("caterer") with the caterers job is not the same need (review of #365's follow-up: it
+    // folded into "Find caterers" and the band was lost).
+    [...text("Sure."), ...tool("s4", "startTask", { goal: "Caterers and a band for the launch party", theirWords: "caterers and a band", steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("I'll text you the bands I find."),
   ]);
   await b.start();
   await b.turn(ASK, "d1", 1);
@@ -563,7 +567,15 @@ let jobRow: any = null;
   check("12. a reworded retry of the same need inside 20 s is that job: one row, and its claim stands on that job's goal", db.tasks.length === 1 && /caterer options/.test(a2), { tasks: db.tasks.map((t) => t.goal), a2 });
   const a3 = await b.turn("And a florist too.", "d3", 3);
   check("12. a different need inside 20 s starts its own job, and 'I'll text you the florists' stands on that one", db.tasks.length === 2 && db.tasks.some((t) => /florist/i.test(t.goal)) && /florists I find/.test(a3), { tasks: db.tasks.map((t) => t.goal), a3 });
-  check("12. sameNeed: same key or mostly the same goal words; never the tool alone", CT.sameNeed("Find caterers for the launch party", "Caterer options for the launch party", "k") && !CT.sameNeed("Find caterers for the launch party", "Find a florist for the launch party", "k") && !CT.sameNeed("Find caterers", "And a florist", "k"));
+  const a4 = await b.turn("Actually caterers and a band.", "d4", 4);
+  check("12. 'caterers and a band' inside 20 s of 'Find caterers' starts its own job (the band isn't lost)", db.tasks.length === 3 && db.tasks.some((t) => /band/i.test(t.goal)) && /bands I find/.test(a4), { tasks: db.tasks.map((t) => t.goal), a4 });
+  check("12. sameNeed: same key or two shared content words (and most of the shorter one's); never one word, never the tool alone",
+    CT.sameNeed("Find caterers for the launch party", "Caterers for the launch party, find some", "k") &&
+    CT.sameNeed("Find vegan caterers in Oakland", "Vegan caterer options in Oakland", "k") &&
+    !CT.sameNeed("Find caterers", "caterers and a band", "k") &&
+    !CT.sameNeed("Find caterers for the launch party", "Caterers and a band for the launch party", "k") &&
+    !CT.sameNeed("Find caterers for the launch party", "Find a florist for the launch party", "k") &&
+    !CT.sameNeed("Find caterers", "And a florist", "k") && CT.SAME_NEED_MIN_SHARED === 2);
   b.tw.close();
 }
 {

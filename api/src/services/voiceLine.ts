@@ -26,6 +26,13 @@ export type LineAsk = {
 
 const TIMEOUT_MS = 4000;
 
+// Tests swap in their own writer (the model's text for an ask), so a logic test never makes a model call; nothing else should.
+type LineWriter = (ask: LineAsk) => Promise<string | null>;
+let writerForTests: LineWriter | null = null;
+export function setLineWriterForTests(w: LineWriter | null): void {
+  writerForTests = w;
+}
+
 // A written line is only used if it keeps to what it was given.
 export function lineKeepsRules(line: string, ask: Pick<LineAsk, "facts" | "mustInclude">): boolean {
   const t = line.trim();
@@ -43,7 +50,7 @@ export function lineKeepsRules(line: string, ask: Pick<LineAsk, "facts" | "mustI
 export async function lineInVoice(ask: LineAsk): Promise<{ text: string; written: boolean }> {
   try {
     const out = await Promise.race([
-      generateText({
+      writerForTests ? writerForTests(ask) : generateText({
         model: anthropic(MODELS.sonnet),
         maxOutputTokens: 200,
         experimental_telemetry: { isEnabled: true, functionId: "voiceLine" },

@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // LAYER 1: every logic test, with the model fully stubbed. Zero tokens, no outside calls, on every change.
 //   npm test            (also: npm run evals:code, the pre-push hook and CI)
-// Each file runs under evals/lib/modelGuard.mjs, which answers model calls with a canned stub and refuses every other
-// outside call. The summary shows how many checks ran, how long it took, and which tests leaned on the stub.
+// Each file runs under evals/lib/modelGuard.mjs, which answers model calls with a canned stub (only for the files on
+// evals/lib/modelStubAllowed.json; any other file must fake its own) and refuses every other outside call, by fetch or by socket
+// (model, voice, telephony, texting, search hosts: a test never places a real call or a paid request). Any refused call fails the
+// run, even when the code under test swallowed the error. The summary shows how many checks ran, how long it took, and which tests
+// leaned on the stub.
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,7 +71,7 @@ const checks = results.reduce((a, r) => a + r.checks, 0);
 const totalStubbed = Object.values(stubbed).reduce((a, n) => a + n, 0);
 console.log(`\nLAYER 1: ${list.length - bad.length}/${list.length} files passed, ${checks.toLocaleString()} checks, ${((Date.now() - t0) / 1000).toFixed(1)}s | model calls: 0 real, ${totalStubbed} stubbed | tokens: 0 | cost: $0.00`);
 if (totalStubbed) console.log(`  stubbed (the test got a canned answer, so it must not depend on what a model says): ${Object.entries(stubbed).map(([f, n]) => `${f} x${n}`).join(", ")}`);
-if (refused.length) console.log(`  REFUSED outside calls (a logic test must make none): ${refused.join(", ")}`);
+if (refused.length) console.log(`  REFUSED outside calls (a logic test must make none; stub it in the test, see evals/lib/modelGuard.mjs): ${[...new Set(refused)].join(", ")}`);
 // A part of a test that couldn't run here (e.g. no local postgres for evals/silence/failureRowsSql.ts) says so with a "SKIP " line; it's
 // listed, never hidden behind a green run.
 const skipped = results.flatMap((r) => r.out.split("\n").filter((l) => /^SKIP /.test(l)).map((l) => `${r.f}: ${l.slice(5)}`));

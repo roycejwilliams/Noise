@@ -1959,13 +1959,19 @@ export function placeholderCandidate(index: number, c: Candidate, messages: stri
 export const BUBBLE_GAP_MS_DEFAULT = 2000;
 let BUBBLE_GAP_MS = BUBBLE_GAP_MS_DEFAULT;
 const BUBBLE_RETRY_MS: number[] = [1000, 3000];
+// Sendblue's record can lag a send it accepted by a few seconds: a failed bubble's record is read only after this wait, and read again
+// right before any retry, so a lagging record never reads as "didn't go" and sends the bubble twice (follow-up to #364; relay.ts reads
+// its record only on a later try, long after the send).
+export const BUBBLE_RECORD_SETTLE_MS_DEFAULT = 4000;
+let BUBBLE_RECORD_SETTLE_MS = BUBBLE_RECORD_SETTLE_MS_DEFAULT;
 // Whether a bubble whose send threw went anyway, by Sendblue's own record (services/sendblue.ts outboundSentSince): null when unreadable.
 type BubbleWent = (q: { number: string; since: Date; content: string }) => Promise<boolean | null>;
 const BUBBLE_WENT_DEFAULT: BubbleWent = (q) => outboundSentSince(q);
 let bubbleWent: BubbleWent = BUBBLE_WENT_DEFAULT;
-export function setBubbleTimingForTests(o: { gapMs: number; retryMs: number[]; went?: BubbleWent | null }): void {
+export function setBubbleTimingForTests(o: { gapMs: number; retryMs: number[]; settleMs?: number; went?: BubbleWent | null }): void {
   BUBBLE_GAP_MS = o.gapMs;
   BUBBLE_RETRY_MS.splice(0, BUBBLE_RETRY_MS.length, ...o.retryMs);
+  BUBBLE_RECORD_SETTLE_MS = o.settleMs ?? BUBBLE_RECORD_SETTLE_MS_DEFAULT;
   bubbleWent = o.went ?? BUBBLE_WENT_DEFAULT;
 }
 // Pure: an HTTP status on a send error (the SDK's status, else a leading "503 ..." in its message), or null.
@@ -2094,16 +2100,25 @@ async function sendWithLedger(
 
   // Claim is durable now. Remaining messages are sent outside the transaction, in order, each index at most once. A bubble whose send
   // throws is retried only when Sendblue's own record says it didn't go (the services/relay.ts rule): a timeout or 5xx can come back
-  // after Sendblue took it, and the SDK already retried inside the call. Never retried: a 4xx, or the send layer's own refusal. Can't
-  // tell whether it went: never retried. At most BUBBLE_RETRY_MS.length + 1 calls per bubble. One that doesn't go (or might not have)
-  // stops the rest (a later bubble alone reads wrong), and is recorded (proactive.bubbleMissed).
+  // after Sendblue took it, and the SDK already retried inside the call. The record is read after BUBBLE_RECORD_SETTLE_MS (it can lag
+  // a send Sendblue took) and read again right before each retry, so a late record still stops the second send. Never retried: a 4xx,
+  // or the send layer's own refusal. Can't tell whether it went: never retried. At most BUBBLE_RETRY_MS.length + 1 calls per bubble.
+  // One that doesn't go (or might not have) stops the rest (a later bubble alone reads wrong), and is recorded (proactive.bubbleMissed).
   for (let i = 1; i < messages.length; i++) {
     await new Promise((r) => setTimeout(r, BUBBLE_GAP_MS));
     let outcome: "sent" | "refused" | "unknown" | "failed" = "failed";
     let lastErr: any = null;
+    // Since before this bubble's first try: every read covers every try of it.
+    const since = new Date(Date.now() - 60_000);
+    const wentNow = () => bubbleWent({ number: person.phoneNumber, since, content: messages[i] }).catch(() => null);
     for (let attempt = 0; attempt <= BUBBLE_RETRY_MS.length; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, BUBBLE_RETRY_MS[attempt - 1]));
-      const since = new Date(Date.now() - 60_000);
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, BUBBLE_RETRY_MS[attempt - 1]));
+        // Read once more right before the retry: a record that lagged past the first read has caught up by now.
+        const again = await wentNow();
+        if (again === true) { outcome = "sent"; break; }
+        if (again === null) { outcome = "unknown"; break; }
+      }
       try {
         await sendblue.messages.send({ number: person.phoneNumber, content: messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
         outcome = "sent";
@@ -2112,7 +2127,9 @@ async function sendWithLedger(
         lastErr = err;
         const status = bubbleErrorStatus(err);
         if (refusedBySendLayer(err) || (status !== null && status >= 400 && status < 500)) { outcome = "refused"; break; }
-        const went = await bubbleWent({ number: person.phoneNumber, since, content: messages[i] }).catch(() => null);
+        // Give Sendblue's record a moment to catch up with a send it may have taken.
+        await new Promise((r) => setTimeout(r, BUBBLE_RECORD_SETTLE_MS));
+        const went = await wentNow();
         if (went === true) { outcome = "sent"; break; }
         if (went === null) { outcome = "unknown"; break; }
         outcome = "failed";
