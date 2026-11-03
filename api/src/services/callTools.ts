@@ -8,6 +8,7 @@
 // Member scope: the member is the call's verified user (routes/callLlm.ts checks the call token); no tool takes a user id, and the
 // model's input is parsed by each tool's schema, so a stray field is dropped.
 import { z } from "zod";
+import { dispatchKeyFor } from "./coTasks.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { createConversationTools } from "../agent/conversationTools.js";
@@ -43,6 +44,20 @@ function within<T>(work: Promise<T>, ms: number): Promise<T | typeof STILL_GOING
 const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
 // A start tool run again on the same call this soon after it came back done is a retry of it (a re-sent delegation), not a new ask.
 export const START_RETRY_MS = 20_000;
+// What a start is for: its goal (startTask) or what's looked for (researchBrief, saveAsk).
+const needOf = (input: unknown): string => { const d = (input ?? {}) as { goal?: unknown; what?: unknown }; return String(d.goal ?? d.what ?? "").trim(); };
+const NEED_PLAIN = new Set("find look looking search some more options option please launch party event thing things help".split(" "));
+const needWords = (t: string) => new Set(t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).map((w) => w.replace(/(?<=\w{3})s$/, "")).filter((w) => w.length >= 4 && !NEED_PLAIN.has(w)));
+// Pure: two starts are the same need: the same need key (coTasks.ts dispatchKeyFor), or their goal words mostly the same (at least
+// two shared, and most of the shorter one's). "Find caterers for the launch" / "Caterer options for the launch party": the same;
+// "Find caterers" / "And a florist": never.
+export function sameNeed(a: string, b: string, callKey: string): boolean {
+  if (!a || !b) return false;
+  if (dispatchKeyFor(callKey, a) === dispatchKeyFor(callKey, b)) return true;
+  const x = needWords(a), y = needWords(b);
+  const shared = [...x].filter((w) => y.has(w)).length;
+  return shared >= 1 && shared / Math.max(1, Math.min(x.size, y.size)) >= 0.6;
+}
 // The call subset is the registry's onCall entries on the allow-list (services/capabilities.ts), the same entries the call
 // briefing's list is written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
 import { VOICE_READ_OFF_ON_CALL_NOTE } from "./voiceReadConsent.js";
@@ -85,7 +100,7 @@ type OnFile = { name: string; url: string; caption: string };
 // jobs: durable work started or queued on this call (its goal and their words, or what an owed send was for): what a spoken "I've
 // started" or "I'll text you" may stand on (callClaims.ts jobBacked). started: each start tool's last done result and when, so a retry
 // inside START_RETRY_MS is that job, whatever its words.
-type CallMem = { jobs?: string[]; started?: Record<string, { at: number; result: unknown }>; at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
+type CallMem = { jobs?: string[]; started?: Record<string, { at: number; need: string; result: unknown }[]>; at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
 const callMemory = new Map<string, CallMem>();
 function memoryFor(key: string): CallMem {
   const now = Date.now();
@@ -480,10 +495,12 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   };
   const run: CallToolset["run"] = async (name, input, toolUseId) => {
     const t = picked[name];
-    // The same start tool again on this call within a few seconds (a retried delegation, the same ask re-sent) is the job it just
-    // started, whatever words it was given this time: never a second job (review of #365: the need key alone let a reworded retry in).
-    const prev = mem.started?.[name];
-    if (prev && Date.now() - prev.at < START_RETRY_MS) return { ...(prev.result as object), alreadyStarted: true, note: "That was just started on this call; this is the same job, not a new one. If they changed something about it, write it on it with updateTask." };
+    // The same need started again on this call within a few seconds (a retried delegation, the same ask re-sent, reworded) is the job
+    // just started: the same need key, or most of the same goal words (review of #365, round 2: the tool alone made "and a florist"
+    // the caterers job). A different need always starts its own.
+    const ask = needOf(input);
+    const prev = (mem.started?.[name] ?? []).find((p) => Date.now() - p.at < START_RETRY_MS && sameNeed(p.need, ask, i.callKey));
+    if (prev) return { ...(prev.result as object), goal: prev.need, alreadyStarted: true, note: "That was just started on this call; this is the same job, not a new one. If they changed something about it, write it on it with updateTask." };
     // The allow-list holds here too: nothing off it runs on a call, whatever the model asks for.
     const plan: CallRun | null = callRunFor(name);
     if (!t || !plan) return { ok: false, error: `No tool named ${name} on a call.` };
@@ -590,7 +607,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     if (startsWork(name) && result && (result as any).ok !== false && !(result as any).stillRunning) {
       const d: any = parsed.data ?? {};
       (mem.jobs ??= []).push([d.goal, d.what, d.theirWords, ...(Array.isArray(d.steps) ? d.steps : [])].filter((x) => typeof x === "string" && x).join(" | ").slice(0, 600));
-      (mem.started ??= {})[name] = { at: Date.now(), result };
+      ((mem.started ??= {})[name] ??= []).push({ at: Date.now(), need: needOf(parsed.data), result });
     }
     // A stop or a no to the voice read on this call: from now on the call drops its lines and every turn's note says so. One still
     // running at its timeout counts too: their stop is never held up by a slow write.

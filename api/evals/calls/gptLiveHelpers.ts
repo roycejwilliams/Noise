@@ -490,8 +490,10 @@ let jobRow: any = null;
   const steps = ORD.map((o) => `${o}, check the kiln shelf for cracks before you load the next piece of work onto it.`).join(" ");
   const s = new SP.SpeakableStream({ keep: (x: string) => /\b988\b/.test(x) });
   const out = [...s.push(`${steps} If you feel unsafe at any point, call or text 988.`), ...s.end()].join("");
-  check("10. past the cap, a safety line is still said", /988/.test(out) && SP.wordCount(out) < SP.wordCount(steps), SP.wordCount(out));
-  check("10. what the cap held back is kept, whole sentences, in order", s.unsaid().length > 3 && /^[A-Z][a-z]+th, check the kiln shelf/.test(s.unsaid()[0]) && !s.unsaid().some((x) => /988/.test(x)), s.unsaid().slice(0, 2));
+  check("10. past the cap, a safety line is still said, and what the cap held goes out before it, in order (nothing dropped)", /988/.test(out) && out.indexOf("Twelfth") < out.indexOf("988") && ORD.every((o, k) => k === 0 || out.indexOf(`${ORD[k - 1]},`) < out.indexOf(`${o},`)) && s.unsaid().length === 0, out.slice(-200));
+  const plain = new SP.SpeakableStream({ keep: (x: string) => /\b988\b/.test(x) });
+  [...plain.push(steps), ...plain.end()];
+  check("10. with no safety line, what the cap held back is kept, whole sentences, in order", plain.unsaid().length > 3 && /^[A-Z][a-z]+th, check the kiln shelf/.test(plain.unsaid()[0]), plain.unsaid().slice(0, 2));
   const b = bridge([text(steps), text("Next, check the shelf again.")]);
   await b.start();
   await b.turn("Walk me through prepping the kiln?", "d1", 1);
@@ -543,19 +545,36 @@ let jobRow: any = null;
   b.tw.close();
 }
 {
-  // A retry inside the window, reworded, is the same job.
-  const ASK = "Look for a DJ for the launch please.";
+  // Inside the 20 s window: a reworded retry of the same need is that job; a different need starts its own (review of #365, round 2).
+  const ASK = "Can you find caterers for the launch party?";
   const b = bridge([
-    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find a DJ for the launch", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find caterers for the launch party", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
     text("On it."),
-    [...text("Sure."), ...tool("s2", "startTask", { goal: "Book-able disc jockeys for the studio opening", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
-    text("Still on it."),
+    // The same need, reworded, seconds later (a re-sent delegation).
+    [...text("Sure."), ...tool("s2", "startTask", { goal: "Caterer options for the launch party", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("I'll text you the caterer options."),
+    // A different need, seconds later.
+    [...text("Sure."), ...tool("s3", "startTask", { goal: "Find a florist for the launch party", theirWords: "and a florist", steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("I'll text you the florists I find."),
   ]);
   await b.start();
   await b.turn(ASK, "d1", 1);
-  await b.turn(ASK, "d2", 2);
-  check("12. a reworded start of the same job seconds later (a re-sent delegation) is that job: one row", db.tasks.length === 1, db.tasks.map((t) => t.goal));
+  const a2 = await b.turn(ASK, "d2", 2);
+  check("12. a reworded retry of the same need inside 20 s is that job: one row, and its claim stands on that job's goal", db.tasks.length === 1 && /caterer options/.test(a2), { tasks: db.tasks.map((t) => t.goal), a2 });
+  const a3 = await b.turn("And a florist too.", "d3", 3);
+  check("12. a different need inside 20 s starts its own job, and 'I'll text you the florists' stands on that one", db.tasks.length === 2 && db.tasks.some((t) => /florist/i.test(t.goal)) && /florists I find/.test(a3), { tasks: db.tasks.map((t) => t.goal), a3 });
+  check("12. sameNeed: same key or mostly the same goal words; never the tool alone", CT.sameNeed("Find caterers for the launch party", "Caterer options for the launch party", "k") && !CT.sameNeed("Find caterers for the launch party", "Find a florist for the launch party", "k") && !CT.sameNeed("Find caterers", "And a florist", "k"));
   b.tw.close();
+}
+{
+  // An alreadyStarted result never lends the second call's words to the job text.
+  const P = await import("../../src/services/callLlmProxy.js");
+  const fake = { defs: [{ name: "startTask", description: "s", input_schema: { type: "object", properties: {} } }], names: new Set(["startTask"]), note: "", starts: () => true, jobs: { corpus: "", callJobs: "" }, turnFacts: { turnWords: "and a florist", tasks: [], canWriteTasks: false },
+    run: async () => ({ ok: true, taskId: 1, goal: "Find caterers for the launch party", alreadyStarted: true }) };
+  const reqs: any[] = [[...text("Sure."), ...tool("s", "startTask", { goal: "Find a florist" })], text("I'll text you the florists I find."), text("That's the caterers job; want me to start on a florist?")];
+  let out = "";
+  for await (const c of P.runCallLlm({ messages: [{ role: "system", content: "You are Cue." }, { role: "user", content: "and a florist" }] } as any, { stream: () => (async function* () { for (const e of reqs.shift() ?? text("Mm.")) yield e as any; })(), clean: true, tools: fake as any, jobClaims: true })) out += c.choices[0].delta.content ?? "";
+  check("12. a start returned as another job (alreadyStarted) backs only that job's goal: 'the florists' is held", !/florists I find/.test(out) && /start on a florist/.test(out), out);
 }
 
 // ---------------------------------------------------------------- 13. review of #365: the safety cap, and tools only with a person

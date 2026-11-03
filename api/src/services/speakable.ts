@@ -176,6 +176,12 @@ export class SpeakableStream {
   // dropped or broken up. What the cap was already holding goes out at the end.
   private lifted = false;
   lift(): void { this.lifted = true; }
+  // What the cap held, out now and in order (only once a kept line or a lift lets the reply run on).
+  private flushHeld(out: string[]) {
+    if (!this.held.length) return;
+    for (const h of this.held) { this.sentences++; this.emitted += wordCount(h); out.push(h + " "); }
+    this.held = [];
+  }
   private get maxS() { return this.lifted ? Number.POSITIVE_INFINITY : (this.o.maxSentenceWords ?? MAX_SENTENCE_WORDS); }
   private get maxR() { return this.lifted ? Number.POSITIVE_INFINITY : (this.o.maxReplyWords ?? MAX_REPLY_WORDS); }
 
@@ -187,6 +193,8 @@ export class SpeakableStream {
       // A hard limit on sentences (a drained member gets two): the rest is dropped, with no closing question kept either.
       if (this.o.maxSentences !== undefined && this.sentences >= this.o.maxSentences) continue;
       if (this.emitted >= this.maxR && !this.o.keep?.(s)) { this.held.push(s); continue; }
+      // A kept line (a safety line) past the cap, or the cap lifted: what the cap held goes first, in order (review of #365, round 2).
+      this.flushHeld(out);
       this.sentences++;
       this.emitted += n;
       out.push(s + " ");
@@ -238,6 +246,7 @@ export class SpeakableStream {
 
   push(delta: string): string[] {
     const out: string[] = [];
+    if (this.lifted) this.flushHeld(out);
     this.buf += delta;
     // A trailing "-" or " -" may be the start of a dash that hasn't finished arriving: leave it until more text comes.
     const hold = this.buf.match(/\s?-$/)?.[0] ?? "";
@@ -253,7 +262,7 @@ export class SpeakableStream {
     this.buf = normalize(this.buf);
     this.drain(true, out);
     if (this.buf.trim()) { const rest = this.buf; this.buf = ""; this.finish(rest, false, out); }
-    if (this.lifted && this.held.length) { for (const h of this.held) out.push(h + " "); this.held = []; }
+    if (this.lifted) this.flushHeld(out);
     const last = this.o.maxSentences !== undefined ? undefined : this.held[this.held.length - 1];
     const kept = !!last && /\?$/.test(last) && this.emitted + wordCount(last) <= this.maxR + CLOSING_QUESTION_EXTRA_WORDS;
     if (kept) out.push(last + " ");

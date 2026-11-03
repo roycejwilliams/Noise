@@ -717,7 +717,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       }
       // A job that started (durable work that texts them later) backs what Cue says about it.
       const meta = runMeta.get(id);
-      if (meta && !x.timedOut && raw && raw.ok !== false && co?.starts?.(meta.name)) { const t = `\n${JSON.stringify(meta.input ?? {})}\n${JSON.stringify(raw).slice(0, 2000)}`; jobs.thisTurn++; jobs.corpus += t; jobs.callJobs += t; }
+      // A start that came back as a job already running (alreadyStarted): that job's own goal, never this call's input (review of #365,
+      // round 2: "and a florist" returned as the caterers job would otherwise have backed "I'll text you the florists").
+      if (meta && !x.timedOut && raw && raw.ok !== false && co?.starts?.(meta.name)) { const r2 = raw as { alreadyStarted?: unknown; goal?: unknown }; const t = r2.alreadyStarted === true ? `\n${typeof r2.goal === "string" ? r2.goal : ""}` : `\n${JSON.stringify(meta.input ?? {})}\n${JSON.stringify(raw).slice(0, 2000)}`; jobs.thisTurn++; jobs.corpus += t; jobs.callJobs += t; }
       if (tried && (raw as { owedAfterCall?: unknown } | null)?.owedAfterCall === true) owedThisRound.push(...(tried.length ? tried : ["it"]));
       if (x.timedOut || !raw || raw.ok === false) continue;
       if (raw.pending !== true) claims.acted = true;
