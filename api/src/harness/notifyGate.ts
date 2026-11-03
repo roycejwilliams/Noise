@@ -215,9 +215,11 @@ export function callClassOf(reason: string): SendClass {
   return ({ user_initiated: "reply", router_decision: "reply", scheduled_call: "requested", checkin_cadence: "checkin", auto_intake: "unsolicited" } as Record<string, SendClass>)[kind] ?? "unsolicited";
 }
 
-// Pure: a team hold's answer for a send that isn't a reply (memberRuleGate returns before this for a reply). Its id only, never the
+// Pure: a team hold's answer for a send it covers (teamHoldCovers). Its id only, never the
 // reason's words; it may go once the hold expires.
 export const TEAM_HOLD = "team_hold";
+// Pure: the classes a team hold quiets: Cue's own outreach (unsolicited, check-ins). Never a reply or a requested delivery.
+export const teamHoldCovers = (cls: SendClass): boolean => cls === "unsolicited" || cls === "checkin";
 export function teamHoldCheck(h: { id: string; expiresAt: Date }): GateCheck & { retryAt?: Date } {
   return { name: MEMBER_RULE, pass: false, reason: `${TEAM_HOLD} ${h.id} holds it`, retryAt: h.expiresAt };
 }
@@ -229,8 +231,9 @@ export async function memberRuleGate(db: Q, o: { userId: string; now: Date; cls:
   const { activePreferences } = await import("../services/memberPreferences.js");
   try {
     const [prefs, sent, zone, hold] = await Promise.all([activePreferences(o.userId, o.now, db), loadCounted(db, o.userId), import("../services/memberTime.js").then((M) => M.memberZone(o.userId)).catch(() => null), import("../services/teamHold.js").then((T) => T.activeTeamHold(o.userId, o.now, db))]);
-    // The team's hold (services/teamHold.ts), apart from their own rules: everything but the turn's reply, until it expires.
-    if (hold) return teamHoldCheck(hold);
+    // The team's hold (services/teamHold.ts), apart from their own rules: only what Cue starts on its own (review of #363). What they
+    // asked for (a document, a reminder they set, a call they booked, a notice about something soon) still goes, under their own rules.
+    if (hold && teamHoldCovers(o.cls)) return teamHoldCheck(hold);
     return memberRuleCheck(prefs, { now: o.now, cls: o.cls, channel: o.channel, sent, zone, soonAt: o.soonAt, rulesAfter: o.rulesAfter });
   } catch (err: any) {
     return { name: MEMBER_RULE, pass: false, reason: `couldn't read their rules (${String(err?.message ?? err).slice(0, 60)})`, retryAt: new Date(o.now.getTime() + 15 * 60_000) };

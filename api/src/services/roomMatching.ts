@@ -1009,12 +1009,13 @@ export async function scheduleRoomCloses(now = new Date()): Promise<number> {
 export type CloseResult = { eventId: string; expiredOffers: number; droppedAsks: number; expiredPairs: number; checkins: number };
 
 // The durable end-of-night job: claims each due room once (a claim older than 10 minutes is taken again after a crash).
-// Pure: whom an expiring pair's close note goes to (the one side that said yes to a Cue-suggested intro the other never answered), or
+// Pure: whom a pair's close note goes to (the one side that said yes to a Cue-suggested intro that didn't happen), or
 // null. A pair a member asked for by name gets none (deferredSends.ts: "found" must never leak through a later note).
+// The other side's answer (none, or no) never changes it: held, silent and declined read the same.
 export function closeNoteFor(p: { origin?: string | null; a_id: string; b_id: string; a_answer?: string | null; b_answer?: string | null }): { to: string; about: string } | null {
   if (p.origin !== "co") return null;
-  if (p.a_answer === "yes" && !p.b_answer) return { to: String(p.a_id), about: String(p.b_id) };
-  if (p.b_answer === "yes" && !p.a_answer) return { to: String(p.b_id), about: String(p.a_id) };
+  if (p.a_answer === "yes" && p.b_answer !== "yes") return { to: String(p.a_id), about: String(p.b_id) };
+  if (p.b_answer === "yes" && p.a_answer !== "yes") return { to: String(p.b_id), about: String(p.a_id) };
   return null;
 }
 // Written on the yes side's record: the intro didn't happen, never why and never whether the other side saw it (internal fact).
@@ -1048,10 +1049,12 @@ export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
       [eventId, now],
     );
     const pairs = await pool.query(`UPDATE co_pairs SET state = 'expired', expired_at = $2, updated_at = NOW() WHERE event_id = $1 AND state IN ('suggested', 'asked') RETURNING id, origin, a_id, b_id, a_answer, b_answer`, [eventId, now]);
-    // A Cue-suggested intro one side said yes to and the night ended on: that side hears the same thing whether the other never got the
-    // ask (held for their hours or their own rule) or got it and didn't answer (2026-11-02: nothing hints where the other member's
-    // thread stood). The held ask itself adds no note when it's dropped (deferredSends.ts EVENT_OVER).
-    for (const p of pairs.rows) {
+    // Every Cue-suggested intro from this event that one side said yes to and didn't happen: that side hears the same thing whether the
+    // other never got the ask (held for their hours or their own rule), got it and didn't answer, or said no (2026-11-02 and its review:
+    // nothing hints where the other member's thread stood, and a "no" reads like silence). Written once, here, at the close; the held ask
+    // adds no note when it's dropped (deferredSends.ts EVENT_OVER), and a decline adds none when it's said.
+    const declined = await pool.query(`SELECT id, origin, a_id, b_id, a_answer, b_answer FROM co_pairs WHERE event_id = $1 AND state = 'declined'`, [eventId]).catch(() => ({ rows: [] as any[] }));
+    for (const p of [...pairs.rows, ...declined.rows]) {
       const yesSide = closeNoteFor(p);
       if (yesSide) await noteIntroDidntHappen(yesSide.to, yesSide.about, r.event_name ?? null).catch(() => {});
     }

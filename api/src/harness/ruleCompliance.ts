@@ -10,9 +10,9 @@
 //   - a requested notice about something within hours passes a held rule on purpose (R2): such a type is flagged low, "may be the
 //     time-sensitive exception";
 //   - a call they booked is held only by rules set after the booking: flagged low, "check when it was booked";
-//   - a safety follow-up goes whatever the rule (its candidate's payload says so): never flagged.
+//   - a safety follow-up goes whatever the rule (the send's own candidate, by its ledger row's candidate_id, says so): never flagged.
 import pool from "../db/db.js";
-import { countedRows, callClassOf, memberRuleCheck, RIDING, teamHoldCheck, type Counted, type SendClass } from "./notifyGate.js";
+import { countedRows, callClassOf, memberRuleCheck, RIDING, teamHoldCheck, teamHoldCovers, type Counted, type SendClass } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
 import type { TeamHold } from "../services/teamHold.js";
 
@@ -38,7 +38,7 @@ export function checkMember(o: { userId: string; prefs: HistPref[]; holds: Pick<
   for (const s of o.window) {
     if (s.cls === "reply" || s.safety) continue;
     const t = s.at.getTime();
-    const hold = o.holds.find((h) => h.setAt.getTime() <= t && h.expiresAt.getTime() > t && (!h.liftedAt || h.liftedAt.getTime() > t));
+    const hold = teamHoldCovers(s.cls) ? o.holds.find((h) => h.setAt.getTime() <= t && h.expiresAt.getTime() > t && (!h.liftedAt || h.liftedAt.getTime() > t)) : undefined;
     const path = `${s.channel}:${s.type}`;
     if (hold) {
       out.push({ userId: o.userId, ref: s.ref, at: s.at.toISOString(), path, cls: s.cls, channel: s.channel, why: String(teamHoldCheck({ id: hold.id, expiresAt: hold.expiresAt }).reason), severity: "high", caveat: null });
@@ -82,7 +82,7 @@ export async function loadMemberSends(userId: string, since: Date, until: Date, 
   const [{ rows: sends }, { rows: calls }] = await Promise.all([
     db.query(
       `SELECT s.id, s.type, s.sent_at, s.notify_class, (c.payload->>'safetyFollowUp') = 'true' AS safety
-       FROM proactive_sends s LEFT JOIN LATERAL (SELECT payload FROM proactive_candidates pc WHERE pc.user_id = s.user_id AND pc.target_key = s.target_key ORDER BY pc.id DESC LIMIT 1) c ON true
+       FROM proactive_sends s LEFT JOIN proactive_candidates c ON c.id = s.candidate_id AND c.user_id = s.user_id
        WHERE s.user_id = $1 AND s.sent_at > $2 AND s.sent_at <= $3 ORDER BY s.sent_at`,
       [userId, histFrom, until],
     ),

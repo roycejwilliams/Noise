@@ -201,7 +201,7 @@ export async function relayFacts(userId: string): Promise<string[]> {
   if (!relayEnabled()) return [];
   const { rows } = await pool
     .query(
-      `SELECT r.from_user, r.to_user, r.message, r.status, COALESCE(r.sent_at, r.created_at) AS created_at, uf.first_name AS from_name, ut.first_name AS to_name
+      `SELECT r.from_user, r.to_user, r.message, r.status, COALESCE(r.sent_at, r.created_at) AS created_at, r.created_at AS asked_at, uf.first_name AS from_name, ut.first_name AS to_name
        FROM member_relays r JOIN users uf ON uf.id = r.from_user JOIN users ut ON ut.id = r.to_user
        WHERE (r.from_user = $1 OR r.to_user = $1) AND r.status IN ('sent', 'queued') AND r.created_at > NOW() - INTERVAL '7 days'
        ORDER BY r.created_at`,
@@ -218,7 +218,8 @@ export async function relayFacts(userId: string): Promise<string[]> {
       out.push(`${r.from_name} asked Cue to pass this along to them on ${day(r.created_at)}: "${r.message}". Cue sends nothing back to ${r.from_name} unless they explicitly ask it to, in their own words.`);
     } else {
       const back = rows.find((x: any) => x.status === "sent" && x.from_user === r.to_user && x.to_user === userId && x.created_at > r.created_at);
-      out.push(relaySenderFact({ to: r.to_name, day: day(r.created_at), message: r.message, back: back?.message ?? null }));
+      // The day they asked, never the day it went: a delivery held overnight must not move the date the sender sees.
+      out.push(relaySenderFact({ to: r.to_name, day: day(r.asked_at ?? r.created_at), message: r.message, back: back?.message ?? null }));
     }
   }
   return out;

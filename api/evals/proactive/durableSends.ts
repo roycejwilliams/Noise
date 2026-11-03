@@ -138,7 +138,7 @@ async function handle(rawSql: string, args: any[] = []): Promise<{ rows: any[] }
     return {
       rows: db.relays
         .filter((r) => (r.from_user === args[0] || r.to_user === args[0]) && ["sent", "queued"].includes(r.status))
-        .map((r) => ({ ...r, created_at: r.sent_at ?? r.created_at, from_name: db.users.get(r.from_user)?.first_name, to_name: db.users.get(r.to_user)?.first_name })),
+        .map((r) => ({ ...r, asked_at: r.created_at, created_at: r.sent_at ?? r.created_at, from_name: db.users.get(r.from_user)?.first_name, to_name: db.users.get(r.to_user)?.first_name })),
     };
   }
   return { rows: [] }; // harness_decisions, outbound_messages, embeddings: not under test
@@ -362,6 +362,8 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   db.zones.set("Nightville", zoneAtHour(12));
   const r = await R.relayMessage({ fromUserId: "ua", fromFirstName: "Jordan", to: "Ellis", message: "running ten minutes late tomorrow", currentText: "tell Ellis running ten minutes late tomorrow" });
   check("relay by day: sent now, status sent, one 'Co replied' line", r.ok && !(r as any).queued && outbox.length === 1 && db.relays[0].status === "sent" && memLines("ub").length === 1 && db.deferred.length === 0);
+  // Review of #363: the sender can't tell a relay that went from one the other side's hours or rule held (see the night case above).
+  check("relay by day: the sender's note is the very note a held relay gets", (r as any).note === R.relaySenderNote("Ellis") && !/morning|queued|reached/.test((r as any).note.replace(/Never say when it reaches Ellis or whether it has yet/, "")));
 }
 
 // ---------------------------------------------------------------- 5. double cron runs don't double-send
