@@ -50,7 +50,10 @@ export function about(draft: string, label: string, not = ""): boolean {
 //   droppedOnly  only what they DROPPED counts for resemblance (queued work): a solved ask leaves what it was for still ahead (the
 //            party after "got the venue"), the same rule services/callReason.ts keeps for calls
 //   optIn    the send is an intro or match opt-in (the double opt-in): its consent question is never held as a second interest question
-export type RecordOpts = { again?: DoneItem | null; closing?: ReadonlySet<string>; back?: ReadonlySet<string>; theirs?: string; resendOk?: boolean; noReopen?: boolean; droppedOnly?: boolean; optIn?: boolean };
+//   theirsAt when their words in `theirs` were said (queued work). They lift a closed item only when said AFTER it closed: the message
+//            that dropped it ("no need for the DJ") never counts as a new request for it. Unset: their message this turn (the reply),
+//            newer than every stored close, but never for what this turn's read says it closes
+export type RecordOpts = { theirsAt?: Date | string | null; again?: DoneItem | null; closing?: ReadonlySet<string>; back?: ReadonlySet<string>; theirs?: string; resendOk?: boolean; noReopen?: boolean; droppedOnly?: boolean; optIn?: boolean };
 // A consent question for an intro or a match, in Cue's own words: never a double "interested?" (the double opt-in is its own ask).
 export const OPT_IN_Q = /\b(?:introduce you|an? (?:intro|introduction)\b|connect (?:you|the two of you)|put you (?:two )?in touch|(?:meet|say hi to) (?:him|her|them)\b|want (?:to )?meet)/i;
 export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "unresolved">, o: RecordOpts = {}): MoveMiss[] {
@@ -79,9 +82,16 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
   if (!o.noReopen) {
     const closing = o.closing ?? new Set<string>();
     const back = o.back ?? new Set<string>();
-    const live = [o.theirs ?? "", ...base.unresolved.filter((u) => !closing.has(u.id) && (u.state === "open" || u.state === "delivered")).map((u) => u.label)].join(" ");
+    const open = base.unresolved.filter((u) => !closing.has(u.id) && (u.state === "open" || u.state === "delivered")).map((u) => u.label).join(" ");
+    const saidAt = o.theirsAt ? new Date(o.theirsAt).getTime() : null;
+    const liftedBy = (u: (typeof base.unresolved)[number]): boolean => {
+      if (!o.theirs || closing.has(u.id)) return false;
+      if (saidAt == null) return true;
+      const at = u.closedAt ? new Date(u.closedAt).getTime() : NaN;
+      return Number.isFinite(at) && saidAt > at;
+    };
     for (const u of base.unresolved.filter((x) => !back.has(x.id) && (o.droppedOnly ? x.state === "dropped" : closing.has(x.id) || x.state === "solved" || x.state === "dropped"))) {
-      const reopens = (urls.length || qs.length || /\b(?:found|another one|still (?:looking|on it)|i'?ll (?:keep|look|send|find))\b/i.test(draft)) && about(draft, u.label, live);
+      const reopens = (urls.length || qs.length || /\b(?:found|another one|still (?:looking|on it)|i'?ll (?:keep|look|send|find))\b/i.test(draft)) && about(draft, u.label, liftedBy(u) ? `${o.theirs} ${open}` : open);
       if (reopens) out.push({ name: "reopen", why: `reopens ${u.id} (${u.label.slice(0, 80)}), which they closed` });
     }
   }

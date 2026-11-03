@@ -33,7 +33,8 @@ export type DoneKind = "link" | "find" | "card" | "document" | "question" | "off
 // replied: they wrote back after it (a question or offer they've had the chance to answer).
 export type DoneItem = { id: string; kind: DoneKind; label: string; url: string | null; replied: boolean };
 export type UnresolvedState = "open" | "delivered" | "solved" | "dropped";
-export type UnresolvedItem = { id: string; label: string; state: UnresolvedState };
+// closedAt: when it closed (closed items read from the stores): their words lift it only when said after that (see moveCheck.ts).
+export type UnresolvedItem = { id: string; label: string; state: UnresolvedState; closedAt?: string | null };
 export type Told = { q: string; a: string };
 // item / notItem: done ids this turn. label / notLabel: their labels (what carries to the next turn).
 // between: when their words and the exchange don't settle which item it is, the two or more it could equally be (then item is null):
@@ -89,7 +90,7 @@ export function doneFrom(recentConversation: string, sent: { name: string; url: 
   return raw.slice(0, DONE_MAX).map((d, i) => ({ id: `D${i + 1}`, ...d }));
 }
 
-export type ClosedRow = { label: string; how: "solved" | "dropped" };
+export type ClosedRow = { label: string; how: "solved" | "dropped"; at?: string | null };
 // Pure: what's still open for them, then what they closed lately. Open asks and threads are open; what Cue carries is open until it's
 // done, then delivered (delivered is not solved: only their word solves it). Numbered U1...
 export function unresolvedFrom(o: { asks?: { text: string }[]; carrying?: { label: string; state: "due" | "outstanding" | "done" }[]; threads?: { text: string }[]; closed?: ClosedRow[] }): UnresolvedItem[] {
@@ -99,8 +100,8 @@ export function unresolvedFrom(o: { asks?: { text: string }[]; carrying?: { labe
     ...(o.threads ?? []).map((t) => ({ label: t.text, state: "open" as const })),
   ];
   const seen = new Set(out.map((x) => x.label.toLowerCase()));
-  for (const c of o.closed ?? []) if (!seen.has(c.label.toLowerCase())) (seen.add(c.label.toLowerCase()), out.push({ label: c.label, state: c.how }));
-  return out.slice(0, UNRESOLVED_MAX).map((u, i) => ({ id: `U${i + 1}`, label: u.label.replace(/\s+/g, " ").slice(0, 160), state: u.state }));
+  for (const c of o.closed ?? []) if (!seen.has(c.label.toLowerCase())) (seen.add(c.label.toLowerCase()), out.push({ label: c.label, state: c.how, ...(c.at ? { closedAt: c.at } : {}) }));
+  return out.slice(0, UNRESOLVED_MAX).map((u, i) => ({ id: `U${i + 1}`, label: u.label.replace(/\s+/g, " ").slice(0, 160), state: u.state, ...(u.closedAt ? { closedAt: u.closedAt } : {}) }));
 }
 
 const itemLine = (d: DoneItem) => `${d.id} ${d.kind}: ${d.label}${d.url && d.kind !== "link" ? ` (${d.url})` : d.url && d.label !== normUrl(d.url).slice(0, 120) ? ` (${d.url})` : ""}${(d.kind === "question" || d.kind === "offer") && !d.replied ? " [no answer yet]" : ""}`;
@@ -217,7 +218,7 @@ export async function closedLately(userId: string, db: Q): Promise<ClosedRow[]> 
       [userId],
     ),
   ]);
-  return [...asks.rows, ...other.rows].filter((r) => typeof r.label === "string" && r.label.trim()).map((r) => ({ label: String(r.label), how: r.status === "dropped" ? "dropped" : "solved" }));
+  return [...asks.rows, ...other.rows].filter((r) => typeof r.label === "string" && r.label.trim()).map((r) => ({ label: String(r.label), how: r.status === "dropped" ? "dropped" : "solved", at: r.closed_at ? new Date(r.closed_at).toISOString() : null }));
 }
 
 // What "that" meant in their last turns (MEANT_HOURS), from the decision log (Cue's own item labels, never their words).

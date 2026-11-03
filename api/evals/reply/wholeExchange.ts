@@ -422,11 +422,11 @@ const THREAD = [
   const safety = PR.exchangeCheck("Thinking of you today. How are you holding up? Worth a look?", base([{ label: "how they're doing", how: "dropped" }]), cand("companion", { safetyFollowUp: true, thread: { text: "how they're doing today" } }));
   check("3. the safety follow-up goes, unchecked, and says why", safety.pass && /safety follow-up/.test(safety.reason ?? ""), safety);
   // 6a. Their latest words, for a new request not on file yet.
-  const djBase = X.baseFrom("", { sent: [], asks: [] }, { closed: [{ label: "a DJ", how: "dropped" }], meant: [] });
+  const djBase = X.baseFrom("", { sent: [], asks: [] }, { closed: [{ label: "a DJ", how: "dropped", at: "2026-11-01T18:00:00.000Z" }], meant: [] });
   const djFind = "Found a DJ for your birthday: https://example.test/dj-bday";
-  check("6a. a DJ find for their birthday, asked in their latest words (no ask on file yet), goes", PR.exchangeCheck(djFind, djBase, cand("companion"), "can you find me a DJ for my birthday?").pass);
+  check("6a. a DJ find for their birthday, asked in their latest words (no ask on file yet), goes", PR.exchangeCheck(djFind, djBase, cand("companion"), { text: "can you find me a DJ for my birthday?", at: "2026-11-03T18:00:00.000Z" }).pass);
   check("6a. ...without their words it would be held (what the latest words protect)", !PR.exchangeCheck(djFind, djBase, cand("companion")).pass);
-  check("6a. the dispatch passes their latest words from its exchanges", PR.latestTheirs({ exchanges: [{ from: "member", text: "old" }, { from: "co", text: "x" }, { from: "member", text: "a DJ for my birthday?" }, { from: "co", text: "on it" }] } as any) === "a DJ for my birthday?" && /exchangeCheck\(messages\.join\("\\n"\), exBase, c, latestTheirs\(known\)\)/.test(fs.readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8")));
+  check("6a. the dispatch passes their latest words from its exchanges", PR.latestTheirs({ exchanges: [{ from: "member", text: "old", verifiedAt: "a" }, { from: "co", text: "x", verifiedAt: "b" }, { from: "member", text: "a DJ for my birthday?", verifiedAt: "2026-11-03T18:00:00.000Z" }, { from: "co", text: "on it", verifiedAt: "d" }] } as any).text === "a DJ for my birthday?" && /exchangeCheck\(messages\.join\("\\n"\), exBase, c, latestTheirs\(known\)\)/.test(fs.readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8")));
   // 4, 5, 6b, 6c: what closedLately reads.
   const sqls: string[] = [];
   const rowsFor = (sql: string) => (/FROM ask_checkins/.test(sql) ? [{ label: "a rooftop party", status: "dropped" }] : [{ label: "loop: book tickets", status: "done" }]);
@@ -437,6 +437,25 @@ const THREAD = [
   check("5. ...and the removal really writes that marker (whatCoKnows: a profile_corrections row with item_ref and removed)", /item_ref/.test(fs.readFileSync(new URL("../../src/services/whatCoKnows.ts", import.meta.url), "utf8")) && /removed: r\.removed === "true"/.test(fs.readFileSync(new URL("../../src/services/whatCoKnows.ts", import.meta.url), "utf8")));
   check("6b. Cue's own closeAsk ('closed by Cue: ...') never counts as their word", !/closed by/.test(askSql));
   check("6c. asks get their own share (own query and limit), apart from loops, tasks and threads", sqls.length === 2 && new RegExp(`LIMIT ${X.CLOSED_ASKS_MAX}`).test(askSql) && got.some((g) => g.label === "a rooftop party" && g.how === "dropped") && got.some((g) => g.label === "loop: book tickets"), { sqls, got });
+}
+
+// ------------------------------------------------------------------ re-review: the message that dropped it never lifts it
+{
+  const PR = await import("../../src/harness/proactive.js");
+  const closedAt = "2026-11-03T17:00:05.000Z";
+  const base = X.baseFrom("", { sent: [], asks: [] }, { closed: [{ label: "a DJ for the launch party", how: "dropped", at: closedAt }], meant: [] });
+  const dropMsg = { text: "not doing the launch party anymore, so no need for the DJ", at: "2026-11-03T17:00:00.000Z" };
+  const find = "Found a DJ for the launch party: https://example.test/dj-launch";
+  const k1 = PR.exchangeCheck(find, base, { type: "companion", targetKey: "companion:x", payload: {} } as any, dropMsg);
+  check("r1. their latest message is the one that dropped it: the DJ find is held (logged as whole_exchange: reopens)", !k1.pass && /reopens U1 \(a DJ for the launch party\)/.test(k1.reason ?? ""), k1);
+  const later = { text: "actually can you find a DJ for my birthday", at: "2026-11-03T19:00:00.000Z" };
+  const k2 = PR.exchangeCheck("Found a DJ for your birthday: https://example.test/dj-bday", base, { type: "companion", targetKey: "companion:x", payload: {} } as any, later);
+  check("r2. the drop, then \"actually can you find a DJ for my birthday\": the birthday DJ find goes", k2.pass, k2);
+  const k3 = PR.exchangeCheck("Launch party DJs at Elbo Room Friday. https://example.test/elbo", base, { type: "event_offer", targetKey: "event_offer:elbo", payload: { fromProfile: true, askId: "profile" } } as any, dropMsg);
+  check("r3. the event_offer variant of r1 (a profile find, no ask of its own): held", !k3.pass && /reopens/.test(k3.reason ?? ""), k3);
+  check("r. a message at the very moment of the close doesn't lift it either", !PR.exchangeCheck(find, base, { type: "companion", targetKey: "companion:x", payload: {} } as any, { text: dropMsg.text, at: closedAt }).pass);
+  check("r. reply path: words their message uses to close something (this turn's read) never lift it", names(M.moveMisses("Found a DJ for the launch party: https://example.test/dj-launch", rec({ unresolved: [{ id: "U1", label: "a DJ for the launch party", state: "open" }] }, { move: "close", closes: [{ item: "U1", how: "dropped" }] }), dropMsg.text)).includes("reopen"));
+  check("r. reply path: a new ask this turn still lifts an older close", M.moveMisses("Found a DJ for your birthday: https://example.test/dj-bday", rec({ unresolved: [{ id: "U1", label: "a DJ", state: "dropped" }] }, { move: "act" }), later.text).length === 0);
 }
 
 console.log(`whole exchange: ${total - failed}/${total} passed`);
