@@ -61,13 +61,7 @@ export async function setSearchArea(userId: string, input: { place: string; thei
   // Their home city by name: back to home (the area cleared), never their home written as an area.
   if (home && W.samePlace(backed.place, home) && R.sameQualifiers(backed.place, home)) {
     const done = await deps.tx(async (db) => {
-      const cleared = await db.query(
-        `UPDATE want_places SET place = NULL, source = 'removed', quote = $3, updated_at = NOW(), resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_home_country = NULL, resolved_at = NULL
-          WHERE user_id = $1 AND want_key = $2 AND place IS NOT NULL`,
-        [userId, AREA_KEY, backed.quote.slice(0, 300)],
-      );
-      // What was found in their old area goes; with no area set, nothing moved and nothing goes.
-      if (cleared.rowCount) await dropFallbackFinds(db, userId, "their search area set back to home");
+      await clearAreaIn(db, userId, { quote: backed.quote, because: "their search area set back to home" });
       return true;
     }).catch((err: any) => (console.error("setSearchArea: setting it back to home failed (nothing changed):", err?.message ?? err), false));
     return done ? { ok: true, changed: "home", home } : { ok: false, error: NOT_SAVED };
@@ -101,6 +95,24 @@ export async function setSearchArea(userId: string, input: { place: string; thei
   }).catch((err: any) => (console.error("setSearchArea: saving it failed (nothing changed):", err?.message ?? err), false));
   if (!saved) return { ok: false, error: NOT_SAVED };
   return { ok: true, changed: "set", place: backed.place, label: s?.label ?? null, home, quote: backed.quote };
+}
+
+// Their area set back to home (the row's place cleared) inside the caller's transaction, and what was found for it dropped; with no
+// area set, nothing moved and nothing goes. onlyPlace: only while the area is still that place (a rule they withdrew clears the area it
+// set, never one set since: member preferences PR C). Returns whether the area changed.
+export async function clearAreaIn(db: Db, userId: string, o: { quote?: string | null; because: string; onlyPlace?: string | null }): Promise<boolean> {
+  const only = o.onlyPlace ? o.onlyPlace.trim().replace(/[.,;:!?]+$/, "") : null;
+  const cleared = await db.query(
+    `UPDATE want_places SET place = NULL, source = 'removed', quote = $3, updated_at = NOW(), resolved_for = NULL, resolved_home = NULL, resolved_status = NULL, resolved_label = NULL, resolved_lat = NULL, resolved_lng = NULL, resolved_options = NULL, resolved_home_country = NULL, resolved_at = NULL
+      WHERE user_id = $1 AND want_key = $2 AND place IS NOT NULL AND ($4::text IS NULL OR lower(place) = lower($4::text))`,
+    [userId, AREA_KEY, (o.quote ?? "").slice(0, 300), only],
+  );
+  if (cleared.rowCount) await dropFallbackFinds(db, userId, o.because);
+  return !!cleared.rowCount;
+}
+// The same, in its own transaction (a rule withdrawn in conversation).
+export async function clearSearchArea(userId: string, o: { because: string; onlyPlace?: string | null }, deps: Pick<SetAreaDeps, "tx">): Promise<boolean> {
+  return deps.tx((db) => clearAreaIn(db, userId, { because: o.because, onlyPlace: o.onlyPlace ?? null }));
 }
 
 // Pure: a place settled by their answer to Cue's question ("Springfield, Missouri" from "the Missouri one" after "which Springfield?"):
@@ -174,6 +186,14 @@ export function areaReceipt(r: Extract<SetAreaResult, { ok: true }>): string {
 // The turn's line while it's set (routes/sendblue.ts): where searches with no place of their own look, and that home didn't change.
 export function areaFact(a: SearchArea, home: string | null): string {
   return `Where Cue searches for them when an ask or goal names no place of its own, as they asked${a.quote ? ` ("${a.quote.slice(0, 160)}")` : ""}: ${a.label ?? a.place}. Their daily search looks there too; asks and goals that name a place keep it.${home ? ` Their home city is still ${home}.` : ""}`;
+}
+
+// What a where-to-search rule is held against (services/memberPreferences.ts ruleApplied): their area, and their home city (a rule naming
+// home sets searches back to home, so it's applied while no area is set). Read only for a member with such a rule; a failed read
+// throws, and the caller says the rule isn't applied.
+export async function areaCtxOf(userId: string, db: Db = pool): Promise<{ area: { place: string } | null; home: string | null }> {
+  const [a, h] = await Promise.all([searchAreaOf(userId, db), db.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId])]);
+  return { area: a ? { place: a.place } : null, home: (h.rows[0]?.city as string | undefined) ?? null };
 }
 
 export const realSetAreaDeps = (): SetAreaDeps => ({

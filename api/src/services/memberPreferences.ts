@@ -15,16 +15,25 @@
 //   show      services/whatCoKnows.ts lists each active rule in their words, with what it covers and what it doesn't do yet;
 //             removing it there withdraws it (the existing correction path).
 //
-// Where PR C plugs in (enforcement in decisions, not just sends): a rule with area "search_area" (services/sweepFind.ts and
-// goalSweep.ts read activePreferences for the place), "reply_style" (the reply's facts and check), and "other". Until then they are
-// stored, shown with "not applied yet", and the reply is told so (replyPreferenceFacts), so Cue never says one is applied when the
-// path ignores it. ENFORCED_AREAS is the one list to widen as each path starts reading them.
+// PR C (enforcement in decisions, not just sends; Royce's spec, section 3: "an SF-only preference must change the search results, not
+// just the sentence introducing them"). DECISION_AREAS, each applied where the decision is made, never only in the words:
+//   search_area  an explicit standing rule for everything with no place of its own is set as their search area (services/searchArea.ts
+//                setSearchArea, #336's one path): sweeps, reply searches, look-outs and goals with no place look there, and what was found
+//                for the old place goes. A rule for one subject only ("climbing gyms in Oakland") isn't: Cue offers that ask's own place.
+//                Applied only while their area is that place (ruleApplied), so a lookup that failed or asked "which one" is never shown
+//                as applied. Withdrawn: the area goes back to home.
+//   reply_style  standing instructions in the reply's and the call's facts, scoped by topic, and the reply check's style read
+//                (services/prefTopics.ts judgeReplyRules). Style can't be guaranteed in code: measured by tests, not enforced.
+//   avoid_topic  "don't bring up X": proactive candidates and finds about X are dropped (a model read of relevance, services/prefTopics.ts),
+//                replies are told not to raise it unless they do, and the reply check cuts a sentence that raises it.
+// "other" stays unsupported: stored, shown with "noted, not applied yet", and the reply offers what Cue can do instead.
+// ENFORCED_AREAS stays the send-time list (harness/notifyGate.ts holds sends on those alone).
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { wordsZone } from "./memberTime.js";
 
-export type PrefArea = "contact" | "checkins" | "search_area" | "reply_style" | "other";
+export type PrefArea = "contact" | "checkins" | "search_area" | "reply_style" | "avoid_topic" | "other";
 export type PrefChannel = "text" | "call" | "all";
 // What a contact rule covers: every message Cue sends them that isn't its reply to their text (deliveries they asked for and notices
 // included), only what Cue starts on its own, or only check-ins.
@@ -70,9 +79,12 @@ export type Preference = {
   askedAt?: string | null;
 };
 
-export const PREF_AREAS: readonly PrefArea[] = ["contact", "checkins", "search_area", "reply_style", "other"];
-// The areas some path enforces today. PR C widens it as searches, replies and calls start reading their rules.
+export const PREF_AREAS: readonly PrefArea[] = ["contact", "checkins", "search_area", "reply_style", "avoid_topic", "other"];
+// The areas the send gate enforces (harness/notifyGate.ts reads this list: only rules about when and how often Cue sends).
 export const ENFORCED_AREAS: ReadonlySet<PrefArea> = new Set<PrefArea>(["contact", "checkins"]);
+// The areas applied where decisions are made (PR C): where searches run, how replies are written, what Cue brings up. Whether one
+// rule is applied right now is ruleApplied's answer (a search area only while it's really set there).
+export const DECISION_AREAS: ReadonlySet<PrefArea> = new Set<PrefArea>(["search_area", "reply_style", "avoid_topic"]);
 
 const DAY_NAMES: Record<string, number> = { mon: 1, monday: 1, tue: 2, tues: 2, tuesday: 2, wed: 3, wednesday: 3, thu: 4, thur: 4, thurs: 4, thursday: 4, fri: 5, friday: 5, sat: 6, saturday: 6, sun: 7, sunday: 7 };
 const DAY_WORDS = ["", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"];
@@ -88,7 +100,7 @@ export function preferencePromptItem(o: { n: number; via?: "text" | "call"; onFi
   - Only the person's own instruction ${o.via === "call" ? "in their own lines on this call (the \"user\" lines). Not Cue's lines" : "in their LAST message. Not an earlier message"}, not something they quote or forward, not what someone else said or wants, not Cue's suggestion.
   - Not a preference: a fact about now ("I'm busy today", "I'm traveling"), a goal, a single request ("send me that link"), small talk. "I'm busy today" is never "don't contact me".
   - type "standing": a rule until they change it; give expires_on when they bound it ("this week", "for a few days", "until Friday"), resolved from today. type "one_time": an exception for one thing or one moment ("text me tonight about this one even though it's late"); it never changes a standing rule. type "withdraw": they lift a rule on file (give its number in replaces). type "permission": anything that would let Cue spend money, share their details or someone else's, give anyone access, or speak or act as them: never a preference, report it as type "permission" with nothing else.
-  - area: "contact" (texts or calls Cue sends them), "checkins" (only check-ins), "search_area" (where to look for events or things; rule.place), "reply_style" (how to reply; rule.style and, if it's for a subject, rule.topic), "other" (rule.topic says what).
+  - area: "contact" (texts or calls Cue sends them), "checkins" (only check-ins), "search_area" (where to look for events or things; rule.place, and rule.topic only when it's for one subject, not events or things in general), "reply_style" (how to reply; rule.style and, if it's for a subject, rule.topic), "avoid_topic" (a subject Cue shouldn't bring up or suggest things about; rule.topic, in a few words), "other" (rule.topic says what).
   - covers (contact only): "all" (every message Cue sends that isn't its reply to their text, things they asked for and urgent ones included: "message me", "notifications", "texts"), "unsolicited" (only what Cue starts on its own: "don't reach out", "stop sending me events"), "checkins" (only check-ins). channel: "text", "call" or "all".
   - rule, only what they said: max_per_day, max_per_week (numbers they gave), no_days / only_days (day names), earliest / latest ("HH:MM", 24h, their time), none (true: nothing at all while it lasts), less (true: they want less with no measure; NEVER make up a number).
   - basis "explicit" when they said it outright; "inferred" only when it's their own words that clearly imply it without stating a rule (still a quote of theirs).
@@ -167,6 +179,15 @@ export function ruleFrom(r: any): PrefRule {
   return out;
 }
 
+// Pure: only the fields an area's path reads (a structure check, not a reading of intent). Where to search, how to reply and what not
+// to bring up never carry a send limit, so nothing in them can hold a send; a send rule keeps every field as PR A stored it.
+const NOT_SEND: ReadonlySet<PrefArea> = new Set<PrefArea>(["search_area", "reply_style", "avoid_topic"]);
+export function ruleForArea(area: PrefArea, r: PrefRule): PrefRule {
+  if (!NOT_SEND.has(area)) return r;
+  const keep: (keyof PrefRule)[] = area === "search_area" ? ["place", "topic"] : area === "reply_style" ? ["style", "topic"] : ["topic"];
+  return Object.fromEntries(Object.entries(r).filter(([k]) => keep.includes(k as keyof PrefRule))) as PrefRule;
+}
+
 // Pure: the model's list, kept only where the quote is in their message and the fields are real. A read that names something this
 // code can't hold is dropped, never guessed into a rule.
 export function parsePreferenceReads(raw: unknown, message: string, localToday: string): PreferenceRead[] {
@@ -184,7 +205,7 @@ export function parsePreferenceReads(raw: unknown, message: string, localToday: 
     // A bound in the past or more than a year out isn't a date they gave: the rule stands without it.
     const expiresOn = exp && exp >= localToday && exp <= DateTime.fromISO(localToday).plus({ days: 366 }).toISODate()! ? exp : null;
     const replaces = Array.isArray(p.replaces) ? p.replaces.filter((n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0) : [];
-    out.push({ type, area, covers, channel, basis: p.basis === "inferred" ? "inferred" : "explicit", rule: ruleFrom(p.rule), expiresOn, replaces, quote });
+    out.push({ type, area, covers, channel, basis: p.basis === "inferred" ? "inferred" : "explicit", rule: ruleForArea(area, ruleFrom(p.rule)), expiresOn, replaces, quote });
   }
   return out;
 }
@@ -204,8 +225,11 @@ export type PrefChanges = {
 export function hasEffect(r: PrefRule): boolean {
   return Object.keys(r).length > 0;
 }
-const sameScope = (a: Pick<Preference, "area" | "covers" | "channel" | "type">, b: Pick<Preference, "area" | "covers" | "channel" | "type">) =>
-  a.area === b.area && a.covers === b.covers && a.channel === b.channel && a.type === b.type;
+// A rule for one subject is its own scope (spec, section 2: "specific preferences apply within their scope; general preferences still
+// apply elsewhere"): "keep work replies short" and "explain technical things fully" never replace each other unless one is named.
+const topicKey = (r: PrefRule) => (r.topic ? squash(r.topic) : "");
+const sameScope = (a: Pick<Preference, "area" | "covers" | "channel" | "type" | "rule">, b: Pick<Preference, "area" | "covers" | "channel" | "type" | "rule">) =>
+  a.area === b.area && a.covers === b.covers && a.channel === b.channel && a.type === b.type && (!NOT_SEND.has(a.area) || topicKey(a.rule) === topicKey(b.rule));
 
 // Pure: what the turn's reads change. Precedence (Royce's spec, section 2):
 //   - a permission is never a preference (refused, logged by kind);
@@ -237,7 +261,7 @@ export function resolveReads(onFile: Preference[], reads: PreferenceRead[], ctx:
       continue;
     }
     const type = r.type === "one_time" ? "one_time" : "standing";
-    const scope = { area: r.area, covers: r.covers, channel: r.channel, type } as const;
+    const scope = { area: r.area, covers: r.covers, channel: r.channel, type, rule: r.rule } as const;
     // One-time requests never replace anything.
     const target = type === "one_time" ? [] : named.length ? named.filter((p) => p.type === "standing") : onFile.filter((p) => !retired.has(p.id) && sameScope(p, scope));
     if (r.basis === "inferred" && target.some((p) => p.basis === "explicit")) {
@@ -285,7 +309,7 @@ function rowToPref(r: any): Preference | null {
     area: PREF_AREAS.includes(m.area) ? m.area : "other",
     channel: m.channel ?? "all",
     covers: m.covers ?? "unsolicited",
-    rule: ruleFrom(m.ruleRaw ?? {}),
+    rule: ruleForArea(PREF_AREAS.includes(m.area) ? m.area : "other", ruleFrom(m.ruleRaw ?? {})),
     basis: m.basis === "inferred" ? "inferred" : "explicit",
     type: m.type === "one_time" ? "one_time" : "standing",
     words: Array.isArray(m.words) ? m.words.map(String) : [String(r.object_label ?? "")],
@@ -372,7 +396,12 @@ export async function withdrawPreference(db: Db, userId: string, id: string, now
     [id, userId, now],
   );
   if (!r.rowCount) return false;
-  if ((r.rows[0]?.meta as any)?.twins?.callCadence) await db.query(`UPDATE co_profiles SET checkin_call_cadence_days = NULL WHERE user_id = $1`, [userId]);
+  const meta = (r.rows[0]?.meta ?? {}) as any;
+  if (meta.twins?.callCadence) await db.query(`UPDATE co_profiles SET checkin_call_cadence_days = NULL WHERE user_id = $1`, [userId]);
+  // A where-to-search rule that set their area: the area goes back to home with it (only while it's still that place), and what was
+  // found there goes, in the same transaction (PR C).
+  const was = rowToPref({ id, object_label: "", happened_at: now, retired_at: null, meta });
+  if (was && areaRuleAppliable(was)) await (await import("./searchArea.js")).clearAreaIn(db, userId, { because: "the rule that set their search area was removed", onlyPlace: was.rule.place! });
   return true;
 }
 // The same learning read wrote a call cadence from the words that set these rules: they're one thing, withdrawn together.
@@ -406,7 +435,78 @@ export async function learnPreferences(userId: string, raw: unknown, o: { messag
   const reads = parsePreferenceReads(raw, o.message, localToday);
   if (!reads.length) return { added: [], retired: [] };
   const onFile = o.onFile ?? (await activePreferences(userId, now));
-  return storePreferenceChanges(userId, resolveReads(onFile, reads, { now, zone: o.zone, source: o.source }), { now });
+  const changes = resolveReads(onFile, reads, { now, zone: o.zone, source: o.source });
+  const stored = await storePreferenceChanges(userId, changes, { now });
+  // Where the decision is made (PR C): their search area set or cleared, what's waiting about a subject they don't want raised dropped.
+  // Awaited, so the reply (or the call's follow-up) sees the change it says was made. Non-fatal: the rule is stored either way, and
+  // until its effect is real it's shown and said as not applied (ruleApplied).
+  await applyRuleEffects(userId, changes, stored, { message: o.message, onFile }).catch((err: any) => console.error("memberPreferences: applying a rule failed (non-fatal; shown as not applied):", err?.message ?? err));
+  return stored;
+}
+
+// ---------------------------------------------------------------- effects where decisions are made (PR C)
+
+export type RuleEffects = {
+  // services/searchArea.ts setSearchArea, #336's one path (resolved against their home; ambiguous or unresolved changes nothing).
+  setArea: (userId: string, input: { place: string; theirWords: string; message: string }) => Promise<import("./searchArea.js").SetAreaResult>;
+  // Back to home, only while the area is still that place.
+  clearArea: (userId: string, place: string, because: string) => Promise<boolean>;
+  // services/prefTopics.ts dropTopicWork: what's waiting about the subject leaves.
+  dropTopic: (userId: string, topic: string) => Promise<unknown>;
+};
+const realEffects: RuleEffects = {
+  setArea: async (userId, input) => {
+    const A = await import("./searchArea.js");
+    return A.setSearchArea(userId, input, A.realSetAreaDeps());
+  },
+  clearArea: async (userId, place, because) => {
+    const A = await import("./searchArea.js");
+    return A.clearSearchArea(userId, { because, onlyPlace: place }, A.realSetAreaDeps());
+  },
+  dropTopic: async (userId, topic) => (await import("./prefTopics.js")).dropTopicWork(userId, topic),
+};
+let effectsForTests: Partial<RuleEffects> | null = null;
+export function setRuleEffectsForTests(e: Partial<RuleEffects> | null): void {
+  effectsForTests = e;
+}
+
+// What this turn's stored changes do beyond the record. ch.add[i] is stored.added[i] (storePreferenceChanges keeps the order).
+// Their words this message (message) back the place: setSearchArea checks the quote is in it and names the place.
+// The decision log carries kinds and outcomes, never their words or the place.
+export async function applyRuleEffects(userId: string, ch: PrefChanges, stored: { added: string[]; retired: string[] }, o: { message: string; onFile: Preference[] }): Promise<{ area: string | null; cleared: boolean; topics: number }> {
+  const fx: RuleEffects = { ...realEffects, ...(effectsForTests ?? {}) };
+  const out = { area: null as string | null, cleared: false, topics: 0 };
+  const added = ch.add.map((p, i) => ({ p, id: stored.added[i] })).filter((x) => !!x.id);
+  // A withdrawn where-to-search rule takes its area back to home (only while the area is still its place); a new one below sets it again.
+  for (const r of ch.retire) {
+    if (r.state !== "withdrawn" || !stored.retired.includes(r.id)) continue;
+    const was = o.onFile.find((p) => p.id === r.id);
+    if (was && areaRuleAppliable(was) && !added.some((x) => areaRuleAppliable(x.p))) out.cleared = (await fx.clearArea(userId, was.rule.place!, "the rule that set their search area was withdrawn")) || out.cleared;
+  }
+  // The newest where-to-search rule for everything is their area (a correction, "SF, not Sacramento", is merged into one rule first).
+  const area = [...added].reverse().find((x) => areaRuleAppliable(x.p));
+  if (area) {
+    const r = await fx.setArea(userId, { place: area.p.rule.place!, theirWords: area.p.words[area.p.words.length - 1] ?? "", message: o.message });
+    out.area = r.ok ? "set" : "ask" in r ? "ambiguous" : "not_set";
+  }
+  for (const x of added) {
+    if (x.p.area !== "avoid_topic" || x.p.basis !== "explicit" || !x.p.rule.topic) continue;
+    await fx.dropTopic(userId, x.p.rule.topic);
+    out.topics++;
+  }
+  if (out.area || out.cleared || out.topics) await recordDecision({ layer: 4, decision: "member.preference.applied", userId, outcome: "act", action: out.area ?? (out.cleared ? "area_cleared" : "topic"), proposal: { ids: added.map((x) => x.id), area: out.area, cleared: out.cleared, topics: out.topics } }).catch(() => {});
+  return out;
+}
+
+// What-Cue-knows changed their search area itself (corrected or removed there): the where-to-search rules that set it are retired with
+// it, their words blanked, so a rule shown as "noted" can't sit beside an area it no longer is, and nothing rebuilds it.
+export async function retireAreaRules(db: Db, userId: string, now: Date = new Date()): Promise<number> {
+  const r = await db.query(
+    `UPDATE co_facts SET retired_at = $2, object_label = '', meta = (meta - 'words') || '{"state":"withdrawn","words":[]}'::jsonb
+     WHERE owner_user_id = $1 AND relation = '${PREF_RELATION}' AND retired_at IS NULL AND meta->>'area' = 'search_area' AND COALESCE(meta->'ruleRaw'->>'topic', '') = ''`,
+    [userId, now],
+  );
+  return r.rowCount ?? 0;
 }
 
 // ---------------------------------------------------------------- the read before the reply (spec: a rule said in a turn shapes that turn)
@@ -454,8 +554,37 @@ const dayList = (ds: number[]) => {
 };
 const clock = (hm: string) => DateTime.fromFormat(hm, "HH:mm").toFormat("h:mm a").replace(":00", "").toLowerCase();
 
+// ---------------------------------------------------------------- applied, or noted (PR C: say only what a path really does)
+
+// What a rule is held against right now: their search area (services/searchArea.ts searchAreaOf), when the caller read it. Left out,
+// a search_area rule is never said to be applied (the honest default: nothing known says it is).
+// home: their home city; a rule naming it set searches back to home (searchArea.ts), so it's applied while no area is set.
+export type ApplyCtx = { area?: { place: string } | null; home?: string | null };
+const placeKey = (t: string) => squash(t.trim().replace(/[.,;:!?]+$/, ""));
+// Pure: a where-to-search rule that becomes their search area: said outright, standing, for everything with no place of its own (no
+// subject of its own), with a place.
+export function areaRuleAppliable(p: Pick<Preference, "area" | "basis" | "type" | "rule">): boolean {
+  return p.area === "search_area" && p.basis === "explicit" && p.type === "standing" && !p.rule.topic && !!p.rule.place;
+}
+// Pure: whether a path applies this rule now. Send rules: the send gate (harness/notifyGate.ts). A search area: only while their area
+// really is that place (a lookup that failed, or a place that could be more than one, left it unset). How to reply and what not to bring
+// up: their own words only (an inferred read stays tentative: spec, section 2).
+export function ruleApplied(p: Pick<Preference, "area" | "basis" | "type" | "rule">, ctx: ApplyCtx = {}): boolean {
+  if (ENFORCED_AREAS.has(p.area)) return true;
+  if (p.area === "reply_style") return p.basis === "explicit" && !!p.rule.style;
+  if (p.area === "avoid_topic") return p.basis === "explicit" && !!p.rule.topic;
+  if (p.area === "search_area") {
+    if (!areaRuleAppliable(p)) return false;
+    if (ctx.area?.place) return placeKey(ctx.area.place) === placeKey(p.rule.place!);
+    return ctx.area === null && !!ctx.home && placeKey(ctx.home.split(",")[0]) === placeKey(p.rule.place!.split(",")[0]);
+  }
+  return false;
+}
+
 // Pure: what the rule does, in plain words, for what-Cue-knows. Code-built from the stored structure, so it says what is enforced.
-export function describePreference(p: Pick<Preference, "area" | "covers" | "channel" | "rule" | "expiresAt" | "zone" | "type" | "basis">): string {
+// applied: ruleApplied's answer from the caller (which knows their search area); left out, the area alone decides, and a search area
+// is never said to be applied.
+export function describePreference(p: Pick<Preference, "area" | "covers" | "channel" | "rule" | "expiresAt" | "zone" | "type" | "basis">, o: { applied?: boolean } = {}): string {
   const r = p.rule;
   const what = p.area === "checkins" || p.covers === "checkins" ? "check-ins" : p.covers === "all" ? (p.channel === "call" ? "calls from me" : p.channel === "text" ? "texts from me" : "messages from me") : p.channel === "call" ? "calls I start" : "messages I start";
   const parts: string[] = [];
@@ -467,32 +596,74 @@ export function describePreference(p: Pick<Preference, "area" | "covers" | "chan
   if (r.earliest) parts.push(`nothing before ${clock(r.earliest)}`);
   if (r.latest) parts.push(`nothing after ${clock(r.latest)}`);
   if (r.less && !parts.length) parts.push(`fewer ${what} (you haven't said how many yet)`);
-  if (r.place) parts.push(`look for things in ${r.place}`);
+  if (r.place) parts.push(`look for things in ${r.place}${r.topic ? ` (for ${r.topic})` : ""}`);
   if (r.style) parts.push(`replies: ${r.style}${r.topic ? ` (for ${r.topic})` : ""}`);
+  if (p.area === "avoid_topic" && r.topic) parts.push(`don't bring up ${r.topic} unless you do`);
   if (!parts.length && r.topic) parts.push(r.topic);
   let line = parts.join("; ");
   if (p.expiresAt) line += `, until ${DateTime.fromISO(p.expiresAt).setZone(wordsZone(p.zone)).toFormat("ccc LLL d")}`;
   if (p.type === "one_time") line += " (just this once)";
   if (p.basis === "inferred") line = `my read: ${line}`;
-  if (!ENFORCED_AREAS.has(p.area)) line += " (noted, not applied yet)";
+  if (!(o.applied ?? ruleApplied(p))) line += " (noted, not applied yet)";
   return line;
 }
 
-// Facts for the reply (harness/replyGrounding.ts): what's in force and what it's applied to, so a reply never says a rule is applied
-// when its path ignores it, and the one ask for a vague "less". Internal prompt lines, not member copy. ids: the vague rules this reply
-// is told to ask about (marked asked once the reply goes).
-export function replyPreferenceFacts(prefs: Preference[], now: Date): { known: string[]; instructions: string[]; askIds: string[] } {
+// Internal prompt lines (not member copy): what each decision-area rule does when applied, and what Cue offers instead when it isn't.
+function appliedLine(p: Preference, applied: boolean): string {
+  if (ENFORCED_AREAS.has(p.area)) return applied ? "Cue's sends enforce it in code; replies to their texts always go." : "";
+  if (applied) {
+    if (p.area === "search_area") return "Applied: their search area is set to this, so every ask, goal and daily search that names no place of its own looks there; asks and goals that name a place keep it, and their home city didn't change.";
+    if (p.area === "reply_style") return "Cue follows it in its replies and on calls where it applies (an instruction Cue keeps, not a hard rule in code).";
+    return "Applied: Cue drops suggestions and check-ins about it, and doesn't raise it unless they do.";
+  }
+  if (p.basis === "inferred") return "Cue's tentative read, not applied: never act as if they said it. If it matters now, ask them once.";
+  if (p.area === "search_area") {
+    if (p.type === "one_time") return "Just this once, not a standing change: search there for what they asked now; never say their searches moved.";
+    if (p.rule.topic) return "Not applied: where Cue searches is set for everything at once, not one subject. Never say it's applied. Offer what Cue can do: put that place on the one ask or goal it's for, or search there for everything from now on.";
+    return "Not applied: where Cue searches didn't change to this (the place couldn't be settled on the map, or it could mean more than one place). Never say it changed. Say plainly it didn't, and ask which place they mean if it could be more than one.";
+  }
+  return "No path applies this: never say it's applied. Say plainly Cue noted it and can't do that yet, and offer the closest thing Cue can do: how often or when it reaches out, check-ins, where it searches, how it replies, or a subject it won't bring up.";
+}
+
+// The rules the reply check reads (services/prefTopics.ts judgeReplyRules): how to reply, by subject, and what not to bring up.
+export type ReplyRules = { style: { style: string; topic: string | null; words: string }[]; avoid: string[] };
+
+// Facts for the reply (harness/replyGrounding.ts) and the call (services/callContext.ts callFitLines): what's in force and what it's
+// applied to, so a reply never says a rule is applied when its path ignores it, and the one ask for a vague "less". Internal prompt
+// lines, not member copy. ids: the vague rules this reply is told to ask about (marked asked once the reply goes).
+// ctx: their search area, when the caller read it (left out, a search area rule is never said to be applied).
+export function replyPreferenceFacts(prefs: Preference[], now: Date, ctx: ApplyCtx = {}): { known: string[]; instructions: string[]; askIds: string[]; rules: ReplyRules; appliedNow: Preference[] } {
   const live = prefs.filter((p) => inForce(p, now));
   const known: string[] = [];
   const instructions: string[] = [];
   const askIds: string[] = [];
+  const rules: ReplyRules = { style: [], avoid: [] };
+  const appliedNow: Preference[] = [];
   for (const p of live) {
-    const applied = ENFORCED_AREAS.has(p.area);
+    const applied = ruleApplied(p, ctx);
     const justNow = now.getTime() - Date.parse(p.setAt) < 5 * 60_000;
-    known.push(`A standing rule they ${justNow ? "set in this message" : "set"}${p.basis === "inferred" ? " (Cue's tentative read, not confirmed)" : ""}: ${describePreference(p)}. ${applied ? "Cue's sends enforce it in code; replies to their texts always go." : "No path applies this yet: never say it's applied; say plainly Cue noted it and can't apply it yet."}`);
+    // A decision rule set in this message and applied: the change it made is this turn's (the reply check's change claims stand on it).
+    if (applied && justNow && DECISION_AREAS.has(p.area)) appliedNow.push(p);
+    const kind = p.type === "one_time" ? "A one-time request" : "A standing rule";
+    known.push(`${kind} they ${justNow ? "set in this message" : "set"}${p.basis === "inferred" ? " (Cue's tentative read, not confirmed)" : ""}: ${describePreference(p, { applied })}. ${appliedLine(p, applied)}`.trim());
     if (p.rule.less && p.rule.maxPerDay === undefined && p.rule.maxPerWeek === undefined && !p.askedAt) askIds.push(p.id);
+    if (!applied) continue;
+    const words = p.words[p.words.length - 1] ?? "";
+    if (p.area === "reply_style" && p.rule.style) {
+      rules.style.push({ style: p.rule.style, topic: p.rule.topic ?? null, words });
+      instructions.push(
+        p.rule.topic
+          ? `How they asked you to reply when the subject is ${p.rule.topic}: ${p.rule.style} (their words: "${words.slice(0, 200)}"). It applies only to that subject; other replies stay as they'd be.`
+          : `How they asked you to reply: ${p.rule.style} (their words: "${words.slice(0, 200)}"). It applies to every reply, except where a rule for a specific subject says otherwise.`,
+      );
+    }
+    if (p.area === "avoid_topic" && p.rule.topic) {
+      rules.avoid.push(p.rule.topic);
+      instructions.push(`They asked you not to bring up ${p.rule.topic} (their words: "${words.slice(0, 200)}"). Don't raise it, suggest anything about it, or ask about it. If they bring it up themselves, follow their lead on it.`);
+    }
   }
+  if (rules.style.some((r) => r.topic) && rules.style.some((r) => !r.topic)) instructions.push("When a reply is about a subject that has its own reply rule, that rule wins over the general one.");
   if (askIds.length) instructions.push("They asked Cue to reach out less without saying how often. Ask once, in a few words, how often works for them. Never suggest a number yourself.");
   if (live.length) instructions.push("A preference never lets Cue spend money, share anyone's details, give access or act as them. If they ask for that through a preference, say plainly Cue can't take it that way.");
-  return { known, instructions, askIds };
+  return { known, instructions, askIds, rules, appliedNow };
 }

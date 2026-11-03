@@ -586,10 +586,13 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 2 },
     use: 'When they say they don\'t want a KIND of thing anymore ("no more hackathons", "stop sending me crypto stuff", "I\'m not into big conferences"), save it so Cue stops suggesting that kind of thing everywhere. Also use it with undo=true when they say they\'re open to that kind of thing again. Not for turning down one specific event.',
   },
-  // Where Cue searches for them from now on (services/searchArea.ts, 2026-10-31).
+  // Where Cue searches for them from now on (services/searchArea.ts, 2026-10-31). On a call too (Royce, 2026-11-02: every
+  // conversational change goes to both mediums): a quick save, and on a GPT-Live call (no tools mid-call) the same rule said on the call
+  // is set right after it by the call's learning read (services/memberPreferences.ts applyRuleEffects).
   {
     id: "search_area",
     sheet: null,
+    onCall: true,
     can: "When they tell Cue where to search for them from now on (\"switch my searches to SF going forward\"), Cue changes it right away: asks and goals that name no place of their own, and their daily search, look there. Asks and goals that name a place keep it, and their home city stays as it is.",
     tool: "setSearchArea",
     limits: { perTurn: 1, perDay: 10 },
@@ -982,6 +985,8 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   updateNotes: SAVE,
   updateLoop: SAVE,
   steerAwayFrom: SAVE,
+  // Resolved against their home before it's kept (a geocoder read): the longer save timeout, as correctWhatCoKnows.
+  setSearchArea: { run: "now", kind: "save", ms: 5000 },
   noteRoomTaste: SAVE,
   noteFreeTime: SAVE,
   answerProposal: SAVE,

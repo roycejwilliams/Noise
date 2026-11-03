@@ -136,7 +136,9 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "
 // changedBy: the tools that changed a setting or a record this turn (any not in services/capabilities.ts CHANGES_NOTHING, recorded by the guard).
 // snapshot: the member's pinned snapshot and the lines added since (a text reply): the judge calls send the pinned text as their own
 // cached block (judgeSystem) and list "Since then" after it.
-export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+// prefRules: how they asked Cue to reply and what not to bring up (services/memberPreferences.ts, applied rules only), for the reply
+// check's rule read (services/prefTopics.ts judgeReplyRules).
+export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; prefRules?: import("../services/memberPreferences.js").ReplyRules | null; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -385,9 +387,16 @@ export async function gatherReplyFacts(
   {
     const P = await import("../services/memberPreferences.js");
     const prefs = await P.activePreferences(userId).catch(() => [] as import("../services/memberPreferences.js").Preference[]);
-    const pf = P.replyPreferenceFacts(prefs, new Date());
+    // Their search area, so a where-to-search rule is said applied only while the area really is its place (a failed read: not applied).
+    const area = prefs.some((p) => p.area === "search_area") ? await import("../services/searchArea.js").then((A) => A.areaCtxOf(userId)).catch(() => ({})) : {};
+    const pf = P.replyPreferenceFacts(prefs, new Date(), area);
     for (const line of pf.known) addFact(rf, "known", line);
     for (const line of pf.instructions) addInstruction(rf, line);
+    // How to reply and what not to raise, for the reply check's rule read (judgeReplyRules).
+    rf.prefRules = pf.rules.style.length || pf.rules.avoid.length ? pf.rules : null;
+    // A rule they set in this message that a path now applies is a change made this turn: a reply saying so ("searching SF from now on")
+    // stands on it (codeChecks no_unbacked_change), as it does on a tool's change.
+    for (const p of pf.appliedNow) (rf.changedBy ??= []).push(p.area === "search_area" ? "setSearchArea" : "memberPreference");
     // Marked asked only once this reply is actually sent (routes/sendblue.ts confirmLessAsked).
     P.noteLessAsk(userId, pf.askIds);
   }
@@ -2206,11 +2215,15 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
   // The admission read, the thread read and the claim read start together (review, 2026-10-14: the thread read ran first and held the
   // claim read back a whole Haiku round trip); the code checks read the first two's answers, so they run once all have settled.
   const pre = Promise.all([admitNarratedSentences(draft, rf), judgeThreadReports(draft, rf, src)]);
+  // Their own rules for replies (member preferences PR C): one small read, only when they have such rules. A sentence raising a subject
+  // they asked Cue not to bring up is cut like an unsupported claim; a clear style break is flagged (logged, never a cut: style isn't
+  // guaranteed in code). A read that fails flags nothing.
+  const ruleRead: Promise<GateCheck[]> = rf.prefRules ? import("../services/prefTopics.js").then((T) => T.judgeReplyRules(draft, rf.prefRules!, src.message)).catch(() => []) : Promise.resolve([]);
   // With a failure of Cue's own in the facts, a line about it ("It didn't go through on my end") is read for claims even when it isn't
   // claim-shaped, so it can stand on that fact instead of being cut as machinery talk unread.
   if (!force && !needsClaimCheck(draft) && !(failureInView(rf.facts).inView && narratesInternalState(draft))) {
-    await pre;
-    return { checks: [...codeChecks(draft, rf, src), { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
+    const [, rules] = await Promise.all([pre, ruleRead]);
+    return { checks: [...codeChecks(draft, rf, src), ...rules, { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   }
   const claimed = (async () => {
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -2227,8 +2240,8 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
     }
     return null;
   })();
-  const [, claims] = await Promise.all([pre, claimed]);
-  const code = codeChecks(draft, rf, src);
+  const [, claims, rules] = await Promise.all([pre, claimed, ruleRead]);
+  const code = [...codeChecks(draft, rf, src), ...rules];
   return claims ? { checks: [...code, ...claims.checks], modelOk: true, ms: claims.ms } : { checks: code, modelOk: false, ms: 0 };
 }
 
@@ -2531,7 +2544,8 @@ export async function groundReply(
   const firstCheckMs = Date.now() - started;
   const stages: NonNullable<GroundingResult["stages"]> = {};
   let result: GroundingResult;
-  const failed1 = first.checks.filter((c) => !c.pass);
+  // A style flag (prefTopics.ts PREF_STYLE) is logged with the reply, never cut or rewritten for: style can't be guaranteed in code.
+  const failed1 = first.checks.filter((c) => !c.pass && c.name !== "pref_style");
   // A claim-shaped draft whose claim read failed twice is treated as a
   // failed check, not sent as "unchecked" on code checks alone (2026-09-17
   // code review) — it goes through the same redraft-then-strip path below.

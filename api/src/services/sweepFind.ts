@@ -662,7 +662,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   for (const g of gatedOut) if (g.url && !passReasons.has(g.url)) passReasons.set(g.url, `kept, then the fact gate: ${g.reasons.join("; ")}`);
   // Their limits, for every member (Phase A2): a kind they ruled out, judged by its main activity, and an event outside when they're free.
   // The ask itself, so a day or time it names isn't overruled by when they're usually free (re-review of #134).
-  const limits = await limitsGate(factGated, k.limits ? { avoid: record.avoid, availability: record.availability } : null, { askText: c.askText }).catch(() => ({ kept: [] as TierMatch[], out: factGated.map((m) => ({ match: m, why: "their limits couldn't be checked" })), read: null }));
+  const limits = await limitsGate(factGated, k.limits ? { avoid: record.avoid, availability: record.availability, rules: k.limits.rules } : null, { askText: c.askText }).catch(() => ({ kept: [] as TierMatch[], out: factGated.map((m) => ({ match: m, why: "their limits couldn't be checked" })), read: null }));
   for (const o of limits.out) {
     const url = "url" in o.match && o.match.url ? String(o.match.url) : "";
     if (url) passReasons.set(url, `kept, then their limits: ${o.why}`);
