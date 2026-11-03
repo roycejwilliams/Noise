@@ -597,6 +597,8 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
   if (has("SELECT * FROM co_pairs WHERE a_id = $1 AND b_id = $2")) return R(W.pairs.filter((r) => r.a_id === p[0] && r.b_id === p[1]).sort((x, y) => +y.created_at - +x.created_at));
   if (has("SELECT 1 FROM co_pairs WHERE event_id = $1 AND a_id = $2 AND b_id = $3")) return R(pairAt(p[0], p[1], p[2]) ? [{ x: 1 }] : []);
+  // The room close's declined pairs (roomMatching.ts runRoomCloses: a "no" leaves the asker the same note as silence).
+  if (has("FROM co_pairs WHERE event_id = $1 AND state = 'declined'")) return R(W.pairs.filter((r) => r.event_id === p[0] && r.state === "declined"));
   if (has("UPDATE co_pairs SET asked_a_at") || has("UPDATE co_pairs SET asked_b_at")) {
     const r = pairAt(p[0], p[1], p[2]);
     const col = has("SET asked_a_at") ? "asked_a_at" : "asked_b_at";
