@@ -111,7 +111,8 @@ const walk = (d: string) => {
   }
 };
 walk(new URL("../../src", import.meta.url).pathname);
-const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts", "services/prefTopics.ts", "services/searchArea.ts", "jobs/index.ts", "harness/ruleCompliance.ts", "services/callPreferences.ts"];
+const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts", "services/prefTopics.ts", "services/searchArea.ts", "jobs/index.ts", "harness/ruleCompliance.ts", "services/callPreferences.ts", "harness/attention.ts"];
+// harness/attention.ts (PR B of notification grouping): a member's own rule about how often replaces the defaults, never anything else.
 check(`the rules are read only where they restrict or are shown (${readers.join(", ")})`, readers.every((r) => ALLOWED_READERS.includes(r)));
 
 // ---------------------------------------------------------------- precedence and changes

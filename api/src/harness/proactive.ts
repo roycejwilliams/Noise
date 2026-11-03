@@ -60,6 +60,7 @@ import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services
 import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass, isRelayKey } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
+import { attentionChecks, carriesFinds, dropRepeatInterest, feelingCheck, foldPlan, hardDayHolds, isUnrequested, readThreads, threadReadDue, threadRiders, type AttentionState } from "./attention.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
 export const GOAL_SEASON_DAYS = 56;
@@ -340,6 +341,10 @@ export type PickState = {
   // The member's own rules and what's been sent, as the one send gate reads them (harness/notifyGate.ts). Missing: no rule read
   // (a pure state built without it), so nothing is held by one here; the send-time read inside the lock still decides.
   memberRules?: { prefs: Preference[]; sent: Counted[] } | null;
+  // A member's attention (harness/attention.ts, notification grouping PR B): what went and when they wrote back, what went today (its
+  // threads), and whether Cue's last message closed with the interest question. Missing: a pure state built without it (its checks
+  // don't run). Null: the read failed, so nothing unrequested goes on a guess.
+  attention?: AttentionState | null;
 };
 
 // While someone is struggling, asks, check-ins on asks, and product updates
@@ -348,6 +353,8 @@ export type PickState = {
 // out (Royce, 2026-09-18: "we can't isolate them until the perfect event is
 // right"). Holding event offers on bad days meant a member frustrated about
 // getting nothing kept getting nothing; the draft carries their feelings.
+// Since 2026-11-02 (notification grouping item 8, the hard_day check in candidateChecks): that still holds for what they asked for; a
+// find or an offer Cue starts on its own waits out the hard day, bounded by the same cap.
 // ask_solicitation (asking an event guest with no stated ask what they'd like from it) follows the same rules as any other text
 // Cue starts (decided 2026-10-19 on Royce's delegation, review of #254): it waits while they're struggling, is paced by engagement,
 // and isn't "can't wait". It used to be exempt from all three; since #254 it also reaches members who have goals but no ask.
@@ -872,6 +879,12 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (heldForMood(state) && HOLD_WHILE_STRUGGLING.has(c.type)) {
     checks.push({ name: "emotional_timing", pass: false, reason: `they've been struggling in the last day; this waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
+  // On a hard day only companionship goes (Royce, 2026-11-02, notification grouping item 8, harness/attention.ts hardDayHolds): a find
+  // or an offer Cue starts on its own waits until they're okay, at most the hold's cap (heldForMood). Timing only, never dropped for it.
+  // What they asked for (an answer to their ask, a delivery) still goes, as the 09-18 rule had it ("we can't isolate them").
+  if (hardDayHolds({ cls: candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type], payload: c.payload, held: heldForMood(state) })) {
+    checks.push({ name: "hard_day", pass: false, reason: `a hard day: only companionship goes; a find or an offer Cue starts waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
+  }
   if (draftWaitRead(c, state)?.hold) {
     checks.push({ name: "mood_draft_wait", pass: false, reason: `its draft was skipped while they were struggling; it's written again once they're okay, at most ${MOOD_HOLD_CAP_HOURS}h after` });
   }
@@ -1000,6 +1013,16 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     if (state.memberRules && !isSafetyFollowUp(candidate)) {
       const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: candidateClass(candidate.type, answering, candidate.payload), channel: "text", sent: state.memberRules.sent });
       checks.push(rule);
+    }
+    // A member's attention (harness/attention.ts): the defaults with no rule of theirs, the back-off after silence, one thread a day.
+    // Only what Cue starts on its own; never a requested delivery or a safety follow-up.
+    if (state.attention !== undefined && !isSafetyFollowUp(candidate)) {
+      const cls = candidateClass(candidate.type, answering, candidate.payload);
+      if (state.attention === null) {
+        if (isUnrequested(cls)) checks.push({ name: "attention_unread", pass: false, reason: "couldn't read what went to them and when they replied; nothing Cue starts goes on a guess" });
+      } else {
+        for (const { retryAt: _r, ...k } of attentionChecks({ now: state.now, zone: state.timezone, cls, channel: "text", joinedAt: state.joinedAt ?? null, att: state.attention, prefs: state.memberRules?.prefs ?? [], item: candidate })) checks.push(k);
+      }
     }
     return { candidate, checks, ok: gate(checks).ok };
   });
@@ -1707,6 +1730,38 @@ async function midConversationNow(db: Queryable, userId: string, now: Date, last
   if (midConversationFrom({ now, lastInboundAt, lastCoReplyAt: null, turnRunning: false })) return true;
   return loadMidConversation(db, userId, now).catch(() => true);
 }
+// A member's attention (harness/attention.ts): their own messages' times (8 days, the window the gate's ledger read covers), what the
+// pick sent today as candidates (their thread ids on them), and whether Cue's last message closed with the interest question.
+async function loadAttention(db: Queryable, userId: string, now: Date, zone: string | null, sent: Counted[]): Promise<AttentionState> {
+  const dayStart = DateTime.fromJSDate(now).setZone(hoursZone(zone)).startOf("day").toJSDate();
+  const [{ rows: inbound }, { rows: today }, { rows: last }] = await Promise.all([
+    db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%') AND created_at > NOW() - INTERVAL '8 days'`, [userId]),
+    db.query(`SELECT type, target_key, payload FROM proactive_candidates WHERE user_id = $1 AND status = 'sent' AND COALESCE(decided_at, updated_at) >= $2`, [userId, dayStart]),
+    db.query(`SELECT COALESCE(payload->>'closingAsked', 'false') = 'true' AS asked, COALESCE(decided_at, updated_at) AS at FROM proactive_candidates WHERE user_id = $1 AND status = 'sent' ORDER BY COALESCE(decided_at, updated_at) DESC, (payload ? 'closingAsked') DESC LIMIT 1`, [userId]),
+  ]);
+  return {
+    sent,
+    inbound: inbound.map((r: any) => new Date(r.created_at)),
+    sentToday: today.map((r: any) => ({ type: String(r.type), targetKey: String(r.target_key), payload: r.payload ?? {} })),
+    lastAsked: last[0]?.at ? { at: new Date(last[0].at), asked: last[0].asked === true } : null,
+  };
+}
+export const loadAttentionForTests = loadAttention;
+
+// The attention a call Cue starts on its own reads (harness/callGate.ts): the same defaults and back-off as a text, on the call channel.
+// One failing check, named after the first that held it; the reason lists them all.
+export function callAttentionFrom(o: { now: Date; zone: string | null; cls: SendClass; joinedAt: Date | null; att: AttentionState; prefs: Preference[] }): GateCheck {
+  const held = attentionChecks({ ...o, channel: "call" }).filter((k) => !k.pass);
+  return held.length ? { name: "attention_default", pass: false, reason: held.map((k) => `${k.name}: ${k.reason}`).join("; ") } : { name: "attention_default", pass: true };
+}
+export async function callAttentionCheck(userId: string, cls: SendClass, now: Date): Promise<GateCheck> {
+  const { activePreferences } = await import("../services/memberPreferences.js");
+  const { loadCounted } = await import("./notifyGate.js");
+  const [prefs, sent, joinedAt, zone] = await Promise.all([activePreferences(userId, now), loadCounted(pool, userId), loadJoinedAt(pool, userId), memberZone(userId).catch(() => null)]);
+  const att = await loadAttention(pool, userId, now, zone, sent);
+  return callAttentionFrom({ now, zone, cls, joinedAt, att, prefs });
+}
+
 async function loadJoinedAt(db: Queryable, userId: string): Promise<Date | null> {
   const { rows } = await db.query(`SELECT created_at FROM users WHERE id = $1`, [userId]);
   return rows[0]?.created_at ? new Date(rows[0].created_at) : null;
@@ -2586,6 +2641,8 @@ export async function memberSendState(userId: string, person: { timezone: string
       .catch(() => null),
   ]);
   const midConversation = await midConversationNow(pool, userId, now, raw.lastInboundAt);
+  // Read with the gate's own ledger read; when that failed, so did this (null: nothing unrequested goes on a guess).
+  const attention = memberRules ? await loadAttention(pool, userId, now, person.timezone, memberRules.sent).catch(() => null) : null;
   return {
     state: {
       now,
@@ -2604,6 +2661,7 @@ export async function memberSendState(userId: string, person: { timezone: string
       midConversation,
       joinedAt,
       memberRules,
+      attention,
     },
     holdUntil: raw.holdUntil,
     spaceUntil: raw.spaceUntil,
@@ -2720,6 +2778,13 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   const state: PickState = { ...member.state, candidates: all.filter((c) => !dead.includes(c)) };
   // The learned preference is written when it flips, from the same read.
   if (member.raw.kinds && !opts.dryRun) await syncKindPreferences(userId, member.raw.kinds.verdicts, member.raw.kinds.stored).catch(() => 0);
+  // Grouped by their thread (harness/attention.ts): an item whose ids don't say which of their threads it serves is read once, when
+  // there's something to group it with, and the answer is stored on it. A read that fails stores nothing: it groups by its ids.
+  if (state.attention && state.candidates.some((x) => !(x.payload as { threadRead?: unknown; threadId?: unknown })?.threadRead && !(x.payload as { threadId?: unknown })?.threadId)) {
+    const threads = await import("./memberThreads.js").then((T) => T.listThreads(userId)).catch(() => []);
+    const due = threadReadDue({ pending: state.candidates, sentToday: state.attention.sentToday, openThreads: threads.length }) as Candidate[];
+    if (due.length) await readThreads({ userId, items: due, threads: threads.map((t) => ({ id: t.id, text: t.text })), write: !opts.dryRun }).catch(() => null);
+  }
   const ev = evaluateCandidates(state, opts);
   // Each mood hold and release, once (services/moodHold.ts): the rule, the kind, the candidate's id; never member text.
   if (!opts.dryRun) for (const p of ev.perCandidate) {
@@ -2865,7 +2930,9 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     // The day's discovery cap (capBundle): a discovery lead at the cap waits for tomorrow (it isn't dropped); an answer always goes;
     // discovery siblings are trimmed to what's left.
     const left = findsLeftToday(await findsSentToday(userId, person.timezone, state.now).catch(() => DAILY_FIND_CAP));
-    const capped = capBundle(c, pickSiblingOffers(c, ev.eligible), left);
+    // Only finds on the lead's thread ride with it; two for one ask become the better one (harness/attention.ts threadRiders). Another
+    // thread's finds wait for another day (the thread_today check); a same-ask find is covered once this goes (foldPlan).
+    const capped = capBundle(c, threadRiders(c, pickSiblingOffers(c, ev.eligible)).riders, left);
     if (capped.deferLead) {
       if (!opts.dryRun) {
         const tomorrow = DateTime.fromJSDate(state.now).setZone(hoursZone(person.timezone)).plus({ days: 1 }).startOf("day").toJSDate();
@@ -3000,6 +3067,16 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     }
   }
 
+  // The interest question never goes twice in a row unanswered (harness/attention.ts dropRepeatInterest): Cue's last message closed with
+  // it and they haven't written since, so this one goes without its closing question.
+  if (composed && state.attention) {
+    const r = dropRepeatInterest(composed, state.attention.lastAsked, state.lastInboundAt);
+    if (r.dropped) {
+      composed = { ...r.composed, notes: [...r.composed.notes, "closing question left out: the last one went unanswered"] };
+      if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.interest_question", userId, outcome: "skip", action: "left_out", reason: "Cue's last message closed with the interest question and they haven't written since", proposal: { candidate: c.id } }).catch(() => {});
+    }
+  }
+
   // Where their finds come from, said once (services/wantPlace.ts, Royce 2026-10-15): the first find searched in a place they didn't name
   // in the want itself carries one line, right before the closing question. It's marked said only once it was delivered.
   let placeNote: { key: string; line: string } | null = null;
@@ -3084,6 +3161,12 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   };
   // A composed bundle's checks ran inside the composer: its record says so, with how many calls it took and what was left out.
   let draftChecks: GateCheck[] = asWritten ? [{ name: "producer_checks", pass: true, reason: "written and checked by the path that made it" }] : composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
+  // A check-in never asserts a feeling they didn't share (harness/attention.ts feelingCheck): Cue's own draft, read against their own
+  // words only. Fails closed; a draft that fails it gets the one rewrite like any failed check, and is read again.
+  const isCheckin = !composed && !asWritten && candidateClass(c.type, isAnswering(c), c.payload) === "checkin";
+  const ownWords = isCheckin ? await import("./memberThreads.js").then((T) => T.ownLines(userId)).then((ls) => ls.map((l) => l.text)).catch(() => [] as string[]) : [];
+  const withFeeling = async (checks: GateCheck[], text: string): Promise<GateCheck[]> => (isCheckin ? [...checks, await feelingCheck({ userId, draft: text, ownWords })] : checks);
+  draftChecks = await withFeeling(draftChecks, draft.text);
   let dg = gate(draftChecks);
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
@@ -3092,7 +3175,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
       .catch(() => null);
     if (second && "messages" in second) {
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
-      const fixedChecks = withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text);
+      const fixedChecks = await withFeeling(withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text), fixed.text);
       const fg = gate(fixedChecks);
       if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});
       if (fg.ok) {
@@ -3248,6 +3331,17 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   if (rideNote) {
     const A = await import("../services/askRetire.js");
     if (A.noteCarried(result.delivered.join("\n"), rideNote)) await A.markNotesTold(userId, [rideNote], "text").catch((err: any) => console.error("proactive: marking the stopped-looking line told failed (non-fatal):", err?.message ?? err));
+  }
+  // What this message covers (harness/attention.ts foldPlan): check-ins about the same thing, and finds for the same thing a better one
+  // answered, leave the queue with the reason; they never go as a second message about it. And whether it closed with the interest
+  // question (so the next one doesn't ask it again while this one is unanswered).
+  if (state.attention) {
+    if (composed?.closing && result.delivered.includes(composed.closing)) await pool.query(`UPDATE proactive_candidates SET payload = payload || '{"closingAsked": true}'::jsonb WHERE id = $1`, [c.id]).catch(() => {});
+    const folds = foldPlan({ lead: c, riders: extras.map((e) => e.candidate), pending: all.filter((x) => !dead.includes(x)), leadCarriesFinds: carriesFinds(c), classOf: (x) => candidateClass(x.type, isAnswering(x), x.payload) });
+    for (const f of folds) {
+      await dropCandidate(registry, f.candidate as Candidate, "skipped", `folded: ${f.why}`).catch(() => {});
+      recordDecision({ layer: 7, decision: "proactive.thread_fold", userId, outcome: "skip", action: `fold:${f.candidate.type}`, reason: f.why, proposal: { candidate: f.candidate.id, into: c.id } }).catch(() => {});
+    }
   }
   await registry[c.type].onSent?.(c, person, result.delivered, composed ? undefined : draft.meta).catch((err: any) =>
     console.error(`proactive: onSent(${c.type}) failed (non-fatal):`, err?.message ?? err),

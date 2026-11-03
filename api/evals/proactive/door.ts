@@ -13,6 +13,8 @@ const PR = await import("../../src/harness/proactive.js");
 const DR = await import("../../src/harness/door.js");
 const G = await import("../../src/harness/notifyGate.js");
 const PF = await import("../../src/harness/payloadFirst.js");
+const A = await import("../../src/harness/attention.js");
+const { DateTime } = await import("luxon");
 const CG = await import("../../src/harness/callGate.js");
 const D = await import("../../src/services/deferredSends.js");
 const RB = await import("../../src/services/researchBrief.js");
@@ -117,9 +119,14 @@ const doorText = (cls: "requested" | "unsolicited" | "checkin", over: Partial<Ca
 // the door's plan (gather, or the highest band), the pick (Cue's own pick falls back to code when it can't run: codePick), the lead, the
 // finds that ride with it (one per tier, the day's find cap), and the ledger rows the send writes. Nothing here is a copy of the
 // dispatch's rules: it calls the same exported functions, in the same order.
-type Sim = { sends: { at: Date; lead: Candidate; riding: Candidate[] }[]; expired: string[]; gathered: Date[]; ledger: (SendRecord & { cls: string })[] };
-function simulate(o: { candidates: (Candidate & { arrives: Date })[]; from: Date; to: Date; inbound?: Date[]; lastInboundAt?: Date | null; joinedAt?: Date | null; prefs?: (now: Date) => Preference[]; tickMinutes?: number[] }): Sim {
-  const sim: Sim = { sends: [], expired: [], gathered: [], ledger: [] };
+// PR B (harness/attention.ts), when b is given: the thread read (its model answer stubbed from b.reads, through the real prompt and
+// parser), the attention checks inside evaluateCandidates, the lead's riders by thread, and what the send covers (foldPlan), in the
+// dispatch's order. Without b, the pick as PR A left it (the "before").
+type Sim = { sends: { at: Date; lead: Candidate; riding: Candidate[] }[]; expired: string[]; gathered: Date[]; ledger: (SendRecord & { cls: string })[]; folded: { id: string; into: string; at: Date }[]; held: Map<string, Set<string>>; reads: number };
+type BOpts = { threads: { id: string; text: string }[]; reads: Record<string, string | null> };
+type SimOpts = { candidates: (Candidate & { arrives: Date })[]; from: Date; to: Date; inbound?: Date[]; lastInboundAt?: Date | null; joinedAt?: Date | null; prefs?: (now: Date) => Preference[]; tickMinutes?: number[]; needsCare?: boolean };
+function simulate(o: SimOpts): Sim {
+  const sim: Sim = { sends: [], expired: [], gathered: [], ledger: [], folded: [], held: new Map(), reads: 0 };
   const pending = new Map<string, Candidate & { arrives: Date }>();
   // The dispatch cron's minutes (jobs/index.ts).
   const minutes = o.tickMinutes ?? [10, 25, 40, 55];
@@ -145,6 +152,56 @@ function simulate(o: { candidates: (Candidate & { arrives: Date })[]; from: Date
     sim.ledger.push({ type: lead.type, targetKey: lead.targetKey, topicKey: lead.topicKey, sentAt: now, exempt: PR.sendIsExempt(lead, riding) || morning, cls: G.candidateClass(lead.type, PR.isAnswering(lead), lead.payload) });
     for (const r of riding) sim.ledger.push({ type: r.type, targetKey: r.targetKey, topicKey: r.topicKey, sentAt: now, exempt: true, cls: G.RIDING });
     for (const x of [lead, ...riding]) pending.delete(x.id);
+    sim.sends.push({ at: now, lead, riding });
+  }
+  return sim;
+}
+async function simulateB(o: SimOpts & { b: BOpts }): Promise<Sim> {
+  const sim: Sim = { sends: [], expired: [], gathered: [], ledger: [], folded: [], held: new Map(), reads: 0 };
+  const pending = new Map<string, Candidate & { arrives: Date }>();
+  const minutes = o.tickMinutes ?? [10, 25, 40, 55];
+  const sentItems: { at: Date; c: Candidate }[] = [];
+  let lastAsked: { at: Date; asked: boolean } | null = null;
+  const all = o.candidates.map((c) => ({ ...c, payload: JSON.parse(JSON.stringify(c.payload ?? {})) }));
+  for (let t = o.from.getTime(); t <= o.to.getTime(); t += MIN) {
+    const now = new Date(t);
+    if (!minutes.includes(now.getUTCMinutes())) continue;
+    for (const c of all) if (c.arrives.getTime() <= t && !pending.has(c.id) && !sentItems.some((s) => s.c.id === c.id) && !sim.expired.includes(c.id) && !sim.folded.some((f) => f.id === c.id)) pending.set(c.id, c);
+    for (const c of [...pending.values()]) if (c.expiresAt && c.expiresAt.getTime() <= t) { pending.delete(c.id); sim.expired.push(c.id); }
+    const inbound = [o.lastInboundAt ?? null, ...(o.inbound ?? [])].filter((d): d is Date => !!d && d.getTime() <= t);
+    const lastIn = [...inbound].sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+    const sent = G.countedRows(sim.ledger.map((r) => ({ sentAt: r.sentAt, type: r.type, cls: r.cls })));
+    const dayStart = DateTime.fromJSDate(now).setZone(ZONE).startOf("day").toJSDate().getTime();
+    const attention = { sent, inbound, sentToday: sentItems.filter((s) => s.at.getTime() >= dayStart).map((s) => s.c), lastAsked };
+    const cands = [...pending.values()];
+    // The dispatch's thread read: only when due, through the real prompt and parser; the model's answer is the fixture's.
+    const due = A.threadReadDue({ pending: cands, sentToday: attention.sentToday, openThreads: o.b.threads.length }) as Candidate[];
+    if (due.length) {
+      sim.reads++;
+      await A.readThreads({ userId: ELI, items: due, threads: o.b.threads, write: false, generate: async (prompt) => JSON.stringify({ items: due.map((c, i) => { const id = o.b.reads[c.id]; const n = o.b.threads.findIndex((x) => x.id === id); return { n: i + 1, thread: id === undefined ? "unanswered" : n >= 0 && prompt.includes(`T${n + 1}.`) ? `T${n + 1}` : null }; }) }) });
+    }
+    const state = { now, timezone: ZONE, optedOut: false, candidates: cands, sends: sim.ledger, lastInboundAt: lastIn, joinedAt: o.joinedAt ?? null, needsCare: o.needsCare ?? false, memberRules: { prefs: o.prefs ? o.prefs(now) : [], sent }, attention };
+    const ev = PR.evaluateCandidates(state as any);
+    for (const p of ev.perCandidate) for (const k of p.checks.filter((x) => !x.pass)) { if (!sim.held.has(p.candidate.id)) sim.held.set(p.candidate.id, new Set()); sim.held.get(p.candidate.id)!.add(k.name); }
+    if (!ev.userOk || !ev.eligible.length) continue;
+    const plan = PR.doorPlan(ev.eligible, now);
+    if (plan.kind === "gather") { sim.gathered.push(now); continue; }
+    const urgent = PR.expiringFind(plan.pool, { now, zone: ZONE, sends: sim.ledger });
+    const chosen = urgent ? urgent.pick : PR.codePick(plan.pool);
+    if (!chosen) continue;
+    const lastDay = urgent ? null : PR.lastDayFirst(chosen, plan.pool, { now, zone: ZONE });
+    const lead = PR.leadPick(lastDay?.pick ?? chosen, plan.pool);
+    const riding = lead.type === "event_offer" ? PR.capBundle(lead, A.threadRiders(lead, PR.pickSiblingOffers(lead, ev.eligible)).riders, PR.DAILY_FIND_CAP).sibs : [];
+    const morning = PR.morningFind(lead, now, ZONE);
+    sim.ledger.push({ type: lead.type, targetKey: lead.targetKey, topicKey: lead.topicKey, sentAt: now, exempt: PR.sendIsExempt(lead, riding) || morning, cls: G.candidateClass(lead.type, PR.isAnswering(lead), lead.payload) });
+    for (const r of riding) sim.ledger.push({ type: r.type, targetKey: r.targetKey, topicKey: r.topicKey, sentAt: now, exempt: true, cls: G.RIDING });
+    for (const x of [lead, ...riding]) { pending.delete(x.id); sentItems.push({ at: now, c: x }); }
+    // A composed find bundle closes with the interest question; a door text goes as written.
+    lastAsked = { at: now, asked: lead.type === "event_offer" };
+    for (const f of A.foldPlan({ lead, riders: riding, pending: [...pending.values()], leadCarriesFinds: A.carriesFinds(lead), classOf: (x) => G.candidateClass(x.type, PR.isAnswering(x), x.payload) })) {
+      pending.delete(f.candidate.id);
+      sim.folded.push({ id: f.candidate.id, into: lead.id, at: now });
+    }
     sim.sends.push({ at: now, lead, riding });
   }
   return sim;
@@ -182,6 +239,43 @@ const eliDay = { from: pt("2026-11-02T07:50:00"), to: pt("2026-11-02T21:00:00"),
   check("Eli, no rule: still one send in the morning window and nothing at 8:15 or 9:10", noRule.sends.filter((s) => s.at.getTime() < pt("2026-11-02T11:00:00").getTime()).length === 1 && !noRule.sends.some((s) => ["08:15", "09:10"].includes(hhmm(s.at))));
   check("Eli, no rule: no two sends inside 3 hours, and fewer than the five he got", noRule.sends.length < 5 && noRule.sends.every((s, i) => i === 0 || s.at.getTime() - noRule.sends[i - 1].at.getTime() >= 3 * HOUR));
   check("Eli, no rule: the waiting finds ride together in one later message (one per tier)", noRule.sends.some((s) => s.lead.type === "event_offer" && s.riding.length >= 1));
+}
+
+// ================================================================ 1b. Eli's 11-02 with PR B (harness/attention.ts), no rule of his
+// His open threads that day (member_threads on dev, Cue's own one-line summaries) and the 9am pick's ids as they stood: 856 is the
+// companion check-in on the partners-and-organizers thread (its own threadId), 857 the ask's find (ask id only), task 1108's results
+// (task id only), 859 and 860 profile finds. The ids don't connect them, so the one thread read runs; its model answer is stubbed here
+// with what that read would most plausibly say (every item is about finding partners and organizers for the agent). Unverified live.
+const ELI_THREADS = [
+  { id: "t-partners", text: "Finding a technical partner and community organizers to help build and grow the agent" },
+  { id: "t-cohost", text: "Trying to co-host an agent-powered matchmaking event with organizers" },
+  { id: "t-icp", text: "Still working out the initial customer profile for the agent" },
+];
+const eliSetB = () => eliSet().map((c) => (c.id === "856" ? { ...c, payload: { ...c.payload, threadId: "t-partners" }, summary: "Weekly reflection: check in on finding a technical partner and community organizers" } : c.id === "task1108" ? { ...c, summary: "Results of work they asked for: find potential co-builders to work on the social agent with" } : c));
+const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partners", "860": "t-partners" };
+{
+  const before = simulate({ candidates: eliSet(), ...eliDay });
+  const after = await simulateB({ candidates: eliSetB(), ...eliDay, b: { threads: ELI_THREADS, reads: ELI_READS } });
+  const day = (s: Sim) => s.sends.filter((x) => hhmm(x.at) < "21:00" && x.at.getTime() < pt("2026-11-03T00:00:00").getTime());
+  console.log(`  Eli 11-02, no rule, before B (PR A): ${describe(before)}`);
+  console.log(`  Eli 11-02, no rule, after B: ${describe(after)}; folded: ${after.folded.map((f) => `${f.id} into ${f.into} at ${hhmm(f.at)}`).join(", ") || "none"}; waiting: ${["859", "860"].map((id) => `${id} (${[...(after.held.get(id) ?? [])].join("+")})`).join(", ")}`);
+  check("B, Eli no rule: before B it was three messages (PR A's replay)", day(before).length === 3);
+  check("B, Eli no rule: after B, one message on 11-02", day(after).length === 1);
+  check("B, Eli no rule: that one message is what he asked for (task 1108's results), at 8:25", after.sends[0]?.lead.id === "task1108" && hhmm(after.sends[0].at) === "08:25");
+  check("B, Eli no rule: the check-in about the same thread is covered by it (folded), never a second message", after.folded.some((f) => f.id === "856" && f.into === "task1108"));
+  check("B, Eli no rule: the ask's find on the same thread is covered by the better finds that went (folded)", after.folded.some((f) => f.id === "857" && f.into === "task1108"));
+  check("B, Eli no rule: the 9:10 profile finds on the thread that already had its message wait for another day (thread_today), not dropped", ["859", "860"].every((id) => after.held.get(id)?.has("thread_today") && !after.folded.some((f) => f.id === id)));
+  check("B, Eli no rule: the thread read ran (the ids didn't settle it) and only when there was something to group", after.reads >= 1);
+  // The same day with the read answering differently: 860 on the co-hosting thread instead. Still one message (another thread waits).
+  const other = await simulateB({ candidates: eliSetB(), ...eliDay, b: { threads: ELI_THREADS, reads: { ...ELI_READS, "860": "t-cohost" } } });
+  check("B, Eli no rule: with 860 read onto another thread, still one message (a different thing waits for another day)", day(other).length === 1);
+  // The read failing (no answer for any item): the ids alone group nothing across asks, tasks and threads. Said, not hidden: two.
+  const unread = await simulateB({ candidates: eliSetB(), ...eliDay, b: { threads: ELI_THREADS, reads: {} } });
+  console.log(`  Eli 11-02, no rule, after B with the thread read failing: ${describe(unread)}`);
+  check("B, Eli no rule: with the thread read failing, the ask's find (requested) still goes on its own: two messages, never more", day(unread).length === 2 && day(unread).some((x) => x.lead.id === "857"));
+  // His own once-a-day rule from 9:11 still holds under B (his rule wins; the day is the same one message).
+  const ruled = await simulateB({ candidates: eliSetB(), ...eliDay, prefs: ONCE_A_DAY, b: { threads: ELI_THREADS, reads: ELI_READS } });
+  check("B, Eli with his once-a-day rule: one message", day(ruled).length === 1);
 }
 
 // ================================================================ 2. a burst of three sources inside the window is one send

@@ -187,7 +187,7 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
   check("a discovery pick after the morning's 3 waits for tomorrow", later.deferLead === true);
   check("with one left: a discovery lead goes alone, an answer sibling still rides", (() => { const b = P.capBundle(disc("x"), [disc("y"), answer("z")], 1); return !b.deferLead && b.sibs.map((s: any) => s.id).join() === "z"; })());
   const px = src("harness/proactive.ts").replace(/\s+/g, "");
-  check("pin: dispatch caps the bundle with capBundle (an answer lead never deferred) before building it", px.includes("constcapped=capBundle(c,pickSiblingOffers(c,ev.eligible),left);if(capped.deferLead){") && px.includes("for(constsibofcapped.sibs){"));
+  check("pin: dispatch caps the bundle with capBundle (an answer lead never deferred) before building it", px.includes("constcapped=capBundle(c,threadRiders(c,pickSiblingOffers(c,ev.eligible)).riders,left);if(capped.deferLead){") && px.includes("for(constsibofcapped.sibs){"));
   check("pin: the cap is read again inside the send's lock, counting this send's discovery finds (no race)", px.includes("constsentToday=awaitfindsSentToday(person.userId,person.timezone,now,client)") && px.includes('checks.push({name:"daily_find_cap",pass:sentToday+discovery<=DAILY_FIND_CAP'));
   check("pin: the count is discovery finds that went today (the SQL twin of isDiscoveryFind), and an unreadable count holds", px.includes("NOT(COALESCE(payload->>'askId','')NOTIN('','profile')") && px.includes(".catch(()=>DAILY_FIND_CAP)"));
   const sh = src("services/sweepShadow.ts").replace(/\s+/g, "");
