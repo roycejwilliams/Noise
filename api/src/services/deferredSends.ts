@@ -92,6 +92,7 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
 // What a send changes in the record, by kind. Run once the outcome is known: on "sent" it writes what Co did; on
 // "skipped"/"failed" it records that it didn't. Each handler is idempotent (a row re-claimed after a crash may run it twice).
 // reason: why a send that didn't go failed, when known (a reminder retries only what failed before delivery: services/relay.ts).
+export const EVENT_OVER = "event over";
 export type AfterHandlers = Record<AfterKind, (payload: any, outcome: SendOutcome, reason?: string) => Promise<void>>;
 
 export const afterHandlers: AfterHandlers = {
@@ -106,8 +107,12 @@ export const afterHandlers: AfterHandlers = {
   // only "if it's someone Cue knows from that event, I'll check", the same whether anyone was found, so "the ask to Sarah didn't go
   // out" would tell them Sarah was found (and that she can't be reached). They hear nothing, as when no one was found; an unreadable
   // pair gets no note either (2026-10-28, Royce: "found/not-found results shouldn't leak through later memory or replies").
-  event_direct_ask: async (p, outcome) => {
+  // An ask that waited (the other member's hours or their own rule) until the night ended: no note here. The room's close tells every
+  // asker whose Cue-suggested intro didn't happen the same thing, whether the other side never got the ask or got it and didn't answer
+  // (roomMatching.ts runRoomCloses), so nothing tells them where the other member's thread stood (2026-11-02).
+  event_direct_ask: async (p, outcome, reason) => {
     if (outcome === "sent") await (await import("./eventGuestMatchHandoff.js")).afterDirectAskSent(p as any);
+    else if (reason === EVENT_OVER) return;
     else if (!(await (await import("../harness/introConsent.js")).eventOptedIn(String(p?.eventId ?? ""), String(p?.candidateId ?? ""), String(p?.askerId ?? "")))) {
       const pair = await (await import("./roomMatching.js")).pairRow(String(p?.eventId ?? ""), String(p?.candidateId ?? ""), String(p?.askerId ?? "")).catch(() => null);
       if (pair?.origin === "co") await noteIntroAskNotSent(p);
@@ -256,7 +261,7 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
       await recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "skip", action: "wrong_after_correction", proposal: { id: row.id, type: row.type, correction: stale.correction, message: String(messages[0] ?? "").slice(0, 200) }, reason: stale.why }).catch(() => {});
     }
     // An in-room intro ask held overnight is pointless once the event is over: dropped, never sent the next morning.
-    else if (row.after_kind === "event_direct_ask" && (await eventIsOver(String((row.after_payload as any)?.eventId ?? ""), now))) result = { sent: false, reason: "event over" };
+    else if (row.after_kind === "event_direct_ask" && (await eventIsOver(String((row.after_payload as any)?.eventId ?? ""), now))) result = { sent: false, reason: EVENT_OVER };
     // The matching kill switch holds an intro ask (it waits, like the global pause; nothing is dropped). Network asks wait
     // on the all-events pause.
     else if ((row.after_kind === "event_direct_ask" || row.after_kind === "network_intro_ask") && (await (await import("./roomMatching.js")).matchingPause(row.after_kind === "event_direct_ask" ? String((row.after_payload as any)?.eventId ?? "") : null))) result = { sent: false, reason: "proactive outreach is paused" };

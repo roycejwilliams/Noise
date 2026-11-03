@@ -99,7 +99,8 @@ export type FlagType =
   | "gpt_live_budget_reached"
   | "turn_failed"
   | "place_not_searched"
-  | "place_far_from_home";
+  | "place_far_from_home"
+  | "member_rule_broken";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -133,6 +134,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   turn_failed: "A text turn broke after the member's text was read",
   place_not_searched: "An ask or goal wasn't searched because of its place (ambiguous, didn't resolve, or inferred far from home)",
   place_far_from_home: "An ask or goal was searched far from home (they named the place, or a trip window covers it)",
+  member_rule_broken: "Something went out against the member's own rule or a team hold (the nightly rule check: send path and rule ids)",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -812,6 +814,8 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     flags.push(...heldBackFlags(await loadHeldBack(userId, until).catch(() => ({ userId, now: until, held: [], lastSendAt: null, picks: [] }))));
     flags.push(...callHealthFlags(await flaggedCalls({ userId, until }).catch(() => [] as FlaggedCall[])));
     flags.push(...stuckDeleteFlags(await stuckDeletes({ userId }).catch(() => [] as StuckDelete[])));
+    // Sends against their own rules or a team hold (harness/ruleCompliance.ts): ids and send paths only.
+    flags.push(...(await import("./ruleCompliance.js").then((R) => R.ruleBreaks(since, until, { userIds: [userId] }).then((b) => b.map(R.breakFlag))).catch(() => [])));
     // The model reads of one member's day, under that member's trace-text mark (services/llmTraceText.ts).
     if (opts.model !== false) flags.push(...(await withTraceUser(userId, () => withMember(userId, async () => [...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => []))]))));
   }

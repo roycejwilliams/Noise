@@ -171,6 +171,28 @@ loadFailures().catch(() => {
   if (failuresStatus) failuresStatus.textContent = "Couldn't load the failures view.";
 });
 
+// The rule check (team only): sends against a member's own rule or a team hold (api/src/harness/ruleCompliance.ts).
+type RuleRow = { name: string; ref: string; at: string; path: string; cls: string; why: string; severity: string; caveat: string | null };
+const rulesStatus = document.getElementById("rules-status") as HTMLElement | null;
+const rulesTable = document.getElementById("rules") as HTMLTableElement | null;
+async function loadRules() {
+  if (!rulesStatus || !rulesTable) return;
+  const res = await fetch("/api/sweeps/rule-checks?days=7", { credentials: "same-origin" });
+  if (!res.ok) {
+    rulesStatus.textContent = res.status === 404 ? "Not available." : "Couldn't load the rule check.";
+    return;
+  }
+  const { rows } = (await res.json()) as { rows: RuleRow[] };
+  rulesStatus.textContent = rows.length ? `${rows.length} send(s) flagged in the last 7 days.` : "Nothing went against a member's rule or a team hold in the last 7 days.";
+  if (!rows.length) return;
+  let html = `<thead><tr><th>Member</th><th>When</th><th>Send</th><th>Path</th><th>Class</th><th>Rule</th><th>Severity</th></tr></thead><tbody>`;
+  for (const r of rows) html += `<tr><td>${esc(r.name)}</td><td>${esc(new Date(r.at).toLocaleString())}</td><td>${esc(r.ref)}</td><td>${esc(r.path)}</td><td>${esc(r.cls)}</td><td class="detail">${esc(r.why)}${r.caveat ? `<br>${esc(r.caveat)}` : ""}</td><td>${r.severity === "high" ? `<span class="pill pill-bad">high</span>` : esc(r.severity)}</td></tr>`;
+  rulesTable.innerHTML = html + "</tbody>";
+}
+loadRules().catch(() => {
+  if (rulesStatus) rulesStatus.textContent = "Couldn't load the rule check.";
+});
+
 // ---------------------------------------------------------------- trace text (api/src/services/llmTraceText.ts)
 type TraceRow = { spanId: string; userId: string | null; functionId: string; createdAt: string; input: string | null; output: string | null };
 const traceForm = document.getElementById("trace-form") as HTMLFormElement | null;

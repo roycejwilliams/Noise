@@ -273,8 +273,12 @@ export async function learnFromCall(input: {
   transcript: string; // the cleaned transcript (voicemail lines stripped)
   // The call's own id, the source a preference records.
   callRef?: string | null;
+  // The live call's key ("gpt-live:<session>"): rules its mid-call reads already stored are never read again (callPreferences.ts).
+  callKey?: string | null;
 }): Promise<CallLearning | null> {
   const started = Date.now();
+  // Mid-call reads still running finish first, so what they stored is on file for this read; the lines they covered are left out below.
+  const unread = await import("./callPreferences.js").then((m) => m.unreadCallerLines(input.callKey, theirLines(input.transcript))).catch(() => null);
   const [{ rows: profileRows }, { rows: askRows }, prefs, zone] = await Promise.all([
     pool.query(
       `SELECT city, life_chapters, goals, blockers, activity_preferences, long_term_direction, availability_pattern
@@ -350,9 +354,11 @@ export async function learnFromCall(input: {
     console.error("callLearning: planned event write failed (non-fatal):", err?.message ?? err),
   );
   // Standing instructions said on the call (services/memberPreferences.ts): the same resolve and store as a text turn's, quotes checked
-  // against their own lines on the call.
-  if (learned.preferences.length) {
-    const stored = await learnPreferences(input.userId, learned.preferences, { message: theirLines(input.transcript), zone, onFile: prefs, source: { via: "call", ref: input.callRef ?? null } }).catch((err: any) => {
+  // against their own lines on the call. The fallback for rules the mid-call reads didn't take (callPreferences.ts): only lines no read
+  // covered count, so a rule stored on the call is never stored twice.
+  const prefLines = unread ?? theirLines(input.transcript);
+  if (learned.preferences.length && prefLines.trim()) {
+    const stored = await learnPreferences(input.userId, learned.preferences, { message: prefLines, zone, onFile: prefs, source: { via: "call", ref: input.callRef ?? null } }).catch((err: any) => {
       console.error("callLearning: preference write failed (non-fatal):", err?.message ?? err);
       return null;
     });

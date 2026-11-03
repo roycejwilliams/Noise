@@ -178,6 +178,14 @@ export function registerJobs(io: Server) {
       .then((n) => { if (n) console.log(`trace text: deleted ${n} expired rows`); })
       .catch((err: any) => console.error("trace text: expiry failed:", err?.name ?? "Error"));
   });
+  // The nightly rule check (harness/ruleCompliance.ts): the last 24h of sends against each member's own rules at send time and the
+  // team's holds. Read-only; flags land on the review and the /sweeps page, ids and send paths only.
+  cron.schedule("10 5 * * *", () => {
+    import("../harness/ruleCompliance.js")
+      .then((m) => m.runNightlyRuleCheck())
+      .then((b) => { if (b.length) console.log(`rule check: ${b.length} send(s) flagged`); })
+      .catch((err: any) => console.error("rule check failed:", err?.name ?? "Error"));
+  }, { timezone: "America/Los_Angeles" });
   // Member assets unused for 90 days lose their bytes (services/memberAssets.ts).
   cron.schedule("25 4 * * *", () => {
     import("../services/memberAssets.js")

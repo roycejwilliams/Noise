@@ -171,9 +171,14 @@ export async function relayMessage(opts: { fromUserId: string; fromFirstName: st
     ok: true,
     to: to.firstName,
     queued: status === "queued",
-    note: status === "queued" ? `Queued for ${to.firstName}'s morning (it's outside their hours now); it hasn't reached them yet.` : `Sent to ${to.firstName}.`,
+    // The same note whether it went now or waits (their hours, or their own rule): when it reaches them is theirs, never the sender's
+    // to know (2026-11-02, no hint of where the other member's thread stands). True either way: Cue has it and it goes through Cue.
+    note: relaySenderNote(to.firstName),
   };
 }
+
+// What the sender's Cue is told about their message, sent or waiting alike (internal facts, not member copy).
+export const relaySenderNote = (to: string): string => `Cue has their message for ${to} and it goes to ${to} through Cue. Never say when it reaches ${to} or whether it has yet, and nothing about ${to}'s hours, availability or settings.`;
 
 // The relay's record once its send is settled (services/deferredSends.ts runs it, now or in the morning).
 export async function relayDelivered(relayId: number, outcome: "sent" | "skipped" | "failed"): Promise<void> {
@@ -182,6 +187,12 @@ export async function relayDelivered(relayId: number, outcome: "sent" | "skipped
   } else {
     await pool.query(`UPDATE member_relays SET status = $2 WHERE id = $1 AND status IN ('pending', 'queued')`, [relayId, outcome]);
   }
+}
+
+// Pure: the sender's fact about one message, the same while it waits and once it has gone (day: when they asked Cue to pass it).
+export function relaySenderFact(o: { to: string; day: string; message: string; back: string | null }): string {
+  const head = `On ${o.day} they asked Cue to pass a message to ${o.to} ("${o.message}"), and Cue is passing it through. Never say when it reached ${o.to} or whether it has yet.`;
+  return o.back ? `${head} ${o.to} asked Cue to send back: "${o.back}".` : `${head} ${o.to} hasn't sent anything back through Cue, and Cue knows nothing else about their reply.`;
 }
 
 // What each side's Co knows about relays, as facts. The sender only ever
@@ -200,20 +211,14 @@ export async function relayFacts(userId: string): Promise<string[]> {
   const day = (d: Date) => DateTime.fromJSDate(d).toFormat("cccc, LLL d");
   const out: string[] = [];
   for (const r of rows) {
-    // Queued for the recipient's morning: the sender hears it's waiting; the recipient's Co knows nothing until it reaches them.
-    if (r.status === "queued") {
-      if (r.from_user === userId) out.push(`Cue has queued their message to ${r.to_name} ("${r.message}") for ${r.to_name}'s morning, since it was outside ${r.to_name}'s hours. It has NOT reached ${r.to_name} yet.`);
-      continue;
-    }
+    // Waiting (their hours, or their own rule): the recipient's Cue knows nothing until it reaches them; the sender's reads exactly as
+    // a sent one does (relaySenderFact), so nothing tells them where the other member's thread stands.
+    if (r.status === "queued" && r.from_user !== userId) continue;
     if (r.to_user === userId) {
       out.push(`${r.from_name} asked Cue to pass this along to them on ${day(r.created_at)}: "${r.message}". Cue sends nothing back to ${r.from_name} unless they explicitly ask it to, in their own words.`);
     } else {
       const back = rows.find((x: any) => x.status === "sent" && x.from_user === r.to_user && x.to_user === userId && x.created_at > r.created_at);
-      out.push(
-        back
-          ? `Cue passed their message to ${r.to_name} on ${day(r.created_at)} ("${r.message}"), and ${r.to_name} asked Cue to send back: "${back.message}".`
-          : `Cue passed their message to ${r.to_name} on ${day(r.created_at)} ("${r.message}"). ${r.to_name} hasn't sent anything back through Cue, and Cue knows nothing else about their reply.`,
-      );
+      out.push(relaySenderFact({ to: r.to_name, day: day(r.created_at), message: r.message, back: back?.message ?? null }));
     }
   }
   return out;

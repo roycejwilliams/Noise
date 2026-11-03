@@ -111,7 +111,7 @@ const walk = (d: string) => {
   }
 };
 walk(new URL("../../src", import.meta.url).pathname);
-const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts", "services/prefTopics.ts", "services/searchArea.ts", "jobs/index.ts"];
+const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts", "services/prefTopics.ts", "services/searchArea.ts", "jobs/index.ts", "harness/ruleCompliance.ts", "services/callPreferences.ts"];
 check(`the rules are read only where they restrict or are shown (${readers.join(", ")})`, readers.every((r) => ALLOWED_READERS.includes(r)));
 
 // ---------------------------------------------------------------- precedence and changes
@@ -179,7 +179,7 @@ const cp = CL.callLearningPrompt({ transcript: "user: no calls on weekends pleas
 const rp = P.preferenceReadPrompt({ words: "only message me once per day", onFile: [], localToday: "2026-11-02" });
 check("a text's rules are read before the reply (its own read), a call's in the call's read, with the same item and JSON", /1\. preferences:/.test(rp) && /7\. preferences:/.test(cp) && rp.includes(P.PREFERENCE_JSON_SHAPE) && cp.includes(P.PREFERENCE_JSON_SHAPE) && !/\d+\. preferences:/.test(tp));
 check("on a call, quotes come from their own lines on the call", /in their own lines on this call/.test(cp) && /their own line on the call/.test(cp));
-check("the call's learning stores them through the same resolve and store, quotes checked against their lines", /learnPreferences\(input\.userId, learned\.preferences, \{ message: theirLines\(input\.transcript\)/.test(src("services/callLearning.ts")) && /learnFromCall\(\{ userId: user_id, transcript: cleanTranscript, callRef:/.test(src("routes/co.ts")));
+check("the call's learning stores them through the same resolve and store, quotes checked against their lines", /const prefLines = unread \?\? theirLines\(input\.transcript\);[\s\S]{0,200}learnPreferences\(input\.userId, learned\.preferences, \{ message: prefLines/.test(src("services/callLearning.ts")) && /learnFromCall\(\{ userId: user_id, transcript: cleanTranscript, callRef:/.test(src("routes/co.ts")));
 await learn(B, read({ type: "standing", area: "contact", covers: "unsolicited", channel: "call", basis: "explicit", rule: { no_days: ["sat", "sun"] }, quote: "no calls on weekends please" }), "user: no calls on weekends please", "call");
 check("a rule said on a call is stored with the call as its source", (await active(B)).some((p) => p.source.via === "call" && p.channel === "call" && p.rule.noDays?.join() === "6,7"));
 const lines = CC.callFitLines({ preferences: [], claims: [], identity: { zone: NY } as any, limits: { avoid: [], availability: null, rules: await active(B), verifiedAt: now.toISOString() } } as any);

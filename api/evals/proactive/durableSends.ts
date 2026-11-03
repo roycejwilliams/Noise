@@ -344,17 +344,17 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   seed();
   const r = await R.relayMessage({ fromUserId: "ua", fromFirstName: "Jordan", to: "Ellis", message: "running ten minutes late tomorrow", currentText: "tell Ellis running ten minutes late tomorrow" });
   const relay = db.relays[0];
-  check("relay at night: queued, nothing sent", r.ok && (r as any).queued === true && outbox.length === 0 && relay?.status === "queued" && /hasn't reached them yet/.test((r as any).note));
+  check("relay at night: queued, nothing sent; the sender's note is the same one a sent relay gets (2026-11-02: nothing about the other side's hours)", r.ok && (r as any).queued === true && outbox.length === 0 && relay?.status === "queued" && (r as any).note === R.relaySenderNote("Ellis"));
   check("relay: the recipient has no 'Co replied' line yet", memLines("ub").length === 0);
   const senderFacts = await R.relayFacts("ua");
-  check("relayFacts (sender): queued, NOT reached them", senderFacts.length === 1 && /queued their message to Ellis/.test(senderFacts[0]) && /NOT reached Ellis/.test(senderFacts[0]) && !/Cue passed their message/.test(senderFacts[0]));
+  check("relayFacts (sender): never claims it reached them, never says queued or why", senderFacts.length === 1 && /they asked Cue to pass a message to Ellis/.test(senderFacts[0]) && /Never say when it reached Ellis or whether it has yet/.test(senderFacts[0]) && !/queued|morning|hours/.test(senderFacts[0]));
   check("relayFacts (recipient): nothing until it reaches them", (await R.relayFacts("ub")).length === 0);
   const again = await R.relayMessage({ fromUserId: "ua", fromFirstName: "Jordan", to: "Ellis", message: "running ten minutes late tomorrow", currentText: "tell Ellis running ten minutes late tomorrow" });
   check("relay: a queued one still counts toward one per pair per day", !again.ok && (again as any).reason === "rate_limited");
   await D.runDueDeferredSends(db.deferred[0].due_at);
   check("relay at their 8am: sent once, status sent, sent_at set", outbox.length === 1 && relay.status === "sent" && relay.sent_at instanceof Date && /Jordan asked me to pass this along/.test(outbox[0].content));
   check("relay: the recipient's 'Co replied' line is written once, on delivery", memLines("ub").length === 1);
-  check("relayFacts after delivery: passed, for both sides", /Cue passed their message to Ellis/.test((await R.relayFacts("ua"))[0] ?? "") && /Jordan asked Cue to pass this along/.test((await R.relayFacts("ub"))[0] ?? ""));
+  check("relayFacts after delivery: the sender's reads exactly as while it waited; the recipient's appears", (await R.relayFacts("ua"))[0] === senderFacts[0] && /Jordan asked Cue to pass this along/.test((await R.relayFacts("ub"))[0] ?? ""));
 }
 {
   // Inside their hours: sent now, recorded once (the old code wrote the recipient's line twice: once itself, once in sendExempt).
