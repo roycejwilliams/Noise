@@ -22,6 +22,7 @@ import { DateTime } from "luxon";
 import { parseAskWindow } from "./askWindow.js";
 import pool from "../db/db.js";
 import { localStamp, windowLine, type CommitWindow } from "./memberTime.js";
+import { classifyScope, startRefusal, workText, type Scope } from "../harness/scope.js";
 
 export type TaskStep = { text: string; done: boolean };
 export type TaskNote = { at: string; text: string };
@@ -333,7 +334,17 @@ export async function openCallJob(userId: string, dispatchKey: string, db: TaskD
   return rows[0] ? rowTo(rows[0]) : null;
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null; dispatchKey?: string | null }): Promise<{ ok: true; task: CoTask; existing?: boolean } | { ok: false; why: string }> {
+// The purpose boundary (harness/scope.ts, Royce 2026-11-04): every task starts here, from a reply, a call, a promise, a goal piece, a
+// look-out or the door, so this is the one place it is checked. A refusal carries the guidance for the caller's own words.
+export type StartRefusal = { ok: false; why: string; outOfScope?: Scope };
+export function scopeRefusal(work: { goal?: string | null; steps?: unknown; firstPlan?: string | null }): StartRefusal | null {
+  const sc = classifyScope(workText(work));
+  return sc.scope === "out" || sc.scope === "mixed" ? { ok: false, why: startRefusal(sc), outOfScope: sc } : null;
+}
+
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null; dispatchKey?: string | null }): Promise<{ ok: true; task: CoTask; existing?: boolean } | StartRefusal> {
+  const refused = scopeRefusal(input);
+  if (refused) return refused;
   const r = await underTaskLock(input.userId, (db) => startTaskLocked(input, db));
   // The commitment ledger (services/commitmentLog.ts): a promise, a call look-out or a goal's piece is logged with its fire time.
   if (r.ok && !r.existing) {
@@ -342,7 +353,7 @@ export async function startTask(input: { userId: string; goal: string; theirWord
   }
   return r;
 }
-async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskDb): Promise<{ ok: true; task: CoTask; existing?: boolean } | { ok: false; why: string }> {
+async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskDb): Promise<{ ok: true; task: CoTask; existing?: boolean } | { ok: false; why: string; outOfScope?: Scope }> {
   // The same need already started on this call (a retry, a repeat, a turn run again): that job, as it is. Read under the lock, so two
   // starts at once never both insert; the unique index (db/migrations.ts) is the backstop.
   if (input.dispatchKey) {
@@ -487,7 +498,10 @@ export async function markTexted(userId: string, id: number): Promise<void> {
 }
 
 // A research brief the member asked for (agent/loopTools.ts researchBrief): due now, run once in the background.
-export async function startResearchBrief(input: { userId: string; theirWords: string; goal: string; params: Record<string, unknown> }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+export async function startResearchBrief(input: { userId: string; theirWords: string; goal: string; params: Record<string, unknown> }): Promise<{ ok: true; task: CoTask } | StartRefusal> {
+  // Venue and vendor research for the member's own event is out for now; research on rooms, events and communities they'd attend stays.
+  const refused = scopeRefusal({ goal: `${input.goal}\n${String(input.params?.what ?? "")}` });
+  if (refused) return refused;
   // The same lock as startTask: the cap counts both, and the open-brief check below is a read then an insert. (The brief read goes
   // through the pool: it runs after the lock is held, so it sees any brief a start before this one committed.)
   return underTaskLock(input.userId, (db) => startResearchBriefLocked(input, db));

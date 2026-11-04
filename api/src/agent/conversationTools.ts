@@ -762,6 +762,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "That's not something you do. Say so briefly in your own words, fresh each time, without a canned line and without forcing an unrelated introduction. Never say you drafted, sent or planned it." };
         }
         const T = await import("../services/coTasks.js");
+        // The purpose boundary (harness/scope.ts), asked first so a refused task costs no lookups; startTask asks it again, the one
+        // check every task goes through (promises, goal pieces, calls and look-outs never come through this tool).
+        const outside = T.scopeRefusal({ goal, steps, firstPlan: firstStep });
+        if (outside) {
+          notDone(`No task was started: ${outside.outOfScope?.scope === "mixed" ? "it bundled something Cue doesn't do with the connection part" : "that isn't something Cue does"}.`);
+          return { ok: false, error: outside.why };
+        }
         // On a call, the same need started again on the same call (a repeat, a retry) is the job already running: nothing new starts.
         const dispatchKey = ctx.onCall && ctx.callKey ? T.dispatchKeyFor(ctx.callKey, goal) : null;
         const sameJob = dispatchKey && !ctx.dryRun ? await T.openCallJob(ctx.userId, dispatchKey).catch(() => null) : null;
