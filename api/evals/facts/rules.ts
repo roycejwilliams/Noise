@@ -83,7 +83,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   const sheet = capabilitySheet().join(" ");
   // (2026-10-01) The old event-only search couldn't find sponsors or investors; Co's web search can find sponsor programs and funds, checked on their own pages.
   check("Cue knows its web search covers people, communities, programs and events", /searches the web \(people, communities, programs, events\)/.test(sheet));
-  check("saving an ask says what isn't searched", /Sponsors, investors, funding and advice are kept on file, not searched/.test(sheet));
+  check("saving an ask says what isn't searched", /Sponsors, investors, funding, job postings, errands, shopping, travel, general research and advice are kept on file, not searched or checked in on/.test(sheet));
   const rg = src("harness/replyGrounding.ts");
   check("every 'I can' is a capability claim, held to that exact thing", (/every "I can…" is one/.test(rg) && /A capability needs a capability FACT covering that exact thing/.test(rg)));
   check("background work is a promise too", /or is already doing in the background/.test(rg));

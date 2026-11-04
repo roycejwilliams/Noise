@@ -66,7 +66,7 @@ const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta
   const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "accelerators for a pre-seed consumer app", city: "San Francisco" }, { today: "2026-10-07", record: SF.emptySweepRecord() });
   check("the sweep prompt carries the X guidance", p.includes(SF.SWEEP_X_GUIDANCE));
   check("X once a sweep, for the asks X covers", /search X once in this sweep/.test(SF.SWEEP_X_GUIDANCE) && /accelerator/.test(SF.SWEEP_X_GUIDANCE) && /open call/.test(SF.SWEEP_X_GUIDANCE) && /founder or builder gatherings/.test(SF.SWEEP_X_GUIDANCE));
-  check("an OR-synonym query written the way posts are", /OR/.test(SF.SWEEP_X_GUIDANCE) && /the way those posts are written/.test(SF.SWEEP_X_GUIDANCE) && /\(applications open OR now accepting OR apply\)/.test(SF.SWEEP_X_GUIDANCE) && /Keep it broad/.test(SF.SWEEP_X_GUIDANCE) && /broad/.test(SF.SWEEP_X_TOOL));
+  check("an OR-synonym query written the way posts are", /OR/.test(SF.SWEEP_X_GUIDANCE) && /the way those posts are written/.test(SF.SWEEP_X_GUIDANCE) && /\(community OR demo day OR meetup\)/.test(SF.SWEEP_X_GUIDANCE) && /Keep it broad/.test(SF.SWEEP_X_GUIDANCE) && /broad/.test(SF.SWEEP_X_TOOL));
   check("no city, no year they didn't say", /Leave out their city and any year/.test(SF.SWEEP_X_GUIDANCE));
   check("not for venues or vendors", /Don't use X for venues, vendors/.test(SF.SWEEP_X_GUIDANCE) && /no venue or vendor names/.test(SF.SWEEP_X_TOOL));
   check("the club's bar for what's kept", /never a token or coin promotion, a giveaway, engagement bait or a bare headline/.test(p));
