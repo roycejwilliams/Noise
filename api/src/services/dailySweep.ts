@@ -20,6 +20,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { hoursZone, REASONABLE_HOUR_END } from "./localHours.js";
 import { memberZone } from "./memberTime.js";
+import { outsideAsk } from "./askKind.js";
 import { emptyTierCounts, type TierCounts } from "./tierCounts.js";
 
 export const DAILY_SWEEP_HOUR = 9;
@@ -535,6 +536,8 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     if (askHold.length) { items.push({ ...b, status: "skipped", why: `held: ${askHold.join(", ")}` }); continue; }
     if (a.kind === "person") { items.push({ ...b, status: "skipped", why: "a person to meet is met by an introduction (the hourly sweep), not a search" }); continue; }
     if (a.kind !== "find") { items.push({ ...b, status: "skipped", why: `not something to search for (kind: ${a.kind ?? "unclassified"})` }); continue; }
+    // The purpose boundary (harness/scope.ts), asked again at the sweep: remembered, never searched (a row not yet moved to "outside" too).
+    if (outsideAsk(String(a.ask_text ?? ""))) { items.push({ ...b, status: "skipped", why: "outside what Cue searches for (remembered only)" }); continue; }
     // Closed while this run was working through their asks: never searched.
     const [still] = (await pool.query(`SELECT resolved_at, closed_reason FROM ask_checkins WHERE id = $1`, [a.id])).rows;
     if (still?.resolved_at) { items.push({ ...b, status: "skipped", why: `closed mid-run (${still.closed_reason ?? "closed"})` }); continue; }
