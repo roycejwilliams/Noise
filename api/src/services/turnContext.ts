@@ -338,11 +338,10 @@ export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null
   const out = [`Cue sent them "${s.name}" on ${sentOnWords(s.sentAt, zone)}${s.url ? `; the link it sent: ${s.url}` : "; no link is on file for it"}.`];
   if (s.read) out.push(describeRead(s.name, s.read).facts.join(" "));
   else if (s.details) {
-    out.push(...renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now, zone));
-    const city = s.details.city ?? s.city;
-    if (!s.details.online && !s.details.venue && !s.details.address && !s.details.city && city) out.push(`"${s.name}" is in ${city}; the exact address is only shown to registered guests.`);
-    const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "street address"].filter(Boolean);
-    if (missing.length) out.push(`Not stored for "${s.name}": ${missing.join(", ")}${s.url ? `; its page (${s.url}) is where to check` : ""}.`);
+    const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now, zone).join(" ");
+    const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "address"].filter(Boolean);
+    out.push(`Details on file for "${s.name}", which Cue sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`);
+    if (!s.details.online && !s.details.venue && !s.details.address && !s.details.city && s.city) out.push(`"${s.name}" is in ${s.city}; the exact address is only shown to registered guests.`);
   } else {
     if (s.city) out.push(`"${s.name}" is in ${s.city}; its street address isn't stored.`);
     out.push(`Its page hasn't been read yet, so Cue has no start time or address for "${s.name}"${s.url ? `; the link is the place to check` : ""}.`);
