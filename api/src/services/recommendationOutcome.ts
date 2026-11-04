@@ -36,9 +36,18 @@ export function followUpDate(match: any): string | null {
   return typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : null;
 }
 
+// A program, cohort, fellowship, accelerator, grant or open call is surfaced once as a community that fits; nothing asks "how was it"
+// about it (the purpose boundary, Royce 2026-11-04). Only a real event, one with a day to anchor "the morning after", gets the follow-up.
+const PROGRAM = /\b(?:fellowships?|accelerators?|incubators?|cohorts?|residenc(?:y|ies)|grants?|scholarships?|programs?|programmes?|open calls?|applications?|apply|funding|competitions?)\b/i;
+export function isRealEventForFollowUp(match: any): boolean {
+  if (!followUpDate(match)) return false;
+  if (match?.kind === "intro") return true; // "did it help?" for an introduction Cue made (services/networkIntroNudge.ts)
+  return !PROGRAM.test(`${match?.name ?? ""} ${match?.category ?? ""} ${match?.kind ?? ""}`);
+}
+
 export async function scheduleOutcomeFollowUp(userId: string, askText: string, match: TierMatch): Promise<void> {
   const eventDate = followUpDate(match);
-  if (match.tier !== 3 && !eventDate) return; // Tier 1/2 need a real event date to anchor "the day after"; Tier 3 doesn't have or need one
+  if (!isRealEventForFollowUp(match)) return; // only a real event, with a day to anchor "the morning after", is followed up
 
   try {
     await pool.query(
@@ -223,6 +232,11 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
     // from when it was recommended) is the anchor instead (2026-09-17).
     const eventDate: string | undefined = followUpDate(match) ?? undefined;
     const anchor: Date | null = eventDate ? null : row.send_at instanceof Date ? row.send_at : row.send_at ? new Date(row.send_at) : null;
+    // One queued before the boundary for a program or a thing with no event day: closed without a text (nothing asks "how was it").
+    if (!isRealEventForFollowUp(match)) {
+      await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
+      continue;
+    }
     if (!eventDate && !anchor) {
       await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
       continue;
