@@ -20,7 +20,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { hoursZone, REASONABLE_HOUR_END } from "./localHours.js";
 import { memberZone } from "./memberTime.js";
-import { outsideAsk } from "./askKind.js";
+import { outsideAsk, searchPartOf } from "./askKind.js";
 import { emptyTierCounts, type TierCounts } from "./tierCounts.js";
 
 export const DAILY_SWEEP_HOUR = 9;
@@ -556,6 +556,8 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
         await recordDecision({ layer: 5, decision: "ask.split", userId, outcome: "act", action: "floor_find_part", reason: "a mixed request on file: only its find part is searched", proposal: { askId: b.id, ask: b.text, work: read?.split?.work ?? null, find: askText, findIsLookout: read?.split?.findIsLookout ?? false } }).catch(() => {});
       }
     }
+    // A mixed ask (a connection ask with an errand in it) is searched for its connection part only (harness/scope.ts connectionPart).
+    askText = searchPartOf(askText);
     const searchB = askText === String(a.ask_text ?? "") ? b : { ...b, searchedPart: askText.slice(0, 160) };
     await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `ask:${a.id}`, text: String(a.ask_text ?? ""), createdAt: a.created_at ? new Date(a.created_at) : null } });
   }

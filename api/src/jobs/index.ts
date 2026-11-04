@@ -736,6 +736,7 @@ export function registerJobs(io: Server) {
             if (sp) await AS.notePlan(sp.plan, row, { taskId: sp.taskId, day: localToday ?? "", sweep: "hourly" }).catch(() => {});
             if (sp && sp.plan.search === null) continue; // followed as its task, or Co's own promise with no task (noted above)
             if (sp?.plan.search && sp.plan.search !== askText) askText = sp.plan.search;
+            askText = (await import("../services/askKind.js")).searchPartOf(askText);
           }
           if (searchedToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY) break;
           searchedToday++;

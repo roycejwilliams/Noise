@@ -17,8 +17,10 @@ import { withTraceUser } from "./llmTraceText.js";
 // research project, a job-board watch, a funding or investor search. The row stays so Cue still knows what they said (and shows it back);
 // it is never swept, checked in on, turned into a task or a look-out. Decided in code, no model call.
 export type AskKind = "find" | "help" | "person" | "outside";
-import { classifyScope } from "../harness/scope.js";
+import { classifyScope, connectionPart } from "../harness/scope.js";
 export const outsideAsk = (text: string): boolean => classifyScope(text).scope === "out";
+// What a sweep searches for an ask: a mixed ask ("founder dinners and a dentist") is searched for its connection part only.
+export const searchPartOf = (text: string): string => connectionPart(text) ?? text;
 
 // Co's own deliverables and promises are not asks (2026-10-08): "plan will be
 // delivered once ready" and "I'll send the outline tonight" were saved as
