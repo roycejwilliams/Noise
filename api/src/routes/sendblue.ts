@@ -2012,6 +2012,28 @@ export function sendblueRouter(io: Server): Router {
             if (r.meant && (thing(r.meant.item) || thing(r.meant.notItem))) recordDecision({ layer: 3, decision: "turn.meant", userId: user.id, outcome: "act", action: r.meant.item ?? "none", proposal: { label: thing(r.meant.item) ? r.meant.label : null, notLabel: thing(r.meant.notItem) ? r.meant.notLabel : null } }).catch(() => {});
           }
         }
+        // The find their words point at (the turn read's referent, #368; else one they name, else the one Cue's last text named): its
+        // stored fields and the day Cue sent it go in the facts however old the send is, so a question about it is answered from the
+        // record (2026-11-04: "Where is that one located?" and "What day did you send that" about a five-day-old find).
+        if (turn?.sent?.length && hasText) {
+          try {
+            const [T, R, mt] = await Promise.all([import("../services/turnContext.js"), import("../harness/repeatAsk.js"), import("../services/memberTime.js")]);
+            const meant = replyFacts.exchange?.read?.meant ?? null;
+            const meantItem = meant?.item ? replyFacts.exchange?.done.find((d) => d.id === meant.item) ?? null : null;
+            const lastCo = [...R.turnsFromConversation(recentConversation)].reverse().find((t) => t.from === "co")?.text ?? null;
+            const referred = T.referredSent(turn.sent, { message: resolvedContent, meantLabel: meantItem?.label ?? null, meantUrl: meantItem?.url ?? null, lastCoText: lastCo });
+            if (referred.length) {
+              const zone = await mt.memberZone(user.id).catch(() => null);
+              for (const f of referred) {
+                for (const line of T.sentFindFacts(f, new Date(), zone)) addFact(replyFacts, "known", line);
+                // The referent the turn read resolved, when the facts build didn't already name it: its own stored offer.
+                await (await import("../harness/replyGrounding.js")).addStoredOfferFacts(replyFacts, user.id, f.name, zone).catch(() => false);
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: the referred find's record failed (non-fatal):", err?.message ?? err);
+          }
+        }
         const brainDecision = planTextReply({ userId: user.id, read: turnRead, owed: owesReply, safetyConcern: crisisWording, clarify: decision.clarifyContext ?? null, repeat: repeatContext || null, walkinAsk: walkinAskInstruction || null, waiting: turn?.waiting?.length && !turn.knowledge?.restraint?.safetyHold ? (await import("../harness/waiting.js")).waitingMention(turn.waiting) : null, turn }, replyFacts);
 
         // Same strings downstream code (and the reply agent) already key on.
