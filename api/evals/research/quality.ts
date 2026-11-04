@@ -108,7 +108,7 @@ check("their passes and likes go into their next query", /outcome IN \('yes','no
 // ---- point A to point B: a yes moves toward the booking, on sourced facts only
 const picked = { name: "The Interval", url: "https://longnow.org/interval/book/", fields: [{ key: "capacity", label: "Capacity", value: "Up to 75 guests", checkedAt: at }, { key: "rate", label: "Rate", value: null, checkedAt: at }] };
 const yes = Q.nextStepAfterReaction("yes", picked);
-check("a yes points Cue at the venue's contact and following it to an answer, without drafting their email", /contact/.test(yes) && !/draftEmail/.test(yes) && /task/.test(yes) && /don't draft their emails/.test(yes));
+check("a yes carries nothing toward a booking: it says what the page states, with no contact to reach out to and no follow-up task", /Don't carry it toward a booking/.test(yes) && /don't give a contact/.test(yes) && /don't take it on as a task/.test(yes) && !/draftEmail/.test(yes));
 check("a yes rests only on the option's sourced fields (an unknown isn't passed on as a fact)", /Capacity: Up to 75 guests \(checked 2026-10-07\)/.test(yes) && !/Rate:/.test(yes) && /Nothing else about price or availability/.test(yes));
 check("'not like that' widens the search, never argues", /look again/.test(Q.nextStepAfterReaction("not_like_that", picked)) && /Don't argue/.test(Q.nextStepAfterReaction("not_like_that", picked)));
 check("the reaction tool hands Cue the option and its next step", /next: Q\.nextStepAfterReaction\(input\.reaction, hit\)/.test(tool));

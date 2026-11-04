@@ -200,22 +200,22 @@ const decisions = (d: string) => db.decisions.filter((x) => x.decision === d);
 // ---------------------------------------------------------------- 2. longer work, dispatched mid-call, delivered by text afterward
 let jobRow: any = null;
 {
-  const ASK = "Can you find me a caterer for the launch, about 40 people, nothing too fancy?";
+  const ASK = "Can you find me a designer for the launch, about 40 people, nothing too fancy?";
   const b = bridge([
     // Claude says it's on it before calling the tool: that line waits for the row.
-    [...text("I'm on it."), ...tool("s1", "startTask", { goal: "Find caterers for a 40-person launch", theirWords: ASK, steps: ["Search caterers in the Mission", "Text the best two"], firstStep: "Search caterers in the Mission", inHours: 1 })],
-    text("I'll text you what I find on caterers for the launch."),
+    [...text("I'm on it."), ...tool("s1", "startTask", { goal: "Find designers for a 40-person launch", theirWords: ASK, steps: ["Search designers in the Mission", "Text the best two"], firstStep: "Search designers in the Mission", inHours: 1 })],
+    text("I'll text you what I find on designers for the launch."),
   ]);
   await b.start();
   const a = await b.turn(ASK, "d1", 1);
   jobRow = db.tasks[0];
-  check("2. one co_tasks row: their own words, the goal, the steps, an owner (the member), open and due soon", db.tasks.length === 1 && jobRow.user_id === USER && jobRow.their_words === ASK && /caterers/i.test(jobRow.goal) && jobRow.steps.length === 2 && jobRow.status === "open" && !!jobRow.next_check_at, db.tasks);
-  check("2. keyed to this call and this need (one job per call and need)", jobRow.dispatch_key === T.dispatchKeyFor(b.call.callKey, "Find caterers for a 40-person launch") && jobRow.dispatch_key.startsWith(`call:${b.call.callKey}:`), jobRow.dispatch_key);
+  check("2. one co_tasks row: their own words, the goal, the steps, an owner (the member), open and due soon", db.tasks.length === 1 && jobRow.user_id === USER && jobRow.their_words === ASK && /designers/i.test(jobRow.goal) && jobRow.steps.length === 2 && jobRow.status === "open" && !!jobRow.next_check_at, db.tasks);
+  check("2. keyed to this call and this need (one job per call and need)", jobRow.dispatch_key === T.dispatchKeyFor(b.call.callKey, "Find designers for a 40-person launch") && jobRow.dispatch_key.startsWith(`call:${b.call.callKey}:`), jobRow.dispatch_key);
   const ins = timeline.indexOf("db:insert #1"), firstClaim = timeline.findIndex((l) => /^say:.*(I'm on it|I'll text you)/.test(l));
   check("2. the row is written BEFORE GPT-Live hears that it started or that a text is coming", ins >= 0 && firstClaim > ins, timeline);
-  check("2. both lines are said, once a job backs them", /I'm on it\..*I'll text you what I find on caterers/.test(a), a);
+  check("2. both lines are said, once a job backs them", /I'm on it\..*I'll text you what I find on designers/.test(a), a);
   check("2. the tool's receipt is in the decision log as done", decisions("tool.startTask").some((d) => d.action === "done"), decisions("tool.startTask"));
-  check("2. the call's ledger has the job (what the after-call steps read)", decisions("call.done_on_call").some((d) => d.action === "startTask" && /caterers/i.test(JSON.stringify(d.proposal))), decisions("call.done_on_call"));
+  check("2. the call's ledger has the job (what the after-call steps read)", decisions("call.done_on_call").some((d) => d.action === "startTask" && /designers/i.test(JSON.stringify(d.proposal))), decisions("call.done_on_call"));
   b.tw.close();
   await sleep(20);
   // After the call: the job's own turn (the 15-minute task cron), delivered through the task's text path.
@@ -236,14 +236,14 @@ let jobRow: any = null;
   // older than the job and "done" is (rightly) refused.
   const t = { ...(await T.getTask(USER, jobRow.id))!, createdAt: "2026-11-03T17:45:00Z" };
   // A job dispatched on a call closes as done only after a send about it went: finishing first is refused.
-  script.push({ tool: "finish", input: { status: "done", outcome: "found caterers" } }, { text: "ok" });
+  script.push({ tool: "finish", input: { status: "done", outcome: "found designers" } }, { text: "ok" });
   await TT.runTaskTurnWith(t, { ...deps, sentSince: async () => [] });
   check("2. afterward: 'done' before anything went out is refused (completed only once its delivery is known)", closed.length === 0, closed);
   script.length = 0;
   script.push(
-    { tool: "tellThem", input: { what: "A caterer for the 40-person launch", links: [CATER.url] } },
+    { tool: "tellThem", input: { what: "A designer for the 40-person launch", links: [CATER.url] } },
     { text: JSON.stringify({ captions: [{ n: 1, caption: "Mission Table Catering does events for 20 to 80 in the Mission." }], closing: null }) },
-    { tool: "finish", input: { status: "done", outcome: "sent a caterer" } },
+    { tool: "finish", input: { status: "done", outcome: "sent a designer" } },
   );
   await TT.runTaskTurnWith(t, deps);
   script.length = 0;
@@ -279,30 +279,30 @@ let jobRow: any = null;
   });
   check("3. after the call, the same ask read from the transcript is the job already open: no second task", opened.length === 0 && started.length === 1, { opened, started });
   const jobs = decisions("call.done_on_call").filter((d) => d.proposal?.kind === "start").flatMap((d) => d.proposal.labels);
-  const reworded = ["I'll text you who I find for the ceramics class.", "I'll send you the caterer options tonight."];
+  const reworded = ["I'll text you who I find for the ceramics class.", "I'll send you the designer options tonight."];
   const left = CC.coveredByJobs(reworded, jobs);
-  check("3. a promise GPT-Live said in its own words is the job's (no second promise task); one about something else stays", left.length === 1 && /caterer/.test(left[0]), { jobs, left });
+  check("3. a promise GPT-Live said in its own words is the job's (no second promise task); one about something else stays", left.length === 1 && /designer/.test(left[0]), { jobs, left });
 }
 
 // ---------------------------------------------------------------- 4. the same need twice, a delegation run twice, a delivery retried
 {
-  const ASK = "Can you look for a venue for the after-party, maybe 60 people?";
-  const start = (id: string, goal: string) => [...text("Sure."), ...tool(id, "startTask", { goal, theirWords: ASK, steps: ["Look for venues"], firstStep: "Look for venues", inHours: 1 })];
+  const ASK = "Can you look for a mixer for the after-party, maybe 60 people?";
+  const start = (id: string, goal: string) => [...text("Sure."), ...tool(id, "startTask", { goal, theirWords: ASK, steps: ["Look for mixers"], firstStep: "Look for mixers", inHours: 1 })];
   const b = bridge([
-    start("s1", "After-party venue for 60 people"),
-    text("I've started on the after-party venue."),
+    start("s1", "After-party mixer for 60 people"),
+    text("I've started on the after-party mixer."),
     // The same need again, a few turns later, its words in another order.
-    start("s2", "Venue for 60 people for the after-party"),
+    start("s2", "Mixer for 60 people for the after-party"),
     text("That's the same one I already started; it's still going."),
   ]);
   await b.start();
   await b.turn(ASK, "d1", 1);
-  const a2 = await b.turn("And you're looking for the after-party venue for sixty, right?", "d2", 2);
+  const a2 = await b.turn("And you're looking for the after-party mixer for sixty, right?", "d2", 2);
   check("4. the same need started again on the same call is the same job: one row", db.tasks.length === 1, db.tasks.map((t) => t.goal));
   check("4. ...and the second start came back as that job, not a new one (one receipt: a repeat inside the retry window never reaches the guard)", decisions("tool.startTask").length === 1 && /same one I already started/.test(a2) && JSON.stringify(b.reqs[b.reqs.length - 1].messages).includes("alreadyStarted"), { a2 });
   // The store's own backstop: two starts with the same key at once never both insert.
-  const key = T.dispatchKeyFor("u-jordan:gl:race", "Find a florist");
-  const both = await Promise.all([T.startTask({ userId: USER, goal: "Find a florist", theirWords: "a florist please", steps: [], firstPlan: "look", inHours: 1, dispatchKey: key }), T.startTask({ userId: USER, goal: "Find a florist", theirWords: "a florist please", steps: [], firstPlan: "look", inHours: 1, dispatchKey: key })]);
+  const key = T.dispatchKeyFor("u-jordan:gl:race", "Find a mentor");
+  const both = await Promise.all([T.startTask({ userId: USER, goal: "Find a mentor", theirWords: "a mentor please", steps: [], firstPlan: "look", inHours: 1, dispatchKey: key }), T.startTask({ userId: USER, goal: "Find a mentor", theirWords: "a mentor please", steps: [], firstPlan: "look", inHours: 1, dispatchKey: key })]);
   check("4. two starts of the same job at once: one row, the second gets it back", db.tasks.filter((t) => t.dispatch_key === key).length === 1 && both.every((r) => r.ok) && both.some((r: any) => r.existing), both.map((r: any) => r.existing ?? false));
   b.tw.close();
   // A delivery whose send failed is retried by the next wake, and only one text goes.
@@ -336,7 +336,7 @@ let jobRow: any = null;
   script.length = 0;
   check("4. the retry delivers it once, and only then is it done", sends.length === 1 && closed.join() === "done", { sends, closed });
   // A later result from the same call job (it has texted before): still a requested result, so it goes through the door's requested
-  // band and the member's rules as one. A call job is an "ask" task, and taskTurn sends every non-lookout task's text as owed
+  // coach and the member's rules as one. A call job is an "ask" task, and taskTurn sends every non-lookout task's text as owed
   // (services/taskTurn.ts tellThem: owed || source !== "lookout"), so no coInitiated, class "requested" (notifyGate PROACTIVE_CLASS).
   const owedFlags: unknown[] = [];
   const again = { ...t, lastTextedAt: "2026-11-01T17:00:00Z", textsSent: 1, theirReplyAt: null };
@@ -348,10 +348,10 @@ let jobRow: any = null;
 
 // ---------------------------------------------------------------- 5. a dispatch that fails, said honestly
 {
-  const ASK = "Can you find a photographer for the launch?";
+  const ASK = "Can you find a copywriter for the launch?";
   const b = bridge([
-    [...text("I'll get a search going for a photographer."), ...tool("s1", "startTask", { goal: "Find a launch photographer", theirWords: ASK, steps: ["Look"], firstStep: "Look", inHours: 1 })],
-    text("I've started on it, and I'll text you the photographers I find."),
+    [...text("I'll get a search going for a copywriter."), ...tool("s1", "startTask", { goal: "Find a launch copywriter", theirWords: ASK, steps: ["Look"], firstStep: "Look", inHours: 1 })],
+    text("I've started on it, and I'll text you the copywriters I find."),
     // The held turn's retry, told what it couldn't back.
     text("That didn't go through on my end, so nothing's running for it yet."),
   ]);
@@ -399,7 +399,7 @@ let jobRow: any = null;
   // An outbound call before AMD's verdict: no tools at all (nothing acts on what a recording said).
   const b = bridge([text("Hi Jordan.")], { outbound: true });
   await b.start();
-  b.ai.in({ type: "session.input_transcript.delta", delta: "Hi, you've reached Jordan, find me a caterer please, leave a message.", start_ms: 0, end_ms: 900 });
+  b.ai.in({ type: "session.input_transcript.delta", delta: "Hi, you've reached Jordan, find me a designer please, leave a message.", start_ms: 0, end_ms: 900 });
   b.ai.in({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "d1", target: "client" } });
   await sleep(150);
   check("6. outbound before a person is confirmed: the turn's tools are never built", b.builds() === 0 && !(b.reqs[0]?.tools ?? []).some((t: any) => t.name === "startTask"), { builds: b.builds(), tools: (b.reqs[0]?.tools ?? []).map((t: any) => t.name) });
@@ -408,36 +408,36 @@ let jobRow: any = null;
 
 // ---------------------------------------------------------------- 7. a correction mid-call, then a stop
 {
-  const ASK = "Find me a caterer for the launch, 40 people.";
+  const ASK = "Find me a designer for the launch, 40 people.";
   const b = bridge([
-    [...text("On it."), ...tool("s1", "startTask", { goal: "Caterer for a 40-person launch", theirWords: ASK, steps: ["Search caterers"], firstStep: "Search caterers", inHours: 1 })],
-    text("Started, I'll text you what I find on caterers."),
+    [...text("On it."), ...tool("s1", "startTask", { goal: "Designer for a 40-person launch", theirWords: ASK, steps: ["Search designers"], firstStep: "Search designers", inHours: 1 })],
+    text("Started, I'll text you what I find on designers."),
     // The correction goes on the same job.
     [...text("Got it, sixty."), ...tool("u1", "updateTask", { taskId: 1, note: "They said it's 60 people now, not 40, and vegetarian." })],
     text("I've changed it to sixty, vegetarian."),
     // The stop.
-    [...tool("c1", "closeTask", { taskId: 1, status: "dropped", outcome: "they're sorting the caterer themselves", theirWords: "forget the caterer, I'll sort it myself" }, 0)],
+    [...tool("c1", "closeTask", { taskId: 1, status: "dropped", outcome: "they're sorting the designer themselves", theirWords: "forget the designer, I'll sort it myself" }, 0)],
     text("Okay, I've stopped it. Nothing had gone out yet."),
   ]);
   await b.start();
   await b.turn(ASK, "d1", 1);
   const a2 = await b.turn("Actually make it sixty, and vegetarian.", "d2", 2);
   check("7. the correction is written on the same job (their words), and no second job starts", db.tasks.length === 1 && db.tasks[0].notes.some((n: any) => /60 people now, not 40, and vegetarian/.test(n.text)) && /changed it to sixty/.test(a2), { notes: db.tasks[0]?.notes, a2 });
-  const a3 = await b.turn("Forget the caterer, I'll sort it myself.", "d3", 3);
+  const a3 = await b.turn("Forget the designer, I'll sort it myself.", "d3", 3);
   check("7. the stop closes that job (dropped, on their word) before any of it ran", db.tasks[0].status === "dropped" && timeline.includes("db:close #1 dropped"), db.tasks[0]);
   check("7. ...and the result tells Cue what had already happened, which is what it says", /stopped it\. Nothing had gone out yet/.test(a3) && b.reqs.some((r) => JSON.stringify(r.messages).includes("Stopped before it ran: nothing from it went out.")), a3);
   // After the call, the transcript's ask doesn't open it again.
   const opened: any[] = [];
-  await TK.tasksFromCall(USER, `user: ${ASK} Actually make it sixty, and vegetarian. Forget the caterer, I'll sort it myself.`, { read: async () => [{ goal: "Find a caterer for a 60-person launch", quote: ASK }], start: (async (x: any) => { opened.push(x); return { ok: true, task: { id: 9 } }; }) as any, alreadyDone: async () => false, record: async () => {}, existing: async () => db.tasks.map((t) => ({ id: t.id, goal: t.goal, theirWords: t.their_words, status: t.status })), note: async () => null });
+  await TK.tasksFromCall(USER, `user: ${ASK} Actually make it sixty, and vegetarian. Forget the designer, I'll sort it myself.`, { read: async () => [{ goal: "Find a designer for a 60-person launch", quote: ASK }], start: (async (x: any) => { opened.push(x); return { ok: true, task: { id: 9 } }; }) as any, alreadyDone: async () => false, record: async () => {}, existing: async () => db.tasks.map((t) => ({ id: t.id, goal: t.goal, theirWords: t.their_words, status: t.status })), note: async () => null });
   check("7. a job they stopped on the call is never reopened from the transcript afterward", opened.length === 0, opened);
   b.tw.close();
 }
 {
   // A stop after the job had already run and texted them: Cue is told so, and can't say it was undone.
   reset();
-  const r = await T.startTask({ userId: USER, goal: "Find a florist", theirWords: "a florist please", steps: [], firstPlan: "look", inHours: 1 });
+  const r = await T.startTask({ userId: USER, goal: "Find a mentor", theirWords: "a mentor please", steps: [], firstPlan: "look", inHours: 1 });
   db.tasks[0].wakes = 1; db.tasks[0].texts_sent = 1;
-  const set = CT.buildCallTools({ userId: USER, callKey: "u-jordan:gl:stop", member: { phone: "+14155550175", firstName: "Jordan", city: "San Francisco", tasks: [{ id: (r as any).task.id, goal: "Find a florist" }], loops: null }, turnWords: "stop the florist thing, I don't want it", callWords: "stop the florist thing, I don't want it", lastCoLine: null, only: CAP.liveCallToolNames(), guide: G.LIVE_TOOLS_GUIDE });
+  const set = CT.buildCallTools({ userId: USER, callKey: "u-jordan:gl:stop", member: { phone: "+14155550175", firstName: "Jordan", city: "San Francisco", tasks: [{ id: (r as any).task.id, goal: "Find a mentor" }], loops: null }, turnWords: "stop the mentor thing, I don't want it", callWords: "stop the mentor thing, I don't want it", lastCoLine: null, only: CAP.liveCallToolNames(), guide: G.LIVE_TOOLS_GUIDE });
   const out: any = await set.run("closeTask", { taskId: (r as any).task.id, status: "dropped", outcome: "they don't want it", theirWords: "I don't want it" }, "c9");
   check("7. stopped after it had texted: the result says it already texted them once, and that it can't be taken back", out?.ok === true && /already texted them 1 time/.test(out.already) && /can't be taken back/.test(out.already), out);
 }
@@ -469,7 +469,7 @@ let jobRow: any = null;
   const J = { thisTurn: 0, corpus: "", onCall: false };
   check("9. families: 'I'm on it', 'it's in motion', 'I've kicked it off' are started; 'I'll text you what I find' a promise; 'you're booked' a booking", CL.jobClaimKind("I'm on it.") === "started" && CL.jobClaimKind("It's in motion.") === "started" && CL.jobClaimKind("I've kicked it off.") === "started" && CL.jobClaimKind("I'll text you what I find.") === "promise" && CL.jobClaimKind("You're booked for Friday.") === "booked");
   check("9. never claims: a question, an offer, a negation", [CL.jobClaimKind("Want me to look into it?"), CL.jobClaimKind("I haven't started on it yet."), CL.jobClaimKind("Should I text you the link?")].every((k) => k === null));
-  check("9. backing: a job about caterers backs 'I'll text you the caterers', not 'I'll send the florists'; a booking is never backed", CL.jobBacked("I'll text you the caterers I find.", { ...J, thisTurn: 1, corpus: "Find caterers for a 40-person launch" }) && !CL.jobBacked("I'll send you the florists.", { ...J, thisTurn: 1, corpus: "Find caterers for a 40-person launch" }) && !CL.jobBacked("I booked it.", { thisTurn: 3, corpus: "booked", onCall: true }));
+  check("9. backing: a job about designers backs 'I'll text you the designers', not 'I'll send the mentors'; a booking is never backed", CL.jobBacked("I'll text you the designers I find.", { ...J, thisTurn: 1, corpus: "Find designers for a 40-person launch" }) && !CL.jobBacked("I'll send you the mentors.", { ...J, thisTurn: 1, corpus: "Find designers for a 40-person launch" }) && !CL.jobBacked("I booked it.", { thisTurn: 3, corpus: "booked", onCall: true }));
   b.tw.close();
 }
 
@@ -517,66 +517,66 @@ let jobRow: any = null;
 }
 {
   // Hole 2: a job for one need on the call doesn't back a subject-less promise about another.
-  const ASK = "Can you find me a caterer for the launch, 40 people?";
+  const ASK = "Can you find me a designer for the launch, 40 people?";
   const b = bridge([
-    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find a caterer for a 40-person launch", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find a designer for a 40-person launch", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
     text("I'll text you what I find."),
     text("I'll text you what I find."),
-    text("Want me to start on a photographer too?"),
+    text("Want me to start on a copywriter too?"),
   ]);
   await b.start();
   const a1 = await b.turn(ASK, "d1", 1);
-  const a2 = await b.turn("And a photographer for it as well?", "d2", 2);
-  check("12. 'I'll text you what I find' stands on this turn's own job (the caterer)", /I'll text you what I find/.test(a1), a1);
-  check("12. ...but not on the next turn, about a photographer nothing was started for", !/I'll text you what I find/.test(a2) && /start on a photographer/.test(a2) && db.tasks.length === 1, a2);
-  const J = { thisTurn: 0, corpus: "Find a caterer for a 40-person launch", callJobs: "Find a caterer for a 40-person launch", onCall: true, need: "" };
-  check("12. jobBacked: a found listing alone backs nothing; a subject needs job text; a subject-less promise needs a job for this need", !CL.jobBacked("I'll text you more jazz nights I find.", { thisTurn: 0, corpus: "", callJobs: "", onCall: false, need: "anything for jazz" }) && CL.jobBacked("I'll text you the caterers I find.", J) && !CL.jobBacked("I'll text you what I find.", { ...J, need: "and a photographer?" }) && CL.jobBacked("I'll text you what I find.", { ...J, need: "the caterer, sixty people now" }) && !CL.jobBacked("I'll text you the caterers.", { ...J, onCall: false }));
+  const a2 = await b.turn("And a copywriter for it as well?", "d2", 2);
+  check("12. 'I'll text you what I find' stands on this turn's own job (the designer)", /I'll text you what I find/.test(a1), a1);
+  check("12. ...but not on the next turn, about a copywriter nothing was started for", !/I'll text you what I find/.test(a2) && /start on a copywriter/.test(a2) && db.tasks.length === 1, a2);
+  const J = { thisTurn: 0, corpus: "Find a designer for a 40-person launch", callJobs: "Find a designer for a 40-person launch", onCall: true, need: "" };
+  check("12. jobBacked: a found listing alone backs nothing; a subject needs job text; a subject-less promise needs a job for this need", !CL.jobBacked("I'll text you more jazz nights I find.", { thisTurn: 0, corpus: "", callJobs: "", onCall: false, need: "anything for jazz" }) && CL.jobBacked("I'll text you the designers I find.", J) && !CL.jobBacked("I'll text you what I find.", { ...J, need: "and a copywriter?" }) && CL.jobBacked("I'll text you what I find.", { ...J, need: "the designer, sixty people now" }) && !CL.jobBacked("I'll text you the designers.", { ...J, onCall: false }));
   b.tw.close();
 }
 {
   // Inside the 20 s window: a reworded retry of the same need is that job; a different need starts its own (review of #365, round 2).
-  const ASK = "Can you find caterers for the launch party?";
+  const ASK = "Can you find designers for the launch party?";
   const b = bridge([
-    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find caterers for the launch party", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    [...text("Sure."), ...tool("s1", "startTask", { goal: "Find designers for the launch party", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
     text("On it."),
     // The same need, reworded, seconds later (a re-sent delegation): its words in another order, "find" moved and "some" added.
-    [...text("Sure."), ...tool("s2", "startTask", { goal: "Caterers for the launch party, find some", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
-    text("I'll text you the caterer options."),
+    [...text("Sure."), ...tool("s2", "startTask", { goal: "Designers for the launch party, find some", theirWords: ASK, steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("I'll text you the designer options."),
     // A different need, seconds later.
-    [...text("Sure."), ...tool("s3", "startTask", { goal: "Find a florist for the launch party", theirWords: "and a florist", steps: ["Search"], firstStep: "Search", inHours: 1 })],
-    text("I'll text you the florists I find."),
-    // Caterers and a band: one shared word ("caterer") with the caterers job is not the same need (review of #365's follow-up: it
-    // folded into "Find caterers" and the band was lost).
-    [...text("Sure."), ...tool("s4", "startTask", { goal: "Caterers and a band for the launch party", theirWords: "caterers and a band", steps: ["Search"], firstStep: "Search", inHours: 1 })],
-    text("I'll text you the bands I find."),
+    [...text("Sure."), ...tool("s3", "startTask", { goal: "Find a mentor for the launch party", theirWords: "and a mentor", steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("I'll text you the mentors I find."),
+    // Designers and a coach: one shared word ("designer") with the designers job is not the same need (review of #365's follow-up: it
+    // folded into "Find designers" and the coach was lost).
+    [...text("Sure."), ...tool("s4", "startTask", { goal: "Designers and a coach for the launch party", theirWords: "designers and a coach", steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    text("I'll text you the coaches I find."),
   ]);
   await b.start();
   await b.turn(ASK, "d1", 1);
   const a2 = await b.turn(ASK, "d2", 2);
-  check("12. a reworded retry of the same need inside 20 s is that job: one row, and its claim stands on that job's goal", db.tasks.length === 1 && /caterer options/.test(a2), { tasks: db.tasks.map((t) => t.goal), a2 });
-  const a3 = await b.turn("And a florist too.", "d3", 3);
-  check("12. a different need inside 20 s starts its own job, and 'I'll text you the florists' stands on that one", db.tasks.length === 2 && db.tasks.some((t) => /florist/i.test(t.goal)) && /florists I find/.test(a3), { tasks: db.tasks.map((t) => t.goal), a3 });
-  const a4 = await b.turn("Actually caterers and a band.", "d4", 4);
-  check("12. 'caterers and a band' inside 20 s of 'Find caterers' starts its own job (the band isn't lost)", db.tasks.length === 3 && db.tasks.some((t) => /band/i.test(t.goal)) && /bands I find/.test(a4), { tasks: db.tasks.map((t) => t.goal), a4 });
+  check("12. a reworded retry of the same need inside 20 s is that job: one row, and its claim stands on that job's goal", db.tasks.length === 1 && /designer options/.test(a2), { tasks: db.tasks.map((t) => t.goal), a2 });
+  const a3 = await b.turn("And a mentor too.", "d3", 3);
+  check("12. a different need inside 20 s starts its own job, and 'I'll text you the mentors' stands on that one", db.tasks.length === 2 && db.tasks.some((t) => /mentor/i.test(t.goal)) && /mentors I find/.test(a3), { tasks: db.tasks.map((t) => t.goal), a3 });
+  const a4 = await b.turn("Actually designers and a coach.", "d4", 4);
+  check("12. 'designers and a coach' inside 20 s of 'Find designers' starts its own job (the coach isn't lost)", db.tasks.length === 3 && db.tasks.some((t) => /coach/i.test(t.goal)) && /coaches I find/.test(a4), { tasks: db.tasks.map((t) => t.goal), a4 });
   const same = (a: string, b: string) => CT.sameNeed(a, b, "k");
   check("12. sameNeed: a retry that adds no subject is the same job (action and filler words don't count)",
-    same("find a florist", "florists nearby") && same("Find caterers for the launch party", "Caterers for the launch party, find some") &&
-    same("Find vegan caterers in Oakland", "Vegan caterer options in Oakland") && same("Book a photographer", "a photographer"),
-    { florist: same("find a florist", "florists nearby") });
-  const pairs: [string, string][] = [["Find caterers", "caterers and a band"], ["golf club", "book club"], ["farmers market", "Saturday market"], ["pottery classes", "yoga classes"], ["tutor in Spanish", "tutor in math"],
-    ["Find caterers for the launch party", "Caterers and a band for the launch party"], ["Find caterers for the launch party", "Find a florist for the launch party"], ["Find caterers", "And a florist"], ["Find caterers", "find some"]];
+    same("find a mentor", "mentors nearby") && same("Find designers for the launch party", "Designers for the launch party, find some") &&
+    same("Find vegan designers in Oakland", "Vegan designer options in Oakland") && same("Book a copywriter", "a copywriter"),
+    { mentor: same("find a mentor", "mentors nearby") });
+  const pairs: [string, string][] = [["Find designers", "designers and a coach"], ["golf club", "book club"], ["farmers market", "Saturday market"], ["pottery classes", "yoga classes"], ["tutor in Spanish", "tutor in math"],
+    ["Find designers for the launch party", "Designers and a coach for the launch party"], ["Find designers for the launch party", "Find a mentor for the launch party"], ["Find designers", "And a mentor"], ["Find designers", "find some"]];
   check("12. sameNeed: any new subject is a new job (a duplicate over a lost request); never the tool alone", pairs.every(([a, b]) => !same(a, b)), pairs.filter(([a, b]) => same(a, b)));
   b.tw.close();
 }
 {
   // An alreadyStarted result never lends the second call's words to the job text.
   const P = await import("../../src/services/callLlmProxy.js");
-  const fake = { defs: [{ name: "startTask", description: "s", input_schema: { type: "object", properties: {} } }], names: new Set(["startTask"]), note: "", starts: () => true, jobs: { corpus: "", callJobs: "" }, turnFacts: { turnWords: "and a florist", tasks: [], canWriteTasks: false },
-    run: async () => ({ ok: true, taskId: 1, goal: "Find caterers for the launch party", alreadyStarted: true }) };
-  const reqs: any[] = [[...text("Sure."), ...tool("s", "startTask", { goal: "Find a florist" })], text("I'll text you the florists I find."), text("That's the caterers job; want me to start on a florist?")];
+  const fake = { defs: [{ name: "startTask", description: "s", input_schema: { type: "object", properties: {} } }], names: new Set(["startTask"]), note: "", starts: () => true, jobs: { corpus: "", callJobs: "" }, turnFacts: { turnWords: "and a mentor", tasks: [], canWriteTasks: false },
+    run: async () => ({ ok: true, taskId: 1, goal: "Find designers for the launch party", alreadyStarted: true }) };
+  const reqs: any[] = [[...text("Sure."), ...tool("s", "startTask", { goal: "Find a mentor" })], text("I'll text you the mentors I find."), text("That's the designers job; want me to start on a mentor?")];
   let out = "";
-  for await (const c of P.runCallLlm({ messages: [{ role: "system", content: "You are Cue." }, { role: "user", content: "and a florist" }] } as any, { stream: () => (async function* () { for (const e of reqs.shift() ?? text("Mm.")) yield e as any; })(), clean: true, tools: fake as any, jobClaims: true })) out += c.choices[0].delta.content ?? "";
-  check("12. a start returned as another job (alreadyStarted) backs only that job's goal: 'the florists' is held", !/florists I find/.test(out) && /start on a florist/.test(out), out);
+  for await (const c of P.runCallLlm({ messages: [{ role: "system", content: "You are Cue." }, { role: "user", content: "and a mentor" }] } as any, { stream: () => (async function* () { for (const e of reqs.shift() ?? text("Mm.")) yield e as any; })(), clean: true, tools: fake as any, jobClaims: true })) out += c.choices[0].delta.content ?? "";
+  check("12. a start returned as another job (alreadyStarted) backs only that job's goal: 'the mentors' is held", !/mentors I find/.test(out) && /start on a mentor/.test(out), out);
 }
 
 // ---------------------------------------------------------------- 13. review of #365: the safety cap, and tools only with a person
@@ -605,7 +605,7 @@ let jobRow: any = null;
 {
   // Outbound, AMD human: tools are given; a voicemail found while the turn is running stops the tool before it acts.
   const b = bridge([
-    [...text("One sec."), ...tool("s1", "startTask", { goal: "Find a caterer", theirWords: "a caterer", steps: ["Search"], firstStep: "Search", inHours: 1 })],
+    [...text("One sec."), ...tool("s1", "startTask", { goal: "Find a designer", theirWords: "a designer", steps: ["Search"], firstStep: "Search", inHours: 1 })],
     text("Okay."),
   ], { outbound: true, settleMs: 20, gaps: { 1: 250 } });
   await b.start();

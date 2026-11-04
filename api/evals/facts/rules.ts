@@ -82,7 +82,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   check("a find ask is, and only it", both.some((f) => f.kind === "ongoing" && /run club/.test(f.text) && !/sponsors/.test(f.text)));
   const sheet = capabilitySheet().join(" ");
   // (2026-10-01) The old event-only search couldn't find sponsors or investors; Co's web search can find sponsor programs and funds, checked on their own pages.
-  check("Cue knows its web search covers venues, vendors, people and programs", /searches the web \(venues, vendors, people, programs, events\)/.test(sheet));
+  check("Cue knows its web search covers people, communities, programs and events", /searches the web \(people, communities, programs, events\)/.test(sheet));
   check("saving an ask says what isn't searched", /Sponsors, investors, funding and advice are kept on file, not searched/.test(sheet));
   const rg = src("harness/replyGrounding.ts");
   check("every 'I can' is a capability claim, held to that exact thing", (/every "I can…" is one/.test(rg) && /A capability needs a capability FACT covering that exact thing/.test(rg)));

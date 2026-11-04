@@ -165,7 +165,7 @@ for (const m of ["stop working on the Sequin planning docs", "cancel the Sequin 
   console.log = () => {};
   const b = make("Can you look for founder dinners in SF?");
   const fresh = await b.tools.saveAsk.execute({ what: "founder dinners in SF" }, {});
-  const freshTask = await b.tools.startTask.execute({ goal: "Find a venue in SF for my birthday", theirWords: "look for founder dinners in SF", steps: ["Search"], firstStep: "Search", inHours: 2 }, {});
+  const freshTask = await b.tools.startTask.execute({ goal: "Find founder dinners in SF for my birthday week", theirWords: "look for founder dinners in SF", steps: ["Search"], firstStep: "Search", inHours: 2 }, {});
   console.log = quiet;
   check("a genuinely new ask saves as before", fresh.ok === true && b.facts.some((f) => f.kind === "ongoing" && /founder dinners in SF/.test(f.text)), fresh);
   check("…and a genuinely new task starts as before", freshTask.ok === true, freshTask);
