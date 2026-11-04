@@ -115,12 +115,11 @@ const DF = "https://www.googleapis.com/auth/drive.file";
   const line = items.find((i) => i.ref === "grant:docs");
   check("the grant shows in what Cue knows, in plain words, and removing it disconnects only that grant", !!line && /see only those/.test(line.text) && /if \(a !== "calendar" && a !== "docs"\)/.test(src("services/whatCoKnows.ts")) && K.fieldFor("grant:docs") === "their Google Docs connection");
   const tools = src("services/googleTools.ts");
-  check("Cue's Docs tool sends the Docs link (never the combined Google one)", /docsConnection: tool/.test(tools) && /createDocsLink\(ctx\.userId\)/.test(tools.slice(tools.indexOf("docsConnection: tool"), tools.indexOf("googleConnection: tool"))));
+  check("Cue's Docs tool sends the Docs link (never the combined Google one)", /docsConnection: tool/.test(tools) && /createDocsLink\(ctx\.userId\)/.test(tools.slice(tools.indexOf("docsConnection: tool"))));
   const caps = src("services/capabilities.ts");
-  const docs = caps.slice(caps.indexOf('id: "docs"'), caps.indexOf('id: "google"'));
+  const docs = caps.slice(caps.indexOf('id: "docs"'), caps.indexOf("// The lines Co doesn't cross"));
   check("what Cue says it can do: Drive files it makes only, never shared by Cue, gated on Cue's client", /sees only the files it creates there, never anything else in their Drive/.test(docs) && /GOOGLE_CUE_CLIENT_ID/.test(docs) && /tool: "docsConnection"/.test(docs));
-  const g = caps.slice(caps.indexOf('id: "google"'), caps.indexOf('tool: "googleConnection"')).split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
-  check("the old Google connection no longer claims Docs or the calendar", !/Google Doc|save a document|when they're busy/.test(g) && /Gmail/.test(g));
+  check("the old combined Google connection (Gmail) is gone from the registry", !/id: "google"|googleConnection/.test(caps));
 }
 
 // ---------------------------------------------------------------- the moment: never before a document is made (Royce, 2026-10-15)
@@ -154,17 +153,8 @@ const DF = "https://www.googleapis.com/auth/drive.file";
 
 // ---------------------------------------------------------------- the old combined grant: no member path, ever (Royce, 2026-10-15)
 {
-  const G = await import("../../src/services/googleAuth.js");
-  const Cap = await import("../../src/services/capabilities.js");
-  const { googleTools } = await import("../../src/services/googleTools.js");
-  check("the old connection asks only for Gmail metadata (the tester flow); never free/busy or Drive", JSON.stringify(G.GOOGLE_SCOPES) === JSON.stringify(["https://www.googleapis.com/auth/gmail.metadata"]));
-  check("its tool is team only: off every member's tool list and capability menu", Cap.teamOnlyTools().includes("googleConnection") && !Cap.capabilityMenu("text").here.some((h) => h.main === "google") && !Cap.callToolNames().includes("googleConnection"));
   const ct = src("agent/conversationTools.ts");
-  check("team-only tools are taken out after the Google tools join a member's set", ct.indexOf("Object.assign(tools, googleTools(ctx, notDone));") > 0 && /Object\.assign\(tools, googleTools\(ctx, notDone\)\);\n  if \(!ctx\.isTeam\) for \(const name of teamOnlyTools\(\)\) delete/.test(ct));
-  const sent: string[] = [];
-  const notDone: string[] = [];
-  const r = await (googleTools({ userId: "m1", phoneNumber: "+15550100002", dryRun: false, sendCoReply: async (m: any) => { sent.push(m.message); return true; } }, (t) => notDone.push(t), { isTeam: async () => false }).googleConnection as any).execute({ action: "connect" }, {});
-  check("a member reaching it anyway gets nothing: no link made or sent", r.ok === false && sent.length === 0 && /team only/.test(notDone.at(-1) ?? ""));
+  check("no Gmail tool exists for anyone: the Google tools are the calendar and Docs only", !/googleConnection/.test(ct + src("services/googleTools.ts") + src("services/capabilities.ts")));
 }
 
 // ---------------------------------------------------------------- what Cue knows: removing the Docs grant disconnects it

@@ -1,14 +1,12 @@
-// Co's Google tools (services/capabilities.ts calendar, docs, google): send a connect
+// Co's Google tools (services/capabilities.ts calendar, docs): send a connect
 // link, disconnect, or say what's connected. Co chooses it; code guards: the
 // link goes only to this member, as its own text, and a disconnect revokes
 // with Google and deletes everything Co had.
 import { tool } from "ai";
 import { z } from "zod";
 import { toolUse } from "./capabilities.js";
-import { createConnectLink, disconnectGoogle, googleConfigured, isConnected } from "./googleAuth.js";
 import { calendarConfigured, calendarConnected, createCalendarLink, createDocsLink, disconnectCalendar, disconnectDocs, docsConfigured, docsConnected } from "./cueGrants.js";
 import { docsMomentReached } from "./documentDelivery.js";
-import { isTeamMember } from "./extensions.js";
 
 type Ctx = {
   userId: string;
@@ -19,7 +17,7 @@ type Ctx = {
 };
 
 // deps: stand-ins for tests (who's on the team, whether the Docs or calendar moment has come).
-export function googleTools(ctx: Ctx, notDone: (text: string) => void, deps: { isTeam?: (userId: string) => Promise<boolean>; docsMoment?: (userId: string) => Promise<boolean>; calendarMoment?: (userId: string) => Promise<boolean> } = {}) {
+export function googleTools(ctx: Ctx, notDone: (text: string) => void, deps: { docsMoment?: (userId: string) => Promise<boolean>; calendarMoment?: (userId: string) => Promise<boolean> } = {}) {
   return {
     // The calendar grant (services/cueGrants.ts, the bounce): free/busy only, its own link and consent, never the combined Google
     // grant. The link shows a plain screen first (what Cue sees and never sees), and its page has a one-tap disconnect.
@@ -107,48 +105,6 @@ export function googleTools(ctx: Ctx, notDone: (text: string) => void, deps: { i
         }
         ctx.facts?.add("did_this_turn", "Sent them a one-time link (good for 15 minutes) to connect Google Docs: Cue saves documents it makes for them to their Drive and sees only those, never anything else there; it never shares a Doc; they can disconnect any time.");
         return { ok: true, note: "Sent the link as its own text. Say in a sentence what Cue will and won't see." };
-      },
-    }),
-    // The old combined connection, now only the Gmail helper's tester flow (Royce, 2026-10-15): the team only. Removed from a member's
-    // tools (conversationTools, teamOnly), and checked here again so no member path can ever start it.
-    googleConnection: tool({
-      description: toolUse("googleConnection"),
-      inputSchema: z.object({ action: z.enum(["connect", "disconnect", "status"]) }),
-      execute: async ({ action }) => {
-        if (ctx.dryRun) {
-          console.log(`[conversationReply dryRun] would ${action} Google for ${ctx.userId}`);
-          return { ok: true };
-        }
-        if (action === "connect" && !(await (deps.isTeam ?? isTeamMember)(ctx.userId).catch(() => false))) {
-          notDone("No Google link was sent: the Gmail connection is for the team only.");
-          return { ok: false, error: "Not available." };
-        }
-        if (action === "status") {
-          const c = await isConnected(ctx.userId);
-          ctx.facts?.add("known", c.connected ? "Their Gmail is connected (read-only: which sent emails await a reply)." : "Their Gmail isn't connected.");
-          return { ok: true, connected: c.connected };
-        }
-        if (action === "disconnect") {
-          const done = await disconnectGoogle(ctx.userId).catch(() => false);
-          ctx.facts?.add(done ? "did_this_turn" : "known", done ? "Disconnected their Google: revoked with Google and deleted everything Cue had from it." : "Their Google wasn't connected, so there was nothing to disconnect.");
-          return { ok: true, disconnected: done };
-        }
-        if (!googleConfigured()) {
-          notDone("No Google link was sent: Google connection isn't set up on Cue yet.");
-          return { ok: false, error: "Google connection isn't set up yet. Say it isn't available yet; don't promise when." };
-        }
-        const link = await createConnectLink(ctx.userId).catch(() => null);
-        if (!link) {
-          notDone("The Google connect link couldn't be made.");
-          return { ok: false, error: "Couldn't make the link. Say it didn't work." };
-        }
-        const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: link, asVoice: false });
-        if (sent === false) {
-          notDone("The Google connect link didn't send.");
-          return { ok: false, error: "The link didn't go through." };
-        }
-        ctx.facts?.add("did_this_turn", "Sent them a one-time link (good for 15 minutes) to connect Google: read-only calendar busy times and which sent emails await a reply, and saving documents they ask for as Google Docs in their Drive (Cue sees only the files it creates). Cue never sends email or changes their calendar.");
-        return { ok: true, note: "Sent the link as its own text. Tell them what Cue will and won't see, in a sentence." };
       },
     }),
   };

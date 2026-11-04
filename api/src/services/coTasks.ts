@@ -45,7 +45,7 @@ export type CoTask = {
   awaitingReply: boolean;
   theirReplyAt: string | null;
   // "followup": a check-in Co decides the timing of (services/followUps.ts).
-  // "research_brief": a find and a document, run as a fixed sequence (services/researchBrief.ts), not a model loop.
+  // "research_brief": a find and a text of finds, run as a fixed sequence (services/researchBrief.ts), not a model loop.
   kind?: "work" | "followup" | "research_brief";
   followup?: any;
   targetKey?: string | null;
@@ -552,25 +552,14 @@ export function briefFactLines(briefs: BriefView[], zone?: string | null): strin
   return briefs.map((b) => {
     const what = `"${b.goal}" (their words: "${b.theirWords.slice(0, 160)}")`;
     if (b.status === "open" && b.held) return `Research brief #${b.id} for them, ${what}, is finished but hasn't reached them yet (it was outside their hours). What it came to: "${b.held.text}". That goes to them${b.held.at ? ` around ${at(b.held.at)}` : " in their morning"}, unless you tell them first.`;
-    if (b.status === "open") return `Cue is putting together research brief #${b.id} for them, ${what}, since ${at(b.createdAt)}. It runs in the background and goes to them as a document when it's done.`;
+    if (b.status === "open") return `Cue is putting together research brief #${b.id} for them, ${what}, since ${at(b.createdAt)}. It runs in the background and texts them what it verified, as finds, when it's done.`;
     if (b.status === "done") return `Research brief #${b.id}, ${what}, finished${b.closedAt ? ` ${at(b.closedAt)}` : ""}: ${b.outcome ?? "sent"}.`;
     return `Research brief #${b.id}, ${what}, stopped${b.closedAt ? ` ${at(b.closedAt)}` : ""} without a brief: ${b.outcome ?? "no reason recorded"}.`;
   });
 }
 
-// A brief's last line to them, held to their hours: the task stays open (still theirs to hear) and wakes when the line can go.
-// A finished brief whose document didn't go out: kept on the task with the options, so the next wake re-sends it without
-// finding again (2026-10-08: a failed PDF closed the task as dropped and they never heard).
-export async function holdBriefDoc(userId: string, id: number, pending: { doc: unknown; options: { name: string; url: string }[]; tries: number; title: string; list: string }, at: Date): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{pendingDoc}', $3::jsonb), next_check_at = $4, plan_next = 'send the brief that did not go out', updated_at = NOW()
-     WHERE user_id = $1 AND id = $2 AND status = 'open' AND kind = 'research_brief'`,
-    [userId, id, JSON.stringify(pending), at],
-  );
-  return (rowCount ?? 0) > 0;
-}
-
-export async function holdBriefLine(userId: string, id: number, held: { text: string; status: "done" | "dropped"; outcome: string }, at: Date): Promise<boolean> {
+// A run's last texts to them, held to their hours: the task stays open (still theirs to hear) and wakes when they can go.
+export async function holdBriefLine(userId: string, id: number, held: { text: string; messages?: string[]; status: "done" | "dropped"; outcome: string }, at: Date): Promise<boolean> {
   const { rowCount } = await pool.query(
     `UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{held}', $3::jsonb), next_check_at = $4, plan_next = 'tell them what the brief came to', updated_at = NOW()
      WHERE user_id = $1 AND id = $2 AND status = 'open' AND kind = 'research_brief'`,

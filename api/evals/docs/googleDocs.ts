@@ -22,7 +22,6 @@ process.env.GOOGLE_DOCS_TEST_USERS = PAIR.join(",");
 // published project, same pattern as the calendar split")
 check("the Docs grant asks for drive.file and nothing wider in Drive (never drive, drive.readonly or documents)", JSON.stringify(CG.DOCS_SCOPES) === JSON.stringify([GD.DRIVE_FILE_SCOPE]) && new URL(CG.grantAuthUrl("docs", "st", "ch")).searchParams.get("scope") === GD.DRIVE_FILE_SCOPE);
 check("a Docs grant of exactly drive.file is kept; anything wider or else is refused", CG.scopeOnly("docs", GD.DRIVE_FILE_SCOPE) && !CG.scopeOnly("docs", `${GD.DRIVE_FILE_SCOPE} https://www.googleapis.com/auth/drive`) && !CG.scopeOnly("docs", "https://www.googleapis.com/auth/calendar.freebusy") && !CG.scopeOnly("docs", ""));
-check("the combined Google grant no longer asks for or accepts drive.file", !GA.GOOGLE_SCOPES.includes(GD.DRIVE_FILE_SCOPE as any) && !GA.scopesAllowed(`${GA.GOOGLE_SCOPES.join(" ")} ${GD.DRIVE_FILE_SCOPE}`));
 // ---- the Doc
 const html = GD.docsHtml(doc, { firstName: "Royce", date: "October 8, 2026" });
 check("the Doc carries the title, who and when, the sections as headings and bullets", /<h1>Cue: Product positioning &amp; scaling<\/h1>/.test(html) && /Prepared for Royce, October 8, 2026/.test(html) && /<h2>What separates us<\/h2><ul><li>We match inside the event\.<\/li>/.test(html));

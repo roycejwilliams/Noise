@@ -67,7 +67,7 @@ export type TurnContext = {
   inlineTarget: RepliedTo | null;
   ledger: { lines: string[]; named: string[] };
   capabilities: string[];
-  // Their own Google Calendar busy times and waiting emails, when connected (services/googleData.ts).
+  // Their own Google Calendar busy times, when connected (services/googleData.ts).
   google?: string[];
   // The details Co has for doing things on their behalf (services/memberKit.ts).
   kit?: Kit;
@@ -560,10 +560,9 @@ export function newestDocs(receipts: Receipt[], n: number): NonNullable<TurnCont
 }
 
 async function loadGoogleFacts(userId: string, zone: string | null): Promise<string[]> {
-  const { isConnected } = await import("./googleAuth.js");
   const { calendarConnected } = await import("./cueGrants.js");
-  // Busy times come from their calendar grant, waiting emails from the Gmail tester flow: either connection, only their own.
-  if (!(await isConnected(userId)).connected && !(await calendarConnected(userId).catch(() => null))) return [];
+  // Busy times come from their calendar grant, only their own.
+  if (!(await calendarConnected(userId).catch(() => null))) return [];
   const { googleFactsFor } = await import("./googleData.js");
   return googleFactsFor(userId, zone);
 }

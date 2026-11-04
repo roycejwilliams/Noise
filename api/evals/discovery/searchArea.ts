@@ -311,8 +311,8 @@ function world(o: { home?: string | null; down?: boolean; area?: string | null; 
   weTool.changedBy = ["setSearchArea"];
   check("a true \"we\" change with its tool behind it stands", !G.codeChecks("We moved your searches to SF from now on.", weTool, { message: ROYCE, recentConversation: "" }).some((c) => c.name === "no_unbacked_change"));
   // Reclassified (2026-10-31): a share link made, an invite used, a connection that can be disconnected each change something.
-  const moved = ["shareArtifact", "sendInvite", "calendarConnection", "docsConnection", "googleConnection"];
-  check("shareArtifact, sendInvite and the three connection tools change something (they back a change claim)", moved.every((t) => CAP.CHANGES_SOMETHING.has(t) && !CAP.CHANGES_NOTHING.has(t)), moved.filter((t) => !CAP.CHANGES_SOMETHING.has(t) || CAP.CHANGES_NOTHING.has(t)));
+  const moved = ["shareArtifact", "sendInvite", "calendarConnection", "docsConnection"];
+  check("shareArtifact, sendInvite and the connection tools change something (they back a change claim)", moved.every((t) => CAP.CHANGES_SOMETHING.has(t) && !CAP.CHANGES_NOTHING.has(t)), moved.filter((t) => !CAP.CHANGES_SOMETHING.has(t) || CAP.CHANGES_NOTHING.has(t)));
   for (const [line, tool] of [["I've disconnected your calendar, so it's switched off from now on.", "calendarConnection"], ["I just changed your Google Docs connection over to off.", "docsConnection"]] as const) {
     const f = G.baseReplyFacts();
     f.changedBy = [tool];

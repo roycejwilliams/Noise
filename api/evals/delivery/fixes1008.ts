@@ -19,8 +19,6 @@ const DD = await import("../../src/services/documentDelivery.js");
 const DS = await import("../../src/services/documentSheet.js");
 const RB = await import("../../src/services/researchBrief.js");
 const MT = await import("../../src/services/memberTime.js");
-const PE = await import("../../src/services/planEmail.js");
-const PS = await import("../../src/services/planSheet.js");
 const Cap = await import("../../src/services/capabilities.js");
 const LT = await import("../../src/agent/loopTools.js");
 const { STARTED_WORK } = await import("../../src/services/promises.js");
@@ -44,8 +42,8 @@ function wired(o: { render?: "ok" | "fail"; sendFails?: boolean } = {}) {
 // ---------------------------------------------------------------- F1
 {
   const lt = src("agent/loopTools.ts");
-  check("F1: researchBrief's fact starts \"Started task #<id>:\"", lt.includes('ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: researching a venue brief for them in the background') && !lt.includes("`Started researching a venue brief"));
-  const filled = `Started task #412: researching a venue brief for them in the background ("launch dinner for 40"). It comes as a document when it's ready; nothing about options, prices or availability is known yet.`;
+  check("F1: researchBrief's fact starts \"Started task #<id>:\"", lt.includes('ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: researching venues for them in the background') && !lt.includes("`Started researching a venue brief"));
+  const filled = `Started task #412: researching venues for them in the background ("launch dinner for 40"). They come as finds by text when it's ready; nothing about options, prices or availability is known yet.`;
   check("F1: ...which is the shape that backs a promise (promises.ts STARTED_WORK)", STARTED_WORK.test(filled), filled.slice(0, 80));
   const { createReplyFacts, addFact, unbackedFollowup } = await import("../../src/harness/replyGrounding.js");
   const rf = createReplyFacts();
@@ -54,97 +52,7 @@ function wired(o: { render?: "ok" | "fail"; sendFails?: boolean } = {}) {
   check("F1: ...and without it, the same promise is unbacked", unbackedFollowup("On it. I'll text you the brief once it's ready.", createReplyFacts()) !== null);
 }
 
-// ---------------------------------------------------------------- F2: briefs through the receipts
-const opt = (name: string, url: string, checkedAt = "2026-10-08T17:00:00.000Z") => ({ name, url, checkedAt, reader: "scripted" as const, fields: RB.peerspaceFields({ hourlyPrice: 125, priceRange: null, minimumHours: 2, capacity: 50, available: "yes", evidence: "" }, { date: "2026-10-22", start: "6:00 pm" }, checkedAt) });
-const BRIEF = RB.buildBrief({ title: "Venue options: launch dinner for 40", asked: "launch dinner for 40", finds: [opt("Shaws", "https://www.peerspace.com/pages/listings/636c4558d6990c0022346e9d"), opt("Copra", "https://www.peerspace.com/pages/listings/636c4558d6990c0022346e9e")], memberContext: [], zone: SF });
-const task = { id: 412, userId: "u1", createdAt: "2026-10-08T16:00:00.000Z", theirWords: "find venues for my launch dinner for 40" }; // 9am SF
 const person = { firstName: "Jordan", phone: "+14155550123" };
-const openHours = async (_u: string, zone: string | null, now: Date, o: { immediate?: boolean } = {}) => (!o.immediate && !MT.deliverableAt(now, zone) ? DD.QUIET_HOURS : null);
-const briefDeps = (h: ReturnType<typeof wired>, now: Date, extra: any = {}) => ({ deliver: h.deliver, receipts: h.receipts, now: () => now, blocked: openHours, record: async () => {}, log: async () => {}, ...extra });
-{
-  const h = wired();
-  const noon = at("2026-10-08T19:00:00Z"); // noon SF, three hours after they asked
-  const r = await RB.deliverBrief(BRIEF, { task, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: false, rechecked: 0 }, briefDeps(h, noon));
-  const rec = h.receipts.all[0];
-  check("F2: a brief goes with its one line, saying when they asked", r.sent && h.wire.length === 1 && !!h.wire[0].media_url && h.wire[0].content === "Here's the venue brief you asked for earlier today.", h.wire);
-  check("F2: ...and is recorded: a receipt with the task, its source, a key from what it's for", !!rec && rec.taskId === 412 && rec.source === "task:412" && rec.docKey === "venue-brief-launch-dinner-for-40" && rec.version === 1 && rec.status === "delivered", rec);
-  check("F2: it shows under the documents delivered", /^Delivered "Venue options: launch dinner for 40" \(doc #1, version 1\)/.test(R.receiptLines(h.receipts.all, SF, noon)[0] ?? ""));
-}
-{
-  // The render fails: the text goes now with "PDF follows", the receipt is pdf_pending, the brief counts as sent (no pendingDoc), and
-  // the receipt retry is the one path that sends the PDF. The text never goes twice.
-  const h = wired({ render: "fail" });
-  const noon = at("2026-10-08T19:00:00Z");
-  const r = await RB.deliverBrief(BRIEF, { task, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: false, rechecked: 0 }, briefDeps(h, noon));
-  check("F2: a failed render: the brief as text now, its line first, saying the PDF follows", r.sent && (r as any).pdfPending === true && h.wire.length === 1 && !h.wire[0].media_url && h.wire[0].content.startsWith("Here's the venue brief you asked for earlier today.") && /The PDF version will follow\.$/.test(h.wire[0].content), h.wire);
-  check("F2: ...recorded as pdf_pending with a retry set (the one retry path for it)", h.receipts.all.length === 1 && h.receipts.all[0].status === "pdf_pending" && !!h.receipts.all[0].nextRetryAt);
-  h.setRender("ok");
-  const deps = { receipts: h.receipts, deliver: h.deliver, person: async () => ({ firstName: "Jordan", phone: person.phone, zone: SF }), blocked: async () => null, log: async () => {}, claim: async () => ({ ok: true as const, ledgerId: 1 }), release: async () => {} };
-  const due = new Date(h.receipts.all[0].nextRetryAt!.getTime() + 1000);
-  const fixed = await DD.retryPendingPdfs(due, deps);
-  const again = await DD.retryPendingPdfs(new Date(due.getTime() + 3_600_000), deps);
-  check("F2: the PDF follows once from the receipt, with its own line; the text never again", fixed.sent === 1 && again.sent === 0 && h.wire.length === 2 && !!h.wire[1].media_url && h.wire[1].content === "Here's the PDF version of the venue brief." && h.wire.filter((m) => /The PDF version will follow/.test(m.content)).length === 1, h.wire);
-  const rb = src("services/researchBrief.ts");
-  const run = rb.slice(rb.indexOf("export async function runResearchBriefTask"));
-  check("F2: the task closes on a sent brief (pdfPending included) and keeps pendingDoc only when nothing reached them", /if \(!delivered\.sent\) \{[\s\S]{0,500}holdBriefDoc\(/.test(run) && /const sent = delivered\.sent;/.test(run) && /if \(r\.sent\) \{\s*await closeTask/.test(run));
-  check("F2: no brief path calls deliverDocument directly any more (every send is deliverAndRecord)", !/deliverDocument\(/.test(run) && /D\.deliverAndRecord\(/.test(rb));
-}
-{
-  // Nothing reached them (render and text both failed): no receipt, so no receipt retry; the brief's own pendingDoc is the one path.
-  const h = wired({ render: "fail", sendFails: true });
-  const r = await RB.deliverBrief(BRIEF, { task, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: false, rechecked: 0 }, briefDeps(h, at("2026-10-08T19:00:00Z")));
-  check("F2: nothing reached them: not sent, no receipt, nothing for the receipt retry", !r.sent && h.receipts.all.length === 0 && (await h.receipts.duePdfRetries(at("2026-10-09T19:00:00Z"))).length === 0, r);
-}
-{
-  // Their quiet hours: held to 8am, not sent at night; asked for it right away, it goes.
-  const h = wired();
-  const twoAm = at("2026-10-09T09:00:00Z");
-  const r = await RB.deliverBrief(BRIEF, { task, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: false, rechecked: 0 }, briefDeps(h, twoAm));
-  check("F2: a brief ready at 2am waits for their 8am, nothing sent at night", !r.sent && (r as any).quietUntil?.toISOString() === "2026-10-09T15:00:00.000Z" && h.wire.length === 0, r);
-  const h2 = wired();
-  const r2 = await RB.deliverBrief(BRIEF, { task: { ...task, theirWords: `${task.theirWords}, send it right away` }, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: false, rechecked: 0 }, briefDeps(h2, twoAm));
-  check("F2: ...unless they asked for it right away", r2.sent && h2.wire.length === 1);
-  const r3 = await RB.deliverBrief(BRIEF, { task, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: false, rechecked: 0 }, briefDeps(h, at("2026-10-09T15:00:00Z")));
-  check("F2: at 8am it goes, saying when they asked", r3.sent && h.wire[0]?.content === "Here's the venue brief you asked for yesterday.", h.wire);
-  check("F2: a pause on proactive outreach doesn't hold a brief they asked for; their opt-out does (documentSendBlocked asked)", /if \(!o\.asked && proactivePaused\(\)\)/.test(src("services/documentDelivery.ts")) && /asked: true/.test(src("services/researchBrief.ts")));
-}
-{
-  // Asked again: unchanged, the same version again; re-checked and changed, the next version with its change line.
-  const h = wired();
-  const t0 = at("2026-10-08T19:00:00Z");
-  await RB.deliverBrief(BRIEF, { task, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: false, rechecked: 0 }, briefDeps(h, t0));
-  const same = await RB.deliverBrief(BRIEF, { task: { ...task, id: 413 }, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: true, rechecked: 0 }, briefDeps(h, at("2026-10-08T20:00:00Z")));
-  check("F2: the same brief asked again: the same version goes again", same.sent && h.wire.length === 2 && h.receipts.all[1].version === 1);
-  const changed = { ...BRIEF, sections: BRIEF.sections.slice(1) };
-  const v2 = await RB.deliverBrief(changed, { task: { ...task, id: 414 }, person, zone: SF, wantsGoogle: false, what: "launch dinner for 40", again: true, rechecked: 2 }, briefDeps(h, at("2026-10-08T21:00:00Z")));
-  check("F2: re-checked and changed: version 2, its one line says what changed", v2.sent && h.receipts.all[2].version === 2 && h.wire[2].content === "Updated the venue brief: rechecked 2 options against their own pages.", h.wire[2]);
-  const other = await RB.deliverBrief({ ...BRIEF, title: "Venue options: rooftop party" }, { task: { ...task, id: 415 }, person, zone: SF, wantsGoogle: false, what: "rooftop party", again: false, rechecked: 0 }, briefDeps(h, at("2026-10-08T21:30:00Z")));
-  check("F2: a brief for something else is its own document, not a version of the last", other.sent && h.receipts.all[3].version === 1 && h.receipts.all[3].docKey === "venue-brief-rooftop-party");
-}
-
-// ---------------------------------------------------------------- F3: plans recorded
-{
-  const plan = PS.resolvePlan({ title: "Saturday in Sonoma", note: "A slow day, the way you described it.", steps: [{ what: "Tasting at the winery", when: "2026-10-10T13:00", until: "2026-10-10T15:00", where: "Sonoma Plaza" }, { what: "Dinner", when: "2026-10-10T19:00" }], notes: ["Bring a jacket"] }, SF, () => null);
-  const doc = PE.planAsDoc(plan);
-  check("F3: a plan becomes a document: its steps and notes as sections", doc.title === "Saturday in Sonoma" && doc.sections[0].heading === "The plan" && /^Sat Oct 10, 1 pm to 3 pm: Tasting at the winery, Sonoma Plaza$/.test(doc.sections[0].bullets[0]) && doc.sections[1].bullets[0] === "Bring a jacket", doc.sections);
-  const h = wired();
-  const t = at("2026-10-08T19:00:00Z");
-  const sheet = Buffer.from("%PDF plan sheet");
-  let rendered: Buffer | null = null;
-  const deliver = (d: any, to: any, target: any) => DD.deliverDocument(d, to, target, { render: async () => sheet, cache: (b: Buffer, name?: string) => { rendered = b; return `https://files.test/${name}`; }, send: async (m: any) => { h.wire.push(m); }, from: "+1" } as any);
-  const rd = await DD.deliverAndRecord(doc, { userId: "u1", firstName: "Jordan", phone: person.phone, zone: SF, now: t, line: "Here's the plan for Saturday." }, { askedForGoogle: false, source: "reply:plan" }, { deliver, receipts: h.receipts, now: () => t });
-  check("F3: the plan's own sheet is the attachment, with its line, and a receipt", rd.sentOk.length === 1 && rendered === sheet && h.wire[0].content === "Here's the plan for Saturday." && h.receipts.all[0].source === "reply:plan", h.wire);
-  await DD.recordSent(doc, { userId: "u1", channel: "email", line: null, source: "reply:plan", now: at("2026-10-08T19:01:00Z") }, h.receipts);
-  check("F3: the email is recorded too, as the same version", h.receipts.all.length === 2 && h.receipts.all[1].channel === "email" && h.receipts.all[1].version === 1);
-  check("F3: the plan shows under the documents delivered (newest: to their email)", /^Delivered "Saturday in Sonoma" \(doc #2, version 1\) to their email/.test(R.receiptLines(h.receipts.all, SF, t)[0] ?? ""), R.receiptLines(h.receipts.all, SF, t));
-  check("F3: readDocument can answer from it (the section found, verbatim)", R.findSection(h.receipts.all[0].doc, "what time is the winery tasting?")?.text.includes("Tasting at the winery") === true);
-  const dup = await DD.deliverAndRecord(doc, { userId: "u1", firstName: "Jordan", phone: person.phone, zone: SF, now: t }, { askedForGoogle: false, source: "reply:plan" }, { deliver, receipts: h.receipts, now: () => t });
-  check("F3: the same plan again on Cue's own: refused", !!dup.duplicate && h.wire.length === 1);
-  check("F3: the table takes 'email' (the check widened on tables made before)", /channel IN \('pdf_text','google_docs','text_fallback','email'\)/.test(src("db/migrations.ts")) && /DROP CONSTRAINT IF EXISTS document_deliveries_channel_check/.test(src("db/migrations.ts")));
-  const lt = src("agent/loopTools.ts");
-  const ep = lt.slice(lt.indexOf("emailPlan: tool({"), lt.indexOf("researchBrief: tool({"));
-  check("F3: emailPlan sends by text through deliverAndRecord and records the email with recordSent", /D\.deliverAndRecord\(doc,/.test(ep) && /D\.recordSent\(doc, \{ userId: ctx\.userId, channel: "email"/.test(ep) && /resend: D\.asksToResend\(theirWords\(\)\)/.test(ep));
-}
 
 // ---------------------------------------------------------------- F4/F5: one resend rule
 {
@@ -196,19 +104,17 @@ const briefDeps = (h: ReturnType<typeof wired>, now: Date, extra: any = {}) => (
   check("F10: a task's document goes with Cue's line, one send", r.ok && h.wire.length === 1 && h.wire[0].content === "Here's the presence plan you asked for last night.", { r, wire: h.wire });
   const lt = src("agent/loopTools.ts");
   const wd = lt.slice(lt.indexOf("writeDocument: tool({"), lt.indexOf("readDocument: tool({"));
-  const ep = lt.slice(lt.indexOf("emailPlan: tool({"), lt.indexOf("researchBrief: tool({"));
-  check("F10: both tools end with \"Delivered with its line; send nothing more about it unless you have a question for them.\"", LT.DELIVERED_NOTE === "Delivered with its line; send nothing more about it unless you have a question for them." && /DELIVERED_NOTE/.test(wd) && /DELIVERED_NOTE/.test(ep) && !/Say in one line what it covers/.test(lt) && !/Say in one line where it is; don't list the steps again/.test(lt));
-  check("F10: both tools pass Cue's line through captionFor", /captionFor\(\{ line: input\.line/.test(wd) && /captionFor\(\{ line: input\.line/.test(ep));
-  check("F10: the registry tells Cue the line is the whole delivery", /Give line: the one sentence that goes with the attachment/.test(Cap.ABILITIES.find((a) => a.id === "write_document")!.use ?? "") && /Give line: the one sentence that goes with the PDF/.test(Cap.ABILITIES.find((a) => a.id === "email_plan")!.use ?? ""));
+  check("F10: the document tool ends with \"Delivered with its line; send nothing more about it unless you have a question for them.\"", LT.DELIVERED_NOTE === "Delivered with its line; send nothing more about it unless you have a question for them." && /DELIVERED_NOTE/.test(wd) && !/Say in one line what it covers/.test(lt) && !/Say in one line where it is; don't list the steps again/.test(lt));
+  check("F10: both tools pass Cue's line through captionFor", /captionFor\(\{ line: input\.line/.test(wd));
+  check("F10: the registry tells Cue the line is the whole delivery", /Give line: the one sentence that goes with the attachment/.test(Cap.ABILITIES.find((a) => a.id === "write_document")!.use ?? ""));
 }
 
 // ---------------------------------------------------------------- B7: a hold line while the PDF is made
 {
   const lt = src("agent/loopTools.ts");
   const wd = lt.slice(lt.indexOf("writeDocument: tool({"), lt.indexOf("readDocument: tool({"));
-  const ep = lt.slice(lt.indexOf("emailPlan: tool({"), lt.indexOf("researchBrief: tool({"));
   check("B7: the hold skips when ✍️ already went on their text this turn", /const holdWhileWriting = async \(line\?: string\) => \{\s*if \(ctx\.ackSent === "✍️"\) return;\s*await hold\(line\);/.test(lt));
-  check("B7: writeDocument and emailPlan take whileWriting and hold before the render", /whileWriting: z\.string\(\)\.optional\(\)/.test(wd) && wd.indexOf("holdWhileWriting(input.whileWriting)") > 0 && wd.indexOf("holdWhileWriting(input.whileWriting)") < wd.indexOf("deliverAndRecord(doc, to") && /whileWriting: z\.string\(\)\.optional\(\)/.test(ep) && ep.indexOf("holdWhileWriting(input.whileWriting)") < ep.indexOf("buildPlanFiles(plan"));
+  check("B7: writeDocument takes whileWriting and hold before the render", /whileWriting: z\.string\(\)\.optional\(\)/.test(wd) && wd.indexOf("holdWhileWriting(input.whileWriting)") > 0 && wd.indexOf("holdWhileWriting(input.whileWriting)") < wd.indexOf("deliverAndRecord(doc, to"));
 }
 
 // ---------------------------------------------------------------- B5: yesterday's finds in today's turn
@@ -226,25 +132,14 @@ const briefDeps = (h: ReturnType<typeof wired>, now: Date, extra: any = {}) => (
   const salon = loop.found.get("https://lu.ma/salon")!;
   const nopa = loop.found.get("https://nopasf.com/private-events")!;
   check("B5: past its window (or never dated) a find backs nothing; inside it, it does", LT.staleFind(salon, now) && LT.usableFacts(salon, now) === "" && !LT.staleFind(nopa, now) && /\$200 an hour/.test(LT.usableFacts(nopa, now)) && LT.staleFind(loop.found.get("https://x.example/s")!, now));
-  check("B5: a stale event can't fill a plan step until it's re-read", /read its page again \(readPage\)/.test(LT.recordFromFound(salon, now)?.blocked ?? ""));
-  // emailPlan's re-read: the event's own page, now, gives the step its time and place.
-  const fetched: string[] = [];
-  const details = { startAt: "2026-10-10T19:00:00-07:00", endAt: "2026-10-10T22:00:00-07:00", timezone: SF, venue: "The Rooftop", address: "1 Market St", soldOut: false };
-  const refreshed = await LT.refreshStoredEvents(loop, ["https://lu.ma/salon", "https://nopasf.com/private-events"], async (u) => { fetched.push(u); return details; }, (u) => u.includes("lu.ma"), now);
-  const rec = LT.recordFromFound(loop.found.get("https://lu.ma/salon"), now);
-  check("B5: emailPlan re-reads yesterday's event (only events) and its record fills the step", refreshed === 1 && fetched.join() === "https://lu.ma/salon" && rec?.hasRecord === true && !rec.blocked && rec.startAt === details.startAt && rec.venue === "The Rooftop", rec);
-  const plan = PS.resolvePlan({ title: "Saturday", note: "x", steps: [{ link: "https://lu.ma/salon", what: "Rooftop Salon" }] }, SF, (l) => LT.recordFromFound(loop.found.get(l), now));
-  const problems = PS.planProblems({ title: "Saturday", note: "x", steps: [{ link: "https://lu.ma/salon", what: "Rooftop Salon" }] }, plan, { facts: "Rooftop Salon", theirs: "plan saturday", now: new Date(now), recordFor: (l) => LT.recordFromFound(loop.found.get(l), now) });
-  check("B5: ...so a plan built today on yesterday's event passes, with its time from the record", problems.length === 0 && plan.steps[0].start?.toISO()?.startsWith("2026-10-10T19:00") === true, problems);
   const nopaAfter = loop.found.get("https://nopasf.com/private-events")!;
   LT.refreshFound(nopaAfter, "Capacity: 40 people; Rate: $250 an hour", now);
   check("B5: a page read again replaces what it said then and is fresh from now", /\$250/.test(nopaAfter.facts) && !/\$200/.test(nopaAfter.facts) && !LT.staleFind(nopaAfter, now) && nopaAfter.checkedAt === new Date(now).toISOString());
   const lt = src("agent/loopTools.ts");
   const sf = lt.slice(lt.indexOf("export async function storedFinds"), lt.indexOf("export function loopTools"));
   check("B5: every stored read is this member's own (user_id), nothing else's", /recentResearchFinds\(userId\)/.test(sf) && /recentShownFinds\(userId\)/.test(sf) && /WHERE owner_user_id = \$1 AND subject = 'co' AND relation = 'sent'/.test(sf) && /\[userId, SENT_EVENT_DAYS\]/.test(sf) && /loadBrief\(userId\)/.test(sf) && (sf.match(/pool\s*\.query\(/g) ?? []).length === 1);
-  check("B5: the turn seeds once, on first use (never in tests), and the tools that cite a find wait for it", /const seeded = \(\): Promise<unknown> => \(seeding \?\?= ctx\.dryRun \|\| ctx\.stubSearch \? Promise\.resolve\(\) : storedFinds\(ctx\.userId\)/.test(lt) && (lt.match(/await seeded\(\);/g) ?? []).length >= 4);
-  check("B5: plans, documents and captions cite only fresh facts", /usableFacts\(f\)\}`\), brief \? JSON\.stringify\(brief\)/.test(lt) && /\$\{f\.name\} \$\{usableFacts\(f\)\}`\)\]\.join/.test(lt) && /captionProblems\(it\.caption, `\$\{f\.name\} \$\{usableFacts\(f\)\}`/.test(lt));
-  check("B5: emailPlan's recordFor reads the carried-in finds", /const recordFor = \(link: string\): EventRecord \| null => recordFromFound\(loop\.found\.get\(link\)\)/.test(lt) && /refreshStoredEvents\(loop, input\.steps/.test(lt));
+  check("B5: the turn seeds once, on first use (never in tests), and the tools that cite a find wait for it", /const seeded = \(\): Promise<unknown> => \(seeding \?\?= ctx\.dryRun \|\| ctx\.stubSearch \? Promise\.resolve\(\) : storedFinds\(ctx\.userId\)/.test(lt) && (lt.match(/await seeded\(\);/g) ?? []).length >= 3);
+  check("B5: documents and captions cite only fresh facts", /\$\{f\.name\} \$\{usableFacts\(f\)\}`\)\]\.join/.test(lt) && /captionProblems\(it\.caption, `\$\{f\.name\} \$\{usableFacts\(f\)\}`/.test(lt));
 }
 
 console.log(`delivery fixes 10-08: ${total - failed}/${total} passed`);

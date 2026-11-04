@@ -197,7 +197,7 @@ export function linkThenCaption(sends: Send[], findUrls: string[]): string[] {
 }
 
 // ---- 7. One reply a turn: one sendReply text, unless a tool brought something new after it went out (TOOL_TURN_RULES).
-const WORK_TOOLS = new Set(["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "researchBrief", "startTask", "writeDocument", "draftEmail", "emailPlan", "makePage", "makeDeck", "followUp", "moveLane", "readDocument"]);
+const WORK_TOOLS = new Set(["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "researchBrief", "startTask", "writeDocument", "makePage", "makeDeck", "followUp", "moveLane", "readDocument"]);
 export function repliesPerTurn(sends: Send[], tools: string[]): string[] {
   const replies = sends.filter((s) => s.kind === "reply" && s.text.trim());
   if (replies.length <= 1 || tools.some((t) => WORK_TOOLS.has(t))) return [];

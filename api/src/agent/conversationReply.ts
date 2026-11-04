@@ -45,7 +45,7 @@ export const TEXT_LISTENING = CO_LISTENING;
 export const TOOL_FAILURE_RULE = "When a tool fails or comes back thin, lead with what they get now: the content, or the best find you have. Say something is still coming only when a receipt or a task in the facts backs it. Never mention tools, searches, limits, errors or retries, and never ask them to try again: code already retries what can be retried.";
 export function TOOL_TURN_RULES(isVoice: boolean): string {
   return [
-    "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp, moveLane), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
+    "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, followUp, moveLane), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
     "- Call tools that don't depend on each other in the same step.",
     `- One sendReply per turn.${isVoice ? " Your reply goes back as a voice note: call sendReply exactly once, with your full response, answering what they actually said before any secondary gesture." : " The one exception is something new from another tool's result after your reply went out, as its own text; your own sent reply isn't one. Never split one thought into pieces."}`,
     `- ${TOOL_FAILURE_RULE}`,

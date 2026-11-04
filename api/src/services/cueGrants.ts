@@ -7,8 +7,7 @@
 // Docs: "drive.file gets its own grant in the published project, same pattern as the calendar split." A Google Doc Cue makes goes into
 // their Drive on this grant; Cue sees only the files it created there.
 //
-// Each grant is separate from the Google connection (services/googleAuth.ts, which keeps Gmail metadata on the Co Club project, in
-// Testing):
+// Each grant stands alone (the old combined Gmail connection is gone; services/googleAuth.ts keeps only the shared token helpers):
 //   - its own one-time link (google_oauth_states.grant_kind), whose consent asks for its one scope and nothing else;
 //   - its own token (calendar_grants, docs_grants), encrypted like the Google one, revoked and deleted on its own;
 //   - a plain screen before Google says what Cue will and won't see (routes/google.ts), and the page after it has a one-tap Disconnect;
@@ -96,10 +95,10 @@ export async function createGrantLink(kind: GrantKind, userId: string): Promise<
 export const createCalendarLink = (userId: string) => createGrantLink("calendar", userId);
 export const createDocsLink = (userId: string) => createGrantLink("docs", userId);
 
-export async function grantKindOf(state: string): Promise<GrantKind | "google" | null> {
+export async function grantKindOf(state: string): Promise<GrantKind | null> {
   const { rows } = await pool.query(`SELECT grant_kind FROM google_oauth_states WHERE state = $1 AND used_at IS NULL AND expires_at > NOW()`, [state]);
   if (!rows[0]) return null;
-  return (KINDS as string[]).includes(rows[0].grant_kind) ? (rows[0].grant_kind as GrantKind) : "google";
+  return (KINDS as string[]).includes(rows[0].grant_kind) ? (rows[0].grant_kind as GrantKind) : null; // an old combined-Google (Gmail) state is no grant any more
 }
 
 export async function grantConsentUrlFor(kind: GrantKind, state: string): Promise<string | null> {

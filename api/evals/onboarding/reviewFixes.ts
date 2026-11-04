@@ -186,7 +186,6 @@ await memberSelects("engagement rhythm", async () => (await import("../../src/se
   const ID = await import("../../src/services/identity.js");
   check("hasPendingEmail ignores case and spaces", ID.hasPendingEmail("Pending-AB12@COPATIBLE.PENDING ") && ID.usableEmail("Pending-AB12@COPATIBLE.PENDING") === null);
   check("usableEmail: the placeholder is no email", ID.usableEmail("pending-ab12@copatible.pending") === null && ID.usableEmail("jordan@studio.co") === "jordan@studio.co" && ID.usableEmail("") === null && ID.usableEmail(null) === null);
-  check("the plan sheet's email address is usableEmail (never the placeholder)", /usableEmail\(rows\[0\]\?\.email\)/.test(src("src/agent/loopTools.ts")));
   check("every templated email (otpActions sendEmail) refuses the placeholder", /if \(!usableEmail\(email\)\) return;/.test(src("src/otpActions.ts")));
   const OA = await import("../../src/otpActions.js");
   await OA.sendEmail({ email: "pending-ab12@copatible.pending", welcome: true } as any);

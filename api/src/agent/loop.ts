@@ -4,7 +4,7 @@
 //
 // A find request is worked inside the reply itself: Co searches events or the
 // web, reads pages, judges what fits, shares the first good finds, refines,
-// drafts an email for their approval, and keeps working notes (the search
+// and keeps working notes (the search
 // brief) across texts. The old reply search (searchNow and the pipeline behind
 // it: the brief, the event tiers, the relevance gate, the fit check, the caption
 // drafts) is gone from replies; the pipeline stays only for Co's multi-day

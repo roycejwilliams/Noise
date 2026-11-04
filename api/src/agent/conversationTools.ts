@@ -254,8 +254,8 @@ export const NEW_FOR_THEM = new Set([
   "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
   "firstRead", "makePage", "updatePage", "takeDownPage", "readInspo", "readReference", "makeDeck", "updateDeck", "openArtifact",
   "shareArtifact", "deleteImages", "resetLink", "resendLink", "stopSharing", "searchEvents", "webSearch", "searchPosts", "readPage",
-  "shareFinds", "draftEmail", "emailPlan", "researchBrief", "writeDocument", "readDocument", "writeFromFile", "deleteMyFiles",
-  "offerDocument", "calendarConnection", "docsConnection", "googleConnection", "setSearchArea",
+  "shareFinds", "researchBrief", "writeDocument", "readDocument", "writeFromFile", "deleteMyFiles",
+  "offerDocument", "calendarConnection", "docsConnection", "setSearchArea",
   // Re-review of #310: each of these can return something to say (a link that moved, the next step on a yes, a playback of their time).
   "keepArtifact", "findReaction", "noteFreeTime",
   // #304: a change to their voice-read consent is worth a line (its question itself rides as a lane note, owed once).
@@ -2198,8 +2198,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   turnLoop = newLoopState(ctx.turnStartedAt);
   Object.assign(tools, loopTools(ctx, state, turnLoop, notDone));
 
-  // The calendar and Docs grants, and the Gmail tester flow (services/googleTools.ts). The Gmail one is team only, so team-only tools
-  // are taken out again now that these are in (2026-10-15: no member-facing path to the old combined grant).
+  // The calendar and Docs grants (services/googleTools.ts). Team-only tools are taken out again now that these are in.
   Object.assign(tools, googleTools(ctx, notDone));
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 

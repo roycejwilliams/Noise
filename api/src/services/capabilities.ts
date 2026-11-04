@@ -143,23 +143,6 @@ export const ABILITIES: Ability[] = [
     use: "Send what you found that fits: each one as its link, then a one-line caption under it, in the order you list them, best first. Send the first good finds as soon as you have them and keep working if more would help, so they aren't waiting a minute for everything. Captions say what it is and why it fits them, tied to what they told you they want and the reason behind it when you know it (where it could take them, as a real possibility, never a promise), using only the facts from its results or its page, and say plainly what's unconfirmed (availability for their date, the final price). Links must come from your results or pages you read this turn, or from your notes; link each thing's own page (a venue's listing, a DJ's profile) rather than a page of search results, so they land on the thing you described. Something sold out, already over, or already sent to them can't go out.",
   },
   {
-    id: "draft_email",
-    sheet: "Cue writes an email for them to send (a tap-to-send link; nothing is sent unless they send it) and plans a day, night or trip as a one-page PDF (or email with calendar holds), to them only.",
-    can: "Cue can write an email for them to send (to a venue, a vendor, a host); it gives them a tap-to-send link that opens their own mail app, and nothing is sent unless they send it.",
-    tool: "draftEmail",
-    limits: { perTurn: 2 },
-    use: "Write an email for them to send when they ask you to reach out to someone or email a place: to, subject and body, in their voice and first person, short and specific. You can't send email yourself; the draft goes to them as its own text, with a tap-to-send link that opens their own mail app filled in, and nothing goes anywhere unless they send it. The address must be one you read on a page this turn, one they gave you, or one in your notes, because a guessed address reaches the wrong person: when you don't have one, read the place's own page for it first. A listing on a marketplace (Tagvenue, Peerspace, The Bash) is reached through its own contact form, so draft without an address and they'll paste it there. When they ask you to email someone, write the draft in this turn rather than asking whether to.",
-  },
-  {
-    id: "email_plan",
-    sheet: null,
-    can: "When they ask Cue to plan something with more than one step or time (a day out, a night, a trip, a few stops), Cue can send them the plan as a one-page sheet (a PDF), by text in this conversation, or by email with a calendar hold for each time when they ask for email, to the email they gave Cue. It goes only to them, never to anyone else; Cue can't send things to other people for them.",
-    tool: "emailPlan",
-    // Raised from 2 (2026-10-08): the receipts already refuse the same plan twice unless they ask for it again, so this only bounds new plans.
-    limits: { perTurn: 1, perDay: 4 },
-    use: "Send them a plan as a one-page sheet when they ask you to plan something with more than one step or time. By default it goes by text, the PDF in this conversation: leave sendBy out. Set it to email, or both, only when they ask for it by email or on their calendar in their own words; never on your own. Build it from what you found or read this turn and what they said: for a step that is an event you found, give its link and leave the time and place to its own record; for any other step give what, where, address and a short detail, and the time as when (2026-10-11T16:30, their time). Put times only in when. The title, note and every step use only places, names and numbers you read this turn or they said, so title it from their words (not a region or a venue you made up). No links. Write the note as one or two plain sentences, in your voice. Don't use it for a single suggestion (answer by text), and don't offer it as a menu: when they asked for a plan, send it. Give line: the one sentence that goes with the PDF, in your voice; the PDF and that line are the whole delivery, so after it sends, send nothing more about it unless you have a question for them (by email only, say in a line it's in their email). The same rule as a document for sending it again: asked for it again (lost it, can't find it, send it again), the same plan goes again; asked for a change, send the changed plan; never on your own. A step that names something you found on an earlier day is re-read before it goes in: an event's own page is re-read for you; anything else, read its page again (readPage) first.",
-  },
-  {
     id: "co_page",
     sheet: "Cue makes a private page (a plan, options, places with links) or a slide deck (from their taste, or a logo, screenshot or public Pinterest board they send; a login-only board can't be opened), changes it at the same link, and takes it down. Both last 90 days from the last change; \"keep this\" keeps one for good. It can make a view-only link to send someone, and stop it.",
     can: "Cue can make them a page: a plan with a few parts, options side by side, or a set of places with their links, at a private link only they get. It can change it in conversation (same link) and take it down when they ask.",
@@ -309,22 +292,22 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "research_brief",
-    sheet: "Cue researches venues for an event in the background and sends a brief: rate, capacity and availability, every line sourced and dated, anything unconfirmed marked unknown.",
-    can: "When they ask Cue to find venues for an event (\"find venues for my launch\", \"what are my options for a dinner for 40\") or say yes to that offer, Cue researches them in the background and sends a venue brief as a document: each option with its rate, minimum, capacity and, for a date they gave, whether it's open, every line with its source link and when it was checked, and anything it couldn't confirm shown as unknown. Options are held to a high-end bar, built from what Cue knows about them (city, size, date, budget, and what they liked or passed on before), and ordered by what they've said yes and no to. It comes as a PDF, or as a Google Doc when they ask for one and it's open to them. Asked again, it re-checks every option before re-sending.",
+    sheet: "Cue researches venues for an event in the background and texts what it verified as finds, each its link then one line (rate, capacity, availability, anything unconfirmed marked unknown). No document.",
+    can: "When they ask Cue to find venues for an event (\"find venues for my launch\", \"what are my options for a dinner for 40\") or say yes to that offer, Cue researches them in the background and texts what it verified as finds, each its link then one line with its rate, minimum, capacity and, for a date they gave, whether it's open, and anything it couldn't confirm shown as unknown. Options are held to a high-end bar, built from what Cue knows about them (city, size, date, budget, and what they liked or passed on before), and ordered by what they've said yes and no to. It never comes as a document. Asked again, it re-checks every option before re-sending.",
     onCall: true,
     tool: "researchBrief",
     limits: { perTurn: 1, perDay: 2 },
     confirm: "their_yes",
-    use: "They asked you to find venues or options for an event, or said yes to your offer to. Call this once with what they're looking for in their words (the kind of event and space, how many people), the date and start time if they gave them (YYYY-MM-DD and like \"6:00 pm\"; never guess one), the headcount, budget, neighborhood and city if they said (never guess one), and up to six short lines of what they told you that matters, in their words. If it comes back with askThem, nothing started: ask them that in one line and call it again with their answer. When they want the same brief again or updated, set again. It runs in the background and sends the brief when it's ready: tell them in one line you're on it and it'll come as a document. Don't promise options, prices or availability before it arrives. Options come ordered by what they've liked or passed on before.",
+    use: "They asked you to find venues or options for an event, or said yes to your offer to. Call this once with what they're looking for in their words (the kind of event and space, how many people), the date and start time if they gave them (YYYY-MM-DD and like \"6:00 pm\"; never guess one), the headcount, budget, neighborhood and city if they said (never guess one), and up to six short lines of what they told you that matters, in their words. If it comes back with askThem, nothing started: ask them that in one line and call it again with their answer. When they want the same options again or updated, set again. It runs in the background and texts what it verified as finds, each its link then one line, when it's ready: tell them in one line you're on it. It never comes as a document. Don't promise options, prices or availability before it arrives. Options come ordered by what they've liked or passed on before.",
   },
   {
     id: "find_reaction",
     sheet: null,
-    can: "When they react to an option from a brief Cue sent (\"the second one looks great\", \"not that one\", \"nothing like that please\"), Cue notes it, and it shapes which options Cue puts first next time.",
+    can: "When they react to an option from the venue research Cue sent (\"the second one looks great\", \"not that one\", \"nothing like that please\"), Cue notes it, and it shapes which options Cue puts first next time.",
     onCall: true,
     tool: "findReaction",
     limits: { perTurn: 6, perDay: 30 },
-    use: "They reacted to an option from a brief you sent them: call this once per option they named, with its number or name, yes / no / not_like_that, and what they said. Only for an option you actually sent; never say you noted it. It hands back that option's sourced details and the next step: on a yes, carry it toward the booking yourself (offer to draft the inquiry, then follow it to an answer as a task), resting only on those details.",
+    use: "They reacted to an option from venue research you sent them: call this once per option they named, with its number or name, yes / no / not_like_that, and what they said. Only for an option you actually sent; never say you noted it. It hands back that option's sourced details and the next step: on a yes, carry it toward the booking yourself (follow it to an answer as a task, and tell them the contact on its page; you don't draft their emails), resting only on those details.",
   },
   {
     id: "write_from_file",
@@ -748,6 +731,11 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 1 },
     use: "Flag it when what they say may mean they're thinking about hurting or killing themselves, or aren't safe right now, however it's worded (including hints like wanting to disappear or everyone being better off without them). Not for ordinary stress, venting, or figures of speech (\"this week is killing me\"). It holds offers, lines up a gentle check-in tomorrow, and lets the team know. Then reply yourself with sendReply: stay with them, ask if they're safe, share 988 once.",
   },
+  {
+    id: "not_assistant",
+    sheet: "Cue is for the people side: who to meet and what's worth going to. It doesn't draft or send emails for them, build plan sheets, make research briefs as documents, search for jobs, or read their email. Asked for one, it says so plainly and never claims it drafted, sent or planned anything. Suggested line, pending Royce: \"That's not something I do. I'm here for the people side: who to meet and what's worth going to.\"",
+    can: "Cue doesn't write or draft emails for them, build plan sheets, make research briefs as documents, search for jobs, or read their email. Asked for one, it says that's not something it does and points back to who to meet and what's worth going to; it never says it drafted, sent or planned one.",
+  },
   { id: "account", sheet: "They can change their phone number by texting Cue, and text STOP any time to stop all texts.", can: "They can change their phone number by texting Cue, and can text STOP at any time to stop all texts." },
   // Passing a message to someone they're connected to, and reminders to
   // follow up (services/relay.ts, 2026-09-28). Off unless CO_RELAY=on, and
@@ -767,8 +755,8 @@ export const ABILITIES: Ability[] = [
     tool: "followUp",
     limits: { perTurn: 1, perDay: 3 },
     use: "Only when they ask you to pass something to a specific person, or to remind them to follow up on something. relay: pass their exact words (copied from what they texted) to the person they named; never add anything about them or anyone else, and never relay unless they asked. From the other side, when someone who got a message from them asks you to send something back, relay that in their own words too. remind_me: a reminder to them at the day and time they gave. Then say plainly what happened, using the tool's note.",
-  },  // Google Calendar and Gmail, read-only (services/googleAuth.ts,
-  // services/googleData.ts, 2026-09-28). Off until the Google client exists,
+  },
+  // Google Calendar, free/busy only (services/cueGrants.ts, services/googleData.ts). Off until the Google client exists,
   // and what Co says it can do follows that.
   {
     id: "calendar",
@@ -803,20 +791,6 @@ export const ABILITIES: Ability[] = [
     tool: "docsConnection",
     limits: { perTurn: 1, perDay: 3 },
     use: "Only once a document is being made for them: connect when a document you made for them went as a PDF because Google Docs isn't connected, or when they say yes to that offer; sends a one-time link as its own text. Never offer it before there's a document to put in their Drive (code refuses). Never instead of the Google connection, and never to reach anything in their Drive but the files Cue makes. disconnect: when they ask to disconnect Google Docs or their Drive. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
-  },
-  {
-    id: "google",
-    // The Gmail helper's tester flow, the only thing left on the old combined connection (Royce, 2026-10-15): the team only, never a
-    // member. The calendar and Google Docs are their own grants (calendar, docs).
-    teamOnly: true,
-    get can() {
-      return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
-        ? "With the team only (testers): if they connect Gmail (Cue texts a one-time link), Cue sees which emails they sent are still waiting on a reply (who, subject and date, never the message). Cue never sends email and never shows any of it to anyone else. They can text \"disconnect Google\" any time."
-        : "Cue can't connect to Gmail yet.";
-    },
-    tool: "googleConnection",
-    limits: { perTurn: 1, perDay: 3 },
-    use: "Team only (testers). connect: when they want Cue to track their email outreach, or say yes when you offer it; sends a one-time link as its own text. For their calendar use calendarConnection, for Google Docs docsConnection, never this. disconnect: when they ask to disconnect Gmail or Google. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
   },
 ];
 
@@ -920,8 +894,6 @@ const MENU: MenuLine[] = [
   { group: "Finding things", main: "list_sent", text: "recap what it sent and resend a link" },
   { group: "Working on something over days", main: "task_start", text: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds", call: "take on something that needs more than one reply as its own task" },
   { group: "Working on something over days", main: "research_brief", text: "research venues for an event and send a brief of the options", call: "research venues for an event and send a brief" },
-  { group: "Working on something over days", main: "draft_email", text: "write an email for them to send themselves" },
-  { group: "Working on something over days", main: "email_plan", text: "plan a day, a night or a trip as a one-page sheet" },
   { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone Cue introduced them to, or remind them to follow up" : "remind them to follow up on something"; } },
   { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", call: "make a private page (a plan, options side by side) and change it or take it down; it arrives in their texts when it's ready, never on the line" },
   { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", call: "make a slide deck from their taste, and change it; it arrives in their texts when it's ready, never on the line" },
@@ -935,7 +907,6 @@ const MENU: MenuLine[] = [
   { group: "Being there", main: "check_ins", text: "check in every few days, and ask how things went" },
   { group: "Being there", main: "media", text: "read photos and screenshots, and listen to voice memos", call: null },
   { group: "Being there", main: "what_co_knows", text: "say what it knows about them, and correct or remove it", call: "say what it knows about them, and correct or remove it" },
-  { group: "Being there", main: "google", get text() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Gmail to see which emails await replies" : null; } },
   { group: "Being there", main: "team_feedback", text: "pass feedback to the team", call: null },
 ];
 // What Co can't do, for a complete answer (the LIMITS above say it in full).
@@ -967,7 +938,7 @@ export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; li
 //   after  slow or multi-step (a page, a deck, a document): started from the call, never waited on past a moment, made after
 //          it and texted when ready.
 // Never on a call, whatever the registry says: anything that needs another member's yes (an intro), anything that costs money,
-// and everything not listed here (web research, reading pages, drafting email: slow or multi-step, so a task or a promise
+// and everything not listed here (web research, reading pages: slow or multi-step, so a task or a promise
 // picks it up right after the call).
 export type CallRun = { run: "now"; kind: "send" | "save" | "start" | "read"; ms: number } | { run: "after"; waitMs: number };
 const SEND: CallRun = { run: "now", kind: "send", ms: 4000 };
@@ -1028,7 +999,7 @@ export const CHANGES_NOTHING: ReadonlySet<string> = new Set([
   "sendReply", "reactInsteadOfReplying", "leaveItAtReaction", "markTopicAsked", "askedWalkin",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readReference", "readInspo", "readDocument", "openArtifact",
   "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows", "anythingForMe",
-  "sendContactCard", "shareFinds", "draftEmail", "emailPlan", "shareLink", "resendLink", "sendProductUpdates",
+  "sendContactCard", "shareFinds", "shareLink", "resendLink", "sendProductUpdates",
   "saveFeedbackForTeam", "flagSafetyConcern",
 ]);
 // Something changed: a setting, a record, a piece of work, an artifact. Also a share link made (shareArtifact), one of their invites used
@@ -1040,7 +1011,7 @@ export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
   "researchBrief", "offerDocument", "answerProposal", "answerShareAsks", "shareAskInIntros", "answerBriefName", "requestEventIntro", "markArrived",
   "voiceRead", "shareLocationYes", "stopSharing",
   "makePage", "updatePage", "takeDownPage", "keepArtifact", "makeDeck", "updateDeck", "writeDocument", "writeFromFile", "deleteImages", "deleteMyFiles", "resetLink",
-  "shareArtifact", "sendInvite", "calendarConnection", "docsConnection", "googleConnection",
+  "shareArtifact", "sendInvite", "calendarConnection", "docsConnection",
 ]);
 
 // What can never run on a call, even if it were listed above.
