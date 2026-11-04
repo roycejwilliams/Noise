@@ -1229,7 +1229,7 @@ async function processEndedCallInScope(o: {
       // counts — a member who says what they're looking for in the first
       // 30 seconds and signs off on logistics ("I'll just text you the
       // rest") used to have the whole call captured as nothing at all.
-      captureIntent(user_id, cleanTranscript, { scope: "whole_transcript" })
+      captureIntent(user_id, cleanTranscript, { scope: "whole_transcript", via: "call" })
         .then(() => surfaceNewAsksNow(user_id))
         .catch(() => {});
       // Their email, when it isn't on file and they gave it on the call (services/callEmail.ts): the intake extraction, then one text
@@ -1457,7 +1457,7 @@ router.post(
       // Ambient intent capture (non-blocking)
       // Whole-transcript scope for the same reason as the Hume webhook
       // above — this is a finished conversation, not one text turn.
-      captureIntent(String(user_id), String(transcript), { scope: "whole_transcript" }).catch(() => {});
+      captureIntent(String(user_id), String(transcript), { scope: "whole_transcript", via: "intake" }).catch(() => {});
       extractPlannedEventMention(String(user_id), String(transcript)).catch(() => {});
       summarizeCallForTextContext(String(user_id), String(transcript)).catch(() => {});
 

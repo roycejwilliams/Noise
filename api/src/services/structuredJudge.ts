@@ -21,6 +21,10 @@ export const SCORE_SCHEMA = z.object({
       share_ask: z.string(),
       hidden_only: z.boolean(),
       mutual: z.boolean(),
+      // The want labels (W1...) the fit rests on, in a room frame; [] on a single ask (services/wantCriteria.ts).
+      fits: z.array(z.string()),
+      // Each listed condition of the asker's want: does it hold for this candidate on what's listed (services/wantCriteria.ts).
+      conditions: z.array(z.object({ label: z.string(), holds: z.enum(["yes", "no", "unknown"]) })),
     }),
   ),
 });

@@ -32,6 +32,7 @@ import {
 import { applyStyleUpdate, MAX_NOTES } from "./textingStyle.js";
 import { activePreferences, learnPreferences, markCadenceTwin, preferencePromptItem, PREFERENCE_JSON_SHAPE, type Preference } from "./memberPreferences.js";
 import { localDay, memberZone } from "./memberTime.js";
+import { ASK_JSON, conditionsOnFileBlock, CRITERIA_FOR_JSON, CRITERIA_FOR_RULE, WANT_WORDS_RULE } from "./wantCriteria.js";
 
 export type TurnLearningInput = {
   userId: string;
@@ -70,6 +71,8 @@ export function turnLearningPrompt(o: {
   coSaidBefore: string | null;
   // Only when the read before the reply failed: their rules on file and their local date, for item 10.
   preferences?: { onFile: Parameters<typeof preferencePromptItem>[0]["onFile"]; localToday: string } | null;
+  // Their intent entries, for the conditions already on the numbered items (services/wantCriteria.ts).
+  intent?: unknown;
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -87,7 +90,7 @@ Today's date: ${o.today}
 
 What Cue already has on file about them:
 ${fileLines || "(nothing yet)"}
-${openItemsBlock(o.openAsks)}
+${openItemsBlock(o.openAsks)}${conditionsOnFileBlock(o.openAsks, o.intent)}
 1. profile: psychographic fields from the whole transcript.
   - ${LIFE_CHAPTERS_RULE}
   - social_energy: a number 0-100 (0 = very introverted, 100 = very extroverted), or null if their own words gave no real signal; never guess a number.
@@ -108,7 +111,8 @@ ${openItemsBlock(o.openAsks)}
 4. cadence: did they state how often Cue should proactively call them? "weekly" (roughly every week), "biweekly" (every two weeks or looser but still wanting calls), "none" (don't call proactively), or "unstated" (never came up or no clear answer).
 
 5. intent, taken from what they just said, using the earlier conversation only to understand it (anything they asked for before is context they already said, not a new ask):
-  - asks: at most one specific thing they're actively seeking or could offer others (a connection, an introduction, a resource, expertise, a kind of event or community), as one clear sentence, typed "seeking" or "offering"; none at all when what they just said isn't asking for or offering something. Never an ask: small talk, thanks, feedback about Cue, questions about Cue itself, logistics, or answers to Cue's questions about them. ${ANSWERED_INTEREST_RULE}
+  - asks: at most one specific thing they're actively seeking or could offer others (a connection, an introduction, a resource, expertise, a kind of event or community), as one clear sentence, typed "seeking" or "offering"; none at all when what they just said isn't asking for or offering something. Never an ask: small talk, thanks, feedback about Cue, questions about Cue itself, logistics, or answers to Cue's questions about them. ${ANSWERED_INTEREST_RULE} ${WANT_WORDS_RULE} The quote and conditions come from what they just said.
+  - ${CRITERIA_FOR_RULE}
   - concrete_preferences: named, specific things they mentioned liking or wanting, not vague vibes ("SoulCycle", "oat milk lattes", "speakeasy-style bars", not "fitness" or "good coffee").
   - wants: things they said they miss or want to find.
   - availability: their stated GENERAL, RECURRING availability in their own words; null for a one-off request for a specific call or meeting time.
@@ -134,7 +138,7 @@ Return ONLY valid JSON, no preamble:
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
- "intent": {"asks": [{"text": "...", "type": "seeking"}], "concrete_preferences": [], "wants": [], "availability": null},
+ "intent": {"asks": [${ASK_JSON}], "concrete_preferences": [], "wants": [], "availability": null, ${CRITERIA_FOR_JSON}},
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
  "advice": null or {"topic": "...", "gist": "..."},
@@ -199,14 +203,16 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
   // The same transcript the separate calls read before.
   const transcript = turnTranscript(withoutTeammateLines(input.recentConversation), input.message, input.coReply);
   try {
-    const [{ rows: profileRows }, { rows: askRows }] = await Promise.all([
+    const [{ rows: profileRows }, { rows: askRows }, { rows: intentRows }] = await Promise.all([
       pool.query(
         `SELECT city, life_chapters, goals, blockers, activity_preferences, long_term_direction, availability_pattern, texting_style
          FROM co_profiles WHERE user_id = $1`,
         [input.userId],
       ),
       import("./goalJourney.js").then((m) => m.openErrandsAndGoals(input.userId)).then((rows) => ({ rows })),
+      pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [input.userId]).catch(() => ({ rows: [] as any[] })),
     ]);
+    const intentOnFile = intentRows[0]?.intent ?? [];
     const row = profileRows[0] ?? null;
     const onFile: OnFileProfile | null = row
       ? {
@@ -227,7 +233,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
     const readRulesHere = pre === null && !!input.ownWords?.trim();
     const zone = readRulesHere ? await memberZone(input.userId).catch(() => null) : null;
     const fallback = readRulesHere ? { onFile: await activePreferences(input.userId).catch(() => [] as Preference[]), localToday: localDay(new Date(), zone) } : null;
-    const { text } = turnLearningModelForTests ? { text: await turnLearningModelForTests(turnLearningPrompt({ transcript, message: input.message, today: new Date().toISOString().slice(0, 10), onFile, openAsks, styleNotes, coSaidBefore: input.coSaidBefore, preferences: fallback })) } : await generateText({
+    const { text } = turnLearningModelForTests ? { text: await turnLearningModelForTests(turnLearningPrompt({ transcript, message: input.message, today: new Date().toISOString().slice(0, 10), onFile, openAsks, styleNotes, coSaidBefore: input.coSaidBefore, preferences: fallback, intent: intentOnFile })) } : await generateText({
       model: anthropic(PROFILE_JUDGMENT_MODEL),
       // 2026-09-29: at the default effort the model spent up to 2500 tokens
       // reasoning before writing, and about half of the reads on a real profile
@@ -246,6 +252,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
         styleNotes,
         coSaidBefore: input.coSaidBefore,
         preferences: fallback,
+        intent: intentOnFile,
       }),
     });
     const learned = parseTurnLearning(text);
@@ -260,7 +267,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
     // The ask first, so the profile write knows what kind of ask this turn carried (lane moves, Royce 2026-10-13): a one-off ask
     // (research, a document, advice, a single search) never becomes a goal or an interest: the extraction's rule (profile, goals) and,
     // for its exact restatement, code (laneMoves.ts turnAskLane, profileExtraction.ts heldAsOneOff).
-    const written = await persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message", input.message).catch((err: any) => {
+    const written = await persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message", input.message, { via: "text", openItems: openAsks }).catch((err: any) => {
       console.error("turnLearning: intent write failed (non-fatal):", err?.message ?? err);
       return null;
     });

@@ -22,7 +22,7 @@ globalThis.fetch = (async (url: any, init: any) => {
 
 for (const model of [MODELS.sonnet, MODELS.haiku]) {
   sent.length = 0;
-  reply = JSON.stringify({ results: [{ index: 0, score: 72, reason: "both building in climate", share_ask: "S1", hidden_only: false, mutual: true }] });
+  reply = JSON.stringify({ results: [{ index: 0, score: 72, reason: "both building in climate", share_ask: "S1", hidden_only: false, mutual: true, fits: [], conditions: [] }] });
   const r = await S.judgeJson(S.SCORE_SCHEMA, { model: anthropic(model), prompt: "score these" });
   const b = sent[0]?.body ?? {};
   check(`${model}: output_config.format carries the JSON schema`, b.output_config?.format?.type === "json_schema" && !!b.output_config?.format?.schema?.properties?.results, b.output_config);

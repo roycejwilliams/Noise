@@ -309,6 +309,8 @@
     "evals/review/healthDb.ts",
     "evals/review/lumaLogPrivacy.ts",
     "evals/corrections/dropRelated.ts",
+    "evals/matching/wantCriteria.ts",
+    "evals/asks/wantWords.ts",
     "evals/loop/offerDue.ts"
   ]
 }

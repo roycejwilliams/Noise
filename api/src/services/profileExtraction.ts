@@ -72,6 +72,12 @@ export type ExtractedIntent = {
   text?: string;
   // The hard type (harness/profileWrite.ts EntryKind): an ask is an errand with a lifecycle; a goal is direction and has none.
   kind?: "ask" | "goal";
+  // Their words for the want, how sure Cue is they're theirs, where they said it, and the conditions they put on it
+  // (services/wantCriteria.ts). Absent on entries written before 2026-11-03: read as inferred, no conditions.
+  quote?: string | null;
+  provenance?: "stated" | "inferred";
+  via?: "text" | "call" | "intake";
+  criteria?: import("./wantCriteria.js").Criterion[];
   // A goal is dated by when it was set or last confirmed (services/goalJourney.ts): its seasonal check-in clock.
   confirmed_at?: string;
   type?: "seeking" | "offering";
@@ -108,6 +114,7 @@ export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from ".
 import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { understandingGaps, type Gap } from "./understanding.js";
 import { withMember } from "./llmUsage.js";
+import { ASK_JSON, conditionsOnFileBlock, CRITERIA_FOR_JSON, CRITERIA_FOR_RULE, WANT_WORDS_RULE } from "./wantCriteria.js";
 
 export type CoverageAssessment = {
   missing_topics: RapportTopic[];
@@ -1257,8 +1264,10 @@ export async function applyRetirements(userId: string, r: ResolutionResult): Pro
   const asks = ids.filter((x) => !activeGoal.has(x) && !x.startsWith(TASK_ITEM));
   if (asks.length) {
     await pool.query(
-      `UPDATE ask_checkins SET resolved_at = NOW(), closed_reason = COALESCE(closed_reason, 'member') WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
-      [userId, asks],
+      // Their closing words with each (the read's quote): a later capture of the same conversation reads them to tell words said before
+      // the close from a new request (closedWantsHeld). The same column Cue's closeAsk and a removal write; covered by forgetting.
+      `UPDATE ask_checkins SET resolved_at = NOW(), closed_reason = COALESCE(closed_reason, 'member'), closed_evidence = COALESCE(closed_evidence, ($3::text[])[array_position($2::text[], ask_id)]) WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
+      [userId, asks, asks.map((id) => (quote(id) ?? "").slice(0, 300) || null)],
     );
     // And in the profile, so it stops being listed as open (askKind.ts).
     await markIntentResolved(userId, asks).catch(() => {});
@@ -1316,8 +1325,11 @@ export async function storeTranscriptMemory(
 }
 
 export type CapturedIntentData = {
-  // Many asks now (a whole call can legitimately state more than one).
-  asks?: { text?: string; type?: "seeking" | "offering" }[] | null;
+  // Many asks now (a whole call can legitimately state more than one). quote and criteria: their words for the want and the
+  // conditions they put on it (services/wantCriteria.ts), checked against their own lines before anything is kept.
+  asks?: { text?: string; type?: "seeking" | "offering"; quote?: string; criteria?: unknown }[] | null;
+  // Conditions said about a numbered on-file item rather than a new ask (services/wantCriteria.ts CRITERIA_FOR_RULE).
+  criteria_for?: unknown;
   // The pre-2026-09-20 single-ask shape, still read so a model reply that
   // falls back to the old key isn't silently dropped.
   ask?: { text?: string; type?: "seeking" | "offering" } | null;
@@ -1326,7 +1338,10 @@ export type CapturedIntentData = {
   availability: string | null;
 };
 
-export type CapturedAsk = { text: string; type: "seeking" | "offering" };
+// quote/criteria as the read returned them; persistIntentFrom grounds them (wantWords) before anything is written.
+export type CapturedAsk = { text: string; type: "seeking" | "offering"; quote?: unknown; criteria?: unknown; wantWords?: WantWords };
+// A want's own words, grounded: their checked quote (or none: "inferred"), where they said it, the conditions in their words.
+export type WantWords = { quote: string | null; provenance: "stated" | "inferred"; via: "text" | "call" | "intake"; criteria: import("./wantCriteria.js").Criterion[] };
 
 // How much of the transcript handed to captureIntent is NEW. This is the
 // only knob between the two channels — same prompt, same parser, same write
@@ -1368,20 +1383,23 @@ const MAX_ASKS_PER_CAPTURE = 8;
 export const ANSWERED_INTEREST_RULE = `An answer to Cue's question is still a seeking ask when what they name is something Cue could go and find for them: a scene or kind of room they'd like to be in, a kind of event, a community, people they'd want to meet, a program or something they're exploring (asked what they'd want to hear about, "honestly, small dinners with other founders" is seeking small founder dinners). Facts about who they are (their work, where they live, how their week went) are never asks.`;
 
 // Exported so evals/capture can check what counts as an ask.
-export function captureIntentPrompt(transcript: string, scope: IntentScope = "last_user_message"): string {
+export function captureIntentPrompt(transcript: string, scope: IntentScope = "last_user_message", onFile: { items: OpenItem[]; intent: unknown } | null = null): string {
   const askScope =
     scope === "whole_transcript"
-      ? `This is a whole conversation and all of it is new, so capture EVERY distinct ask the user stated anywhere in it — including one they said early and then moved on from. What they happened to say LAST never cancels an ask they stated earlier: a conversation that ends on logistics ("I'm just going to text you the rest", "let's pick this up later"), small talk or a goodbye still carries every ask from earlier in it. Two wordings of the same request are one ask; genuinely different requests are separate asks.`
+      ? `This is a whole conversation and all of it is new, so capture EVERY distinct ask the user stated anywhere in it — including one they said early and then moved on from. What they happened to say LAST never cancels an ask they stated earlier: a conversation that ends on logistics ("I'm just going to text you the rest", "let's pick this up later"), small talk or a goodbye still carries every ask from earlier in it. The one exception is their own word: an ask they said later in the same conversation they're no longer pursuing (dropped, off, not doing it anymore) is not captured. Two wordings of the same request are one ask; genuinely different requests are separate asks.`
       : `Take it from the LAST user message, using the earlier conversation only to understand it — anything they asked for before that is context they already said, not a new ask. Return at most one ask, and none at all when that last message isn't asking for or offering something.`;
   return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Cue (the "assistant:" lines) said as if the user said it. A question Cue asked that the user never answered is not an ask.
 
-1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} None of these is ever an ask: small talk, thanks, feedback about Cue, questions about Cue itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Cue's questions about them. ${ANSWERED_INTEREST_RULE} ALSO include, as their own entries, the DIRECTION they said they are moving toward over the next few months (for example "get Cue in front of users", "raise a pre-seed round"): those are goals, and they are typed when they are stored. If Cue played back what it is carrying for them in this conversation and they corrected it, the CORRECTED version is the final list: extract from the correction, not from the first version.
+1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} ${WANT_WORDS_RULE} None of these is ever an ask: small talk, thanks, feedback about Cue, questions about Cue itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Cue's questions about them. ${ANSWERED_INTEREST_RULE} ALSO include, as their own entries, the DIRECTION they said they are moving toward over the next few months (for example "get Cue in front of users", "raise a pre-seed round"): those are goals, and they are typed when they are stored. If Cue played back what it is carrying for them in this conversation and they corrected it, the CORRECTED version is the final list: extract from the correction, not from the first version.
 2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
 3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
 4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
 
+${onFile?.items.length ? `${openItemsBlock(onFile.items)}${conditionsOnFileBlock(onFile.items, onFile.intent)}
+5. ${CRITERIA_FOR_RULE}
+` : ""}
 Return ONLY valid JSON, no preamble. "asks" is a list — use [] when there is no ask at all:
-{"asks": [{"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"}], "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null}
+{"asks": [${ASK_JSON}], "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null${onFile?.items.length ? `, ${CRITERIA_FOR_JSON}` : ""}}
 
 Transcript:
 "${transcript}"`;
@@ -1392,13 +1410,13 @@ Transcript:
 export function normalizeCapturedAsks(parsed: CapturedIntentData | null, scope: IntentScope = "last_user_message"): CapturedAsk[] {
   const raw = Array.isArray(parsed?.asks) ? parsed!.asks! : parsed?.ask ? [parsed.ask] : [];
   const out: CapturedAsk[] = [];
-  for (const a of raw) {
+  for (const a of raw as any[]) {
     const text = typeof a?.text === "string" ? a.text.trim() : "";
     const type = a?.type === "seeking" || a?.type === "offering" ? a.type : null;
     if (!text || !type) continue;
     // The same ask returned twice in one pass is one ask row, not two.
     if (out.some((o) => o.text.toLowerCase() === text.toLowerCase())) continue;
-    out.push({ text, type });
+    out.push({ text, type, ...(a?.quote !== undefined ? { quote: a.quote } : {}), ...(a?.criteria !== undefined ? { criteria: a.criteria } : {}) });
   }
   // A text turn is one member message — it can only ever open one ask, no
   // matter what the model hands back. This is what keeps the text path
@@ -1412,10 +1430,15 @@ const NO_EXTRAS: IntentExtras = { concrete_preferences: [], wants: [], availabil
 export async function captureIntent(
   user_id: string,
   transcript: string,
-  opts: { scope?: IntentScope } = {},
+  // ownWords: what their words for a want may be checked against, when the transcript isn't theirs (a tool's "user: <Cue's sentence>"
+  // is Cue's wording: null, so nothing in it is quoted as theirs).
+  opts: { scope?: IntentScope; via?: WantWords["via"]; ownWords?: string | null } = {},
 ): Promise<ExtractedIntent | null> {
   const scope = opts.scope ?? "last_user_message";
   try {
+    // What's already open, numbered, so a condition said on a call about an existing want lands on that want (the text turn's read
+    // has the same list, turnLearning.ts). A failed read just means no criteria_for this time.
+    const onFile = await loadOpenForCriteria(user_id).catch(() => null);
     const { text: rawIntent } = await propagateAttributes(
       { userId: user_id, traceName: "profileExtraction.captureIntent" },
       () =>
@@ -1423,7 +1446,7 @@ export async function captureIntent(
           // Pinned to Haiku 4.5: on 5.5 this layer's eval fails (src/models.ts haikuPinned).
           model: anthropic(MODELS.haikuPinned),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
-          prompt: captureIntentPrompt(transcript, scope),
+          prompt: captureIntentPrompt(transcript, scope, onFile),
         }),
     );
 
@@ -1436,7 +1459,7 @@ export async function captureIntent(
     } catch {
       return null;
     }
-    return await persistIntentFrom(user_id, parsed, transcript, scope);
+    return await persistIntentFrom(user_id, parsed, transcript, scope, null, { via: opts.via, openItems: onFile?.items, ownWords: opts.ownWords });
   } catch (err: any) {
     console.error("captureIntent failed (non-fatal):", err?.message ?? err);
     return null;
@@ -1454,12 +1477,26 @@ export async function persistIntentFrom(
   transcript: string,
   scope: IntentScope = "last_user_message",
   message?: string | null,
+  // via: where they said it; openItems: the numbered list the read was shown (criteria_for indexes into it).
+  wopts: { via?: WantWords["via"]; openItems?: OpenItem[]; ownWords?: string | null } = {},
 ): Promise<ExtractedIntent | null> {
   try {
     // Only what THEY said: an item that's Co's own line echoed back is
     // dropped (harness/profileWrite.ts echoesCoNotMember, 2026-09-23).
     const mine = (x: unknown) => typeof x === "string" && !echoesCoNotMember(x, transcript);
-    const captured = normalizeCapturedAsks(parsed, scope).filter((a) => mine(a.text));
+    // Their words for each want and its conditions, checked against their own lines: a text turn's newest message, or every line of
+    // theirs in a call (services/wantCriteria.ts). Nothing the read can't quote from them is kept as theirs.
+    const WC = await import("./wantCriteria.js");
+    const ownWords = wopts.ownWords !== undefined ? (wopts.ownWords ?? "") : scope === "last_user_message" && message ? message : WC.theirWordsIn(transcript) || (message ?? "");
+    const via: WantWords["via"] = wopts.via ?? (scope === "whole_transcript" ? "call" : "text");
+    const captured = normalizeCapturedAsks(parsed, scope)
+      .filter((a) => mine(a.text))
+      .map((a) => ({ ...a, wantWords: { ...WC.groundWant(a.quote, ownWords), via, criteria: WC.groundCriteria(a.criteria, ownWords) } }));
+    // Conditions said about something already open (criteria_for): each lands on its own want only, written before the asks below so
+    // a deduped restatement in the same turn merges on top of it.
+    if (wopts.openItems?.length && parsed?.criteria_for) {
+      await applyCriteriaForTurn(user_id, parsed.criteria_for, wopts.openItems, ownWords).catch((err: any) => console.error("criteria_for write failed (non-fatal):", err?.message ?? err));
+    }
     // This turn, if Co answered it as a status check for one of its tasks (services/statusCheck.ts, Royce 2026-10-13: status_check.turn
     // with this message), saves no ask that is that task again (capturedAskIsTask: restates it and covers it). A broader ask, any other
     // turn, and a read that fails all save as before (fail open).
@@ -1484,6 +1521,13 @@ export async function persistIntentFrom(
     // Nothing real came out of this pass at all — don't write an empty
     // record just to have one.
     if (!asks.length && !extras.concrete_preferences.length && !extras.wants.length && !extras.availability) return null;
+    // A want they closed at their word is never re-opened by the words that closed it, or by words said before it closed (a call's
+    // capture reads the whole call after its own retire read already closed it): only a request said after the close re-opens it.
+    if (asks.length) {
+      const held = await closedWantsHeld(user_id, asks, transcript).catch(() => new Set<string>());
+      for (let i = asks.length - 1; i >= 0; i--) if (held.has(asks[i].text)) asks.splice(i, 1);
+      if (!asks.length && !extras.concrete_preferences.length && !extras.wants.length && !extras.availability) return null;
+    }
 
     // One write path for both channels: a text turn is just the N<=1 case of
     // the loop a call runs. Sequential on purpose — each ask dedupes against
@@ -1506,7 +1550,10 @@ export async function persistIntentFrom(
         // Preferences/wants/availability describe the member, not one
         // particular ask — hang them on the first record so they're stored
         // once, exactly as they were when there was only ever one record.
-        written.push(await persistCapturedIntent(user_id, w.ask, i === 0 ? extras : NO_EXTRAS, { kind: w.kind, keepSearchRow: w.keepSearchRow }));
+        // A split part keeps the want's words only when it is the want as captured (the split rewrote it otherwise: no quote).
+        const own = asks.find((a) => a.text === w.ask.text)?.wantWords;
+        const ask = { ...w.ask, wantWords: w.ask.wantWords ?? own ?? { quote: null, provenance: "inferred" as const, via, criteria: [] } };
+        written.push(await persistCapturedIntent(user_id, ask, i === 0 ? extras : NO_EXTRAS, { kind: w.kind, keepSearchRow: w.keepSearchRow }));
       }
     }
 
@@ -1636,9 +1683,11 @@ export async function persistCapturedIntent(
     });
   }
 
+  const ww = ask?.wantWords;
   const newIntent: ExtractedIntent = {
     id: intentId,
     ...(ask ? { text: ask.text, type: ask.type, kind: kind! } : {}),
+    ...(ww ? { quote: ww.quote, provenance: ww.provenance, via: ww.via, ...(ww.criteria.length ? { criteria: ww.criteria } : {}) } : {}),
     ...(kind === "goal" ? { confirmed_at: new Date().toISOString() } : {}),
     concrete_preferences,
     wants,
@@ -1652,8 +1701,15 @@ export async function persistCapturedIntent(
     // Replace the restated entry in place (latest wording wins, preferences
     // merged) and keep it last so getActiveSeekingAsk still picks it.
     const prior = existingIntent.find((i: any) => i?.id === intentId) ?? {};
+    // A restatement never loses what the want already carried: their earlier words stay when the new wording isn't quoted, and the
+    // conditions merge (a newer one replaces the same condition; services/wantCriteria.ts).
+    const { mergeCriteria } = await import("./wantCriteria.js");
+    const criteria = mergeCriteria(prior.criteria, ww?.criteria ?? []);
     const merged: ExtractedIntent = {
       ...newIntent,
+      quote: ww?.quote ?? prior.quote ?? null,
+      provenance: ww?.quote ? "stated" : prior.provenance ?? ww?.provenance,
+      ...(criteria.length ? { criteria } : {}),
       created_at: prior.created_at ?? newIntent.created_at,
       concrete_preferences: [...new Set([...(prior.concrete_preferences ?? []), ...concrete_preferences])],
       wants: [...new Set([...(prior.wants ?? []), ...wants])],
@@ -1736,6 +1792,64 @@ export async function persistCapturedIntent(
 
 const lastCaptureDeduped = new Map<string, boolean>();
 
+// The numbered open items (as the text turn's read sees them) and the intent they live on, for a read that can put a condition on one.
+export async function loadOpenForCriteria(userId: string): Promise<{ items: OpenItem[]; intent: unknown }> {
+  const [rows, { rows: prof }] = await Promise.all([
+    import("./goalJourney.js").then((m) => m.openErrandsAndGoals(userId)),
+    pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]),
+  ]);
+  return { items: rows.map((r: any) => ({ id: String(r.ask_id), text: String(r.ask_text), kind: r.kind, link: r.link ?? null, owned: !!r.owned })), intent: prof[0]?.intent ?? [] };
+}
+
+// Conditions said about an open want (criteria_for), each on its own entry, logged with ids only.
+export async function applyCriteriaForTurn(userId: string, raw: unknown, items: OpenItem[], ownWords: string): Promise<number> {
+  const WC = await import("./wantCriteria.js");
+  const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]);
+  const intent = rows[0]?.intent ?? [];
+  const changes = WC.groundCriteriaFor(raw, items, intent, ownWords);
+  if (!changes.length) return 0;
+  await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(WC.applyCriteriaFor(intent, changes))]);
+  recordDecision({ layer: 4, decision: "profile.write", userId, outcome: "act", action: "want_criteria", proposal: { wants: changes.map((c) => ({ id: c.id, added: c.added.length, lifted: c.lifted.length })) } }).catch(() => {});
+  return changes.length;
+}
+
+// Pure: is this captured want one they closed at their word, said no later than the close? Their closing words (closed_evidence) in
+// this transcript after the want's own words, or the want's words not found at all, mean the capture read words from before the
+// close: held. Closing words not in this transcript mean it closed earlier and this is a new request: it goes.
+export function heldByClose(transcript: string, wantQuote: string | null, closedEvidence: string | null): boolean {
+  const norm = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  // Their lines only, in order (a Cue line repeating their words never places the close).
+  const theirs = norm(transcript.split("\n").filter((l) => /^\s*(user said:|user:|user sent a voice memo:)/i.test(l)).join(" ") || transcript);
+  const ev = norm(closedEvidence ?? "");
+  if (ev.length < 6) return false;
+  const closeAt = theirs.lastIndexOf(ev);
+  if (closeAt < 0) return false;
+  const q = norm(wantQuote ?? "");
+  const askAt = q.length >= 4 ? theirs.lastIndexOf(q) : -1;
+  return askAt < 0 || askAt < closeAt;
+}
+
+// The captured asks to hold: each that restates (same words, or a near-duplicate) an ask they closed at their word in the last 30 days,
+// when heldByClose says these words aren't newer than the close. Logged; never sent anywhere.
+async function closedWantsHeld(userId: string, asks: CapturedAsk[], transcript: string): Promise<Set<string>> {
+  const { rows } = await pool.query(
+    `SELECT ask_id, ask_text, closed_reason, closed_evidence FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NOT NULL AND resolved_at > NOW() - INTERVAL '30 days'`,
+    [userId],
+  );
+  const { askClosedAtTheirWord } = await import("../harness/closedSubject.js");
+  const closed = rows.filter((r: any) => askClosedAtTheirWord(r.closed_reason));
+  const out = new Set<string>();
+  if (!closed.length) return out;
+  const { normalizeAskText } = await import("../harness/profileWrite.js");
+  for (const a of asks) {
+    const hit = closed.find((r: any) => normalizeAskText(String(r.ask_text)) === normalizeAskText(a.text) || (a.wantWords?.quote && normalizeAskText(String(r.ask_text)).includes(normalizeAskText(a.wantWords.quote))));
+    if (!hit || !heldByClose(transcript, a.wantWords?.quote ?? null, hit.closed_evidence)) continue;
+    out.add(a.text);
+    recordDecision({ layer: 4, decision: "profile.write", userId, outcome: "skip", action: "closed_want_held", reason: "they closed this want at their word; these words aren't newer than the close", proposal: { askId: hit.ask_id } }).catch(() => {});
+  }
+  return out;
+}
+
 // Borderline similarity only: is the new wording the same request as the
 // open ask? A wrong "yes" hides a real new ask, so this is a Sonnet 5 call.
 export async function judgeSameAsk(userId: string | null, newText: string, openText: string): Promise<boolean> {
@@ -1758,7 +1872,7 @@ export function sameAskPrompt(newText: string, openText: string): string {
   return `Someone already has this open request with Cue: "${openText}"
 They just said they're looking for: "${newText}"
 
-Is the new one the same request restated (same kind of thing, same purpose, maybe more detail or different wording)? Or a different request (a different kind of person, thing, or goal)? A narrower or more specific version of the same request counts as the same.
+Is the new one the same request restated (same kind of thing, same purpose, maybe more detail or different wording)? Or a different request (a different kind of person, thing, or goal)? A narrower or more specific version of the same request counts as the same: the same kind of person or thing, for the same purpose. Two requests that are both about meeting people are still different requests when they want a different kind of person or room: "a technical cofounder who's built consumer before", "people outside tech" and "a room where I can drop my guard" are three different requests, never one.
 
 Return ONLY valid JSON: {"same": true} or {"same": false}`;
 }
@@ -1771,9 +1885,9 @@ export type TurnAsk = { ask: { text: string; type: "seeking" | "offering" }; ask
 export async function captureIntentForTurn(
   userId: string,
   transcript: string,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; via?: WantWords["via"]; ownWords?: string | null } = {},
 ): Promise<TurnAsk | null> {
-  const capture = captureIntent(userId, transcript);
+  const capture = captureIntent(userId, transcript, { via: opts.via, ownWords: opts.ownWords });
   const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), opts.timeoutMs ?? 2500));
   const intent = await Promise.race([capture, timeout]);
   if (!intent?.text || !intent.type) return null;

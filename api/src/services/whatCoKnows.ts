@@ -75,6 +75,7 @@
 // What it still doesn't reach: the words already spoken on a live call (the call's own transcript so far is the conversation, as
 // it happens; ElevenLabs sends it each turn and Co doesn't rewrite what was said), and Co's lessons and research notes
 // (team-internal, never shown).
+import { criteriaOf } from "./wantCriteria.js";
 import { createHash } from "node:crypto";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -84,7 +85,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -285,7 +286,17 @@ export function knownItems(r: RawKnown): KnownItem[] {
     if (d.fonts) add(`designfont:${d.context}`, "designfont", "likes", d.fonts, null, false);
   }
   for (const x of r.designRefs ?? []) add(`designref:${x.id}`, "designref", "likes", `a look I took from ${x.ref}, for your decks and pages`, null, false);
-  for (const a of r.asks) add(`ask:${a.id}`, "ask", "after", `looking out for: ${a.text}`);
+  // Each want with their own words beside it (only a quote checked as theirs), and each condition they put on it as its own line,
+  // in their words, removable on its own (services/wantCriteria.ts: visible knowledge is all of it).
+  const entryOf = (id: string) => (p?.intent ?? []).find((e: any) => e?.id === id);
+  for (const a of r.asks) {
+    const e = entryOf(a.id);
+    add(`ask:${a.id}`, "ask", "after", `looking out for: ${a.text}`, e?.provenance === "stated" && typeof e?.quote === "string" ? e.quote : null);
+  }
+  for (const e of p?.intent ?? []) {
+    if (e?.status !== "active" || !e?.id || !(r.asks.some((a) => a.id === e.id) || e?.kind === "goal")) continue;
+    for (const c of criteriaOf(e)) add(`cond:${e.id}:${hashOf(c.text)}`, "cond", "after", `for "${String(e.text ?? "").slice(0, 100)}", you said: "${c.quote}"`, c.quote, false);
+  }
   // Where Co looks for each want (Royce, 2026-10-15: "the place shows in what Cue knows, editable and removable").
   // Windows and stated free times first: the group shows 8, and these are few and time-bound (review of #220).
   for (const x of r.places ?? []) if (x.until) add(`window:${x.key}`, "window", "where", `"${x.want.slice(0, 120)}" is for until ${x.until}`, null, false);
@@ -927,6 +938,15 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       }
       return { ref: item.ref, source: "ask", was: old, now: v };
     }
+    case "cond": {
+      // One condition they put on one want: taken off that want only; the want and its other conditions stay.
+      const entry = (raw.profile?.intent ?? []).find((x: any) => x?.id === a);
+      const hit = criteriaOf(entry).find((c) => hashOf(c.text) === b);
+      if (!entry || !hit) return { why: "it's no longer on file" };
+      const intent = (raw.profile?.intent ?? []).map((x: any) => (x?.id === a ? { ...x, criteria: criteriaOf(x).filter((c) => c !== hit && hashOf(c.text) !== b) } : x));
+      await must(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(intent)]);
+      return { ref: item.ref, source: "cond", was, now: null };
+    }
     case "place": {
       // Where Co looks for one want (services/wantPlace.ts): their place now, or none (the home city stands in, never read again).
       const key = item.ref.slice("place:".length);
@@ -1021,7 +1041,7 @@ export function fieldFor(ref: string): string {
   if (kind === "free") return "when they said they're free";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "docs" ? "their Google Docs connection" : a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested", pair: "how an introduction went for them", knows: "someone they already know" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", pair: "how an introduction went for them", knows: "someone they already know" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -1200,7 +1220,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file", "pair", "knows"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file", "pair", "knows", "cond"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";

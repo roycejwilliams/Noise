@@ -710,7 +710,7 @@ export async function auditCall(
           `Cue promised on a call: "${c.what}". ${p.asked ? `They asked for it in their own words ("${p.asked.slice(0, 160)}")` : "Cue offered it on its own"}; task #${p.coveredBy} is carrying it.`,
         ).catch(() => null);
       } else if (p.asked) {
-        await captureIntentForTurn(userId, `user: ${c.what}`, { timeoutMs: 6000 }).catch(() => null);
+        await captureIntentForTurn(userId, `user: ${c.what}`, { timeoutMs: 6000, via: "call", ownWords: p.asked }).catch(() => null);
       } else {
         await writeMemory(
           userId,
