@@ -32,6 +32,7 @@ import { REMINDER_RETRY } from "./relay.js";
 import { goalBody, promiseKeptBy, reminderTiedTo, reminderPromise, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
+import { closeOutOfScope, handBackDepsFor, OUTCOME_QUIET, scopeOfTask } from "./scopeClose.js";
 import { MAKER_DECLINE_RULE } from "./coVoice.js";
 import type { GateCheck } from "../harness/core.js";
 import { withMember } from "./llmUsage.js";
@@ -243,7 +244,7 @@ This is wake-up ${t.wakes} of at most ${TASK_LIMITS.maxWakes}. Now, their time: 
 ${o.person ? `What you know about them (who they are, what's going on, what you've done, everything you're carrying for them):\n${o.person}\n\n` : ""}${o.knowledge ? `${o.knowledge}\n\n` : ""}${o.rules ? `Rules for them:\n${o.rules}\n\n` : ""}Your recent texts with them (oldest first, each stamped with its time, theirs; read their newest messages first, they may have answered you or changed their mind):
 ${o.recent || "(none)"}
 
-Do the next real step with your tools (search for events and opportunities, webSearch for anything else such as venues, vendors, people or prices, readPage), and write down what you learned with note. When you finish a step, call note with stepDone set to that step's exact text. Only mark a step done when you actually did it; closing a task doesn't finish its steps.
+Do the next real step with your tools (search for events and opportunities, webSearch for the people, communities and programs that serve a connection, readPage). This work is about who they should meet and where: if a step has turned into something else (shopping, prices, travel, an errand, venues or vendors for their own event, a general research project), don't do it: note that, and finish, and write down what you learned with note. When you finish a step, call note with stepDone set to that step's exact text. Only mark a step done when you actually did it; closing a task doesn't finish its steps.
 Then decide:
 - If they've said they don't need it anymore, found it themselves, or it's done: finish it (and tellThem only if a short close-out helps).
 - Text only about this goal. Their other goals have their own tasks, so never start, promise or report work on another goal here.
@@ -539,7 +540,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       },
     }),
     webSearch: tool({
-      description: "Search the whole web for anything the task needs that isn't an event: venues, vendors, prices, people, how-tos, programs. One plain sentence of what to find. Every result is checked against its own page; only its listed facts are verified.",
+      description: "Search the web for what the task needs that isn't an event and serves a connection: people, communities, programs. Never prices, vendors, venues for their own event, shopping or travel. One plain sentence of what to find. Every result is checked against its own page; only its listed facts are verified.",
       inputSchema: z.object({ what: z.string() }),
       execute: async ({ what }) => {
         if (did.filter((d) => d.startsWith("web:")).length >= 3) return { found: [], note: "That's the web searches for this wake-up. Work with what you have, note it, and schedule the next look." };
@@ -1142,10 +1143,21 @@ export async function runDueTasks(deps: { claim?: () => Promise<CoTask[]>; runOn
   for (const t of await claim()) await withTraceUser(t.userId, () => withMember(t.userId, () => runOne(t)));
 }
 
-async function runDueTask(t: CoTask): Promise<void> {
+export async function runDueTask(t: CoTask, o: { handBack?: (t: CoTask) => Promise<import("./scopeClose.js").HandBackDeps | null> } = {}): Promise<void> {
   const L = await import("./commitmentLog.js");
   // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
   if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
+  // The purpose boundary (harness/scope.ts), asked again because queued work may predate it or have drifted: out-of-scope work is
+  // handed back with one natural line (when they asked for it) or closed quietly, never worked on and never called done
+  // (services/scopeClose.ts). Ambiguous work goes ahead: the wake's own model read judges it.
+  const sc = scopeOfTask(t);
+  if (sc.scope === "out") {
+    const deps = await (o.handBack ?? handBackDepsFor)(t).catch(() => null);
+    const r = deps ? await closeOutOfScope(t, sc, deps).catch(() => null) : null;
+    if (!r) await closeTask(t.userId, t.id, "dropped", OUTCOME_QUIET).catch(() => false);
+    await recordDecision({ layer: 7, decision: "task.scope", userId: t.userId, outcome: "skip", action: r?.told ? "handed_back" : "closed", proposal: { taskId: t.id, kind: t.kind, why: sc.why } }).catch(() => {});
+    return;
+  }
   // A goal piece that was to be drafted and sent as a document (removed 2026-11-04): nothing writes it now, so it closes honestly as
   // dropped, no text, and is never promised again.
   if (t.kind === "work" && t.followup?.goalId != null && !t.followup?.checkin && /^Draft:/i.test(t.goal)) {
