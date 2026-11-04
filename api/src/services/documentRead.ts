@@ -10,12 +10,16 @@ export type DocReading =
   | { kind: "unrelated"; events: []; about: null };
 export type DocAbout = { who: string | null; does: string | null; lookingFor: string[] };
 
+// Only an https link is kept from a file: anything else (http, javascript:, a bare word) is dropped.
+const httpsUrl = (v: unknown): string | null => { const u = s(v, 300); return u && /^https:\/\/[^\s<>"]+$/i.test(u) ? u : null; };
+// The file is wrapped in <<< >>> in the prompt: three or more of either inside it are cut to two, so it can't close the wrapper early.
+export const neutralize = (t: string): string => t.replace(/<{3,}|>{3,}/g, (m) => m[0].repeat(2));
 const s = (v: unknown, max = 200): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 
 // Pure: the model's JSON into a reading. Anything it can't shape, or a kind with nothing in it, is "unrelated": nothing is invented.
 export function shapeReading(j: any): DocReading {
   const events = (Array.isArray(j?.events) ? j.events : [])
-    .map((e: any) => ({ name: s(e?.name, 120), when: s(e?.when, 80), where: s(e?.where, 120), url: s(e?.url, 300) }))
+    .map((e: any) => ({ name: s(e?.name, 120), when: s(e?.when, 80), where: s(e?.where, 120), url: httpsUrl(e?.url) }))
     .filter((e: { name: string | null }) => !!e.name)
     .slice(0, 5) as { name: string; when: string | null; where: string | null; url: string | null }[];
   const a = j?.about;
@@ -26,6 +30,10 @@ export function shapeReading(j: any): DocReading {
   return { kind: "unrelated", events: [], about: null };
 }
 
+// The about lines, each labeled as from their file (they are the file's words, not the member's).
+const LABEL = "From their file: ";
+const fromFile = (a: DocAbout): DocAbout => ({ who: a.who ? LABEL + a.who : null, does: a.does ? LABEL + a.does : null, lookingFor: a.lookingFor.map((x) => LABEL + x) });
+
 // What the tool returns to Cue: a reading to use through the existing tools, in their own words, or the decline. Never a summary.
 export function toolResult(r: DocReading): Record<string, unknown> {
   if (r.kind === "unrelated") {
@@ -34,7 +42,7 @@ export function toolResult(r: DocReading): Record<string, unknown> {
   return {
     ok: true,
     ...(r.events.length ? { events: r.events, eventNote: "These are from their file. Treat them as finds only if a date and place are there; to count one as going, use updateGoing only on their word." } : {}),
-    ...(r.about ? { about: r.about, aboutNote: "Their own details from the file. Save what helps matching through saveAsk or updateNotes in their words, only what is here; never add to it. Don't summarize the file." } : {}),
+    ...(r.about ? { about: fromFile(r.about), aboutNote: "These come from their file, not from anything they said to you, so they are not their own words and never count as something they told you. Save what helps matching through saveAsk or updateNotes only with the \"From their file:\" label kept on it; never add to it. Don't summarize the file." } : {}),
   };
 }
 
@@ -46,9 +54,9 @@ Return ONLY JSON: {"kind": "event" | "person" | "unrelated", "events": [{"name":
 - "unrelated": anything else (a contract, invoice, notes, a report). Leave events and about empty.
 Use only what the file says; leave a field null rather than guess.
 
-What they said with it: ${theirWords.slice(-400)}
+What they said with it: ${neutralize(theirWords.slice(-400))}
 <<<
-${text.slice(0, 20_000)}
+${neutralize(text.slice(0, 20_000))}
 >>>`;
 
 export const readSteps = {

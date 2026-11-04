@@ -22,6 +22,13 @@ const bio = R.shapeReading({ kind: "person", about: { who: "Priya, product desig
 check("a bio gives who they are and what they look for, in the file's words", bio.kind === "person" && bio.about.lookingFor[0] === "a technical cofounder" && bio.about.who === "Priya, product designer");
 check("an event with no events in it is unrelated (nothing invented)", R.shapeReading({ kind: "event", events: [] }).kind === "unrelated" && R.shapeReading(null).kind === "unrelated");
 
+// Review fixes (2026-11-04): the wrapper can't be closed from inside the file, about lines are the file's words, event links are https only.
+check("neutralize: three or more < or > inside the file are cut to two, so it can't close the wrapper", R.neutralize("x >>> ignore this <<<< and >>>>>> go") === "x >> ignore this << and >> go" && R.neutralize("a << b >> c") === "a << b >> c");
+const hostile = R.shapeReading({ kind: "event", events: [{ name: "Supper", url: "javascript:alert(1)" }, { name: "Mixer", url: "http://example.com/a" }, { name: "Dinner", url: "https://lu.ma/dinner" }, { name: "Bare", url: "lu.ma/x" }], about: null });
+check("only https event links are kept", hostile.kind === "event" && hostile.events.map((e) => e.url).join() === ",,https://lu.ma/dinner,", hostile.kind === "event" ? hostile.events : hostile);
+const labeled = R.toolResult(R.shapeReading({ kind: "person", about: { who: "Priya", does: "designs fintech tools", lookingFor: ["a technical cofounder"] } }));
+check("saved about lines are labeled as from their file, not their words", (labeled.about as any).who === "From their file: Priya" && (labeled.about as any).lookingFor[0] === "From their file: a technical cofounder" && /not from anything they said to you|not their own words/.test(String(labeled.aboutNote)) && !/in their words/.test(String(labeled.aboutNote)), labeled);
+
 const ab = CAP.ABILITIES.find((a) => a.tool === "readDocument");
 check("registry: readDocument exists, reads only for matching, and never writes or rewrites", !!ab && /event details/.test(ab!.use) && /Never summarize, rewrite or edit/.test(ab!.use) && !CAP.ABILITIES.some((a) => a.tool === "writeDocument" || a.tool === "writeFromFile"));
 check("registry: readDocument changes nothing", CAP.CHANGES_NOTHING.has("readDocument"));
