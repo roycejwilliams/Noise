@@ -13,7 +13,7 @@
 // wrong on 12 sites with no script) the general reader (services/sdkGeneralReader.ts) for a venue's own pages.
 import { regionFor } from "./areaCodes.js";
 import { schemaFields, type FieldValue, type FindField, type FindType, type StoredFind } from "./researchQuality.js";
-import { assembleMessages } from "./taskMessages.js";
+import { assembleMessages, captionOk, draftTaskMessages, type SendItem } from "./taskMessages.js";
 
 export const SDK_FINDS_ALLOWED = true;
 // How many finds one run sends: the usual find cap (services/researchFinds.ts RESEARCH_FIND_SHOWN), so it reads like any other find text.
@@ -26,31 +26,50 @@ export const UNKNOWN = "unknown";
 // The oldest field's check time: the caption says no more than its stalest line can back.
 export const findCheckedAt = (fields: FindField[], fallback: string) => fields.map((x) => x.checkedAt).filter(Boolean).sort()[0] ?? fallback;
 
-const MAX_CAPTION = 290;
-// Pure: one find's one-line caption, from its fixed fields only: what the page said, what it didn't, and when it was checked.
-export function findCaption(f: ResearchFind, zone?: string | null): string {
+// Pure: finds that can be sent at all: an https source and a check time. Filtered before the cap, so a valid fourth find fills the
+// slot a dropped one leaves.
+export const sendable = (finds: ResearchFind[]): ResearchFind[] => finds.filter((f) => /^https:\/\//.test(f.url) && !Number.isNaN(new Date(f.checkedAt).getTime()));
+
+// Pure: what a find's page said, as the facts its caption may state: each fixed field with a value, and the fields it did not confirm.
+export function findFacts(f: ResearchFind): string[] {
   const known = f.fields.filter((x) => x.value && x.value.trim()).map((x) => `${x.label}: ${x.value!.trim()}`);
-  const unknown = f.fields.filter((x) => !x.value || !x.value.trim()).map((x) => x.label.toLowerCase());
+  const open = f.fields.filter((x) => !x.value || !x.value.trim()).map((x) => x.label.toLowerCase());
   const d = new Date(findCheckedAt(f.fields, f.checkedAt));
-  const on = Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { timeZone: zone || "America/Los_Angeles", month: "short", day: "numeric" });
-  const tail = [unknown.length ? `${UNKNOWN}: ${unknown.join(", ")}` : "", on ? `checked ${on}` : ""].filter(Boolean).join("; ");
-  const parts = [...known];
-  let line = "";
-  while (true) {
-    line = `${f.name}. ${[parts.join("; "), tail].filter(Boolean).join(". ")}`.trim();
-    if (line.length <= MAX_CAPTION || !parts.length) break;
-    parts.pop();
-  }
-  return line.slice(0, MAX_CAPTION);
+  return [...known, ...(open.length ? [`not confirmed on its page: ${open.join(", ")}`] : []), ...(Number.isNaN(d.getTime()) ? [] : [`checked ${d.toISOString().slice(0, 10)}`])];
 }
 
-// Pure: the run's result as texts: each find's link, then its caption, in order, best first. Nothing without an https source and a
-// check time goes. No heads-up, no closing line (the finds are the message).
-export function findMessages(finds: ResearchFind[], zone?: string | null): string[] {
-  const ok = finds
-    .filter((f) => /^https:\/\//.test(f.url) && !Number.isNaN(new Date(f.checkedAt).getTime()))
-    .slice(0, BRIEF_LIMITS.maxOptions);
-  return assembleMessages(ok.map((f) => ({ url: f.url, caption: findCaption(f, zone) })), null);
+// The captions come from the same path every task's finds use (services/taskMessages.ts draftTaskMessages, held by captionOk: the
+// draft rules, its own facts' numbers and places, no scarcity it can't back): one line each saying why it fits, in Cue's voice, stating
+// only the find's fixed fields. A caption that doesn't hold gets one redraft; what still doesn't hold is left out and its slot goes to
+// the next valid find. Returns the texts (link, then caption) for up to the usual cap, or [] when nothing held up.
+export type CaptionDraft = (o: { items: SendItem[]; fix?: string }) => Promise<{ captions: Map<string, string> } | null>;
+export async function researchMessages(finds: ResearchFind[], o: { firstName: string; ask: string; context: string[]; draft?: CaptionDraft }): Promise<{ messages: string[]; sent: ResearchFind[] }> {
+  const valid = sendable(finds);
+  if (!valid.length) return { messages: [], sent: [] };
+  const items: SendItem[] = valid.map((f) => ({ url: f.url, name: f.name, tier: 3, facts: findFacts(f) }));
+  const draft: CaptionDraft = o.draft ?? ((d) => draftTaskMessages({ firstName: o.firstName || "them", goal: o.ask, items: d.items, what: `why each fits what they asked for: ${o.ask}`, context: o.context.join(" | "), fix: d.fix }).catch(() => null));
+  const vet = (d: { captions: Map<string, string> }, pool: SendItem[]) => {
+    const good: { f: ResearchFind; caption: string }[] = [];
+    const dropped: string[] = [];
+    for (const it of pool) {
+      const cap = d.captions.get(it.url);
+      const v = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`) : { ok: false, why: "no caption" };
+      const f = valid.find((x) => x.url === it.url)!;
+      if (cap && v.ok) good.push({ f, caption: cap });
+      else dropped.push(`${it.name}: ${v.why}`);
+    }
+    return { good, dropped };
+  };
+  const first = await draft({ items });
+  if (!first) return { messages: [], sent: [] };
+  let v = vet(first, items);
+  if (v.dropped.length) {
+    const again = await draft({ items, fix: v.dropped.join("; ") });
+    const w = again ? vet(again, items) : null;
+    if (w && w.good.length >= v.good.length) v = w;
+  }
+  const top = v.good.slice(0, BRIEF_LIMITS.maxOptions);
+  return { messages: assembleMessages(top.map((g) => ({ url: g.f.url, caption: g.caption })), null), sent: top.map((g) => g.f) };
 }
 
 // ---------------------------------------------------------------- reading a source as the venue schema
@@ -181,7 +200,6 @@ export const briefSearchNext = (wakes: number): "retry" | "tell" => (wakes <= BR
 export const BRIEF_DOOR_LOOK_HOURS = 12;
 export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boolean; queued?: boolean }, wakes: number): "told" | "hold" | "untold" | "queued" {
   // Waiting at the door for Cue's next message (harness/door.ts): not told yet; the task stays open until the pick sends it.
-  if (r.door && r.queued) return "queued";
   // Its line ended at the door without going (past its valid-until): never told, and no more looks.
   if (r.door && /^ended at the door/.test(r.reason ?? "")) return "untold";
   if (r.sent || r.reason === "already sent") return "told";
@@ -217,27 +235,27 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // A line to them that ends the brief (what it came to, or the question it needs first). Outside their hours it used to be
   // dropped while the task closed as done, so they never heard (2026-10-07). Now: told, then closed; outside their hours, held
   // to their morning with the task kept open; never told for any other reason, closed as dropped and saying so.
-  const tellThenClose = async (what: string | string[], status: "done" | "dropped", outcome: string) => {
+  // On file as research finds (so "send it" has the link) and as shown finds (the ranking signal for the next run).
+  const recordSentFinds = async (fs: ResearchFind[]) => {
+    const { recordResearchFinds } = await import("./researchFinds.js");
+    await recordResearchFinds(task.userId, fs.map((f) => ({ name: f.name, url: f.url, facts: f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value}`).join("; ") }))).catch(() => 0);
+    await Q.recordShownFinds(task.userId, task.id, fs.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
+  };
+  const tellThenClose = async (what: string | string[], status: "done" | "dropped", outcome: string, record?: ResearchFind[]) => {
     const messages = Array.isArray(what) ? what : [what];
     const text = messages.join("\n");
-    // Through the door (harness/door.ts) unless it answers their latest message: it goes with Cue's next message, as a delivery they
-    // asked for, with no clock (requested work ends only when moot). The task stays open until the pick sends it: the door closes it
-    // then, with this status and outcome, or, if it never goes, closes it as not told and notes why (review of #361).
-    const door = { summary: `The research brief they asked for: ${String(p.what ?? "").slice(0, 120)}`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone), taskId: task.id, close: { status, outcome }, awaitingReply: false };
-    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages, timezone: zone, respectHours: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, door }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; door?: boolean; queued?: boolean });
+    // Work they asked for: the pause on unprompted outreach never holds it (requested), and it doesn't wait at the door. Opt-out,
+    // safety, their hours and their own rule still apply.
+    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages, timezone: zone, respectHours: true, requested: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null } }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; retryAt?: Date });
     const next = briefLineOutcome(r, task.wakes);
-    if (next === "queued") {
-      // Waiting at the door: the task stays open, looking again later only to re-hand the same line (the same key, so never twice).
-      const { holdBriefLine, unspendWake } = await import("./coTasks.js");
-      if (await holdBriefLine(task.userId, task.id, { text, messages, status, outcome }, new Date(Date.now() + BRIEF_DOOR_LOOK_HOURS * 3_600_000))) await unspendWake(task.userId, task.id).catch(() => {});
-      return;
-    }
+    // Recorded only for what actually went out.
+    if (next === "told" && r.sent && record?.length) await recordSentFinds(record).catch(() => {});
     if (next === "hold") {
       const { holdBriefLine, unspendWake } = await import("./coTasks.js");
       const { nextSendable } = await import("./memberTime.js");
       // Held by their rule or the spacing: it waits until it may go, and the wake comes back (a hold never uses up an owed delivery).
       const held = r.reason?.startsWith("held:") ? (r as { retryAt?: Date }).retryAt ?? null : null;
-      if (await holdBriefLine(task.userId, task.id, { text, messages, status, outcome }, held ?? nextSendable(new Date(), zone))) {
+      if (await holdBriefLine(task.userId, task.id, { text, messages, status, outcome, ...(record?.length ? { record } : {}) }, held ?? nextSendable(new Date(), zone))) {
         if (held) await unspendWake(task.userId, task.id).catch(() => {});
         return;
       }
@@ -245,9 +263,9 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     await closeTask(task.userId, task.id, next === "told" ? status : "dropped", next === "told" ? outcome : `${outcome}; never told them (${r.reason ?? "not sent"})`);
   };
   // A line held from an earlier run: say it now (the find isn't run again).
-  const held = (task.followup as any)?.held as { text: string; messages?: string[]; status: "done" | "dropped"; outcome: string } | undefined;
+  const held = (task.followup as any)?.held as { text: string; messages?: string[]; status: "done" | "dropped"; outcome: string; record?: ResearchFind[] } | undefined;
   if (held?.text) {
-    await tellThenClose(held.messages?.length ? held.messages : held.text, held.status, held.outcome);
+    await tellThenClose(held.messages?.length ? held.messages : held.text, held.status, held.outcome, held.record);
     return;
   }
   let finds: ResearchFind[] = [];
@@ -293,21 +311,24 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const signal = await Q.rankingSignal(task.userId);
   finds = Q.rankFinds(finds.map((f) => ({ ...f, type: "venue" as FindType })), signal.member, signal.global).map(({ score: _s, type: _t, ...f }) => f);
 
-  // Only what has a source and a check time goes (findMessages); each caption is code's, from the find's fixed fields.
-  const toSend = finds.slice(0, BRIEF_LIMITS.maxOptions).filter((f) => findMessages([f], zone).length);
-  if (!toSend.length) {
-    await tellThenClose(finds.length ? "I looked, but I couldn't verify enough to send you anything I'd stand behind. I can tell you what to check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?", "done", finds.length ? "no finds sent: none could be verified with a source" : "no finds sent: none found");
+  // Only what has a source and a check time can go; the captions come from the shared find-caption path; the cap applies after the
+  // filter, so a valid fourth find fills a dropped slot.
+  const { messages, sent } = await researchMessages(finds, { firstName: String(person.first_name ?? ""), ask: p.what, context: [...(p.memberContext ?? []), `their budget: ${p.budget ?? "not given"}`].slice(0, 7) });
+  if (!sent.length) {
+    // Nothing held up. If the captions never came (the model call failed) the next wake tries again; otherwise there is nothing to send.
+    if (sendable(finds).length && task.wakes <= BRIEF_SEARCH_RETRIES) return;
+    if (sendable(finds).length) {
+      await closeTask(task.userId, task.id, "dropped", "no finds sent: no caption held up");
+      return;
+    }
+    await tellThenClose("I looked, but couldn't verify any venues that fit. Want me to widen the search?", "done", "no finds sent: none found");
     return;
   }
-  // The options are on file as research finds (so "send it" has the link) and as shown finds (the ranking signal for the next run).
-  const { recordResearchFinds } = await import("./researchFinds.js");
-  await recordResearchFinds(task.userId, toSend.map((f) => ({ name: f.name, url: f.url, facts: f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value}`).join("; ") }))).catch(() => 0);
-  await Q.recordShownFinds(task.userId, task.id, toSend.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
   const { recordDecision } = await import("../harness/core.js");
   // The kind of thing, never its title (the title is their ask in words).
-  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: "act", action: "venue finds texted", proposal: { taskId: task.id, options: toSend.length, again: !!p.again, rechecked, readers: [...new Set(toSend.map((f) => f.reader))] } }).catch(() => {});
+  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: "act", action: "venue finds texted", proposal: { taskId: task.id, options: sent.length, again: !!p.again, rechecked, readers: [...new Set(sent.map((f) => f.reader))] } }).catch(() => {});
   // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched. The
   // options are the places found, never their words.
-  const list = toSend.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
-  await tellThenClose(findMessages(toSend, zone), "done", `texted the finds: ${list}`);
+  const list = sent.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
+  await tellThenClose(messages, "done", `texted the finds: ${list}`, sent);
 }

@@ -21,7 +21,7 @@ delete process.env.PROACTIVE_PAUSED;
 touched = 0;
 await P.runProactiveDispatch({} as any).catch(() => {});
 check("not paused: the dispatcher reads its queue as before", touched > 0);
-check("the switch sits at the top of both doors, before any lock or insert", /export async function runProactiveDispatch\(registry: ProactiveRegistry\): Promise<void> \{\n  if \(proactivePaused\(\)\) return;/.test(src) && /if \(proactivePaused\(\)\) return \{ sent: false, reason: "proactive outreach is paused" \};\n  \/\/ Monitoring visibility/.test(src));
+check("the switch sits at the top of both doors, before any lock or insert", /export async function runProactiveDispatch\(registry: ProactiveRegistry\): Promise<void> \{\n  if \(proactivePaused\(\)\) return;/.test(src) && /if \(proactivePaused\(\) && !opts\.requested\) return \{ sent: false, reason: "proactive outreach is paused" \};\n  \/\/ Monitoring visibility/.test(src));
 // ---- automatic calls
 {
   const { triggerCallForUser, setPreflightForTests } = await import("../../src/services/callTrigger.js");

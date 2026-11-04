@@ -85,7 +85,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   check("paused, opted out or failed = untold", ["proactive outreach is paused", "opted out", "boom"].every((reason) => RB.briefLineOutcome({ sent: false, reason }, 1) === "untold"));
   const rb = src("services/researchBrief.ts");
   check("no closing line goes through a fire-and-forget say() any more", !/await say\(/.test(rb) && (rb.match(/await tellThenClose\(/g) ?? []).length >= 3);
-  check("told: closed as planned; held: the task stays open with the line and wakes in their hours; untold: dropped, saying so", /if \(next === "hold"\)[\s\S]{0,700}holdBriefLine\(task\.userId, task\.id, \{ text, messages, status, outcome \}, (?:held \?\? )?nextSendable\(new Date\(\), zone\)\)/.test(rb) && /closeTask\(task\.userId, task\.id, next === "told" \? status : "dropped", next === "told" \? outcome : `\$\{outcome\}; never told them/.test(rb));
+  check("told: closed as planned; held: the task stays open with the line and wakes in their hours; untold: dropped, saying so", /if \(next === "hold"\)[\s\S]{0,700}holdBriefLine\(task\.userId, task\.id, \{ text, messages, status, outcome, \.\.\.\(record\?\.length \? \{ record \} : \{\}\) \}, (?:held \?\? )?nextSendable\(new Date\(\), zone\)\)/.test(rb) && /closeTask\(task\.userId, task\.id, next === "told" \? status : "dropped", next === "told" \? outcome : `\$\{outcome\}; never told them/.test(rb));
   check("a held line is said on the next wake without running the find again", rb.indexOf("if (held?.text)") > 0 && rb.indexOf("if (held?.text)") < rb.indexOf("findVenueOptions(task.userId"));
   check("a brief that found nothing is closed as done only through tellThenClose (never before they're told)", !/closeTask\(task\.userId, task\.id, "done", `no brief/.test(rb));
   check("holdBriefLine only touches an open brief", /WHERE user_id = \$1 AND id = \$2 AND status = 'open' AND kind = 'research_brief'/.test(ct));
@@ -142,7 +142,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
 {
   const { narratesInternalState } = await import("../../src/services/speakable.js");
   const RB = await import("../../src/services/researchBrief.js");
-  const t = RB.findMessages([{ name: "Perbacco", url: "https://www.perbaccosf.com/dining/", checkedAt: "2026-10-08T17:00:00.000Z", reader: "scripted", fields: [] }]).join("\n");
+  const t = (await RB.researchMessages([{ name: "Perbacco", url: "https://www.perbaccosf.com/dining/", checkedAt: "2026-10-08T17:00:00.000Z", reader: "scripted", fields: [] }], { firstName: "Jordan", ask: "a venue", context: [], draft: async ({ items }) => ({ captions: new Map(items.map((it) => [it.url, "A private dining room that fits the size you gave."])) }) })).messages.join("\n");
   check("a research result never narrates Cue's state", narratesInternalState(t) === null);
   const fu = src("services/followUps.ts");
   check("asking for space is skip, never later", /that is skip, never later/.test(fu) && /Never "later" because they asked for space/.test(fu));
