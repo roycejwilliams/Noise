@@ -217,15 +217,15 @@ const searched = (fp: { plan: any }) => (fp.plan ? goalItemsFromPlan(fp.plan, (e
 // ---------------------------------------------------------------- Jacqueline's 10-10 to 10-14, renamed Priya
 {
   // Her last plan was 10-10 21:30 (before fingerprints); a goal find went out 10-11 08:15; the hourly goal sweep then hit the cooldown on
-  // 10-11, 10-12, 10-13 and 10-14 and never planned. On 10-14 the old floor read no plan from the last 3 days: 0 of her 9 goals searched.
+  // 10-11, 10-12, 10-13 and 10-14 and never planned. On 10-14 the old floor read no plan from the last 3 days: 0 of her 9 goals searched. (11-04: 8 of 9 now: the trip is outside the purpose boundary.)
   const NINE = ["co-found Cue with Royce", "build a design system for Cue", "get to 20 members by November", "host a November launch party", "find a Pilates studio near the Mission", "meet women founders in SF", "learn product analytics", "plan a trip to Mexico City", "read more fiction this fall"];
   const old = { proposal: { edges: NINE.map((g) => ({ goal: g, kind: "findable", edges: ["x y"] })), passed: [], setAside: [] }, created_at: new Date("2026-10-10T21:30:05Z") };
   const w = world({ goals: NINE, stored: old });
   w.deps.model = async () => { w.calls.model++; return JSON.stringify(NINE.map((g, i) => ({ n: i + 1, kind: "findable", edges: [`edge ${i}`], until: null, superseded_by: null, why: "" }))); };
   const r = await floorGoalPlan({ user_id: "priya", cooldown_cleared: false }, new Date("2026-10-14T16:00:00Z"), w.deps);
-  check("Priya on 10-14: her goals are searched (the pre-fingerprint plan is rebuilt once at 9am, then reused)", r.how === "built" && searched(r).length === 9 && w.calls.model === 1, r);
+  check("Priya on 10-14: her goals are searched (the pre-fingerprint plan is rebuilt once at 9am, then reused)", r.how === "built" && searched(r).length === 8 && w.calls.model === 1, r); // 8 of 9: "plan a trip to Mexico" is outside the purpose boundary (remembered, never searched)
   const r2 = await floorGoalPlan({ user_id: "priya" }, new Date("2026-10-15T16:00:00Z"), world({ goals: NINE, stored: { proposal: w.calls.log[0].proposal, created_at: new Date("2026-10-14T16:00:00Z") } }).deps);
-  check("Priya on 10-15: the 9am plan from 10-14 is reused with no call", r2.how === "reused" && searched(r2).length === 9);
+  check("Priya on 10-15: the 9am plan from 10-14 is reused with no call", r2.how === "reused" && searched(r2).length === 8);
 }
 
 // ---------------------------------------------------------------- four days, a goal find on day 1
