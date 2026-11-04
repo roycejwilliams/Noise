@@ -65,5 +65,26 @@ export async function expireStaleAsks(): Promise<{ backfilled: number; expired: 
     );
     expired += rowCount ?? 0;
   }
+  // Conditions said with a time limit ("not investors right now") run out 60 days after they were last said (services/wantCriteria.ts).
+  await expireTimeBoundCriteria().catch((err: any) => console.error("expireTimeBoundCriteria failed (non-fatal):", err?.message ?? err));
   return { backfilled: missing.length, expired };
+}
+
+// Takes expired time-worded conditions off each want they were on (they already stopped applying: wantCriteria.ts criteriaOf), and logs
+// each member's expiry with want ids and counts only, never their words. Only that want's conditions change.
+export async function expireTimeBoundCriteria(now: Date = new Date()): Promise<number> {
+  const { pruneExpiredCriteria } = await import("./wantCriteria.js");
+  const { recordDecision } = await import("../harness/core.js");
+  const { rows } = await pool.query(`SELECT user_id, intent FROM co_profiles WHERE intent::text LIKE '%"criteria"%' LIMIT 1000`);
+  let n = 0;
+  for (const r of rows) {
+    const { intent, expired } = pruneExpiredCriteria(r.intent, now);
+    if (!expired.length) continue;
+    // Only if the intent is still the one read (a turn may have written since): the next day's pass takes whatever is left.
+    const { rowCount } = await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1 AND intent = $3::jsonb`, [r.user_id, JSON.stringify(intent), JSON.stringify(r.intent)]);
+    if (!rowCount) continue;
+    n += expired.reduce((a, x) => a + x.n, 0);
+    await recordDecision({ layer: 5, decision: "want_criteria.expired", userId: r.user_id, outcome: "act", action: "expired", reason: "conditions said with a time limit ran past 60 days since last said", proposal: { wants: expired } }).catch(() => {});
+  }
+  return n;
 }
