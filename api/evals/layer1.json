@@ -93,6 +93,7 @@
     "evals/review/email.ts",
     "evals/onboarding/rules.ts",
     "evals/onboarding/firstConversation.ts",
+    "evals/calls/callFeel.ts",
     "evals/onboarding/reviewFixes.ts",
     "evals/invites/rules.ts",
     "evals/capture/rules.ts",

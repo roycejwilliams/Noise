@@ -71,7 +71,7 @@ const fakeDb = (o: { pastCall?: boolean; texts?: string[]; inviter?: string | nu
   check("a failed read is not a first call (the four phases, as before)", (await F.firstCallFacts("u-jordan", fakeDb({ fail: true }))).firstCall === false);
   const route = src("src/routes/co.ts");
   const answer = route.slice(route.indexOf("async function gptLiveAnswer"), route.indexOf("async function gptLiveRefusalTwiml"));
-  check("every GPT-Live call (inbound and outbound) reads the flag and passes it to buildLiveCall", /firstCallFacts\(o\.userId\)/.test(answer) && /zone\), first \}\);/.test(answer));
+  check("every GPT-Live call (inbound and outbound) reads the flag and passes it to buildLiveCall", /firstCallFacts\(o\.userId\)/.test(answer) && /zone\), first(?:, thread)? \}\);/.test(answer));
   check("the call context no longer calls an empty context a first conversation", !/If that's empty, this is your first real conversation/.test(src("src/services/elevenLabsCalls.ts")));
 }
 

@@ -698,11 +698,13 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
     // A first call (no past call transcript) gets the first-conversation guidance and, in its opening, a line of their own texted words
     // and the inviter they named themselves (services/firstCall.ts). A failed read is a later call: the four phases, as before.
     const first = await import("../services/firstCall.js").then((m) => m.firstCallFacts(o.userId)).catch(() => ({ firstCall: false }));
-    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone), first });
+    // A later call opens from where they left off: one line, the most recent open thread or topic (services/firstCall.ts laterCallThread).
+    const thread = (first as { firstCall?: boolean }).firstCall ? null : await import("../services/firstCall.js").then((m) => m.laterCallThread(o.userId)).catch(() => null);
+    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone), first, thread });
     const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, budgetLimited: admitted.budgetLimited }, Date.now(), admitted.id);
     G.markCall(o.callSid, o.userId, "pending");
     // What the opening had to go on (which pieces, never their words): GPT-Live writes the line itself.
-    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason, firstCall: !!call.opening.firstCall, theirWords: !!call.opening.theirWords, inviter: !!call.opening.inviter } } }).catch(() => {});
+    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason, firstCall: !!call.opening.firstCall, theirWords: !!call.opening.theirWords, inviter: !!call.opening.inviter, thread: !!call.opening.thread } } }).catch(() => {});
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.connect({ action: `${process.env.API_URL}/co/gpt-live/after-stream` }).stream({ url: streamUrl }).parameter({ name: "s", value: id });
     return { twiml: twiml.toString() };
