@@ -46,7 +46,7 @@ const ACT: Record<string, string> = {
   webSearch: "the web",
   writeDocument: "a document (PDF)",
   startTask: "took on a task for them",
-  researchBrief: "started researching venues for them",
+  researchBrief: "started researching rooms, events and communities for them",
   closeTask: "closed a task",
   offerDocument: "offered to write something up for them as a document",
   saveAsk: "saved an ask",
