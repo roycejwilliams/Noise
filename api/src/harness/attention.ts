@@ -20,6 +20,10 @@
 //                offers Cue starts wait. A check-in never asserts a feeling the member didn't share: Cue's own draft is read against
 //                their own words (feelingCheck).
 //
+//  10  send time Learned from the hour they usually write back (their own inbound times, no new store): an unrequested text waits for those
+//               hours (inside Cue's own 8am to 9pm and what their rules allow), never a requested one, a possible intro, a time-sensitive
+//               one, one that would expire first, or the morning sweep's find. Too little to learn from: the current default stands.
+//
 // Never touched by any of it: requested deliveries, replies, safety follow-ups and notices about something soon (their class is
 // "requested" or "reply", or the payload says safety). Calls Cue starts read the same defaults (harness/callGate.ts pickerBudget).
 // Pure, apart from the two model reads at the end (readThreads, feelingCheck).
@@ -38,7 +42,7 @@ export const isUnrequested = (cls: SendClass): boolean => cls === "unsolicited" 
 
 // ---------------------------------------------------------------- 3. the member's thread
 
-type Item = { type: string; targetKey: string; payload: unknown };
+type Item = { type: string; targetKey: string; payload: unknown; expiresAt?: Date | null };
 // One model read's answer, stored on the candidate: the member thread it serves, or null for none of them.
 export type ThreadRead = { thread: string | null; at: string };
 export type ThreadIds = { thread: string | null; ask: string | null; goal: string | null; task: string | null; profile: boolean; read: boolean };
@@ -172,9 +176,12 @@ export type AttentionState = {
   sentToday: Item[];
   // Cue's last message: whether it closed with the interest question, and when.
   lastAsked: { at: Date; asked: boolean } | null;
+  // Their own messages over a longer stretch (SEND_TIME.lookbackDays), times only: what the usual reply hour is learned from. Missing: the
+  // learning has nothing to read, so the current default stands (item 10).
+  history?: Date[];
 };
 
-const answeredWithin = (at: Date, inbound: Date[], ms: number) => inbound.some((i) => i.getTime() > at.getTime() && i.getTime() - at.getTime() <= ms);
+export const answeredWithin = (at: Date, inbound: Date[], ms: number) => inbound.some((i) => i.getTime() > at.getTime() && i.getTime() - at.getTime() <= ms);
 
 // "Often" (item 7): of the unrequested texts in the window the ledger read covers (8 days), at least REPLY_OFTEN.min, and at least
 // REPLY_OFTEN.rate of them answered within a day. A member Cue hasn't written to enough yet is not "often".
@@ -249,8 +256,85 @@ export function attentionChecks(o: { now: Date; zone: string | null; cls: SendCl
     const other = today.find((s) => !sameThread(s, o.item!));
     if (same) out.push({ name: "thread_today", pass: false, reason: `its thread (${threadKey(o.item)}) already had its message today`, retryAt: tomorrow });
     else if (other && !often.often && !theirRule) out.push({ name: "thread_today", pass: false, reason: `a message about something else (${threadKey(other)}) went today: a different thing waits for another day`, retryAt: tomorrow });
+    // 10: unrequested texts go in the hours they usually write back (learned from their own messages; nothing to learn from: no check).
+    const usual = sendTimeCheck({ now: o.now, zone: o.zone, cls: o.cls, channel: o.channel, att: o.att, prefs: o.prefs, item: o.item });
+    if (usual) out.push(usual);
   }
   return out;
+}
+
+// ---------------------------------------------------------------- 10. send time
+
+// Learned from the member's own inbound timestamps (the texts and calls they started), never asked. A reply is the first message of a run
+// (messages under clusterMinutes apart are one). Too little to go on (fewer than minReplies, or on fewer than minDays different days)
+// keeps the current default: no learned hour. The usual window is the narrowest run of hours (at least minWidth, at most maxWidth) that
+// holds at least `coverage` of their replies; a member who writes all day has none. It is then cut to Cue's own hours
+// (services/localHours.ts, 8am to 9pm) and to what their own rules allow, and when nothing is left it is no window at all.
+export const SEND_TIME = { minReplies: 12, minDays: 5, lookbackDays: 45, coverage: 0.7, minWidth: 3, maxWidth: 8, clusterMinutes: 30, startHour: 8, endHour: 21 } as const;
+export type UsualHours = { hours: number[]; replies: number; days: number };
+
+// Pure: the hours (0-23, their zone) they usually write in, or null when there is too little to say.
+export function usualReplyHours(times: Date[], zone: string | null | undefined, now: Date): UsualHours | null {
+  const since = now.getTime() - SEND_TIME.lookbackDays * DAY;
+  const sorted = times.filter((t) => t.getTime() > since && t.getTime() <= now.getTime()).sort((a, b) => a.getTime() - b.getTime());
+  const replies: DateTime[] = [];
+  let last = -Infinity;
+  for (const t of sorted) {
+    if (t.getTime() - last >= SEND_TIME.clusterMinutes * 60_000) replies.push(DateTime.fromJSDate(t).setZone(zoneOf(zone)));
+    last = t.getTime();
+  }
+  const days = new Set(replies.map((r) => r.toISODate())).size;
+  if (replies.length < SEND_TIME.minReplies || days < SEND_TIME.minDays) return null;
+  const counts = new Array<number>(24).fill(0);
+  for (const r of replies) counts[r.hour]++;
+  for (let w = SEND_TIME.minWidth; w <= SEND_TIME.maxWidth; w++) {
+    let best = -1;
+    let bestSum = -1;
+    for (let start = 0; start < 24; start++) {
+      let sum = 0;
+      for (let i = 0; i < w; i++) sum += counts[(start + i) % 24];
+      if (sum > bestSum) (bestSum = sum, (best = start));
+    }
+    if (bestSum / replies.length >= SEND_TIME.coverage) {
+      const hours = Array.from({ length: w }, (_, i) => (best + i) % 24).filter((h) => h >= SEND_TIME.startHour && h < SEND_TIME.endHour);
+      return hours.length ? { hours, replies: replies.length, days } : null;
+    }
+  }
+  return null;
+}
+
+// Pure: whether a member's own explicit rules allow a send of this class at this hour of their day (an "earliest" or a "latest" time of
+// day). Their rules always win over the learned hour: an hour they forbid is never one Cue waits for.
+export function hourAllowedByRules(prefs: Preference[], cls: SendClass, channel: NotifyChannel, hour: number, now: Date): boolean {
+  return holdingRules(prefs, now).every((p) => {
+    if (!covers(p.area === "checkins" ? "checkins" : p.covers, cls) || (p.channel !== "all" && p.channel !== channel)) return true;
+    const m = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
+    if (p.rule.earliest && hour * 60 + 59 < m(p.rule.earliest)) return false;
+    if (p.rule.latest && hour * 60 >= m(p.rule.latest)) return false;
+    return true;
+  });
+}
+
+// Pure: the send-time check for one unrequested text. Null: nothing to say (no learned hour, already inside it, a rule of theirs leaves
+// no usual hour, the item can't wait for it, or it's one that never waits). Else a failing check with when the next usual hour begins.
+// Never for a requested delivery, a reply, a safety follow-up, a possible intro (matching first), a find from the morning sweep (it has
+// its own hour), or anything that would expire before the next usual hour.
+export function sendTimeCheck(o: { now: Date; zone: string | null; cls: SendClass; channel: NotifyChannel; att: Pick<AttentionState, "inbound" | "history">; prefs: Preference[]; item: Item }): AttentionCheck | null {
+  if (!isUnrequested(o.cls) || o.channel !== "text" || isPossibleIntro(o.item)) return null;
+  const pay = (o.item.payload ?? {}) as { safetyFollowUp?: boolean; morningDay?: string; soonAt?: string | null };
+  if (pay.safetyFollowUp === true || pay.soonAt) return null;
+  const local = DateTime.fromJSDate(o.now).setZone(zoneOf(o.zone));
+  if (typeof pay.morningDay === "string" && pay.morningDay === local.toISODate()) return null;
+  const usual = usualReplyHours(o.att.history ?? o.att.inbound, o.zone, o.now);
+  if (!usual) return null;
+  const hours = usual.hours.filter((h) => hourAllowedByRules(o.prefs, o.cls, o.channel, h, o.now));
+  if (!hours.length || hours.includes(local.hour)) return null;
+  let next = local.startOf("hour");
+  for (let i = 0; i < 48 && !hours.includes(next.hour); i++) next = next.plus({ hours: 1 });
+  if (!hours.includes(next.hour)) return null;
+  const at = next.toJSDate();
+  if (o.item.expiresAt && o.item.expiresAt.getTime() <= at.getTime()) return null;
+  return { name: "usual_hour", pass: false, reason: `their usual reply hours (${usual.replies} replies over ${usual.days} days): it waits for the next one`, retryAt: at };
 }
 
 // ---------------------------------------------------------------- 8. their state

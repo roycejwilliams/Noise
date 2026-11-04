@@ -1093,6 +1093,13 @@ export function registerJobs(io: Server) {
       .then((m) => m.recordDailyFailures())
       .catch((err: any) => console.error("failure count cron error:", err?.message ?? err));
   }, { timezone: "America/Los_Angeles" });
+  // Beside it, per member (harness/attentionStats.ts, notification grouping item 11): reply rate per message, less/stop requests,
+  // expired items, messages close together. Logged only: no text, no email, no member words.
+  cron.schedule("10 8 * * *", () => {
+    import("../harness/attentionStats.js")
+      .then((m) => m.recordDailyAttention())
+      .catch((err: any) => console.error("attention stats cron error:", err?.message ?? err));
+  }, { timezone: "America/Los_Angeles" });
   cron.schedule("*/15 * * * *", () => {
     import("../harness/failureCount.js")
       .then((m) => m.checkFailureAlert())

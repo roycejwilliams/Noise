@@ -47,6 +47,12 @@ for (const t of registered) {
     check("registry tool voiceRead exists only where the voice read can run", voiceTools.includes(t) && !toolNames.includes(t));
     continue;
   }
+  if (t === "anythingForMe") {
+    // The pull exists only on a turn with something waiting for them (harness/waiting.ts; TurnContext.waiting).
+    const waitingTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, turn: { waiting: [{ id: "1", type: "event_offer", band: 2, label: "a find for you: X", intro: false, expiresAt: null }] }, sendCoReply: async () => true } as any).tools);
+    check("registry tool anythingForMe exists only on a turn with something waiting", waitingTools.includes(t) && !toolNames.includes(t));
+    continue;
+  }
   if (t === "leaveItAtReaction") {
     check("registry tool leaveItAtReaction exists only after a reaction went out", ackedTools.includes(t) && !toolNames.includes(t));
     continue;

@@ -278,7 +278,7 @@ export async function gatherReplyFacts(
 ): Promise<ReplyFacts> {
   const t = opts.turn;
   const team = await isTeamMember(userId).catch(() => false);
-  const rf = baseReplyFacts(situationFor({ kitFields: Object.keys(t?.kit ?? {}).length, message: t?.message ?? "", openTasks: t?.tasks?.length ?? 0, eventToday: !!t?.todayEvent, doorOpen: t?.door ? doorOpen(t.door).open : false, walkinDue: !!opts.walkinDue, voiceRead: voiceReadPrereqs() }), opts.snapshot, team);
+  const rf = baseReplyFacts(situationFor({ kitFields: Object.keys(t?.kit ?? {}).length, message: t?.message ?? "", openTasks: t?.tasks?.length ?? 0, eventToday: !!t?.todayEvent, doorOpen: t?.door ? doorOpen(t.door).open : false, walkinDue: !!opts.walkinDue, voiceRead: voiceReadPrereqs(), waiting: !!t?.waiting?.length }), opts.snapshot, team);
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // The member-level rules from the one member-knowledge layer (addMemberKnowledge): restraint, quiet hours, delivery shape. What
   // they told Cue, corrected and liked is in the snapshot.
