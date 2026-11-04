@@ -114,6 +114,7 @@ export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from ".
 import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { understandingGaps, type Gap } from "./understanding.js";
 import { withMember } from "./llmUsage.js";
+import { sharedNotAsked } from "../harness/scope.js";
 import { ASK_JSON, conditionsOnFileBlock, CRITERIA_FOR_JSON, CRITERIA_FOR_RULE, WANT_WORDS_RULE } from "./wantCriteria.js";
 
 export type CoverageAssessment = {
@@ -1390,7 +1391,7 @@ export function captureIntentPrompt(transcript: string, scope: IntentScope = "la
       : `Take it from the LAST user message, using the earlier conversation only to understand it — anything they asked for before that is context they already said, not a new ask. Return at most one ask, and none at all when that last message isn't asking for or offering something.`;
   return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Cue (the "assistant:" lines) said as if the user said it. A question Cue asked that the user never answered is not an ask.
 
-1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} ${WANT_WORDS_RULE} None of these is ever an ask: small talk, thanks, feedback about Cue, questions about Cue itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Cue's questions about them. ${ANSWERED_INTEREST_RULE} ALSO include, as their own entries, the DIRECTION they said they are moving toward over the next few months (for example "get Cue in front of users", "raise a pre-seed round"): those are goals, and they are typed when they are stored. If Cue played back what it is carrying for them in this conversation and they corrected it, the CORRECTED version is the final list: extract from the correction, not from the first version.
+1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} ${WANT_WORDS_RULE} None of these is ever an ask: small talk, thanks, feedback about Cue, questions about Cue itself ("how can you improve?", "anything you need to ask me?"), logistics, answers to Cue's questions about them, or a personal update (a loss, an illness, a hard stretch, news about their week) told without asking for anything. ${ANSWERED_INTEREST_RULE} ALSO include, as their own entries, the DIRECTION they said they are moving toward over the next few months (for example "get Cue in front of users", "raise a pre-seed round"): those are goals, and they are typed when they are stored. If Cue played back what it is carrying for them in this conversation and they corrected it, the CORRECTED version is the final list: extract from the correction, not from the first version.
 2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
 3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
 4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
@@ -1494,6 +1495,8 @@ export async function persistIntentFrom(
     const onReject = (why: string) => void (rejected[why] = (rejected[why] ?? 0) + 1);
     const captured = normalizeCapturedAsks(parsed, scope)
       .filter((a) => mine(a.text))
+      // A personal share is not an ask (harness/scope.ts sharedNotAsked): remembered in the profile reads, never an ask to search for.
+      .filter((a) => !sharedNotAsked(String(a.quote ?? "")))
       .map((a) => ({ ...a, wantWords: { ...WC.groundWant(a.quote, ownWords), via, criteria: WC.groundCriteria(a.criteria, ownWords, undefined, onReject) } }));
     // Conditions said about something already open (criteria_for): each lands on its own want only, written before the asks below so
     // a deduped restatement in the same turn merges on top of it.

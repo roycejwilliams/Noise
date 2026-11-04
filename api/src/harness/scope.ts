@@ -127,3 +127,21 @@ export const MIXED_REPLY_GUIDANCE = "This message bundles something Cue does (th
 export function replyScopeGuidance(v: ScopeVerdict | null | undefined): string | null {
   return !v || v.scope === "in" ? null : v.scope === "out" ? OUT_OF_SCOPE_GUIDANCE : MIXED_REPLY_GUIDANCE;
 }
+
+// A personal share: a member telling Cue something about their life (a loss, an illness, a hard stretch, news) without asking for
+// anything. The companion listens (Royce, 2026-11-04: "don't turn every personal update into a matching opportunity or another
+// question"); no path turns it into an ask, a look-out or a task. Deterministic: a disclosure pattern and no request in the same text.
+const SHARE = new RegExp(
+  [
+    "\\b(?:my|our) (?:mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|brother|sister|wife|husband|partner|dog|cat|friend|boyfriend|girlfriend|kid|son|daughter|baby)\\b[^.?!]{0,50}\\b(?:passed|died|is sick|was diagnosed|in the hospital|got sick|is dying|had surgery|left me|broke up)",
+    "\\bI(?:'m| am| was| feel| felt| have been| 've been| keep feeling)\\b[^.?!]{0,30}\\b(?:exhausted|overwhelmed|anxious|depressed|lonely|burn(?:ed|t) out|grieving|heartbroken|struggling|scared|sad|stressed|tired|worried|ashamed|lost|numb)\\b",
+    "\\b(?:passed away|funeral|miscarriage|my divorce|the breakup|broke up with me|got laid off|got fired|was diagnosed|my diagnosis|chemo|had surgery)\\b",
+  ].join("|"),
+  "i",
+);
+const ASKS_FOR = /\b(?:can you|could you|would you|will you|please|find me|look for|looking for|any (?:events|dinners|meetups|people|groups)|introduce|intro me|help me (?:find|meet|get)|where can i|who should i|i want to (?:meet|find|go)|i need to (?:meet|find|go)|i'd like to (?:meet|find|go))\b/i;
+export function sharedNotAsked(text: string): boolean {
+  const t = String(text ?? "");
+  return SHARE.test(t) && !ASKS_FOR.test(t);
+}
+export const SHARED_NOT_ASKED_GUIDANCE = "They shared something about their life; they didn't ask for anything. Listen: answer what they feel, have a point of view, and let it be the whole reply. No ask, look-out or task comes out of it, no pivot to events or people, and no question just to keep it going.";
