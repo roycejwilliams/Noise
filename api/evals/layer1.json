@@ -297,6 +297,7 @@
     "evals/asks/wantWords.ts",
     "evals/loop/offerDue.ts",
     "evals/docs/readDocument.ts",
-    "evals/docs/researchBrief.ts"
+    "evals/docs/researchBrief.ts",
+    "evals/capabilities/directAsk.ts"
   ]
 }
