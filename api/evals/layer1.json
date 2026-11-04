@@ -7,6 +7,7 @@
     "evals/reply/askedFor.ts",
     "evals/reply/threadWindow.ts",
     "evals/reply/wholeExchange.ts",
+    "evals/reactions/incoming.ts",
     "evals/proactive/closedSubjects.ts",
     "evals/profile/lists.ts",
     "evals/matching/run.ts",

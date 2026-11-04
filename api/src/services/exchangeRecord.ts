@@ -13,6 +13,7 @@
 // The move (answer, summarize, steps, act, close, feeling, ask, quiet) is chosen by the turn read on text, and by the call brain itself
 // on a call; the draft is checked against it in harness/moveCheck.ts. Pure, apart from the loaders at the bottom.
 import { questionsIn, turnsFromConversation } from "../harness/repeatAsk.js";
+import { isReaction, parseReaction, quotesText } from "./reactionsIn.js";
 
 export const EXCHANGE_MOVES = ["answer", "summarize", "steps", "act", "close", "feeling", "ask", "quiet"] as const;
 export type ExchangeMove = (typeof EXCHANGE_MOVES)[number];
@@ -31,7 +32,9 @@ export const MOVES_GUIDE = `Pick the move from the whole exchange, not from thei
 
 export type DoneKind = "link" | "find" | "card" | "document" | "question" | "offer";
 // replied: they wrote back after it (a question or offer they've had the chance to answer).
-export type DoneItem = { id: string; kind: DoneKind; label: string; url: string | null; replied: boolean };
+// reacted: the tapback they gave the text this came from (services/reactionsIn.ts), e.g. "👍". Seen, but not an answer: it leaves
+// replied as it was, so a question stays open, and it tells the read not to ask the same thing again as if it were unseen.
+export type DoneItem = { id: string; kind: DoneKind; label: string; url: string | null; replied: boolean; reacted?: string | null };
 export type UnresolvedState = "open" | "delivered" | "solved" | "dropped";
 // closedAt: when it closed (closed items read from the stores): their words lift it only when said after that (see moveCheck.ts).
 export type UnresolvedItem = { id: string; label: string; state: UnresolvedState; closedAt?: string | null };
@@ -68,19 +71,27 @@ export function doneFrom(recentConversation: string, sent: { name: string; url: 
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i];
     if (t.from !== "co") continue;
-    const replied = turns.slice(i + 1).some((x) => x.from === "them" && x.text.trim());
+    const later = turns.slice(i + 1).filter((x) => x.from === "them" && x.text.trim());
+    // A tapback is not a written reply; the newest reaction on this very text stands (a removed one clears it).
+    const replied = later.some((x) => !isReaction(x.text));
+    let reacted: string | null = null;
+    for (const x of later) {
+      const rx = parseReaction(x.text);
+      if (rx && quotesText(t.text, rx.quoted)) reacted = rx.removed ? null : rx.emoji;
+    }
+    const mark = reacted ? { reacted } : {};
     const card = t.text.match(/\[sent (?:Cue|Co)'s contact card\]/i);
-    if (card) raw.push({ kind: "card", label: "Cue's contact card", url: null, replied });
+    if (card) raw.push({ kind: "card", label: "Cue's contact card", url: null, replied, ...mark });
     const doc = t.text.match(/\[sent a document: ([^\]]+)\]/i);
-    if (doc) raw.push({ kind: "document", label: doc[1].trim().slice(0, 120), url: null, replied });
+    if (doc) raw.push({ kind: "document", label: doc[1].trim().slice(0, 120), url: null, replied, ...mark });
     for (const u of t.text.match(URL) ?? []) {
       const k = normUrl(u);
       if (seenUrl.has(k)) continue;
       seenUrl.add(k);
       const named = sent.find((s) => s.url && normUrl(s.url) === k);
-      raw.push({ kind: "link", label: named?.name.slice(0, 120) ?? k.slice(0, 120), url: u.replace(/[.,;!?]+$/, ""), replied });
+      raw.push({ kind: "link", label: named?.name.slice(0, 120) ?? k.slice(0, 120), url: u.replace(/[.,;!?]+$/, ""), replied, ...mark });
     }
-    for (const q of questionsIn(t.text.replace(URL, ""))) raw.push({ kind: OFFER_Q.test(q) ? "offer" : "question", label: q.slice(0, 200), url: null, replied });
+    for (const q of questionsIn(t.text.replace(URL, ""))) raw.push({ kind: OFFER_Q.test(q) ? "offer" : "question", label: q.slice(0, 200), url: null, replied, ...mark });
   }
   for (const s of sent) {
     if (s.url && seenUrl.has(normUrl(s.url))) continue;
@@ -104,7 +115,7 @@ export function unresolvedFrom(o: { asks?: { text: string }[]; carrying?: { labe
   return out.slice(0, UNRESOLVED_MAX).map((u, i) => ({ id: `U${i + 1}`, label: u.label.replace(/\s+/g, " ").slice(0, 160), state: u.state, ...(u.closedAt ? { closedAt: u.closedAt } : {}) }));
 }
 
-const itemLine = (d: DoneItem) => `${d.id} ${d.kind}: ${d.label}${d.url && d.kind !== "link" ? ` (${d.url})` : d.url && d.label !== normUrl(d.url).slice(0, 120) ? ` (${d.url})` : ""}${(d.kind === "question" || d.kind === "offer") && !d.replied ? " [no answer yet]" : ""}`;
+const itemLine = (d: DoneItem) => `${d.id} ${d.kind}: ${d.label}${d.url && d.kind !== "link" ? ` (${d.url})` : d.url && d.label !== normUrl(d.url).slice(0, 120) ? ` (${d.url})` : ""}${(d.kind === "question" || d.kind === "offer") && !d.replied ? " [no answer yet]" : ""}${d.reacted ? ` [they reacted ${d.reacted}: seen, not an answer]` : ""}`;
 
 // The part of the turn read's prompt that carries the record (services/readTurn.ts turnReadAddendum), and the fields it asks for.
 export function exchangeAddendum(b: ExchangeBase | null | undefined): string {
