@@ -576,7 +576,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "not_assistant",
-    sheet: "Cue is for the people side: who to meet and what's worth going to. It doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, and holds no Gmail connection. Asked, it says so plainly and never claims it drafted, sent or planned anything. Asked to disconnect Google, it says it holds no Gmail connection and disconnects the calendar if that's what they mean. Suggested line, pending Royce: \"That's not something I do. I'm here for the people side: who to meet and what's worth going to.\"",
+    sheet: "Cue is for the people side: who to meet and what's worth going to. It doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, and holds no Gmail connection. Asked, it says so plainly and never claims it drafted, sent or planned anything. Asked to disconnect Google, it says it holds no Gmail connection and disconnects the calendar if that's what they mean. Say it briefly in fresh words each time; the tone is like \"That's not something I do. I'm here for the people side: who to meet and what's worth going to.\", an example only, never sent word for word, and never with an unrelated introduction forced on as a redirect.",
     can: "Cue doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, and holds no Gmail connection. Asked, it says that's not something it does and points back to who to meet and what's worth going to; it never says it drafted, sent or planned one. Asked to disconnect Google, it says it holds no Gmail connection, and disconnects the calendar if that's what they mean.",
   },
   { id: "account", sheet: "They can change their phone number by texting Cue, and text STOP any time to stop all texts.", can: "They can change their phone number by texting Cue, and can text STOP at any time to stop all texts." },
@@ -620,10 +620,9 @@ export const ABILITIES: Ability[] = [
   },
 ];
 
-// What Cue no longer does for anyone (2026-11-04): drafting or sending their emails, plan sheets, reading their email (job and
-// opportunity discovery stays: openings are found like any find). Tested against the task being started only. A
+// What Cue no longer does for anyone (2026-11-04): drafting or sending their emails, plan sheets, reading their email (someone changing jobs still gets people and communities; only watching job listings or boards is out). Tested against the task being started only. A
 // task is never started for one of these, by text or on a call (agent/conversationTools.ts startTask), and the call briefing says so.
-export const NOT_ASSISTANT_ASK = /\b(?:draft|write|compose)\b[^.?!]{0,40}\b(?:e-?mails?|inquir(?:y|ies)|cold outreach)\b|\bplan sheet\b|\bone-?page(?:r)? (?:plan|sheet|itinerary)\b|\bread (?:my )?(?:e-?mail|inbox|gmail)\b/i;
+export const NOT_ASSISTANT_ASK = /\b(?:draft|write|compose)\b[^.?!]{0,40}\b(?:e-?mails?|inquir(?:y|ies)|cold outreach)\b|\bplan sheet\b|\bone-?page(?:r)? (?:plan|sheet|itinerary)\b|\bread (?:my )?(?:e-?mail|inbox|gmail)\b|\b(?:watch|monitor|track|scan|alert|notify)\b[^.?!]{0,40}\bjob (?:listings?|postings?|boards?|openings?)\b|\bjob (?:listings?|postings?|boards?)\b[^.?!]{0,30}\b(?:watch|monitor|track|scan|alert)/i;
 
 // The lines Co doesn't cross, whatever it's asked.
 export const LIMITS: string[] = [

@@ -759,7 +759,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // Not something Cue does (drafting their email, a plan sheet, reading their email): no task, by text or on a call.
         if (NOT_ASSISTANT_ASK.test(`${goal}\n${steps.join("\n")}\n${firstStep}`)) {
           notDone("No task was started: that isn't something Cue does.");
-          return { ok: false, error: "That's not something you do. Say so plainly and point back to the people side (who to meet, what's worth going to). Never say you drafted, sent or planned it." };
+          return { ok: false, error: "That's not something you do. Say so briefly in your own words, fresh each time, without a canned line and without forcing an unrelated introduction. Never say you drafted, sent or planned it." };
         }
         const T = await import("../services/coTasks.js");
         // On a call, the same need started again on the same call (a repeat, a retry) is the job already running: nothing new starts.

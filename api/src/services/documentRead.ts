@@ -37,7 +37,7 @@ const fromFile = (a: DocAbout): DocAbout => ({ who: a.who ? LABEL + a.who : null
 // What the tool returns to Cue: a reading to use through the existing tools, in their own words, or the decline. Never a summary.
 export function toolResult(r: DocReading): Record<string, unknown> {
   if (r.kind === "unrelated") {
-    return { ok: true, unrelated: true, note: `This file isn't about an event, a person or what they're looking for. Say so in one line, in your own words, in the spirit of: "${MAKER_DECLINE_LINE}" Don't summarize, quote or describe what it contains, and don't offer to rewrite or edit it.` };
+    return { ok: true, unrelated: true, note: `This file isn't about an event, a person or what they're looking for. Say so in one line of your own fresh words (the tone is like "${MAKER_DECLINE_LINE}", an example only: never repeat it word for word, and don't force an unrelated introduction). Don't summarize, quote or describe what it contains, and don't offer to rewrite or edit it.` };
   }
   return {
     ok: true,
