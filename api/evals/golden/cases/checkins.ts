@@ -78,7 +78,7 @@ export async function reply(s: Scene): Promise<Reply> {
   for (const f of G.ongoingFactsFor(searching.asks.map((text) => ({ text, kind: "find" as const })))) G.addFact(facts, f.kind, f.text);
   G.addFact(facts, "known", G.runningWorkLine([], [], searching));
   for (const [kind, text] of s.facts ?? []) G.addFact(facts, kind as any, text);
-  const world = M.buildMemberWorld({ now: s.now, zone: ZONE, keep: (x) => x, tasks: [], briefs: [], searching, ahead: null, offeredGoals: [], docOffer: null, threads: s.threads ?? [], exchange: s.exchange, sent: s.sent ?? [], activity: s.exchange.filter((l) => l.from === "member").map((l) => l.at), safetyHold: false, letPass: [] });
+  const world = M.buildMemberWorld({ now: s.now, zone: ZONE, keep: (x) => x, tasks: [], briefs: [], searching, ahead: null, offeredGoals: [], threads: s.threads ?? [], exchange: s.exchange, sent: s.sent ?? [], activity: s.exchange.filter((l) => l.from === "member").map((l) => l.at), safetyHold: false, letPass: [] });
   G.addMemberWorld(facts, world);
   const recent = s.exchange
     .filter((l) => s.now.getTime() - l.at.getTime() < 3 * 86_400_000)
@@ -302,7 +302,7 @@ export const CASES: GoldenCase[] = [
       // The read itself, on Co's own sentence: a yes here would cut it.
       const G = await import("../../../src/harness/replyGrounding.js");
       const M = await import("../../../src/services/memberWorld.js");
-      const world = M.buildMemberWorld({ now: DAY, zone: ZONE, keep: (x) => x, tasks: [], briefs: [], searching: NONE, ahead: null, offeredGoals: [], docOffer: null, threads, exchange, sent: [], activity: exchange.filter((l) => l.from === "member").map((l) => l.at), safetyHold: false, letPass: [] });
+      const world = M.buildMemberWorld({ now: DAY, zone: ZONE, keep: (x) => x, tasks: [], briefs: [], searching: NONE, ahead: null, offeredGoals: [], threads, exchange, sent: [], activity: exchange.filter((l) => l.from === "member").map((l) => l.at), safetyHold: false, letPass: [] });
       const rf = G.createReplyFacts();
       G.addMemberWorld(rf, world);
       const echo = "Great that Hayes Valley confirmed.";

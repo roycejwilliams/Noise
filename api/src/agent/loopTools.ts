@@ -8,10 +8,6 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import { writeMemory } from "../services/memory.js";
 import { meaningWords } from "../services/profileExtraction.js";
-import { pageTools } from "./pageTools.js";
-import { deckTools } from "./deckTools.js";
-import { artifactTools } from "./artifactTools.js";
-import { owedAnswerNote } from "./linkAnswer.js";
 import { recordDecision } from "../harness/core.js";
 import { withRecordAs } from "./toolGuard.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
@@ -26,8 +22,6 @@ import { identityDropped } from "../services/guardDrops.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
-import { WRITE_DOCUMENT_INPUT } from "../services/documentSheet.js";
-import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
 
 // What the loop has seen this turn: every link a tool returned, with the facts
 // that came with it, and every page it read.
@@ -150,8 +144,6 @@ export function captionProblems(caption: string, facts: string, theirs: string):
   ];
 }
 
-// They asked for a Google Doc (or for it in their Drive), in their own words. Defined with the delivery (a task's document reads it too).
-export { GOOGLE_DOC_ASK };
 
 // A search-area read that failed (searchHome): the search doesn't run.
 const AREA_UNREAD = Symbol("area unread");
@@ -170,10 +162,7 @@ export function loopTools(
       state.sentMessages.push(text);
       return true;
     }
-    // On a call, a text with one of their own page or deck links, or the "Updated the deck/page:" line for one, goes to their texts
-    // (PR 6), as it would by text; nothing else is texted mid-call.
-    const linkOnCall = ctx.sendLinkText && (/\/d\/(v\/)?[A-Za-z0-9_-]{24}\b/.test(text) || /^Updated the (deck|page): /.test(text));
-    const ok = linkOnCall ? await ctx.sendLinkText!(text) : await ctx.sendCoReply({ phone: ctx.phoneNumber, message: text, asVoice: false });
+    const ok = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: text, asVoice: false });
     if (ok === false) return false;
     // Delivered is delivered: the log write failing doesn't unsend it (2026-10-01 code review).
     state.sentMessages.push(text);
@@ -253,45 +242,14 @@ export function loopTools(
   // never needs them never reads them). Never in tests.
   let seeding: Promise<unknown> | null = null;
   const seeded = (): Promise<unknown> => (seeding ??= ctx.dryRun || ctx.stubSearch ? Promise.resolve() : storedFinds(ctx.userId).then((rows) => seedFound(loop, rows)).catch(() => 0));
-  // A short line while a PDF is made (like whileLooking), unless the ✍️ reaction on their text already said "on it".
-  // Documents refused this turn (writeDocument): two is the budget before Co says plainly it isn't made.
-  let docRefusals = 0;
-  const holdWhileWriting = async (line?: string) => {
-    if (ctx.ackSent === "✍️") return;
-    await hold(line);
-  };
-
-  // Co pages (agent/pageTools.ts): grounded on the same source as a document, their words and what Co read this turn.
-  const pageSource = async () => {
-    const { loadTheirWords } = await import("../services/documentDelivery.js");
-    // An image read only for its look (readReference) says nothing they said (services/designSystem.ts withoutReferenceText).
-    const D = await import("../services/designSystem.js");
-    const refs = ctx.dryRun ? new Set<number>() : await D.referenceImageNumbers(ctx.userId).catch(() => new Set<number>());
-    const theirs = D.withoutReferenceText([await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n"), refs);
-    const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
-    return { theirs, read };
-  };
-  // A page's or deck's link, or a share link, is the turn's answer (rule 2: one text, the line plus the link). Once one sends, the
-  // turn counts as answered, so a model that rightly ends without sendReply isn't followed by its leftover text or the fallback line
-  // (live run, 2026-10-11: "Sorry, I got tangled up on that one." went out after a deck's link; pages had the same path), and no
-  // second reply follows it (conversationTools.ts sendReply).
+  // What anythingForMe sent is the turn's whole answer: no leftover text or fallback line after it (conversationTools.ts sendReply).
   ctx.onLinkDelivered = () => {
     if (ctx.dryRun) return;
     state.sent = true;
     state.linkDelivered = true;
   };
-  // An answer meant to ride with a link that didn't go: the tool's note says so, not "you're done" (agent/linkAnswer.ts).
-  const pages = pageTools(ctx, { say, notDone, source: pageSource });
-  // Decks (agent/deckTools.ts): the same pipeline and grounding as pages.
-  const decks = deckTools(ctx, { say, notDone, source: pageSource });
-  // Keep, renew and share links, for pages and decks alike (agent/artifactTools.ts).
-  const artifacts = artifactTools(ctx, { say, notDone });
-  for (const t of [pages, decks, artifacts]) owedAnswerNote(ctx, t);
 
   return {
-    ...pages,
-    ...decks,
-    ...artifacts,
     searchEvents: tool({
       description: toolUse("searchEvents"),
       inputSchema: z.object({
@@ -658,10 +616,8 @@ export function loopTools(
       },
     }),
 
-    // A document (services/documentSheet.ts, documentDelivery.ts): a titled page Co writes from what they said, as a PDF in this
-    // conversation. Phase 1; a Google Docs step slots into DELIVERERS later. Needs their own yes (the registry's `confirm`).
     // Venue research in the background (services/researchBrief.ts): this only starts it, on their ask or yes (the
-    // guard's their_yes, the same as writeDocument). The task finds, checks every line's source and texts the finds, each its link then one line (never a document).
+    // guard's their_yes). The task finds, checks every line's source and texts the finds, each its link then one line (never a document).
     researchBrief: tool({
       description: toolUse("researchBrief"),
       inputSchema: z.object({
@@ -729,223 +685,6 @@ export function loopTools(
         return { ok: true, option: { name: hit.name, link: hit.url, fields: hit.fields.map((f) => ({ [f.label]: f.value ?? "unknown", checked: f.checkedAt })) }, next: Q.nextStepAfterReaction(input.reaction, hit), note: "Don't mention noting it." };
       },
     }),
-    // The input and the delivery loop are shared with a task keeping a promise (services/taskTurn.ts writeDocument).
-    writeDocument: tool({
-      description: toolUse("writeDocument"),
-      inputSchema: WRITE_DOCUMENT_INPUT.extend({
-        whileWriting: z.string().optional().describe("Only if it'll take a moment and you haven't already reacted to their text with ✍️: a few words to them while the PDF is made, in your own voice."),
-      }),
-      execute: async (input) => {
-        await seeded();
-        const { resolveDocument, documentProblems, docText } = await import("../services/documentSheet.js");
-        // What the document says, as part of its receipt, so Co describing what it just sent is backed (2026-10-12 audit, row 9061:
-        // "Covers what Co actually does..." was cut right after the PDF went).
-        const covers = (d: Parameters<typeof docText>[0]) => ctx.facts?.add("did_this_turn", `What "${d.title}" says (it went to them this turn): ${docText(d).replace(/\s+/g, " ").slice(0, 1200)}`);
-        const { deliverAndRecord, asksToResend, loadTheirWords, captionFor } = await import("../services/documentDelivery.js");
-        const { recordDocumentWritten } = await import("../services/documentOffer.js");
-        const doc = resolveDocument(input);
-        // Their record is their words: two weeks of their texts and calls, and this message. What Co read this turn can back only
-        // an event or place in Co's own marked suggestions, never a claim about them.
-        const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
-        const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
-        const source = { theirs, read };
-        // The word check first; a line it can't place in their words goes to a judge, so their own facts said another way pass
-        // (services/documentClaims.ts). Numbers and names they never gave are refused in code either way.
-        const problems = await (await import("../services/documentClaims.js")).judgedDocumentProblems(doc, source, documentProblems(doc, source));
-        if (problems.length) {
-          // Plain in the turn's facts: no document exists, so nothing about one (its sections, what's in it, what was left open) is said
-          // (2026-10-12: after every try was refused, Co texted "I left the example section open..." about a document that never existed).
-          docRefusals++;
-          notDone(`No document exists: writeDocument was refused${docRefusals > 1 ? ` ${docRefusals} times` : ""} this turn and nothing was written or sent (${problems.slice(0, 3).join("; ")}). Nothing about a document's contents, sections or what was put in it is true.`);
-          // Two refusals is the budget (the deck rule, applied to documents): say so plainly rather than retrying, and never strip it bare.
-          if (docRefusals >= 2) {
-            return { ok: false, error: `Not sent, and that's twice: ${problems.slice(0, 3).join(" | ")}. Don't call writeDocument again this turn. In one text, tell them plainly the document isn't made, name the line you couldn't back from what they told you, and say what would unblock it (them confirming that fact or giving the missing piece), as what they get, not your process ("The doc isn't made yet: I can't back \"...\" from what you've told me. Tell me ... and it's done."). Never describe the document as if it exists, and never send its points as bare bullets.` };
-          }
-          return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix only the lines named and try once more, keeping every other section and line as it was (rewrite a flagged line from their own words or move it to suggestions; never drop a section they asked for, and never strip it to bare bullets). If it can't be fixed, tell them plainly the document isn't made, which line you couldn't back, and what would unblock it.` };
-        }
-        if (ctx.dryRun) {
-          // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
-          ctx.onLinkDelivered?.();
-          ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}", as a PDF in this conversation.`);
-          covers(doc);
-          return { ok: true, note: "Test run: nothing was sent." };
-        }
-        const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
-        const zone = await (await import("../services/memberTime.js")).memberZone(ctx.userId);
-        // The tool owns its one line (Co's, held to the delivery rules, or "Here's the X."): the caption on the attachment, nothing after it.
-        const now = new Date();
-        const line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, sendAt: now, zone });
-        await holdWhileWriting(input.whileWriting);
-        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone, now, line };
-        // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
-        // working artifact (partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.
-        // Google Docs not connected: the PDF goes instead, and Co offers to connect Google Docs (its own grant, services/cueGrants.ts).
-        // Recorded (services/deliveryReceipts.ts): a revision goes as the next version with its change line; the same artifact never twice.
-        const rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()), source: "reply", revises: input.revises ?? null, changed: input.changed ?? null, resend: asksToResend(theirWords()) });
-        const { results, sentOk, googleRefused, googleMissing } = rd;
-        if (rd.duplicate) {
-          notDone(`No document sent: it's already theirs (doc #${rd.duplicate.id}).`);
-          return { ok: false, error: `${(results[0] as any).why}. Answer from it instead (readDocument).` };
-        }
-        if (!sentOk.length) {
-          const why = results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ");
-          notDone(`No document sent: ${why}.`);
-          return { ok: false, error: `${why}. Give them the points in a text now; mention the document only to say it isn't there yet.` };
-        }
-        const sent = { ok: true as const, via: sentOk.map((r) => r.via).join("+"), link: sentOk.find((r) => r.link)?.link ?? null };
-        const asText = sentOk.some((r) => r.pdfPending);
-        if (asText) ctx.facts?.add("did_this_turn", `The PDF of "${doc.title}" failed, so its content went as text in this conversation, saying the PDF version will follow (it's retried on its own).`);
-        if (rd.version > 1) ctx.facts?.add("did_this_turn", `This was version ${rd.version} of "${doc.title}", sent with the line "${rd.line}".`);
-        await logDeliveredPlan(`Co replied: [sent a document: ${doc.title}]`);
-        state.sentMessages.push(`[sent a document: ${doc.title}]`);
-        if (rd.line) state.sentMessages.push(rd.line);
-        await recordDocumentWritten(ctx.userId, doc.title).catch(() => {});
-        // The kind of thing, never its title (forget by default: the title is their words).
-        await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: "document sent", proposal: { kind: doc.kind ?? "other", sections: doc.sections.length, via: sent.via } }).catch(() => {});
-        const asPdf = sentOk.some((r) => r.via === "pdf_text");
-        const asDoc = sentOk.some((r) => r.via === "google_docs");
-        const sharedLink = sentOk.some((r) => r.via === "google_docs" && r.shared);
-        // The same Doc, written in place: the text said only what changed; the link they have still opens it (rule 3, 2026-10-11).
-        const inPlace = sentOk.some((r) => r.via === "google_docs" && r.updatedInPlace);
-        const newDoc = sentOk.find((r) => r.via === "google_docs" && r.newDocBecause)?.newDocBecause;
-        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (${inPlace ? `updated in place, same link: ${sent.link}` : `link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"}`})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
-        covers(doc);
-        await remember({ next: `document sent: ${doc.title}` });
-        const extras = `${rd.docBecamePdf ? "The earlier version was a Google Doc, but this one couldn't go to Google, so it went as a PDF, and the text said so. " : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "They haven't connected Google Docs, so it went as a PDF: say so in a line and offer to send the link to connect Google Docs (docsConnection). " : ""}`;
-        // A document whose text carried its line is the turn's delivery: no leftover text after it. When Co still owes a line (a Google
-        // Doc that became a PDF, connecting Google), the delivery gate stays open so that line goes.
-        if (!extras) ctx.onLinkDelivered?.();
-        return {
-          ok: true,
-          via: sent.via,
-          note: `${inPlace ? "The Google Doc they already have was updated in place (same link), and the text said what changed. Add nothing about it. " : asDoc ? `The Google Doc is in their Drive and its link went with its line; ${sharedLink ? "anyone with the link can open and edit it, and the text told them so" : "only they can open it for now, and the text told them so"}. ${newDoc ? `It's a new Doc with a new link, and the text said why ("${newDoc}"). ` : ""}` : ""}${extras}${extras ? "Say only that, in a few words, nothing else about it." : DELIVERED_NOTE}`,
-        };
-      },
-    }),
-    // A delivered document's own words (services/deliveryReceipts.ts), for a question or a change request about it: answers come
-    // from what was sent, quoted, never a fresh generation.
-    readDocument: tool({
-      description: toolUse("readDocument"),
-      inputSchema: z.object({
-        doc: z.number().int().describe("Its doc number from \"Documents you've delivered\"."),
-        about: z.string().optional().describe("What they asked about, in their words, to find the section."),
-      }),
-      execute: async ({ doc: id, about }) => {
-        const R = await import("../services/deliveryReceipts.js");
-        const rec = await R.pgReceipts.get(ctx.userId, id).catch(() => null);
-        if (!rec) return { ok: false, error: `There's no document #${id} on record for them. Say plainly you don't have it.` };
-        const section = about ? R.findSection(rec.doc, about) : null;
-        return {
-          ok: true,
-          title: rec.title,
-          version: rec.version,
-          delivered: rec.deliveredAt.toISOString(),
-          section,
-          sections: R.sectionsOf(rec.doc),
-          note: `Answer from this text only. Quote the words of the section they asked about, in quotation marks, then answer. If it isn't in the document, say so. If they want it changed, write the new version with writeDocument (revises: ${rec.id}, changed: what changed), starting from these words.`,
-        };
-      },
-    }),
-
-    // A document from a PDF they sent (services/memberFiles.ts, board item 4). Drafted in its own call from their file and their words,
-    // so the file's contents never enter this conversation: Co doesn't see them, and every record of it here says only "their file #n"
-    // (no title, no words of it), so nothing from a file reaches their memory, their profile, or anything another member's matching reads.
-    writeFromFile: tool({
-      description: toolUse("writeFromFile"),
-      inputSchema: z.object({
-        file: z.number().int().positive().optional().describe("The file's number (#2 is 2) when they name one; leave it out for their newest."),
-        kind: z.enum(["partnership_plan", "readout", "other"]).optional().describe("What it is for: partnership_plan, readout, or other (anything for themselves)."),
-        want: z.string().describe("What they asked for, in a few of their own words."),
-        saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out for a PDF in this conversation. Only when they ask for a Google Doc in their own words: google_doc (or both)."),
-      }),
-      execute: async (input) => {
-        const F = await import("../services/memberFiles.js");
-        const { resolveDocument, documentProblems, docText } = await import("../services/documentSheet.js");
-        // What the document says, as part of its receipt, so Co describing what it just sent is backed (2026-10-12 audit, row 9061:
-        // "Covers what Co actually does..." was cut right after the PDF went).
-        const covers = (d: Parameters<typeof docText>[0]) => ctx.facts?.add("did_this_turn", `What "${d.title}" says (it went to them this turn): ${docText(d).replace(/\s+/g, " ").slice(0, 1200)}`);
-        const { docTargets, loadTheirWords } = await import("../services/documentDelivery.js");
-        const deliverDocument = F.fileSteps.deliver;
-        // Only this member's own file, by their own number.
-        const file = await F.fileText(ctx.userId, input.file ?? null);
-        if (!file) {
-          const have = await F.filesOnFile(ctx.userId).catch(() => []);
-          return { ok: false, error: have.length ? `No file #${input.file} on file for them; their files are ${have.map((f) => `#${f.n} (sent ${f.sentOn})`).join(", ")}. Ask which one.` : "They have no file on file with you. Tell them to text you the PDF first." };
-        }
-        const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
-        if (ctx.dryRun) {
-          ctx.facts?.add("did_this_turn", `Sent them a document made from their file #${file.n}.`);
-          return { ok: true, note: "Test run: nothing was drafted or sent." };
-        }
-        const draft = await F.fileSteps.draft({ fileText: file.text, theirWords: theirs, kind: input.kind ?? "other", want: input.want });
-        if (!draft) return { ok: false, error: "The document couldn't be drafted. Give them what you can from their file in a text now, and never ask them to try again." };
-        const doc = resolveDocument(draft);
-        // Rule 4: the same grounding as writeDocument, with their file as part of their own record. Nothing of either is shown to Co.
-        const problems = documentProblems(doc, { theirs: `${theirs}\n${file.text}` });
-        if (problems.length) {
-          notDone(`No document sent from their file #${file.n}: it didn't hold to their file and words.`);
-          return { ok: false, error: "The draft leaned on things that weren't in their file or their words, so it wasn't sent. Say you couldn't make it hold to what they gave you, and ask what they want it to cover." };
-        }
-        const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
-        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone: null };
-        const { targets, googleRefused } = docTargets({ userId: ctx.userId, kind: doc.kind, saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()) });
-        const results: Awaited<ReturnType<typeof deliverDocument>>[] = [];
-        for (const target of targets) {
-          const r = await deliverDocument(doc, to, target);
-          results.push(r);
-          if (!r.ok && target === "google_docs" && (r.notConnected || r.notAllowed) && !targets.includes("pdf_text")) results.push(await deliverDocument(doc, to, "pdf_text"));
-        }
-        const sentOk = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
-        if (!sentOk.length) {
-          notDone(`No document sent from their file #${file.n}.`);
-          return { ok: false, error: "It didn't send. Give them the content in a text now, and never ask them to try again." };
-        }
-        const via = sentOk.map((r) => r.via).join("+");
-        const line = `[sent a document made from their file #${file.n}]`;
-        await logDeliveredPlan(`Co replied: ${line}`);
-        state.sentMessages.push(line);
-        await recordDecision({ layer: 3, decision: "loop.writeFromFile", userId: ctx.userId, outcome: "act", action: `file #${file.n}`, proposal: { via, kind: doc.kind } }).catch(() => {});
-        ctx.facts?.add("did_this_turn", `Sent them a document made from their file #${file.n}${sentOk.some((r) => r.via === "google_docs") ? ", as a Google Doc in their own Drive" : ""}${sentOk.some((r) => r.via === "pdf_text") ? ", as a PDF in this conversation" : ""}.`);
-        await remember({ next: `document sent from their file #${file.n}` });
-        return {
-          ok: true,
-          via,
-          note: `It's sent. ${googleRefused === "kind" ? "A Google Doc is only for a partnership plan or readout, so it went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "Google Docs aren't open to them yet, so it went as a PDF: say so in a line. " : ""}Say in one line that it's there and you'll change anything they want. You haven't seen what it says, so don't describe it.`,
-        };
-      },
-    }),
-
-    // Their files, gone on their ask (services/memberFiles.ts): code checks their words asked for it, not Co's say-so.
-    deleteMyFiles: tool({
-      description: toolUse("deleteMyFiles"),
-      inputSchema: z.object({ file: z.number().int().positive().optional().describe("The file's number when they name one; leave it out to delete all of them.") }),
-      execute: async (input) => {
-        const F = await import("../services/memberFiles.js");
-        if (!F.DELETE_ASK.test(theirWords())) return { ok: false, error: "Not done: they haven't asked to delete their files in this message. Only delete when they ask." };
-        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was deleted." };
-        const n = await F.deleteFiles(ctx.userId, input.file ?? null);
-        await recordDecision({ layer: 3, decision: "loop.deleteMyFiles", userId: ctx.userId, outcome: "act", action: input.file ? `file #${input.file}` : "all", proposal: { deleted: n } }).catch(() => {});
-        ctx.facts?.add("did_this_turn", n ? `Deleted ${n === 1 ? "one of their files" : `${n} of their files`}${input.file ? ` (#${input.file})` : ""}; ${n === 1 ? "it's" : "they're"} gone.` : "Looked for their files to delete and found none.");
-        return { ok: true, deleted: n, note: n ? "Say plainly what was deleted and that it's gone." : "There was nothing to delete: say so." };
-      },
-    }),
-
-    // The offer (services/documentOffer.ts): code re-checks the moment and records that Co offered, so it is never offered twice;
-    // Co writes the offer itself, in its own words.
-    offerDocument: tool({
-      description: toolUse("offerDocument"),
-      inputSchema: z.object({}),
-      execute: async () => {
-        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was recorded. Make the offer in your own words." };
-        const { loadOfferState, documentOfferDue, recordOffer } = await import("../services/documentOffer.js");
-        const due = documentOfferDue(await loadOfferState(ctx.userId));
-        if (!due.due) return { ok: false, error: `Don't offer a document now: ${due.why}.` };
-        await recordOffer(ctx.userId, due.topic);
-        ctx.facts?.add("did_this_turn", `Offered to write up "${due.topic}" as a document; waiting on their answer.`);
-        return { ok: true, topic: due.topic, note: "Recorded. Now make the offer in your reply, in your own words, as one light line about this. Don't write the document until they say yes." };
-      },
-    }),
-
     // A goal's state (services/goalEdges.ts, Royce 2026-10-08): done or set aside when they say so or it's plainly over, active again
     // when they still want it. Only a goal on file; stale and done goals stay on file as history and stop generating searches.
     markGoal: tool({

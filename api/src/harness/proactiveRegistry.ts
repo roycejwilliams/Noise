@@ -16,7 +16,7 @@ import { solicitationGoals } from "../agent/eventAskSolicitation.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
-import { draftHeldRecap, draftPostCall, holdRecapForMood, isHeldRecap, markCarriedCorrections, markPostCallDropped, markPostCallSent, recordRecapOffer } from "../jobs/postCallFollowUp.js";
+import { draftPostCall, isHeldRecap, markCarriedCorrections, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
@@ -1030,27 +1030,19 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
-  // The text after a call, and (isHeldRecap) the recap offer for that call held while they were struggling (jobs/postCallFollowUp.ts,
-  // Royce 2026-10-19: a hard time decides when, never whether).
+  // The text after a call. A recap offer held from before recaps were removed (isHeldRecap) is closed without a draft.
   post_call: {
     async draft(c, person) {
-      if (isHeldRecap(c)) return draftHeldRecap(c.userId, person.firstName, c.payload.followUpId);
+      if (isHeldRecap(c)) return skip("recap offers are no longer made");
       const r = await draftPostCall(c.userId, person.firstName, c.payload.followUpId);
       // The call corrections this draft was written with ride to onSent, so only those are marked delivered.
       return r ? { messages: [r.text], text: r.text, rules: r.rules, ...(r.corrections.length ? { meta: { callCorrectionIds: r.corrections.map((x) => x.id) } } : {}) } : skip("model chose SKIP");
     },
     async onSent(c, _p, messages, meta) {
-      if (isHeldRecap(c)) {
-        await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => false);
-        return;
-      }
+      if (isHeldRecap(c)) return;
       await markPostCallSent(c.payload.followUpId);
       // The corrections it was drafted with went with it: delivered, so the next text knows it was meant to take them back (harness/callGrounding.ts).
       await markCarriedCorrections(c.userId, meta).catch((err: any) => console.error("postCallFollowUp: marking call corrections delivered failed (non-fatal):", err?.message ?? err));
-      const offered = await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => null);
-      // Went without the recap (known: a failed record is not "without"): if a hard time was the only thing in the way, it's held for
-      // this call, never dropped for it.
-      if (offered === false) await holdRecapForMood(c.userId, c.payload.followUpId).catch((err: any) => console.error("postCallFollowUp: holding the recap failed (non-fatal):", err?.message ?? err));
     },
     async onDropped(c, status) {
       // A held recap ending (its own lifetime, or a fact that no longer holds) leaves the call's own record alone: its text went.
@@ -1110,25 +1102,12 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
-  // Fixed wording, not a draft: it names the date a page or deck expires, which has to be exactly right (services/coPages/expiry.ts).
-  // Re-read at send time: kept, renewed, taken down or already past since it was queued means nothing goes.
+  // Pages and decks are gone (2026-11-04): an expiry notice queued before that is dropped, never sent. The type stays so the queue still reads it.
   artifact_expiry: {
-    async draft(c) {
-      const { rows } = await pool.query(
-        `SELECT data->>'title' AS title, COALESCE(data->>'kind', 'page') AS kind, expires_at FROM co_pages
-         WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND NOT kept AND expiry_warned_at IS NULL AND expires_at > NOW() + INTERVAL '12 hours'`,
-        [String(c.payload.pageId ?? ""), c.userId],
-      );
-      if (!rows[0]) return skip("kept, renewed, taken down or about to lapse already");
-      const E = await import("../services/coPages/expiry.js");
-      const label = E.expiryDateLabel(new Date(rows[0].expires_at), await memberZone(c.userId));
-      const message = E.expiryText(String(rows[0].title ?? ""), rows[0].kind === "deck" ? "deck" : "page", label);
-      return { messages: [message], text: message, rules: { maxChars: 260, maxSentences: 3, allowGreeting: false, mustIncludeAny: [label] } };
+    async draft() {
+      return skip("pages and decks are no longer available");
     },
-    async onSent(c, _p, messages) {
-      await (await import("../services/coPages/store.js")).markExpiryWarned(String(c.payload.pageId ?? ""));
-      await writeMemory(c.userId, "check_in", `Expiry notice: ${messages.join(" ")}`);
-    },
+    async onSent() {},
   },
 
   product_update: {

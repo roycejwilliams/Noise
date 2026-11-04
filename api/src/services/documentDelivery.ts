@@ -137,7 +137,7 @@ const realDeps = async (): Promise<DeliverDeps> => {
     cache: cachePlanFile,
     send: (m) => sendblue.messages.send(m as any),
     from: process.env.SENDBLUE_PHONE_NUMBER!,
-    googleToken: async (userId) => (g.docsConfigured() ? g.docsToken(userId).catch(() => null) : null),
+    googleToken: async () => null, // the Docs grant was removed (2026-11-04): a Google Doc is never made
     uploadDoc: (token, name, html) => d.uploadGoogleDoc(token, name, html),
     shareDoc: (token, fileId) => d.shareWithLink(token, fileId),
     updateDoc: (token, fileId, html) => d.updateGoogleDoc(token, fileId, html),

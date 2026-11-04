@@ -154,7 +154,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("the world has no other door into waiting", Object.keys(base()).sort().join(",") === "clock,lead,next,running,theirWords,thread,waiting,withheld" && [...M.WAITS].sort().join(",") === "doc_offer,goal_split,question");
   const tcSrc = fs.readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8");
   const call = tcSrc.slice(tcSrc.indexOf("M.buildMemberWorld({"), tcSrc.indexOf("unreadable: !safe"));
-  check("the turn hands the world no loop status, working note, carrying item or draft", !!call && !/carrying|decision|loop|draft|ledger/i.test(call) && /status === "offered"/.test(call) && /docOffer\?\.pending \?/.test(call) && /safetyHold: knowledge\?\.restraint \? knowledge\.restraint\.safetyHold : null/.test(call) && /letPass: knowledge\?\.restraint\?\.suppressedKinds/.test(call) && /\bactivity,/.test(call), call);
+  check("the turn hands the world no loop status, working note, carrying item or draft", !!call && !/carrying|decision|loop|draft|ledger/i.test(call) && /status === "offered"/.test(call) && /safetyHold: knowledge\?\.restraint \? knowledge\.restraint\.safetyHold : null/.test(call) && /letPass: knowledge\?\.restraint\?\.suppressedKinds/.test(call) && /\bactivity,/.test(call), call);
 }
 
 // ------------------------------------------------------------------ 2. priorities and the fact
@@ -168,7 +168,6 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const running = M.memberWorldFact(base({ exchange: QUIET }));
   check("with nothing waiting, running work is the check-in's one item", /Nothing waits on them \(not a thing to say\)\. Running \(a check-in's one item\): Cue's daily search/.test(running), running);
   check("a goal split Cue offered waits on their pick, ahead of running work", base({ exchange: QUIET, offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: "2026-10-13T20:00:00Z" }] }).lead?.kind === "goal_split");
-  check("a document Cue offered waits on their yes", base({ exchange: QUIET, docOffer: { topic: "the launch venue shortlist" } }).lead?.kind === "doc_offer");
   const nothing = base({ exchange: QUIET, searching: NOTHING });
   const nf = M.memberWorldFact(nothing);
   check("genuinely nothing (all read): no lead, and the fact says so", nothing.lead === null && nothing.withheld === 0 && /Nothing waits on them \(not a thing to say\)\. Nothing is running \(not a thing to say\)\./.test(nf), nf);

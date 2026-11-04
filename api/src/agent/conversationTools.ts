@@ -55,20 +55,9 @@ async function memberDate(userId: string): Promise<(iso: string | Date | null | 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
 
 export type ConversationToolContext = {
-  // Set by loopTools for this turn: a page's, deck's or share link just went out, and that text is the turn's whole answer
-  // (rule 2). The page, deck and share tools call it after the link sends.
+  // Set by loopTools for this turn: a delivered text (what anythingForMe sent) is the turn's whole answer.
   onLinkDelivered?: () => void;
-  // Links made this turn whose text didn't send (agent/linkAnswer.ts unsentLink): resendLink sends one again, so a member is never
-  // left without a working link (founder's review, 2026-10-12: on a reset the old link is already off).
-  unsentLinks?: { url: string; text: string; what: string }[];
-  // On a call (services/callTools.ts): a page's, deck's or share link still goes to their texts while they talk (PR 6). Everything
-  // else on a call is spoken; only a text carrying one of their own /d/ links goes this way.
-  sendLinkText?: (text: string) => Promise<boolean>;
-  // The reply's own fact check and brand guard, for an answer that rides with a link (agent/linkAnswer.ts). Set per turn below.
-  checkAnswer?: (draft: string) => Promise<string>;
-  // An answer that rode with a link went out: it counts as part of this turn's reply (the call-offer check reads lastReplyText).
-  noteAnswerSent?: (answer: string) => void;
-  // An answer that was meant to ride with a link but didn't go (agent/linkAnswer.ts withAnswer): owed, so the one reply that
+  // An answer that was meant to ride with a link but didn't go (none are made now): owed, so the one reply tha
   // answers it may follow the link (sendReply), once.
   answerOwed?: string | null;
   // When their text arrived; the loop's time budget runs from here.
@@ -252,12 +241,12 @@ export const NEW_FOR_THEM = new Set([
   "sendContactCard", "whatCoKnows", "correctWhatCoKnows", "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "moveLane",
   "answerShareAsks", "shareAskInIntros", "answerBriefName", "shareLocationYes", "flagSafetyConcern", "checkInvitesLeft", "markArrived",
   "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
-  "firstRead", "makePage", "updatePage", "takeDownPage", "readInspo", "readReference", "makeDeck", "updateDeck", "openArtifact",
-  "shareArtifact", "deleteImages", "resetLink", "resendLink", "stopSharing", "searchEvents", "webSearch", "searchPosts", "readPage",
-  "shareFinds", "researchBrief", "writeDocument", "readDocument", "writeFromFile", "deleteMyFiles",
-  "offerDocument", "calendarConnection", "docsConnection", "setSearchArea",
+  "firstRead",
+  "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
+  "shareFinds", "researchBrief",
+  "calendarConnection", "setSearchArea",
   // Re-review of #310: each of these can return something to say (a link that moved, the next step on a yes, a playback of their time).
-  "keepArtifact", "findReaction", "noteFreeTime",
+  "findReaction", "noteFreeTime",
   // #304: a change to their voice-read consent is worth a line (its question itself rides as a lane note, owed once).
   "voiceRead",
 ]);
@@ -371,10 +360,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
       ctx.facts?.add("known", S.whereItStands(t, await memberZone(ctx.userId).catch(() => null), strip));
     }
     return { hold: S.looksLike(t, strip) };
-  };
-  ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent()) : draft, ctx.resolvedContent);
-  ctx.noteAnswerSent = (answer: string) => {
-    state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${answer}` : answer;
   };
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.

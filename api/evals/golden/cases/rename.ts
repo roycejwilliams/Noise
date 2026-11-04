@@ -125,14 +125,12 @@ export const CASES: GoldenCase[] = [
       const NC = await import("../../../src/services/nameChange.js");
       const INV = await import("../../../src/services/invites.js");
       const ED = await import("../../../src/services/emailDesign.js");
-      const LP = await import("../../../src/services/coPages/linkPreview.js");
       const rendered: [string, string][] = [
         ["first text", OL.GATE_ASK.join(" ")],
         ["contact card", buildCoVCard("+14155550100")],
         ["name notice", `${NC.NAME_CHANGE_TEXT} ${NC.NAME_CHANGE_RIDE}`],
         ["invite text", INV.inviteGreeting("Noor", "ABCD1234")],
         ["email", ED.galleryEmail({ preview: "p", eyebrow: "e", headline: "h", body: ["b"], close: "c" }).replace(/<[^>]+>/g, " ")],
-        ["link preview", (LP.genericHead(null) + LP.coMarkHtml()).replace(/<[^>]+>/g, " ") + LP.genericHead(null).match(/content="[^"]*"/g)?.join(" ")],
       ];
       for (const [label, text] of rendered) if (oldNamesIn(text).length) misses.push(`${label}: says ${oldNamesIn(text).join(", ")}`);
       // Every string in the code, the dashboard and the prompts (evals/lib/nameScan.ts, justified exceptions only).

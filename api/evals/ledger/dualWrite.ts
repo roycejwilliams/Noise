@@ -105,14 +105,6 @@ const recMeta = JSON.parse(recRows[0]?.p[7] ?? "{}");
 check("recommendation: exactly one ledger row for the pair, keyed by the link it went under, its own url and its name", recRows.length === 1 && recRows[0].p[3] === "L|memory:ro-0" && ["u:https://lu.ma/demo?ref=cue", "u:https://lu.ma/demo", "n:demo night"].every((k) => recMeta.items.includes(k)) && recMeta.event_api_id === "evt-1", recRows.map((c) => c.p));
 check("recommendation: the old stores are still written (both memories and the content-keyed fact)", calls.some((c) => /'recommendation_offered'/.test(c.sql)) && calls.some((c) => /'recommendation', \$2/.test(c.sql)) && legacyInserts().length === 1);
 
-// A document delivery (services/deliveryReceipts.ts pgReceipts.insert): one ledger row per delivery.
-const { pgReceipts } = await import("../../src/services/deliveryReceipts.js");
-calls = [];
-await pgReceipts.insert({ userId: U, docKey: "plan", version: 2, title: "Friday Dinner Plan", kind: null, doc: {} as any, contentHash: "h", channel: "pdf_text", status: "delivered", line: null, link: null, taskId: null, source: "reply", changeNote: null, error: null, nextRetryAt: null, deliveredAt: T0 } as any);
-await waitFor(() => ledgerInserts().length > 0);
-const docs = ledgerInserts();
-check("document: exactly one ledger row per delivery, with its version, under the tool's own words", docs.length === 1 && docs[0].p[3] === "L|document_deliveries:77" && docs[0].p[2] === "a document (PDF): Friday Dinner Plan" && JSON.parse(docs[0].p[7]).version === 2, docs.map((c) => c.p));
-
 // The announcement of Noise's own event writes recommendation_offered by hand: its builder makes one row.
 const ann = L.recommendationRow({ userId: U, memoryId: "ro-9", at: T0, name: "Noise Supper Club", eventApiId: "evt-9", tier: "1" });
 check("announcement: one row, one thing, keyed by name", ann.parts.length === 1 && ann.relation === "sent" && L.objectKey(ann) === "L|memory:ro-9" && ann.parts[0].keys.includes("n:noise supper club"));

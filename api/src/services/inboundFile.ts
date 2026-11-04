@@ -243,7 +243,7 @@ export function unreadableFileFact(kind: FileKind, why: string | null = null): s
 
 // A file Co kept (a PDF, now also a deck or a Word file): what Co may say about it. Never its contents (services/memberFiles.ts).
 export function keptFileFact(kind: FileKind, kept: { n: number; isNew: boolean }): string {
-  return `They sent ${FILE_LABEL[kind]} this turn. It's kept for them alone as their file #${kept.n}${kept.isNew ? "" : " (they had sent it before)"}. You haven't read it and don't know what it says, so don't describe or guess its contents. You can write them a document from it when they ask (writeFromFile), and delete it whenever they ask (deleteMyFiles). If they want to talk it through right here, they can paste the parts they care about as text.`;
+  return `They sent ${FILE_LABEL[kind]} this turn. It's kept for them alone as their file #${kept.n}${kept.isNew ? "" : " (they had sent it before)"}. You haven't read it and don't know what it says, so don't describe or guess its contents. Read it with readDocument only for what helps connections (event details, who they are and what they're looking for); you don't summarize, rewrite or edit documents. They can have it deleted whenever they ask, through what you know about them. If they want to talk it through right here, they can paste the parts they care about as text.`;
 }
 
 // ---------------------------------------------------------------- "it didn't come through": a true statement, from the record

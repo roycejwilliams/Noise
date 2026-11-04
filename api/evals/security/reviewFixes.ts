@@ -38,7 +38,7 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
   const s = read("co-test/src/server.ts");
   check("co-test counts visitors behind Railway's proxy", /app\.set\("trust proxy", 1\)/.test(s));
   const at = s.indexOf('app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter)');
-  check("the public pages (and Cue pages at /d) are limited, before their routes are mounted", at > 0 && at < s.indexOf('app.get("/i/:code"') && at < s.indexOf('app.use("/readout"') && at < s.indexOf('app.use("/google"') && at < s.indexOf('app.use("/mo", createEmailOptOutRouter())') && at < s.indexOf('app.use("/d", createCoPageRouter())'));
+  check("the public pages (and Cue pages at /d) are limited, before their routes are mounted", at > 0 && at < s.indexOf('app.get("/i/:code"') && at < s.indexOf('app.use("/readout"') && at < s.indexOf('app.use("/google"') && at < s.indexOf('app.use("/mo", createEmailOptOutRouter())') && at < s.indexOf('app.use("/d", (_req, res) => res.status(410)'));
   check("starting a sign-in is limited harder", /app\.use\("\/api\/login\/start", authLimiter\)/.test(s) && s.indexOf('app.use("/api/login/start", authLimiter)') < s.indexOf('app.use("/api/login", loginRouter)'));
   check("webhooks, media and the polling dashboard aren't limited", !/app\.use\([^)]*"\/(sendblue|co|luma|audio|plan-file|api\/phone)"[^)]*limiter/.test(s) && !/app\.use\(limiter\)/.test(s));
 }
@@ -61,24 +61,6 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
   check("safeFetch refuses a private address before any request", "error" in blocked && blocked.blocked === true);
 }
 
-// ---------------------------------------------------------------- 4. no Doc is opened by link on its own
-{
-  const X = await import("../../src/services/documentDelivery.js");
-  const D = await import("../../src/services/documentSheet.js");
-  const PAIR = ["11111111-1111-4111-8111-111111111111"];
-  process.env.GOOGLE_DOCS_TEST_USERS = PAIR.join(",");
-  const doc = D.resolveDocument({ title: "Partnership plan for the Mission dinner", note: "", kind: "partnership_plan", sections: [{ heading: "The plan", bullets: ["Split the room booking."] }], suggestions: [] });
-  const shares: string[] = [];
-  const texts: string[] = [];
-  const deps: any = { render: async () => Buffer.alloc(10), cache: () => "", send: async (m: any) => { texts.push(m.content); return {}; }, from: "+1", googleToken: async () => "tok", uploadDoc: async () => ({ ok: true, id: "f1", link: "https://docs.google.com/document/d/f1/edit" }), shareDoc: async (_t: string, id: string) => { shares.push(id); return { ok: true }; } };
-  const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-11T18:00:00Z") };
-  const priv = await X.deliverDocument(doc, to, "google_docs", deps);
-  check("a shared kind stays private, and the text says they can share it", priv.ok && (priv as any).shared === false && shares.length === 0 && /Only you can open it for now/.test(texts[0] ?? ""));
-  const pub = await X.deliverDocument(doc, { ...to, shareByLink: true }, "google_docs", deps);
-  check("only an explicit shareByLink (a later, logged yes) opens it", pub.ok && (pub as any).shared === true && shares.join() === "f1");
-  check("Cue's capability text says the Doc is theirs alone", /The Doc is theirs alone; they share it from the Doc themselves\./.test(read("api/src/services/capabilities.ts")) && !/open to anyone with the link/.test(read("api/src/services/capabilities.ts")));
-  check("review of #142: no delivery path opens a Doc by link on its own (no guessing from their words)", !/shareByLink:/.test(read("api/src/agent/loopTools.ts")) && !/shareByLink:/.test(read("api/src/services/researchBrief.ts")) && !/shareByLink: /.test(read("api/src/services/documentDelivery.ts").replace(/export type DeliverTo[^\n]*/, "")) && !/asksToShare|SHARE_ASK/.test(read("api/src/services/documentDelivery.ts")));
-}
 
 console.log(`security review fixes: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

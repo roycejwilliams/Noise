@@ -63,9 +63,9 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   const never = CAP.ABILITIES.filter((a) => a.confirm === "affects_another_member" || a.confirm === "costs_money").map((a) => a.tool!).filter(Boolean);
   check("1. nothing that needs another member's yes or costs money is on a call", never.length > 0 && never.every((t) => !names.has(t)), never);
   check("1. intros, invites, web research, page reads, email drafts and Pinterest reads stay off calls", ["requestEventIntro", "sendInvite", "webSearch", "searchPosts", "readPage", "draftEmail", "emailPlan", "readInspo", "shareFinds", "sendReply"].every((t) => !names.has(t)));
-  check("1. sending what's on file, saving an event they're into, starting a search or a task, saving an ask: now", ["shareLink", "resendLink", "noteReaction", "searchEvents", "startTask", "saveAsk", "updateTask"].every((t) => CAP.callRunFor(t)?.run === "now"));
-  check("1. decks, pages and documents: after (started on the call, made and texted after)", ["makeDeck", "updateDeck", "makePage", "updatePage", "writeDocument"].every((t) => CAP.callRunFor(t)?.run === "after"));
-  check("1. sends get 3-5 seconds, saves and starts 3", ["shareLink", "resendLink", "resetLink"].every((t) => { const r: any = CAP.callRunFor(t); return r.ms >= 3000 && r.ms <= 5000; }) && ["saveAsk", "startTask", "updateNotes"].every((t) => (CAP.callRunFor(t) as any).ms === 3000));
+  check("1. sending what's on file, saving an event they're into, starting a search or a task, saving an ask: now", ["shareLink", "noteReaction", "searchEvents", "startTask", "saveAsk", "updateTask"].every((t) => CAP.callRunFor(t)?.run === "now"));
+  check("1. no maker tool is on a call at all (decks, pages and documents were removed)", ["makeDeck", "updateDeck", "makePage", "updatePage", "writeDocument", "resendLink", "resetLink", "shareArtifact"].every((t) => CAP.callRunFor(t) == null));
+  check("1. sends get 3-5 seconds, saves and starts 3", ["shareLink"].every((t) => { const r: any = CAP.callRunFor(t); return r.ms >= 3000 && r.ms <= 5000; }) && ["saveAsk", "startTask", "updateNotes"].every((t) => (CAP.callRunFor(t) as any).ms === 3000));
   // A tool handed in that isn't on the list is never offered or run, whatever the model asks for.
   let ran = 0;
   const raw = { webSearch: aiTool({ description: "w", inputSchema: z.object({ q: z.string() }), execute: async () => { ran++; return { ok: true }; } }), updateNotes: aiTool({ description: "n", inputSchema: z.object({ what: z.string().optional() }), execute: async () => ({ ok: true }) }) };
@@ -202,7 +202,6 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   await wait(200);
   check("3. ...and its write still lands", landed);
   const route = src("services/callTools.ts");
-  check("3. decks, pages and documents carry on in the background past a short wait, never holding the call", /plan\.run === "after" && !i\.dryRun/.test(route) && /const quick = await within\(work, plan\.waitMs\)/.test(route) && (CAP.callRunFor("makeDeck") as any).waitMs <= 3500);
 }
 
 // ---------------------------------------------------------------- 4. right after the call: the owed link goes, nothing done twice
@@ -303,7 +302,6 @@ const JAZZ = { name: "Rooftop Jazz Night", url: "https://lu.ma/rooftop-jazz", ca
   check("4. F8: \"I'll text you the jazz link\" is covered by the jazz send this turn", CC.commitmentKeptBy("I'll text you the jazz link.", "", [jazzSent]));
   check("4. F8: ...not by a note that came back done", !CC.commitmentKeptBy("I'll text you the jazz link.", "", [noteDone]));
   check("4. F8: ...and not by a send of something else", !CC.commitmentKeptBy("I'll text you the breakfast link.", "", [jazzSent]));
-  check("4. F8: a write-up is covered only by the thing made for it", !CC.commitmentKeptBy("I'll put together the partner plan.", "", [noteDone, jazzSent]) && CC.commitmentKeptBy("I'll put together the partner plan.", "", [{ name: "writeDocument", input: { title: "Partner plan" }, result: { ok: true, pending: true } }]));
   check("4. F8: the route covers each commitment on its own (uncovered ones still open)", /commitmentKeptBy\(s, coBefore, doneThisTurn\)/.test(src("routes/callLlm.ts")) && /commitments\.filter\(\(x\) => !covered\.includes\(x\)\)\) await trackCallCommitment/.test(src("routes/callLlm.ts")));
   const co = src("routes/co.ts");
   check("4. the post-call audit reads the call's ledger", /readCallLedger\(user_id[\s\S]{0,200}doneItems[\s\S]{0,1200}await auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall[^}]*\}\)/.test(co));

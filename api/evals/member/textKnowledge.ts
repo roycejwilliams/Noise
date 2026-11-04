@@ -158,7 +158,7 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   const sb = src("routes/sendblue.ts");
   const rg = src("harness/replyGrounding.ts");
   check("assembleContext: one memberKnowledge read, sections limited to what a text reply reads", (tc.match(/memberKnowledge\(userId/g) ?? []).length === 1 && /include: TEXT_KNOWLEDGE/.test(tc));
-  check("assembleContext: tasks, briefs and receipts read once, shared with the layer", /tasks: \(\) => tasksOnce\(\), briefs: \(\) => briefsOnce\(\), receipts: \(\) => receiptsOnce\(\)/.test(tc));
+  check("assembleContext: tasks and briefs read once, shared with the layer", /tasks: \(\) => tasksOnce\(\), briefs: \(\) => briefsOnce\(\) \}/.test(tc));
   check("assembleContext: no loaders of its own for asks, lessons or loops", !/FROM ask_checkins/.test(tc) && !/memory_type = 'co_lesson'/.test(tc) && !/FROM open_loops/.test(tc));
   check("text route: claims and the goal lens from member knowledge, not their own reads", /heldClaimsFrom\(turn\?\.knowledge\)/.test(sb) && /goalLens\(turn\?\.knowledge, turn\?\.profile\?\.intent\)/.test(sb) && !/liveClaimsRendered/.test(sb) && !/goalTexts\(/.test(sb));
   check("reply facts: taste from the layer when the turn has it", /addMemberKnowledge\(rf, t\?\.knowledge, t\?\.rules\)/.test(rg));

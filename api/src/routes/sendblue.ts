@@ -1197,8 +1197,6 @@ export function sendblueRouter(io: Server): Router {
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
-        // Their image number in the member asset store (services/memberAssets.ts), for decks and other artifacts.
-        let photoAssetN: number | null = null;
         // A file that came WITH their text: its note rides after their words in the record.
         let fileNoteWithText: string | null = null;
         // A file they sent (services/memberFiles.ts): a PDF, PowerPoint or Word file, kept for them alone, by number. What it says
@@ -1238,11 +1236,7 @@ export function sendblueRouter(io: Server): Router {
                 // Written down once, for the record and the reply's fact check
                 // (services/imageRead.ts, 2026-09-22).
                 photoDescription = await describeImage(buffer, mediaType);
-                // Kept as theirs for their own decks and pages (a logo, a product shot, an inspiration image). Never blocks the reply.
-                const asset = await import("../services/memberAssets.js").then((m) => m.keepAsset(user.id, buffer, mediaType, photoDescription)).catch(() => null);
-                if (asset?.ok) photoAssetN = asset.n;
-                const assetNote = photoAssetN ? ` (saved as their image #${photoAssetN})` : "";
-                if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]${assetNote}` : `[sent a photo]${assetNote}`;
+                if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]` : `[sent a photo]`;
               } else {
                 fileUnreadable = { kind: fileKind, why: null };
                 console.error(`sendblue: a file Cue can't open arrived (${fileKind}, ${imageRes.headers.get("content-type") ?? "no type"})`);
@@ -1279,7 +1273,7 @@ export function sendblueRouter(io: Server): Router {
         let reactingToSent = !!inlineTarget?.fromCo && (!!inlineTarget.what || !!bareLink(inlineTarget.text));
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
-          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}${photoAssetN ? `. Saved as their image #${photoAssetN}` : ""}]` : ""}${fileNoteWithText ? ` ${fileNoteWithText}` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
+          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${fileNoteWithText ? ` ${fileNoteWithText}` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
 
         // A link they texted is read in the background, kept to them (services/linkReader.ts).
         // The first one is also read for this reply (raced below), so Co can react to what the page says.
@@ -1747,8 +1741,6 @@ export function sendblueRouter(io: Server): Router {
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
           walkinDue: !!walkinAskEvent,
         });
-        // A look Co read from their image waits on their yes before anything is built from it (services/designSystem.ts): said to Co
-        // so a "yes" builds in this turn instead of getting only an acknowledgment (design audit, 2026-10-12).
         // Ruling A: the reply answers their first text after the welcome, and asks for name and email once, in its own words.
         if (welcomedThisTurn) addFact(replyFacts, "did_this_turn", "Just before this reply, the welcome, how Cue works and Cue's contact card went out. Don't repeat them.");
         if (intakeSaved) addFact(replyFacts, "did_this_turn", `Saved their name and email from this text: ${intakeSaved.name}, ${intakeSaved.email}.`);
@@ -1759,11 +1751,6 @@ export function sendblueRouter(io: Server): Router {
           if (fixNote.fact) addFact(replyFacts, "did_this_turn", fixNote.fact);
           if (fixNote.instruction) addInstruction(replyFacts, fixNote.instruction);
         }
-        const pendingLook = await (await import("../services/designSystem.js")).pendingLookInstruction(user.id).catch(() => null);
-        if (pendingLook) addInstruction(replyFacts, pendingLook);
-        // A photo sent as the look they want is read before anything is said about using it (design audit: a "this is the vibe" image
-        // was never read, and Co said it was saved as their look).
-        if (imageForVision && photoAssetN) addInstruction(replyFacts, `If they sent this photo as the look they want for what you make them (a vibe, a style, "make it look like this"), read it with readReference (their image #${photoAssetN}) in this turn before saying anything about using it. Never say a look is saved or applied unless a tool did it this turn.`);
         // Cue's own recent failure, read back from where it was reported (services/turnFailure.ts): what happened, and whether its report
         // is on record, so "I've flagged it" is said only when it is (2026-10-28). Null when the read fails: then that's what Cue knows.
         if (hasText) {

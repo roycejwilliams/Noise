@@ -200,8 +200,6 @@ const IF = await import("../../src/services/inboundFile.js");
 check("an unreadable file is recognized under either name", ["[sent a PDF Co couldn't open]", "[sent a PDF Cue couldn't open]"].every((t) => /couldn't be opened/.test(IF.fileRecordFact([{ at: day, content: `User said: here ${t}` }], "did you get it?") ?? "")));
 const MR = await import("../../src/services/messageRouter.js");
 check("a stored call offer reads under either name", ["| Co offered: Want to talk it through?", "| Cue offered: Want to talk it through?"].every((d) => /"Want to talk it through\?"/.test(MR.describeOpenItem("call_offer", `Asked about a call ${d}`))));
-const DC = await import("../../src/services/coPages/deckClaims.js");
-check("a deck approval pairs with the agent's last text under either name", DC.approvalPair(["Co: Want the deck?", "Them: yes"]) !== "" && DC.approvalPair(["Cue: Want the deck?", "Them: yes"]) !== "");
 check("nothing writes \"Cue replied:\" yet (if something starts to, every SQL reader of 'Co replied:%' must change with it)", !/[`"']Cue replied:/.test(fs.readdirSync(new URL("../../src/", import.meta.url), { recursive: true } as any).filter((f: any) => String(f).endsWith(".ts")).map((f: any) => src(String(f))).join("\n")));
 
 // ---------------------------------------------------------------- 4. team lines (a privacy guard): old rows stay fenced out

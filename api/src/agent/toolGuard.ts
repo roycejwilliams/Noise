@@ -127,7 +127,7 @@ export function requestKey(name: string, input: unknown): string {
 // Tools that only read (a subset of CHANGES_NOTHING, which also holds sends): only these get a free retry after a throw. A tool
 // not listed is treated as one that sends or changes something, so a new tool is never retried by default.
 export const READS_ONLY: ReadonlySet<string> = new Set([
-  "searchEvents", "webSearch", "searchPosts", "readPage", "readReference", "readInspo", "readDocument", "openArtifact",
+  "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
   "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows",
 ]);
 

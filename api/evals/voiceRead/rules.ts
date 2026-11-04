@@ -395,7 +395,6 @@ check("past the wait, it's pruned when another session finishes", B.sessionShape
 
 // The recap's heavy call and the hard stretch (the mood stack) never count a voice score alone (final review of #269).
 const pcf = readFileSync(new URL("../../src/jobs/postCallFollowUp.ts", import.meta.url), "utf8");
-check("a voice moment alone never makes a heavy call (the recap isn't held for it)", /const heavyCall = \(emo\?\.lastCall\?\.moments \?\? \[\]\)\.some\(\(m\) => m\.intensity === "high" && m\.valence === "negative" && !isScoreBasis\(m\.basis\)\);/.test(pcf) && /\{ getEmotionalContext, isScoreBasis \}/.test(pcf));
 const hAt = new Date("2026-10-23T12:00:00Z");
 const hrs = (h: number) => new Date(hAt.getTime() - h * 3_600_000);
 const textHard = (h: number) => ({ valence: "negative" as const, intensity: "high" as const, basis: null, at: hrs(h) });

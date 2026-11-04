@@ -161,7 +161,7 @@ check("#343: buildCallKnowledge passes the thread to the summary and to the audi
   check("#349/#350: the proxy's call toolset is the texting tools wrapped by the same guard (toolGuard.ts)", /createConversationTools\(\{/.test(src("services/callTools.ts")) && /guardTools\(tools, \{ userId: ctx\.userId/.test(src("agent/conversationTools.ts")));
   decisions.length = 0;
   const runs: string[] = [];
-  const raw = { startTask: { description: "start a task", inputSchema: z.object({ goal: z.string() }), execute: async () => { runs.push("startTask"); throw new Error("db write timed out"); } }, researchBrief: { description: "research a brief", inputSchema: z.object({ topic: z.string() }), execute: async () => ({ ok: true }) } };
+  const raw = { startTask: { description: "start a task", inputSchema: z.object({ goal: z.string() }), execute: async () => { runs.push("startTask"); throw new Error("db write timed out"); } }, correctWhatCoKnows: { description: "correct what Cue knows", inputSchema: z.object({ topic: z.string() }), execute: async () => ({ ok: true }) } };
   const member = { phone: "+14155550123", firstName: "Jordan", city: "San Francisco", tasks: [], loops: null } as any;
   const set = CT.buildCallTools({ userId: "u-jordan", callKey: "u-jordan:p", turnWords: "can you keep looking for a pilot partner for me", callWords: "can you keep looking for a pilot partner for me", lastCoLine: null, member, tools: raw, done: async () => {}, owe: async () => {}, sendText: async () => true });
   const r1: any = await quietly(() => set.run("startTask", { goal: "find a pilot partner", theirYes: "can you keep looking for a pilot partner for me" }, "t1"));
@@ -171,8 +171,8 @@ check("#343: buildCallKnowledge passes the thread to the summary and to the audi
   check("#350 on a call: a thrown tool comes back not done", r1?.ok === false, r1);
   check("#350 on a call: …leaves a not_done receipt saying it threw", decisions.some((d) => d.decision === "tool.startTask" && d.action === "not_done" && d.proposal?.threw === true), decisions);
   check("#350 on a call: …and a tool that changes something isn't run again that turn", runs.length === 1 && /isn't known/.test(JSON.stringify(r2)), { runs, r2 });
-  const yesField = set.defs.find((d: any) => d.name === "researchBrief")?.input_schema?.properties?.theirYes?.description;
-  check("#349 on a call: a tool that needs their yes (researchBrief) takes a direct ask as one", typeof yesField === "string" && /asking you for it, or saying yes to your offer of it/.test(yesField), yesField);
+  const yesField = set.defs.find((d: any) => d.name === "correctWhatCoKnows")?.input_schema?.properties?.theirYes?.description;
+  check("#349 on a call: a tool that needs their yes (correctWhatCoKnows) takes a direct ask as one", typeof yesField === "string" && /asking you for it, or saying yes to your offer of it/.test(yesField), yesField);
 }
 
 console.log(`\ncall parity (#343 #344 #347 #349 #350): ${total - failed}/${total} passed`);
