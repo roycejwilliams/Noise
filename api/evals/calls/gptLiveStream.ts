@@ -208,7 +208,7 @@ const until = async (ok: () => boolean, ms = 1500) => { for (let t = 0; t < ms &
   r.tw.close();
   const P = await import("../../src/services/callLlmProxy.js");
   const req = (msgs: [string, string][]) => ({ messages: [{ role: "system", content: "x" }, ...msgs.map(([role, content]) => ({ role, content }))] }) as any;
-  check("callClosing: their goodbye, or their reply to Cue's own goodbye; not an ordinary turn", P.callClosing(req([["user", "Okay I have to run, bye!"]])) && P.callClosing(req([["assistant", "Alright, take care Jordan."], ["user", "You too"]])) && !P.callClosing(req([["assistant", "Which gym?"], ["user", "The one by the lake"]])) && !P.callClosing(req([["user", "I'll go with the first one, it's closer."]])));
+  check("callClosing: their goodbye, or their reply to Cue's own goodbye; not an ordinary turn", P.callClosing(req([["user", "Okay I have to run, bye!"]])) && P.callClosing(req([["user", "I have to run, bye"], ["assistant", "Alright, take care Jordan."], ["user", "You too"]])) && !P.callClosing(req([["user", "yeah"], ["assistant", "Alright, take care Jordan."], ["user", "You too"]])) && !P.callClosing(req([["assistant", "Which gym?"], ["user", "The one by the lake"]])) && !P.callClosing(req([["user", "I'll go with the first one, it's closer."]])));
   check("...and runCallLlm reads the turn's closed fact through it (one read, never two that drift)", /closed: callClosing\(b\),/.test(fs.readFileSync(new URL("../../src/services/callLlmProxy.ts", import.meta.url), "utf8")));
 }
 

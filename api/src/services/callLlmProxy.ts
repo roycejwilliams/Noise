@@ -344,18 +344,30 @@ export function safetyCall(b: OaiRequest): boolean {
   });
 }
 
-// Pure: whether end_call can pass on this request: their last words close the call (memberClosed), or they're replying to Co's own
-// goodbye. The same read runCallLlm makes for the turn's closed fact; a caller that hands sentences on before the answer is done uses it
+// Pure: whether end_call can pass on this request: their last words close the call (memberClosed), or, when Co's goodbye answered their own, their reply to it.
+// A goodbye Co guessed at plus any reply is not a close. The same read runCallLlm makes for the turn's closed fact; a caller that hands sentences on before the answer is done uses it
 // to hold a closing turn's words until it knows whether the call ends.
+// An explicit request to end the call: needs no confirmation.
+const EXPLICIT_END = /\b(?:end (?:the|this|our) call|hang up|we (?:can|could) (?:end|stop|wrap)(?: up| this)?|let'?s (?:end|stop|wrap)(?: up| this)?|you can (?:hang up|go ahead and end))\b/i;
 export function callClosing(b: OaiRequest): boolean {
   const lastAt = b.messages.map((m) => m.role).lastIndexOf("user");
   if (lastAt < 0) return false;
-  const coBefore = [...b.messages.slice(0, lastAt)].reverse().find((m) => m.role === "assistant" && textOf(m.content ?? "").trim());
-  const coLastWords = coBefore ? textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2) : [];
   const reply = textOf(b.messages[lastAt]?.content ?? "");
-  // A reply to Cue's goodbye closes the call in any words, unless it opens something new ("Wait, what about step three?"): then it goes on.
+  // "I'm good" / "all good" answering a question of Cue's ("how are you?", "want me to send it?") is an answer, not a goodbye.
+  const cueAsked = b.messages.slice(0, lastAt).filter((m) => m.role === "assistant" && textOf(m.content ?? "").trim()).map((m) => textOf(m.content ?? "").trim()).pop();
+  if (cueAsked && /\?["')\]]*$/.test(cueAsked) && /^\W*(?:(?:ok(?:ay)?|yeah|yes|no),?\s*)?(?:(?:i'?m|we'?re)\s+)?(?:good|fine|great|all good|ok(?:ay)?)(?:,?\s*thanks)?\W*$/i.test(reply)) return false;
+  // The member's own goodbye, or their explicit "we can end the call", closes it, whatever Cue said before.
+  if (memberClosed(reply) || EXPLICIT_END.test(reply)) return true;
+  // A reply to Cue's goodbye closes it only when Cue was answering THEIR goodbye. A goodbye Cue guessed at ("Talk soon, Jordan." after
+  // two "yeah"s) plus any reply is not a close: the call goes on. A reply that opens something new never closes.
+  const coAt = b.messages.slice(0, lastAt).map((m, i) => (m.role === "assistant" && textOf(m.content ?? "").trim() ? i : -1)).filter((i) => i >= 0).pop();
+  if (coAt == null) return false;
+  const coLastWords = textOf(b.messages[coAt].content ?? "").split(/(?<=[.!?])\s+/).slice(-2);
+  if (!coLastWords.some((x) => GOODBYE.test(x.trim()) || CO_CLOSING.test(x))) return false;
+  const theirBefore = [...b.messages.slice(0, coAt)].reverse().find((m) => m.role === "user");
   const opensNew = /\?|^\W*(?:wait|actually|hold on|one (?:more|last)|before you go|but|also|can you|could you|what about|how about)\b/i.test(reply);
-  return memberClosed(reply) || (!opensNew && coLastWords.some((x) => GOODBYE.test(x.trim()) || CO_CLOSING.test(x)));
+  const theirText = textOf(theirBefore?.content ?? "");
+  return !opensNew && (memberClosed(theirText) || EXPLICIT_END.test(theirText));
 }
 
 // The stream of OpenAI chunks ElevenLabs reads. Text is cleaned and guarded sentence by sentence; a tool call passes through whole.

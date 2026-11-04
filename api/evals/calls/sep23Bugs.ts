@@ -133,7 +133,7 @@ user: Yes please`;
   check("speech: no dashes anywhere in the call prompt (Cue copies its style; a spoken dash is a run-on)", !/[—–]/.test(prompt));
   check("speech: short spoken sentences, never a dash", /Short sentences, one thought each/.test(prompt) && /Never put a dash in what you say/.test(prompt));
   check("speech: one question per turn, never re-asked in other words", /Ask one question per turn\./.test(prompt) && /never follow it with the same question in other words/.test(prompt));
-  check("speech: 'hello?' mid-call means the line seemed to drop, not a new call", /say you're still here and pick up where you were, never greet them like a new call/.test(prompt));
+  check("speech: 'hello?' mid-call means the line seemed to drop, not a new call", /they may not have heard you or think the line dropped: say you're still here, answer what was unclear, and never greet them like a new call/.test(prompt));
 }
 
 // ---------------------------------------------------------------- second review of PR 46 (2026-09-24)

@@ -196,9 +196,11 @@ const day = () => "Oct 8";
     check("\"thanks for calling\" isn't their goodbye yet: the call stays open", !thanks.ended);
     const theirBye = await ends([sys, { role: "user", content: "Alright, I should probably get going. Talk soon!" }], "Talk soon, Jordan.");
     check("after their goodbye, end_call goes through", theirBye.ended);
-    const afterCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Take care, Jordan." }, { role: "user", content: "you too" }], "");
-    check("their reply to Cue's goodbye lets the call end", afterCo.ended);
-    const looseCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Enjoy tonight, bye!" }, { role: "user", content: "you too" }], "Night.");
+    const afterCo = await ends([sys, { role: "user", content: "Okay, I have to go, bye" }, { role: "assistant", content: "Take care, Jordan." }, { role: "user", content: "you too" }], "");
+    check("their reply to Cue's goodbye (answering their own goodbye) lets the call end", afterCo.ended);
+    const guessed = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Take care, Jordan." }, { role: "user", content: "you too" }], "");
+    check("a goodbye Cue guessed at plus any reply does not end the call (Royce, 2026-11-04)", !guessed.ended);
+    const looseCo = await ends([sys, { role: "user", content: "alright, I should go, talk soon" }, { role: "assistant", content: "Enjoy tonight, bye!" }, { role: "user", content: "you too" }], "Night.");
     check("a goodbye in Cue's own words (\"Enjoy tonight, bye!\") then their reply ends the call, never dead air", looseCo.ended);
     {
       // A bare end_call mid-call is held too, and Co answers them instead: the second model call is the answer (never dead air).

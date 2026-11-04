@@ -51,9 +51,9 @@ const laterIn = G.buildLiveCall({ ...base, direction: "inbound", first: { firstC
 check("inbound later call: the thread is in GPT-Live's instructions, framed never to read out", laterIn.instructions.includes(G.threadNote(line)) && /never to read out/.test(G.threadNote("x")));
 const laterOut = G.buildLiveCall({ ...base, direction: "outbound", callReason: "A nudge about the venue.", first: { firstCall: false }, thread: line });
 check("outbound later call: the thread waits for a person on the line, never in the instructions", !laterOut.instructions.includes(line) && G.heldOpeningNote(laterOut.opening).includes(G.threadNote(line)) && G.heldOpeningNote(laterOut.opening).includes(G.reasonNote("A nudge about the venue.")));
-check("outbound voicemail never carries it (the instructions hold none of it)", !/Where you left off/.test(laterOut.instructions));
-check("no thread, no line (as before)", !G.buildLiveCall({ ...base, direction: "inbound" }).instructions.includes("Where you left off") && G.heldOpeningNote(G.buildLiveCall({ ...base, direction: "outbound", callReason: "R." }).opening) === G.reasonNote("R."));
-check("a first call keeps its own words, not a thread", !G.buildLiveCall({ ...base, direction: "inbound", first: { firstCall: true, theirWords: "gave notice, last day the 21st", emailOnFile: false }, thread: line }).instructions.includes("Where you left off"));
+check("outbound voicemail never carries it (the instructions hold none of it)", !/Where you left off with them/.test(laterOut.instructions));
+check("no thread, no line (as before)", !G.buildLiveCall({ ...base, direction: "inbound" }).instructions.includes("Where you left off with them") && G.heldOpeningNote(G.buildLiveCall({ ...base, direction: "outbound", callReason: "R." }).opening) === G.reasonNote("R."));
+check("a first call keeps its own words, not a thread", !G.buildLiveCall({ ...base, direction: "inbound", first: { firstCall: true, theirWords: "gave notice, last day the 21st", emailOnFile: false }, thread: line }).instructions.includes("Where you left off with them"));
 check("the bridge sends the held note only on confirmPerson (unchanged)", /const held = heldOpeningNote\(call\.opening\);\s*\n\s*if \(held\) send\(ai, \{ type: "session\.thinking\.append", event_id: "reason"/.test(src("src/services/gptLiveBridge.ts")));
 check("the route reads the thread for a later call and passes it", /laterCallThread\(o\.userId\)/.test(src("src/routes/co.ts")) && /first, thread \}\);/.test(src("src/routes/co.ts")));
 check("the 'what's on your mind' family is in the opening's avoid list", /what's on your mind/.test(G.OPEN_NO_MIND) && /I'm here, I'm with you/.test(G.OPEN_NO_MIND) && laterIn.instructions.includes(G.OPEN_NO_MIND));
@@ -66,20 +66,18 @@ check("the 'what's on your mind' family is in the opening's avoid list", /what's
   check("names are capped at 24 characters in the prompt", !worst.instructions.includes(long) && worst.instructions.includes(long.slice(0, 24)) && !worstFirst.instructions.includes("Bartholomew-Fitzgerald-Montgomery"));
   // The cap holds at runtime: an over-long identity pushes the prompt over, and the thread (then their words) goes first.
   const over = G.liveInstructions({ firstName: "Jordan", direction: "inbound", team: true, opening: { timeOfDay: "Wednesday afternoon", reason: null, thread: line, firstCall: false }, identity: "y".repeat(G.GPT_LIVE.maxInstructionChars - G.liveInstructions({ firstName: "Jordan", direction: "inbound", team: true, opening: { timeOfDay: "Wednesday afternoon", reason: null, firstCall: false } }).length - 10) });
-  check("runtime cap: over the cap, the thread is dropped first and the prompt fits", !over.includes("Where you left off") && over.length < G.GPT_LIVE.maxInstructionChars, over.length);
+  check("runtime cap: over the cap, the thread is dropped first and the prompt fits", !over.includes("Where you left off with them") && over.length < G.GPT_LIVE.maxInstructionChars, over.length);
   console.log(`worst-case instructions: later ${worst.instructions.length}, first ${worstFirst.instructions.length} of ${G.GPT_LIVE.maxInstructionChars}`);
 }
 
 // ---------------------------------------------------------------- 2-5. the prompt lines
 for (const [label, c] of [["inbound", laterIn], ["outbound", laterOut]] as const) {
-  check(`${label}: GPT-Live has all four feel lines`, G.LIVE_FEEL.length === 3 && G.LIVE_FEEL.every((l) => c.instructions.includes(l)));
+  check(`${label}: GPT-Live has both feel lines`, G.LIVE_FEEL.length === 2 && G.LIVE_FEEL.every((l) => c.instructions.includes(l)));
   check(`${label}: the thinking has the feel guidance`, c.backendSystem.includes(G.BACKEND_FEEL));
   check(`${label}: nothing GPT-Live may never say`, !G.GPT_LIVE_FORBIDDEN.some((re) => re.test(c.backendSystem) || re.test(c.instructions)));
 }
-check("wind-down: the thinking keeps its end-call line and the feel guidance names the signals", /use your tool that ends the call and write nothing/.test(G.BACKEND_NOTE) && /short agreements in a row/.test(G.BACKEND_FEEL) && /never ask a new question or bring a topic back/.test(G.BACKEND_FEEL));
 check("opinions: the thinking (which answers any ask for advice or a read) gives an opinion and its reason, never a verdict", /opinion and the reason/.test(G.BACKEND_FEEL) && /never state their feelings or motives as fact/.test(G.BACKEND_FEEL));
-check("moment: light and brief when with others, hi, or short on time", /with other people, just saying hi, or short on time/.test(G.BACKEND_FEEL) && /light and brief with others around/.test(G.LIVE_FEEL[1]));
-check("rhythm: at most one question every other turn, in both prompts", /at most one question every other turn/.test(G.BACKEND_FEEL) && /not every turn/.test(G.LIVE_FEEL[0]));
+check("moment: light and brief when with others, hi, or short on time", /with other people, just saying hi, or short on time/.test(G.BACKEND_FEEL));
 check("texts keep the family (call-only change): the shared stock list does not flag it", stockLine("Hey Jordan, what's on your mind tonight?") === null);
 
 // ---------------------------------------------------------------- the wind-down signal
@@ -90,9 +88,7 @@ const STATE = "That plan holds up, and the venue is the right size.";
 const member = (...m: string[]) => call(m.map(() => STATE), m);
 check("signal: two short agreements in a row after finished points (the real wrap-up)", G.windDownSignal(member("Yeah, I agree.", "Yeah, I agree")) === true);
 check("signal: thanks after an agreement", G.windDownSignal(member("Totally", "Thanks")) === true);
-check("signal: an agreement plus a 'hello?' check in one turn, after a finished point", G.windDownSignal(member("Tell me more", "Yeah, I agree. Hello?")) === true);
 check("signal: not on one bare yeah or thanks (they may go on)", G.windDownSignal(member("Tell me more", "Yeah")) === false && G.windDownSignal(member("Tell me more", "Thanks")) === false);
-check("signal: not on a bare 'hello?' (the line dropped: I'm still here)", G.windDownSignal(member("Tell me more", "Hello?")) === false);
 check("signal: not when either turn says more", G.windDownSignal(member("Yeah, I agree, but what about the venue", "Yeah")) === false && G.windDownSignal(member("Yeah I agree", "Okay so what do I do about Ellis")) === false);
 check("signal: only the last two of their turns count", G.windDownSignal(member("Yeah", "Yeah", "Tell me about the studio launch plan")) === false);
 // The review's probes, each one that must NOT fire:
@@ -102,14 +98,7 @@ check("probe: 'No.' / 'No, no.' answers never fire", G.windDownSignal(member("No
 check("probe: a yes to an offer never fires", G.windDownSignal(call(["Hi", "Want me to text you the list?"], ["Hey", "Yeah"])) === false && G.windDownSignal(call(["Want me to send it?", "Want me to send it too?"], ["Yeah", "Yes, please"])) === false && G.agreedBriefly(call(["Hi", "Want me to text you the list?"], ["Hey", "Yeah"])) === false);
 check("probe: an agreement to a question never fires", G.windDownSignal(call(["Hi", "Does Thursday work?"], ["Hey", "Yeah, I agree"])) === false);
 check("probe: a capped walkthrough ('say go on') never fires", G.windDownSignal(call(["Step one, open settings. Step two, tap the account. Say go on for the rest.", "Step three is the toggle, then save. Say go on when you're ready."], ["Yeah", "Yeah, I agree"])) === false && G.agreedBriefly(call(["Hi", "Step two, tap the account. Say go on for the rest."], ["Hey", "Yeah"])) === false);
-check("probe: 'Yeah, hello?' at pickup never fires (nothing finished yet)", G.windDownSignal(call(["Hey Jordan, good to catch you."], ["Yeah, hello?"])) === false && G.windDownSignal(call(["Hey Jordan, good to catch you."], ["Yeah, I agree. Hello?"])) === false);
-check("probe: 'Okay... hello?' during a tool run or silence never fires", G.windDownSignal(call(["Hi", "Let me check that for you, one moment."], ["Hey", "Okay... hello?"])) === false && G.windDownSignal(call(["Hi", "Hang on, looking that up."], ["Hey", "Yeah, I agree. Hello?"])) === false);
-check("probe: the hello reading is only after agreement plus hello (a plain hello after a finished point is still the line dropping)", G.windDownSignal(member("Tell me more", "Hello?")) === false && G.windDownSignal(member("Tell me more", "Hello, you there?")) === false);
-check("the voice's hello rule keeps the line-dropped meaning and the closing exception", /say you're still here and pick up where you were/.test(src("prompts/co-system-prompt.md")) && /unless it comes right after they agreed with a point you had just finished/.test(src("prompts/co-system-prompt.md")));
-check("signal: the thinking is told as a fact, not a command to hang up", /winding down/.test(G.WIND_DOWN_NOTE) && /Don't ask a new question or bring a topic back/.test(G.WIND_DOWN_NOTE));
-check("question rhythm: noted only when Cue's last turn ended on a question", G.askedLastTurn(req("Hi", "What part grabbed you?", "The pricing")) === true && G.askedLastTurn(req("Hi", "That sounds like a solid plan.", "Thanks")) === false);
 check("a lone short agreement after a statement gets the soft note; after a question it does not", G.agreedBriefly(member("Tell me more", "Yeah, I agree")) === true && G.agreedBriefly({ model: "x", messages: [{ role: "assistant", content: "Hi." }, { role: "user", content: "hey" }, { role: "assistant", content: "What part grabbed you?" }, { role: "user", content: "Yeah" }] } as any) === false && G.agreedBriefly(member("Tell me more", "Yeah, but what about the venue")) === false);
-check("the signal is fed to the thinking every non-safety turn (turn notes)", /!safety0 && windDownSignal\(req\) \? WIND_DOWN_NOTE/.test(src("src/services/gptLive.ts")));
 
 
 // ---------------------------------------------------------------- the review's fixes: fresh, not Cue's own, not cancelled, no other people
@@ -127,9 +116,46 @@ check("outbound: the thread is read only when they asked for the call (member_as
 // callClosing after a goodbye
 const P = await import("../../src/services/callLlmProxy.js");
 const bye = (reply: string) => ({ model: "x", messages: [{ role: "assistant", content: "Good luck with the launch. Talk soon, Jordan." }, { role: "user", content: reply }] }) as any;
-check("callClosing: a reply to Cue's goodbye still closes in any words", P.callClosing(bye("You too.")) === true && P.callClosing(bye("Thanks, bye")) === true && P.callClosing(bye("Okay")) === true);
-check("callClosing: a new question or topic after a goodbye keeps the call going", P.callClosing(bye("Wait, what about step three?")) === false && P.callClosing(bye("Actually one more thing about the venue")) === false && P.callClosing(bye("Hold on, can you resend that?")) === false);
-check("callClosing: their own goodbye still closes", P.callClosing(bye("Wait, bye!")) === true);
+
+
+// ---------------------------------------------------------------- Royce's revised call rules (2026-11-04), through the real functions
+const P2 = await import("../../src/services/callLlmProxy.js");
+const closes = (msgs: [string, string][]) => P2.callClosing({ model: "x", messages: msgs.map(([role, content]) => ({ role, content })) } as any);
+// 1. "hello?" is not a closing signal
+check("hello: never a closing signal, alone or after an agreement", G.windDownSignal(member("Tell me more", "Hello?")) === false && G.windDownSignal(member("Tell me more", "Yeah, I agree. Hello?")) === false && G.windDownSignal(member("Yeah", "Hello?")) === false);
+check("hello: it doesn't close the call", closes([["assistant", "That plan holds up."], ["user", "Hello?"]]) === false && closes([["assistant", "Hi."], ["user", "Yeah, I agree"], ["assistant", "Good."], ["user", "Yeah, I agree. Hello?"]]) === false);
+check("hello: the rule says acknowledge, answer what was unclear, don't repeat the last point or assume they're done, in the voice, the thinking and the prompt", [G.LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")).join(" "), G.BACKEND_FEEL, src("prompts/co-system-prompt.md")].every((t) => /hello/i.test(t) && /answer what was unclear/.test(t) && /(?:repeat your last point|assume they're done)/.test(t)) && !/pick up where you were/.test(src("prompts/co-system-prompt.md")));
+check("hello: no closing guidance mentions it as a sign of being done", !G.LIVE_FEEL.some((l) => /hello/i.test(l)) && !/agree and then say/.test(G.BACKEND_FEEL) && !/hello/i.test(G.WIND_DOWN_NOTE));
+// 2. short agreements, thanks and "I'm good" are read in context
+check("I'm good after 'how are you?' does not close or signal", closes([["assistant", "Hey Jordan. How are you?"], ["user", "I'm good"]]) === false && G.windDownSignal(call(["Hi", "Hey Jordan. How are you?"], ["Hey", "I'm good"])) === false);
+check("'I'm good, that's all' is a soft cue, and a soft one", G.windDownSignal(member("Tell me more", "I'm good, that's all")) === true && /may be wrapping up/.test(G.WIND_DOWN_NOTE) && /if not, carry on as usual/.test(G.WIND_DOWN_NOTE) && !/\b(?:end the call|goodbye)\b/i.test(G.WIND_DOWN_NOTE));
+check("a mid-call 'thanks' is not a close", closes([["assistant", "The venue is the right size."], ["user", "Thanks"]]) === false && G.windDownSignal(member("Tell me more", "Thanks")) === false);
+check("an explicit end request closes with no confirmation", closes([["assistant", "The venue is the right size."], ["user", "We could end the call."]]) === true && closes([["assistant", "Anything else?"], ["user", "Let's end the call"]]) === true && closes([["assistant", "Hi."], ["user", "Okay, hang up now"]]) === true && /needs no confirmation/.test(G.BACKEND_FEEL));
+check("a reply after Cue's guessed goodbye continues the call", closes([["user", "Yeah, I agree"], ["assistant", "Good luck with it. Talk soon, Jordan."], ["user", "Okay"]]) === false && closes([["user", "Thanks"], ["assistant", "Take care, Jordan."], ["user", "Wait, what about step three?"]]) === false);
+check("a reply to Cue's goodbye answering THEIR goodbye closes", closes([["user", "Alright, gotta go, bye"], ["assistant", "Take care, Jordan."], ["user", "You too"]]) === true && closes([["user", "ok bye"], ["assistant", "Talk soon, Jordan."], ["user", "Actually, one more thing?"]]) === false);
+check("if they speak again while Cue is closing: listen and answer (voice and thinking)", /if they speak, listen/.test(G.LIVE_FEEL[1]) && /if they speak again while you're closing, listen and answer/.test(G.BACKEND_FEEL));
+check("silence and connection loss stay separate from social closing cues", !/silence|connection|dropped line/.test(G.WIND_DOWN_NOTE) && /If someone goes quiet/.test(G.LIVE_VOICE_RULES.map((r) => r.line).join("\n")));
+// 3. no every-other-turn rule, no note for it
+check("no every-other-turn question rule or last-turn question note remains", !/every other turn/.test(G.LIVE_FEEL.join(" ") + G.BACKEND_FEEL + G.BACKEND_NOTE) && (G as any).askedLastTurn === undefined && (G as any).NO_QUESTION_NOTE === undefined && !/NO_QUESTION_NOTE|askedLastTurn/.test(src("src/services/gptLive.ts")));
+check("questions: ask when the answer helps, one at a time, never again in other words, never just to keep the call going, never block a needed one", /Ask when the answer helps, one question at a time/.test(G.BACKEND_FEEL) && /never the same question again in other words/.test(G.BACKEND_FEEL) && /just to keep the call going/.test(G.BACKEND_FEEL) && /never hold back one you need/.test(G.BACKEND_FEEL) && /never again in other words/.test(G.LIVE_FEEL[0]));
+// 4. where we left off is optional background
+check("where we left off: optional background, only if relevant and fine to say aloud, no quick-hi drag-back, no assumption it still holds", /optional background/.test(G.OPEN_NO_MIND) && /fine to say aloud/.test(G.OPEN_NO_MIND) && /a quick hi stays a quick hi/.test(G.OPEN_NO_MIND) && /background only/.test(G.threadNote("x")) && /to pull them back if they start somewhere new/.test(G.threadNote("x")) && /never assume it still holds/.test(G.BACKEND_FEEL));
+// 5. don't re-ask what was answered (guidance; the sentence-level re-ask hold already exists in callSentenceMiss)
+check("re-asking: guidance to clarify only the gap, respect a decline, carry corrections; the existing re-ask hold is still wired", /ask only for that gap/.test(G.BACKEND_FEEL) && /if they decline or move on, respect it/.test(G.BACKEND_FEEL) && /carry their corrections forward/.test(G.BACKEND_FEEL) && /callSentenceMiss/.test(src("src/services/callLlmProxy.ts")));
+// 6. a closing commitment is kept, and nothing is invented to fill the line
+const CC = await import("../../src/services/callCommitments.js");
+const CG = await import("../../src/harness/callGrounding.js");
+const closingLine = "Good luck with the launch, Jordan. I'll text you the venue list tomorrow.";
+check("a closing commitment is picked up as a commitment to keep (the call's follow-through)", CC.commitmentsIn([closingLine]).length === 1 && /venue list/.test(CC.commitmentsIn([closingLine])[0]) && CC.commitmentProblem(CC.commitmentsIn([closingLine])[0]) === null);
+check("...and it opens a task through the after-call path, never nothing", CG.promiseOpens({ coveredBy: null, asked: "send me the venue list" }) === "their_ask" && CG.promiseOpens({ coveredBy: null, asked: null }) === "promise_thread" && CG.promiseOpens({ coveredBy: 3, asked: null }) === "task_from_call");
+{
+  const co = src("src/routes/co.ts");
+  const post = co.slice(co.indexOf("export async function runGptLivePostCall"));
+  const ended = co.slice(co.indexOf("async function processEndedCall"));
+  check("...and a GPT-Live call's end reaches that path (post-call -> processEndedCall -> tasksFromCall + auditCall -> keepCallPromise)", /processEndedCall\(/.test(post.slice(0, post.indexOf("\n}\n"))) && /tasksFromCall\(/.test(ended) && /auditCall\(/.test(ended) && /keepCallPromise\(/.test(src("src/harness/callGrounding.ts")));
+}
+check("a goodbye is not proof the request was done, and no invented takeaway or promise fills the closing line", /a goodbye is not proof their request is done/.test(G.BACKEND_FEEL) && /Don't invent a takeaway or a promise to fill the closing line/.test(G.BACKEND_FEEL) && /Never fill the closing line with a takeaway or promise you won't keep/.test(src("prompts/co-system-prompt.md")));
+check("the mid-call notes are reminders of the same rules, never stronger (no 'end the call', no 'goodbye', no 'must')", [G.WIND_DOWN_NOTE, G.AGREED_NOTE].every((n) => !/\b(?:end the call|goodbye|must|never ask|don't ask)\b/i.test(n)));
 
 console.log(`call feel: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
