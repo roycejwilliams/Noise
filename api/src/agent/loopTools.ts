@@ -669,6 +669,52 @@ export function loopTools(
         return R.toolResult(r);
       },
     }),
+    // A venue brief, researched in the background (services/researchBrief.ts): this only starts it, on their ask or yes (the
+    // guard's their_yes, the same as writeDocument). The task finds, builds, checks every line's source and sends the document.
+    researchBrief: tool({
+      description: toolUse("researchBrief"),
+      inputSchema: z.object({
+        what: z.string().describe("What they're looking for, in their words: the kind of event and space, how many people."),
+        date: z.string().optional().describe("The event date they gave, YYYY-MM-DD. Leave it out if they didn't give one."),
+        start: z.string().optional().describe("The start time they gave, like 6:00 pm. Leave it out if they did not give one."),
+        memberContext: z.array(z.string()).max(6).optional().describe("Up to six short lines of what they told you that matters (budget, size, neighborhood), in their words."),
+        headcount: z.number().int().positive().max(5000).optional().describe("How many people, if they said. Never guess it."),
+        budget: z.string().optional().describe("Their budget in their words (like \"$5k\" or \"under $200 an hour\"), if they gave one."),
+        neighborhood: z.string().optional().describe("The neighborhood or area they named, if any."),
+        city: z.string().optional().describe("The city, only if it's not the one they live in."),
+        again: z.boolean().optional().describe("True when they want the same brief again or updated; the options are re-checked before it goes."),
+      }),
+      execute: async (input) => {
+        // Search quality (services/researchQuality.ts): the search is built from what's known about them; a load-bearing fact
+        // that isn't known is asked, never guessed. "Again" re-sends the last brief's options, re-checked.
+        if (!input.again) {
+          const Q = await import("../services/researchQuality.js");
+          const known = { city: input.city?.trim() || (ctx.turn?.profile?.city ?? null), neighborhood: null, budget: null, date: null, start: null, headcount: input.headcount ?? null, likes: [], passes: [] };
+          const q = Q.assembleQuery("venue", input.what, known);
+          if (!q.ok) return { ok: false, askThem: q.question, note: "Nothing was started. Ask them this in your own words, in one line, then start it once they answer." };
+        }
+        const date = input.date && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : null;
+        const start = input.start && /^\d{1,2}:\d{2}\s*[ap]m$/i.test(input.start.trim()) ? input.start.trim().toLowerCase() : null;
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was started." };
+        const { startResearchBrief } = await import("../services/coTasks.js");
+        const r = await startResearchBrief({
+          userId: ctx.userId,
+          theirWords: theirWords(),
+          goal: `Venue brief: ${input.what}`.slice(0, 200),
+          params: { what: input.what.slice(0, 200), date, start: date ? start : null, memberContext: (input.memberContext ?? []).map((x) => x.slice(0, 200)), wantsGoogle: false, city: input.city?.trim() || (ctx.turn?.profile?.city ?? null), headcount: input.headcount ?? null, budget: input.budget?.slice(0, 80) ?? null, neighborhood: input.neighborhood?.slice(0, 80) ?? null, again: !!input.again },
+        });
+        if (!r.ok) {
+          notDone(`The venue brief wasn't started: ${r.why}.`);
+          return { ok: false, error: r.why };
+        }
+        // "Started task #N:" is the shape a promise is backed by (harness/replyGrounding.ts unbackedFollowup), so "I'll text you the brief
+        // once it's ready" stands on this.
+        // Their yes to a waiting [brief] offer is this brief: mark it accepted, so it doesn't hold other offers for 48h.
+        await import("../services/documentOffer.js").then((m) => m.recordDocumentWritten(ctx.userId, `[brief] ${input.what}`)).catch(() => {});
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: researching a venue brief for them in the background ("${input.what.slice(0, 80)}"${date ? `, ${date}${start ? ` from ${start}` : ""}` : ""}). It comes as a document when it's ready; nothing about options, prices or availability is known yet.`);
+        return { ok: true, note: "Tell them in one line you're on it and the brief will come as a document. Don't name any option, price or availability now." };
+      },
+    }),
     // What they made of an option Co showed them in a brief (services/researchQuality.ts): the ranking signal for their next finds.
     findReaction: tool({
       description: toolUse("findReaction"),

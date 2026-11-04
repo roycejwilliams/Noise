@@ -143,6 +143,16 @@ export const ABILITIES: Ability[] = [
     use: "They sent a PDF or document and want it used: call this with the file's number (leave it out for their newest). It returns event details from a flyer or agenda, and what the file says about who they are and what they're looking for, or says the file is about neither. Use event details as finds; save their own details through saveAsk or updateNotes, in their words. Never summarize, rewrite or edit a document; if the file is about neither, say so in one line and offer nothing else.",
   },
   {
+    id: "research_brief",
+    sheet: "Cue researches venues for an event in the background and sends a brief: rate, capacity and availability, every line sourced and dated, anything unconfirmed marked unknown.",
+    can: "When they ask Cue to find venues for an event (\"find venues for my launch\", \"what are my options for a dinner for 40\") or say yes to that offer, Cue researches them in the background and sends a venue brief as a document: each option with its rate, minimum, capacity and, for a date they gave, whether it's open, every line with its source link and when it was checked, and anything it couldn't confirm shown as unknown. Options are held to a high-end bar, built from what Cue knows about them (city, size, date, budget, and what they liked or passed on before), and ordered by what they've said yes and no to. It comes as a PDF, or as a Google Doc when they ask for one and it's open to them. Asked again, it re-checks every option before re-sending.",
+    onCall: true,
+    tool: "researchBrief",
+    limits: { perTurn: 1, perDay: 2 },
+    confirm: "their_yes",
+    use: "They asked you to find venues or options for an event, or said yes to your offer to. Call this once with what they're looking for in their words (the kind of event and space, how many people), the date and start time if they gave them (YYYY-MM-DD and like \"6:00 pm\"; never guess one), the headcount, budget, neighborhood and city if they said (never guess one), and up to six short lines of what they told you that matters, in their words. If it comes back with askThem, nothing started: ask them that in one line and call it again with their answer. When they want the same brief again or updated, set again. It runs in the background and sends the brief when it's ready: tell them in one line you're on it and it'll come as a document. Don't promise options, prices or availability before it arrives. Options come ordered by what they've liked or passed on before.",
+  },
+  {
     id: "share_finds",
     sheet: null,
     can: "Cue sends what it found as links, each with a short caption, best first.",
@@ -717,6 +727,7 @@ const MENU: MenuLine[] = [
   { group: "Finding things", main: "steer_away", text: null, call: "stop suggesting a kind of thing they don't want" },
   { group: "Finding things", main: "list_sent", text: "recap what it sent and resend a link" },
   { group: "Working on something over days", main: "task_start", text: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds", call: "take on something that needs more than one reply as its own task" },
+  { group: "Working on something over days", main: "research_brief", text: "research venues for an event and send a brief of the options", call: "research venues for an event and send a brief" },
   { group: "Working on something over days", main: "draft_email", text: "write an email for them to send themselves" },
   { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone Cue introduced them to, or remind them to follow up" : "remind them to follow up on something"; } },
   { group: "People", main: "co_events", text: "at Noise events, tell them who's worth meeting and why" },
@@ -775,6 +786,8 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   // Start work that runs after the call.
   startTask: START,
   // Their yes is a short model read first (services/theirYes.ts), so these get a little longer.
+  researchBrief: { run: "now", kind: "start", ms: 5000 },
+  // Their yes is a short model read first (services/theirYes.ts), so these get a little longer.
   saveAsk: START,
   // Save what they said: an event they're into, their notes, tasks, preferences, corrections and consent.
   noteReaction: SAVE,
@@ -812,7 +825,7 @@ export const CHANGES_NOTHING: ReadonlySet<string> = new Set([
 export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
   "setSearchArea", "correctWhatCoKnows", "steerAwayFrom", "saveAsk", "closeAsk", "saveKitFact", "noteRoomTaste", "noteFreeTime",
   "noteReaction", "noteMetAgain", "noteRoomMeeting", "findReaction", "updateNotes", "updateLoop",
-  "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "markGoal", "moveLane", "updateGoing", "followUp", "firstRead",
+  "startTask", "researchBrief", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "markGoal", "moveLane", "updateGoing", "followUp", "firstRead",
   "answerProposal", "answerShareAsks", "shareAskInIntros", "answerBriefName", "requestEventIntro", "markArrived",
   "voiceRead", "shareLocationYes",
   "sendInvite", "calendarConnection", "googleConnection",

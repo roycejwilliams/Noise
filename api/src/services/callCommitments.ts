@@ -227,7 +227,7 @@ export async function checkCallCommitments(now: Date = new Date(), deps: CheckDe
 // when that tool did that same thing this turn: a send that texted them that item, or, for a write-up, the page, deck, document or
 // task started for it. Any other tool that came back done (a note, a save) keeps nothing, and the promise opens as before.
 const WRITES_UP = /\b(?:put together|pull together|write up|draft)\b/i;
-const MAKES = new Set(["startTask"]);
+const MAKES = new Set(["researchBrief", "startTask"]);
 const SENDS = new Set(["shareLink", "calendarConnection"]);
 const COMMIT_COMMON = new Set(significant("text send sent share link links that this those them with your after right over call hang just will together draft write pull also then soon later tonight away both thing things stuff option options one ones going gonna make sure real quick okay alright too have want need know here there good great nice look check before about more from into some been well kind got get"));
 const distinct = (s: string) => new Set(significant(s).filter((w) => !COMMIT_COMMON.has(w)));

@@ -34,7 +34,6 @@ import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { createEmailOptOutRouter } from "../../api/src/routes/emailOptOut.js";
 import { createGoogleRouter } from "../../api/src/routes/google.js";
 import { createReadoutRouter } from "../../api/src/routes/readout.js";
-import { createCoPageRouter } from "../../api/src/routes/coPage.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
 import { authLimiter, limiter } from "../../api/src/middleware/rateLimiter.js";
@@ -213,8 +212,8 @@ async function main() {
   app.use("/google", createGoogleRouter());
   // The host's read-only partner readout, by an approved link only. Mirrors api/src/server.ts.
   app.use("/readout", createReadoutRouter());
-  // A Co page, by its unguessable link only; never listed (api/src/routes/coPage.ts). Mirrors api/src/server.ts.
-  app.use("/d", createCoPageRouter());
+  // Pages and decks are gone: every old link answers 410 (mirrors api/src/server.ts).
+  app.use("/d", (_req, res) => res.status(410).set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex" }).type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>No longer available</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:20vh auto;padding:0 1rem;color:#222"><p>This page is no longer available.</p></body></html>`));
   app.use("/sendblue", sendblueRouter(io));
   app.use("/luma", createLumaRouter());
   // The opt-out link in invitation emails already sent keeps working (api/src/routes/emailOptOut.ts).

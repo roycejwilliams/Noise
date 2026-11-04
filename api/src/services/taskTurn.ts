@@ -1152,7 +1152,6 @@ async function runDueTask(t: CoTask): Promise<void> {
   // A goal's check-in or reminder (services/goalOwnership.ts): real state first, then one text through the task-update path.
   if (t.kind === "work" && t.followup?.checkin) await import("./goalOwnership.js").then((g) => g.runGoalCheckin(t)).catch((err: any) => console.error("goal check-in failed (non-fatal):", err?.message ?? err));
   else if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
-  // A venue brief queued before the document layer was removed (2026-11-04): it cannot be made now, so it closes without sending anything.
-  else if (t.kind === "research_brief") await import("./coTasks.js").then((c) => c.closeTask(t.userId, t.id, "dropped", "Venue briefs are no longer made.")).catch((err: any) => console.error("closing a retired research brief failed (non-fatal):", err?.message ?? err));
+  else if (t.kind === "research_brief") await import("./researchBrief.js").then((r) => r.runResearchBriefTask(t)).catch((err: any) => console.error("research brief task failed (non-fatal):", err?.message ?? err));
   else await runTaskTurn(t);
 }

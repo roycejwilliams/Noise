@@ -243,7 +243,7 @@ export const NEW_FOR_THEM = new Set([
   "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
   "firstRead",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
-  "shareFinds", "draftEmail",
+  "shareFinds", "draftEmail", "researchBrief",
   "calendarConnection", "googleConnection", "setSearchArea",
   // Re-review of #310: each of these can return something to say (a link that moved, the next step on a yes, a playback of their time).
   "findReaction", "noteFreeTime",

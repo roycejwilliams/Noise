@@ -296,6 +296,7 @@
     "evals/matching/wantCriteria.ts",
     "evals/asks/wantWords.ts",
     "evals/loop/offerDue.ts",
-    "evals/docs/readDocument.ts"
+    "evals/docs/readDocument.ts",
+    "evals/docs/researchBrief.ts"
   ]
 }
