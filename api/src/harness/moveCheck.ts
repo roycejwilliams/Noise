@@ -194,22 +194,29 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
 // Pure: what the draft gets wrong against the move and the record. Empty when nothing does (or when there's no read to judge from).
 // theirs: their latest message (its topic words never make a reopening: they raised it).
 
-// A direct factual question (where, what day, which, who, how much, did you send ...) answered by nothing: a reassurance or a nod with no
-// fact, no link, no number or place, and no honest "I don't have it". "No worries, easy to miss" in reply to "what day did you send that"
-// is the example (2026-11-04). A brief honest "I don't know, here's the link", "the address shows after approval" or a link passes.
-export const DIRECT_FACT_Q = /(?:^|[.!?]\s+|\n)\s*(?:what|which|when|where|who|how much|how many|did you|do you|is it|was it|can you (?:send|tell|share))\b|\b(?:what|which) (?:day|date|time|city)\b|\bwhere (?:is|was|'s)\b|\bwhen did you\b/i;
+// A question about a find Cue sent (where, what day, the link, the price, who hosts it, when Cue sent it) answered by nothing of that find.
+// It fires only when the turn resolved the find they mean (turnContext.ts resolveReferents) and they ask about it. The draft answers if it
+// carries a stored field of THAT find (its city, venue, address, hosts, price, the day it happens or the day Cue sent it, how long ago),
+// its link, a link-delivery ("sending it now"), or an honest gap ("not stored", "I don't have it"; "the address shows after approval" only
+// when that find's record says registration needs approval). A feeling, a reassurance or a guess about the week does not (2026-11-04:
+// "No worries, easy to miss" to "what day did you send that").
+export type ReferentAnswerFacts = { name: string; url: string | null; tokens: string[]; approvalGap: boolean };
 export const DEFLECTION = /\b(?:no worries|no problem|no stress|totally fine|all good|that happens|easy to miss|happens to (?:all|the best)|don'?t worry|it'?s okay|it'?s ok|understandable|no biggie|so much going on|in the middle of everything)\b/i;
-const HONEST_GAP = /\b(?:don'?t (?:have|know)|do not (?:have|know)|not sure|isn'?t (?:shown|listed|stored|public|on file|available)|aren'?t (?:shown|listed)|not (?:shown|listed|stored|public|on file)|shows? (?:up )?(?:only )?after|after (?:host )?approval|once (?:you'?re|you are) (?:approved|in|registered)|can'?t (?:see|tell|find)|couldn'?t (?:see|find)|no (?:address|date|time|record))\b/i;
-export function nonAnswer(draft: string, theirs: string): MoveMiss | null {
+const HONEST_GAP = /\b(?:don'?t (?:have|know)|do not (?:have|know)|not sure|isn'?t (?:shown|listed|stored|public|on file|available)|aren'?t (?:shown|listed)|not (?:shown|listed|stored|public|on file)|can'?t (?:see|tell|find)|couldn'?t (?:see|find)|no (?:address|date|time|record) (?:is |on )?(?:stored|file|listed))\b/i;
+const APPROVAL_GAP = /\b(?:shows? (?:up )?(?:only )?(?:after|once)|after (?:the )?(?:host )?(?:approval|approves|approved)|once (?:you'?re|you are|the host) (?:approved|approves|in|registered))\b/i;
+const DELIVERING = /\b(?:sending|sent|texting|dropping|forwarding|here(?:'s| is| you go)) (?:it|that|you|the link|this)\b|\bsending it\b|\bhere you go\b/i;
+const wordIn = (hay: string, needle: string) => new RegExp(`(?:^|[^a-z0-9])${needle.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[^a-z0-9]|$)`, "i").test(hay);
+export function nonAnswer(draft: string, theirs: string, referents: readonly ReferentAnswerFacts[] = []): MoveMiss | null {
   const t = theirs.trim();
-  if (!t || !draft.trim() || !(DIRECT_FACT_Q.test(t) || (ASKS_ABOUT_FIND.test(t) && /\?\s*$/.test(t)))) return null;
   const d = draft.replace(/\s+/g, " ");
-  const hasFact = /https?:\/\//.test(d) || /\d/.test(d) || HONEST_GAP.test(d) || /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b|\b(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b|\b(?:yesterday|today|tonight|last (?:week|night)|this (?:week|morning))\b/i.test(d);
-  if (hasFact || !DEFLECTION.test(d)) return null;
-  return { name: "non_answer", why: `answers none of what they asked ("${t.slice(0, 80)}"): it reassures but gives no fact. Answer from the record, or say plainly what isn't stored and give the link` };
+  if (!t || !d.trim() || !referents.length || !ASKS_ABOUT_FIND.test(t)) return null;
+  const answers = referents.some((r) => (r.url && normUrl(d).includes(normUrl(r.url))) || r.tokens.some((tok) => wordIn(d, tok)) || (r.approvalGap && APPROVAL_GAP.test(d)));
+  if (answers || /https?:\/\//.test(d) || HONEST_GAP.test(d) || DELIVERING.test(d)) return null;
+  const f = referents[0];
+  return { name: "non_answer", why: `answers none of what they asked about "${f.name}" ("${t.slice(0, 80)}"): it carries nothing stored about it. Answer from what's stored about "${f.name}" (its city, place, day, price, host, the day Cue sent it, its link), or say plainly which of those isn't stored` };
 }
-export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined, theirs = ""): MoveMiss[] {
-  const non = nonAnswer(draft, theirs);
+export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined, theirs = "", referents: readonly ReferentAnswerFacts[] = []): MoveMiss[] {
+  const non = nonAnswer(draft, theirs, referents);
   if (!rec?.read || !draft.trim()) return non ? [non] : [];
   const r = rec.read;
   const qs = questionsIn(draft.replace(URL, "")).filter((q) => !askable(q));
