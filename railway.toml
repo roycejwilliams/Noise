@@ -1,7 +1,8 @@
-# Config for the co-test service only. api/ and web/ each have their own
-# railway.toml inside their subdirectory and are unaffected by this file —
-# Railway resolves config relative to each service's own Root Directory
-# setting, and theirs are set to api/ and web/ respectively.
+# Config for the co-test service only. api/ has its own railway.toml inside
+# its subdirectory and is unaffected by this file — Railway resolves config
+# relative to each service's own Root Directory setting. (web/ was removed
+# from co-test on 2026-11-04; production's app.copatible.com service still
+# builds it from main until production is changed.)
 #
 # co-test's Root Directory is intentionally left at the repo root (not
 # co-test/) so its Docker build context can reach api/src — see
