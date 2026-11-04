@@ -616,6 +616,20 @@ export function loopTools(
       },
     }),
 
+    // A file they sent (services/memberFiles.ts), read only for what serves connections (services/documentRead.ts): event details from
+    // a flyer or agenda, who they are and what they're looking for. Read in its own call, so the file never enters this conversation.
+    readDocument: tool({
+      description: toolUse("readDocument"),
+      inputSchema: z.object({ file: z.number().int().optional().describe("The file's number, when they name one; leave it out for their newest.") }),
+      execute: async ({ file }) => {
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was read." };
+        const R = await import("../services/documentRead.js");
+        const r = await R.readMemberFile(ctx.userId, file ?? null, ctx.resolvedContent);
+        if (!r) return { ok: false, error: "There's no readable file of theirs on file. Ask them to send it again, or to tell you the details." };
+        ctx.facts?.add("did_this_turn", r.kind === "unrelated" ? "Read the file they sent: it isn't about an event, a person or what they're looking for." : `Read the file they sent for ${r.kind === "event" ? "event details" : "who they are and what they're looking for"}.`);
+        return R.toolResult(r);
+      },
+    }),
     // Venue research in the background (services/researchBrief.ts): this only starts it, on their ask or yes (the
     // guard's their_yes). The task finds, checks every line's source and texts the finds, each its link then one line (never a document).
     researchBrief: tool({
