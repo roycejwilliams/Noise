@@ -7,6 +7,7 @@
 //
 // Owner-scoped: rows are read and written only with the member's own id.
 import pool from "../db/db.js";
+import { classifyScope } from "../harness/scope.js";
 
 export type Advice = { id: number; topic: string; gist: string; givenAt: string; followedUpAt: string | null };
 
@@ -38,6 +39,8 @@ export function isRepeat(topic: string, recent: Pick<Advice, "topic" | "givenAt"
 export function dueAdvice(all: Advice[], now: Date): Advice | null {
   const due = all
     .filter((a) => !a.followedUpAt)
+    // Only advice about something inside the purpose boundary is asked about (harness/scope.ts): not a laptop, a trip, an errand.
+    .filter((a) => classifyScope(`${a.topic}\n${a.gist}`).scope !== "out")
     .filter((a) => {
       const age = now.getTime() - new Date(a.givenAt).getTime();
       return age >= FOLLOW_UP_AFTER_DAYS * dayMs && age <= STALE_AFTER_DAYS * dayMs;

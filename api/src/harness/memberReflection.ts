@@ -15,6 +15,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
+import { classifyScope } from "./scope.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { enqueueCandidate } from "./proactive.js";
 import { PROACTIVE_PURPOSE } from "./proactivePurpose.js";
@@ -68,6 +69,8 @@ export function gateReflection(proposal: Partial<ReflectionMove>, facts: WeekFac
   const t = facts.threads.find((x) => x.id === proposal.threadId && (x.status === "open" || x.status === "waiting"));
   checks.push({ name: "reflection_thread_theirs", pass: Boolean(t), reason: t ? t.text.slice(0, 80) : `not one of their open threads: ${proposal.threadId}` });
   if (!t) return hold("no valid thread");
+  checks.push({ name: "reflection_thread_in_scope", pass: classifyScope(t.text).scope !== "out", reason: t.text.slice(0, 80) });
+  if (classifyScope(t.text).scope === "out") return hold("thread outside the purpose boundary");
   const companionSends = facts.sends.filter((s) => s.purpose === "companion");
   const lastCompanion = companionSends[companionSends.length - 1];
   const unansweredCompanion = Boolean(lastCompanion) && (!facts.lastReplyAt || facts.lastReplyAt < lastCompanion!.at);
@@ -138,6 +141,8 @@ async function reflectOnMemberInScope(userId: string): Promise<ReflectionMove | 
       return null;
     });
     const facts = await weekFacts(userId, known, known ? MK.memberRules(known).restraint || null : null);
+    // Only a thread inside the purpose boundary is checked in on (harness/scope.ts): not a purchase, a trip or an errand.
+    facts.threads = facts.threads.filter((t) => classifyScope(t.text).scope !== "out");
     // Nothing to be a companion about yet: the recap path covers them.
     if (!facts.threads.length) {
       await recordDecision({ layer: 7, decision: "proactive.reflection", userId, outcome: "skip", action: "hold", reason: "no open threads", proposal: { facts: { ...facts, threads: [] } } });
