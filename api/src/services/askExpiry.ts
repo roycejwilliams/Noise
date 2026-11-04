@@ -75,16 +75,27 @@ export async function expireStaleAsks(): Promise<{ backfilled: number; expired: 
 export async function expireTimeBoundCriteria(now: Date = new Date()): Promise<number> {
   const { pruneExpiredCriteria } = await import("./wantCriteria.js");
   const { recordDecision } = await import("../harness/core.js");
-  const { rows } = await pool.query(`SELECT user_id, intent FROM co_profiles WHERE intent::text LIKE '%"criteria"%' LIMIT 1000`);
+  // Every profile with conditions, a page at a time in user_id order (a cursor), so each row is read once per pass, never the same
+  // first page again (review of bb6c5372).
+  const PAGE = 500;
   let n = 0;
-  for (const r of rows) {
-    const { intent, expired } = pruneExpiredCriteria(r.intent, now);
-    if (!expired.length) continue;
-    // Only if the intent is still the one read (a turn may have written since): the next day's pass takes whatever is left.
-    const { rowCount } = await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1 AND intent = $3::jsonb`, [r.user_id, JSON.stringify(intent), JSON.stringify(r.intent)]);
-    if (!rowCount) continue;
-    n += expired.reduce((a, x) => a + x.n, 0);
-    await recordDecision({ layer: 5, decision: "want_criteria.expired", userId: r.user_id, outcome: "act", action: "expired", reason: "conditions said with a time limit ran past 60 days since last said", proposal: { wants: expired } }).catch(() => {});
+  let after = "00000000-0000-0000-0000-000000000000";
+  for (;;) {
+    const { rows } = await pool.query(
+      `SELECT user_id, intent FROM co_profiles WHERE intent::text LIKE '%"criteria"%' AND user_id > $1::uuid ORDER BY user_id LIMIT ${PAGE}`,
+      [after],
+    );
+    for (const r of rows) {
+      const { intent, expired } = pruneExpiredCriteria(r.intent, now);
+      if (!expired.length) continue;
+      // Only if the intent is still the one read (a turn may have written since): the next day's pass takes whatever is left.
+      const { rowCount } = await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1 AND intent = $3::jsonb`, [r.user_id, JSON.stringify(intent), JSON.stringify(r.intent)]);
+      if (!rowCount) continue;
+      n += expired.reduce((a, x) => a + x.n, 0);
+      await recordDecision({ layer: 5, decision: "want_criteria.expired", userId: r.user_id, outcome: "act", action: "expired", reason: "conditions said with a time limit ran past 60 days since last said", proposal: { wants: expired } }).catch(() => {});
+    }
+    if (rows.length < PAGE) break;
+    after = String(rows[rows.length - 1].user_id);
   }
   return n;
 }
