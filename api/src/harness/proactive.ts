@@ -60,7 +60,7 @@ import { HELD_RECAP_APPROVED, MOOD_FALLBACK_KEY, MOOD_FALLBACK_LINE, MOOD_FALLBA
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
-import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, type Counted, type SendClass, isRelayKey } from "./notifyGate.js";
+import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE_CLASS, RIDING, teamHoldCovers, type Counted, type SendClass, isRelayKey } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
 import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, type ClosedSet, type ClosedSubject } from "./closedSubject.js";
@@ -896,7 +896,11 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   // On a hard day only companionship goes (Royce, 2026-11-02, notification grouping item 8, harness/attention.ts hardDayHolds): a find
   // or an offer Cue starts on its own waits until they're okay, at most the hold's cap (heldForMood). Timing only, never dropped for it.
   // What they asked for (an answer to their ask, a delivery) still goes, as the 09-18 rule had it ("we can't isolate them").
-  // (Not for a pulled one: they asked, and a hard day never means a member who asks gets nothing.)
+  // A pull on a hard day delivers only what they asked for themselves: every item Cue started (a find, an offer, an intro ask, a check-in)
+  // stays held, bounded by the same cap as the hold itself (heldForMood).
+  if (opts.pulled && heldForMood(state) && isUnrequested(candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload))) {
+    checks.push({ name: "hard_day", pass: false, reason: `a hard day: a pull delivers only what they asked for; the rest waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
+  }
   if (!opts.pulled && hardDayHolds({ cls: candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type], payload: c.payload, held: heldForMood(state) })) {
     checks.push({ name: "hard_day", pass: false, reason: `a hard day: only companionship goes; a find or an offer Cue starts waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
@@ -1004,7 +1008,7 @@ export function pacedByEngagement(c: Pick<Candidate, "type" | "payload">): boole
   return !((c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true);
 }
 
-export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean; recapApproved?: boolean; pulled?: boolean } = {}): Evaluation {
+export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean; recapApproved?: boolean; pulled?: boolean; teamHold?: boolean } = {}): Evaluation {
   // Opt-out and local hours apply to the person; caps and the unanswered
   // pause apply per lane, so each candidate is checked against its own lane.
   // Pulled (harness/waiting.ts: they asked "anything for me?"): this is the turn's own answer, so their hours don't hold it.
@@ -1027,8 +1031,10 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering, recapApproved: opts.recapApproved, pulled: opts.pulled })];
     // The member's own rules (harness/notifyGate.ts), before any draft is written. A safety follow-up keeps its precedence.
     if (state.memberRules && !isSafetyFollowUp(candidate)) {
-      // A pulled delivery is something they asked for, so a rule that covers only what Cue starts doesn't hold it; one that covers all does.
-      const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: opts.pulled ? "requested" : candidateClass(candidate.type, answering, candidate.payload), channel: "text", sent: state.memberRules.sent });
+      // A pulled item keeps its own class: a rule that holds check-ins, finds or offers holds a pulled one too.
+      const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: candidateClass(candidate.type, answering, candidate.payload), channel: "text", sent: state.memberRules.sent });
+      // The team's hold (services/teamHold.ts) covers what Cue starts, pulled or not.
+      if (opts.teamHold && teamHoldCovers(candidateClass(candidate.type, answering, candidate.payload))) checks.push({ name: "team_hold", pass: false, reason: "the team holds what Cue starts for this member" });
       checks.push(rule);
     }
     // A member's attention (harness/attention.ts): the defaults with no rule of theirs, the back-off after silence, one thread a day.
@@ -1916,6 +1922,28 @@ async function loadPerson(userId: string): Promise<(Person & { optedOut: boolean
   };
 }
 
+// Which of these candidates could go on a pull right now, and why not for the rest: the pick's own checks (opt-out, the member's rules,
+// safety hold, away, kind restraint, emotional timing, the hard day, the team hold), nothing else. check names only. Never throws:
+// null when it can't be read (then nothing is said to go).
+export async function pulledChecks(userId: string, cands: Candidate[], now: Date): Promise<Map<string, string[]> | null> {
+  try {
+    const person = await loadPerson(userId);
+    if (!person) return new Map(cands.map((c) => [c.id, ["no_phone"]]));
+    const member = await memberSendState(userId, person, now);
+    const teamHold = await import("./notifyGate.js").then((G) => G.teamHoldNow(userId, now));
+    const ev = evaluateCandidates({ ...member.state, midConversation: false, candidates: cands }, { ignorePacing: true, pulled: true, teamHold });
+    const out = new Map(ev.perCandidate.map((p) => [p.candidate.id, p.checks.filter((k) => !k.pass).map((k) => k.name)]));
+    const personal = ev.userOk ? [] : gate(ev.userChecks).failed.map((k) => k.name);
+    // A safety hold on them: nothing is raised, whatever its type.
+    const safety = member.state.safetyHold ? ["safety_hold"] : [];
+    for (const [id, names] of out) out.set(id, [...new Set([...names, ...personal, ...safety])]);
+    return out;
+  } catch (err: any) {
+    console.error("proactive: the pull's checks couldn't be read (non-fatal):", err?.message ?? err);
+    return null;
+  }
+}
+
 // ---------- pick proposal
 
 // Code picks by priority, then soonest expiry, then due time. A model pick
@@ -2183,7 +2211,7 @@ async function sendWithLedger(
     ];
     // The member's own rules, read inside the lock with what's been sent (harness/notifyGate.ts): two sends at once can't both pass a
     // cap, and a rule set after this was queued still decides it. A safety follow-up keeps its precedence (it goes, and counts).
-    const cls = opts.pulled ? ("requested" as SendClass) : candidateClass(c.type, answering, c.payload);
+    const cls = candidateClass(c.type, answering, c.payload);
     if (!isSafetyFollowUp(c)) {
       const { retryAt: _r, ...rule } = await memberRuleGate(client, { userId: person.userId, now, cls, channel: "text" });
       checks.push(rule);
@@ -2911,6 +2939,12 @@ export function dispatchBusy(userId: string): boolean {
 export async function dispatchForUser(...a: Parameters<typeof dispatchForUserInScope>): ReturnType<typeof dispatchForUserInScope> {
   return withMember(a[1], () => oneDispatchAtATime(a[1], () => dispatchForUserInScope(...a)));
 }
+// A pull (harness/waiting.ts): the same one-pick-at-a-time lock, taken atomically; false when another pick holds it (nothing ran).
+export async function pullDispatch(registry: ProactiveRegistry, userId: string, opts: DispatchOpts): Promise<boolean> {
+  let ran = false;
+  await withMember(userId, () => oneDispatchAtATime(userId, async () => { ran = true; await dispatchForUserInScope(registry, userId, opts); }));
+  return ran;
+}
 async function oneDispatchAtATime(userId: string, fn: () => Promise<void>): Promise<void> {
   if (dispatchInFlight.has(userId)) return;
   dispatchInFlight.add(userId);
@@ -2925,9 +2959,11 @@ async function oneDispatchAtATime(userId: string, fn: () => Promise<void>): Prom
 // going on, and counts as requested for their own rules; everything else is the same pick: the bands (matching first), the expiry, the
 // day's find cap, what they closed, the composer's caps (3 bubbles, 2 finds), the draft's checks and the send-time ledger. onWent is told
 // what actually went (the delivered texts), once, after the ledger row and the type's own record were written.
-export type DispatchOpts = { ignorePacing?: boolean; dryRun?: boolean; pulled?: boolean; onWent?: (w: { candidates: string[]; delivered: string[] }) => void };
+export type DispatchOpts = { ignorePacing?: boolean; dryRun?: boolean; pulled?: boolean; teamHold?: boolean; onWent?: (w: { candidates: string[]; delivered: string[] }) => void };
 async function dispatchForUserInScope(registry: ProactiveRegistry, userId: string, opts: DispatchOpts = {}): Promise<void> {
   if (opts.pulled && !opts.ignorePacing) opts = { ...opts, ignorePacing: true };
+  // A pull respects the team hold like any send (a read that fails holds): checked here so the pick never picks what the lock would refuse.
+  if (opts.pulled) opts = { ...opts, teamHold: await import("./notifyGate.js").then((G) => G.teamHoldNow(userId, new Date())) };
   // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
   if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUserInScope(registry, userId, opts));
   const person = await loadPerson(userId);

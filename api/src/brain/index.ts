@@ -145,7 +145,8 @@ export function judgeText(p: TextPicture): Decision {
   else if (p.read?.aboutCo) instructions.push(ABOUT_CO_INSTRUCTION);
   if (p.repeat) instructions.push(p.repeat);
   if (p.walkinAsk) instructions.push(p.walkinAsk);
-  if (p.waiting) instructions.push(p.waiting);
+  // (Not when the turn already asks for a list: the pull or the capability list answers that.)
+  if (p.waiting && !p.read?.asksForList) instructions.push(p.waiting);
   if (p.clarify) instructions.push(p.clarify);
   const kind: DecisionKind = p.safetyConcern ? "act" : p.owed || p.read?.asksForList ? "deliver" : p.clarify || p.walkinAsk ? "ask" : "act";
   const why = p.safetyConcern

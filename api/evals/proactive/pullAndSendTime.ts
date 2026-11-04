@@ -83,6 +83,8 @@ const run = async (raw: string, a: any[] = []) => {
     db.decisions.push({ layer: a[0], decision: a[1], user_id: a[2], outcome: a[3], action: a[4], proposal: a[5] ? JSON.parse(a[5]) : null, reason: a[8] });
     return { rows: [{ id: String(db.decisions.length), created_at: new Date() }] };
   }
+  if (/^SELECT type, payload FROM proactive_candidates WHERE id = \$2 AND user_id = \$1 AND status = 'pending'/.test(sql)) return { rows: db.candidates.filter((c) => String(c.id) === String(a[1]) && c.user_id === a[0] && c.status === "pending").map((c) => ({ type: c.type, payload: c.payload })) };
+  if (/^INSERT INTO network_introductions/.test(sql)) { (db as any).declined = [...((db as any).declined ?? []), { a: a[0], b: a[1] }]; return { rows: [] }; }
   if (/^INSERT INTO co_memories/.test(sql)) { db.memories.push({ user: a[0], type: a[1], content: String(a[2]) }); return { rows: [{ id: db.memories.length }] }; }
   if (/^SELECT MAX\(created_at\) AS at FROM co_memories/.test(sql)) return { rows: [{ at: null }] };
   if (/^SELECT created_at FROM users WHERE id = \$1/.test(sql)) return { rows: [{ created_at: new Date("2026-01-01T00:00:00Z") }] };
@@ -191,7 +193,7 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   const asUns = G.memberRuleCheck([mk("unsolicited")], { now: NOW, cls: "requested", channel: "text", sent: [] });
   check("rules: a pulled delivery is requested: a rule covering only what Cue starts doesn't hold it", asUns.pass === true);
   check("rules: a rule covering everything still holds it (their rule wins)", asReq.pass === false);
-  check("rules: the evaluation reads a pulled candidate as requested, and the send-time ledger the same", /cls: opts\.pulled \? "requested" : candidateClass\(candidate\.type, answering, candidate\.payload\)/.test(src("harness/proactive.ts")) && /const cls = opts\.pulled \? \("requested" as SendClass\) : candidateClass\(c\.type, answering, c\.payload\);/.test(src("harness/proactive.ts")));
+  check("rules: a pulled item keeps its own class (no override to requested anywhere in the pick or the lock)", !/pulled \? "requested"|pulled \? \("requested"/.test(src("harness/proactive.ts")));
 }
 
 // ---------------------------------------------------------------- the pulled pick keeps every other gate
@@ -201,7 +203,7 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   check("gates: a pull that finds nothing doesn't hold the member's regular pick", /if \(!opts\.dryRun && !opts\.pulled\) await pool\.query\(\s*`INSERT INTO proactive_user_state \(user_id, hold_until\)/.test(PS));
   check("gates: a hard day never means a member who asks gets nothing (the hard-day check skips a pulled one)", /if \(!opts\.pulled && hardDayHolds\(/.test(PS));
   check("gates: the safety hold still holds finds for a pulled pick (candidateChecks is unchanged for it)", /state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer"/.test(PS));
-  check("gates: the dispatch runs one pick per member at a time; a pull behind one in flight says so", /if \(P\.dispatchBusy\(userId\)\) return \{ status: "busy" \};/.test(src("harness/waiting.ts")));
+  check("gates: the lock is taken atomically by the pull (no gap between checking and running), after a bounded wait", /export async function pullDispatch/.test(PS) && /ran = true; await dispatchForUserInScope/.test(PS) && /while \(P\.dispatchBusy\(userId\) && Date\.now\(\) < busyUntil\)/.test(src("harness/waiting.ts")));
   const W_SRC = src("harness/waiting.ts");
   check("privacy: the list is read for one member only", /WHERE user_id = \$1 AND status = 'pending'/.test(W_SRC) && !/FROM users|network_introductions|co_pairs/.test(W_SRC));
   check("privacy: labels pass the member-safe strip, failing closed", /const safe = await memberSafeLine\(userId\);/.test(W_SRC) && /label: \(c\) => safe\(waitingLabel\(c\)\)/.test(W_SRC));
@@ -247,8 +249,8 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
 // ================================================================ calls: the same list, spoken, never sent mid-call
 {
   const items = [
-    { id: "1", type: "network_tease", band: DR.BAND.intro, label: "someone I think you should meet", intro: true, expiresAt: null },
-    { id: "2", type: "event_offer", band: DR.BAND.find, label: "a find for you: Founders Dinner", intro: false, expiresAt: null },
+    { id: "1", type: "network_tease", band: DR.BAND.intro, label: "someone I think you should meet", intro: true, expiresAt: null, held: [] },
+    { id: "2", type: "event_offer", band: DR.BAND.find, label: "a find for you: Founders Dinner", intro: false, expiresAt: null, held: [] },
   ];
   const lines = W.callWaitingLines(items);
   const finds: any = { available: true, lookingFor: "founder rooms", items: [{ name: "Founders Dinner", details: [], link: null }], note: "n" };
@@ -260,6 +262,74 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   check("call: waiting items are offered even when the call has no finds of its own", noFinds.briefing.findsNow.includes("a find for you: Founders Dinner"));
   check("call: no list means the briefing is exactly as before", BR.judgeBriefing({ userId: RIVER, now: new Date(), clock: null, finds }).briefing.findsNow === BR.renderFinds(finds));
   check("call: it is spoken only; the briefing reads the list but nothing on a call marks it delivered or sends it", !/pullWaiting|dispatchForUser/.test(src("services/callBriefing.ts")));
+}
+
+// ================================================================ review fixes (#385)
+{
+  const NOW = new Date();
+  const mkPref = (area: string, covers: string, rule: Record<string, unknown> = { none: true }): Preference => ({ id: `p-${area}`, area, channel: "all", covers, rule, basis: "explicit", type: "standing", words: ["no"], source: { via: "text", ref: null }, startsAt: null, expiresAt: null, zone: ZONE, state: "active", setAt: new Date(NOW.getTime() - DAY).toISOString() } as any);
+  const base = (over: Record<string, unknown> = {}) => ({ now: NOW, timezone: ZONE, optedOut: false, sends: [], lastInboundAt: new Date(NOW.getTime() - 5 * HOUR), joinedAt: new Date(NOW.getTime() - 30 * DAY), memberRules: { prefs: [] as Preference[], sent: [] as any[] }, ...over });
+  const c = (type: string, payload: Record<string, unknown> = {}, id = String(++seq)): Candidate => ({ id, userId: RIVER, type: type as any, targetKey: `${type}:${id}`, topicKey: `${type}:${id}`, summary: "s", priority: 50, dueAt: new Date(NOW.getTime() - HOUR), expiresAt: new Date(NOW.getTime() + 3 * DAY), payload, attempts: 0, createdAt: new Date(NOW.getTime() - 2 * HOUR) });
+  const checkin = c("companion"), profileFind = c("event_offer", { askId: "profile", fromProfile: true, picked: true, match: { tier: 2 } }), asked = c("task_update", { door: true, cls: "requested", messages: ["x"] }), askedFind = c("event_offer", { askId: "a1", fromProfile: false, match: { tier: 2 } });
+  const held = (ev: ReturnType<typeof PR.evaluateCandidates>, cand: Candidate) => ev.perCandidate.find((p) => p.candidate.id === cand.id)!.checks.filter((k) => !k.pass).map((k) => k.name);
+  const ev = (state: any, opts: any = {}) => PR.evaluateCandidates({ candidates: [checkin, profileFind, asked, askedFind], ...state } as any, { ignorePacing: true, pulled: true, ...opts });
+  // 1. their rules by the item's own class
+  const stopCheckins = ev(base({ memberRules: { prefs: [mkPref("checkins", "checkins")], sent: [] } }));
+  check("1: a rule that stops check-ins holds a pulled check-in, and nothing else", held(stopCheckins, checkin).includes("member_rule") && !held(stopCheckins, profileFind).includes("member_rule") && !held(stopCheckins, asked).includes("member_rule"), held(stopCheckins, checkin));
+  const stopFinds = ev(base({ memberRules: { prefs: [mkPref("contact", "unsolicited")], sent: [] } }));
+  check("1: a rule about what Cue starts holds a pulled find and check-in; what they asked for still goes", held(stopFinds, profileFind).includes("member_rule") && held(stopFinds, checkin).includes("member_rule") && !held(stopFinds, asked).includes("member_rule") && !held(stopFinds, askedFind).includes("member_rule"));
+  const timing = held(ev(base({ midConversation: true, now: new Date("2026-11-04T10:00:00Z") })), profileFind);
+  check("1: only Cue's timing defaults are skipped (hours, daily limits, spacing, the conversation)", !timing.some((n) => ["local_hours", "daily_cap", "weekly_cap", "spacing", "engagement_pace", "unanswered_pause"].includes(n)), timing);
+  // 2. hard day and team hold
+  const hard = { needsCare: true, moodHold: { state: "held", hold: true, heldHours: 2 } };
+  const hd = ev(base(hard));
+  check("2: on a hard day a pull delivers only what they asked for (finds, intro asks and check-ins held)", held(hd, profileFind).includes("hard_day") && held(hd, checkin).includes("hard_day") && !held(hd, asked).includes("hard_day") && !held(hd, askedFind).includes("hard_day"), held(hd, profileFind));
+  const th = ev(base(), { teamHold: true });
+  check("2: under the team hold a pull delivers only what they asked for", held(th, profileFind).includes("team_hold") && held(th, checkin).includes("team_hold") && !held(th, asked).includes("team_hold") && !held(th, askedFind).includes("team_hold"));
+  check("2: the dispatch reads the team hold for a pull, failing closed", /G\.teamHoldNow\(userId, new Date\(\)\)/.test(src("harness/proactive.ts")) && /\.catch\(\(\) => true\);\n\}/.test(src("harness/notifyGate.ts")));
+  // 3. the list is built through the pick's own checks
+  const items = (held: string[], intro = false): any => ({ id: String(++seq), type: "event_offer", band: DR.BAND.find, label: "a find for you: X", intro, expiresAt: null, held });
+  check("3: a held item is never mentioned or spoken on a call", W.waitingMention([items(["emotional_timing"])]) === null && W.callWaitingLines([items(["kind_restraint"])]).length === 0 && W.waitingMention([items([]), items(["away_hold"])])!.includes("one thing"));
+  check("3: a safety hold shows nothing at all in what Cue knows, other holds show as held", W.visibleHeld([items(["safety_hold"]), items(["away_hold"]), items([])]).length === 2);
+  check("3: a safety hold on them holds every item (the text path gets the call path's guard)", /safety = member\.state\.safetyHold \? \["safety_hold"\] : \[\]/.test(src("harness/proactive.ts")) && W.couldGo([items(["safety_hold"])]).length === 0);
+  reset();
+  const pc = row("event_offer", { payload: { askId: "profile", fromProfile: true, picked: true, match: { name: "X" } } });
+  const checks = await PR.pulledChecks(RIVER, [PR.rowToCandidate(pc)], new Date());
+  check("3: the checks are read through the pick (a clean item has none)", !!checks && (checks.get(String(pc.id)) ?? ["x"]).length === 0, checks && [...checks]);
+  const k = WK.knownItems({ profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], waiting: [{ id: "5", label: "something I found for you", held: true }, { id: "6", label: "something I found for you", held: false }] } as any);
+  const kv = WK.groupKnown(k);
+  check("3: what Cue knows marks a held item as held", kv.groups[0].lines[0].text === "something I found for you (held for now)" && kv.groups[0].lines[1].text === "something I found for you");
+  // 5. per-item refs
+  check("5: two items with the same label stay two lines, each with its own ref", kv.groups[0].lines.length === 2 && kv.groups[0].lines[0].refs.join() === "waiting:5" && kv.groups[0].lines[1].refs.join() === "waiting:6");
+  // 4. busy, slow, time bound
+  check("4: the whole pull is bounded (15s) and a busy pick is waited for only briefly", W.PULL_TIMEOUT_MS <= 15_000 && W.PULL_BUSY_WAIT_MS <= 6_000);
+  const TC = src("agent/conversationTools.ts");
+  check("4: no \"will arrive\" promise on slow or busy", !/will arrive as its own text in a moment/.test(TC) && /don't promise it will arrive/.test(TC));
+  const order: string[] = [];
+  const reg = {} as any;
+  const both = await Promise.all([PR.pullDispatch(reg, "no-such-user", { pulled: true }), PR.pullDispatch(reg, "no-such-user", { pulled: true })]);
+  check("4: with a pick already running the second pull is told it did not run (no gap between the check and the lock)", both.filter(Boolean).length >= 1 && order.length === 0);
+  // 6. usual_hour
+  const att6 = (() => { const out: Date[] = []; for (let d = 5; d <= 30; d++) out.push(DateTime.fromObject({ year: 2026, month: 10, day: d, hour: 18, minute: 5 }, { zone: ZONE }).toJSDate(), DateTime.fromObject({ year: 2026, month: 10, day: d, hour: 19, minute: 40 }, { zone: ZONE }).toJSDate()); return out; })();
+  const NOW6 = pt("2026-11-04T09:30:00");
+  const f6 = (payload: any, expiresAt: Date | null): any => ({ type: "event_offer", targetKey: "e", payload, expiresAt });
+  const b6 = { now: NOW6, zone: ZONE, cls: "unsolicited" as const, channel: "text" as const, att: { inbound: [], history: att6 }, prefs: [] as Preference[] };
+  check("6: a find for an event today is never moved", A.sendTimeCheck({ ...b6, item: f6({ match: { details: { startAt: pt("2026-11-04T20:00:00").toISOString() } } }, pt("2026-11-10T00:00:00")) }) === null);
+  check("6: a find with less than 6 hours between the usual hour and the event goes now", A.sendTimeCheck({ ...b6, item: f6({ match: { details: { startAt: pt("2026-11-04T22:00:00").toISOString() } } }, null) }) === null);
+  check("6: a find with a day to spare is still placed", !!A.sendTimeCheck({ ...b6, item: f6({ match: { details: { startAt: pt("2026-11-07T20:00:00").toISOString() } } }, pt("2026-11-08T00:00:00")) }));
+  check("6: a zone that isn't one falls back like the hours gate does (no throw)", (() => { try { A.sendTimeCheck({ ...b6, zone: "Not/AZone", item: f6({}, null) }); return true; } catch { return false; } })());
+  const ruleZ = mkPref("contact", "unsolicited", { latest: "19:00" });
+  check("6: a rule's hours are read in the zone the gate reads them in", A.hourAllowedByRules([ruleZ], "unsolicited", "text", 18, NOW6, ZONE) === true && A.hourAllowedByRules([ruleZ], "unsolicited", "text", 19, NOW6, ZONE) === false);
+  // 7. small fixes
+  const KS = src("services/whatCoKnows.ts");
+  check("7: a failed waiting read leaves the group out of what Cue knows, not the view", /\}\)\.catch\(\(\) => \[\] as \{ id: string; label: string; held: boolean \}\[\]\),/.test(KS));
+  check("7: the mention is skipped in code when the turn asks for the list", !BR.judgeText({ userId: RIVER, read: { aboutCo: false, asksForList: true, feedback: [] } as any, owed: false, safetyConcern: false, clarify: null, waiting: "MENTION-LINE", turn: null }).instructions.includes("MENTION-LINE"));
+  check("7: the waiting read is part of the turn's one Promise.all", /ledger, waiting\] = await Promise\.all\(\[/.test(src("services/turnContext.ts")));
+  check("7: the call does not promise to text details", !/offer to text/.test(src("harness/waiting.ts")));
+  reset();
+  const tease = row("network_tease", { payload: { askId: "a1", candidate: { candidate_id: "99999999-0000-4000-8000-000000000009", match_reason: "r" } } });
+  const ap = await WK.applyOne({ query: (q: string, a?: any[]) => run(q, a) } as any, RIVER, { profile: null } as any, { ref: `waiting:${tease.id}`, source: "waiting", group: "waiting", text: "someone I think you should meet", theirWords: null, canCorrect: false } as any, "remove", null, "no");
+  check("7: removing a possible intro is them declining it: the pair is recorded as declined, once, in canonical order", "ref" in ap && ((db as any).declined ?? []).length === 1 && (db as any).declined[0].a < (db as any).declined[0].b, (db as any).declined);
 }
 
 // ================================================================ 10. send time

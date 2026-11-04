@@ -202,7 +202,7 @@ export type RawKnown = {
   alreadyKnows?: { id: string; on: string; quote: string | null }[];
   // What the pick is holding for them (harness/waiting.ts, notification grouping item 9), best first, unexpired, as labels that name
   // nothing but the item itself. Removing one means it is never sent.
-  waiting?: { id: string; label: string }[];
+  waiting?: { id: string; label: string; held: boolean }[];
 };
 
 const CONTEXT_WORDS = { professional: "work", personal: "personal" } as const;
@@ -318,7 +318,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
-  for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.label, null, false);
+  for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.held ? `${w.label} (held for now)` : w.label, null, false);
   for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
   for (const x of r.pairOutcomes ?? []) {
     const line = pairOutcomeLine(x.evidence);
@@ -350,7 +350,7 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
     const lines: KnownLine[] = [];
     for (const i of items.filter((x) => x.group === g)) {
       const plain = i.text.replace(/^(my read|looking out for|not for you): /, "");
-      const same = g !== "files" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
+      const same = g !== "files" && g !== "waiting" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
       if (same) {
         same.refs.push(i.ref);
         same.theirWords ??= i.theirWords;
@@ -691,11 +691,11 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     files,
     ...designKnown(signals),
     // The same list a pull and a reply read; a read that fails fails the view (never "nothing is waiting" on a guess).
+    // Held ones are shown as held; one under a safety hold is not shown at all. A read that fails leaves this group out, not the view.
     waiting: await import("../harness/waiting.js").then(async (W) => {
       const items = await W.waitingOrNull(userId);
-      if (items === null) throw new Error("what's waiting couldn't be read");
-      return items.map((i) => ({ id: i.id, label: i.label }));
-    }),
+      return W.visibleHeld(items ?? []).map((i) => ({ id: i.id, label: i.label, held: i.held.length > 0 }));
+    }).catch(() => [] as { id: string; label: string; held: boolean }[]),
     alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
@@ -1017,7 +1017,14 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     case "waiting": {
       // Something Cue is holding for them: dropped at its source, so it is never sent (the pick and a pull both read the same row).
       if (!/^\d+$/.test(a)) return { why: "not something Cue can change" };
+      // A possible intro they remove is them declining it: the same pair record the tease's "no" writes, so the other side's state is honest.
+      const held = await db.query(`SELECT type, payload FROM proactive_candidates WHERE id = $2 AND user_id = $1 AND status = 'pending'`, [userId, Number(a)]);
+      const cand = held.rows?.[0]?.payload?.candidate;
       await must(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = 'removed by the member', decided_at = NOW(), updated_at = NOW() WHERE id = $2 AND user_id = $1 AND status = 'pending'`, [userId, Number(a)]);
+      if (held.rows?.[0]?.type === "network_tease" && cand?.candidate_id) {
+        const [pa, pb] = [userId, String(cand.candidate_id)].sort();
+        await db.query(`INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id) VALUES ($1, $2, 'declined', $3, $4) ON CONFLICT (person_a_id, person_b_id) DO NOTHING`, [pa, pb, cand.match_reason ?? "", (held.rows[0].payload?.askId ?? null)]);
+      }
       return { ref: item.ref, source: "waiting", was, now: null };
     }
     case "knows": {
