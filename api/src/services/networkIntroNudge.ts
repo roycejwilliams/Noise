@@ -491,6 +491,8 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent a network intro ${channels.text.length ? (channels.email.length ? "by email and text" : "by text") : "email"} connecting ${a.first_name} and ${b.first_name}: ${matchReason}`);
   // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
   await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "network_intro")).catch(() => {});
+  // Its outcome record (services/roomMatching.ts NETWORK_PAIR_EVENT): the same per-pair record event intros have, each side's own.
+  await import("./roomMatching.js").then((RM) => RM.noteNetworkPairIntroduced(a.user_id, b.user_id, matchReason)).catch(() => false);
   return "sent";
 }
 

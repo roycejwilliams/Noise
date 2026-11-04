@@ -438,6 +438,28 @@ export async function notePairIntroSent(eventId: string, x: string, y: string): 
     .catch((err: any) => console.error("co_pairs: intro sent failed (non-fatal):", err?.message ?? err));
 }
 
+// A network intro's pair (Royce, 2026-11-03: one outcome record for every intro Cue makes). Network intros are once per pair ever
+// (network_introductions' key), so they share one co_pairs "event": NETWORK_PAIR_EVENT. Written only once the intro went to both
+// (sendNetworkIntroEmail, after both said yes: the double opt-in holds), as intro_sent, origin 'co'. Each side's value line is the
+// reason the intro itself gave both of them (network_introductions.match_reason, in the email or text each received), so their own
+// outcome signal has its line (ownOutcomeSignals) and nothing either side didn't already see is stored for them. From here the record
+// is the event one: each side's own answer only (noteRoomMeeting, noteMetAgain, the call's read), never shown to the other.
+// It is not a room: the host read (by event id), the room count (northStar ROOM_SQL) and the event report leave it out.
+export const NETWORK_PAIR_EVENT = "network";
+export const NETWORK_PAIR_SQL = `INSERT INTO co_pairs (event_id, a_id, b_id, origin, state, a_answer, a_answered_at, b_answer, b_answered_at, both_yes_at, intro_sent_at, value_line_a, value_line_b)
+     VALUES ($1, $2, $3, 'co', 'intro_sent', 'yes', $4, 'yes', $4, $4, $4, $5, $5)
+     ON CONFLICT (event_id, a_id, b_id) DO UPDATE SET intro_sent_at = COALESCE(co_pairs.intro_sent_at, EXCLUDED.intro_sent_at),
+       state = CASE WHEN co_pairs.state = 'met' THEN 'met' ELSE 'intro_sent' END, updated_at = NOW()`;
+export async function noteNetworkPairIntroduced(x: string, y: string, reason: string | null, at = new Date()): Promise<boolean> {
+  if (!x || !y || x === y) return false;
+  const { a, b } = orderPair(x, y);
+  const line = String(reason ?? "").trim().slice(0, 500) || null;
+  return pool
+    .query(NETWORK_PAIR_SQL, [NETWORK_PAIR_EVENT, a, b, at, line])
+    .then(() => true)
+    .catch((err: any) => (console.error("co_pairs: network intro record failed (non-fatal):", err?.message ?? err), false));
+}
+
 export type MeetingOutcome = "met_good" | "met_fine" | "met_not_a_fit" | "did_not_meet";
 
 // ============================================================ the outcome record (Royce, 2026-11-02: "both accepted" isn't enough)

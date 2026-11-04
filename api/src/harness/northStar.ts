@@ -58,7 +58,7 @@ export const ROOM_SQL = `
     SELECT DISTINCT ON (p.a_id, p.b_id) p.*
     FROM co_pairs p
     JOIN users ua ON ua.id = p.a_id JOIN users ub ON ub.id = p.b_id
-    WHERE p.intro_sent_at IS NOT NULL AND ${MEMBER("ua")} AND ${MEMBER("ub")}
+    WHERE p.intro_sent_at IS NOT NULL AND p.event_id <> 'network' AND ${MEMBER("ua")} AND ${MEMBER("ub")}
     ORDER BY p.a_id, p.b_id, p.intro_sent_at)
   SELECT count(*) FILTER (WHERE f.origin = 'co') AS room,
          count(*) FILTER (WHERE f.origin = 'co' AND f.met_at IS NOT NULL) AS room_met,
@@ -76,7 +76,7 @@ export const NETWORK_SQL = `
   WHERE n.introduced_at IS NOT NULL AND (n.email_sent_at IS NOT NULL OR n.email_claimed_at IS NULL) AND n.introduced_at > NOW() - ($1 || ' days')::interval AND ${MEMBER("ua")} AND ${MEMBER("ub")}
     AND NOT EXISTS (SELECT 1 FROM member_connections mc WHERE mc.person_a = n.person_a_id AND mc.person_b = n.person_b_id
                     AND mc.created_at < n.introduced_at - INTERVAL '1 minute')
-    AND NOT EXISTS (SELECT 1 FROM co_pairs p WHERE p.a_id = n.person_a_id AND p.b_id = n.person_b_id AND p.intro_sent_at < n.introduced_at)`;
+    AND NOT EXISTS (SELECT 1 FROM co_pairs p WHERE p.a_id = n.person_a_id AND p.b_id = n.person_b_id AND p.event_id <> 'network' AND p.intro_sent_at < n.introduced_at)`;
 
 export const ENGAGEMENT_SQL = `
   WITH members AS (SELECT u.id, u.created_at <= NOW() - INTERVAL '30 days' AS eligible FROM users u WHERE ${MEMBER("u")}),

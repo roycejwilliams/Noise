@@ -31,7 +31,7 @@ export const MATCH_OUTCOMES_SQL = `
   FROM co_pairs p
   LEFT JOIN event_room_closures c ON c.event_id = p.event_id
   LEFT JOIN co_test_events t ON t.api_id = p.event_id
-  WHERE ($1::text IS NULL OR p.event_id = $1)
+  WHERE ($1::text IS NULL OR p.event_id = $1) AND p.event_id <> 'network'
   GROUP BY p.event_id, COALESCE(c.event_name, t.name)
   ORDER BY MIN(p.created_at) DESC`;
 

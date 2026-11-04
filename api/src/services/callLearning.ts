@@ -51,7 +51,11 @@ export function callLearningPrompt(o: {
   preferences?: { onFile: Parameters<typeof preferencePromptItem>[0]["onFile"]; localToday: string };
   // First names of people Cue introduced them to or pointed them to at a Noise event (the outcome record). None: no section 8.
   introduced?: string[];
+  // Their Noise event today, or the no-show question still open (services/preArrival.ts goingSubject). None: no going section.
+  going?: import("./preArrival.js").GoingSubject | null;
 }): string {
+  const intros = (o.introduced ?? []).length > 0;
+  const goingN = intros ? 9 : 8;
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
         .filter(([, v]) => (Array.isArray(v) ? v.length : v))
@@ -93,7 +97,7 @@ ${openItemsBlock(o.openAsks)}
 
 ${preferencePromptItem({ n: 7, via: "call", onFile: o.preferences?.onFile ?? [], localToday: o.preferences?.localToday ?? o.today })}
 
-${introSection(o.introduced ?? [])}${alreadyKnowSection((o.introduced ?? []).length ? 9 : 8)}Return ONLY valid JSON, no preamble:
+${introSection(o.introduced ?? [])}${goingSection(goingN, o.going ?? null)}${alreadyKnowSection(goingN + (o.going ? 1 : 0))}Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}], ${RELATED_DROP_JSON}},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
@@ -101,7 +105,8 @@ ${introSection(o.introduced ?? [])}${alreadyKnowSection((o.introduced ?? []).len
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "lessons": [{"lesson": "...", "quote": "..."}],
  ${PREFERENCE_JSON_SHAPE}${(o.introduced ?? []).length ? `,
- "introductions": [{"name": "...", "met": null, "useful": null, "kept_talking": null, "quote": "..."}]` : ""},
+ "introductions": [{"name": "...", "met": null, "useful": null, "kept_talking": null, "quote": "..."}]` : ""}${o.going ? `,
+ "noise_event": {"going": null, "quote": null}` : ""},
  ${ALREADY_KNOW_JSON}}`;
 }
 
@@ -110,6 +115,35 @@ ${introSection(o.introduced ?? [])}${alreadyKnowSection((o.introduced ?? []).len
 export const alreadyKnowSection = (n: number) => `${n}. already_know: ${ALREADY_KNOW_RULE}
 
 `;
+
+// Only for someone on the list for a Noise event today, or whose "did you make it?" is still open (Royce, 2026-11-03: "can't make it
+// tonight" said on a call is recorded like a text). The prompt is unchanged for everyone else.
+export function goingSection(n: number, g: import("./preArrival.js").GoingSubject | null): string {
+  if (!g) return "";
+  const what = g.kind === "today" ? `Cue's Noise event today${g.name ? `, "${g.name}"` : ""}` : `Cue's Noise event${g.name ? ` "${g.name}"` : ""}, which Cue asked whether they made it to`;
+  const yes = g.kind === "today" ? `"yes" only if they said they're going after all, ` : "";
+  return `${n}. noise_event: they're on the list for ${what}. going: "no" only if the person said outright they can't make it or didn't make it, ${yes}else null. quote: their exact words that say it, copied from their line.
+
+`;
+}
+// Pure: what to record from that section. Only their own words (the quote is in their lines), only "no" for a no-show question.
+export function callGoingFrom(raw: unknown, transcript: string, g: import("./preArrival.js").GoingSubject | null): boolean | null {
+  if (!g) return null;
+  const x = (raw as any)?.noise_event;
+  const going = x?.going === "no" ? false : x?.going === "yes" && g.kind === "today" ? true : null;
+  if (going === null || typeof x?.quote !== "string") return null;
+  const q = squash(x.quote);
+  if (q.split(" ").length < 2 || !squash(theirLines(transcript)).includes(q)) return null;
+  return going;
+}
+
+// The read's answer, recorded through the text tool's own path (services/preArrival.ts recordGoing). Never throws.
+export async function saveCallGoing(userId: string, raw: unknown, transcript: string, g: import("./preArrival.js").GoingSubject | null): Promise<{ going: boolean | null; recorded: import("./preArrival.js").GoingSubject | null }> {
+  const going = callGoingFrom(raw, transcript, g);
+  if (going === null) return { going, recorded: null };
+  const recorded = await import("./preArrival.js").then((P) => P.recordGoing(userId, going, g)).catch((err: any) => (console.error("callLearning: going write failed (non-fatal):", err?.message ?? err), null));
+  return { going, recorded };
+}
 
 // Section 8, only for someone Cue has introduced (the prompt is unchanged for everyone else).
 export function introSection(names: string[]): string {
@@ -290,6 +324,7 @@ export async function learnFromCall(input: {
     memberZone(input.userId).catch(() => null),
   ]);
   const introduced = await introducedNames(input.userId).catch(() => ({ names: [] as string[], pairs: [], intros: [] }));
+  const goingSubj = await import("./preArrival.js").then((P) => P.goingSubject(input.userId, null)).catch(() => null);
   const row = profileRows[0] ?? null;
   const onFile: OnFile | null = row
     ? {
@@ -319,6 +354,7 @@ export async function learnFromCall(input: {
       openAsks,
       preferences: { onFile: prefs, localToday: localDay(new Date(), zone) },
       introduced: introduced.names,
+      going: goingSubj,
     }),
   });
   const parsed = parseTurnLearning(text);
@@ -369,6 +405,8 @@ export async function learnFromCall(input: {
   const introOutcomes = callIntroOutcomes(raw, input.transcript, introduced.names);
   const quotes = new Map<string, string>(((raw as any)?.introductions ?? []).filter((x: any) => typeof x?.name === "string" && typeof x?.quote === "string").map((x: any) => [String(x.name).trim().split(/\s+/)[0].toLowerCase(), String(x.quote).slice(0, 160)]));
   await saveCallIntroOutcomes(input.userId, introOutcomes, introduced, (name) => quotes.get(name.toLowerCase()) ?? null).catch((err: any) => console.error("callLearning: intro outcome write failed (non-fatal):", err?.message ?? err));
+  // "Can't make it tonight" (or "going after all") said on the call: the same presence record the text tool writes (updateGoing).
+  const { going, recorded: goingRecorded } = await saveCallGoing(input.userId, raw, input.transcript, goingSubj);
   // People they said they already know (services/knownConnections.ts): the same record the text tool writes, source "call".
   await saveAlreadyKnow(input.userId, alreadyKnowFrom(raw, theirLines(input.transcript)), "call");
   await recordDecision({
@@ -377,7 +415,7 @@ export async function learnFromCall(input: {
     userId: input.userId,
     outcome: "act",
     action: "learned",
-    proposal: { ms: Date.now() - started, plannedEvent: learned.planned_event?.event_name ?? null, lessons, cadence: learned.cadence, introOutcomes: introOutcomes.length },
+    proposal: { ms: Date.now() - started, plannedEvent: learned.planned_event?.event_name ?? null, lessons, cadence: learned.cadence, introOutcomes: introOutcomes.length, ...(goingRecorded ? { going, goingEvent: goingRecorded.eventApiId } : {}) },
   }).catch(() => {});
   return { ...learned, lessons };
 }

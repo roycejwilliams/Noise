@@ -1283,19 +1283,17 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("Going wasn't updated: the quote isn't in their words.");
           return { ok: false, error: "Quote their own words." };
         }
-        const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
-        // A "no, I didn't make it" after the night is over answers the no-show ask (services/eventNoShow.ts), so the note still follows.
-        if (!today && !going) {
-          const asked = await import("../services/eventNoShow.js").then((N) => N.openNoShowAsk(ctx.userId)).catch(() => null);
-          if (asked) {
-            if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(asked.eventApiId, ctx.userId, false));
-            ctx.facts?.add("did_this_turn", "Noted they didn't make it to the Noise event Cue asked about.");
-            return { ok: true };
-          }
+        // The same subject and record as the call's after-call read (services/preArrival.ts goingSubject / recordGoing): their event
+        // today, or, for a "no, I didn't make it" after the night, the no-show ask still open (services/eventNoShow.ts), so the note follows.
+        const P = await import("../services/preArrival.js");
+        const subject = await P.goingSubject(ctx.userId, going);
+        if (!subject || (going && subject.kind !== "today")) return { ok: false, error: "No Noise event of theirs today." };
+        if (!ctx.dryRun) await P.recordGoing(ctx.userId, going, subject);
+        if (subject.kind === "noshow") {
+          ctx.facts?.add("did_this_turn", "Noted they didn't make it to the Noise event Cue asked about.");
+          return { ok: true };
         }
-        if (!today) return { ok: false, error: "No Noise event of theirs today." };
-        if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(today.eventApiId, ctx.userId, going));
-        ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Cue won't send them anything more about it.`);
+        ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${subject.name}".` : `Noted they can't make "${subject.name}"; Cue won't send them anything more about it.`);
         return { ok: true };
       },
     }),
@@ -1771,8 +1769,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const people = [...new Set(told.map((p) => p.otherId))];
         if (people.length > 1) return { ok: false, error: `More than one person Cue pointed them to is called ${person}. Ask which one, then try again.` };
         if (!told.length) {
-          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue pointed them to at a Noise event.`);
-          return { ok: false, error: "That isn't someone Cue pointed them to at a Noise event (only Cue's own suggestions count)." };
+          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue pointed them to at a Noise event or introduced them to.`);
+          return { ok: false, error: "That isn't someone Cue pointed them to at a Noise event or introduced them to (only Cue's own suggestions and intros count)." };
         }
         await RM.notePairMet(ctx.userId, told[0].pairId, outcome, note ?? null, ctx.onCall ? "call" : "text");
         ctx.facts?.add("did_this_turn", `Noted how meeting ${told[0].firstName} went for them, so Cue's next introductions learn from it.`);
