@@ -56,12 +56,15 @@ const PREFER_WORDS = /\b(rather|prefer|preferably|ideally|bonus|nice to have|if 
 const NEGATION = /\b(not|no|never|without|except|avoid|none|nobody|skip)\b|n't\b/i;
 // Words that carry no meaning of their own in a reading ("in SF", "not VCs", "no one from big tech"), or too little to tie a reading to a
 // quote ("good energy" is not "good engineer"): never counted.
-const FUNCTION = new Set(["a", "an", "the", "in", "on", "at", "of", "to", "for", "and", "or", "no", "not", "one", "from", "with", "by", "is", "are", "be", "was", "who", "whos", "that", "this", "it", "its", "someone", "somebody", "people", "person", "folks", "anyone", "they", "them", "their", "have", "has", "had", "been", "into", "right", "really", "just", "want", "wants", "looking", "would", "should", "could", "about", "some", "more", "less", "than", "over", "dont", "don't", "all", "any", "only", "good", "great", "nice", "kind", "type", "sort", "like", "very", "well", "much", "lot", "also", "maybe", "thing", "things", "stuff", "time", "now", "new", "get", "got", "can", "will", "me", "my", "i", "i'm", "im", "you", "we", "our", "so", "but", "if", "as", "rather", "prefer", "need", "needs"]);
+const FUNCTION = new Set(["a", "an", "the", "in", "on", "at", "of", "to", "for", "and", "or", "no", "not", "one", "from", "with", "by", "is", "are", "be", "was", "who", "whos", "that", "this", "it", "its", "someone", "somebody", "people", "person", "folks", "anyone", "they", "them", "their", "have", "has", "had", "been", "into", "right", "really", "just", "want", "wants", "looking", "would", "should", "could", "about", "some", "more", "less", "than", "over", "dont", "don't", "all", "any", "only", "good", "great", "nice", "kind", "type", "sort", "like", "very", "well", "much", "lot", "also", "maybe", "thing", "things", "stuff", "time", "now", "new", "get", "got", "can", "will", "me", "my", "i", "i'm", "im", "you", "we", "our", "so", "but", "if", "as", "rather", "prefer", "need", "needs", "must", "something", "anything", "anyone", "who's", "who", "being", "doing"]);
+// A few words people use for the same thing, read as one ("has to be a woman founder" is "female founder"; "job hunting" is "job
+// seekers"). Kept small on purpose: anything else said differently is off their words.
+const SAME_AS: Record<string, string> = { female: "woman", women: "woman", woman: "woman", seekers: "seek", seeker: "seek", seeking: "seek", hunting: "seek" };
 const tokens = (t: string) => norm(t).split(" ").filter(Boolean);
 const bare = (x: string) => x.replace(/'s$|s$/, "");
 // Pure: one word of a reading against the quote's words: the same word (a plural "s" aside), or for words of six letters or more the
 // same first six letters ("engineer"/"engineering"). A short word must be the same word: "found" is never "founder".
-const sameWord = (x: string, q: string) => bare(x) === bare(q) || (x.length >= 6 && q.length >= 6 && x.slice(0, 6) === q.slice(0, 6));
+const sameWord = (x: string, q: string) => bare(x) === bare(q) || (!!SAME_AS[x] && SAME_AS[x] === SAME_AS[q]) || (x.length >= 6 && q.length >= 6 && x.slice(0, 6) === q.slice(0, 6));
 // Pure: does Cue's reading of a condition stay on their words (review of #378, rounds 2 and 3)? Every meaningful word of the reading
 // counts at any length, and at least two of them must be in the quote (all of them when the reading has fewer than two), unless a
 // name, place or acronym of the reading (SF, VCs, NYC, LA, B2B, Austin) is the same word in the quote. "no one in finance" from "not investors", "good engineer" from "good energy" and "no FAANG" from "big tech" are
@@ -74,17 +77,40 @@ export function readingOnTheirWords(text: string, quote: string): boolean {
   // on its own: "based in Austin" from "has to be in Austin".
   const named = String(text ?? "").split(/[^A-Za-z0-9'’]+/).filter((x) => /[A-Z]/.test(x) && !FUNCTION.has(norm(x)));
   if (named.some((x) => q.some((y) => bare(norm(x)) === bare(y)))) return true;
+  // Two words in common, or as many as the shorter side has: "has to be a designer" has one meaningful word, so "a product
+  // designer" needs only that one (review of bb6c5372).
+  const qMeaningful = [...new Set(q.filter((x) => !FUNCTION.has(x)))];
   const hits = meaningful.filter((x) => q.some((y) => sameWord(x, y))).length;
-  return hits >= Math.min(2, meaningful.length);
+  return hits >= Math.min(2, meaningful.length, Math.max(1, qMeaningful.length));
 }
 
 // Words in their own quote that put a time limit on the condition: it expires CONDITION_TTL_DAYS after it was last said.
 export const TIME_WORDS = /\b(right now|for now|at the moment|this month|this year|currently|these days)\b/i;
 export const CONDITION_TTL_DAYS = 60;
+// Pure: does a time word limit the condition itself (review of bb6c5372)? Only where it bounds what they said: at the start of the
+// clause ("for now no investors"), right after the negation or the want/need ("not currently looking", "don't need right now"), or at
+// the clause's end ("not investors right now", "no VCs at the moment"). Never inside a clause about the other person ("someone
+// currently building in AI", "nobody who's fundraising these days"): that describes them, not how long the condition lasts.
+export function timeBound(quote: string): boolean {
+  const clauses = String(quote ?? "").toLowerCase().replace(/[’‘]/g, "'").split(/[.;!?,]|\s(?:but|and|though)\s/);
+  const re = new RegExp(TIME_WORDS.source, "gi");
+  for (const raw of clauses) {
+    const c = raw.trim();
+    for (const m of c.matchAll(re)) {
+      const before = c.slice(0, m.index).trim();
+      const after = c.slice((m.index ?? 0) + m[0].length).trim();
+      if (/\b(who|who's|whos|who is|who are|who're|that is|that's|that are|which)\b/.test(before)) continue;
+      if (!before || !after) return true;
+      if (/\b(not|no|never|n't|don't|dont|want|wants|need|needs|looking)$/.test(before)) return true;
+    }
+  }
+  return false;
+}
+
 // Pure: a condition said with a time limit, last said more than 60 days ago. A condition with no time words lasts as long as the want;
 // one with no readable time it was said has no basis to expire.
 export function conditionExpired(c: { quote?: unknown; at?: unknown }, now: Date = new Date()): boolean {
-  if (!TIME_WORDS.test(String(c.quote ?? ""))) return false;
+  if (!timeBound(String(c.quote ?? ""))) return false;
   const at = Date.parse(String(c.at ?? ""));
   return Number.isFinite(at) && now.getTime() - at > CONDITION_TTL_DAYS * 86_400_000;
 }

@@ -223,6 +223,53 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   check("logged under its own plain kind", K.logKind(inv.ref) === "a condition they put on one of their wants");
 }
 
+// ================================================================ 6b. grounding: the real conditions kept, the false readings dropped (review of bb6c5372)
+{
+  const real: [string, string, string, string][] = [
+    ["has shipped a product", "must", "must have shipped something", "must"],
+    ["a product designer", "must", "has to be a designer", "must"],
+    ["female founder", "must", "has to be a woman founder", "must"],
+    ["no job seekers", "must_not", "no one who's just job hunting", "must_not"],
+    ["in SF", "prefer", "would rather someone in SF", "prefer"],
+    ["not VCs", "must_not", "I don't want VCs", "must_not"],
+    ["no one from big tech", "must_not", "no one from big tech", "must_not"],
+    ["investors", "must_not", "I'm not looking for investors right now", "must_not"],
+    ["has built a consumer product", "must", "who's built consumer before", "must"],
+    ["based in Austin", "must", "has to be in Austin", "must"],
+    ["in NYC", "must", "has to be in NYC", "must"],
+    ["B2B founders", "must", "only B2B founders", "must"],
+    ["in LA", "prefer", "would rather someone in LA", "prefer"],
+  ];
+  const kept = real.filter(([text, strength, quote, want]) => { const g = WC.groundCriteria([{ text, strength, quote }], quote); return g.length === 1 && g[0].strength === want; });
+  check(`real conditions are kept with their strength: ${kept.length}/${real.length}`, kept.length === real.length, real.filter((r) => !kept.includes(r)).map((r) => r[0]));
+  const falseReadings: [string, string, string][] = [
+    ["no investors at all", "must_not", "investors"],
+    ["no investors at all", "must_not", "meeting investors Thursday"],
+    ["no one in finance", "must_not", "Not investors"],
+    ["no FAANG", "must_not", "no one from big tech"],
+    ["good engineer", "prefer", "I'd rather someone with good energy"],
+    ["Good engineer", "prefer", "I'd rather someone with good energy"],
+    ["founder", "must", "I found my people"],
+    ["Founder", "must", "I found my people"],
+    ["a founder", "must", "not until I found the space"],
+    ["strong product taste", "prefer", "taste matters more than seniority"],
+    ["senior engineer", "must", "no juniors please"],
+  ];
+  const dropped = falseReadings.filter(([text, strength, quote]) => WC.groundCriteria([{ text, strength, quote }], `${quote}. I'm meeting investors Thursday`).length === 0);
+  check(`false readings are all dropped: ${dropped.length}/${falseReadings.length}`, dropped.length === falseReadings.length, falseReadings.filter((r) => !dropped.includes(r)).map((r) => r[0]));
+  console.log(`grounding: ${kept.length}/${real.length} real kept, ${dropped.length}/${falseReadings.length} false dropped`);
+}
+
+// ================================================================ 6c. a time word counts only when it limits the condition itself
+{
+  const bounded = ["not investors right now", "for now no investors", "no VCs at the moment", "I'm not looking for investors right now", "not currently looking for investors", "no founders this month", "I don't need investors for now"];
+  const about = ["someone currently building in AI", "nobody who's fundraising these days", "a founder who is currently raising", "someone that's hiring this month"];
+  check("time words that limit the condition: at its start, after the negation or the want/need, or at its end", bounded.every((q) => WC.timeBound(q)), bounded.filter((q) => !WC.timeBound(q)));
+  check("time words that describe the other person never make the condition expire", about.every((q) => !WC.timeBound(q)), about.filter((q) => WC.timeBound(q)));
+  const longAgo = new Date(Date.now() - 400 * 86_400_000).toISOString();
+  check("'someone currently building in AI' said 400 days ago still applies", !WC.conditionExpired({ quote: "someone currently building in AI", at: longAgo }) && WC.conditionExpired({ quote: "not investors right now", at: longAgo }));
+}
+
 // ================================================================ 7. conditions said with a time limit expire (Royce, 2026-11-03)
 {
   const now = new Date();
@@ -255,6 +302,26 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   const log = w.decisions.find((d) => d.decision === "want_criteria.expired");
   check("the prune takes off only the expired one, on its own want; the other want's recent time-worded one stays", n === 1 && w.intent[0].criteria.length === 1 && w.intent[0].criteria[0].strength === "must" && w.intent[1].criteria.length === 1, w.intent.map((e: any) => e.criteria));
   check("the expiry is logged with want ids and counts, none of their words", !!log && JSON.stringify(typeof log.proposal === "string" ? JSON.parse(log.proposal) : log.proposal) === JSON.stringify({ wants: [{ id: "a1", n: 1 }] }) && !/investors|right now/.test(JSON.stringify(log)), log);
+  // Paged by a cursor in user_id order: 1,201 profiles are each read once, in three pages, never the first page again.
+  {
+    const ids = Array.from({ length: 1201 }, (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`);
+    const reads: string[] = [];
+    let pages = 0;
+    const o2 = (pool as any).query;
+    (pool as any).query = async (sql: string, a: any[] = []) => {
+      const flat = sql.replace(/\s+/g, " ").trim();
+      if (/^SELECT user_id, intent FROM co_profiles WHERE intent::text LIKE '%"criteria"%' AND user_id > \$1::uuid ORDER BY user_id LIMIT 500$/.test(flat)) {
+        pages++;
+        const rows = ids.filter((id) => id > a[0]).slice(0, 500).map((id) => ({ user_id: id, intent: [] }));
+        reads.push(...rows.map((r) => r.user_id));
+        return { rows, rowCount: rows.length };
+      }
+      return o2(sql, a);
+    };
+    await (await import("../../src/services/askExpiry.js")).expireTimeBoundCriteria(now);
+    (pool as any).query = o2;
+    check("the prune pages by a cursor in user_id order: every profile read once, no page read twice", pages === 3 && reads.length === 1201 && new Set(reads).size === 1201, { pages, reads: reads.length });
+  }
   check("the expiry runs in the existing expiry job", /await expireTimeBoundCriteria\(\)/.test(src("services/askExpiry.ts")) && /expireStaleAsks\(\)/.test(src("jobs/index.ts")));
 }
 
