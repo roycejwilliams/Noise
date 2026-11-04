@@ -3319,9 +3319,10 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   }
 
   if ("defer" in draft) {
-    // A find's defer (Phase B) never passes its expiry; a door text's moves with it (a pause never expires it).
+    // A find's defer (Phase B) and a pre-arrival text's (review of #377) never pass their expiry; a door text's moves with it (a pause
+    // never expires it).
     if (!opts.dryRun) await pool.query(
-      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type IN ('task_update', 'co_event', 'event_change', 'direct_ask') THEN $4::timestamptz WHEN type = 'event_offer' AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type IN ('task_update', 'co_event', 'event_change', 'direct_ask') THEN $4::timestamptz WHEN type IN ('event_offer', 'pre_arrival') AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
       [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000), deferredDoorExpiry(c.expiresAt, draft.defer)],
     );
     if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });

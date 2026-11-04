@@ -532,12 +532,16 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload;
       // Read again now, as the brief and the name question are (2026-11-03): queued up to 3 hours before the start, it went to someone
       // who had since said they can't make it ("Cue won't send them anything more about it"), or who had left the list.
-      const row = await P.presenceRow(p.eventId, c.userId);
+      // Its own window first (review of #377): past payload.until it never goes, and a wait never runs past it.
+      if (!p.until || Date.now() > new Date(p.until).getTime()) return skip("window closed");
+      const read = await P.presenceRead(p.eventId, c.userId);
+      if (!read) return P.preArrivalWait(p.until, new Date(), "couldn't read whether they're still going");
+      const row = read.row;
       if (row?.not_going_at) return skip("they said they can't make it");
       if (row?.pre_arrival_sent_at) return skip("already sent for this event");
       const members = await import("../services/eventPresence.js").then((e) => e.eventMembers(p.eventId)).catch(() => null);
       // A guest-list outage is not "no longer registered", and with no list the no-names check below would have nothing to check.
-      if (!members) return { defer: new Date(Date.now() + 10 * 60_000), reason: "couldn't read the guest list just now" };
+      if (!members) return P.preArrivalWait(p.until, new Date(), "couldn't read the guest list just now");
       if (!members.some((m) => m.user_id === c.userId)) return skip("no longer registered");
       const [ask, fits] = await Promise.all([P.statedAsk(c.userId), P.strongFits(p.eventId, c.userId, members)]);
       const text = await draftProactive({

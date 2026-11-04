@@ -22,7 +22,7 @@ import { isOpenAsk } from "../harness/profileWrite.js";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
-import { briefPairBlocks, namedYes, pickNamed, rankingFor } from "./eventBrief.js";
+import { briefPairBlocks, pickNamed, rankingFor } from "./eventBrief.js";
 import type { RankedCandidate } from "./eventScoring.js";
 
 export const PRE_ARRIVAL = { fromBeforeStartMs: 3 * 3_600_000, untilBeforeStartMs: 60 * 60_000, strongScore: 60, minCrowd: 2, farMeters: 3000, farNoteFromMs: 10 * 60_000, farNoteUntilMs: 30 * 60_000 };
@@ -108,7 +108,9 @@ export async function strongFits(eventId: string, userId: string, members: { use
     if (!rankedAll.length || !others.length) return 0;
     const blocks = await briefPairBlocks(eventId, userId, rankedAll.map((r) => r.candidate_id));
     if (!blocks) return 0;
-    const { notGoing } = await namedYes(eventId, others.map((m) => m.user_id));
+    // Read here, not through namedYes (which reads a failure as "nobody cancelled"): a failed read counts nobody (review of #377).
+    const { rows: gone } = await pool.query(`SELECT user_id FROM event_presence WHERE event_api_id = $1 AND user_id = ANY($2::uuid[]) AND not_going_at IS NOT NULL`, [eventId, others.map((m) => m.user_id)]);
+    const notGoing = new Set<string>(gone.map((r: any) => String(r.user_id)));
     const { shareableAsks } = await import("./matching.js");
     const { rows } = await pool.query(`SELECT user_id, intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [others.map((m) => m.user_id)]);
     const stillShareable = new Map<string, string[]>(rows.map((r: any) => [String(r.user_id), shareableAsks(r.intent).map((a: any) => String(a.text))]));
@@ -121,6 +123,28 @@ export async function strongFits(eventId: string, userId: string, members: { use
 // Pure: the count, through the brief's own picker with nobody allowed a name (so every fit is a count).
 export function countStrongFits(p: { ranked: RankedCandidate[]; recipientId: string; members: { user_id: string; first_name: string }[]; notGoing: Set<string>; stillShareable: Map<string, string[]> }): number {
   return pickNamed({ ranked: p.ranked, recipientId: p.recipientId, members: p.members, nameOk: new Set(), notGoing: p.notGoing, stillShareable: p.stillShareable }).unnamedFits;
+}
+
+// Their presence row for the pre-arrival draft: { row } (row null when there's none), or null when the read failed, so the draft waits
+// instead of reading a failure as "nothing said" (review of #377).
+export async function presenceRead(eventId: string, userId: string): Promise<{ row: any | null } | null> {
+  try {
+    const { rows } = await pool.query(`SELECT * FROM event_presence WHERE event_api_id = $1 AND user_id = $2`, [eventId, userId]);
+    return { row: rows[0] ?? null };
+  } catch {
+    return null;
+  }
+}
+
+// Pure: the pre-arrival draft's wait. Past its window (payload.until): skip, recorded as "window closed". A wait only while there's
+// still room for it inside the window; otherwise skip (review of #377: each wait moved the queue row's expiry 3 days on, so a list
+// that stayed unreadable kept it waiting past the event).
+export const PRE_ARRIVAL_WAIT_MS = 10 * 60_000;
+export function preArrivalWait(until: string | null | undefined, now: Date, reason: string): { defer: Date; reason: string } | { skip: string } {
+  const end = until ? new Date(until).getTime() : NaN;
+  if (!Number.isFinite(end) || now.getTime() > end) return { skip: "window closed" };
+  if (now.getTime() + PRE_ARRIVAL_WAIT_MS < end) return { defer: new Date(now.getTime() + PRE_ARRIVAL_WAIT_MS), reason };
+  return { skip: `window closed: ${reason}` };
 }
 
 export async function presenceRow(eventId: string, userId: string): Promise<any | null> {
