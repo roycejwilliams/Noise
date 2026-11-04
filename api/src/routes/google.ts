@@ -32,25 +32,7 @@ export const CALENDAR_GRANT_COPY = {
   notConnected: "There's no calendar connected on this link anymore.",
   off: "Connecting your calendar isn't turned on yet.",
 } as const;
-// The Docs grant (Royce, 2026-10-15: "drive.file gets its own grant in the published project, same pattern as the calendar split").
-// COPY: every line here is in the PR's Copy section for Royce.
-export const DOCS_GRANT_COPY = {
-  title: "Connect Google Docs",
-  sees: "Cue will save documents it makes for you into your Google Drive, and see only those.",
-  never: ["Never anything else in your Drive: no other files, folders or Docs.", "Cue never shares a Doc. It's yours alone until you share it.", "Cue never changes or deletes your own files."],
-  undo: "You can undo it any time: text Cue \"disconnect Google Docs\", or tap Disconnect on the next page.",
-  go: "Continue to Google",
-  doneTitle: "Google Docs connected",
-  done: "Cue can save documents it makes for you to your Drive, and sees only those.",
-  disconnect: "Disconnect",
-  sureTitle: "Disconnect Google Docs?",
-  sure: "Cue will stop saving documents to your Drive. Docs it already made stay yours.",
-  goneTitle: "Disconnected",
-  gone: "Cue can no longer reach your Drive. Docs it already made stay in it, yours to keep or delete.",
-  notConnected: "There's no Google Docs connection on this link anymore.",
-  off: "Connecting Google Docs isn't turned on yet.",
-} as const;
-const GRANT_COPY: Record<GrantKind, typeof CALENDAR_GRANT_COPY | typeof DOCS_GRANT_COPY> = { calendar: CALENDAR_GRANT_COPY, docs: DOCS_GRANT_COPY };
+const GRANT_COPY: Record<GrantKind, typeof CALENDAR_GRANT_COPY> = { calendar: CALENDAR_GRANT_COPY };
 const GRANT_KINDS = Object.keys(GRANT_COPY) as GrantKind[];
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 

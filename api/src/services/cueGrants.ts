@@ -4,7 +4,7 @@
 // only, the grant visible in 'what Cue knows,' one-tap revoke, never shared. Between two members Cue sees free or busy and nothing else.
 // Once granted, the calendar is the only source allowed to HOLD a slot." And: "The free/busy-only split is non-negotiable - never reuse
 // the combined Gmail/Drive grant to save time."
-// Docs: "drive.file gets its own grant in the published project, same pattern as the calendar split." A Google Doc Cue makes goes into
+// (The Docs grant was removed 2026-11-04; its stored tokens go in the approved cleanup.) Docs: "drive.file gets its own grant in the published project, same pattern as the calendar split." A Google Doc Cue makes goes into
 // their Drive on this grant; Cue sees only the files it created there.
 //
 // Each grant is separate from the Google connection (services/googleAuth.ts, which keeps Gmail metadata on the Co Club project, in
@@ -23,13 +23,11 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { decryptToken, encryptToken, pkcePair, redirectUri, revokeToken, tokenAndBaseReady } from "./googleAuth.js";
 
-export type GrantKind = "calendar" | "docs";
+export type GrantKind = "calendar";
 export const CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar.freebusy"] as const;
-export const DOCS_SCOPES = ["https://www.googleapis.com/auth/drive.file"] as const;
 // Table names are constants here, never from input.
-const GRANTS: Record<GrantKind, { scope: string; table: "calendar_grants" | "docs_grants"; label: string }> = {
+const GRANTS: Record<GrantKind, { scope: string; table: "calendar_grants"; label: string }> = {
   calendar: { scope: CALENDAR_SCOPES[0], table: "calendar_grants", label: "calendar" },
-  docs: { scope: DOCS_SCOPES[0], table: "docs_grants", label: "docs" },
 };
 const KINDS = Object.keys(GRANTS) as GrantKind[];
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -44,7 +42,6 @@ export function cueGrantsConfigured(env: NodeJS.ProcessEnv = process.env): boole
   return Boolean(clientId(env) && clientSecret(env) && tokenAndBaseReady(env));
 }
 export const calendarConfigured = cueGrantsConfigured;
-export const docsConfigured = cueGrantsConfigured;
 
 // Pure: exactly the grant's one scope, nothing wider and nothing else.
 export function scopeOnly(kind: GrantKind, granted: string): boolean {
@@ -94,7 +91,6 @@ export async function createGrantLink(kind: GrantKind, userId: string): Promise<
   return `${base()}/google/connect/${state}`;
 }
 export const createCalendarLink = (userId: string) => createGrantLink("calendar", userId);
-export const createDocsLink = (userId: string) => createGrantLink("docs", userId);
 
 export async function grantKindOf(state: string): Promise<GrantKind | "google" | null> {
   const { rows } = await pool.query(`SELECT grant_kind FROM google_oauth_states WHERE state = $1 AND used_at IS NULL AND expires_at > NOW()`, [state]);
@@ -151,7 +147,6 @@ export async function grantConnected(kind: GrantKind, userId: string, db: Db = p
   return rows[0] ? { since: new Date(rows[0].connected_at).toISOString().slice(0, 10) } : null;
 }
 export const calendarConnected = (userId: string, db: Db = pool) => grantConnected("calendar", userId, db);
-export const docsConnected = (userId: string, db: Db = pool) => grantConnected("docs", userId, db);
 
 // Revoked with Google and deleted: nothing of it is kept.
 export async function disconnectGrant(kind: GrantKind, userId: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
@@ -166,7 +161,6 @@ export async function disconnectGrant(kind: GrantKind, userId: string, fetchImpl
   return true;
 }
 export const disconnectCalendar = (userId: string, fetchImpl: typeof fetch = fetch) => disconnectGrant("calendar", userId, fetchImpl);
-export const disconnectDocs = (userId: string, fetchImpl: typeof fetch = fetch) => disconnectGrant("docs", userId, fetchImpl);
 
 // The one-tap disconnect (the confirmation page's button): the token's hash names the grant (only that kind, when the page names one).
 export async function disconnectByToken(token: string, fetchImpl: typeof fetch = fetch, only?: GrantKind): Promise<GrantKind | null> {
@@ -205,7 +199,6 @@ export async function grantToken(kind: GrantKind, userId: string, fetchImpl: typ
   await pool.query(`UPDATE ${t0} SET access_token_enc = $2, access_expires_at = NOW() + make_interval(secs => $3) WHERE user_id = $1`, [userId, encryptToken(t.access_token), Math.max(60, (t.expires_in ?? 3600) - 60)]);
   return t.access_token;
 }
-export const docsToken = (userId: string, fetchImpl: typeof fetch = fetch) => grantToken("docs", userId, fetchImpl);
 
 export type BusySpan = { start: string; end: string };
 // This member's busy spans between two times (free/busy only), read fresh; null when there's no grant or the read failed (then no

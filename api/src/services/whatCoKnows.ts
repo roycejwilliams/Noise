@@ -180,8 +180,6 @@ export type RawKnown = {
   freeTimes?: { id: string; text: string; quote: string }[];
   // Their calendar grant (services/cueGrants.ts): free/busy only; removing it disconnects.
   calendar?: { since: string } | null;
-  // Their Docs grant (services/cueGrants.ts): Drive files Co makes only; removing it disconnects.
-  docs?: { since: string } | null;
   // Their yes to the voice read on calls (services/voiceReadConsent.ts), while it's on; removing it is taking it back.
   voiceRead?: { since: string } | null;
   // The rules they set for how Cue treats them (services/memberPreferences.ts), in force now: what each does, in plain words, and
@@ -258,7 +256,6 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}${searchingNote(x.place, x.searching)}` : `where I look for "${x.want.slice(0, 120)}": ${noPlace}`);
   // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
   if (r.calendar) add("grant:calendar", "grant", "where", `your calendar, connected ${r.calendar.since}: I see only when you're busy or free, never what, where or with whom, and it's never shared`, null, false);
-  if (r.docs) add("grant:docs", "grant", "where", `Google Docs, connected ${r.docs.since}: I save documents I make for you to your Drive and see only those, nothing else there`, null, false);
   if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
@@ -612,7 +609,6 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     area: await import("./searchArea.js").then((A) => A.searchAreaOf(userId, db as any)).then((a) => (a ? { place: a.place, searching: a.label } : null)),
     freeTimes: freeRows,
     calendar: await import("./cueGrants.js").then((C) => C.calendarConnected(userId, db as any)).catch(() => null),
-    docs: await import("./cueGrants.js").then((C) => C.docsConnected(userId, db as any)).catch(() => null),
     voiceRead: await import("./voiceReadConsent.js").then((V) => V.voiceReadOnSince(userId, db as any)).catch(() => null),
     // Never guessed: a read that fails fails the view, so a rule they set is never shown as gone.
     // Applied or "noted, not applied yet" by what a path really does (PR C): a where-to-search rule is applied only while their area is its place.
@@ -853,7 +849,7 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     case "grant": {
       // Their calendar or Docs grant: disconnected (revoked with Google, deleted). Docs already made stay in their Drive.
       const { disconnectGrant } = await import("./cueGrants.js");
-      if (a !== "calendar" && a !== "docs") return a === "voice_read" ? removeVoiceRead(userId, item.ref, was) : { why: "not something Cue can change" };
+      if (a !== "calendar") return a === "voice_read" ? removeVoiceRead(userId, item.ref, was) : { why: "not something Cue can change" };
       if (!(await disconnectGrant(a, userId))) throw new NotApplied();
       return { ref: item.ref, source: "grant", was, now: null };
     }
@@ -939,7 +935,7 @@ export function fieldFor(ref: string): string {
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
   if (kind === "pref") return "a rule they set for how Cue treats them";
-  if (kind === "grant") return a === "docs" ? "their Google Docs connection" : a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
+  if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
   return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;
 }
 
