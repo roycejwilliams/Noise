@@ -1,6 +1,6 @@
 ---
 name: evals-engineer
-description: Python evaluation engineer for the RAGAS/Langfuse harness in evals/. Use for anything touching evals/ — RAGAS metric scoring, Langfuse trace fetching, judge-model config, eval scripts. Not for Node/TypeScript work in api/, co-test/, app/, or web/.
+description: Python evaluation engineer for the RAGAS/Langfuse harness in evals/. Use for anything touching evals/ — RAGAS metric scoring, Langfuse trace fetching, judge-model config, eval scripts. Not for Node/TypeScript work in api/, co-test/, or app/.
 tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch
 model: inherit
 ---
