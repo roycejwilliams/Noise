@@ -218,7 +218,7 @@ const regEntry = reg.slice(reg.indexOf("  voice_read_ask: {"), reg.indexOf("  //
 const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
 const toolSrc = tools.slice(tools.indexOf("    voiceRead: tool({"), tools.indexOf("    answerShareAsks: tool({"));
 check("4. the reply tool won't put the question to them again after a no or a withdrawal", /answer === "explain" && \(was === "no" \|\| was === "withdrawn"\)\) \{[^}]*return \{ ok: false/.test(toolSrc));
-check("4. the reply tool takes only their own words, and a yes counts only after the question", /quoteIsTheirs\(theirWords, ctx\.resolvedContent\)/.test(toolSrc) && /if \(!onFile\?\.askedAt \|\| answer === "explain"\) \{/.test(toolSrc) && toolSrc.indexOf("if (!onFile?.askedAt || answer") < toolSrc.indexOf("recordVoiceReadYes"));
+check("4. the reply tool takes only their own words, and a yes counts only after the question", /quoteIsTheirs\(theirWords, ctx\.resolvedContent(?:, ctx\.userId)?\)/.test(toolSrc) && /if \(!onFile\?\.askedAt \|\| answer === "explain"\) \{/.test(toolSrc) && toolSrc.indexOf("if (!onFile?.askedAt || answer") < toolSrc.indexOf("recordVoiceReadYes"));
 check("4. no regex reads what they meant: the model picks yes/no/stop/explain", /answer: z\.enum\(\["yes", "no", "stop", "explain"\]\)/.test(toolSrc) && !/\.test\(ctx\.resolvedContent\)/.test(toolSrc));
 
 // ---------------------------------------------------------------- the words (Copy, for Royce)

@@ -20,7 +20,7 @@ import { isSwitchedOff } from "../services/abilitySwitches.js";
 import { recordToolAction } from "../services/coFacts.js";
 import { logKind } from "../services/whatCoKnows.js";
 import { guestName } from "../services/guestName.js";
-import { isReactionIn } from "../services/reactionsIn.js";
+import { isReactionGuard } from "../services/reactionsIn.js";
 
 // Replies and bookkeeping aren't choices worth logging one by one.
 const UNGUARDED = new Set(["sendReply", "markTopicAsked"]);
@@ -268,11 +268,11 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
         if (rows.length) return refuse("limited", `${name} wasn't run: it was already done for ${input.personName}.`, "Already requested for this person. Don't ask again.");
       }
       if (ability.confirm) {
-        const yes = await confirmYes({ theirYes: input?.theirYes, message: ctx.resolvedContent, recent: ctx.recentExchange ?? null, ability: ability.can });
+        const yes = await confirmYes({ theirYes: input?.theirYes, message: ctx.resolvedContent, recent: ctx.recentExchange ?? null, userId: ctx.userId, ability: ability.can });
         if (!yes.ok) {
           const detail = { yesCheck: yes.kind, yesWhy: yes.why };
           // The quote wasn't their words: a clean retry with the right quote, never asking them again.
-          if (isReactionIn(ctx.resolvedContent, ctx.recentExchange ?? null)) return refuse("needs_yes", `${name} wasn't run: a reaction isn't a yes to it.`, "Not done: they only reacted, and a reaction is never a yes. Ask once, lightly, in one short line whether that's a yes; don't do it until they say so in words.", detail);
+          if (isReactionGuard(ctx.resolvedContent, ctx.userId)) return refuse("needs_yes", `${name} wasn't run: a reaction isn't a yes to it.`, "Not done: they only reacted, and a reaction is never a yes. Ask once, lightly, in one short line whether that's a yes; don't do it until they say so in words.", detail);
           if (yes.kind === "quote") return refuse("needs_yes", `${name} wasn't run yet: the quoted yes isn't in their message.`, `Not done yet. ${QUOTE_RETRY}`, detail);
           if (yes.kind === "unread") return refuse("needs_yes", `${name} wasn't run: their yes couldn't be checked just now.`, "Not done: their yes couldn't be checked just now. Say plainly it didn't go through yet; don't ask them to say it again.", detail);
           return refuse("needs_yes", `${name} wasn't run: their message isn't a yes to it.`, "Not done: their message doesn't read as a yes to this. Answer what they said; don't ask again in this reply.", detail);

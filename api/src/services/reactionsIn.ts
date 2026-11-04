@@ -103,16 +103,20 @@ export function cueTextsFrom(conversation: string | null | undefined): string[] 
   }
   return out.filter((x) => x !== "\u0000");
 }
-// Verified in this process by the webhook (it has the send log): the guards refuse these as a yes even when the exchange they see is short.
+// Verified in this process by the webhook (it has the send log), per member: a straight-quoted tapback from an older client is only
+// known as one by that check.
 const verifiedTexts = new Set<string>();
-export function noteVerifiedReaction(text: string): void {
+const vkey = (userId: string, text: string) => `${userId}\u0000${text}`;
+export function noteVerifiedReaction(userId: string, text: string): void {
   if (verifiedTexts.size >= 200) verifiedTexts.delete(verifiedTexts.values().next().value as string);
-  verifiedTexts.add(text);
+  verifiedTexts.add(vkey(userId, text));
 }
-// For a guard that has the exchange before their message (or none): a reaction when the webhook verified it, or the exchange shows its text.
-export function isReactionIn(message: string, exchange?: string | null): boolean {
-  if (verifiedTexts.has(message)) return true;
-  return readReaction(message, exchange == null ? null : cueTextsFrom(exchange)) !== null;
+// The yes guards' read (yesIsTheirs, confirmYes, quoteIsTheirs, the tool guard, lane moves): a tapback is never a yes, so this refuses on
+// verified OR the exact curly shape, whatever exchange the guard can see. A real tapback whose Cue text is out of the window, or whose send
+// wasn't logged, is still refused. The cost is accepted: a typed whole-message string in that shape ("Emphasized “yes intro me to Dana”") is
+// refused too, the safe side. What a reaction MEANS (readReaction / verifyReaction) is a separate question that only shapes the reply.
+export function isReactionGuard(message: string, userId?: string | null): boolean {
+  return (userId != null && verifiedTexts.has(vkey(userId, message))) || isReaction(message);
 }
 // Pure: whether this raw text, before the member is even looked up, has a removal's shape (it never moves the debounce stamp).
 export const isRemovalShape = (text: unknown): boolean => typeof text === "string" && parseReactionShape(text)?.removed === true;
@@ -127,11 +131,14 @@ export const sameEmoji = (a: string, b: string): boolean => bare(a) === bare(b);
 export const LIGHT_CHECK = /^\s*(?:so\s+)?is that a yes\b/i;
 // A second ask riding in the same sentence ("…, and want me to book the 8pm?") makes it a new offer, not the light check.
 const SECOND_ASK = /\b(?:and|or|also|plus|then|while)\b[^?]*\b(?:want me to|want (?:a|the)|should i|shall i|can i|would you like|do you want|book|send|draft|share|reserve|order|introduce|intro)\b/i;
-export const isLightCheck = (q: string): boolean => LIGHT_CHECK.test(q) && !SECOND_ASK.test(q);
+// ... or a second thing it asks yes to ("…the intro, and to dinner at 8?").
+const SECOND_THING = /[,;]?\s+(?:and|or|plus|as well as)\s+(?:to|for|about|on|with)\b/i;
+export const isLightCheck = (q: string): boolean => LIGHT_CHECK.test(q) && !SECOND_ASK.test(q) && !SECOND_THING.test(q);
 
 // Pure: whether a taken-back reaction ends the turn with no reply. It does only when nothing of theirs is waiting for an answer: reading
 // their lines newest first (rows: their thread's lines, oldest first, as stored; ownId is the removal's own row), a written line of theirs
-// before any Cue reply means the removal must not end the turn (a "yes, book the 8pm" in the same burst is still owed its answer).
+// before any Cue reply means the removal must not end the turn. Cue's own reaction chosen as the answer ("Co replied: [reaction …]", merged in by
+// the route from the turn.closing decision) is a reply: a turn Cue chose to leave at a tapback is not revived by a removal (a "yes, book the 8pm" in the same burst is still owed its answer).
 export function removalEndsTurn(rows: { id: number | string; content: string }[], ownId: number | string): boolean {
   const lines = rows.filter((r) => String(r.id) !== String(ownId));
   const cue = lines.filter((r) => /^(?:Co|Cue) (?:replied|said):/.test(r.content)).map((r) => r.content.replace(/^(?:Co|Cue) (?:replied|said):\s*/, ""));
