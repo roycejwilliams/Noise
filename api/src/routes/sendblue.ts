@@ -2181,6 +2181,8 @@ export function sendblueRouter(io: Server): Router {
             await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
             await recordSuggestionOutcome(user.id, pendingOutcomeFollowUp.tier === 0 ? "intro" : pendingOutcomeFollowUp.tier === 3 ? "opportunity" : "event", `followup:${pendingOutcomeFollowUp.id}`, pendingOutcomeFollowUp.match_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160), { provenance: "stated", quote: resolvedContent.slice(0, 200) });
             addFact(replyFacts, "did_this_turn", `Recorded what they said about how "${pendingOutcomeFollowUp.match_name}" went.`);
+            // An intro's follow-up: the same answer on their side of the pair's outcome record (services/secondContact.ts).
+            if (pendingOutcomeFollowUp.tier === 0) await import("../services/secondContact.js").then((SC) => SC.noteIntroFollowUpAnswer(user.id, pendingOutcomeFollowUp.match_name, outcome)).catch(() => null);
             // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
             // without this, a name or detail from a DIFFERENT,
             // already-resolved outcome follow-up sitting in

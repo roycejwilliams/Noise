@@ -121,26 +121,54 @@ export const alreadyKnowSection = (n: number) => `${n}. already_know: ${ALREADY_
 export function goingSection(n: number, g: import("./preArrival.js").GoingSubject | null): string {
   if (!g) return "";
   const what = g.kind === "today" ? `Cue's Noise event today${g.name ? `, "${g.name}"` : ""}` : `Cue's Noise event${g.name ? ` "${g.name}"` : ""}, which Cue asked whether they made it to`;
-  const yes = g.kind === "today" ? `"yes" only if they said they're going after all, ` : "";
-  return `${n}. noise_event: they're on the list for ${what}. going: "no" only if the person said outright they can't make it or didn't make it, ${yes}else null. quote: their exact words that say it, copied from their line.
+  const yes = g.kind === "today" ? `"yes" only if they themselves said they're going after all. ` : "";
+  return `${n}. noise_event: they're on the list for ${what}. going: "no" only when the person says THEY themselves can't make it or didn't. Never for someone else ("my friend can't make it"), never for a condition or maybe ("might not", "if work runs late", "probably not"). ${yes}Otherwise null. quote: their exact words that say it, copied from their line.
 
 `;
 }
-// Pure: what to record from that section. Only their own words (the quote is in their lines), only "no" for a no-show question.
-export function callGoingFrom(raw: unknown, transcript: string, g: import("./preArrival.js").GoingSubject | null): boolean | null {
-  if (!g) return null;
+// Pure: what to record from that section, or why not (review of #380: a false "no" silently takes them out of that night's matching,
+// the pre-arrival text and the brief). Only their own words (the quote is in their lines); only "no" for a no-show question; never
+// when the sentence that says it hedges (might, maybe, may, if, probably, possibly, not sure, could) or is about someone else (a name,
+// he/she/they, "my friend", "my partner" before the verb).
+const HEDGE = /\b(?:might|maybe|may|if|probably|possibly|not sure|could(?!n'?t))\b/i;
+const GOING_VERB = /\b(?:can'?t|cannot|can not|won'?t|couldn'?t|didn'?t|did not|not going|not gonna|not coming|unable|not make|going|coming|make it|be there)\b/i;
+const OTHER_SUBJECT = /\b(?:he|she|they|his|her|their|my\s+\w+|our\s+\w+)\b/i;
+// A capitalized word before the verb is a name (someone else), unless it's one of these sentence openers.
+const OPENERS = new Set(["ugh", "oh", "hey", "sorry", "actually", "unfortunately", "honestly", "yeah", "yes", "no", "nope", "well", "so", "sadly", "hmm", "ah", "okay", "ok", "good", "bad", "news", "turns", "looks", "just", "man", "shoot", "dang", "tonight", "today", "really", "totally", "afraid"]);
+export type CallGoingRead = { going: boolean | null; why: "none" | "not_theirs" | "hedged" | "not_them" | "not_today" | null };
+export function readCallGoing(raw: unknown, transcript: string, g: import("./preArrival.js").GoingSubject | null): CallGoingRead {
+  if (!g) return { going: null, why: "none" };
   const x = (raw as any)?.noise_event;
-  const going = x?.going === "no" ? false : x?.going === "yes" && g.kind === "today" ? true : null;
-  if (going === null || typeof x?.quote !== "string") return null;
+  const said = x?.going === "no" ? false : x?.going === "yes" ? true : null;
+  if (said === null) return { going: null, why: "none" };
+  if (said && g.kind !== "today") return { going: null, why: "not_today" };
+  if (typeof x?.quote !== "string") return { going: null, why: "not_theirs" };
   const q = squash(x.quote);
-  if (q.split(" ").length < 2 || !squash(theirLines(transcript)).includes(q)) return null;
-  return going;
+  const lines = theirLines(transcript);
+  if (q.split(" ").length < 2 || !squash(lines).includes(q)) return { going: null, why: "not_theirs" };
+  // The sentence of theirs that holds the quote (the whole line when the quote runs across sentences).
+  const pieces = lines.split("\n").flatMap((l) => [l, ...l.split(/(?<=[.!?])\s+/)]);
+  const sentence = pieces.filter((p) => squash(p).includes(q)).sort((a, b) => a.length - b.length)[0] ?? "";
+  if (HEDGE.test(sentence)) return { going: null, why: "hedged" };
+  // Who it's about: the words before the verb, in the clause that holds it.
+  const at = sentence.search(GOING_VERB);
+  const before = (at >= 0 ? sentence.slice(0, at) : sentence).split(/[,;:]|\b(?:but|so|and|because)\b/i).pop() ?? "";
+  if (OTHER_SUBJECT.test(before) || before.split(/[^A-Za-z']+/).some((w) => /^[A-Z][a-z]+$/.test(w) && !OPENERS.has(w.toLowerCase()))) return { going: null, why: "not_them" };
+  return { going: said, why: null };
+}
+export function callGoingFrom(raw: unknown, transcript: string, g: import("./preArrival.js").GoingSubject | null): boolean | null {
+  return readCallGoing(raw, transcript, g).going;
 }
 
 // The read's answer, recorded through the text tool's own path (services/preArrival.ts recordGoing). Never throws.
 export async function saveCallGoing(userId: string, raw: unknown, transcript: string, g: import("./preArrival.js").GoingSubject | null): Promise<{ going: boolean | null; recorded: import("./preArrival.js").GoingSubject | null }> {
-  const going = callGoingFrom(raw, transcript, g);
-  if (going === null) return { going, recorded: null };
+  const read = readCallGoing(raw, transcript, g);
+  const going = read.going;
+  // Turned down: nothing recorded, and the decision says why in a word, never their words.
+  if (going === null) {
+    if (g && read.why && read.why !== "none") await recordDecision({ layer: 4, decision: "profile.callGoing", userId, outcome: "skip", action: read.why, proposal: { eventId: g.eventApiId, kind: g.kind } }).catch(() => {});
+    return { going, recorded: null };
+  }
   const recorded = await import("./preArrival.js").then((P) => P.recordGoing(userId, going, g)).catch((err: any) => (console.error("callLearning: going write failed (non-fatal):", err?.message ?? err), null));
   return { going, recorded };
 }

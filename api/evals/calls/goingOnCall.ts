@@ -32,6 +32,17 @@ const { default: pool } = await import("../../src/db/db.js");
     const r = presence.get(key(p[0], p[1]));
     return { rows: r ? [{ name_asked_at: null, name_ok: null, brief_sent_at: null, ...r }] : [] };
   }
+  if (/^INSERT INTO event_presence \(event_api_id, user_id, arrived_at, arrived_via\)/.test(q)) {
+    const r = presence.get(key(p[0], p[1])) ?? {};
+    if (r.arrived_at && !r.not_going_at) return { rows: [] };
+    const isNew = !r.arrived_at;
+    presence.set(key(p[0], p[1]), { ...r, arrived_at: r.arrived_at ?? new Date(), arrived_via: r.arrived_via ?? p[2], not_going_at: null });
+    return { rows: [{ user_id: p[1], is_new: isNew }] };
+  }
+  if (/SELECT user_id, arrived_at, not_going_at, sharing_seen_at, location_stopped_at FROM event_presence WHERE event_api_id = \$1 AND user_id = ANY/.test(q)) {
+    return { rows: (p[1] as string[]).filter((u) => presence.has(key(p[0], u))).map((u) => ({ user_id: u, sharing_seen_at: null, location_stopped_at: null, arrived_at: null, not_going_at: null, ...presence.get(key(p[0], u)) })) };
+  }
+  if (/FROM co_profiles cp JOIN users u/.test(q) && /u\.phone_number = ANY\(\$1::text\[\]\) OR LOWER\(u\.email\) = ANY\(\$2::text\[\]\)/.test(q)) return { rows: [{ user_id: JORDAN, first_name: "Jordan", phone_number: "+15550100001", email: "jordan@example.test", city: "San Francisco", goals: [], blockers: [], activity_preferences: [], intent: [] }] };
   if (/^SELECT \* FROM event_presence WHERE event_api_id = \$1 AND user_id = \$2/.test(q)) { const r = presence.get(key(p[0], p[1])); return { rows: r ? [r] : [] }; }
   if (/INSERT INTO harness_decisions/.test(q)) return { rows: [{ id: "1", created_at: new Date() }] };
   return { rows: [] };
@@ -52,11 +63,11 @@ const base = { transcript: call, today: "2026-11-04", onFile: null, openAsks: []
 const without = CL.callLearningPrompt(base);
 const withToday = CL.callLearningPrompt({ ...base, going: today });
 check("no Noise event today and no open question: the prompt has no going section", !/noise_event/.test(without));
-check("their Noise event today: one section, the event named, and its JSON key", /\n8\. noise_event: they're on the list for Cue's Noise event today, "Founders Table"\. going: "no" only if the person said outright they can't make it or didn't make it, "yes" only if they said they're going after all, else null\. quote: their exact words that say it, copied from their line\./.test(withToday) && /"noise_event": \{"going": null, "quote": null\}/.test(withToday));
+check("their Noise event today: one section, the event named, and its JSON key", withToday.includes(`\n8. noise_event: they're on the list for Cue's Noise event today, "Founders Table". going: "no" only when the person says THEY themselves can't make it or didn't. Never for someone else ("my friend can't make it"), never for a condition or maybe ("might not", "if work runs late", "probably not"). "yes" only if they themselves said they're going after all. Otherwise null. quote: their exact words that say it, copied from their line.`) && /"noise_event": \{"going": null, "quote": null\}/.test(withToday));
 check("the item after it is numbered on (already_know 9)", /\n9\. already_know: /.test(withToday) && /\n8\. already_know: /.test(without));
 const withBoth = CL.callLearningPrompt({ ...base, going: today, introduced: ["Ellis"] });
 check("with introductions on file too: introductions 8, going 9, already_know 10", /\n8\. introductions: /.test(withBoth) && /\n9\. noise_event: /.test(withBoth) && /\n10\. already_know: /.test(withBoth));
-check("a no-show question still open: only a no is asked for", /which Cue asked whether they made it to\. going: "no" only if .* didn't make it, else null\./.test(CL.goingSection(8, noshow)) && !/going after all/.test(CL.goingSection(8, noshow)));
+check("a no-show question still open: only a no is asked for", /which Cue asked whether they made it to\. going: "no" only when the person says THEY themselves/.test(CL.goingSection(8, noshow)) && /\. Otherwise null\./.test(CL.goingSection(8, noshow)) && !/going after all/.test(CL.goingSection(8, noshow)));
 check("the rest of the prompt is the same with or without it", without === withToday.replace(CL.goingSection(8, today), "").replace("\n9. already_know: ", "\n8. already_know: ").replace(`,\n "noise_event": {"going": null, "quote": null}`, ""));
 
 // ---------------------------------------------------------------- 2. the answer: their own words only
@@ -97,6 +108,45 @@ check("a yes after the night is never written as going", (await P.recordGoing(JO
 await P.recordGoing(JORDAN, false, today);
 await CL.saveCallGoing(JORDAN, said("yes", "I'm coming after all"), "assistant: Sorry you can't make it.\nuser: Good news, the meeting moved, I'm coming after all.", today);
 check("going after all, said on a call: the row clears", presence.get(key(EV, JORDAN))?.not_going_at === null);
+
+// ---------------------------------------------------------------- 3b. a false "no" never counts (review of #380)
+const reads = (line: string, quote: string, going = "no") => CL.readCallGoing(said(going, quote), `assistant: Still on for tonight?\nuser: ${line}`, today);
+let rd = reads("My friend Sam can't make it tonight, so I'm flying solo", "can't make it tonight");
+check("\"My friend Sam can't make it tonight, so I'm flying solo\": someone else, doesn't count", rd.going === null && rd.why === "not_them", rd);
+rd = reads("If work runs late I might not make it", "I might not make it");
+check("\"If work runs late I might not make it\": a condition, doesn't count", rd.going === null && rd.why === "hedged", rd);
+rd = reads("probably not going to make it", "not going to make it");
+check("\"probably not going to make it\": a maybe, doesn't count", rd.going === null && rd.why === "hedged", rd);
+rd = reads("I can't make it tonight", "I can't make it tonight");
+check("\"I can't make it tonight\": still counts", rd.going === false && rd.why === null, rd);
+check("more of the same: she/they/a name/my partner, or maybe, possibly, not sure, may, could: none count", [
+  reads("She can't make it tonight", "can't make it tonight"), reads("They won't make it, they're sick", "won't make it"), reads("Ellis can't make it", "can't make it"),
+  reads("My partner can't come tonight", "can't come tonight"), reads("Maybe I can't make it", "I can't make it"), reads("I possibly can't make it", "can't make it"),
+  reads("Not sure, I can't make it maybe", "I can't make it"), reads("I may not make it tonight", "may not make it"), reads("I could miss it tonight, not make it", "not make it"),
+].every((r) => r.going === null), "");
+check("a firm no in the past tense still counts (couldn't is not could)", reads("Sorry, I couldn't make it last night", "I couldn't make it").going === false);
+check("going after all, about themself: counts; about someone else: doesn't", reads("Good news, I'm coming after all", "I'm coming after all", "yes").going === true && reads("My friend is coming after all", "is coming after all", "yes").going === null);
+presence.clear();
+const decisions: any[] = [];
+const realQ = (pool as any).query;
+(pool as any).query = async (sql: string, p: any[] = []) => { if (/INSERT INTO harness_decisions/.test(sql)) decisions.push(p); return realQ(sql, p); };
+await CL.saveCallGoing(JORDAN, said("no", "can't make it tonight"), "user: My friend Sam can't make it tonight, so I'm flying solo", today);
+(pool as any).query = realQ;
+check("turned down: nothing recorded", !presence.has(key(EV, JORDAN)));
+check("…and one decision, saying why in a word, with none of their words", decisions.length === 1 && decisions[0].includes("not_them") && !JSON.stringify(decisions[0]).match(/Sam|friend|flying|tonight/), decisions);
+
+// ---------------------------------------------------------------- 3c. arrival puts them back in the room
+presence.clear();
+await CL.saveCallGoing(JORDAN, said("no", "I can't make it tonight"), call, today);
+const E = await import("../../src/services/eventScoring.js");
+const guests: any[] = [{ approval_status: "approved", email: "jordan@example.test", phone: "+15550100001", name: "Jordan" }];
+check("a call's no: out of the room", !!presence.get(key(EV, JORDAN))?.not_going_at && (await E.inRoomPool(EV, guests)).length === 0);
+const PR = await import("../../src/services/eventPresence.js");
+const first = await PR.markArrived(EV, JORDAN, "location");
+check("then they arrive: the no is cleared, the arrival is new, and they're back in the pool", first === true && presence.get(key(EV, JORDAN))?.not_going_at === null && !!presence.get(key(EV, JORDAN))?.arrived_at && (await E.inRoomPool(EV, guests)).map((g) => g.user_id).join() === JORDAN);
+check("arriving again is not a new arrival", (await PR.markArrived(EV, JORDAN, "text")) === false);
+await P.recordGoing(JORDAN, false, today);
+check("a later no after arriving, then arrival evidence again: cleared again, not a new arrival", (await PR.markArrived(EV, JORDAN, "text")) === false && presence.get(key(EV, JORDAN))?.not_going_at === null);
 
 // ---------------------------------------------------------------- 4. wiring
 const cl = src("services/callLearning.ts");
