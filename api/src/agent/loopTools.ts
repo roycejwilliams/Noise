@@ -630,7 +630,7 @@ export function loopTools(
         return R.toolResult(r);
       },
     }),
-    // Venue research in the background (services/researchBrief.ts): this only starts it, on their ask or yes (the
+    // Research on rooms, events and communities they'd attend, in the background (services/researchBrief.ts): this only starts it, on their ask or yes (the
     // guard's their_yes). The task finds, checks every line's source and texts the finds, each its link then one line (never a document).
     researchBrief: tool({
       description: toolUse("researchBrief"),
@@ -648,6 +648,14 @@ export function loopTools(
       execute: async (input) => {
         // Search quality (services/researchQuality.ts): the search is built from what's known about them; a load-bearing fact
         // that isn't known is asked, never guessed. "Again" re-sends the last brief's options, re-checked.
+        // The purpose boundary (harness/scope.ts): venue and vendor research for their OWN event is out for now. Only research on rooms,
+        // events and communities they would attend goes ahead. The same check runs again in startResearchBrief and when a brief wakes.
+        const { scopeRefusal } = await import("../services/coTasks.js");
+        const outside = scopeRefusal({ goal: input.what });
+        if (outside) {
+          notDone("The research wasn't started: that isn't something Cue does.");
+          return { ok: false, error: outside.why };
+        }
         if (!input.again) {
           const Q = await import("../services/researchQuality.js");
           const known = { city: input.city?.trim() || (ctx.turn?.profile?.city ?? null), neighborhood: null, budget: null, date: null, start: null, headcount: input.headcount ?? null, likes: [], passes: [] };
@@ -661,16 +669,16 @@ export function loopTools(
         const r = await startResearchBrief({
           userId: ctx.userId,
           theirWords: theirWords(),
-          goal: `Venue research: ${input.what}`.slice(0, 200),
+          goal: `Research: ${input.what}`.slice(0, 200),
           params: { what: input.what.slice(0, 200), date, start: date ? start : null, memberContext: (input.memberContext ?? []).map((x) => x.slice(0, 200)), city: input.city?.trim() || (ctx.turn?.profile?.city ?? null), headcount: input.headcount ?? null, budget: input.budget?.slice(0, 80) ?? null, neighborhood: input.neighborhood?.slice(0, 80) ?? null, again: !!input.again },
         });
         if (!r.ok) {
-          notDone(`The venue research wasn't started: ${r.why}.`);
+          notDone(`The research wasn't started: ${r.why}.`);
           return { ok: false, error: r.why };
         }
         // "Started task #N:" is the shape a promise is backed by (harness/replyGrounding.ts unbackedFollowup), so "I'll text you the brief
         // once it's ready" stands on this.
-        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: researching venues for them in the background ("${input.what.slice(0, 80)}"${date ? `, ${date}${start ? ` from ${start}` : ""}` : ""}). They come as finds by text when it's ready; nothing about options, prices or availability is known yet.`);
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: researching rooms, events and communities for them in the background ("${input.what.slice(0, 80)}"${date ? `, ${date}${start ? ` from ${start}` : ""}` : ""}). They come as finds by text when it's ready; nothing about options, prices or availability is known yet.`);
         return { ok: true, note: "Tell them in one line you're on it and what it verifies will come as texts. Don't name any option, price or availability now." };
       },
     }),

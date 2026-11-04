@@ -98,7 +98,7 @@ export function toolAction(tool: string, input: any): { relation: string; label:
       return s(input?.goal) ? [{ relation: "did", label: `took on a task for them: ${s(input.goal).slice(0, 160)}` }] : null;
     // Kept to read old records: this tool was removed 2026-11-04.
     case "researchBrief":
-      return s(input?.what) ? [{ relation: "did", label: `started researching venues for them: ${s(input.what).slice(0, 160)}` }] : null;
+      return s(input?.what) ? [{ relation: "did", label: `started researching rooms, events and communities for them: ${s(input.what).slice(0, 160)}` }] : null;
     case "closeTask":
       return [{ relation: "did", label: `closed a task (${s(input?.status) || "done"})${s(input?.outcome) ? `: ${s(input.outcome).slice(0, 160)}` : ""}` }];
     // Kept to read old records: this tool was removed 2026-11-04.
