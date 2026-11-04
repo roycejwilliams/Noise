@@ -426,6 +426,7 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
     "services/askSharing.ts": "their yes or no to sharing an ask in intros",
     "services/goalJourney.ts": "a goal closed at their word; check-in clocks",
     "services/whatCoKnows.ts": "corrects or removes an entry at their yes",
+    "services/askExpiry.ts": "takes a time-worded condition off its want 60 days after it was last said (expireTimeBoundCriteria), only if the entry is unchanged",
     "scripts/reclassifyEntries.ts": "hand-run, dev tunnel only, applies an approved list",
     "scripts/resolveActiveAsk.ts": "hand-run test tool",
     "scripts/setStatedAsk.ts": "hand-run test tool",
