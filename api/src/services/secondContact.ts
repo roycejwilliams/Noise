@@ -114,3 +114,24 @@ export async function secondContactRate(o: { sinceDays?: number; includeRecent?:
   const r = rows[0] ?? { intros: 0, answered: 0, met: 0 };
   return { intros: r.intros, answered: r.answered, metAgain: r.met, rate: r.intros ? r.met / r.intros : null, answeredRate: r.answered ? r.met / r.answered : null };
 }
+
+// The intro's "did it help?" follow-up ("your intro to <name>", tier 0, scheduled when the intro went; services/networkIntroNudge.ts),
+// answered (routes/sendblue.ts, the outcome_followup branch): their answer lands on their side of the pair's record deterministically,
+// not only when the reply's model picks noteRoomMeeting (review of #380). The reply's own classifier read of their words decides:
+// something good came of it: met (inferred) and useful yes (their words); it wasn't worthwhile: useful no (their words); anything
+// else: nothing. Cue's noteRoomMeeting in the same reply, from their exact words, replaces it (their newer word wins). Never the
+// other side's record. Returns the pair id written, or null.
+export async function noteIntroFollowUpAnswer(userId: string, matchName: string, outcome: string, now = new Date()): Promise<number | null> {
+  const m = String(matchName ?? "").match(/^your intro to (.+)$/i);
+  if (!m || (outcome !== "named_positive" && outcome !== "named_critical")) return null;
+  const pick = pickIntro(await introducedTo(userId), m[1]);
+  if (!pick || pick === "ambiguous") return null;
+  const RM = await import("./roomMatching.js");
+  const pairId = await RM.introducedPairId(userId, pick.otherId);
+  if (!pairId) return null;
+  if (outcome === "named_positive") {
+    await RM.notePairEvidence(userId, pairId, "met", "yes", "text", "inferred", now);
+    await RM.notePairEvidence(userId, pairId, "useful", "yes", "text", "stated", now);
+  } else await RM.notePairEvidence(userId, pairId, "useful", "no", "text", "stated", now);
+  return pairId;
+}

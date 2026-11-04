@@ -56,6 +56,7 @@ const { default: pool } = await import("../../src/db/db.js");
     return { rows: pairs.filter((r) => (r.a_id === x || r.b_id === x) && r.intro_sent_at).map((r) => ({ ev: clone(r.a_id === x ? r.a_evidence : r.b_evidence), line: r.a_id === x ? r.value_line_a : r.value_line_b })) };
   }
   if (/^SELECT id FROM co_pairs WHERE a_id = \$1 AND b_id = \$2 AND intro_sent_at IS NOT NULL/.test(q)) return { rows: pairs.filter((r) => r.a_id === p[0] && r.b_id === p[1] && r.intro_sent_at).map((r) => ({ id: r.id })) };
+  if (/FROM member_connections c JOIN users u ON u\.id = CASE WHEN c\.person_a = \$1/.test(q)) { const o = p[0] === JORDAN ? ELLIS : JORDAN; return { rows: [{ id: o, first_name: names[o], created_at: new Date() }] }; }
   if (/INSERT INTO harness_decisions/.test(q)) return { rows: [{ id: "1", created_at: new Date() }] };
   return { rows: [] };
 };
@@ -106,13 +107,30 @@ const ellisSide = pairs[0][`${sideOf(ELLIS)}_evidence`];
 check("call: Ellis says on a call it wasn't a fit: his side, source call, stated", n === 1 && ellisSide.useful?.value === "no" && ellisSide.useful?.source === "call" && ellisSide.useful?.how === "stated", ellisSide);
 check("…and Jordan's side is exactly as Jordan left it", JSON.stringify(pairs[0][`${sideOf(JORDAN)}_evidence`]) === JSON.stringify(mine));
 
+// ---------------------------------------------------------------- 2b. the 5-day "did it help?" reply reaches the record without the model
+{
+  const SC = await import("../../src/services/secondContact.js");
+  pairs = [];
+  nextId = 1;
+  await RM.noteNetworkPairIntroduced(JORDAN, ELLIS, REASON);
+  const id = await SC.noteIntroFollowUpAnswer(JORDAN, "your intro to Ellis", "named_positive");
+  const j = pairs[0][`${sideOf(JORDAN)}_evidence`];
+  check("a good answer to \"your intro to Ellis\": Jordan's side, useful yes (their words), met (inferred)", id === pairs[0].id && j.useful?.value === "yes" && j.useful?.how === "stated" && j.met?.value === "yes" && j.met?.how === "inferred", j);
+  check("…Ellis's side untouched", JSON.stringify(pairs[0][`${sideOf(ELLIS)}_evidence`]) === "{}");
+  await SC.noteIntroFollowUpAnswer(ELLIS, "your intro to Jordan", "named_critical");
+  check("a 'wasn't worthwhile' answer: useful no on the answerer's side only", pairs[0][`${sideOf(ELLIS)}_evidence`].useful?.value === "no" && pairs[0][`${sideOf(JORDAN)}_evidence`].useful?.value === "yes");
+  check("no real answer, or not an intro's follow-up: nothing", (await SC.noteIntroFollowUpAnswer(JORDAN, "your intro to Ellis", "not_mentioned")) === null && (await SC.noteIntroFollowUpAnswer(JORDAN, "Founders Salon", "named_positive")) === null && (await SC.noteIntroFollowUpAnswer(JORDAN, "your intro to Noor", "named_positive")) === null);
+  check("…and it feeds their own signal (useful)", (await RM.ownOutcomeSignals(JORDAN))[0]?.kind === "useful");
+  check("wired into the follow-up reply's turn, for intros (tier 0), from the reply's own read", /if \(pendingOutcomeFollowUp\.tier === 0\) await import\("\.\.\/services\/secondContact\.js"\)\.then\(\(SC\) => SC\.noteIntroFollowUpAnswer\(user\.id, pendingOutcomeFollowUp\.match_name, outcome\)\)/.test(src("routes/sendblue.ts")));
+}
+
 // ---------------------------------------------------------------- 3. not a room
 const ns = src("harness/northStar.ts");
 check("the room count leaves network pairs out (they're counted once, as network intros)", /WHERE p\.intro_sent_at IS NOT NULL AND p\.event_id <> 'network'/.test(ns) && /p\.event_id <> 'network' AND p\.intro_sent_at < n\.introduced_at/.test(ns));
 check("the host read is by event id (a network pair is never in a room's readout)", /FROM co_pairs WHERE event_id = \$1 AND intro_sent_at IS NOT NULL/.test(src("services/partnerReadout.ts")));
 check("the event outcome report leaves network pairs out", /p\.event_id <> 'network'/.test(src("scripts/eventOutcomeReport.ts")));
 const one = RM.pairOutcome(pairs[0].a_evidence, pairs[0].b_evidence);
-check("the pair's outcome reads both sides for measurement only (met yes, each side's useful)", one.met === "yes" && one.usefulA === "no" && one.usefulB === "no");
+check("the pair's outcome reads both sides for measurement only (met yes, each side's own useful)", one.met === "yes" && [one.usefulA, one.usefulB].sort().join() === "no,yes", one);
 
 console.log(`network outcomes: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

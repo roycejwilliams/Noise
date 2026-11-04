@@ -154,16 +154,18 @@ export async function getPresence(eventId: string, userId: string) {
   return rows[0] ? { sharing_seen_at: at(rows[0].sharing_seen_at), arrived_at: at(rows[0].arrived_at), location_stopped_at: at(rows[0].location_stopped_at) } : null;
 }
 
-// Marks them arrived once. True only the first time.
+// Marks them arrived once. True only the first time. Arriving is evidence they're going: an earlier "can't make it" (by text, or read
+// from a call, which they never saw played back) is cleared, so they're back in the room (eventScoring.ts inRoomPool; review of #380).
 export async function markArrived(eventId: string, userId: string, via: "location" | "text"): Promise<boolean> {
   const { rows } = await pool.query(
     `INSERT INTO event_presence (event_api_id, user_id, arrived_at, arrived_via) VALUES ($1, $2, NOW(), $3)
-     ON CONFLICT (event_api_id, user_id) DO UPDATE SET arrived_at = NOW(), arrived_via = $3
-       WHERE event_presence.arrived_at IS NULL
-     RETURNING user_id`,
+     ON CONFLICT (event_api_id, user_id) DO UPDATE SET arrived_at = COALESCE(event_presence.arrived_at, NOW()),
+       arrived_via = COALESCE(event_presence.arrived_via, $3), not_going_at = NULL
+       WHERE event_presence.arrived_at IS NULL OR event_presence.not_going_at IS NOT NULL
+     RETURNING user_id, arrived_at = NOW() AS is_new`,
     [eventId, userId, via],
   );
-  const isNew = rows.length > 0;
+  const isNew = rows.length > 0 && rows[0].is_new !== false;
   if (isNew) {
     await recordDecision({ layer: 6, decision: "event.arrived", userId, outcome: "act", action: via, proposal: { eventId } }).catch(() => {});
   }
