@@ -32,6 +32,7 @@ const { default: pool } = await import("../../src/db/db.js");
     const r = presence.get(key(p[0], p[1]));
     return { rows: r ? [{ name_asked_at: null, name_ok: null, brief_sent_at: null, ...r }] : [] };
   }
+  if (/^SELECT \* FROM event_presence WHERE event_api_id = \$1 AND user_id = \$2/.test(q)) { const r = presence.get(key(p[0], p[1])); return { rows: r ? [r] : [] }; }
   if (/INSERT INTO harness_decisions/.test(q)) return { rows: [{ id: "1", created_at: new Date() }] };
   return { rows: [] };
 };
@@ -73,6 +74,12 @@ check("call: saved through recordGoing on their presence row", r.going === false
 const flags = await B.presenceFlags(EV, JORDAN);
 check("the member brief reads it: not going, so no brief", flags.notGoing && !B.briefEligible({ registered: true, notGoing: flags.notGoing, alreadySent: false, eventListed: true }).ok);
 check("the pre-arrival text reads it: not eligible", !P.preArrivalEligible({ registered: true, notGoing: flags.notGoing, alreadySent: false, eventListed: true }).ok);
+{
+  const { proactiveRegistry } = await import("../../src/harness/proactiveRegistry.js");
+  const cand: any = { id: "c1", userId: JORDAN, type: "pre_arrival", payload: { eventId: EV, name: "Founders Table", startAt: new Date(Date.now() + 3 * 3_600_000).toISOString(), timezone: "America/Los_Angeles", canUseLocation: false, until: new Date(Date.now() + 2 * 3_600_000).toISOString() }, createdAt: new Date() };
+  const d: any = await (proactiveRegistry as any).pre_arrival.draft(cand, { firstName: "Jordan", timezone: "America/Los_Angeles" });
+  check("a pre-arrival text already queued: its draft reads the call's no and nothing goes", d && "skip" in d && /can't make it/.test(d.skip), d);
+}
 check("the end-of-night debrief reads it: skipped (the no-show flow has the night)", CF.debriefForPresence({ not_going_at: presence.get(key(EV, JORDAN)).not_going_at }, false) === "skip");
 check("the no-show ask is never sent to someone who said no (its own skip)", /if \(r\?\.noshow_asked_at \|\| r\?\.not_going_at\) continue;/.test(src("services/eventNoShow.ts")));
 presence.clear();
