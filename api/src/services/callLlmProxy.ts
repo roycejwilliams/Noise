@@ -115,9 +115,12 @@ export function memberClosed(theirLast: string): boolean {
   while ((m = re.exec(tail))) {
     const before = tail.slice(Math.max(0, m.index - 30), m.index), after = tail.slice(m.index + m[0].length);
     if (/^bye$/i.test(m[0]) && /^\s+the\s+way\b/i.test(after)) continue;
-    if (/(?:hang up|end the call)/i.test(m[0]) && (/\b(?:don'?t|do not|never|not|without|no)\b[^.?!]{0,25}$/i.test(before) || /\b(?:how|when|should|can i|do i|to)\b[^.?!]{0,25}$/i.test(before) || /^\s+(?:with|for|on|when|to)\b/i.test(after))) continue;
+    if (/(?:hang up|end the call)/i.test(m[0]) && (/\b(?:don'?t|do not|never|not|without|no)\b[^.?!]{0,25}$/i.test(before) || /\b(?:how|when|should i|can i|do i|to)\b[^.?!]{0,25}$/i.test(before) || /^\s+(?:with|for|on|when|to)\b/i.test(after))) continue;
     if (/(?:gotta|got to|have to|need to|should|better|gonna)/i.test(m[0]) && /\b(?:hang on|hold on|one sec(?:ond)?|give me a (?:sec|minute)|just a (?:sec|minute|moment))\b/i.test(tail)) continue;
-    if (/\?|\b(?:actually|wait|one (?:more )?thing|oh and|also|but)\b/i.test(after)) continue;
+    // Skipped only when what follows starts something new: "but what / can / could...", "also can you / what about...", "actually", "wait",
+    // "one more thing", "oh and", or a real question about something else. Thanks or praise after it ("but thank you", "also thanks") never
+    // cancels it, nor does a sign-off question ("talk to you tomorrow?", "see you Thursday then?").
+    if (/^\W*(?:but|also|and)\s+(?:what|when|where|why|how|who|which|can|could|did|do|does|will|would|should|is|are|about)\b/i.test(after) || /\b(?:actually|wait|one (?:more )?thing|oh and)\b/i.test(after) || /\b(?:what|when|where|why|how|who|which|can|could|did|do|does|will|would|is|are)\b[^?]*\?/i.test(after)) continue;
     return true;
   }
   return SHORT_CLOSING.test((sentences[sentences.length - 1] ?? "").trim());

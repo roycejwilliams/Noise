@@ -183,6 +183,9 @@ check("explicit end: the three false closes through callClosing", closes([["assi
 for (const t of ["Oh bye the way, did you see the deck?", "Bye-bye for now, actually one more thing", "Okay bye, what time tomorrow?", "Bye! Oh wait, did you send the link?", "Hang on, gotta go grab the deck, one sec", "Don't hang up yet", "Please don't end the call", "How do I end the call with the investor politely"]) {
   check(`memberClosed: "${t}" does not close`, P2.memberClosed(t) === false && closes([["assistant", "Here is the plan."], ["user", t]]) === false, t);
 }
+for (const t of ["I gotta go, but thank you!", "Gotta go but this was great", "Okay, take care. Also thanks for the list.", "Bye! But really, thanks", "I should probably hang up now", "Okay, talk to you tomorrow?", "Cool, see you Thursday then?"]) {
+  check(`memberClosed: "${t}" closes`, P2.memberClosed(t) === true && closes([["assistant", "Here is the plan."], ["user", t]]) === true, t);
+}
 check("memberClosed: real closes still close", ["Okay, bye!", "Bye", "Wait, bye!", "Alright, I have to run, talk soon", "Okay, hang up now", "ok that's all for now"].every((t) => P2.memberClosed(t)));
 check("opensNew: 'oh and' / 'one thing' after a goodbye keeps the call going", closes([["user", "ok bye"], ["assistant", "Talk soon, Jordan."], ["user", "Oh and one more"]]) === false && closes([["user", "ok bye"], ["assistant", "Talk soon, Jordan."], ["user", "One thing, the date"]]) === false);
 // runtime cap order: thread, then inviter, their first-call words last, and only if still over
