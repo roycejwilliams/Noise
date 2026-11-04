@@ -1003,25 +1003,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // Co's judgment on the goal and each piece, a fail-safe read: unread means light (no split) and every piece theirs.
         const read = await G.readGoal(title, theirWords, cleaned);
         let split = G.splitFor(cleaned.map((i) => ({ ...i, reach: read.reach.get(i.n) ?? "unread" })), read.clubWorld);
-        // Admin and grind (outside the club's world): one reminder for the whole goal and its deadline, always. The deadline is the
-        // moment Co gave, or one in their own words ("before the 30th"), read in code.
-        const lightMoment = goalMoment ?? G.deadlineInTheirWords(ctx.resolvedContent, new Date(), zone);
-        if (!read.clubWorld) split = G.withLightReminder(split, title, lightMoment, { now: new Date(), zone });
         const mayTake = split.filter((i) => i.owner === "co");
         const handedBack = cleaned.filter((i) => i.owner === "co" && split.find((x) => x.n === i.n)?.owner === "member");
-        // The light path: Co reads only what it can offer (the reminder and its timing) and the instruction to offer it. Who owns the rest
-        // and why the goal is light stay in the log (goal.offered), never in what Co reads: Co echoed that framing back as a decline.
-        const reminderPiece = !read.clubWorld ? split.find((i) => i.owner === "co" && i.how === "reminder") ?? null : null;
+        // Outside the club's world (taxes, inbox, errands, shopping, travel: the purpose boundary, Royce 2026-11-04): the goal is heard and
+        // kept on file, and nothing is offered on it, not even a reminder. Who owns what and why stay in the log, never in what Co reads.
         const guidance = !read.clubWorld
-          ? reminderPiece?.suggest
-            ? `Open your reply with a plain, warm offer, in your own words and short, to remind them about ${reminderPiece.text.replace(/, ahead of .*$/, "")} on ${reminderPiece.suggest.day}: name what it's for and that day. Make it simply an offer, never framed against a limit (no "what I can do is", "all I can", "the most I can"). A line of real help can follow it. If they say yes, pickGoalItems with piece ${reminderPiece.n} and checkIn "${reminderPiece.suggest.day}" (or the day they pick instead).`
-            : `Open your reply with a plain, warm offer, in your own words and short, to remind them about ${reminderPiece?.text ?? "it"}, and ask what day suits them. Make it simply an offer, never framed against a limit (no "what I can do is", "all I can", "the most I can"). A line of real help can follow it. If they say yes, pickGoalItems with piece ${reminderPiece?.n ?? 1} and the day they give in checkIn.`
+          ? "This isn't something Cue works on or holds a reminder for. Hear them out like a person would and answer the moment; if it matters to say, say briefly in your own fresh words that it isn't something you do, never a stock line, no offer of a reminder, no forced introduction, no question just to keep it going."
           : mayTake.length
             ? "Offer the split once, in your own words, naturally, in this reply: what you'd take and what stays with them. No list, no numbers, no form. Nothing starts until they pick."
             : "Nothing here is yours to take on your own: every piece stays with them. Help in the moment.";
         if (ctx.dryRun) {
           ctx.facts?.add("known", `Goal they handed you, "${title}": ${guidance}`);
-          if (!read.clubWorld) return { ok: true, youMayOffer: reminderPiece ? [{ n: reminderPiece.n, text: reminderPiece.text, how: "reminder", suggestedDay: reminderPiece.suggest?.day ?? null }] : [], guidance };
+          if (!read.clubWorld) return { ok: true, youMayOffer: [], guidance };
           return { ok: true, clubWorld: read.clubWorld, youMayOffer: mayTake.map((i) => ({ n: i.n, text: i.text, how: i.how })), staysTheirs: split.filter((i) => i.owner === "member").map((i) => ({ n: i.n, text: i.text })), guidance };
         }
         const r = await G.offerGoal({ userId: ctx.userId, title, theirWords, items: split, clubWorld: read.clubWorld, clubWhy: read.why, moment: goalMoment, sourceFile: fromFile?.n ?? null, handedOver: fromFile?.quote ?? null });
@@ -1033,9 +1026,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // The offer itself, backed as an offer (2026-10-13: "I can text you a nudge on the 27th" was cut as an unbacked promise, and only
         // "Want me to set that?" went out): what Co can do for them if they say yes, offered in this reply, nothing set. It backs "I can..."
         // and "want me to...?"; it never backs "I'll text you on the 27th" as if it were set (replyGrounding.ts OFFERED_NOT_SET).
-        for (const line of G.offerFactLines(read.clubWorld ? mayTake : split.filter((i) => i.owner === "co" && i.how === "reminder"))) ctx.facts?.add("capability", line);
+        for (const line of G.offerFactLines(read.clubWorld ? mayTake : [])) ctx.facts?.add("capability", line);
         ctx.facts?.add("known", `Goal #${r.goal.id} they handed you, "${r.goal.title}", is on file${fromFile ? `, its pieces from their file #${fromFile.n}, which they handed over ("${fromFile.quote.slice(0, 120)}"); only those piece titles are yours to use, nothing else from the file` : ""}${goalMoment ? `; the moment it's for: ${goalMoment.words}` : ""}. Nothing is started on it until they pick. ${guidance}`);
-        if (!read.clubWorld) return { ok: true, goalId: r.goal.id, youMayOffer: reminderPiece ? [{ n: reminderPiece.n, text: reminderPiece.text, how: "reminder", suggestedDay: reminderPiece.suggest?.day ?? null }] : [], guidance };
+        if (!read.clubWorld) return { ok: true, goalId: r.goal.id, youMayOffer: [], guidance };
         return {
           ok: true,
           goalId: r.goal.id,
@@ -1586,6 +1579,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // Something that may be an open task of Co's (services/statusCheck.ts, Royce 2026-10-13): said once, Co decides.
         const c = await statusCandidate(what, differentFrom, "saveAsk");
         if (c) return { ok: false, error: c.hold };
+        // The purpose boundary (harness/scope.ts): an errand, shopping, travel, a general research project, a job-board watch, a funding
+        // search is still remembered (saved below, as kind "outside"), but never searched, checked in on or promised.
+        const outsideNow = (await import("../services/askKind.js")).outsideAsk(what);
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would save ask for ${ctx.userId}: "${what}"`);
         } else {
@@ -1601,10 +1597,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
           await recordDecision({ layer: 3, decision: "reply.saveAsk", userId: ctx.userId, outcome: "act", action: saved.deduped ? "updated_ask" : "saved_ask", proposal: { what, saved: saved.ask.text } });
           // Where and until when, in the same breath (services/wantWhen.ts, the bounce): kept only when their own words say it.
           const where = await wantWhereFromWords(ctx, saved.ask.text, { place, until, theirWords }).catch(() => null);
-          if (where) {
+          if (where && !outsideNow) {
             ctx.facts?.add("ongoing", where.fact);
             return { ok: true, note: `Saved. ${where.note} You can say you'll keep looking and text them if something real fits. Don't promise a time.` };
           }
+        }
+        if (outsideNow) {
+          ctx.facts?.add("known", `They told Cue about "${what.slice(0, 120)}". It's on file as something they said; Cue does not look for it, check in on it or watch for it.`);
+          return { ok: true, note: "Noted on file only. Cue doesn't search for this or follow up on it, so don't say you'll keep looking, check back or watch for it. If it matters, say briefly in your own fresh words that it isn't something you do; no stock line, no forced introduction." };
         }
         ctx.facts?.add("ongoing", `Cue's daily search is now looking for: "${what}". If something real fits, Cue may text them (at most one text a day). Cue can't promise it will find anything, or when.`);
         return { ok: true, note: "Saved. You can say you'll keep looking and text them if something real fits. Don't promise a time." };
