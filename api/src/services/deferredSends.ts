@@ -18,7 +18,7 @@ import { dropStaleAck } from "./speakable.js";
 import { recordDecision } from "../harness/core.js";
 import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, SUBJECT_CLOSED } from "../harness/closedSubject.js";
 
-export type AfterKind = "relay" | "reminder" | "network_intro_ask" | "event_direct_ask" | "call_confirm" | "co_event_announce";
+export type AfterKind = "relay" | "reminder" | "network_intro_ask" | "event_direct_ask" | "call_confirm" | "co_event_announce" | "research_finds";
 export type AfterSend = { kind: AfterKind; payload: Record<string, unknown> };
 export type SendOutcome = "sent" | "skipped" | "failed";
 
@@ -99,6 +99,10 @@ export const EVENT_OVER = "event over";
 export type AfterHandlers = Record<AfterKind, (payload: any, outcome: SendOutcome, reason?: string) => Promise<void>>;
 
 export const afterHandlers: AfterHandlers = {
+  // A research result that waited at the door and went: only now are its finds on file and counted as shown.
+  research_finds: async (p, outcome) => {
+    if (outcome === "sent") await (await import("./researchBrief.js")).recordSentResearchFinds(String(p.userId), Number(p.taskId), Array.isArray(p.finds) ? p.finds : []);
+  },
   relay: async (p, outcome) => (await import("./relay.js")).relayDelivered(Number(p.relayId), outcome),
   reminder: async (p, outcome, reason) => (await import("./relay.js")).reminderDelivered(Number(p.reminderId), outcome, reason),
   // Not sent because the other side already said yes (their own yes sent the intro): nothing to tell the asker.

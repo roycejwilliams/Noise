@@ -253,15 +253,14 @@ try {
   const w3 = await runBrief(3);
   // The line doesn't answer a fresh message of theirs, so it waits at the door for Cue's next message (harness/door.ts): nothing is sent
   // this minute, the task stays open (held to look again), and the door closes it as dropped, saying the search didn't run, once it went.
-  // Requested work: sent directly (the pause never holds it), the task closes as dropped saying the search didn't run.
-  check("... wake 3: exactly one line, the approved one, sent; the task closes as dropped, saying the search didn't run", w3.texts.length === 1 && w3.texts[0] === RB.SEARCH_FAILED_LINE && w3.closes.length === 1 && w3.closes[0]?.status === "dropped" && /search didn't run/.test(w3.closes[0]?.outcome ?? ""), w3);
+  check("... wake 3: exactly one line, the approved one, queued at the door (not sent yet); the task stays open and closes as dropped once it goes", w3.texts.length === 0 && w3.queued.length === 1 && w3.queued[0] === RB.SEARCH_FAILED_LINE && w3.closes.length === 0 && w3.holds === 1 && w3.queuedTask[0] === 42 && w3.queuedClose[0]?.status === "dropped" && /search didn't run/.test(w3.queuedClose[0]?.outcome ?? ""), w3);
   budget = [FULL, FULL, FULL];
   exa = () => ({ status: 200, body: { results: [] } });
   const b1 = await runBrief(1);
   check("the brief, every search blocked by the budget, wake 1: nothing sent, nothing closed (a retry, the same as a failure)", b1.texts.length === 0 && b1.queued.length === 0 && b1.closes.length === 0, b1);
   budget = [];
   const ok2 = await runBrief(2);
-  check("a retry where the search works: the normal path (the find runs; with nothing found it's the 'no venues' line, never the failure line)", ok2.exaCalls > 0 && ok2.texts.length === 1 && ok2.texts[0] !== RB.SEARCH_FAILED_LINE && /couldn't verify any venues that fit/.test(ok2.texts[0] ?? ""), ok2);
+  check("a retry where the search works: the normal path (the find runs; with nothing found it's the brief's own 'no venues' line, never the failure line)", ok2.exaCalls > 0 && ok2.texts.length === 0 && ok2.queued.length === 1 && ok2.queued[0] !== RB.SEARCH_FAILED_LINE && /couldn't verify any venues that fit/.test(ok2.queued[0]) && ok2.closes.length === 0 && ok2.queuedClose[0]?.status === "done", ok2);
   rowsFor = () => [];
 } finally {
   globalThis.fetch = realFetch;

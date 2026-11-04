@@ -12,6 +12,7 @@
 // Sources: the scripted Peerspace reader, and since round 2 passed (evals/browserPilot/round2.ts: 39 right, 11 unknown, 0
 // wrong on 12 sites with no script) the general reader (services/sdkGeneralReader.ts) for a venue's own pages.
 import { regionFor } from "./areaCodes.js";
+import { proactivePaused } from "./proactivePause.js";
 import { schemaFields, type FieldValue, type FindField, type FindType, type StoredFind } from "./researchQuality.js";
 import { assembleMessages, captionOk, draftTaskMessages, type SendItem } from "./taskMessages.js";
 
@@ -200,6 +201,7 @@ export const briefSearchNext = (wakes: number): "retry" | "tell" => (wakes <= BR
 export const BRIEF_DOOR_LOOK_HOURS = 12;
 export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boolean; queued?: boolean }, wakes: number): "told" | "hold" | "untold" | "queued" {
   // Waiting at the door for Cue's next message (harness/door.ts): not told yet; the task stays open until the pick sends it.
+  if (r.door && r.queued) return "queued";
   // Its line ended at the door without going (past its valid-until): never told, and no more looks.
   if (r.door && /^ended at the door/.test(r.reason ?? "")) return "untold";
   if (r.sent || r.reason === "already sent") return "told";
@@ -212,6 +214,14 @@ export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boo
 }
 
 type BriefParams = { what?: string; city?: string | null; neighborhood?: string | null; date?: string | null; start?: string | null; headcount?: number | null; budget?: string | null; memberContext?: string[]; again?: boolean };
+
+// On file as research finds (so "send it" has the link) and as shown finds (the ranking signal for the next run). Called only once the
+// texts went out: right after a direct send, or by the door's after-send step when the pick sent them (services/deferredSends.ts).
+export async function recordSentResearchFinds(userId: string, taskId: number, fs: ResearchFind[]): Promise<void> {
+  const [{ recordResearchFinds }, Q] = await Promise.all([import("./researchFinds.js"), import("./researchQuality.js")]);
+  await recordResearchFinds(userId, fs.map((f) => ({ name: f.name, url: f.url, facts: f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value}`).join("; ") }))).catch(() => 0);
+  await Q.recordShownFinds(userId, taskId, fs.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
+}
 
 // The background run of one research task (services/taskTurn.ts runDueTasks): find (or, for "send it again", re-check the
 // last run's finds), rank, text them as finds (link, then one line), record what was shown, close. Never a document.
@@ -235,21 +245,35 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // A line to them that ends the brief (what it came to, or the question it needs first). Outside their hours it used to be
   // dropped while the task closed as done, so they never heard (2026-10-07). Now: told, then closed; outside their hours, held
   // to their morning with the task kept open; never told for any other reason, closed as dropped and saying so.
-  // On file as research finds (so "send it" has the link) and as shown finds (the ranking signal for the next run).
-  const recordSentFinds = async (fs: ResearchFind[]) => {
-    const { recordResearchFinds } = await import("./researchFinds.js");
-    await recordResearchFinds(task.userId, fs.map((f) => ({ name: f.name, url: f.url, facts: f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value}`).join("; ") }))).catch(() => 0);
-    await Q.recordShownFinds(task.userId, task.id, fs.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
-  };
+  const recordSentFinds = (fs: ResearchFind[]) => recordSentResearchFinds(task.userId, task.id, fs);
   const tellThenClose = async (what: string | string[], status: "done" | "dropped", outcome: string, record?: ResearchFind[]) => {
     const messages = Array.isArray(what) ? what : [what];
     const text = messages.join("\n");
-    // Work they asked for: the pause on unprompted outreach never holds it (requested), and it doesn't wait at the door. Opt-out,
-    // safety, their hours and their own rule still apply.
-    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages, timezone: zone, respectHours: true, requested: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null } }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; retryAt?: Date });
+    // Work they asked for (requested): the pause on unprompted outreach never holds it. Unless the pause is on, it goes through the door
+    // (harness/door.ts) at its priority band, gathered with whatever else is ready and capped, unless it answers their latest message.
+    // The task stays open until the pick sends it: the door closes it then, and records the finds (after-send step), or, if it never
+    // goes, closes it as not told. Paused, the door isn't a way out (the dispatcher is stopped), so it goes directly. Opt-out, safety,
+    // their hours and their own rule still apply either way.
+    const door = proactivePaused()
+      ? undefined
+      : {
+          summary: `The venue research they asked for: ${String(p.what ?? "").slice(0, 120)}`,
+          validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone),
+          taskId: task.id,
+          close: { status, outcome },
+          awaitingReply: false,
+          ...(record?.length ? { after: { kind: "research_finds" as const, payload: { userId: task.userId, taskId: task.id, finds: record } } } : {}),
+        };
+    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages, timezone: zone, respectHours: true, requested: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, ...(door ? { door } : {}) }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; retryAt?: Date; door?: boolean; queued?: boolean });
     const next = briefLineOutcome(r, task.wakes);
     // Recorded only for what actually went out.
     if (next === "told" && r.sent && record?.length) await recordSentFinds(record).catch(() => {});
+    if (next === "queued") {
+      // Waiting at the door: the task stays open, looking again later only to re-hand the same line (the same key, so never twice).
+      const { holdBriefLine, unspendWake } = await import("./coTasks.js");
+      if (await holdBriefLine(task.userId, task.id, { text, messages, status, outcome, ...(record?.length ? { record } : {}) }, new Date(Date.now() + BRIEF_DOOR_LOOK_HOURS * 3_600_000))) await unspendWake(task.userId, task.id).catch(() => {});
+      return;
+    }
     if (next === "hold") {
       const { holdBriefLine, unspendWake } = await import("./coTasks.js");
       const { nextSendable } = await import("./memberTime.js");

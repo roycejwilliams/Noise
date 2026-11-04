@@ -45,7 +45,9 @@ const rb = src("services/researchBrief.ts");
 // ---- requested work goes through a proactive pause (opt-out, safety, hours and their own rule still apply)
 {
   const run0 = rb.slice(rb.indexOf("export async function runResearchBriefTask"));
-  check("the research send is requested work: sendExempt(requested: true), no door", /requested: true/.test(run0) && !/door:/.test(run0.slice(run0.indexOf("const tellThenClose"), run0.indexOf("// A line held from an earlier run"))));
+  const tell0 = run0.slice(run0.indexOf("const tellThenClose"), run0.indexOf("// A line held from an earlier run"));
+  check("the research send is requested work through the door: not paused, a door spec at the requested band; paused, no door (it goes directly)", /requested: true/.test(tell0) && /const door = proactivePaused\(\)\s*\? undefined\s*: \{/.test(tell0) && /doorValidUntil\("requested"/.test(tell0) && /\.\.\.\(door \? \{ door \} : \{\}\)/.test(tell0));
+  check("a result that waited at the door and went records its finds then (after-send step), never at queue time", /after: \{ kind: "research_finds" as const/.test(tell0) && /research_finds: async \(p, outcome\) => \{\s*if \(outcome === "sent"\)/.test(src("services/deferredSends.ts")));
   const px = src("harness/proactive.ts");
   check("sendExempt: the pause holds unprompted sends, never a requested one", /if \(proactivePaused\(\) && !opts\.requested\) return \{ sent: false, reason: "proactive outreach is paused" \}/.test(px));
   process.env.PROACTIVE_PAUSED = "true";
