@@ -1730,6 +1730,20 @@ export function sendblueRouter(io: Server): Router {
         }
         const replySnapshot = await snapshotP;
         turn = turnP ? await turnP.catch(() => null) : null;
+        // The find their words point at, resolved once before the facts: the turn read's referent (meant, #368), a find they name, or the
+        // find Cue's recent texts named. Its stored record is filled with no window, so the facts, the lines and the call parity all read
+        // the same result (2026-11-04: "Where is that one located?" about a five-day-old find with newer finds since).
+        if (turn && hasText) {
+          try {
+            const T = await import("../services/turnContext.js");
+            const mt = turnRead?.exchange?.meant ?? null;
+            const mItem = mt?.item ? (exchangeBase as import("../services/exchangeRecord.js").ExchangeBase | null)?.done.find((d) => d.id === mt.item) ?? null : null;
+            const coTexts = [...(await import("../harness/repeatAsk.js")).turnsFromConversation(recentConversation)].reverse().filter((t) => t.from === "co").map((t) => t.text);
+            turn.referents = await T.resolveReferents(user.id, turn, { message: resolvedContent, meantLabel: mItem?.label ?? null, meantUrl: mItem?.url ?? null, coTexts });
+          } catch (err: any) {
+            console.error("sendblue: resolving the find they asked about failed (non-fatal):", err?.message ?? err);
+          }
+        }
         // This message's feeling was just recorded; the context read the ones before it.
         if (turn) turn.emotional = emotional;
         // The rule read lands before the facts (at most a few seconds' wait; past that the reply goes without it and the rule is still stored).
@@ -2010,29 +2024,6 @@ export function sendblueRouter(io: Server): Router {
             // name or their words.
             const thing = (id: string | null) => !!id && ["link", "find", "document", "card"].includes(record.done.find((d) => d.id === id)?.kind ?? "");
             if (r.meant && (thing(r.meant.item) || thing(r.meant.notItem))) recordDecision({ layer: 3, decision: "turn.meant", userId: user.id, outcome: "act", action: r.meant.item ?? "none", proposal: { label: thing(r.meant.item) ? r.meant.label : null, notLabel: thing(r.meant.notItem) ? r.meant.notLabel : null } }).catch(() => {});
-          }
-        }
-        // The find their words point at (the turn read's referent, #368; else one they name, else the one Cue's last text named): its
-        // stored fields and the day Cue sent it go in the facts however old the send is, so a question about it is answered from the
-        // record (2026-11-04: "Where is that one located?" and "What day did you send that" about a five-day-old find).
-        if (turn?.sent?.length && hasText) {
-          try {
-            const [T, R, mt] = await Promise.all([import("../services/turnContext.js"), import("../harness/repeatAsk.js"), import("../services/memberTime.js")]);
-            const meant = replyFacts.exchange?.read?.meant ?? null;
-            const meantItem = meant?.item ? replyFacts.exchange?.done.find((d) => d.id === meant.item) ?? null : null;
-            const lastCo = [...R.turnsFromConversation(recentConversation)].reverse().find((t) => t.from === "co")?.text ?? null;
-            const referred = T.referredSent(turn.sent, { message: resolvedContent, meantLabel: meantItem?.label ?? null, meantUrl: meantItem?.url ?? null, lastCoText: lastCo });
-            if (referred.length) {
-              const zone = await mt.memberZone(user.id).catch(() => null);
-              await T.fillDetails(referred, { withinDays: 60 }).catch(() => {});
-              for (const f of referred) {
-                for (const line of T.sentFindFacts(f, new Date(), zone)) addFact(replyFacts, "known", line);
-                // The referent the turn read resolved, when the facts build didn't already name it: its own stored offer.
-                await (await import("../harness/replyGrounding.js")).addStoredOfferFacts(replyFacts, user.id, f.name, zone).catch(() => false);
-              }
-            }
-          } catch (err: any) {
-            console.error("sendblue: the referred find's record failed (non-fatal):", err?.message ?? err);
           }
         }
         const brainDecision = planTextReply({ userId: user.id, read: turnRead, owed: owesReply, safetyConcern: crisisWording, clarify: decision.clarifyContext ?? null, repeat: repeatContext || null, walkinAsk: walkinAskInstruction || null, waiting: turn?.waiting?.length && !turn.knowledge?.restraint?.safetyHold ? (await import("../harness/waiting.js")).waitingMention(turn.waiting) : null, turn }, replyFacts);

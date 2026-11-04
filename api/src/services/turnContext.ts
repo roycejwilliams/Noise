@@ -57,6 +57,8 @@ export type TurnContext = {
   profile: Record<string, any> | null;
   snapshot: PersonSnapshot | null;
   sent: SentItem[];
+  // The finds their message points at, resolved once for this turn (resolveReferents) with their stored fields filled, no window.
+  referents?: SentItem[];
   asks: { text: string; kind: "find" | "help" }[];
   // line: the thread with its stamp (when they said it, whether it is old): what a call briefing prints. Older than DROP_AFTER_DAYS is left out.
   threads: { text: string; feeling: string | null; line: string }[];
@@ -228,11 +230,19 @@ export async function loadSentItems(userId: string, days = 45): Promise<SentItem
 // key first (the router's), details and post text filled in from the offers.
 // dated: Co's sent-record rows (name, when, when_end): they only fill a date in on something already listed, never add an item.
 export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: any[] = []): SentItem[] {
-  const byName = new Map<string, SentItem>();
+  const items: SentItem[] = [];
+  const idOf = (x: SentItem) => (x.key?.startsWith("event:") ? x.key : null);
+  const urlKey = (u: string | null) => (u ? u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase() : null);
+  // The same thing: the same event id or link; with neither on one side, the same name. Two events of one name with different links or
+  // ids (another city, another date) stay two (a lookup by url or id finds the right one).
+  const same = (a: SentItem, b: SentItem) => {
+    if (idOf(a) && idOf(b)) return idOf(a) === idOf(b);
+    if (a.url && b.url) return urlKey(a.url) === urlKey(b.url);
+    return norm(a.name) === norm(b.name);
+  };
   const add = (item: SentItem) => {
-    const k = norm(item.name);
-    const had = byName.get(k);
-    if (!had) byName.set(k, item);
+    const had = items.find((x) => same(x, item));
+    if (!had) items.push(item);
     else {
       // Same thing from another source: keep the first key, fill in what's missing.
       had.url ??= item.url;
@@ -274,10 +284,10 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: an
     add({ key: x.event_api_id ? `event:${x.event_api_id}` : nameKey(x.name), name: x.name, kind: x.event_api_id ? "event" : "opportunity", url: x.url ?? null, sentAt: new Date(r.created_at), reaction: null, details: null, postText: null, endsOn: endsOnOf(x) });
   }
   for (const r of dated) {
-    const had = r?.name ? byName.get(norm(String(r.name))) : undefined;
+    const had = r?.name ? items.find((x) => norm(x.name) === norm(String(r.name))) : undefined;
     if (had && !had.endsOn) had.endsOn = r.when_end || r.when || null;
   }
-  return [...byName.values()].sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+  return items.sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
 }
 
 // Pure: the last day a find is still ahead, as on file: an opening's deadline, else the end or the date of the event (the same fields
@@ -319,7 +329,7 @@ export async function fillDetails(items: SentItem[], opts: { withinDays?: number
 // What's on file for each recent send, and what isn't, as facts: "I don't
 // have the start time" is then only ever true.
 // now: the moment it's read for (tests pin it; 2026-10-11 the Phase B test went red a day later on the real clock).
-export function sentDetailLines(ctx: Pick<TurnContext, "sent"> & { google?: string[] }, withinDays = 5, now = new Date(), o: { zone?: string | null; also?: readonly SentItem[] } = {}): string[] {
+export function sentDetailLines(ctx: Pick<TurnContext, "sent"> & { google?: string[] }, withinDays = 5, now = new Date(), o: { zone?: string | null; also?: readonly SentItem[]; referentMax?: number } = {}): string[] {
   const cutoff = now.getTime() - withinDays * 86_400_000;
   return [...sentLines(ctx, cutoff, now, o), ...(ctx.google ?? [])];
 }
@@ -332,16 +342,20 @@ export function sentOnWords(at: Date, zone: string | null = null): string {
 }
 
 // Pure: everything stored about one find Cue sent, as facts: the day it went out, the link, and its page or saved fields, with what
-// isn't on file said as exactly that (never "nothing on file" for a find whose record exists). A place only shown after host approval
-// is said as that, with the link.
+// isn't stored said as exactly that (never "nothing on file" for a find whose record exists). "The exact address shows after approval"
+// is said only when the record says registration needs host approval; otherwise the address is plainly not stored, and the link is where
+// to look.
+const HIDDEN_ADDRESS = /the exact address is only shown to registered guests/;
 export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null = null): string[] {
   const out = [`Cue sent them "${s.name}" on ${sentOnWords(s.sentAt, zone)}${s.url ? `; the link it sent: ${s.url}` : "; no link is on file for it"}.`];
+  const gate = (line: string, approval: boolean | null | undefined) => (HIDDEN_ADDRESS.test(line) ? line.replace(HIDDEN_ADDRESS, approval ? "the exact address shows once the host approves their registration" : "its street address isn't stored") : line);
   if (s.read) out.push(describeRead(s.name, s.read).facts.join(" "));
   else if (s.details) {
-    const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now, zone).join(" ");
+    const approval = s.details.requiresApproval;
+    const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now, zone).map((l) => gate(l, approval)).join(" ");
     const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "address"].filter(Boolean);
     out.push(`Details on file for "${s.name}", which Cue sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`);
-    if (!s.details.online && !s.details.venue && !s.details.address && !s.details.city && s.city) out.push(`"${s.name}" is in ${s.city}; the exact address is only shown to registered guests.`);
+    if (!s.details.online && !s.details.venue && !s.details.address && !s.details.city && s.city) out.push(`"${s.name}" is in ${s.city}; ${approval ? "the exact address shows once the host approves their registration" : "its street address isn't stored"}.`);
   } else {
     if (s.city) out.push(`"${s.name}" is in ${s.city}; its street address isn't stored.`);
     out.push(`Its page hasn't been read yet, so Cue has no start time or address for "${s.name}"${s.url ? `; the link is the place to check` : ""}.`);
@@ -349,12 +363,38 @@ export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null
   return out;
 }
 
-function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number, now = new Date(), o: { zone?: string | null; also?: readonly SentItem[] } = {}): string[] {
-  const recent = ctx.sent.filter((s) => s.sentAt.getTime() > cutoff).slice(0, 5);
-  // A find the member's question points at stays in the facts however old it is (2026-11-04: "Where is that one located?" about a find
-  // sent five days before had dropped out of the five-day window, and Cue said nothing was on file).
-  const extra = (o.also ?? []).filter((s) => !recent.includes(s));
-  return [...recent, ...extra].map((s) => sentFindFacts(s, now, o.zone ?? null).join(" "));
+// Pure: what in a reply would answer a question about this find: its stored fields as the words a reply would use (city, venue, address,
+// hosts, price, the day it happens, the day Cue sent it, how many days ago), and whether "the address shows after approval" is true
+// of it (only when its record says registration needs host approval). moveCheck.ts reads this and nothing else of the find.
+export type ReferentAnswer = { name: string; url: string | null; tokens: string[]; approvalGap: boolean };
+export function referentAnswer(s: SentItem, now = new Date(), zone: string | null = null): ReferentAnswer {
+  const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
+  const days = (d: DateTime) => [d.toFormat("LLL d"), d.toFormat("LLLL d"), d.toFormat("cccc"), d.toFormat("ccc d")];
+  const tokens: string[] = [];
+  const d = s.details;
+  const read = (f: { value: string } | undefined | null) => (f?.value ? [f.value] : []);
+  tokens.push(...[d?.city, s.city, d?.venue, d?.address, ...(d?.hosts ?? []), d?.price && d.price !== "free" ? d.price : null].filter((x): x is string => !!x && x.length >= 3));
+  if (d?.price === "free") tokens.push("free");
+  if (s.read) for (const f of ["venue", "address", "host", "cost"] as const) tokens.push(...read((s.read as any).fields?.[f]));
+  const at = (iso: string | null | undefined) => { if (!iso) return null; const x = DateTime.fromISO(iso, { setZone: true }); return x.isValid ? x : null; };
+  const start = at(d?.startAt ?? s.endsOn);
+  if (start) tokens.push(...days(start.setZone(d?.timezone || z)));
+  const sentD = DateTime.fromJSDate(s.sentAt).setZone(z);
+  tokens.push(...days(sentD));
+  const n = Math.max(0, Math.round((now.getTime() - s.sentAt.getTime()) / 86_400_000));
+  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+  tokens.push(`${n} days ago`, ...(n <= 10 ? [`${words[n]} days ago`] : []));
+  if (n >= 7 && n < 14) tokens.push("last week");
+  return { name: s.name, url: s.url, tokens: [...new Set(tokens.map((t) => t.trim()).filter(Boolean))], approvalGap: d?.requiresApproval === true };
+}
+
+// The referents (named or pointed at) come first, then the recent sends, so a size cap (a call's CALL_SENT_MAX) cuts the oldest recent
+// send and never the find they asked about.
+function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number, now = new Date(), o: { zone?: string | null; also?: readonly SentItem[]; referentMax?: number } = {}): string[] {
+  const first = [...(o.also ?? [])];
+  const recent = ctx.sent.filter((s) => s.sentAt.getTime() > cutoff && !first.includes(s)).slice(0, 5);
+  const cut = (t: string, isFirst: boolean) => (isFirst && o.referentMax && t.length > o.referentMax ? `${t.slice(0, o.referentMax - 1).trimEnd()}…` : t);
+  return [...first, ...recent].map((s) => cut(sentFindFacts(s, now, o.zone ?? null).join(" "), first.includes(s)));
 }
 
 // Co's own reads of those pages and anything unconfirmed: hints for drafting,
@@ -367,28 +407,130 @@ export function sentDetailHints(ctx: Pick<TurnContext, "sent">, withinDays = 5):
     .flatMap((s) => describeRead(s.name, s.read!).hints);
 }
 
-// Pure: the finds Cue sent that their message points at, so their stored fields reach the reply however old the send is. The referent
-// the turn read resolved (meant, #368) first; else a find they name; else, for a question about a find, the one Cue's last text named.
-export function referredSent(sent: readonly SentItem[], o: { message: string; meantLabel?: string | null; meantUrl?: string | null; lastCoText?: string | null }): SentItem[] {
-  const out = new Set<SentItem>();
-  const normUrlOf = (u: string) => u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
+const normUrlOf = (u: string) => u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
+// Whole-word match of a name in a text ("coffee" in a sentence is not a find named "Coffee" unless the whole name is there as words).
+const WORD_STOP = new Set(["the", "a", "an", "and", "of", "at", "in", "on", "to", "for", "with"]);
+const namedIn = (text: string, name: string): number => {
+  const n = norm(name);
+  if (n.length < 3) return -1;
+  // A one-word name ("Coffee") must be written as the name (capitalized, as stored); a lowercase "coffee" in a sentence is the word.
+  if (!n.includes(" ")) return new RegExp(`(?:^|[^A-Za-z0-9])${name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`).exec(text)?.index ?? -1;
+  return ` ${norm(text)} `.indexOf(` ${n} `);
+};
+// Their words point at something Cue said, with a pointing word and no noun of their own ("that", "that one", "the link"); a question
+// that names a different thing ("that pottery class") is not pointing at the last find.
+export const POINTING = /\b(?:that|this|it|those)\b(?!\s+(?:[a-z']+\s+){0,2}(?:class|event|dinner|night|party|meetup|workshop|lunch|brunch|mixer|talk|show|festival|session|gig|retreat|conference)\b)|\b(?:that|this|the) one\b|\bthe (?:link|address|location|venue|price|date|time|day|city)\b/i;
+
+// Pure: the finds Cue sent that their message points at, so their stored fields reach the reply however old the send is. In order: the
+// referent the turn read resolved (meant, #368: its link, else its label); the finds they name (whole words); else, when they point
+// ("that", "that one") and name nothing, the find in the newest of Cue's recent texts that names one (coTexts, newest first), the one
+// mentioned last in that text. A thing they name that Cue never sent resolves to nothing: never the last find by default.
+export function referredSent(sent: readonly SentItem[], o: { message: string; meantLabel?: string | null; meantUrl?: string | null; coTexts?: readonly string[] }): SentItem[] {
+  const out: SentItem[] = [];
+  const put = (x: SentItem | undefined) => { if (x && !out.includes(x)) out.push(x); };
   const byUrl = (u: string) => sent.find((x) => x.url && normUrlOf(x.url) === normUrlOf(u));
-  if (o.meantUrl) { const f = byUrl(o.meantUrl); if (f) out.add(f); }
-  if (o.meantLabel) { const f = findSent(sent as SentItem[], o.meantLabel); if (f) out.add(f); }
-  const nameIn = (text: string) => sent.filter((x) => norm(x.name).length >= 3 && norm(text).includes(norm(x.name)));
-  for (const f of nameIn(o.message)) out.add(f);
-  if (!out.size && ASKS_ABOUT_FIND.test(o.message) && o.lastCoText) {
-    for (const f of nameIn(o.lastCoText)) out.add(f);
-    for (const u of o.lastCoText.match(/https?:\/\/[^\s)>\]"']+/g) ?? []) { const f = byUrl(u); if (f) out.add(f); }
+  if (o.meantUrl) put(byUrl(o.meantUrl));
+  if (!out.length && o.meantLabel) for (const x of sent.filter((x) => norm(x.name) === norm(o.meantLabel!)).slice(0, 2)) put(x);
+  for (const u of o.message.match(/https?:\/\/[^\s)>\]"']+/g) ?? []) put(byUrl(u));
+  for (const x of sent) if (namedIn(o.message, x.name) >= 0) put(x);
+  if (!out.length && POINTING.test(o.message) && ASKS_ABOUT_FIND.test(o.message)) {
+    for (const text of (o.coTexts ?? []).slice(0, 8)) {
+      const hits = sent.map((x) => ({ x, at: Math.max(namedIn(text, x.name), x.url && text.includes(x.url) ? text.indexOf(x.url) : -1) })).filter((h) => h.at >= 0).sort((a, b) => b.at - a.at);
+      if (hits.length) { put(hits[0].x); break; }
+    }
   }
-  return [...out].slice(0, 2);
+  return out.slice(0, 2);
 }
 
-// Pure: the finds Cue sent that Cue's own recent texts named (a follow-up, a debrief), newest send first, at most max. A call opens with
-// no question yet, so what the thread was just about is the referent it can resolve; its stored fields stay in the call's facts.
-export function sentNamedIn(sent: readonly SentItem[], texts: readonly string[], max = 3): SentItem[] {
-  const said = norm(texts.join(" \n "));
-  return sent.filter((x) => norm(x.name).length >= 3 && said.includes(norm(x.name))).slice(0, max);
+// Pure: the finds Cue sent that Cue's own recent texts named (a follow-up, a debrief), ranked by how recently a text named them (texts
+// newest first; later in a text before earlier), at most max. A call opens with no question yet, so what the thread was just about is the
+// referent it can resolve; ranked, never cut by the age of the send.
+export function sentNamedIn(sent: readonly SentItem[], textsNewestFirst: readonly string[], max = 3): SentItem[] {
+  const out: SentItem[] = [];
+  for (const text of textsNewestFirst) {
+    const hits = sent.map((x) => ({ x, at: Math.max(namedIn(text, x.name), x.url && text.includes(x.url) ? text.indexOf(x.url) : -1) })).filter((h) => h.at >= 0 && !out.includes(h.x)).sort((a, b) => b.at - a.at);
+    for (const h of hits) out.push(h.x);
+    if (out.length >= max) break;
+  }
+  return out.slice(0, max);
+}
+
+type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
+const likeEsc = (t: string) => t.replace(/[\\%_]/g, (c) => `\\${c}`);
+const reEsc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// The stored offer for one find, by its link or event id (by name only when it has neither), however long ago: no window. Scoped to the
+// member. Null when none is stored.
+export async function loadStoredMatch(userId: string, item: Pick<SentItem, "name" | "url" | "key">, db: Db = pool): Promise<any | null> {
+  const apiId = item.key?.startsWith("event:") ? item.key.slice(6) : null;
+  const pats = [item.url ? `%${likeEsc(normUrlOf(item.url))}%` : null, apiId ? `%${likeEsc(apiId)}%` : null, !item.url && !apiId ? `%${likeEsc(item.name)}%` : null].filter((x): x is string => !!x);
+  if (!pats.length) return null;
+  const { rows } = await db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'event_offer_pending' AND content ILIKE ANY($2::text[]) ORDER BY created_at DESC LIMIT 20`, [userId, pats]);
+  for (const r of rows) {
+    let m: any = null;
+    try { m = JSON.parse(r.content)?.match; } catch { continue; }
+    if (!m?.name) continue;
+    const ok = (apiId && m.event_api_id === apiId) || (item.url && m.url && normUrlOf(m.url) === normUrlOf(item.url)) || (!item.url && !apiId && norm(m.name) === norm(item.name));
+    if (ok) return m;
+  }
+  return null;
+}
+
+// Finds Cue sent by name (whole words), however long ago: no window, this member only. For a name the turn read or the member gave that
+// isn't in the recent list. Newest first, at most 3.
+export async function loadSentNamed(userId: string, name: string, db: Db = pool): Promise<SentItem[]> {
+  const n = name.trim();
+  if (norm(n).length < 3) return [];
+  const re = `(^|[^[:alnum:]])${reEsc(n)}([^[:alnum:]]|$)`;
+  const [revealed, offers, recs] = await Promise.all([
+    db.query(`SELECT item_key, item_name, kind, url, sent_at, reaction FROM revealed_offers WHERE user_id = $1 AND item_name ~* $2 ORDER BY sent_at DESC LIMIT 6`, [userId, re]).then((r) => r.rows).catch(() => [] as any[]),
+    db.query(`SELECT payload->'match' AS m, decided_at FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND payload->'match'->>'name' ~* $2 ORDER BY decided_at DESC LIMIT 6`, [userId, re]).then((r) => r.rows).catch(() => [] as any[]),
+    db.query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'recommendation_offered' AND content ~* $2 ORDER BY created_at DESC LIMIT 6`, [userId, re]).then((r) => r.rows).catch(() => [] as any[]),
+  ]);
+  return mergeSent(revealed, offers, recs).filter((x) => namedIn(n, x.name) >= 0 || namedIn(x.name, n) >= 0).slice(0, 3);
+}
+
+// Capitalized or quoted phrases in their message that could name a find (not a leading question word).
+const LEAD_STOP = new Set(["where", "what", "when", "which", "who", "how", "did", "do", "does", "is", "was", "are", "can", "could", "would", "i", "hey", "ok", "okay", "thanks", "so", "and", "but", "the", "a"]);
+export function namedPhrases(message: string): string[] {
+  const out: string[] = [];
+  for (const m of message.matchAll(/["“]([^"”]{3,60})["”]/g)) out.push(m[1].trim());
+  for (const m of message.matchAll(/\b[A-Z][\w'’&-]*(?:\s+[A-Z][\w'’&-]*)*/g)) {
+    const words = m[0].split(/\s+/);
+    while (words.length && (LEAD_STOP.has(words[0].toLowerCase()) && (m.index === 0 || words.length > 1))) words.shift();
+    const phrase = words.join(" ");
+    if (phrase.length >= 4 && !LEAD_STOP.has(phrase.toLowerCase())) out.push(phrase);
+  }
+  return [...new Set(out)].slice(0, 3);
+}
+
+// Resolve, once per turn, the finds their message points at and fill each one's stored record with no window: the saved page read, the
+// stored offer's details and city, found by link or event id. The turn's lists and the facts then read this one result. The turn read's
+// meant (an item's link and label) is passed in; a referent not in the recent list is looked up by name, whole words, however old.
+export async function resolveReferents(userId: string, turn: Pick<TurnContext, "sent" | "message">, o: { message: string; meantLabel?: string | null; meantUrl?: string | null; coTexts?: readonly string[]; db?: Db; fill?: (items: SentItem[]) => Promise<void> } = { message: "" }): Promise<SentItem[]> {
+  const db = o.db ?? pool;
+  let found = referredSent(turn.sent, { message: o.message, meantLabel: o.meantLabel, meantUrl: o.meantUrl, coTexts: o.coTexts });
+  if (!found.length && ASKS_ABOUT_FIND.test(o.message)) {
+    const names = [o.meantLabel, ...namedPhrases(o.message)].filter((x): x is string => !!x);
+    for (const n of names) {
+      const older = await loadSentNamed(userId, n, db).catch(() => [] as SentItem[]);
+      for (const x of older) if (!found.some((f) => f.key === x.key && f.url === x.url)) found.push(x);
+      if (found.length) break;
+    }
+    found = found.slice(0, 2);
+  }
+  await Promise.all(found.map(async (i) => {
+    const m = await loadStoredMatch(userId, i, db).catch(() => null);
+    if (m) {
+      i.details ??= m.details ?? null;
+      i.city ??= m.city ?? m.details?.city ?? null;
+      i.checkedAt ??= m.checkedAt ?? null;
+      i.postText ??= m.opportunity?.postText ?? m.evidence ?? null;
+      i.url ??= m.url ?? null;
+    }
+  }));
+  await (o.fill ?? ((items: SentItem[]) => fillDetails(items, { withinDays: 36500, max: 3 })))(found).catch(() => {});
+  return found;
 }
 
 // A thing Co sent, by the name the member (or Co's tool) used for it.
