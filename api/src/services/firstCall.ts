@@ -23,21 +23,36 @@ export const WORK_OR_PLANS =
 // What never goes in the opening, whatever else the line says: an invite code, an email, a number, a link, a question about Cue.
 const NOT_OPENING = /\b(?:code|invite|invited)\b|@|https?:\/\/|\bwww\.|\d{3}[\s.-]?\d{3}[\s.-]?\d{4}|\bcue\b|\bco\b(?![-\w])/i;
 
+// Pure: whether a line may go in the opening at all (work or plans, never sensitive, never a code/email/number/link/question about Cue).
+const openable = (t: string, minWords: number): boolean => t.split(/\s+/).length >= minWords && WORK_OR_PLANS.test(t) && !SENSITIVE.test(t) && !NOT_OPENING.test(t);
+const cutAtWord = (t: string, max: number): string => {
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const at = cut.lastIndexOf(" ");
+  return (at > 40 ? cut.slice(0, at) : cut).replace(/[,;:]$/, "");
+};
+
 // Pure: the sentence of theirs the opening may build on, cut to at most `max` characters at a word. Newest first; null when none fits.
 export function openingWords(theirTexts: string[], max: number = FIRST_CALL.wordsMax): string | null {
   for (const text of theirTexts) {
     const sentences = String(text).replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/);
     for (const s of sentences) {
       const t = s.trim();
-      if (t.split(/\s+/).length < 4) continue;
-      if (!WORK_OR_PLANS.test(t) || SENSITIVE.test(t) || NOT_OPENING.test(t)) continue;
-      if (t.length <= max) return t;
-      const cut = t.slice(0, max);
-      const at = cut.lastIndexOf(" ");
-      return (at > 40 ? cut.slice(0, at) : cut).replace(/[,;:]$/, "");
+      if (openable(t, 4)) return cutAtWord(t, max);
     }
   }
   return null;
+}
+
+// Pure: the one line a later call's opening may build on (Royce's 2026-11-04 review: three calls opened with the same "what's on your
+// mind"). The most recent open thread first (their open loops' titles, newest change first), then the latest sentence of theirs; the
+// same work-or-plans and SENSITIVE filters as a first call's words, at most FIRST_CALL.wordsMax characters. Null when none fits.
+export function threadLine(openThreads: string[], theirTexts: string[], max: number = FIRST_CALL.wordsMax): string | null {
+  for (const raw of openThreads) {
+    const t = String(raw).replace(/\s+/g, " ").trim();
+    if (openable(t, 2)) return cutAtWord(t, max);
+  }
+  return openingWords(theirTexts, max);
 }
 
 // Pure: the inviter's first name, only when it appears as a word in their own texts (ruling 2). Never anyone else's name.
@@ -89,4 +104,23 @@ export async function firstCallFacts(userId: string, db: Db = pool): Promise<Fir
     emailOnFile: !!email && !hasPendingEmail(email),
     emailAsked: Number(user?.intake_retries ?? 0) > 0 || oldLine,
   };
+}
+
+// A later call's thread (see threadLine), read for one member: open loops and their latest texts, minus anything their removals took
+// back (same guard as a first call). Any read that fails leaves its piece out; null when nothing fits.
+export async function laterCallThread(userId: string, db: Db = pool): Promise<string | null> {
+  const { notToTeammate } = await import("./teamLines.js");
+  const [loops, texts, removed] = await Promise.all([
+    db
+      .query(`SELECT title FROM open_loops WHERE user_id = $1 AND closed_at IS NULL ORDER BY changed_at DESC LIMIT 8`, [userId])
+      .then((r) => r.rows.map((x: any) => String(x.title ?? "")))
+      .catch(() => [] as string[]),
+    db
+      .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 20`, [userId])
+      .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/, "")))
+      .catch(() => [] as string[]),
+    import("./whatCoKnows.js").then((W) => W.forgottenRows(userId, db as any).then((rows) => ({ W, rows: rows.filter((g) => g.removed) }))).catch(() => null),
+  ]);
+  const keep = (xs: string[]) => (removed?.rows.length ? xs.map((t) => removed.W.guardText(t, removed.rows)).filter((t): t is string => !!t && !!t.trim()) : xs);
+  return threadLine(keep(loops), keep(texts));
 }

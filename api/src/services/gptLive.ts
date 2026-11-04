@@ -170,7 +170,6 @@ export const LIVE_VOICE_RULES: { from: "call prompt" | "CO_VOICE" | "VARIETY_GUI
   { from: "call prompt", line: "Short sentences, one thought each, as many as the moment needs and no more." },
   { from: "call prompt", line: "Talk like a person, not a script. Skip filler like \"absolutely\", \"happy to help\", and stock lines of empathy. Vary how you start your turns: never start with \"Okay, so\", and don't open most turns with the same word. Show you got it by responding to the specific thing they said." },
   { from: "VARIETY_GUIDE", line: "Never sound scripted. Answer what this person just said, in words that could only follow it. A sentence that would fit after any answer is a stock sentence: comfort that sums up how heavy things are, gratitude for their opening up, praise for their honesty, a claim that you can only guess, a line that names the size of what happened. Don't say those." },
-  { from: "call prompt", line: "Ask one question per turn. Once you've asked it, stop and let them answer; never follow it with the same question in other words." },
   { from: "call prompt", line: "Speak to what happened, not to how they feel about it, and let your next question show you caught it." },
   { from: "OPENING_NOTE", line: "How you work behind the scenes is never news." },
   { from: "call prompt", line: "Never state a fact you weren't given, about them, other people, events, or yourself and what you can do. If you don't know, say so." },
@@ -232,7 +231,7 @@ Do not guess the result while waiting. Never name an event, place, time or perso
 // On a first call (no past call transcript: services/firstCall.ts), the opening also gets the first-call line, one line of their own
 // texted words (work or plans only, through callReason.ts SENSITIVE, at most FIRST_CALL.wordsMax characters), and the member who
 // brought them in only when they wrote that name themselves (Royce, 2026-11-02, rulings 1-2).
-export type OpeningContext = { timeOfDay: string | null; reason: string | null; firstCall?: boolean; theirWords?: string | null; inviter?: string | null };
+export type OpeningContext = { timeOfDay: string | null; reason: string | null; firstCall?: boolean; theirWords?: string | null; inviter?: string | null; thread?: string | null };
 // Outbound (review of #333): whoever picks up usually speaks first, so GPT-Live waits for them (the bridge opens it after openWaitMs if
 // nothing comes, or on AMD's human verdict).
 export const OPEN_WHEN_THEY_ANSWER = "When they answer, open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
@@ -240,6 +239,9 @@ export const OPEN_IN_OWN_WORDS = "When the call connects, you speak first: open 
 export const OPEN_NOW = "The call just connected. Open it now, in your own words.";
 // The ElevenLabs opener writer's own rule, copied word for word (the 10-31 smoke opened with "I've been thinking about you").
 export const OPEN_NO_STOCK = `No "how are you", no "good to hear your voice", no "I remember", no "I was thinking about you".`;
+// Royce's 2026-11-04 call review: three calls opened "what's on your mind tonight?", "what's driving your thoughts right now?" and "I'm here,
+// I'm with you. What's on your mind tonight?". The family is out, and a line about where they left off is what the opening builds on.
+export const OPEN_NO_MIND = `Never open with "what's on your mind" or "I'm here, I'm with you". If given where you left off, open from it.`;
 // Pure: "Saturday afternoon", in their zone.
 export function timeOfDay(now: Date, zone: string): string | null {
   const t = DateTime.fromJSDate(now).setZone(zone);
@@ -255,8 +257,12 @@ export const reasonNote = (reason: string): string => `Why you called them (back
 // voicemail, hears the opening. Inbound they called from their own verified number, so they're in the instructions.
 export const FIRST_CALL_LINE = "This is your first real conversation with them.";
 export const theirWordsNote = (w: string): string => `What they texted you before this call, in their own words (background for how you open, never to read out): "${w}"`;
+// A later call's one line of where things were left (Royce's 2026-11-04 call review): the most recent open thread or topic, through the
+// same work-or-plans and SENSITIVE filters as a first call's words (services/firstCall.ts threadLine). Inbound it's in the instructions,
+// outbound it waits for a person with the reason (heldOpeningNote).
+export const threadNote = (t: string): string => `Where you left off with them (background for how you open, never to read out): "${t}"`;
 export const inviterNote = (name: string): string => `Who brought them in: ${name}, a member. They named ${name} themselves.`;
-const personalLines = (c: OpeningContext): string[] => [c.theirWords ? theirWordsNote(c.theirWords) : null, c.inviter ? inviterNote(c.inviter) : null].filter((x): x is string => !!x);
+const personalLines = (c: OpeningContext): string[] => [c.theirWords ? theirWordsNote(c.theirWords) : null, c.thread ? threadNote(c.thread) : null, c.inviter ? inviterNote(c.inviter) : null].filter((x): x is string => !!x);
 export function openingBackground(c: OpeningContext, direction: "inbound" | "outbound" = "inbound"): string {
   return [
     c.timeOfDay ? `It's ${c.timeOfDay} for them.` : null,
@@ -278,20 +284,30 @@ export const VOICEMAIL_WAIT = "If a recorded voicemail greeting answers instead 
 // a text is coming; never why Cue called, and nothing about them.
 export const VOICEMAIL_NOW = "Their voicemail is recording now, and someone else may hear it. Leave a short message in your own words saying only this: their first name, that it's Cue, that you're sorry you missed them, and that you'll text them. Never say why you called, and nothing about them or their life. Then say nothing more.";
 
+// How a call feels (Royce's 2026-11-04 review of his own GPT-Live calls: no wind-down, a question on almost every turn, a deep question to
+// someone showing Cue off to a friend, "You're not rushing" stated as fact). Guidance only: no sentence check can tell a question that
+// fits from one that doesn't. The thinking has the same four in BACKEND_NOTE.
+export const LIVE_FEEL = [
+  "One question at most, and not every turn: a reaction or an opinion often beats one.",
+  "Keep it light and brief with others around, a quick hi, or little time.",
+  "Back-to-back short agreements, thanks, \"I'm good\", or \"hello?\" after your point: they're done, not a dropped line. One closing line, goodbye, no new question.",
+];
+
 // Pure: GPT-Live's whole prompt. Role and style (who's on the line, who called whom, how to open, Cue's voice), then the three
 // policies. Nothing about the member beyond their first name, the call's situation and the opening's background: what Cue knows
 // about them is the thinking's (BACKEND_NOTE).
 export function liveInstructions(o: { firstName: string; direction: "inbound" | "outbound"; team: boolean; opening?: OpeningContext; identity?: string }): string {
   const bg = o.opening ? openingBackground(o.opening, o.direction) : "";
   const vm = o.direction === "outbound" ? `\n${VOICEMAIL_WAIT}` : "";
-  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${o.direction === "outbound" ? OPEN_WHEN_THEY_ANSWER : OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK}${bg ? `\n${bg}` : ""}${vm}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n\n${LIVE_POLICY}`;
+  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${o.direction === "outbound" ? OPEN_WHEN_THEY_ANSWER : OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK} ${OPEN_NO_MIND}${bg ? `\n${bg}` : ""}${vm}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n${LIVE_FEEL.join("\n")}\n\n${LIVE_POLICY}`;
 }
 
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms). How long an answer runs (2026-11-02: the
 // 10-31 delegated answers ran p50 ~400 characters, ~70 words, ~25 s spoken; 2 of 3 GPT-Live calls failed short_spoken_replies) follows
 // OpenAI's delegation guide ("Keep answers concise ... Avoid long explanations"): guidance, never a cap in code.
+export const BACKEND_FEEL = `They're winding down when they give short agreements in a row ("yeah, I agree"), say thanks or "I'm good", or say "hello?" right after you made your point. On the first clear sign, never ask a new question or bring a topic back: if the voice hasn't closed yet, write one short closing line, the takeaway or the next step, and a goodbye; if it has, end the call with your tool and write nothing. A reaction, an agreement or an opinion often beats another question: ask at most one question every other turn. Match the moment: if they're with other people, just saying hi, or short on time, keep it light and brief, with no deep questions. When they ask for your read on themselves or a decision, give an opinion and the reason for it, and leave room for them to disagree; never state their feelings or motives as fact.`;
 export const BACKEND_NOTE = `# How this call runs
-This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. When it takes several steps, say the first few as short complete steps and stop there so they can say go on; never leave a step, a condition or a safety instruction half said. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. What you can do on this call, if anything, is in the note that comes with each turn. When they're wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual.`;
+This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. When it takes several steps, say the first few as short complete steps and stop there so they can say go on; never leave a step, a condition or a safety instruction half said. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. What you can do on this call, if anything, is in the note that comes with each turn. When they're wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual. ${BACKEND_FEEL}`;
 
 // Everything one GPT-Live call needs, built by the TwiML route for the verified caller only.
 export type LiveCall = { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; callKey: string; voiceOn: boolean; instructions: string; backendSystem: string; opening: OpeningContext; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; budgetLimited?: boolean };
@@ -299,7 +315,7 @@ export type LiveCall = { userId: string; callSid: string | null; firstName: stri
 // Pure: the call's two prompts: GPT-Live's short one, and the thinking's, which is the ElevenLabs agent's prompt filled with this
 // member's values (the same values registerElevenLabsCall sends, the call's situation first in the context).
 export type FirstCallFacts = { firstCall: boolean; theirWords?: string | null; inviter?: string | null; emailOnFile?: boolean; emailAsked?: boolean };
-export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; callKey?: string; voiceOn?: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null; first?: FirstCallFacts }): LiveCall {
+export function buildLiveCall(o: { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; team: boolean; callKey?: string; voiceOn?: boolean; voiceLayer: string; contextSummary: string; rightNow: string; findsNow: string; callReason: string; timeOfDay: string | null; first?: FirstCallFacts; thread?: string | null }): LiveCall {
   const findsNow = o.findsNow || "Nothing to offer right now. Don't offer an event.";
   const first = o.first?.firstCall ? o.first : null;
   // While the voice read is on for them, the thinking is told how a stop works on a call (VOICE_READ_CALL_RULE), as on ElevenLabs.
@@ -307,7 +323,7 @@ export function buildLiveCall(o: { userId: string; callSid: string | null; first
   const opening: OpeningContext = {
     timeOfDay: o.timeOfDay,
     reason: o.direction === "outbound" ? o.callReason.replace(/\s+/g, " ").trim().slice(0, 300) || null : null,
-    ...(first ? { firstCall: true, theirWords: first.theirWords ? first.theirWords.slice(0, FIRST_CALL.wordsMax) : null, inviter: first.inviter ?? null } : {}),
+    ...(first ? { firstCall: true, theirWords: first.theirWords ? first.theirWords.slice(0, FIRST_CALL.wordsMax) : null, inviter: first.inviter ?? null } : o.thread ? { thread: o.thread.slice(0, FIRST_CALL.wordsMax) } : {}),
   };
   const prompt = fillCallVars(liveCallPrompt(voiceForCall(o.voiceLayer, !!first)), { first_name: o.firstName || "there", context_summary: contextSummary, direction: o.direction, right_now: o.rightNow, finds_now: findsNow, call_reason: o.callReason, user_id: "", call_token: "" });
   return {
@@ -442,6 +458,40 @@ export function liveCallWords(req: OaiRequest, exchange: (x: { side: "member" | 
     recentExchange: exchange(msgs.slice(0, i).map((m) => ({ side: m.role === "user" ? ("member" as const) : ("co" as const), text: txt(m) }))),
   };
 }
+// Pure: a cheap, deterministic closing signal from the call itself (Royce's 2026-11-04 review: "Yeah, I agree. Hello", then "Yeah, I agree"
+// again, and he had to say "we could end the call"). True when their last two turns are each three words or fewer and nothing but
+// agreement or thanks, or when their last turn is that plus a "hello?" check. Never true on one bare "yeah" or "thanks": they may go on.
+const ASSENT = new Set("yeah yes yep yup ok okay sure right totally exactly true agree agreed i sounds good cool got it fair thanks thank you thx great fine alright mm hmm mhm uh huh perfect no problem appreciate that".split(" "));
+const assentWords = (t: string): string[] | null => {
+  const w = t.toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(Boolean);
+  return w.length >= 1 && w.length <= 3 && w.every((x) => ASSENT.has(x)) ? w : null;
+};
+export function windDownSignal(req: OaiRequest): boolean {
+  const txt = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
+  const theirs = req.messages.filter((m) => m.role === "user").map(txt).map((t) => t.trim()).filter(Boolean);
+  const last = theirs[theirs.length - 1];
+  if (!last) return false;
+  const hello = /^(.*?)[\s,.!?]*\b(?:hello|hi|hey|you there)\b[\s.!?]*$/is.exec(last);
+  if (hello && hello[1].trim() && assentWords(hello[1])) return true;
+  return theirs.length >= 2 && !!assentWords(last) && !!assentWords(theirs[theirs.length - 2]);
+}
+export const WIND_DOWN_NOTE = "(Cue's note, not their words.) They're winding down: their last turns were short agreements. Don't ask a new question or bring a topic back. If the voice hasn't closed yet, write one short closing line, the takeaway or the next step, and a goodbye; if it has, end the call with your tool and write nothing.";
+// Pure: the last two things Cue said both ended on a question (guidance for the rhythm: a reaction or an opinion often beats another question).
+export function askedLastTurn(req: OaiRequest): boolean {
+  const txt = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
+  const cue = req.messages.filter((m) => m.role === "assistant").map(txt).map((t) => t.trim()).filter(Boolean);
+  return /\?["')\]]*$/.test(cue[cue.length - 1] ?? "");
+}
+export const NO_QUESTION_NOTE = "(Cue's note, not their words.) Your last turn ended on a question. End this one on a reaction, an agreement or an opinion instead, unless you need an answer to go on.";
+// Pure: their last turn is a short agreement (three words or fewer) after a turn of Cue's that asked nothing: the "Yeah. So," moment of the
+// 2026-11-04 call, where Cue filled the space with another topic. Softer than windDownSignal: one agreement alone is not a goodbye.
+export function agreedBriefly(req: OaiRequest): boolean {
+  const txt = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
+  const last = req.messages[req.messages.length - 1];
+  const cue = req.messages.filter((m) => m.role === "assistant").map(txt).map((t) => t.trim()).filter(Boolean);
+  return !!last && last.role === "user" && !!assentWords(txt(last).trim()) && cue.length >= 2 && !/\?["')\]]*$/.test(cue[cue.length - 1]);
+}
+export const AGREED_NOTE = "(Cue's note, not their words.) They agreed in a few words and you hadn't asked anything. Don't fill the space with a new question or topic: a short reaction is enough, and if your point is made, one closing line and a goodbye.";
 export type ThinkOptions = {
   // This turn's tools (liveCallTools), built only when it isn't a safety turn.
   tools?: LiveToolsFor | null;
@@ -491,7 +541,7 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   // After their words, past the cache breakpoint (runCallLlm turnNotes): the call's system prompt stays the same every turn. Never the
   // cap note on a safety turn: nothing pulls it back to an earlier answer.
   const X = exchange ? await import("./exchangeRecord.js") : null;
-  const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : "", X ? X.callTurnNote(exchange) ?? "" : ""].filter(Boolean);
+  const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : "", !safety0 && windDownSignal(req) ? WIND_DOWN_NOTE : "", !safety0 && !windDownSignal(req) ? (agreedBriefly(req) ? AGREED_NOTE : askedLastTurn(req) ? NO_QUESTION_NOTE : "") : "", X ? X.callTurnNote(exchange) ?? "" : ""].filter(Boolean);
   const streamed = !!onSentence && !safety0 && !callClosing(req);
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
