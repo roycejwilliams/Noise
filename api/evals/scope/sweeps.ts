@@ -50,6 +50,15 @@ check("a lookout keeps its kind, except that an out-of-scope one moves to outsid
   check("remembered, not closed: the kind write never resolves or deletes the ask", updates.every((u) => !/resolved_at|DELETE/.test(u.sql)) && !log.some((l) => /DELETE FROM ask_checkins|resolved_at = /.test(l.sql)));
 }
 
+// ---- 1b. a mixed ask is searched for its connection part only
+{
+  const SC = await import("../../src/harness/scope.js");
+  check("a mixed ask is searched for the connection part: the errand clause is left out", SC.connectionPart("Founder dinners in the Mission, and book me a dentist") === "Founder dinners in the Mission" && K.searchPartOf("Founder dinners in the Mission and find me a dentist near the Mission") === "Founder dinners in the Mission");
+  check("an ask with nothing outside it is unchanged, and one that is all outside has no part", SC.connectionPart("Founder dinners and mixers in the Mission") === "Founder dinners and mixers in the Mission" && SC.connectionPart("Find me a dentist") === null && K.searchPartOf("Find me a dentist") === "Find me a dentist");
+  const sweepSrc = src("services/dailySweep.ts") + src("jobs/index.ts") + src("services/eventSurfacingSweep.ts");
+  check("all three searches (morning floor, hourly, new ask after a call) use the connection part", (sweepSrc.match(/searchPartOf\(/g) ?? []).length >= 3);
+}
+
 // ---- 2. the morning sweep skips an out-of-scope ask (an old row still marked find too) and searches nothing
 {
   const D = await import("../../src/services/dailySweep.js");
