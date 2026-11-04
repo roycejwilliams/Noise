@@ -99,7 +99,7 @@ export const SAFETY_TURN = new RegExp([
 ].join("|"), "i");
 // The member closing the call, anywhere in their last words ("ok, talk soon", "I should probably get going"). Co never hangs up
 // first (Royce, 2026-10-08): ElevenLabs' end_call passes only after this, or after Co's goodbye has had their reply.
-export const MEMBER_CLOSING = /\b(?:bye|goodbye|good ?night|talk (?:to you )?(?:soon|later|tomorrow)|take care|see (?:you|ya)|catch you later|speak soon|ttyl|signing off|(?:gotta|got to|have to|need to|should(?: probably)?|better|i'?m gonna) (?:go|run|jump|hop off|head out|get going|bounce|jet)(?! (?:with|to|ahead|for|and|over|through|back)\b)|i'?ll let you go|i'?m off(?! (?:work|today|tomorrow|on|for|this|next|until|till)\b)|heading out|hang up|end the call|that'?s (?:it|all) (?:for now|from me|i (?:had|needed)))\b/i;
+export const MEMBER_CLOSING = /\b(?:bye|goodbye|good ?night|talk (?:to you )?(?:soon|later|tomorrow)|take care|see (?:you|ya)|catch you later|speak soon|ttyl|signing off|(?:gotta|got to|have to|need to|should(?: probably)?|better|i'?m gonna) (?:go|run|jump|hop off|head out|get going|bounce|jet)(?! (?:with|to|ahead|for|and|over|through|back|grab|get|find|check|look|pick|make|take|see)\b)|i'?ll let you go|i'?m off(?! (?:work|today|tomorrow|on|for|this|next|until|till)\b)|heading out|hang up|end the call|that'?s (?:it|all) (?:for now|from me|i (?:had|needed)))\b/i;
 // A short closing on its own ("Later!", "Night.", "Cheers, Co.", "Peace."): only as the whole of their last sentence.
 const SHORT_CLOSING = /^(?:(?:ok(?:ay)?|alright|thanks|anyway|no|nope|nah|all good|i'?m good)[,.!]?\s+)*(?:later|night|peace|cheers|ciao|ttyl|that'?s it|that'?s all|all good|i'?m good)\b[\s\w,'!.]{0,16}$/i;
 // Pure: their last words close the call. Only the last sentence or two counts, so "I'll go with the first one" mid-thought never
@@ -107,7 +107,20 @@ const SHORT_CLOSING = /^(?:(?:ok(?:ay)?|alright|thanks|anyway|no|nope|nah|all go
 export function memberClosed(theirLast: string): boolean {
   const sentences = theirLast.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
   const tail = sentences.slice(-2).join(" ");
-  return MEMBER_CLOSING.test(tail) || SHORT_CLOSING.test((sentences[sentences.length - 1] ?? "").trim());
+  // Every closing phrase in the tail, each read in its place: "bye the way" is no bye; "don't hang up yet" and "how do I end the call with
+  // the investor" are not requests to end; "gotta go grab the deck, one sec" is not leaving; and a bye followed in the same turn by a
+  // question or "actually / wait / one more thing" is the start of something new, not the end.
+  const re = new RegExp(MEMBER_CLOSING.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(tail))) {
+    const before = tail.slice(Math.max(0, m.index - 30), m.index), after = tail.slice(m.index + m[0].length);
+    if (/^bye$/i.test(m[0]) && /^\s+the\s+way\b/i.test(after)) continue;
+    if (/(?:hang up|end the call)/i.test(m[0]) && (/\b(?:don'?t|do not|never|not|without|no)\b[^.?!]{0,25}$/i.test(before) || /\b(?:how|when|should|can i|do i|to)\b[^.?!]{0,25}$/i.test(before) || /^\s+(?:with|for|on|when|to)\b/i.test(after))) continue;
+    if (/(?:gotta|got to|have to|need to|should|better|gonna)/i.test(m[0]) && /\b(?:hang on|hold on|one sec(?:ond)?|give me a (?:sec|minute)|just a (?:sec|minute|moment))\b/i.test(tail)) continue;
+    if (/\?|\b(?:actually|wait|one (?:more )?thing|oh and|also|but)\b/i.test(after)) continue;
+    return true;
+  }
+  return SHORT_CLOSING.test((sentences[sentences.length - 1] ?? "").trim());
 }
 // Co's own goodbye in its last turn, however phrased ("Alright Royce, take care.", "Enjoy tonight, bye!", "Night!", "Cheers, Jordan.").
 export const CO_CLOSING = /\b(?:bye|goodbye|good ?night|night|take care|talk (?:to you )?(?:soon|later|tomorrow)|speak soon|see you|catch you later|cheers|enjoy (?:tonight|the|your|it)|have a (?:good|great|nice|lovely) (?:night|evening|one|day|weekend|time|trip))\b/i;
@@ -348,7 +361,18 @@ export function safetyCall(b: OaiRequest): boolean {
 // A goodbye Co guessed at plus any reply is not a close. The same read runCallLlm makes for the turn's closed fact; a caller that hands sentences on before the answer is done uses it
 // to hold a closing turn's words until it knows whether the call ends.
 // An explicit request to end the call: needs no confirmation.
-const EXPLICIT_END = /\b(?:end (?:the|this|our) call|hang up|we (?:can|could) (?:end|stop|wrap)(?: up| this)?|let'?s (?:end|stop|wrap)(?: up| this)?|you can (?:hang up|go ahead and end))\b/i;
+// An explicit request to end the call, about the call itself: "end the call", "hang up", "I need to go / hop off", "we can wrap up" with nothing
+// after it, "I should let you go". "Let's stop this and go over the pitch", "wrap up the deck first" and "stop this whole plan" are not.
+const EXPLICIT_END_RE = /\b(?:end (?:the|this|our) call|hang up|(?:i|we) (?:need|have|got|gotta) to (?:go|hop off|run|jump off)|i (?:should|gotta|better) (?:go|hop off|run|let you go)|let you go|(?:we (?:can|could)|let'?s|can we|could we|shall we|i think we should) (?:wrap(?: this| it)?(?: up)?|stop(?: this| here)?|end(?: this| it)?))(?=\W*$)/i;
+export function explicitEnd(reply: string): boolean {
+  return reply.split(/(?<=[.!?])\s+/).some((x) => {
+    const t = x.trim();
+    if (/\b(?:hang on|hold on|one sec(?:ond)?|give me a (?:sec|minute))\b/i.test(t)) return false;
+    if (/\b(?:how|when|should)\b[^.?!]{0,25}\b(?:end|hang up)\b|\b(?:don'?t|do not|never|not|without)\b[^.?!]{0,25}\b(?:end|hang up)\b|end (?:the|this|our) call (?:with|for|on|when|to)\b/i.test(t)) return false;
+    if (/\b(?:end (?:the|this|our) call|hang up)\b/i.test(t)) return true;
+    return EXPLICIT_END_RE.test(t);
+  });
+}
 export function callClosing(b: OaiRequest): boolean {
   const lastAt = b.messages.map((m) => m.role).lastIndexOf("user");
   if (lastAt < 0) return false;
@@ -357,7 +381,7 @@ export function callClosing(b: OaiRequest): boolean {
   const cueAsked = b.messages.slice(0, lastAt).filter((m) => m.role === "assistant" && textOf(m.content ?? "").trim()).map((m) => textOf(m.content ?? "").trim()).pop();
   if (cueAsked && /\?["')\]]*$/.test(cueAsked) && /^\W*(?:(?:ok(?:ay)?|yeah|yes|no),?\s*)?(?:(?:i'?m|we'?re)\s+)?(?:good|fine|great|all good|ok(?:ay)?)(?:,?\s*thanks)?\W*$/i.test(reply)) return false;
   // The member's own goodbye, or their explicit "we can end the call", closes it, whatever Cue said before.
-  if (memberClosed(reply) || EXPLICIT_END.test(reply)) return true;
+  if (memberClosed(reply) || explicitEnd(reply)) return true;
   // A reply to Cue's goodbye closes it only when Cue was answering THEIR goodbye. A goodbye Cue guessed at ("Talk soon, Jordan." after
   // two "yeah"s) plus any reply is not a close: the call goes on. A reply that opens something new never closes.
   const coAt = b.messages.slice(0, lastAt).map((m, i) => (m.role === "assistant" && textOf(m.content ?? "").trim() ? i : -1)).filter((i) => i >= 0).pop();
@@ -365,9 +389,9 @@ export function callClosing(b: OaiRequest): boolean {
   const coLastWords = textOf(b.messages[coAt].content ?? "").split(/(?<=[.!?])\s+/).slice(-2);
   if (!coLastWords.some((x) => GOODBYE.test(x.trim()) || CO_CLOSING.test(x))) return false;
   const theirBefore = [...b.messages.slice(0, coAt)].reverse().find((m) => m.role === "user");
-  const opensNew = /\?|^\W*(?:wait|actually|hold on|one (?:more|last)|before you go|but|also|can you|could you|what about|how about)\b/i.test(reply);
+  const opensNew = /\?|^\W*(?:wait|actually|hold on|one (?:more|last)|before you go|oh and|one thing|but|also|can you|could you|what about|how about)\b/i.test(reply);
   const theirText = textOf(theirBefore?.content ?? "");
-  return !opensNew && (memberClosed(theirText) || EXPLICIT_END.test(theirText));
+  return !opensNew && (memberClosed(theirText) || explicitEnd(theirText));
 }
 
 // The stream of OpenAI chunks ElevenLabs reads. Text is cleaned and guarded sentence by sentence; a tool call passes through whole.

@@ -303,10 +303,10 @@ export function liveInstructions(o: { firstName: string; direction: "inbound" | 
     const vm = o.direction === "outbound" ? `\n${VOICEMAIL_WAIT}` : "";
     return `${LIVE_WHO} You're on a phone call with ${name}.\n${callSituation({ direction: o.direction, team: o.team })}\n${o.direction === "outbound" ? OPEN_WHEN_THEY_ANSWER : OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK} ${OPEN_NO_MIND}${bg ? `\n${bg}` : ""}${vm}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n${LIVE_FEEL.join("\n")}\n\n${LIVE_POLICY}`;
   };
-  // The cap holds at runtime, not just in a test: over it, the thread goes first, then their texted words, then the inviter.
+  // The cap holds at runtime, not just in a test: over it, the thread goes first, then the inviter, and their first-call words last (Royce ruled on those), only if it is still over.
   let out = build(o.opening);
   if (o.opening && out.length >= GPT_LIVE.maxInstructionChars) out = build({ ...o.opening, thread: null });
-  if (o.opening && out.length >= GPT_LIVE.maxInstructionChars) out = build({ ...o.opening, thread: null, theirWords: null });
+  if (o.opening && out.length >= GPT_LIVE.maxInstructionChars) out = build({ ...o.opening, thread: null, inviter: null });
   if (o.opening && out.length >= GPT_LIVE.maxInstructionChars) out = build({ ...o.opening, thread: null, theirWords: null, inviter: null });
   return out;
 }

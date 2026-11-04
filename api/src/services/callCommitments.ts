@@ -139,11 +139,11 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
 // The post-call fallback (the direct-Haiku path says these with nothing watching): the same, from the transcript, once each.
 // skip: Cue's lines from a turn whose tool already did it on the call (services/callLedger.ts call.turn_acted): never a promise to
 // keep again after the call.
-export async function trackCommitmentsFromTranscript(userId: string, transcript: string, o: { skip?: string[]; jobs?: string[] } = {}): Promise<number> {
+export async function trackCommitmentsFromTranscript(userId: string, transcript: string, o: { skip?: string[]; jobs?: string[] } = {}, deps: CommitDeps = realCommitDeps): Promise<number> {
   const co = transcript.split("\n").filter((l) => /^assistant:/i.test(l.trim())).map((l) => l.replace(/^assistant:\s*/i, ""));
   const theirs = transcript.split("\n").filter((l) => /^user:/i.test(l.trim())).map((l) => l.replace(/^user:\s*/i, ""));
   let n = 0;
-  for (const s of coveredByJobs(commitmentsNotCovered(commitmentsIn(co), o.skip ?? []), o.jobs ?? [])) if ((await trackCallCommitment({ userId, sentence: s, theirLine: theirs[theirs.length - 1] })).ok) n++;
+  for (const s of coveredByJobs(commitmentsNotCovered(commitmentsIn(co), o.skip ?? []), o.jobs ?? [])) if ((await trackCallCommitment({ userId, sentence: s, theirLine: theirs[theirs.length - 1] }, deps)).ok) n++;
   return n;
 }
 
