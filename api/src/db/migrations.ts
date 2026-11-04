@@ -3018,6 +3018,19 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_claimed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_outcome TEXT`)
     .catch((err: Error) => console.error("network_introductions email claim column failed:", err));
+  // Network intros already made get their outcome record (services/roomMatching.ts NETWORK_PAIR_EVENT, 2026-11-03): the ones whose
+  // intro went (email_sent_at, or made before the claim existed: the same "went" test as harness/northStar.ts NETWORK_SQL), as the send
+  // now writes it. Idempotent (ON CONFLICT DO NOTHING); nothing existing changes.
+  await pool
+    .query(
+      `INSERT INTO co_pairs (event_id, a_id, b_id, origin, state, a_answer, a_answered_at, b_answer, b_answered_at, both_yes_at, intro_sent_at, value_line_a, value_line_b)
+       SELECT 'network', n.person_a_id, n.person_b_id, 'co', 'intro_sent', 'yes', n.introduced_at, 'yes', n.introduced_at, n.introduced_at,
+              COALESCE(n.email_sent_at, n.introduced_at), left(n.match_reason, 500), left(n.match_reason, 500)
+       FROM network_introductions n
+       WHERE n.status = 'introduced' AND n.introduced_at IS NOT NULL AND (n.email_sent_at IS NOT NULL OR n.email_claimed_at IS NULL)
+       ON CONFLICT (event_id, a_id, b_id) DO NOTHING`,
+    )
+    .catch((err: Error) => console.error("co_pairs network intro backfill failed (non-fatal):", err));
   // An in-room question still open when the room closes expires instead of binding a "yes" days later. 'sending': a direct ask
   // holding the member's one question slot while it is drafted and sent (services/inRoomOffers.ts claimAskSlot).
   await pool

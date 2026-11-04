@@ -168,6 +168,29 @@ export async function stopSharing(userId: string): Promise<number> {
   return rowCount ?? 0;
 }
 
+// Which Noise event a "can't make it" / "going after all" is about, for the text tool (agent/conversationTools.ts updateGoing) and the
+// call's after-call read (services/callLearning.ts), one rule for both (Royce, 2026-11-03: said on a call, recorded like text). Their
+// event today; else, for a "no" (or when asking which applies), the no-show question still open (services/eventNoShow.ts), since a
+// "didn't make it" after the night answers that. Null: nothing to record.
+export type GoingSubject = { eventApiId: string; name: string | null; kind: "today" | "noshow" };
+export async function goingSubject(userId: string, going: boolean | null): Promise<GoingSubject | null> {
+  const today = await import("./eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null);
+  if (today) return { eventApiId: today.eventApiId, name: today.name, kind: "today" };
+  if (going === true) return null;
+  const asked = await import("./eventNoShow.js").then((N) => N.openNoShowAsk(userId)).catch(() => null);
+  if (!asked) return null;
+  const name = await import("./eventPresence.js").then(async (e) => (await e.presenceEvents()).find((x) => x.api_id === asked.eventApiId)?.name ?? null).catch(() => null);
+  return { eventApiId: asked.eventApiId, name, kind: "noshow" };
+}
+// Records it: the presence row every reader uses (the brief, the pre-arrival text, the in-room sends, the no-show flow). A "yes" only
+// for today's event (after the night, a yes is an arrival, markArrived's). Returns what was recorded, or null.
+export async function recordGoing(userId: string, going: boolean, subject?: GoingSubject | null): Promise<GoingSubject | null> {
+  const s = subject === undefined ? await goingSubject(userId, going) : subject;
+  if (!s || (going && s.kind !== "today")) return null;
+  await setGoing(s.eventApiId, userId, going);
+  return s;
+}
+
 export async function setGoing(eventId: string, userId: string, going: boolean): Promise<void> {
   await pool.query(
     `INSERT INTO event_presence (event_api_id, user_id, not_going_at) VALUES ($1, $2, ${going ? "NULL" : "NOW()"})

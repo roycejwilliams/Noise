@@ -205,6 +205,8 @@
     "evals/coPages/tools.ts",
     "evals/intros/secondContact.ts",
     "evals/intros/connectionAfter.ts",
+    "evals/intros/networkOutcomes.ts",
+    "evals/calls/goingOnCall.ts",
     "evals/docs/memberFiles.ts",
     "evals/presence/readoutFlow.ts",
     "evals/inroom/rules.ts",
