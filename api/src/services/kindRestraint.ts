@@ -20,7 +20,7 @@
 //             count; nothing a member let pass before restraint existed holds them back.
 // Answers to their own explicit ask (an event offer for an open ask) are never suppressed: they asked (harness/proactive.ts).
 // Every read and write is scoped to one member.
-import { parseReaction } from "./reactionsIn.js";
+import { readReaction } from "./reactionsIn.js";
 import pool from "../db/db.js";
 import { MOOD_FALLBACK_TOPIC } from "./moodHold.js";
 
@@ -87,7 +87,8 @@ export type KindVerdict = {
   reason: string;
 };
 
-type Signal = "reply" | "positive" | "negative";
+// none: a taken-back reaction, which says nothing either way (not a reply, not an answer).
+type Signal = "reply" | "positive" | "negative" | "none";
 export type ReadInbound = { at: Date; signal: Signal; quoted: string | null };
 
 // iMessage reactions arrive as text: Loved “…”, Liked “…”, Disliked “…”, Laughed at “…”, Emphasized “…”, Questioned “…”, and the
@@ -96,12 +97,12 @@ export type ReadInbound = { at: Date; signal: Signal; quoted: string | null };
 const THREADED = /\[Replying to (?:Co|Cue)'s text: "([\s\S]+?)"(?:\s*\([^)]*\))?\]\s*$/;
 
 // Pure: one of their lines as a signal. `text` is what they sent (the "User said: " prefix is removed by the reader).
-export function readInbound(line: InboundLine): ReadInbound {
+export function readInbound(line: InboundLine, cueTexts: string[] | null = null): ReadInbound {
   const text = line.text.trim();
-  const tb = parseReaction(text);
+  const tb = readReaction(text, cueTexts);
   if (tb) {
     // A taken-back reaction says nothing either way.
-    if (tb.removed) return { at: line.at, signal: "reply", quoted: tb.quoted || null };
+    if (tb.removed) return { at: line.at, signal: "none", quoted: tb.quoted || null };
     const negative = tb.kind === "dislike" || /👎/.test(tb.emoji);
     return { at: line.at, signal: negative ? "negative" : tb.kind === "question" ? "reply" : "positive", quoted: tb.quoted || null };
   }
@@ -136,7 +137,8 @@ export function evaluateKindRestraint(o: { sends: KindSend[]; inbound: InboundLi
     }
     sends.push({ ...s });
   }
-  const lines = o.inbound.map(readInbound).sort((a, b) => a.at.getTime() - b.at.getTime());
+  const cueTexts = o.sends.map((s) => s.message).filter((m): m is string => !!m);
+  const lines = o.inbound.map((l) => readInbound(l, cueTexts)).filter((l) => l.signal !== "none").sort((a, b) => a.at.getTime() - b.at.getTime());
   // A quoted reaction or threaded reply belongs to the newest send before it that it quotes, of any kind.
   const quotedTo = new Map<ReadInbound, string>();
   for (const l of lines) {

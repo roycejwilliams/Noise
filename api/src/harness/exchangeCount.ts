@@ -6,7 +6,7 @@
 //   reask         a question of Cue's they had already answered (harness/repeatAsk.ts repeatedQuestion over the thread)
 //   reopen        a link, offer or question about something they had closed (done or dropped at their word) before it went
 //   after_close   a question in the reply to a turn whose read chose "close" (services/exchangeRecord.ts, logged as turn.move_read)
-import { isReaction, LIGHT_CHECK } from "../services/reactionsIn.js";
+import { isLightCheck, readReaction } from "../services/reactionsIn.js";
 import pool from "../db/db.js";
 import { questionsIn, repeatedQuestion, type Turn } from "./repeatAsk.js";
 import { about } from "./moveCheck.js";
@@ -30,14 +30,15 @@ export function countMember(o: { rows: Row[]; closed: Closed[]; closeTurns: Date
   const lastUrl = new Map<string, number>();
   let lastCard = -1;
   let openInterest: number | null = null;
+  const coBefore = (i: number) => o.rows.slice(0, i).filter((x) => x.from === "co").map((x) => x.text);
   for (let i = 0; i < o.rows.length; i++) {
     const r = o.rows[i];
     if (r.from === "them") {
       // A tapback leaves a question as open as it was (services/reactionsIn.ts).
-      if (!isReaction(r.text)) openInterest = null;
+      if (!readReaction(r.text, coBefore(i))) openInterest = null;
       continue;
     }
-    const theirsSince = (j: number) => o.rows.slice(j + 1, i).some((x) => x.from === "them" && x.text.trim() && !isReaction(x.text));
+    const theirsSince = (j: number) => o.rows.slice(j + 1, i).some((x) => x.from === "them" && x.text.trim() && !readReaction(x.text, coBefore(i)));
     for (const u of (r.text.match(URL) ?? []).map(normUrl)) {
       const j = lastUrl.get(u);
       if (j != null && !theirsSince(j) && r.at.getTime() - o.rows[j].at.getTime() > SAME_SEND_MS && r.at.getTime() - o.rows[j].at.getTime() < WEEK && inWin(r.at)) hits.push({ kind: "repeat", at: r.at });
@@ -48,7 +49,7 @@ export function countMember(o: { rows: Row[]; closed: Closed[]; closeTurns: Date
       lastCard = i;
     }
     const qs = questionsIn(r.text.replace(URL, ""));
-    if (qs.some((q) => !LIGHT_CHECK.test(q) && (INTEREST_Q.test(q) || OFFER_Q.test(q)))) {
+    if (qs.some((q) => !isLightCheck(q) && (INTEREST_Q.test(q) || OFFER_Q.test(q)))) {
       if (openInterest != null && r.at.getTime() - openInterest < 86_400_000 && inWin(r.at)) hits.push({ kind: "double_ask", at: r.at });
       openInterest = r.at.getTime();
     }

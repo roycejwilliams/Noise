@@ -4,7 +4,7 @@
 // one thing only: a plain request for something already delivered (askedAgain), which lifts a resend hold; the rest is the turn read's.
 // On a miss the reply gets one rewrite toward the move (agent/conversationTools.ts sendReply), in its own words, never a canned line; on
 // a call the sentence is held and Cue answers again in its own words (services/callLlmProxy.ts, the #365 hold). Pure.
-import { LIGHT_CHECK } from "../services/reactionsIn.js";
+import { isLightCheck, LIGHT_CHECK } from "../services/reactionsIn.js";
 import { ALWAYS_ASKABLE, questionsIn, sameQuestion } from "./repeatAsk.js";
 import { namesItem } from "../services/callClaims.js";
 import { INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeBase, type ExchangeRecord } from "../services/exchangeRecord.js";
@@ -155,11 +155,20 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
   // After a tapback on an ask, only the one light check may follow: the same ask again, in any wording, is a miss (the tapback was seen,
   // not answered; services/reactionsIn.ts LIGHT_CHECK is the one allowed question).
   for (const q of qs) {
-    if (LIGHT_CHECK.test(q)) continue;
+    if (LIGHT_CHECK.test(q) && !isLightCheck(q)) {
+      out.push({ name: "reoffer", why: "the light check carries a second ask; after a tapback only the one question \"Is that a yes to…?\" may follow, nothing alongside it" });
+      continue;
+    }
+    if (isLightCheck(q)) {
+      // Asked once: not again for the same target after a second tapback.
+      const spent = base.done.find((d) => d.reacted && (d.lightChecked || LIGHT_CHECK.test(d.label)));
+      if (spent) out.push({ name: "reask", why: `the one light check was already asked (${spent.id}); a second tapback does not earn another` });
+      continue;
+    }
     const prior = base.done.find((d) => (d.kind === "offer" || d.kind === "question") && d.reacted && !d.replied && sameQuestion(q, d.label, true));
     if (prior) out.push({ name: prior.kind === "offer" ? "reoffer" : "reask", why: `asks again what ${prior.id} already asked ("${prior.label.slice(0, 80)}"), which they only reacted to; after a tapback only one light check ("Is that a yes to…?") may follow` });
   }
-  const interest = o.optIn ? [] : qs.filter((q) => !LIGHT_CHECK.test(q) && (INTEREST_Q.test(q) || OFFER_Q.test(q)) && !OPT_IN_Q.test(q));
+  const interest = o.optIn ? [] : qs.filter((q) => !isLightCheck(q) && (INTEREST_Q.test(q) || OFFER_Q.test(q)) && !OPT_IN_Q.test(q));
   if (interest.length > 1) out.push({ name: "double_ask", why: "asks whether they're interested (or want something) more than once in one reply" });
   else if (interest.length === 1 && base.done.some((d) => (d.kind === "question" || d.kind === "offer") && !d.replied && INTEREST_Q.test(d.label))) out.push({ name: "double_ask", why: "asks again whether they're interested while the last such question still has no answer" });
   // Unresolved: something they closed, reopened (a find, an offer or a question about it).

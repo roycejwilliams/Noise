@@ -65,7 +65,7 @@ import { networkIntroFact, resolveNetworkTeaseReply, resolveNetworkIntroReplySta
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { ackAllowed, describeTapbacks, reactionFor, tapbackHistory } from "../services/tapbacks.js";
-import { parseReaction } from "../services/reactionsIn.js";
+import { interpretReaction, isRemovalShape, noteVerifiedReaction, parseReactionShape, recentSentTexts, removalEndsTurn, verifyReaction } from "../services/reactionsIn.js";
 import { LOOP_GUIDE } from "../agent/loop.js";
 import { burstWaitMs } from "../services/beats.js";
 import { describeNotes } from "../agent/loopTools.js";
@@ -685,7 +685,8 @@ export function sendblueRouter(io: Server): Router {
       // a group text from someone mid-turn in their 1:1 thread cancelled
       // that reply, though the group message never gets a 1:1 reply itself).
       const isGroupMessage = bodyForStamp.message_type === "group" || !!bodyForStamp.group_id;
-      if (lockKey && isGenuineInbound && !isGroupMessage) {
+      // A taken-back reaction never stamps: it must not make a real text just before it look superseded (review of #384).
+      if (lockKey && isGenuineInbound && !isGroupMessage && !isRemovalShape(bodyForStamp.content)) {
         try {
           const stampResult = await pool.query(
             `INSERT INTO phone_debounce (phone, last_inbound_at) VALUES ($1, NOW())
@@ -1367,9 +1368,22 @@ export function sendblueRouter(io: Server): Router {
 
         // A taken-back reaction (services/reactionsIn.ts) says nothing: the line is kept so the record clears the reaction it removed, and
         // nobody is answered. In code, not a prompt line. The text is only ever the whole iMessage string, so nothing else rides in it.
-        if (hasText && !hasMedia && parseReaction(resolvedContent)?.removed) {
-          await recordDecision({ layer: 3, decision: "turn.reaction_in", userId: user.id, outcome: "skip", action: "removed", proposal: { reason: "a taken-back reaction needs no reply" } }).catch(() => {});
-          return res.status(200).send({ received: true, action: "reaction_removed" });
+        // Whether this text is a reaction at all: its exact iMessage shape AND (when it quotes) the quote is one of Cue's own recent texts or the
+        // payload names the text. A typed message that merely has the shape ("Loved “Dune”, yes intro me to the “film club”") is a normal
+        // message. It ends the turn only when nothing of theirs is still waiting for an answer (removalEndsTurn).
+        let reactionCtx: ReturnType<typeof verifyReaction> = null;
+        if (hasText && !hasMedia && parseReactionShape(resolvedContent)) {
+          const sentTexts = await recentSentTexts(user.id).catch(() => [] as import("../services/reactionsIn.js").SentText[]);
+          reactionCtx = verifyReaction(resolvedContent, sentTexts, req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle ?? null);
+          if (reactionCtx) noteVerifiedReaction(resolvedContent);
+        }
+        if (reactionCtx?.reaction.removed) {
+          const { rows: thread } = await pool
+            .query(`SELECT id, content FROM (SELECT id, content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC, id DESC LIMIT 40) t ORDER BY created_at, id`, [user.id])
+            .catch(() => ({ rows: [] as any[] }));
+          const ends = removalEndsTurn(thread, inboundMemory.rows[0].id);
+          await recordDecision({ layer: 3, decision: "turn.reaction_in", userId: user.id, outcome: "skip", action: "removed", proposal: { endsTurn: ends, reason: ends ? "a taken-back reaction needs no reply" : "something of theirs is still waiting, so the turn runs" } }).catch(() => {});
+          if (ends) return res.status(200).send({ received: true, action: "reaction_removed" });
         }
 
         // Same text sent again within a couple of minutes (confirmed live:
@@ -1649,7 +1663,7 @@ export function sendblueRouter(io: Server): Router {
           // Fail safe: act on nothing rather than guess.
           console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
         }
-        const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation });
+        const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation, isReaction: !!reactionCtx });
         // Emotion loop (harness/emotion.ts): how this message feels, from the read, is recorded, then the shared picture (this
         // text, recent calls, what keeps coming up) that the reply reasons from is loaded. Alongside: whether they want to be
         // heard or helped toward an answer.
@@ -1974,13 +1988,11 @@ export function sendblueRouter(io: Server): Router {
         // Their tapback (services/reactionsIn.ts): which of Cue's texts it was on and what it means there. It is context for the reply and
         // a line in the decision log; nothing is recorded as an answer, and no tool treats it as their yes (the guards live with the tools).
         // Text only: calls have no tapbacks.
-        const reactionIn = hasText ? parseReaction(resolvedContent) : null;
-        if (reactionIn) {
+        const reactionIn = reactionCtx?.reaction ?? null;
+        if (reactionIn && reactionCtx) {
           try {
-            const R = await import("../services/reactionsIn.js");
-            const sentTexts = await R.recentSentTexts(user.id).catch(() => [] as import("../services/reactionsIn.js").SentText[]);
-            const target = R.pickTarget(reactionIn, sentTexts, req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle ?? null);
-            const meant = R.interpretReaction(reactionIn, target);
+            const target = reactionCtx.target;
+            const meant = interpretReaction(reactionIn, target);
             addInstruction(replyFacts, meant.instruction);
             recordDecision({ layer: 3, decision: "turn.reaction_in", userId: user.id, outcome: "act", action: meant.meaning, proposal: { kind: reactionIn.kind, emoji: reactionIn.emoji, removed: reactionIn.removed, target: meant.target, found: target?.how ?? null, handle: target?.handle ? target.handle.slice(-8) : null } }).catch(() => {});
           } catch (err: any) {
