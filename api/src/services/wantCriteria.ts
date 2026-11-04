@@ -24,7 +24,9 @@
 import { quoteIsTheirs } from "./provenance.js";
 
 export type Strength = "must" | "must_not" | "prefer";
-export type Criterion = { text: string; strength: Strength; quote: string; at: string };
+// timed: their words limit it in time, read when it was grounded from the quote or the sentence of theirs it came from (absent on
+// conditions saved before 2026-11-04: the quote alone is read).
+export type Criterion = { text: string; strength: Strength; quote: string; at: string; timed?: boolean };
 export type Holds = "yes" | "no" | "unknown";
 
 // The bar both nudge paths use for a match (eventScoring.ts MATCH_NUDGE_MIN_SCORE, networkIntroNudge.ts NETWORK_NUDGE_MIN_SCORE).
@@ -110,8 +112,8 @@ export function timeBound(quote: string): boolean {
 
 // Pure: a condition said with a time limit, last said more than 60 days ago. A condition with no time words lasts as long as the want;
 // one with no readable time it was said has no basis to expire.
-export function conditionExpired(c: { quote?: unknown; at?: unknown }, now: Date = new Date()): boolean {
-  if (!timeBound(String(c.quote ?? ""))) return false;
+export function conditionExpired(c: { quote?: unknown; at?: unknown; timed?: unknown }, now: Date = new Date()): boolean {
+  if (!(typeof c.timed === "boolean" ? c.timed : timeBound(String(c.quote ?? "")))) return false;
   const at = Date.parse(String(c.at ?? ""));
   return Number.isFinite(at) && now.getTime() - at > CONDITION_TTL_DAYS * 86_400_000;
 }
@@ -127,6 +129,22 @@ export function pruneExpiredCriteria(intent: unknown, now: Date = new Date()): {
     return { ...e, criteria: keep };
   });
   return { intent: out, expired };
+}
+
+// Pure: the sentence of theirs a quote was taken from (their words split at . ! ? and line breaks), or null when it isn't found.
+export function sentenceOf(quote: string, ownWords: string): string | null {
+  const q = norm(quote);
+  if (!q) return null;
+  return String(ownWords ?? "").split(/(?<=[.!?])\s+|\n+/).find((x) => ` ${norm(x)} `.includes(` ${q} `)) ?? null;
+}
+
+// Pure: is a condition limited in time? Its quote, or the sentence of theirs it came from, by the same position rules (timeBound): the
+// model often quotes "I don't want to meet any recruiters" from "For now, I don't want to meet any recruiters" (live check, 2026-11-03).
+// A time word in that sentence about the other person ("someone currently building in AI") still doesn't count.
+export function conditionTimed(quote: string, ownWords: string): boolean {
+  if (timeBound(quote)) return true;
+  const sentence = sentenceOf(quote, ownWords);
+  return !!sentence && timeBound(sentence);
 }
 
 export type CriterionReject = "no_quote_of_theirs" | "quote_too_short" | "reading_off_their_words" | "exclusion_without_negation" | "malformed" | "duplicate";
@@ -152,7 +170,7 @@ export function groundCriteria(raw: unknown, ownWords: string, now: string = new
     if (PREFER_WORDS.test(quote)) strength = "prefer";
     else if (strength === "must_not" && !NEGATION.test(quote)) { no("exclusion_without_negation"); continue; }
     if (out.some((o) => norm(o.text) === norm(text))) { no("duplicate"); continue; }
-    out.push({ text, strength, quote, at: now });
+    out.push({ text, strength, quote, at: now, timed: conditionTimed(quote, ownWords) });
   }
   return out.slice(0, MAX_CRITERIA);
 }
