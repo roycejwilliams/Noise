@@ -119,7 +119,14 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   const bt = WC.groundCriteria([{ text: "no one from big tech", strength: "must_not", quote: "no one from big tech" }], said2);
   check("'no one from big tech' (the reading all in their words) keeps an exclusion", bt.length === 1 && bt[0].strength === "must_not", bt);
   check("a synonym is still off their words: 'no FAANG' from 'big tech' is dropped", WC.groundCriteria([{ text: "no FAANG", strength: "must_not", quote: "no one from big tech" }], said2).length === 0);
-  check("short words count: NYC, AI, B2B", WC.readingOnTheirWords("NYC", "founders in NYC please") && WC.readingOnTheirWords("AI founders", "someone doing AI") && WC.readingOnTheirWords("B2B", "not B2B people"));
+  check("short words and places count: NYC, AI, B2B, LA, Austin", WC.readingOnTheirWords("NYC", "founders in NYC please") && WC.readingOnTheirWords("AI", "someone doing AI") && WC.readingOnTheirWords("B2B", "not B2B people") && WC.readingOnTheirWords("in LA", "would rather someone in LA") && WC.readingOnTheirWords("based in Austin", "has to be in Austin"));
+  // Round 3: two words of the reading in their quote (all when it has fewer), a longer list of words that never count, and a short
+  // word must be the same word.
+  check("'good engineer' never grounds from 'good energy'", !WC.readingOnTheirWords("good engineer", "someone with good energy") && WC.groundCriteria([{ text: "good engineer", strength: "prefer", quote: "I'd rather someone with good energy" }], "I'd rather someone with good energy").length === 0);
+  check("a capitalized word only counts as itself: 'Good engineer' and 'Founder' still don't ground", !WC.readingOnTheirWords("Good engineer", "someone with good energy") && !WC.readingOnTheirWords("Founder", "I found my people"));
+  check("'founder' never grounds from 'found'", !WC.readingOnTheirWords("founder", "I found my people") && !WC.readingOnTheirWords("a founder", "not until I found the space"));
+  check("a reading resting on one word of three is off their words; two of three is on them", !WC.readingOnTheirWords("strong product taste", "taste matters more than seniority") && WC.readingOnTheirWords("has built a consumer product", "who's built consumer before"));
+  check("stems still match for long words: engineer/engineering, investor/investors", WC.readingOnTheirWords("engineering", "an engineer") && WC.readingOnTheirWords("investor", "no investors"));
   const whys: string[] = [];
   WC.groundCriteria([{ text: "no one in finance", strength: "must_not", quote: "Not investors" }, { text: "x", strength: "must_not", quote: "investors" }, { text: "investors", strength: "must_not", quote: "meeting investors Thursday" }], said, undefined, (w) => whys.push(w));
   check("each rejection gives its reason (never their words)", JSON.stringify(whys) === JSON.stringify(["reading_off_their_words", "quote_too_short", "exclusion_without_negation"]), whys);
@@ -139,7 +146,7 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   const before = JSON.stringify(entry(A_OUT));
   await P.persistIntentFrom(U, { asks: [], concrete_preferences: [], wants: [], availability: null, criteria_for: [
     { index: iCof, text: "investors", strength: "must_not", quote: "I'm not looking for investors right now" },
-    { index: iCof, text: "strong product taste", strength: "prefer", quote: "taste matters more than seniority" },
+    { index: iCof, text: "taste over seniority", strength: "prefer", quote: "taste matters more than seniority" },
     { index: iOut, text: "no founders", strength: "must_not", quote: "no founders please" },
   ] } as any, `user: ${MSG}\nassistant: Noted.`, "last_user_message", MSG, { via: "text", openItems: items });
   const c = entry(A_COF)?.criteria ?? [];
@@ -152,7 +159,7 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   check("the turn prompt and the call prompt both carry the same want-words rule, criteria_for and the on-file conditions", (() => {
     const t = TL.turnLearningPrompt({ transcript: "user: hi", message: "hi", today: "2026-11-03", onFile: null, openAsks: items, styleNotes: [], coSaidBefore: null, intent: w.intent });
     const k = P.captureIntentPrompt(callTranscript, "whole_transcript", { items, intent: w.intent });
-    return [t, k].every((p) => p.includes(WC.WANT_WORDS_RULE) && p.includes(WC.CRITERIA_FOR_RULE) && /Conditions already on file/.test(p) && /would rather: "strong product taste"/.test(p));
+    return [t, k].every((p) => p.includes(WC.WANT_WORDS_RULE) && p.includes(WC.CRITERIA_FOR_RULE) && /Conditions already on file/.test(p) && /would rather: "taste over seniority"/.test(p));
   })());
   check("the call prompt: an ask they dropped later in the same call is not captured (their word), anything else still is", /is not captured/.test(P.captureIntentPrompt(callTranscript, "whole_transcript")) && /What they happened to say LAST never cancels an ask/.test(P.captureIntentPrompt(callTranscript, "whole_transcript")));
   check("the call path loads the numbered list for the read and hands it to the write (call parity with the text turn)", /const onFile = await loadOpenForCriteria\(user_id\)/.test(src("services/profileExtraction.ts")) && /openItems: onFile\?\.items/.test(src("services/profileExtraction.ts")) && /openItems: openAsks/.test(src("services/turnLearning.ts")));
@@ -214,6 +221,41 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   const a1 = saved?.find((e: any) => e.id === "a1");
   check("removing 'not investors' takes only that condition off that want; the want, its other condition and the other want stay", out?.source === "cond" && a1?.status === "active" && a1.criteria.length === 1 && a1.criteria[0].strength === "must" && JSON.stringify(saved.find((e: any) => e.id === "a2")) === JSON.stringify(intent[1]), { out, saved });
   check("logged under its own plain kind", K.logKind(inv.ref) === "a condition they put on one of their wants");
+}
+
+// ================================================================ 7. conditions said with a time limit expire (Royce, 2026-11-03)
+{
+  const now = new Date();
+  const ago = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
+  const timed = (d: number) => ({ text: "investors", strength: "must_not", quote: "I'm not looking for investors right now", at: ago(d) });
+  check("a time-worded condition expires 60 days after it was last said, not before", WC.conditionExpired(timed(61), now) && !WC.conditionExpired(timed(59), now));
+  check("every time word counts: for now, at the moment, this month, this year, currently, these days", ["for now", "at the moment", "this month", "this year", "currently", "these days"].every((t) => WC.conditionExpired({ quote: `no investors ${t}`, at: ago(61) }, now)));
+  check("a condition with no time words lasts as long as the want", !WC.conditionExpired({ quote: "who's built consumer before", at: ago(400) }, now));
+  check("no readable time it was said: no basis to expire", !WC.conditionExpired({ quote: "not investors right now", at: "x" }, now));
+  const entry = { id: "a1", kind: "ask", status: "active", text: A_COF, criteria: [timed(61), { text: "has built a consumer product", strength: "must", quote: "who's built consumer before", at: ago(400) }] };
+  check("an expired one stops applying at once (criteriaOf), the enduring one stays", JSON.stringify(WC.criteriaOf(entry, now).map((c) => c.strength)) === JSON.stringify(["must"]));
+  const again = WC.mergeCriteria([timed(59)], [{ ...timed(0), text: "no investors" }]);
+  check("saying it again starts its clock over (the same words replace the older one)", again.length === 1 && !WC.conditionExpired(again[0], new Date(now.getTime() + 59 * 86_400_000)) && again[0].text === "no investors", again);
+  const raw: any = { profile: { city: null, long_term_direction: null, availability_pattern: null, goals: [], life_chapters: [], blockers: [], activity_preferences: [], avoid: [], intent: [entry] }, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [{ id: "a1", text: A_COF }], files: [] };
+  const conds = K.knownItems(raw).filter((i) => i.source === "cond");
+  check("an expired condition drops from what-Cue-knows; the enduring one still shows", conds.length === 1 && /who's built consumer before/.test(conds[0].text), conds);
+  // The daily prune (askExpiry.ts expireTimeBoundCriteria, run in the expiry job) takes it off the record and logs ids and counts only.
+  reset();
+  w.intent = [entry, { id: "a2", kind: "ask", status: "active", text: A_OUT, criteria: [{ text: "no founders", strength: "must_not", quote: "no founders for now", at: ago(10) }] }];
+  const prof = { user_id: U, intent: JSON.parse(JSON.stringify(w.intent)) };
+  const orig = (pool as any).query;
+  (pool as any).query = async (sql: string, a: any[] = []) => {
+    const flat = sql.replace(/\s+/g, " ").trim();
+    if (/^SELECT user_id, intent FROM co_profiles WHERE intent::text LIKE/.test(flat)) return { rows: [prof], rowCount: 1 };
+    if (/^UPDATE co_profiles SET intent = \$2::jsonb, updated_at = NOW\(\) WHERE user_id = \$1 AND intent = \$3::jsonb/.test(flat)) { w.intent = JSON.parse(a[1]); return { rows: [], rowCount: 1 }; }
+    return orig(sql, a);
+  };
+  const n = await (await import("../../src/services/askExpiry.js")).expireTimeBoundCriteria(now);
+  (pool as any).query = orig;
+  const log = w.decisions.find((d) => d.decision === "want_criteria.expired");
+  check("the prune takes off only the expired one, on its own want; the other want's recent time-worded one stays", n === 1 && w.intent[0].criteria.length === 1 && w.intent[0].criteria[0].strength === "must" && w.intent[1].criteria.length === 1, w.intent.map((e: any) => e.criteria));
+  check("the expiry is logged with want ids and counts, none of their words", !!log && JSON.stringify(typeof log.proposal === "string" ? JSON.parse(log.proposal) : log.proposal) === JSON.stringify({ wants: [{ id: "a1", n: 1 }] }) && !/investors|right now/.test(JSON.stringify(log)), log);
+  check("the expiry runs in the existing expiry job", /await expireTimeBoundCriteria\(\)/.test(src("services/askExpiry.ts")) && /expireStaleAsks\(\)/.test(src("jobs/index.ts")));
 }
 
 console.log(`\n${total - failed}/${total} passed`);

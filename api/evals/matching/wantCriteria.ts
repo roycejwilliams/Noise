@@ -36,7 +36,8 @@ const pass = async (ev: string) => {
   await settle();
   return r;
 };
-const at = "2026-11-03T00:00:00.000Z";
+// Said just now: the time-worded ones ("right now") are well inside their 60 days whenever this runs.
+const at = new Date().toISOString();
 const crit = (text: string, strength: "must" | "must_not" | "prefer", quote: string) => ({ text, strength, quote, at });
 const nudgedTo = (ev: string, m: Member) => W.nudges.filter((n) => n.event_id === ev && n.person_id === m.id).map((n) => n.candidate_id);
 const ranking = (ev: string, m: Member): any[] => (W.rankings.get(`${ev}|${m.id}`) as any)?.ranked_candidates ?? [];
@@ -59,7 +60,12 @@ const BUILT = "who's built consumer before";
   check("a requirement that fails takes that want out", r([["C1", "no"], ["C2", "no"]], ["W1"]).score === 0);
   check("a requirement nobody can confirm: below the bar, never a match, never assumed", r([["C1", "no"], ["C2", "unknown"]], ["W1"]).score === WC.CONDITION_BAR - 1 && r([["C1", "no"], ["C2", "unknown"]], ["W1"]).unverified.length === 1);
   check("an answer with no read of a requirement is the same as unknown (fail closed)", r([], ["W1"]).score === WC.CONDITION_BAR - 1);
-  check("an exclusion nobody can confirm is not invented: the want stays", r([["C1", "unknown"], ["C2", "yes"]], ["W1"]).score === 80);
+  // Royce, 2026-11-03: an exclusion nobody can confirm holds the want the same way an unconfirmed requirement does.
+  const exUnknown = r([["C1", "unknown"], ["C2", "yes"]], ["W1"]);
+  check("an exclusion nobody can confirm: held at 59, under the bar, and the want is held", exUnknown.score === WC.CONDITION_BAR - 1 && exUnknown.held === true && exUnknown.unverified.includes("investors"), exUnknown);
+  check("... at the bar edge: an unconfirmed exclusion keeps even a 100 at 59, and never lifts a low score", r([["C1", "unknown"], ["C2", "yes"]], ["W1"]).score === 59 && WC.applyConditions(100, { conditions: [{ label: "C1", holds: "unknown" }, { label: "C2", holds: "yes" }], fits: ["W1"] }, wants).score === 59 && WC.applyConditions(40, { conditions: [{ label: "C1", holds: "unknown" }, { label: "C2", holds: "yes" }], fits: ["W1"] }, wants).score === 40);
+  check("... per want: the same candidate fitting the other want (no conditions) is not held", r([["C1", "unknown"], ["C2", "yes"]], ["W1", "W2"]).held === false && r([["C1", "unknown"], ["C2", "yes"]], ["W1", "W2"]).score === 80);
+  check("... and a candidate fitting nothing isn't held by it", WC.applyConditions(20, { conditions: [{ label: "C1", holds: "unknown" }], fits: ["W1"] }, wants).held === false);
   check("both met: unchanged", r([["C1", "no"], ["C2", "yes"]], ["W1"]).score === 80);
   const pref = [{ label: "W1", text: COFOUNDER, criteria: [crit("strong taste", "prefer", TASTE)] }];
   const p = (score: number, holds: string) => WC.applyConditions(score, { conditions: [{ label: "C1", holds }] }, pref).score;
@@ -215,6 +221,19 @@ const jordanIntent = () => [
   check("control: Sam (not held by Jordan's conditions) asks the same way, and Jordan is asked", asked2 !== false && (W.llmCalls.some((c) => c.kind === "directAsk") || W.sent.slice(before2).some((x) => x.to === jordan.phone_number)), { asked2, kinds: W.llmCalls.map((c) => c.kind), sent: W.sent.slice(before2) });
   check("Kai fits none of Jordan's wants (his requirement unread for Kai): not held, so Jordan stays askable about Kai", !ranking("evt-o", jordan).find((x) => x.candidate_id === kai.id)?.heldByCondition && !(await H.heldByTheirCondition("evt-o", jordan.id, kai.id)), ranking("evt-o", jordan).find((x) => x.candidate_id === kai.id));
   check("pure read: held only for the one his conditions rule out", (await H.heldByTheirCondition("evt-o", jordan.id, noor.id)) && !(await H.heldByTheirCondition("evt-o", jordan.id, sam.id)) && !(await H.heldByTheirCondition("evt-o", noor.id, jordan.id)));
+}
+
+// ================================================================ 9. an expired time-worded condition stops applying (Royce, 2026-11-03)
+{
+  reset();
+  const old = new Date(Date.now() - 70 * 86_400_000).toISOString();
+  const jordan = addMember({ first_name: "Jordan", intent: [{ ...ask(COFOUNDER), criteria: [{ ...crit("investors", "must_not", NOT_INVESTORS), at: old }] }] });
+  const noor = addMember({ first_name: "Noor", intent: [ask("angel checks for consumer founders", "offering")] });
+  addEvent({ api_id: "evt-x", name: "Cue Night" }, [{ m: jordan }, { m: noor }]);
+  W.scorer = (askText, cand) => (askText.includes(COFOUNDER) && cand.first_name === "Noor" ? { score: 95, share: true, conditions: { [NOT_INVESTORS]: "yes" } } : { score: 0, share: false });
+  await pass("evt-x");
+  const xp = W.llmCalls.find((c) => c.kind === "score" && c.prompt.includes(COFOUNDER))?.prompt ?? "";
+  check("'not investors right now' said 70 days ago: no longer listed to the scorer, and the investor is picked again", !/investors right now/.test(xp) && JSON.stringify(nudgedTo("evt-x", jordan)) === JSON.stringify([noor.id]), { nudged: nudgedTo("evt-x", jordan) });
 }
 
 console.log(`\n${results.total - results.failed}/${results.total} passed`);

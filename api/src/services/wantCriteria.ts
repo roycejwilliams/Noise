@@ -17,7 +17,7 @@
 // silently relaxed and nothing is invented when the line is silent:
 //   must_not yes                 -> that want is out for this candidate
 //   must no                      -> that want is out for this candidate
-//   must unknown                 -> uncertain: never a match on that want (held below the bar), never assumed either way
+//   must or must_not unknown     -> uncertain: never a match on that want (held below the bar), never assumed either way
 //   prefer yes / no              -> up or down a little, never across the bar either way (a preference is not a filter)
 // Pure, apart from nothing: every function here is a pure step the capture and matching paths call.
 import { quoteIsTheirs } from "./provenance.js";
@@ -54,20 +54,52 @@ export function groundWant(quote: unknown, ownWords: string): { quote: string | 
 const PREFER_WORDS = /\b(rather|prefer|preferably|ideally|bonus|nice to have|if possible|matters? more|matters? less|more important than|less important than)\b/i;
 // Words that make it an exclusion ("not investors right now", "no founders", "I don't want").
 const NEGATION = /\b(not|no|never|without|except|avoid|none|nobody|skip)\b|n't\b/i;
-// Words that carry no meaning of their own in a reading ("in SF", "not VCs", "no one from big tech"): never enough to tie it to a quote.
-const FUNCTION = new Set(["a", "an", "the", "in", "on", "at", "of", "to", "for", "and", "or", "no", "not", "one", "from", "with", "by", "is", "are", "be", "who", "whos", "that", "this", "it", "its", "someone", "people", "person", "anyone", "they", "them", "their", "have", "has", "been", "into", "right", "really", "just", "want", "wants", "looking", "would", "should", "about", "some", "more", "less", "than", "dont", "don't", "all", "any", "only"]);
+// Words that carry no meaning of their own in a reading ("in SF", "not VCs", "no one from big tech"), or too little to tie a reading to a
+// quote ("good energy" is not "good engineer"): never counted.
+const FUNCTION = new Set(["a", "an", "the", "in", "on", "at", "of", "to", "for", "and", "or", "no", "not", "one", "from", "with", "by", "is", "are", "be", "was", "who", "whos", "that", "this", "it", "its", "someone", "somebody", "people", "person", "folks", "anyone", "they", "them", "their", "have", "has", "had", "been", "into", "right", "really", "just", "want", "wants", "looking", "would", "should", "could", "about", "some", "more", "less", "than", "over", "dont", "don't", "all", "any", "only", "good", "great", "nice", "kind", "type", "sort", "like", "very", "well", "much", "lot", "also", "maybe", "thing", "things", "stuff", "time", "now", "new", "get", "got", "can", "will", "me", "my", "i", "i'm", "im", "you", "we", "our", "so", "but", "if", "as", "rather", "prefer", "need", "needs"]);
 const tokens = (t: string) => norm(t).split(" ").filter(Boolean);
 const bare = (x: string) => x.replace(/'s$|s$/, "");
-// Pure: does Cue's reading of a condition stay on their words (review of #378, round 2)? Each meaningful word of the reading (any
-// length, so SF, VCs, NYC, AI and B2B count) is checked against the quote: the same word (a plural "s" aside), or for words of four
-// letters or more the same stem (first 5 letters). One such word is enough. "no one in finance" read from "not investors" has none, and
-// a synonym ("no FAANG" from "big tech") isn't one either: dropped.
+// Pure: one word of a reading against the quote's words: the same word (a plural "s" aside), or for words of six letters or more the
+// same first six letters ("engineer"/"engineering"). A short word must be the same word: "found" is never "founder".
+const sameWord = (x: string, q: string) => bare(x) === bare(q) || (x.length >= 6 && q.length >= 6 && x.slice(0, 6) === q.slice(0, 6));
+// Pure: does Cue's reading of a condition stay on their words (review of #378, rounds 2 and 3)? Every meaningful word of the reading
+// counts at any length, and at least two of them must be in the quote (all of them when the reading has fewer than two), unless a
+// name, place or acronym of the reading (SF, VCs, NYC, LA, B2B, Austin) is the same word in the quote. "no one in finance" from "not investors", "good engineer" from "good energy" and "no FAANG" from "big tech" are
+// all off their words: dropped.
 export function readingOnTheirWords(text: string, quote: string): boolean {
   const q = tokens(quote);
-  const qBare = new Set(q.map(bare));
-  const qStem = new Set(q.filter((x) => x.length >= 4).map((x) => x.slice(0, 5)));
-  const meaningful = tokens(text).filter((x) => !FUNCTION.has(x));
-  return meaningful.some((x) => qBare.has(bare(x)) || (x.length >= 4 && qStem.has(x.slice(0, 5))));
+  const meaningful = [...new Set(tokens(text).filter((x) => !FUNCTION.has(x)))];
+  if (!meaningful.length) return false;
+  // A name, place or acronym in the reading (a capital in it: SF, VCs, LA, Austin, B2B) that is the same word in their quote is enough
+  // on its own: "based in Austin" from "has to be in Austin".
+  const named = String(text ?? "").split(/[^A-Za-z0-9'’]+/).filter((x) => /[A-Z]/.test(x) && !FUNCTION.has(norm(x)));
+  if (named.some((x) => q.some((y) => bare(norm(x)) === bare(y)))) return true;
+  const hits = meaningful.filter((x) => q.some((y) => sameWord(x, y))).length;
+  return hits >= Math.min(2, meaningful.length);
+}
+
+// Words in their own quote that put a time limit on the condition: it expires CONDITION_TTL_DAYS after it was last said.
+export const TIME_WORDS = /\b(right now|for now|at the moment|this month|this year|currently|these days)\b/i;
+export const CONDITION_TTL_DAYS = 60;
+// Pure: a condition said with a time limit, last said more than 60 days ago. A condition with no time words lasts as long as the want;
+// one with no readable time it was said has no basis to expire.
+export function conditionExpired(c: { quote?: unknown; at?: unknown }, now: Date = new Date()): boolean {
+  if (!TIME_WORDS.test(String(c.quote ?? ""))) return false;
+  const at = Date.parse(String(c.at ?? ""));
+  return Number.isFinite(at) && now.getTime() - at > CONDITION_TTL_DAYS * 86_400_000;
+}
+// Pure: the intent list with expired conditions taken off, and which wants lost how many (ids and counts only).
+export function pruneExpiredCriteria(intent: unknown, now: Date = new Date()): { intent: unknown[]; expired: { id: string; n: number }[] } {
+  const entries = Array.isArray(intent) ? (intent as any[]) : [];
+  const expired: { id: string; n: number }[] = [];
+  const out = entries.map((e) => {
+    const all = Array.isArray(e?.criteria) ? e.criteria : [];
+    const keep = all.filter((c: any) => !conditionExpired(c, now));
+    if (keep.length === all.length) return e;
+    expired.push({ id: String(e?.id ?? ""), n: all.length - keep.length });
+    return { ...e, criteria: keep };
+  });
+  return { intent: out, expired };
 }
 
 export type CriterionReject = "no_quote_of_theirs" | "quote_too_short" | "reading_off_their_words" | "exclusion_without_negation" | "malformed" | "duplicate";
@@ -102,15 +134,17 @@ export function groundCriteria(raw: unknown, ownWords: string, now: string = new
 // rest stay. Never touches another want.
 export function mergeCriteria(onFile: unknown, added: Criterion[], lifted: string[] = []): Criterion[] {
   const gone = new Set(lifted.map(norm));
-  const kept = criteriaOf({ criteria: onFile }).filter((c) => !gone.has(norm(c.text)) && !added.some((a) => norm(a.text) === norm(c.text)));
+  // Said again (the same reading or the same words of theirs): the newer one replaces it, so a time-worded one's clock starts over.
+  const kept = criteriaOf({ criteria: onFile }).filter((c) => !gone.has(norm(c.text)) && !added.some((a) => norm(a.text) === norm(c.text) || norm(a.quote) === norm(c.quote)));
   return [...kept, ...added].slice(-MAX_CRITERIA);
 }
 
-// Pure: a want entry's conditions, as written (anything malformed is left out).
-export function criteriaOf(entry: unknown): Criterion[] {
+// Pure: a want entry's conditions in force (anything malformed is left out, and so is a time-worded one past its 60 days: it stops
+// applying and stops showing the moment it expires, before the daily prune takes it off the record and logs it).
+export function criteriaOf(entry: unknown, now: Date = new Date()): Criterion[] {
   const raw = (entry as { criteria?: unknown } | null)?.criteria;
   return (Array.isArray(raw) ? raw : []).filter(
-    (c: any): c is Criterion => typeof c?.text === "string" && c.text.trim() !== "" && STRENGTHS.includes(c?.strength),
+    (c: any): c is Criterion => typeof c?.text === "string" && c.text.trim() !== "" && STRENGTHS.includes(c?.strength) && !conditionExpired(c, now),
   );
 }
 
@@ -227,7 +261,8 @@ export function applyConditions(score: number, judged: Judged, wants: WantLine[]
       perWant.push({ label: w.label, excluded: true, unverified: false });
       continue;
     }
-    const unsure = mine.filter((l) => l.c.strength === "must" && h(l) === "unknown");
+    // Nobody can confirm it either way (Royce, 2026-11-03): a requirement or an exclusion read "unknown" holds the want under the bar.
+    const unsure = mine.filter((l) => (l.c.strength === "must" || l.c.strength === "must_not") && h(l) === "unknown");
     perWant.push({ label: w.label, excluded: false, unverified: unsure.length > 0 });
     unverified.push(...unsure.map((l) => l.c.text));
     const step = mine.filter((l) => l.c.strength === "prefer").reduce((s, l) => s + (h(l) === "yes" ? PREFER_STEP : h(l) === "no" ? -PREFER_STEP : 0), 0);
