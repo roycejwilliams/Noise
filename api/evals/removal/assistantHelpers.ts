@@ -69,6 +69,8 @@ check("the document offer, delivery, receipts, Google Docs and plan-file modules
 check("the research line in the menu sends finds, not a brief", !/send a brief/.test(src("services/capabilities.ts")));
 check("no venue_brief document kind anywhere in the source", !/venue_brief/.test(callers.length ? Cap.ABILITIES.map((a) => `${a.can} ${a.use ?? ""}`).join("") : ""));
 
+const na = Cap.ABILITIES.find((a) => a.id === "not_assistant")!;
+check("the decline line says Cue disconnects only the calendar (no Google Docs)", !/Docs/.test(`${na.sheet} ${na.can}`) && /disconnects the calendar if that's what they mean/.test(na.can));
 // ---- goals: no draft piece that ends in a document
 const GO = await import("../../src/services/goalOwnership.js");
 const cleaned = GO.cleanItems([{ text: "a note to the venue", who: "co", how: "draft" }, { text: "venues for 40", who: "co", how: "research" }, { text: "founder dinners", who: "co", how: "watch" }]);
