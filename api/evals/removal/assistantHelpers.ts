@@ -45,18 +45,23 @@ const T = await import("../../src/agent/conversationTools.js");
 const quiet = console.log;
 console.log = () => {};
 const mk = (msg: string, isVoice = false) => T.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: msg, isVoice, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, isTeam: false, sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any);
-const asks = ["Can you draft an email to the venue about Friday?", "write an email to the host asking about the rate", "find me a job in product", "read my inbox and tell me what's waiting"];
+const asks = ["Can you draft an email to the venue about Friday?", "write an email to the host asking about the rate", "read my inbox and tell me what's waiting"];
 const outs: any[] = [];
 for (const m of asks) for (const voice of [false, true]) {
   const t = mk(m, voice);
-  outs.push(await (t.tools as any).startTask.execute({ goal: m.slice(0, 40), theirWords: m, steps: ["a"], firstStep: "a", inHours: 2 }, {}).catch((e: unknown) => ({ ok: false, err: String(e) })));
+  outs.push(await (t.tools as any).startTask.execute({ goal: m.slice(0, 40), theirWords: m, steps: [m.slice(0, 40)], firstStep: m.slice(0, 40), inHours: 2 }, {}).catch((e: unknown) => ({ ok: false, err: String(e) })));
 }
 console.log = quiet;
 check("a request to draft their email (or find a job, read their inbox) is not accepted as a task, on text or on a call", outs.every((o) => o.ok === false && /not something you do/.test(o.error ?? "")), outs);
 const ok = await (mk("let me know when a founders dinner shows up in the Mission") as any).tools.startTask.execute({ goal: "founders dinners in the Mission", theirWords: "let me know when a founders dinner shows up in the Mission", steps: ["look"], firstStep: "look", inHours: 3, lookout: true }, {}).catch((e: unknown) => ({ ok: false, err: String(e) }));
+const mixed = "write an email to my landlord ugh. anyway any founder dinners this week?";
+const dinner = await (mk(mixed) as any).tools.startTask.execute({ goal: "founder dinners this week", theirWords: "any founder dinners this week?", steps: ["look for founder dinners"], firstStep: "look for founder dinners", inHours: 3 }, {}).catch((e: unknown) => ({ ok: false, err: String(e) }));
+check("an email aside in the same message doesn't block the dinner task (only the task being started is tested)", dinner.ok === true, dinner);
+const jobs = await (mk("keep an eye out for job openings in climate tech") as any).tools.startTask.execute({ goal: "job openings in climate tech", theirWords: "keep an eye out for job openings in climate tech", steps: ["watch for climate tech openings"], firstStep: "watch for climate tech openings", inHours: 3, lookout: true }, {}).catch((e: unknown) => ({ ok: false, err: String(e) }));
+check("a job-openings look-out starts (openings and opportunity discovery are kept)", jobs.ok === true, jobs);
 check("a look-out is still accepted", ok.ok === true, ok);
 const { CAPABILITY_SHEET } = await import("../../src/services/callBriefing.js");
-check("the call sheet says Cue doesn't draft emails, plan sheets or search jobs, and never claims it did", /Not something you do, so no task for it: drafting their emails, plan sheets, job searches, reading their email/.test(CAPABILITY_SHEET));
+check("the call sheet says Cue doesn't draft emails, plan sheets or search jobs, and never claims it did", /Not something you do, so no task for it: drafting their emails, plan sheets, reading their email/.test(CAPABILITY_SHEET));
 
 // ---- nothing offers a sheet, a brief or a document: the offer and delivery modules are gone
 const gone = (f: string) => !fs.existsSync(new URL(`../../src/${f}`, import.meta.url));

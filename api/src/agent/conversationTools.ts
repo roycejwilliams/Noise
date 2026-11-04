@@ -756,8 +756,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
       }),
       execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom }) => {
-        // Not something Cue does (drafting their email, a plan sheet, a job search, reading their email): no task, by text or on a call.
-        if (NOT_ASSISTANT_ASK.test(`${goal}\n${theirWords}\n${ctx.resolvedContent}`)) {
+        // Not something Cue does (drafting their email, a plan sheet, reading their email): no task, by text or on a call.
+        if (NOT_ASSISTANT_ASK.test(`${goal}\n${steps.join("\n")}\n${firstStep}`)) {
           notDone("No task was started: that isn't something Cue does.");
           return { ok: false, error: "That's not something you do. Say so plainly and point back to the people side (who to meet, what's worth going to). Never say you drafted, sent or planned it." };
         }
