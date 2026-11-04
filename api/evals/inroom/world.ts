@@ -73,7 +73,9 @@ export const W = {
   pairs: [] as Row[], // co_pairs (services/roomMatching.ts): one row per (event, pair)
   roomClosures: new Map<string, Row>(), // event_room_closures
   // Scorer: (askText, candidate) => score/share/mutual. Default: keyword overlap.
-  scorer: null as null | ((ask: string, cand: Member) => { score: number; share: boolean; mutual?: boolean }),
+  // conditions: the asker's conditions that hold for this candidate, keyed by the condition's words (services/wantCriteria.ts);
+  // fits: the asker's wants (their words) the candidate fits. Both read back into the prompt's labels by the fake scorer.
+  scorer: null as null | ((ask: string, cand: Member) => { score: number; share: boolean; mutual?: boolean; conditions?: Record<string, "yes" | "no" | "unknown">; fits?: string[] }),
   // The scorer's model call fails (a 400) while true.
   scorerFail: false,
   // Consent read verdict (the model half of introConsent): default no violation.
@@ -784,8 +786,13 @@ function fakeAnthropic(init: any): Response {
         const tag = l.match(/tag(\d{6})/)?.[1];
         const cand = [...W.members.values()].find((mm) => mm.id.endsWith(tag ?? "--"));
         // The stub scores on what a line shows, never its hidden part (matching.ts HIDDEN_LABEL), so hidden_only is never true here.
-        const s = W.scorer && cand ? W.scorer(askText, cand) : defaultScore(askText, l.split("hidden, to judge fit only")[0]);
-        return { index, score: s.score, reason: "internal", share_ask: s.share ? shareLabel(askText, l) : "", hidden_only: false, mutual: !!s.mutual };
+        const s: { score: number; share: boolean; mutual?: boolean; conditions?: Record<string, string>; fits?: string[] } = W.scorer && cand ? W.scorer(askText, cand) : defaultScore(askText, l.split("hidden, to judge fit only")[0]);
+        // The prompt's condition labels ("C1 (for W1), must not: \"...\"") and want labels ("- W1 looking for: \"...\"").
+        const condLabels = [...prompt.matchAll(/^(C\d+)(?: \(for W\d+\))?, [^:]+: "([^"]*)"$/gm)].map((m) => ({ label: m[1], text: m[2] }));
+        const wantLabels = [...prompt.matchAll(/^- (W\d+) (?:looking for|can offer): "([^"]*)"$/gm)].map((m) => ({ label: m[1], text: m[2] }));
+        const conditions = condLabels.map((c) => ({ label: c.label, holds: s.conditions?.[c.text] ?? "unknown" }));
+        const fits = (s.fits ?? []).map((t) => wantLabels.find((w) => w.text === t)?.label).filter(Boolean);
+        return { index, score: s.score, reason: "internal", share_ask: s.share ? shareLabel(askText, l) : "", hidden_only: false, mutual: !!s.mutual, fits, conditions };
       });
     return anthropicText(JSON.stringify({ results }));
   }

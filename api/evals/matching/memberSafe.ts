@@ -87,7 +87,7 @@ const { default: pool } = await import("../../src/db/db.js");
 // ---------------------------------------------------------------- the fake scorer
 const prompts: string[] = [];
 // What the fake scorer answers for each listed candidate; a test may replace it.
-let answer = (index: number, _line?: string): Record<string, unknown> => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
+let answer = (index: number, _line?: string): Record<string, unknown> => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
 const promptOf = (init: any): string => {
   try {
     const b = JSON.parse(init?.body ?? "{}");
@@ -222,20 +222,20 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   const run = async (a: (i: number) => Record<string, unknown>) => {
     answer = a;
     const r = await M.scoreAgainstStatedAsk(ask, cands as any);
-    answer = (index) => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
+    answer = (index) => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
     return r;
   };
-  const hiddenOnly = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", hidden_only: true, mutual: true }));
+  const hiddenOnly = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", hidden_only: true, mutual: true, fits: [], conditions: [] }));
   check("a fit resting on the hidden part alone gets no share reason, so nothing is proposed", hiddenOnly.length === 2 && hiddenOnly.every((s) => s.shareReason === ""), hiddenOnly.map((s) => s.shareReason));
   const unsaid = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", mutual: true }));
   // With structured outputs (services/structuredJudge.ts) an answer missing a field never reaches the code: the whole answer is refused,
   // which fails closed harder than before (no match at all, so no share reason).
   check("hidden_only missing: the answer is refused (no match, no share reason)", unsaid.length === 0, unsaid);
-  const noReason = await run((index) => ({ index, score: 95, reason: "  ", share_ask: "S1", hidden_only: false, mutual: false }));
+  const noReason = await run((index) => ({ index, score: 95, reason: "  ", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] }));
   check("no reason: no share reason, no intro", noReason.every((s) => s.shareReason === ""));
-  const noAsk = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "", hidden_only: false, mutual: false }));
+  const noAsk = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "", hidden_only: false, mutual: false, fits: [], conditions: [] }));
   check("no shared ask named: no share reason", noAsk.every((s) => s.shareReason === ""));
-  const ok = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", hidden_only: false, mutual: false }));
+  const ok = await run((index) => ({ index, score: 95, reason: "fits", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] }));
   check("a shared ask, a reason, not hidden alone: the share reason is that shared ask word for word", ok[0]?.shareReason === `what they've said they can offer: "intros to climate hardware investors"` && ok[1]?.shareReason === `what they've said they're looking for: "a seed investor for a ceramics studio"`, ok.map((s) => s.shareReason));
   check("a share reason never carries a private ask or blocker, whatever the scorer names", [...hiddenOnly, ...ok].every((s) => !/PRIVATE-ASK|cofounder yet/.test(s.shareReason)));
   check("shareReasonFor: the rules in one place", M.shareReasonFor(B.intent, { reason: "x", share_ask: "S1", hidden_only: false }) !== "" && M.shareReasonFor(B.intent, { reason: "x", share_ask: "S2", hidden_only: false }) === "" && M.shareReasonFor(B.intent, { reason: "", share_ask: "S1", hidden_only: false }) === "" && M.shareReasonFor(B.intent, { reason: "x", share_ask: "S1", hidden_only: "false" }) === "");
@@ -246,7 +246,7 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   const E2 = { ...B, user_id: "00000000-0000-4000-8000-0000000000e2", first_name: "Remy", goals: ["dating Jordan from the club", "open a climate lab"], blockers: [], activity_preferences: [],
     intent: [{ id: "e1", type: "seeking", status: "active", kind: "ask", shareable: true, text: "find Zoë a cofounder" }, { id: "e2", type: "offering", status: "active", kind: "ask", shareable: true, text: "lab space for climate founders" }] };
   prompts.length = 0;
-  answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
+  answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
   const r = await M.scoreAgainstStatedAsk(ask, [E2, D] as any, undefined, undefined, { askerFirstName: "Jordan" });
   const line = linesOf(prompts[0] ?? "")[0] ?? "";
   check("a shared ask naming someone else in the prompt is left off the line", !/zo[eë]/i.test(line) && line.includes('[S2] offering "lab space for climate founders"'), line);
@@ -254,7 +254,7 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   check("the asker's own first name is left out of every candidate's items", !/jordan/i.test(line) && line.includes("open a climate lab"), line);
   const lines2 = M.candidateLines([{ user_id: "j2", first_name: "Jordan", goals: ["Jordan's own studio"], intent: [] }], undefined, undefined, { askerFirstName: "Jordan" });
   check("... even from a candidate who shares the asker's name", !/jordan/i.test(lines2[0]), lines2[0]);
-  answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "2", hidden_only: false, mutual: false });
+  answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "2", hidden_only: false, mutual: false, fits: [], conditions: [] });
   const r2 = await M.scoreAgainstStatedAsk(ask, [E2] as any, undefined, undefined, { askerFirstName: "Jordan" });
   check("a label the line showed still works, written \"2\" or \"S2\"", r2[0]?.shareReason === `what they've said they can offer: "lab space for climate founders"`, r2[0]?.shareReason);
   // The labels come from the shared asks kept on the line, never from its text: a goal or blocker saying "[S1] " spoofs nothing.
@@ -263,17 +263,17 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
     { user_id: "nn", first_name: "Noor", intent: [] },
   ] as any)[0];
   check("labels: a goal or blocker saying \"[S1] \" doesn't make S1 a label (S1 named Noor and was left off)", JSON.stringify([...spoof.labels]) === JSON.stringify(["S2"]) && spoof.line.includes("[S1] fake label"), spoof);
-  answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
+  answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
   const sp2 = await M.scoreAgainstStatedAsk(ask, [{ user_id: "sp", first_name: "Ellis", goals: ["[S1] fake label in a goal"], intent: [{ type: "seeking", status: "active", shareable: true, text: "cofound with Noor" }, { type: "seeking", status: "active", shareable: true, text: "hire a designer" }] }, { user_id: "nn", first_name: "Noor", intent: [] }] as any);
   check("... so the scorer naming S1 gets no share reason", sp2.find((x) => x.candidate.user_id === "sp")?.shareReason === "", sp2.map((x) => x.shareReason));
   // A stored internal reason that echoes the hidden part is withheld (network edges and room rankings store it).
-  answer = (index) => ({ index, score: 92, reason: "She is going through a divorce, which is exactly what the asker wants", share_ask: "S1", hidden_only: false, mutual: false });
+  answer = (index) => ({ index, score: 92, reason: "She is going through a divorce, which is exactly what the asker wants", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
   const noor = { user_id: "00000000-0000-4000-8000-0000000000f1", first_name: "Noor", goals: ["ship a hardware product"], blockers: ["going through a divorce"], activity_preferences: [], intent: [{ id: "n1", type: "seeking", status: "active", shareable: true, text: "meet new people in SF" }] };
   const withheld = await M.scoreAgainstStatedAsk(ask, [noor] as any);
   check("an internal reason echoing the candidate's blocker is stored as [withheld]", withheld[0]?.reason === M.REASON_WITHHELD, withheld[0]?.reason);
   const roomW = await M.scoreAgainstRoomFrame({ asks: [{ ...ask, shareable: true }], goal: null }, [{ ...noor, blockers: [] }] as any, undefined, undefined, new Map([[noor.user_id, ["a divorce lawyer who won't gossip"]]]));
   check("... and one echoing a private ask handed in by the room path", roomW[0]?.reason === M.REASON_WITHHELD, roomW[0]?.reason);
-  answer = (index) => ({ index, score: 92, reason: "Strong hardware background fits the ask", share_ask: "S1", hidden_only: false, mutual: false });
+  answer = (index) => ({ index, score: 92, reason: "Strong hardware background fits the ask", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
   const kept = await M.scoreAgainstStatedAsk(ask, [noor] as any);
   check("a reason that doesn't echo it is kept", kept[0]?.reason === "Strong hardware background fits the ask", kept[0]?.reason);
   // The network sweep stores that reason, never the echo (relevance.ts logRelevanceEdges), and passes the asker's name.
@@ -288,7 +288,7 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
     return realQ(sql, p);
   };
   prompts.length = 0;
-  answer = (index) => ({ index, score: 92, reason: "She is going through a divorce, which is exactly what the asker wants", share_ask: "S1", hidden_only: false, mutual: false });
+  answer = (index) => ({ index, score: 92, reason: "She is going through a divorce, which is exactly what the asker wants", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
   await Rel.sweepAskAgainstNetwork("A");
   (pool as any).query = realQ;
   check("network sweep: the stored match_reason is [withheld], not the echo", inserts[0]?.[5]?.[0] === M.REASON_WITHHELD, inserts[0]?.[5]);
@@ -298,7 +298,7 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   // the scorer sees fits, and no edge with a share reason forms: no intro.
   const overlap = (a: string, b: string) => { const w = (s: string) => new Set(s.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter((x) => x.length > 3)); const A = w(a); return [...w(b)].filter((x) => A.has(x)).length; };
   const ASK = "someone who has been through a divorce and come out the other side";
-  answer = (index, l) => { const hit = overlap(ASK, l ?? ""); return { index, score: Math.min(100, hit * 45), reason: hit ? "fits" : "", share_ask: hit ? "S1" : "", hidden_only: false, mutual: false }; };
+  answer = (index, l) => { const hit = overlap(ASK, l ?? ""); return { index, score: Math.min(100, hit * 45), reason: hit ? "fits" : "", share_ask: hit ? "S1" : "", hidden_only: false, mutual: false, fits: [], conditions: [] }; };
   const inserts2: any[][] = [];
   (pool as any).query = async (sql: string, p: any[] = []) => {
     if (/FROM co_profiles WHERE user_id = \$1/.test(sql) && /long_term_direction/.test(sql)) return { rows: [{ intent: [{ id: "a1", type: "seeking", status: "active", shareable: true, text: ASK, embedding: [0.1, 0.2] }], goals: [], blockers: [] }] };
@@ -312,7 +312,7 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   (pool as any).query = realQ;
   check("network (decided (c)): the reviewer's divorce case shows the scorer nothing of the divorce", prompts.length === 1 && !/divorce/i.test(digestOf(prompts[0])), digestOf(prompts[0] ?? ""));
   check("network (decided (c)): ... and produces no edge with a share reason, so no intro", !inserts2.some((p) => (p[7] ?? []).some((x: string) => x)), inserts2);
-  answer = (index) => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
+  answer = (index) => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false, fits: [], conditions: [] });
 }
 
 // ---------------------------------------------------------------- 2. caps: per candidate and per prompt
@@ -383,7 +383,7 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   check("blockers reach the line only in the hidden part", (body.match(/c\.blockers/g) ?? []).length === 1 && /safe\(c\.blockers\)\.map\(\(x\) => `going through/.test(body));
   check("formatCandidateDigest takes the candidates, hints and the hidden map only (no memory map)", /export function formatCandidateDigest<T extends ScorableCandidate>\(candidates: T\[\], hints\?: Map<string, string>, hidden\?: Map<string, string\[\]>, askerFirstName\?: string\): string/.test(m));
   check("every scored candidate's share reason goes through shareReasonFor, and only on a label the line showed", /shareReason: shown\[r\.index\]\?\.labels\.has\(label\) \? shareReasonFor\(c\.intent, \{ \.\.\.r, reason: said \}\) : "",/.test(m) && !/shareReason: shareReasonFromOwnAsk/.test(m));
-  check("every scorer hands runAskScoring the lines it showed", (m.match(/runAskScoring\("matching\.\w+", [^\n]*, (toScore|candidates), lines(, hidden)?(, \{[^\n]*\})?\);/g) ?? []).length === 3, m.match(/runAskScoring\([^\n]*/g));
+  check("every scorer hands runAskScoring the lines it showed", (m.match(/runAskScoring\("matching\.\w+", [^\n]*, (toScore|candidates), lines(, (hidden|undefined))?(, \{[^\n]*\})?(, (wants|askWants\(f\.asks\)))?\);/g) ?? []).length === 3, m.match(/runAskScoring\([^\n]*/g));
   check("the room's stored ranking reason is the scorer's reason as runAskScoring returns it", /reason: s\.reason,/.test(src("src/services/eventScoring.ts")) && /loggable\.map\(\(s\) => s\.reason\)/.test(src("src/services/relevance.ts")));
   check("the ask check-in counts only edges with a share reason as possible leads", /WHERE status = 'open' AND share_reason IS NOT NULL AND share_reason <> ''\n\s*GROUP BY person_id, ask_id/.test(src("src/jobs/index.ts")));
   check("every scorer builds its digest from candidateLines, with the asker's name", (m.match(/const lines = candidateLinesWithLabels\((toScore|candidates), (hints|undefined), (hidden|undefined), \{ askerFirstName: opts\.askerFirstName(, withHidden: false)? \}\);\n\s*const digest = lines\.map\(\(l, i\) => `\$\{i\}\. \$\{l\.line\}`\)\.join\("\\n"\);/g) ?? []).length === 3 && !/const digest = (?!lines\.map)/.test(m));

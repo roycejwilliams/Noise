@@ -1,0 +1,185 @@
+// Preserve what the member actually wants, and let corrections change only that want (Royce's spec, 2026-11-02, sections 1, 5, 6).
+// Through the REAL capture write path (profileExtraction.ts persistIntentFrom -> persistCapturedIntent) on a fake store, with the
+// read's answer as a fixture, and what-Cue-knows' real item list and removal. Zero tokens; invented people.
+//   1. three free-form wants stay three asks, each with their own words, where it was said, and whether the words are theirs
+//   2. a condition is kept only in their own words; one the read made up is dropped (nothing invented)
+//   3. a condition said later about one want lands on that want only (text and call); a lift takes back only that condition
+//   4. a want they dropped at their word isn't re-opened by the same conversation's earlier words (the call capture after the
+//      call's own retire read), but a request said after the close re-opens it
+//   5. a save worded by Cue (the saveAsk tool's "user: <Cue's sentence>") is never quoted as theirs
+//   6. what-Cue-knows shows each want with their words and each condition as its own removable line; removing one changes that one
+//   npx tsx evals/asks/wantWords.ts
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+process.env.OPENAI_API_KEY ||= "unused-in-tests";
+process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
+import fs from "node:fs";
+
+let total = 0, failed = 0;
+const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 700)}` : ""}`); } };
+const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+
+// ---------------------------------------------------------------- outside calls: a fixed answer for every model read, and embeddings
+// far apart per text (so three different wants never look like one restated).
+let seq = 0;
+const vecs = new Map<string, number[]>();
+const vec = (t: string) => {
+  if (!vecs.has(t)) { const v = new Array(1536).fill(0); v[seq++ % 1536] = 1; vecs.set(t, v); }
+  return vecs.get(t)!;
+};
+const text = (t: string) => new Response(JSON.stringify({ id: "m", type: "message", role: "assistant", model: "stub", content: [{ type: "text", text: t }], stop_reason: "end_turn", usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
+globalThis.fetch = (async (input: any, init?: any) => {
+  const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input?.url ?? String(input));
+  if (url.host === "api.openai.com") {
+    const b = JSON.parse(init?.body ?? "{}");
+    const inputs = Array.isArray(b.input) ? b.input : [b.input ?? ""];
+    return new Response(JSON.stringify({ object: "list", data: inputs.map((t: string, index: number) => ({ object: "embedding", index, embedding: vec(String(t)) })), usage: { prompt_tokens: 0, total_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (url.host === "api.anthropic.com") return text('{"kind": "ask", "same": false}');
+  throw new Error(`wantWords: refused outside call to ${url.host}`);
+}) as typeof fetch;
+
+// The clients read fetch when they're made: the fake goes in before any source module loads.
+const { default: pool } = await import("../../src/db/db.js");
+const P = await import("../../src/services/profileExtraction.js");
+const WC = await import("../../src/services/wantCriteria.js");
+const K = await import("../../src/services/whatCoKnows.js");
+const TL = await import("../../src/services/turnLearning.js");
+(await import("../../src/services/embeddings.js")).setEmbeddingsClientForTests({ embeddings: { create: async ({ input }: any) => ({ data: (Array.isArray(input) ? input : [input]).map((t: string, index: number) => ({ index, embedding: vec(String(t)) })) }) } } as any);
+
+// ---------------------------------------------------------------- the fake store: the statements the capture path runs
+const U = "member-jordan";
+type Row = Record<string, any>;
+const w = { intent: [] as Row[], asks: [] as Row[], decisions: [] as Row[] };
+const reset = () => { w.intent = []; w.asks = []; w.decisions = []; };
+const q = async (raw: string, a: any[] = []): Promise<{ rows: any[]; rowCount: number }> => {
+  const sql = raw.replace(/\s+/g, " ").trim();
+  const r = (rows: any[], n = rows.length) => ({ rows, rowCount: n });
+  if (/^INSERT INTO harness_decisions/.test(sql)) { w.decisions.push({ decision: a[1], action: a[4], proposal: a[5] }); return r([]); }
+  if (/^SELECT intent FROM co_profiles WHERE user_id = \$1$/.test(sql)) return r([{ intent: JSON.parse(JSON.stringify(w.intent)) }]);
+  if (/^UPDATE co_profiles SET intent = \$2::jsonb/.test(sql)) { w.intent = JSON.parse(a[1]); return r([], 1); }
+  if (/^INSERT INTO co_profiles \(user_id, intent, updated_at\)/.test(sql)) { w.intent = [...w.intent, ...JSON.parse(a[1])]; return r([], 1); }
+  if (/^SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NULL$/.test(sql)) return r(w.asks.filter((x) => !x.resolved_at));
+  if (/^SELECT ask_id, ask_text, intent FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NULL/.test(sql)) return r(w.asks.filter((x) => !x.resolved_at).map((x) => ({ ...x, intent: null })));
+  if (/^SELECT ask_id, ask_text, closed_reason, closed_evidence FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NOT NULL/.test(sql)) return r(w.asks.filter((x) => x.resolved_at));
+  if (/^INSERT INTO ask_checkins \(user_id, ask_id, ask_text, expires_at, kind/.test(sql)) {
+    if (w.asks.some((x) => !x.resolved_at && x.ask_text.toLowerCase().trim() === String(a[2]).toLowerCase().trim())) return r([], 0);
+    w.asks.push({ ask_id: a[1], ask_text: a[2], resolved_at: null, closed_reason: null, closed_evidence: null }); return r([], 1);
+  }
+  if (/^INSERT INTO co_memories/.test(sql)) return r([{ id: "m1" }], 1);
+  return r([], 0);
+};
+(pool as any).query = q;
+(pool as any).connect = async () => ({ query: q, release: () => {} });
+const settle = () => new Promise((res) => setTimeout(res, 40));
+const entries = () => w.intent.filter((e) => e.kind === "ask" && e.status === "active");
+const entry = (t: string) => w.intent.find((e) => e.text === t);
+
+const A_COF = "Looking for a technical cofounder who has built consumer products before";
+const A_OUT = "Wants to meet people outside tech";
+const A_ROOM = "Wants a room where they can drop their guard";
+const SAID_COF = "I'm looking for a technical cofounder who's built consumer before";
+const SAID_OUT = "honestly I want to meet people outside tech";
+const SAID_ROOM = "I want a room where I can drop my guard";
+const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone technical who has shipped consumer.", `user: And ${SAID_OUT}, everyone I know is in tech.`, "assistant: That makes sense.", `user: ${SAID_ROOM}, somewhere small.`, "assistant: I'll keep that in mind."].join("\n");
+
+// ================================================================ 1-2. three wants, their words, nothing invented
+{
+  reset();
+  const answer = {
+    asks: [
+      { text: A_COF, type: "seeking", quote: SAID_COF, criteria: [{ text: "has built a consumer product", strength: "must", quote: "who's built consumer before" }, { text: "based in SF", strength: "must", quote: "must be in SF" }] },
+      { text: A_OUT, type: "seeking", quote: SAID_OUT, criteria: [] },
+      { text: A_ROOM, type: "seeking", quote: SAID_ROOM, criteria: [{ text: "under 20 people", strength: "prefer", quote: "a small room under 20" }] },
+    ],
+    concrete_preferences: [], wants: [], availability: null,
+  };
+  await P.persistIntentFrom(U, answer as any, callTranscript, "whole_transcript", null, { via: "call" });
+  await settle();
+  const e = entries();
+  check("before: one call, three different wants; after: three asks, three check-in rows, never one 'networking' ask", e.length === 3 && w.asks.length === 3 && [A_COF, A_OUT, A_ROOM].every((t) => !!entry(t)), e.map((x) => x.text));
+  check("each keeps their own words, checked against their lines, and where it was said", entry(A_COF)?.quote === SAID_COF && entry(A_OUT)?.quote === SAID_OUT && entry(A_ROOM)?.quote === SAID_ROOM && e.every((x) => x.provenance === "stated" && x.via === "call"), e.map((x) => [x.quote, x.provenance, x.via]));
+  check("a condition said outright is kept on its own want, in their words", JSON.stringify(entry(A_COF)?.criteria?.map((c: any) => [c.text, c.strength, c.quote])) === JSON.stringify([["has built a consumer product", "must", "who's built consumer before"]]), entry(A_COF)?.criteria);
+  check("a condition the read made up (no quote of theirs: 'must be in SF', 'under 20') is dropped: no invented requirement", !entry(A_COF)?.criteria?.some((c: any) => /SF/.test(c.text)) && !entry(A_ROOM)?.criteria, [entry(A_COF)?.criteria, entry(A_ROOM)?.criteria]);
+  check("an emotional want with no conditions stays a want, not a task with made-up details", entry(A_ROOM)?.kind === "ask" && !entry(A_ROOM)?.criteria);
+  // Pure grounding, the same rule both reads use.
+  check("groundWant: a quote that isn't in their lines is never kept as theirs", WC.groundWant("I need a CTO by Friday", "I'm looking for a cofounder").provenance === "inferred" && WC.groundWant("looking for a cofounder", "I'm looking for a cofounder").provenance === "stated");
+  check("groundCriteria: bad strength, no quote, or Cue's words are all dropped", WC.groundCriteria([{ text: "x", strength: "urgent", quote: "looking" }, { text: "y", strength: "must" }, { text: "z", strength: "must", quote: "Got it, someone technical" }], WC.theirWordsIn(callTranscript)).length === 0);
+}
+
+// ================================================================ 3. a later condition lands on one want only (text turn and call)
+{
+  // The numbered items as the text turn's read shows them (goalJourney.openErrandsAndGoals order: the ask rows).
+  const items = w.asks.map((x) => ({ id: x.ask_id, text: x.ask_text, kind: "ask" as const }));
+  const iCof = items.findIndex((x) => x.text === A_COF);
+  const iOut = items.findIndex((x) => x.text === A_OUT);
+  const MSG = "for the cofounder thing, I'm not looking for investors right now, and taste matters more than seniority";
+  const before = JSON.stringify(entry(A_OUT));
+  await P.persistIntentFrom(U, { asks: [], concrete_preferences: [], wants: [], availability: null, criteria_for: [
+    { index: iCof, text: "investors", strength: "must_not", quote: "I'm not looking for investors right now" },
+    { index: iCof, text: "strong product taste", strength: "prefer", quote: "taste matters more than seniority" },
+    { index: iOut, text: "no founders", strength: "must_not", quote: "no founders please" },
+  ] } as any, `user: ${MSG}\nassistant: Noted.`, "last_user_message", MSG, { via: "text", openItems: items });
+  const c = entry(A_COF)?.criteria ?? [];
+  check("'not investors right now' and the taste preference land on the cofounder want, with their words", c.some((x: any) => x.text === "investors" && x.strength === "must_not") && c.some((x: any) => x.strength === "prefer" && x.quote === "taste matters more than seniority"), c);
+  check("... the other want is untouched (a condition belongs to its want; one they didn't say is never added)", JSON.stringify(entry(A_OUT)) === before, [before, entry(A_OUT)]);
+  const LIFT = "actually investors are fine now";
+  await P.persistIntentFrom(U, { asks: [], concrete_preferences: [], wants: [], availability: null, criteria_for: [{ index: iCof, text: "investors", strength: "lifted", quote: LIFT }] } as any, `user: ${LIFT}`, "last_user_message", LIFT, { via: "text", openItems: items });
+  const c2 = entry(A_COF)?.criteria ?? [];
+  check("a lift takes back only that condition; the requirement and the preference stay", !c2.some((x: any) => x.text === "investors") && c2.some((x: any) => x.strength === "must") && c2.some((x: any) => x.strength === "prefer"), c2);
+  check("the turn prompt and the call prompt both carry the same want-words rule, criteria_for and the on-file conditions", (() => {
+    const t = TL.turnLearningPrompt({ transcript: "user: hi", message: "hi", today: "2026-11-03", onFile: null, openAsks: items, styleNotes: [], coSaidBefore: null, intent: w.intent });
+    const k = P.captureIntentPrompt(callTranscript, "whole_transcript", { items, intent: w.intent });
+    return [t, k].every((p) => p.includes(WC.WANT_WORDS_RULE) && p.includes(WC.CRITERIA_FOR_RULE) && /Conditions already on file/.test(p) && /would rather: "strong product taste"/.test(p));
+  })());
+  check("the call prompt: an ask they dropped later in the same call is not captured (their word), anything else still is", /is not captured/.test(P.captureIntentPrompt(callTranscript, "whole_transcript")) && /What they happened to say LAST never cancels an ask/.test(P.captureIntentPrompt(callTranscript, "whole_transcript")));
+  check("the call path loads the numbered list for the read and hands it to the write (call parity with the text turn)", /const onFile = await loadOpenForCriteria\(user_id\)/.test(src("services/profileExtraction.ts")) && /openItems: onFile\?\.items/.test(src("services/profileExtraction.ts")) && /openItems: openAsks/.test(src("services/turnLearning.ts")));
+}
+
+// ================================================================ 4. a dropped want isn't re-opened by the words before the drop
+{
+  const cof = w.asks.find((x) => x.ask_text === A_COF)!;
+  const DROP = "I'm not pursuing the cofounder search anymore";
+  Object.assign(cof, { resolved_at: new Date(), closed_reason: "member", closed_evidence: DROP });
+  w.intent = w.intent.map((e) => (e.text === A_COF ? { ...e, status: "resolved" } : e));
+  const call = `user: ${SAID_COF}.\nassistant: Got it.\nuser: Actually, ${DROP}.\nassistant: Understood.`;
+  await P.persistIntentFrom(U, { asks: [{ text: A_COF, type: "seeking", quote: SAID_COF }], concrete_preferences: [], wants: [], availability: null } as any, call, "whole_transcript", null, { via: "call" });
+  check("call: the capture after the call's own retire read doesn't re-open the want they dropped later in that call", entries().every((e) => e.text !== A_COF) && w.asks.filter((x) => x.ask_text === A_COF && !x.resolved_at).length === 0 && w.decisions.some((d) => d.action === "closed_want_held"), { open: entries().map((e) => e.text), decisions: w.decisions.map((d) => d.action) });
+  check("pure: closing words after the want's words hold; closing words from before (or not in this conversation) don't", P.heldByClose(call, SAID_COF, DROP) && !P.heldByClose(`user: ${DROP}\nassistant: ok\nuser: ${SAID_COF} again after all`, `${SAID_COF} again after all`, DROP) && !P.heldByClose(`user: ${SAID_COF}`, SAID_COF, DROP));
+  check("the retire read (text turn and call alike) keeps their closing words on the ask it closes, which is what the hold reads", /closed_evidence = COALESCE\(closed_evidence, \(\$3::text\[\]\)\[array_position\(\$2::text\[\], ask_id\)\]\)/.test(src("services/profileExtraction.ts")) && /asks\.map\(\(id\) => \(quote\(id\) \?\? ""\)\.slice\(0, 300\) \|\| null\)/.test(src("services/profileExtraction.ts")));
+  const BACK = "ok I'm back on it, I'm looking for a technical cofounder who's built consumer before";
+  await P.persistIntentFrom(U, { asks: [{ text: A_COF, type: "seeking", quote: BACK }], concrete_preferences: [], wants: [], availability: null } as any, `user: ${BACK}`, "last_user_message", BACK, { via: "text" });
+  check("text: a request said after the close (their drop isn't in it) re-opens it as a new want", entries().some((e) => e.text === A_COF && e.quote === BACK) && w.asks.some((x) => x.ask_text === A_COF && !x.resolved_at));
+}
+
+// ================================================================ 5. Cue's wording is never their words
+{
+  reset();
+  await P.persistIntentFrom(U, { asks: [{ text: "Find founder dinners in SF", type: "seeking", quote: "Find founder dinners in SF" }], concrete_preferences: [], wants: [], availability: null } as any, "user: Find founder dinners in SF", "last_user_message", null, { ownWords: null });
+  check("a save worded by Cue (the saveAsk tool) is kept as Cue's read: inferred, no quote", entries()[0]?.provenance === "inferred" && entries()[0]?.quote === null, entries()[0]);
+  check("the text and call save tools pass no words of theirs, or only the words they asked in", /captureIntentForTurn\(ctx\.userId, `user: \$\{what\}`, \{ timeoutMs: 6000, ownWords: null, via: ctx\.onCall \? "call" : "text" \}\)/.test(src("agent/conversationTools.ts")) && /ownWords: p\.asked/.test(src("harness/callGrounding.ts")));
+}
+
+// ================================================================ 6. what-Cue-knows: visible, in their words, removable one by one
+{
+  const intent = [
+    { id: "a1", kind: "ask", status: "active", text: A_COF, quote: SAID_COF, provenance: "stated", criteria: [{ text: "investors", strength: "must_not", quote: "I'm not looking for investors right now", at: "x" }, { text: "has built a consumer product", strength: "must", quote: "who's built consumer before", at: "x" }] },
+    { id: "a2", kind: "ask", status: "active", text: A_OUT, quote: null, provenance: "inferred" },
+  ];
+  const raw: any = { profile: { city: "Oakland", long_term_direction: null, availability_pattern: null, goals: [], life_chapters: [], blockers: [], activity_preferences: [], avoid: [], intent }, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [{ id: "a1", text: A_COF }, { id: "a2", text: A_OUT }], files: [] };
+  const items = K.knownItems(raw);
+  const ask1 = items.find((i) => i.ref === "ask:a1");
+  const conds = items.filter((i) => i.source === "cond");
+  check("each want shows with their own words when Cue has them (none shown as theirs when it's Cue's read)", ask1?.theirWords === SAID_COF && items.find((i) => i.ref === "ask:a2")?.theirWords === null);
+  check("each condition is its own line, in their words, under its want, removal only", conds.length === 2 && conds.every((c) => c.text.startsWith(`for "${A_COF}", you said: "`) && !c.canCorrect) && conds.some((c) => c.theirWords === "I'm not looking for investors right now"), conds);
+  let saved: any = null;
+  const db = { query: async (sql: string, args: any[] = []) => { if (/UPDATE co_profiles SET intent/.test(sql)) { saved = JSON.parse(args[1]); return { rows: [], rowCount: 1 }; } return { rows: [], rowCount: 0 }; } };
+  const inv = conds.find((c) => /investors/.test(c.text))!;
+  const out: any = await K.applyOne(db, U, raw, inv, "remove", null, "drop the investor thing");
+  const a1 = saved?.find((e: any) => e.id === "a1");
+  check("removing 'not investors' takes only that condition off that want; the want, its other condition and the other want stay", out?.source === "cond" && a1?.status === "active" && a1.criteria.length === 1 && a1.criteria[0].strength === "must" && JSON.stringify(saved.find((e: any) => e.id === "a2")) === JSON.stringify(intent[1]), { out, saved });
+  check("logged under its own plain kind", K.logKind(inv.ref) === "a condition they put on one of their wants");
+}
+
+console.log(`\n${total - failed}/${total} passed`);
+process.exit(failed ? 1 : 0);

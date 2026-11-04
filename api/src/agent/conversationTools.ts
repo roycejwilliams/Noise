@@ -1564,7 +1564,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // Why it didn't save, for the log only (toolGuard.ts withReason, 2026-11-02 helper audit: eight on dev with no reason).
           const started = Date.now();
           let threw: string | null = null;
-          const saved = await captureIntentForTurn(ctx.userId, `user: ${what}`, { timeoutMs: 6000 }).catch((err: any) => ((threw = String(err?.message ?? err).slice(0, 160)), null));
+          const saved = await captureIntentForTurn(ctx.userId, `user: ${what}`, { timeoutMs: 6000, ownWords: null, via: ctx.onCall ? "call" : "text" }).catch((err: any) => ((threw = String(err?.message ?? err).slice(0, 160)), null));
           if (!saved?.ask?.text) {
             notDone(`Saving "${what.slice(0, 120)}" for the daily search didn't work, so Cue is NOT looking for it.`);
             const why = threw ? `the save threw: ${threw}` : Date.now() - started >= 6000 ? "the read of the ask timed out (6s)" : "the read found no ask to save in it";

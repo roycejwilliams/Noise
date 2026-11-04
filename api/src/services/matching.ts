@@ -4,6 +4,7 @@ import { MODELS } from "../models.js";
 import { goalEntries, isOpenAsk } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
 import { nameFinder } from "./memberSafeMemories.js";
+import { applyConditions, conditionsPromptBlock, CONDITIONS_FIELDS, criteriaOf, type WantLine } from "./wantCriteria.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
 // whom, so it runs on Sonnet 5.
@@ -25,6 +26,8 @@ export type StatedIntent = {
   embedding?: number[] | null;
   // The member said Co may mention this ask when introducing them. Default (missing) is private.
   shareable?: boolean | null;
+  // Conditions they put on this want, in their words (services/wantCriteria.ts). Read only by the asker's own scoring.
+  criteria?: unknown;
 };
 
 // captureIntent appends asks over time as calls happen — take the most
@@ -70,6 +73,9 @@ export type AskScore<T> = {
   // shareable, so the match must not be surfaced to anyone.
   shareReason: string;
   mutual: boolean;
+  // What the asker's conditions did (services/wantCriteria.ts applyConditions): their own words, internal only, never shown to the
+  // candidate. Absent when the want has no conditions.
+  conditions?: { excluded: string[]; unverified: string[]; preferred: string[] };
 };
 
 type ScorableCandidate = {
@@ -283,6 +289,10 @@ async function runAskScoring<T extends ScorableCandidate>(
   // would have outlived its removal in someone else's trace (review of #245 x #247). recordInputs/recordOutputs false: the span
   // carries no prompt or answer, so neither Langfuse nor our trace text keeps one.
   opts: { noTraceText?: boolean; failLoudly?: boolean } = {},
+  // The asker's wants as the prompt labelled them, with their conditions (services/wantCriteria.ts). Applied here, in code, from the
+  // scorer's read of each condition: a broken requirement or exclusion takes that want out, an unconfirmed requirement keeps it under
+  // the bar, a preference moves the order without crossing it.
+  wants: WantLine[] = [],
 ): Promise<AskScore<T>[]> {
   try {
     const { hiddenEcho } = await import("../harness/hiddenEcho.js");
@@ -307,9 +317,12 @@ async function runAskScoring<T extends ScorableCandidate>(
         const reason = said && hiddenEcho(said, hiddenTextsOf(c, hidden), [], [], SENSITIVE, shareableAsks(c.intent).map((a) => String(a.text))) ? REASON_WITHHELD : said;
         const num = typeof r.share_ask === "string" ? Number(r.share_ask.trim().replace(/^\[?S/i, "").replace(/\]$/, "")) : NaN;
         const label = Number.isInteger(num) && num > 0 ? `S${num}` : "";
+        const raw = typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0;
+        const cond = wants.some((w) => w.criteria.length) ? applyConditions(raw, { conditions: r.conditions, fits: r.fits }, wants) : null;
         return {
           candidate: c,
-          score: typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
+          score: cond ? cond.score : raw,
+          ...(cond ? { conditions: { excluded: cond.excluded, unverified: cond.unverified, preferred: cond.preferred } } : {}),
           reason,
           // The model only names WHICH shared ask the match rests on; the words shown to people are that ask, in their own
           // words, and only if they marked it shareable. Nothing private or inferred (e.g. "actively fundraising") can leak.
@@ -388,22 +401,25 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
   // a private ask or blocker could quietly be a network match's real basis (review of #245). Rooms keep it behind the value gate.
   const lines = candidateLinesWithLabels(toScore, hints, undefined, { askerFirstName: opts.askerFirstName, withHidden: false });
   const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
-  const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore, lines);
+  const wants = askWants([ask]);
+  const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext, wants), toScore, lines, undefined, {}, wants);
   return [...scored, ...dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>)];
 }
 
-export function buildStatedAskPrompt(askText: string, digest: string, askerContext?: string): string {
+export function buildStatedAskPrompt(askText: string, digest: string, askerContext?: string, wants: WantLine[] = []): string {
   return `Someone wants to be connected with people who match this: "${askText}"
-${askerContext ? `\nWhat's known about the person asking (use ONLY to judge "mutual" below, never to inflate the score itself): ${askerContext}\n` : ""}
+${conditionsPromptBlock(wants)}${askerContext ? `\nWhat's known about the person asking (use ONLY to judge "mutual" below, never to inflate the score itself): ${askerContext}\n` : ""}
 Here is what's known about each candidate, one per line:
 ${digest}
 
 For each candidate, judge how well they satisfy the ask, based only on what's listed — never assume or infer facts that aren't present. ${HIDDEN_RULE}
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false, "fits": [], "conditions": []}, ...]}
 
 score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisfy it. Score every candidate, even a 0.
+fits: [] (one ask).
+${CONDITIONS_FIELDS}
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
 share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
 mutual: true only if one of the candidate's own asks (any listed, the hidden part included) also plausibly points back at what's known about the asker above. false if the candidate has no ask listed, or it doesn't plausibly connect.
@@ -435,8 +451,8 @@ ${digest}
 
 For each candidate, judge how much they would likely want or benefit from this offering, based only on what's listed — never assume or infer facts that aren't present. ${HIDDEN_RULE}
 
-Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false}, ...]}
+Return ONLY valid JSON, no preamble ("fits" and "conditions" are always [] here):
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false, "fits": [], "conditions": []}, ...]}
 
 score: 0-100. 0 means nothing on file suggests they'd want this, 100 means it clearly matches something they're after. Score every candidate, even a 0.
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
@@ -475,8 +491,9 @@ export function frameLine(f: RoomFrame): string {
 }
 
 export function buildRoomFramePrompt(f: RoomFrame, digest: string, askerContext?: string): string {
+  const wants = askWants(f.asks);
   const lines = [
-    ...f.asks.map((a) => `- ${a.type === "offering" ? "can offer" : "looking for"}: "${a.text}"`),
+    ...f.asks.map((a, i) => `- W${i + 1} ${a.type === "offering" ? "can offer" : "looking for"}: "${a.text}"`),
     ...(f.goal?.text ? [`- where they're headed: "${f.goal.text}"${f.asks.length ? " (the frame when none of the lines above is about people)" : ""}`] : []),
   ];
   return `Someone wants to be connected with people who match this: "${frameLine(f)}"
@@ -484,16 +501,18 @@ export function buildRoomFramePrompt(f: RoomFrame, digest: string, askerContext?
 Everything they're open to, in their words (a candidate needs to fit only one line):
 ${lines.join("\n")}
 Only lines about people count: someone to meet, hire, work with, learn from, back or be backed by, or something they can give a person. An errand (a place, a product, a booking, a plan, a recommendation) says nothing about who to meet: leave it out of the judgment.
-${askerContext ? `\nWhat's known about the person asking (use it to judge what they can offer someone, and "mutual" below): ${askerContext}\n` : ""}
+${conditionsPromptBlock(wants)}${askerContext ? `\nWhat's known about the person asking (use it to judge what they can offer someone, and "mutual" below): ${askerContext}\n` : ""}
 Here is what's known about each candidate, one per line:
 ${digest}
 
 For each candidate, judge how well they fit, based only on what's listed — never assume or infer facts that aren't present. ${HIDDEN_RULE} A fit runs either way: the candidate can meet one of the person's needs, or the candidate needs what the person offers or does (a founder who needs a product designer fits a product designer weighing freelance work). Judge by who the candidate is and what they do, not only by whether the candidate's own ask repeats the person's words.
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false, "fits": ["W1"], "conditions": []}, ...]}
 
 score: 0-100. 0 means nothing on file supports a fit, 100 means a clear fit for one of their lines. Score every candidate, even a 0.
+fits: the labels (like "W1") of every line above the candidate fits; [] when none.
+${CONDITIONS_FIELDS}
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
 share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
 mutual: true only if one of the candidate's own asks also plausibly points back at the person (what they need, offer or do). false if the candidate has no ask listed, or it doesn't plausibly connect.
@@ -535,7 +554,7 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
   // A line with a hidden part (a private ask or a blocker) means the prompt holds it: no text is recorded for the call.
   const noTraceText = toScore.some((c) => hiddenTextsOf(c, hidden).length > 0);
-  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden, { noTraceText, failLoudly: opts.failLoudly });
+  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden, { noTraceText, failLoudly: opts.failLoudly }, askWants(f.asks));
   return [...scored, ...zero];
 }
 
@@ -558,6 +577,11 @@ function getOpenAsksOfType(intent: unknown, type: "seeking" | "offering"): State
 function getGoalFrame(intent: unknown): StatedIntent | null {
   const g = goalEntries(intent);
   return g.length ? ({ ...g[g.length - 1], type: "seeking" } as StatedIntent) : null;
+}
+
+// Pure: the asker's wants as the scoring prompts label them (W1, W2... in the frame's order), each with its own conditions.
+export function askWants(asks: StatedIntent[]): WantLine[] {
+  return asks.map((a, i) => ({ label: `W${i + 1}`, text: String(a.text ?? ""), criteria: criteriaOf(a) }));
 }
 
 export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk, getOpenAsksOfType, getGoalFrame };
