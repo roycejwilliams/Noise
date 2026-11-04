@@ -220,6 +220,7 @@
     "evals/browserPilot/rules.ts",
     "evals/research/findsNotDocument.ts",
     "evals/removal/assistantHelpers.ts",
+    "evals/scope/boundary.ts",
     "evals/research/quality.ts",
     "evals/time/local.ts",
     "evals/sweepFind/visibility.ts",
