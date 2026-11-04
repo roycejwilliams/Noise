@@ -15,7 +15,7 @@ import {
   type PendingNetworkIntroOffer,
 } from "./networkIntroNudge.js";
 import { MODELS } from "../models.js";
-import { cueTextsFrom, isReactionIn, readReaction } from "./reactionsIn.js";
+import { cueTextsFrom, isReaction, readReaction } from "./reactionsIn.js";
 import { extractFirstJsonObject, parseModelJson } from "./modelJson.js";
 
 // Layer 2 router (Royce, 2026-09-14). Replaces ~10 independent classifiers
@@ -559,7 +559,7 @@ export function decideActions<T extends RoutableItem>(
   };
 
   // A tapback answers nothing and starts nothing: it never resolves an item, places a call or asks for a search (services/reactionsIn.ts).
-  if (turn.isReaction ?? (isReactionIn(turn.message) || readReaction(turn.message, cueTextsFrom(turn.recentConversation)) !== null)) return d;
+  if (turn.isReaction ?? (isReaction(turn.message) || readReaction(turn.message, cueTextsFrom(turn.recentConversation)) !== null)) return d;
 
   const byId = new Map(openItems.map((i) => [i.id, i]));
   const ambiguous = [...new Set(out.ambiguousBetween)].map((id) => byId.get(id)).filter((i): i is NonNullable<typeof i> => !!i);

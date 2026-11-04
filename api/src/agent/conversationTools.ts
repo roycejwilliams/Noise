@@ -1142,7 +1142,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ answer, theirWords }) => {
         const C = await import("../services/voiceReadConsent.js");
         const V = await import("../services/voiceRead.js");
-        if (!quoteIsTheirs(theirWords, ctx.resolvedContent)) {
+        if (!quoteIsTheirs(theirWords, ctx.resolvedContent, ctx.userId)) {
           notDone("Nothing about the voice read changed: the quote isn't in their words.");
           return { ok: false, error: "Quote their own words from this message." };
         }
@@ -1279,7 +1279,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({ going: z.boolean(), theirWords: z.string().describe("Their words, copied exactly.") }),
       execute: async ({ going, theirWords }) => {
         // Going is theirs to say (services/provenance.ts): a short "yes" counts only when it is really in their message.
-        if (!quoteIsTheirs(theirWords, ctx.resolvedContent)) {
+        if (!quoteIsTheirs(theirWords, ctx.resolvedContent, ctx.userId)) {
           notDone("Going wasn't updated: the quote isn't in their words.");
           return { ok: false, error: "Quote their own words." };
         }
@@ -1699,7 +1699,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "That isn't something Cue sent them recently (check listSentOffers)." };
         }
         // What they did or will do is theirs to say (services/provenance.ts, 2026-10-12): only their own explicit words record it.
-        if (!ctx.dryRun && !quoteIsTheirs(quote, `${ctx.resolvedContent}\n${ctx.isVoice ? String(ctx.turn?.message ?? "") : ""}`)) {
+        if (!ctx.dryRun && !quoteIsTheirs(quote, `${ctx.resolvedContent}\n${ctx.isVoice ? String(ctx.turn?.message ?? "") : ""}`, ctx.userId)) {
           notDone(`No reaction was recorded for "${item.slice(0, 80)}": they didn't say it in their own words.`);
           return { ok: false, error: "Only their own explicit words record a reaction: the quote must be copied from what they just said. If they didn't say it, ask them (\"Did you end up going?\"); never say they went or are going." };
         }

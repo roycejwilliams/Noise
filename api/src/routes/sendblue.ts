@@ -65,7 +65,7 @@ import { networkIntroFact, resolveNetworkTeaseReply, resolveNetworkIntroReplySta
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { ackAllowed, describeTapbacks, reactionFor, tapbackHistory } from "../services/tapbacks.js";
-import { interpretReaction, isRemovalShape, noteVerifiedReaction, parseReactionShape, recentSentTexts, removalEndsTurn, verifyReaction } from "../services/reactionsIn.js";
+import { interpretReaction, isReaction, isRemovalShape, noteVerifiedReaction, parseReactionShape, recentSentTexts, removalEndsTurn, verifyReaction } from "../services/reactionsIn.js";
 import { LOOP_GUIDE } from "../agent/loop.js";
 import { burstWaitMs } from "../services/beats.js";
 import { describeNotes } from "../agent/loopTools.js";
@@ -1375,12 +1375,17 @@ export function sendblueRouter(io: Server): Router {
         if (hasText && !hasMedia && parseReactionShape(resolvedContent)) {
           const sentTexts = await recentSentTexts(user.id).catch(() => [] as import("../services/reactionsIn.js").SentText[]);
           reactionCtx = verifyReaction(resolvedContent, sentTexts, req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle ?? null);
-          if (reactionCtx) noteVerifiedReaction(resolvedContent);
+          if (reactionCtx) noteVerifiedReaction(user.id, resolvedContent);
         }
         if (reactionCtx?.reaction.removed) {
-          const { rows: thread } = await pool
-            .query(`SELECT id, content FROM (SELECT id, content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC, id DESC LIMIT 40) t ORDER BY created_at, id`, [user.id])
+          const { rows: lines } = await pool
+            .query(`SELECT id::text AS id, content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC, id DESC LIMIT 40`, [user.id])
             .catch(() => ({ rows: [] as any[] }));
+          // A turn Cue chose to leave at a tapback (turn.closing) answered them too: a removal must not revive it.
+          const { rows: left } = await pool
+            .query(`SELECT 'left-' || id::text AS id, '[left at a reaction]' AS content, created_at FROM harness_decisions WHERE user_id = $1 AND decision = 'turn.closing' AND outcome = 'act' AND created_at > NOW() - interval '1 day' ORDER BY created_at DESC LIMIT 10`, [user.id])
+            .catch(() => ({ rows: [] as any[] }));
+          const thread = [...lines, ...left.map((x: any) => ({ ...x, content: `Co replied: ${x.content}` }))].sort((a: any, b: any) => +new Date(a.created_at) - +new Date(b.created_at));
           const ends = removalEndsTurn(thread, inboundMemory.rows[0].id);
           await recordDecision({ layer: 3, decision: "turn.reaction_in", userId: user.id, outcome: "skip", action: "removed", proposal: { endsTurn: ends, reason: ends ? "a taken-back reaction needs no reply" : "something of theirs is still waiting, so the turn runs" } }).catch(() => {});
           if (ends) return res.status(200).send({ received: true, action: "reaction_removed" });
@@ -1663,7 +1668,7 @@ export function sendblueRouter(io: Server): Router {
           // Fail safe: act on nothing rather than guess.
           console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
         }
-        const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation, isReaction: !!reactionCtx });
+        const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation, isReaction: !!reactionCtx || isReaction(resolvedContent) });
         // Emotion loop (harness/emotion.ts): how this message feels, from the read, is recorded, then the shared picture (this
         // text, recent calls, what keeps coming up) that the reply reasons from is loaded. Alongside: whether they want to be
         // heard or helped toward an answer.
