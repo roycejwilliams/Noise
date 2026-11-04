@@ -37,7 +37,6 @@ import { gptLiveStreamUrl, isGptLiveStreamPath } from "./services/gptLive.js";
 import { configureSocket } from "./socket/index.js";
 import { serveCoVCard, serveVersionedVCard } from "./routes/contactCard.js";
 import { createEmailOptOutRouter } from "./routes/emailOptOut.js";
-import { servePlanFile } from "./services/planFile.js";
 import { createGoogleRouter } from "./routes/google.js";
 import { createReadoutRouter } from "./routes/readout.js";
 
@@ -168,9 +167,6 @@ app.get("/audio/:id", (req, res) => {
   return res.send(entry.buffer);
 });
 
-// A brief's PDF for Sendblue to attach to a text: random id, short-lived, never listed (services/planFile.ts).
-app.get("/plan-file/:id.pdf", servePlanFile);
-app.get("/plan-file/:id/:name", servePlanFile);
 
 app.use(errorHandler);
 

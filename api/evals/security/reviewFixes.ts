@@ -40,7 +40,7 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
   const at = s.indexOf('app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter)');
   check("the public pages (and Cue pages at /d) are limited, before their routes are mounted", at > 0 && at < s.indexOf('app.get("/i/:code"') && at < s.indexOf('app.use("/readout"') && at < s.indexOf('app.use("/google"') && at < s.indexOf('app.use("/mo", createEmailOptOutRouter())') && at < s.indexOf('app.use("/d", (_req, res) => res.status(410)'));
   check("starting a sign-in is limited harder", /app\.use\("\/api\/login\/start", authLimiter\)/.test(s) && s.indexOf('app.use("/api/login/start", authLimiter)') < s.indexOf('app.use("/api/login", loginRouter)'));
-  check("webhooks, media and the polling dashboard aren't limited", !/app\.use\([^)]*"\/(sendblue|co|luma|audio|plan-file|api\/phone)"[^)]*limiter/.test(s) && !/app\.use\(limiter\)/.test(s));
+  check("webhooks, media and the polling dashboard aren't limited", !/app\.use\([^)]*"\/(sendblue|co|luma|audio|api\/phone)"[^)]*limiter/.test(s) && !/app\.use\(limiter\)/.test(s));
 }
 
 // ---------------------------------------------------------------- 3. readers check every hop

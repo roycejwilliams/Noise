@@ -15,7 +15,8 @@ const { goalHash } = await import("../../src/services/goalEdges.js");
 const { historyLine } = await import("../../src/services/memberSafeMemories.js");
 const { unansweredPauseFor } = await import("../../src/harness/proactive.js");
 type Deps = import("../../src/services/memberKnowledge.js").KnowledgeDeps;
-type Receipt = import("../../src/services/deliveryReceipts.js").Receipt;
+// A delivered-document receipt (the document library was removed 2026-11-04); the knowledge layer still reads the shape.
+type Receipt = { id: number; docKey: string; title: string; version: number; deliveredAt: Date } & Record<string, any>;
 type CoTask = import("../../src/services/coTasks.js").CoTask;
 
 let total = 0;

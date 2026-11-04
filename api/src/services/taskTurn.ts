@@ -72,7 +72,6 @@ export type TaskTurnDeps = {
   now: () => Date;
   // What Co sent them since a time (texts, links, documents): a promise closes as done only on a matching send after it.
   sentSince?: (since: Date) => Promise<Sent[]>;
-  // The document tool, texting's own (services/documentDelivery.ts sendDocumentForTask): grounded, inside their hours, recorded.
   // A commitment's window (services/memberTime.ts): the miss warning, sent once per window through the send path with quiet hours,
   // the window moved to the new time, and the next check set to when the deliverable can go out.
   warn?: (text: string, key: string) => Promise<{ sent: boolean; reason?: string }>;

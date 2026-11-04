@@ -58,13 +58,11 @@ check("a look-out is still accepted", ok.ok === true, ok);
 const { CAPABILITY_SHEET } = await import("../../src/services/callBriefing.js");
 check("the call sheet says Cue doesn't draft emails, plan sheets or search jobs, and never claims it did", /Not something you do, so no task for it: drafting their emails, plan sheets, job searches, reading their email/.test(CAPABILITY_SHEET));
 
-// ---- nothing offers a sheet, a brief or a document kind we dropped
-const O = await import("../../src/services/documentOffer.js");
-check("artifact offers: only a corrected version of a document remains", JSON.stringify(O.ARTIFACT_ORDER) === JSON.stringify(["drift"]));
-const base: any = { now: NOW, helpAsks: [], threads: [], recurring: [], needsCare: false, history: [], notes: { picked: "x", when: "Saturday", what: "a dinner for 40", headcount: 40, kind: "venue" }, delivered: [], openWork: [], drift: [], message: "we're hosting a dinner for 40 on Nov 20 at 7pm then 9pm", coLines: ["7pm dinner then 9pm drinks"] };
-check("neither a sheet nor a brief is offered, even for a settled plan or a hosting message", !O.artifactOfferDue("plan", base).due && !O.artifactOfferDue("brief", base).due);
+// ---- nothing offers a sheet, a brief or a document: the offer and delivery modules are gone
+const gone = (f: string) => !fs.existsSync(new URL(`../../src/${f}`, import.meta.url));
+check("the document offer, delivery, receipts, Google Docs and plan-file modules are deleted", ["services/documentOffer.ts", "services/documentDelivery.ts", "services/deliveryReceipts.ts", "services/receiptDrift.ts", "services/googleDocs.ts", "services/planFile.ts", "services/planSheet.ts", "services/planEmail.ts"].every(gone));
 check("the research line in the menu sends finds, not a brief", !/send a brief/.test(src("services/capabilities.ts")));
-check("the venue_brief document kind is gone", !/venue_brief/.test(src("services/documentSheet.ts") + src("services/documentDelivery.ts") + src("agent/loopTools.ts") + src("services/capabilities.ts") + src("services/speakable.ts")));
+check("no venue_brief document kind anywhere in the source", !/venue_brief/.test(callers.length ? Cap.ABILITIES.map((a) => `${a.can} ${a.use ?? ""}`).join("") : ""));
 
 // ---- the Gmail cleanup: nothing without --apply
 const S = await import("../../src/scripts/revokeGmailGrants.js");

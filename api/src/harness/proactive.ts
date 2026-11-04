@@ -729,7 +729,7 @@ async function coInitiatedHold(client: Queryable, o: { userId: string; timezone:
   return { failed, sends };
 }
 
-// A Co-initiated send that isn't a text through sendExempt (a look-out's document, PDF or Google Doc, services/documentDelivery.ts):
+// A Co-initiated send that isn't a text through sendExempt (formerly a look-out's document; kept for any claimed send):
 // the same gate and the same ledger row, claimed before it goes (Royce, 2026-10-09: "a Co lookout must not be able to send an
 // uncounted PDF"). The caller delivers, then releases the claim if nothing went out, so a send that failed never counts as let pass.
 // owed: a document they asked for (askedAt: when), claimed through the same lock and ledger so their own rule holds it and it counts.

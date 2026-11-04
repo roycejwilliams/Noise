@@ -264,17 +264,6 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // A document whose PDF failed went as text (services/documentDelivery.ts); the PDF it promised follows from here, inside their
-  // delivery hours, with backoff, never the text again (deliveryReceipts.ts receipts in pdf_pending).
-  cron.schedule("*/5 * * * *", async () => {
-    try {
-      const { retryPendingPdfs } = await import("../services/documentDelivery.js");
-      await retryPendingPdfs();
-    } catch (err: any) {
-      console.error("pdf retry cron error (non-fatal):", err?.message ?? err);
-    }
-  });
-
   // The member snapshot's upkeep (services/memberSnapshot.ts, shadow): stored snapshots that went stale or are past 24h are rebuilt,
   // so something a member removed leaves the stored copy within a pass even while nothing reads it. Code only, no model call.
   cron.schedule("*/15 * * * *", async () => {

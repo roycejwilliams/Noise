@@ -13,7 +13,6 @@ import { Client as PgClient } from "pg";
 import { runMigrations } from "../../api/src/db/migrations.js";
 import { serveCoVCard, serveVersionedVCard } from "../../api/src/routes/contactCard.js";
 import { getAudioEntry } from "../../api/src/services/voiceNote.js";
-import { servePlanFile } from "../../api/src/services/planFile.js";
 import { runTestMigrations } from "./db/testMigrations.js";
 import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
@@ -166,7 +165,7 @@ async function main() {
   // Rate limits (security review, 2026-10-11): co-test had none. The public pages anyone can open without signing in are limited
   // (100 per 15 minutes per address), and starting a sign-in to 10. The signed-in dashboard polls every few seconds and is behind
   // its login, and webhooks (Sendblue, Twilio, ElevenLabs, Luma, Resend) and the media Twilio and Sendblue fetch (/audio,
-  // /plan-file, /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
+  // /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
   app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
   app.use("/api/login/start", authLimiter);
   app.use("/api/login/confirm", authLimiter);
@@ -195,10 +194,6 @@ async function main() {
     return res.send(entry.buffer);
   });
 
-  // A plan's PDF for Sendblue to attach to a text (services/planFile.ts): the same route api/src/server.ts mounts.
-  // co-test keeps its own copies of the media routes, so it has to be added here too.
-  app.get("/plan-file/:id.pdf", servePlanFile);
-  app.get("/plan-file/:id/:name", servePlanFile);
 
   // The actual product routes (ElevenLabs call webhooks, Twilio call-status,
   // inbound-call TwiML, and the Sendblue text-conversation webhook) —
