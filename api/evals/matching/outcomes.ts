@@ -321,7 +321,7 @@ const other = (id: number, who: string) => {
   check("learnFromCall reads the names and saves what was said", /introduced: introduced\.names,/.test(cl) && /await saveCallIntroOutcomes\(input\.userId, introOutcomes, introduced/.test(cl));
   const co = src("src/routes/co.ts");
   check("GPT-Live's post-call goes through processEndedCall, which runs learnFromCall", /export async function runGptLivePostCall[\s\S]*?ended = await processEndedCall\(/.test(co) && /await learnFromCall\(\{ userId: user_id, transcript: cleanTranscript[,} ]/.test(co));
-  check("on a call, noteMetAgain (a live call tool) records kept talking with source call", /recordSecondContact\(ctx\.userId, pick, said\.outcome, note \?\? null, new Date\(\), said\.metOn, ctx\.onCall \? "call" : "text"\)/.test(src("src/agent/conversationTools.ts")) && /noteMetAgain: SAVE/.test(src("src/services/capabilities.ts")));
+  check("on a call, noteMetAgain (a live call tool) records kept talking with source call", /recordSecondContact\(ctx\.userId, pick, said\.outcome, note \?\? null, new Date\(\), said\.metOn, ctx\.onCall \? "call" : "text", said\.plannedOn\)/.test(src("src/agent/conversationTools.ts")) && /noteMetAgain: SAVE/.test(src("src/services/capabilities.ts")));
   {
     const C = await import("../../src/services/capabilities.js");
     check("noteRoomMeeting runs on a call too (same record, source call)", C.callRunFor("noteRoomMeeting")?.run === "now" && C.callRunFor("noteMetAgain")?.run === "now");
