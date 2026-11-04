@@ -75,7 +75,7 @@ export type AskScore<T> = {
   mutual: boolean;
   // What the asker's conditions did (services/wantCriteria.ts applyConditions): their own words, internal only, never shown to the
   // candidate. Absent when the want has no conditions.
-  conditions?: { excluded: string[]; unverified: string[]; preferred: string[] };
+  conditions?: { excluded: string[]; unverified: string[]; preferred: string[]; held: boolean; perWant: import("./wantCriteria.js").WantResult[] };
 };
 
 type ScorableCandidate = {
@@ -322,7 +322,7 @@ async function runAskScoring<T extends ScorableCandidate>(
         return {
           candidate: c,
           score: cond ? cond.score : raw,
-          ...(cond ? { conditions: { excluded: cond.excluded, unverified: cond.unverified, preferred: cond.preferred } } : {}),
+          ...(cond ? { conditions: { excluded: cond.excluded, unverified: cond.unverified, preferred: cond.preferred, held: cond.held, perWant: cond.perWant } } : {}),
           reason,
           // The model only names WHICH shared ask the match rests on; the words shown to people are that ask, in their own
           // words, and only if they marked it shareable. Nothing private or inferred (e.g. "actively fundraising") can leak.

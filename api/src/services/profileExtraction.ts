@@ -1489,14 +1489,18 @@ export async function persistIntentFrom(
     const WC = await import("./wantCriteria.js");
     const ownWords = wopts.ownWords !== undefined ? (wopts.ownWords ?? "") : scope === "last_user_message" && message ? message : WC.theirWordsIn(transcript) || (message ?? "");
     const via: WantWords["via"] = wopts.via ?? (scope === "whole_transcript" ? "call" : "text");
+    // A condition left out is logged with its reason (never their words), so a rejection is never silent.
+    const rejected: Record<string, number> = {};
+    const onReject = (why: string) => void (rejected[why] = (rejected[why] ?? 0) + 1);
     const captured = normalizeCapturedAsks(parsed, scope)
       .filter((a) => mine(a.text))
-      .map((a) => ({ ...a, wantWords: { ...WC.groundWant(a.quote, ownWords), via, criteria: WC.groundCriteria(a.criteria, ownWords) } }));
+      .map((a) => ({ ...a, wantWords: { ...WC.groundWant(a.quote, ownWords), via, criteria: WC.groundCriteria(a.criteria, ownWords, undefined, onReject) } }));
     // Conditions said about something already open (criteria_for): each lands on its own want only, written before the asks below so
     // a deduped restatement in the same turn merges on top of it.
     if (wopts.openItems?.length && parsed?.criteria_for) {
-      await applyCriteriaForTurn(user_id, parsed.criteria_for, wopts.openItems, ownWords).catch((err: any) => console.error("criteria_for write failed (non-fatal):", err?.message ?? err));
+      await applyCriteriaForTurn(user_id, parsed.criteria_for, wopts.openItems, ownWords, onReject).catch((err: any) => console.error("criteria_for write failed (non-fatal):", err?.message ?? err));
     }
+    if (Object.keys(rejected).length) recordDecision({ layer: 4, decision: "profile.write", userId: user_id, outcome: "skip", action: "want_criteria_rejected", reason: Object.keys(rejected).join(", "), proposal: { rejected } }).catch(() => {});
     // This turn, if Co answered it as a status check for one of its tasks (services/statusCheck.ts, Royce 2026-10-13: status_check.turn
     // with this message), saves no ask that is that task again (capturedAskIsTask: restates it and covers it). A broader ask, any other
     // turn, and a read that fails all save as before (fail open).
@@ -1803,11 +1807,11 @@ export async function loadOpenForCriteria(userId: string): Promise<{ items: Open
 }
 
 // Conditions said about an open want (criteria_for), each on its own entry, logged with ids only.
-export async function applyCriteriaForTurn(userId: string, raw: unknown, items: OpenItem[], ownWords: string): Promise<number> {
+export async function applyCriteriaForTurn(userId: string, raw: unknown, items: OpenItem[], ownWords: string, onReject?: (why: string) => void): Promise<number> {
   const WC = await import("./wantCriteria.js");
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]);
   const intent = rows[0]?.intent ?? [];
-  const changes = WC.groundCriteriaFor(raw, items, intent, ownWords);
+  const changes = WC.groundCriteriaFor(raw, items, intent, ownWords, undefined, onReject);
   if (!changes.length) return 0;
   await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(WC.applyCriteriaFor(intent, changes))]);
   recordDecision({ layer: 4, decision: "profile.write", userId, outcome: "act", action: "want_criteria", proposal: { wants: changes.map((c) => ({ id: c.id, added: c.added.length, lifted: c.lifted.length })) } }).catch(() => {});

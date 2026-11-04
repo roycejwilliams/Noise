@@ -932,7 +932,8 @@ async function scoreMatchedGroupInScope(
           shareReason: s.shareReason,
           mutual: s.mutual,
           method: "ask" as const,
-          ...(s.conditions && (s.conditions.excluded.length || s.conditions.unverified.length) && adj.score < MATCH_NUDGE_MIN_SCORE ? { heldByCondition: true } : {}),
+          // Only through the want that would carry the match (wantCriteria.ts applyConditions held), never pooled across their wants.
+          ...(s.conditions?.held ? { heldByCondition: true } : {}),
           graph: e ? { score: e.score, want: e.want, offer: e.offer, mutual: e.mutual } : null,
         };
       })

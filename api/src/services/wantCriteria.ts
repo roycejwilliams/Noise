@@ -54,15 +54,23 @@ export function groundWant(quote: unknown, ownWords: string): { quote: string | 
 const PREFER_WORDS = /\b(rather|prefer|preferably|ideally|bonus|nice to have|if possible|matters? more|matters? less|more important than|less important than)\b/i;
 // Words that make it an exclusion ("not investors right now", "no founders", "I don't want").
 const NEGATION = /\b(not|no|never|without|except|avoid|none|nobody|skip)\b|n't\b/i;
-const STOP = new Set(["someone", "people", "person", "anyone", "with", "that", "this", "they", "them", "their", "have", "been", "from", "into", "right", "really", "just", "want", "looking", "would", "should", "about", "some", "more", "less", "than"]);
-const contentWords = (t: string) => norm(t).split(" ").filter((x) => x.length >= 4 && !STOP.has(x));
-// Pure: does Cue's reading of a condition stay on their words? At least one content word of the reading shares its stem (first 5
-// letters) with a word of the quote: "no one in finance" read from "not investors" does not.
+// Words that carry no meaning of their own in a reading ("in SF", "not VCs", "no one from big tech"): never enough to tie it to a quote.
+const FUNCTION = new Set(["a", "an", "the", "in", "on", "at", "of", "to", "for", "and", "or", "no", "not", "one", "from", "with", "by", "is", "are", "be", "who", "whos", "that", "this", "it", "its", "someone", "people", "person", "anyone", "they", "them", "their", "have", "has", "been", "into", "right", "really", "just", "want", "wants", "looking", "would", "should", "about", "some", "more", "less", "than", "dont", "don't", "all", "any", "only"]);
+const tokens = (t: string) => norm(t).split(" ").filter(Boolean);
+const bare = (x: string) => x.replace(/'s$|s$/, "");
+// Pure: does Cue's reading of a condition stay on their words (review of #378, round 2)? Each meaningful word of the reading (any
+// length, so SF, VCs, NYC, AI and B2B count) is checked against the quote: the same word (a plural "s" aside), or for words of four
+// letters or more the same stem (first 5 letters). One such word is enough. "no one in finance" read from "not investors" has none, and
+// a synonym ("no FAANG" from "big tech") isn't one either: dropped.
 export function readingOnTheirWords(text: string, quote: string): boolean {
-  const q = contentWords(quote).map((x) => x.slice(0, 5));
-  const t = contentWords(text);
-  return t.length > 0 && t.some((x) => q.includes(x.slice(0, 5)));
+  const q = tokens(quote);
+  const qBare = new Set(q.map(bare));
+  const qStem = new Set(q.filter((x) => x.length >= 4).map((x) => x.slice(0, 5)));
+  const meaningful = tokens(text).filter((x) => !FUNCTION.has(x));
+  return meaningful.some((x) => qBare.has(bare(x)) || (x.length >= 4 && qStem.has(x.slice(0, 5))));
 }
+
+export type CriterionReject = "no_quote_of_theirs" | "quote_too_short" | "reading_off_their_words" | "exclusion_without_negation" | "malformed" | "duplicate";
 
 // Pure: the conditions the read found, kept only when said outright in their own words (review of #378):
 //   - a quote of theirs of two words or more ("investors" alone, lifted from "I'm meeting investors Thursday", is not a condition)
@@ -70,17 +78,21 @@ export function readingOnTheirWords(text: string, quote: string): boolean {
 //   - an exclusion needs words that exclude (a negation); without one it is dropped, never stored as must_not
 //   - words of preference ("I'd rather", "matters more than") are always a preference, never a must or must_not
 // No quote, no condition: a date, budget, urgency or requirement they didn't say is never added.
-export function groundCriteria(raw: unknown, ownWords: string, now: string = new Date().toISOString()): Criterion[] {
+// onReject: why each one was left out (a reason only, never their words), so a rejection is logged, never silent.
+export function groundCriteria(raw: unknown, ownWords: string, now: string = new Date().toISOString(), onReject?: (why: CriterionReject) => void): Criterion[] {
   const out: Criterion[] = [];
+  const no = (why: CriterionReject) => onReject?.(why);
   for (const c of Array.isArray(raw) ? raw : []) {
     const text = typeof c?.text === "string" ? c.text.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT) : "";
     let strength = typeof c?.strength === "string" && STRENGTHS.includes(c.strength) ? (c.strength as Strength) : null;
     const quote = typeof c?.quote === "string" ? c.quote.trim().slice(0, 200) : "";
-    if (!text || !strength || !quote || norm(quote).split(" ").length < 2 || !quoteIsTheirs(quote, ownWords)) continue;
-    if (!readingOnTheirWords(text, quote)) continue;
+    if (!text || !strength) { no("malformed"); continue; }
+    if (!quote || !quoteIsTheirs(quote, ownWords)) { no("no_quote_of_theirs"); continue; }
+    if (tokens(quote).length < 2) { no("quote_too_short"); continue; }
+    if (!readingOnTheirWords(text, quote)) { no("reading_off_their_words"); continue; }
     if (PREFER_WORDS.test(quote)) strength = "prefer";
-    else if (strength === "must_not" && !NEGATION.test(quote)) continue;
-    if (out.some((o) => norm(o.text) === norm(text))) continue;
+    else if (strength === "must_not" && !NEGATION.test(quote)) { no("exclusion_without_negation"); continue; }
+    if (out.some((o) => norm(o.text) === norm(text))) { no("duplicate"); continue; }
     out.push({ text, strength, quote, at: now });
   }
   return out.slice(0, MAX_CRITERIA);
@@ -129,7 +141,7 @@ export type CriteriaFor = { id: string; added: Criterion[]; lifted: string[] };
 
 // Pure: criteria_for answers turned into per-item changes. Only an ask or goal item (by its index in what the read was shown), only
 // conditions in their own words; a lift only of a condition actually on file.
-export function groundCriteriaFor(raw: unknown, items: { id: string; kind?: string | null }[], intent: unknown, ownWords: string, now: string = new Date().toISOString()): CriteriaFor[] {
+export function groundCriteriaFor(raw: unknown, items: { id: string; kind?: string | null }[], intent: unknown, ownWords: string, now: string = new Date().toISOString(), onReject?: (why: CriterionReject) => void): CriteriaFor[] {
   const entries = Array.isArray(intent) ? (intent as any[]) : [];
   const out = new Map<string, CriteriaFor>();
   for (const c of Array.isArray(raw) ? raw : []) {
@@ -142,7 +154,7 @@ export function groundCriteriaFor(raw: unknown, items: { id: string; kind?: stri
       const q = typeof c?.quote === "string" ? c.quote : "";
       const hit = criteriaOf(entry).find((x) => norm(x.text) === norm(c?.text));
       if (hit && q && quoteIsTheirs(q, ownWords)) slot.lifted.push(hit.text);
-    } else slot.added.push(...groundCriteria([c], ownWords, now));
+    } else slot.added.push(...groundCriteria([c], ownWords, now, onReject));
     if (slot.added.length || slot.lifted.length) out.set(item.id, slot);
   }
   return [...out.values()];
@@ -180,14 +192,19 @@ export function conditionsPromptBlock(wants: WantLine[]): string {
 export const CONDITIONS_FIELDS = `conditions: one entry per listed condition, {"label": "C1", "holds": "yes" | "no" | "unknown"}; [] when no conditions are listed.`;
 
 export type Judged = { conditions?: unknown; fits?: unknown };
-export type ConditionOutcome = { score: number; excluded: string[]; unverified: string[]; preferred: string[] };
+// held: the want that would carry the match is kept from it by a condition (its exclusion holds, its requirement failed, or nobody can
+// confirm it). Only when the candidate fits on the want itself (the scorer's score at the bar): a candidate who fits none of the wants
+// isn't a match on conditions, and a condition on a want they don't fit never marks them (review of #378, round 2). perWant: each
+// want's own result, never pooled across wants.
+export type WantResult = { label: string; excluded: boolean; unverified: boolean };
+export type ConditionOutcome = { score: number; excluded: string[]; unverified: string[]; preferred: string[]; held: boolean; perWant: WantResult[] };
 
 // Pure: a candidate's score after the conditions. fits: the want labels the scorer said the candidate fits (rooms); none named means
 // every want could be the fit. A want with a broken requirement or exclusion is out for this candidate; the candidate stays only
 // through a want that isn't. A requirement nobody can confirm keeps that want below the bar.
 export function applyConditions(score: number, judged: Judged, wants: WantLine[], bar: number = CONDITION_BAR): ConditionOutcome {
   const ls = labelConditions(wants);
-  if (!ls.length) return { score, excluded: [], unverified: [], preferred: [] };
+  if (!ls.length) return { score, excluded: [], unverified: [], preferred: [], held: false, perWant: [] };
   const holds = new Map<string, Holds>();
   for (const j of Array.isArray(judged.conditions) ? judged.conditions : []) {
     const h = (j as any)?.holds;
@@ -200,26 +217,31 @@ export function applyConditions(score: number, judged: Judged, wants: WantLine[]
   const unverified: string[] = [];
   const preferred: string[] = [];
   const open: { w: WantLine; certain: boolean; step: number }[] = [];
+  const perWant: WantResult[] = [];
   for (const w of pool) {
     const mine = ls.filter((l) => l.want === w.label);
     const h = (l: Labelled) => holds.get(l.label) ?? "unknown";
     const broken = mine.filter((l) => (l.c.strength === "must_not" && h(l) === "yes") || (l.c.strength === "must" && h(l) === "no"));
     if (broken.length) {
       excluded.push(...broken.map((l) => l.c.text));
+      perWant.push({ label: w.label, excluded: true, unverified: false });
       continue;
     }
     const unsure = mine.filter((l) => l.c.strength === "must" && h(l) === "unknown");
+    perWant.push({ label: w.label, excluded: false, unverified: unsure.length > 0 });
     unverified.push(...unsure.map((l) => l.c.text));
     const step = mine.filter((l) => l.c.strength === "prefer").reduce((s, l) => s + (h(l) === "yes" ? PREFER_STEP : h(l) === "no" ? -PREFER_STEP : 0), 0);
     for (const l of mine.filter((x) => x.c.strength === "prefer" && h(x) === "yes")) preferred.push(l.c.text);
     open.push({ w, certain: !unsure.length, step });
   }
-  if (!open.length) return { score: 0, excluded, unverified, preferred };
+  const fitsAtAll = score >= bar;
+  if (!open.length) return { score: 0, excluded, unverified, preferred, held: fitsAtAll, perWant };
   const best = open.find((o) => o.certain) ?? open[0];
   let s = score;
   // A preference moves the order, never across the bar either way.
   if (best.step) s = score >= bar ? Math.max(bar, Math.min(100, score + best.step)) : Math.min(bar - 1, Math.max(0, score + best.step));
   // Only wants with a requirement nobody can confirm: uncertain, never a match.
   if (!best.certain) s = Math.min(s, bar - 1);
-  return { score: s, excluded, unverified, preferred };
+  // Held only through the want that would carry it: every candidate want ruled out (above), or the best open one unconfirmed.
+  return { score: s, excluded, unverified, preferred, held: fitsAtAll && !best.certain, perWant };
 }
