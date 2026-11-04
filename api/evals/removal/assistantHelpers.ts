@@ -2,7 +2,7 @@
 //   - the calendar file exists only for a member going to a Noise event, with the right instant; a plan request gets none
 //   - Cue doesn't accept a task for drafting their email (text or call), and the call sheet says so
 //   - nothing offers a sheet, a brief or a venue_brief document
-//   - the Gmail cleanup script does nothing without --apply, and --dry-run prints counts only
+//   - the cleanup script does nothing without --apply, and --dry-run prints counts per table only
 //   npx tsx evals/removal/assistantHelpers.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
@@ -118,18 +118,33 @@ const delErr = await runDelete("throw");
 check("deleteImages: a failed delete is not claimed", delErr.r.ok === false && !delErr.facts.some((f) => f.k === "did_this_turn"), delErr);
 check("deleteImages is a call tool (text and calls), left out of GPT-Live's quick set, and it changes something", Cap.callToolNames().includes("deleteImages") && !Cap.liveCallToolNames().includes("deleteImages") && Cap.CHANGES_SOMETHING.has("deleteImages"));
 
-// ---- the Gmail cleanup: nothing without --apply
-const S = await import("../../src/scripts/revokeGmailGrants.js");
-const calls: string[] = [];
-const rows = [{ user_id: "u1", refresh_token_enc: null, access_token_enc: null }];
-const db: any = { query: async (q: string) => (calls.push(q), /COUNT\(\*\)::int AS n, COUNT/.test(q) ? { rows: [{ n: 1, gmail: 1 }] } : /FROM docs_grants/.test(q) && /COUNT/.test(q) ? { rows: [{ n: 1 }] } : /COUNT\(\*\)::int AS n FROM google_snapshots/.test(q) ? { rows: [{ n: 2 }] } : /SELECT user_id/.test(q) ? { rows } : { rows: [], rowCount: 1 }) };
-const counts = await S.countGmailGrants(db);
-check("dry run: counts only, and it only reads", JSON.stringify(counts) === JSON.stringify({ connections: 1, withGmailScope: 1, waitingSnapshots: 2, docsGrants: 1 }) && calls.every((q) => /^SELECT/.test(q)), calls);
-const applied = await S.applyGmailCleanup(db, async () => {});
-check("apply: deletes each google_connections row and nulls waiting, counts only back", applied.deleted === 2 && applied.nulled === 1 && calls.some((q) => /DELETE FROM google_connections/.test(q)) && calls.some((q) => /DELETE FROM docs_grants/.test(q)) && calls.some((q) => /UPDATE google_snapshots SET waiting = NULL/.test(q)));
-const sc = src("scripts/revokeGmailGrants.ts");
-check("the script does nothing unless exactly one of --dry-run or --apply is passed", /if \(apply === dry\) \{[\s\S]{0,200}Nothing was done/.test(sc) && /process\.argv\.slice\(2\)/.test(sc) && !/console\.log\([^)]*(email|token|user_id)/i.test(sc.replace(/refresh_token_enc|access_token_enc|user_id/g, "")));
-check("it never touches the calendar grant (Gmail and Docs grants only)", !/calendar_grants/.test(sc.replace(/^\/\/.*$/gm, "")) && /docs_grants/.test(sc));
+// ---- the removed-helpers cleanup: nothing without --apply, counts only in a dry run, never touches what is still in use
+const S = await import("../../src/scripts/cleanupRemovedHelpers.js");
+const mkDb = () => {
+  const calls: string[] = [];
+  const db: any = {
+    query: async (q: string) => {
+      calls.push(q);
+      if (/SELECT COUNT/.test(q)) return { rows: [{ n: /gmail\.metadata/.test(q) ? 1 : /FROM co_pages/.test(q) ? 4 : 2 }] };
+      if (/^SELECT user_id/.test(q)) return { rows: [{ user_id: "secret-user-1", refresh_token_enc: null, access_token_enc: null }] };
+      return { rows: [], rowCount: 1 };
+    },
+  };
+  return { db, calls };
+};
+const dry = mkDb();
+const counts = await S.countRemovedHelpers(dry.db);
+check("dry run: counts per table only, and it only reads", dry.calls.every((q) => /^SELECT COUNT/.test(q)) && counts.co_pages === 4 && counts.docs_grants === 2 && counts["google_connections(gmail scope)"] === 1 && Object.keys(counts).includes("member_design_signals") && Object.keys(counts).includes("co_memories(design_taste)"), counts);
+check("the dry-run output holds numbers and table names only, no member data", JSON.stringify(counts).indexOf("secret-user-1") < 0 && Object.values(counts).every((v) => v === null || typeof v === "number"));
+const live = mkDb();
+const applied = await S.applyRemovedHelpersCleanup(live.db, async () => {});
+const sql = live.calls.join("\n");
+check("apply: revokes and deletes both Google grants, nulls the Gmail summary, and empties the removed features' content", /DELETE FROM google_connections/.test(sql) && /DELETE FROM docs_grants/.test(sql) && /UPDATE google_snapshots SET waiting = NULL/.test(sql) && /DELETE FROM co_page_shares/.test(sql) && /DELETE FROM co_pages/.test(sql) && /DELETE FROM artifact_design_log/.test(sql) && /DELETE FROM member_design_signals/.test(sql) && /DELETE FROM co_memories WHERE memory_type IN \('design_taste', 'design_taste_asked'\)/.test(sql), live.calls);
+check("apply: counts come back, never a member id", applied.nulled === 1 && applied.deleted.co_pages === 1 && JSON.stringify(applied).indexOf("secret-user-1") < 0);
+check("it never touches photos, readDocument files, the calendar grant, delivery records or any other co_memories type", !/member_assets|member_files|memberFiles|calendar_grants|document_deliveries/.test(sql) && live.calls.filter((q) => /co_memories/.test(q)).every((q) => /memory_type IN \('design_taste', 'design_taste_asked'\)/.test(q)));
+const sc = src("scripts/cleanupRemovedHelpers.ts");
+check("the script does nothing unless exactly one of --dry-run or --apply is passed", /if \(apply === dry\) \{[\s\S]{0,200}Nothing was done/.test(sc) && /process\.argv\.slice\(2\)/.test(sc));
+check("the old Gmail-only script name is gone", !fs.existsSync(new URL("../../src/scripts/revokeGmailGrants.ts", import.meta.url)));
 
 console.log(`assistant helpers removal: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
