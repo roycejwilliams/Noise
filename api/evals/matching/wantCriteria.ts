@@ -64,6 +64,14 @@ const BUILT = "who's built consumer before";
   const pref = [{ label: "W1", text: COFOUNDER, criteria: [crit("strong taste", "prefer", TASTE)] }];
   const p = (score: number, holds: string) => WC.applyConditions(score, { conditions: [{ label: "C1", holds }] }, pref).score;
   check("a preference moves the order a little, never across the bar either way", p(70, "yes") === 80 && p(70, "no") === WC.CONDITION_BAR && p(55, "yes") === WC.CONDITION_BAR - 1 && p(55, "no") === 45 && p(70, "unknown") === 70);
+  // Review of #378 round 2: held only through the want that would carry the match, never pooled across their wants.
+  const b2 = [{ label: "W1", text: COFOUNDER, criteria: [crit("has built a consumer product", "must", BUILT)] }, { label: "W2", text: OUTSIDE, criteria: [] }];
+  const neither = WC.applyConditions(20, { conditions: [{ label: "C1", holds: "unknown" }], fits: [] }, b2);
+  check("B has W1 with a must and W2 with none; A fits neither: not held (not a match on conditions), and W1's unknown is W1's only", neither.held === false && JSON.stringify(neither.perWant) === JSON.stringify([{ label: "W1", excluded: false, unverified: true }, { label: "W2", excluded: false, unverified: false }]), neither);
+  const onlyW1 = WC.applyConditions(80, { conditions: [{ label: "C1", holds: "unknown" }], fits: ["W1"] }, b2);
+  check("A fits W1 only and W1's requirement can't be confirmed: held", onlyW1.held === true && onlyW1.score === WC.CONDITION_BAR - 1, onlyW1);
+  check("A fits W2 (no conditions) though W1 is unconfirmed: not held", WC.applyConditions(80, { conditions: [{ label: "C1", holds: "unknown" }], fits: ["W2"] }, b2).held === false);
+  check("A's only fitting want excludes A: held", WC.applyConditions(80, { conditions: [{ label: "C1", holds: "no" }], fits: ["W1"] }, b2).held === true);
   check("no conditions: the score is the scorer's, untouched", WC.applyConditions(73, {}, [{ label: "W1", text: OUTSIDE, criteria: [] }]).score === 73);
   check("the bar is the one both nudge paths use", S.MATCH_NUDGE_MIN_SCORE === WC.CONDITION_BAR && /const NETWORK_NUDGE_MIN_SCORE = 60;/.test((await import("node:fs")).readFileSync(new URL("../../src/services/networkIntroNudge.ts", import.meta.url), "utf8")));
 }
@@ -188,7 +196,8 @@ const jordanIntent = () => [
   const jordan = addMember({ first_name: "Jordan", intent: jordanIntent() });
   const noor = addMember({ first_name: "Noor", intent: [ask("angel checks for consumer founders", "offering")] });
   const sam = addMember({ first_name: "Sam", intent: [ask("a cofounder for my next consumer app", "seeking")] });
-  addEvent({ api_id: "evt-o", name: "Cue Night" }, [{ m: jordan }, { m: noor }, { m: sam }]);
+  const kai = addMember({ first_name: "Kai", intent: [ask("a running group", "seeking")] });
+  addEvent({ api_id: "evt-o", name: "Cue Night" }, [{ m: jordan }, { m: noor }, { m: sam }, { m: kai }]);
   // Jordan's pass ranks Noor (an investor) out by his own condition; nobody is nudged (the scorer gives Sam nothing here).
   W.scorer = (askText, cand) => (askText.includes(COFOUNDER) && cand.first_name === "Noor" ? { score: 95, share: true, fits: [COFOUNDER], conditions: { [NOT_INVESTORS]: "yes", [BUILT]: "yes" } } : askText.includes(COFOUNDER) && cand.first_name === "Sam" ? { score: 30, share: true, fits: [COFOUNDER], conditions: { [NOT_INVESTORS]: "no", [BUILT]: "yes" } } : { score: 0, share: false });
   await pass("evt-o");
@@ -204,6 +213,7 @@ const jordanIntent = () => [
   const asked2 = await H.requestIntroToNamedGuest("evt-o", "Cue Night", card(sam), card(jordan));
   await settle();
   check("control: Sam (not held by Jordan's conditions) asks the same way, and Jordan is asked", asked2 !== false && (W.llmCalls.some((c) => c.kind === "directAsk") || W.sent.slice(before2).some((x) => x.to === jordan.phone_number)), { asked2, kinds: W.llmCalls.map((c) => c.kind), sent: W.sent.slice(before2) });
+  check("Kai fits none of Jordan's wants (his requirement unread for Kai): not held, so Jordan stays askable about Kai", !ranking("evt-o", jordan).find((x) => x.candidate_id === kai.id)?.heldByCondition && !(await H.heldByTheirCondition("evt-o", jordan.id, kai.id)), ranking("evt-o", jordan).find((x) => x.candidate_id === kai.id));
   check("pure read: held only for the one his conditions rule out", (await H.heldByTheirCondition("evt-o", jordan.id, noor.id)) && !(await H.heldByTheirCondition("evt-o", jordan.id, sam.id)) && !(await H.heldByTheirCondition("evt-o", noor.id, jordan.id)));
 }
 

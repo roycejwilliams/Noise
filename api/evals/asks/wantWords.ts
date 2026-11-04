@@ -101,6 +101,8 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   check("each keeps their own words, checked against their lines, and where it was said", entry(A_COF)?.quote === SAID_COF && entry(A_OUT)?.quote === SAID_OUT && entry(A_ROOM)?.quote === SAID_ROOM && e.every((x) => x.provenance === "stated" && x.via === "call"), e.map((x) => [x.quote, x.provenance, x.via]));
   check("a condition said outright is kept on its own want, in their words", JSON.stringify(entry(A_COF)?.criteria?.map((c: any) => [c.text, c.strength, c.quote])) === JSON.stringify([["has built a consumer product", "must", "who's built consumer before"]]), entry(A_COF)?.criteria);
   check("a condition the read made up (no quote of theirs: 'must be in SF', 'under 20') is dropped: no invented requirement", !entry(A_COF)?.criteria?.some((c: any) => /SF/.test(c.text)) && !entry(A_ROOM)?.criteria, [entry(A_COF)?.criteria, entry(A_ROOM)?.criteria]);
+  const rej = w.decisions.find((d) => d.action === "want_criteria_rejected");
+  check("the condition the read made up is logged as rejected, with its reason and none of their words", !!rej && /no_quote_of_theirs/.test(JSON.stringify(rej.proposal)) && !/SF|under 20/.test(JSON.stringify(rej)), rej);
   check("an emotional want with no conditions stays a want, not a task with made-up details", entry(A_ROOM)?.kind === "ask" && !entry(A_ROOM)?.criteria);
   // Pure grounding, the same rule both reads use.
   check("groundWant: a quote that isn't in their lines is never kept as theirs", WC.groundWant("I need a CTO by Friday", "I'm looking for a cofounder").provenance === "inferred" && WC.groundWant("looking for a cofounder", "I'm looking for a cofounder").provenance === "stated");
@@ -108,6 +110,19 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   const said = "I'm meeting investors Thursday. Not investors for the cofounder though. I'd rather someone with taste than a big title.";
   check("groundCriteria: 'investors' lifted from 'I'm meeting investors Thursday' never grounds as an exclusion", WC.groundCriteria([{ text: "no investors at all", strength: "must_not", quote: "investors" }, { text: "no investors at all", strength: "must_not", quote: "meeting investors Thursday" }], said).length === 0);
   check("groundCriteria: 'not investors' never grounds as 'no one in finance' (Cue's reading off their words)", WC.groundCriteria([{ text: "no one in finance", strength: "must_not", quote: "Not investors" }], said).length === 0 && WC.groundCriteria([{ text: "investors", strength: "must_not", quote: "Not investors" }], said).length === 1);
+  // Round 2 of the review: short words (SF, VCs, NYC, AI, B2B) carry a reading; a synonym still doesn't.
+  const said2 = "I would rather someone in SF. I don't want VCs. Also no one from big tech.";
+  const sf = WC.groundCriteria([{ text: "in SF", strength: "prefer", quote: "would rather someone in SF" }], said2);
+  check("'would rather someone in SF' read as 'in SF' keeps a preference", sf.length === 1 && sf[0].strength === "prefer", sf);
+  const vcs = WC.groundCriteria([{ text: "not VCs", strength: "must_not", quote: "I don't want VCs" }], said2);
+  check("'don't want VCs' read as 'not VCs' keeps an exclusion", vcs.length === 1 && vcs[0].strength === "must_not", vcs);
+  const bt = WC.groundCriteria([{ text: "no one from big tech", strength: "must_not", quote: "no one from big tech" }], said2);
+  check("'no one from big tech' (the reading all in their words) keeps an exclusion", bt.length === 1 && bt[0].strength === "must_not", bt);
+  check("a synonym is still off their words: 'no FAANG' from 'big tech' is dropped", WC.groundCriteria([{ text: "no FAANG", strength: "must_not", quote: "no one from big tech" }], said2).length === 0);
+  check("short words count: NYC, AI, B2B", WC.readingOnTheirWords("NYC", "founders in NYC please") && WC.readingOnTheirWords("AI founders", "someone doing AI") && WC.readingOnTheirWords("B2B", "not B2B people"));
+  const whys: string[] = [];
+  WC.groundCriteria([{ text: "no one in finance", strength: "must_not", quote: "Not investors" }, { text: "x", strength: "must_not", quote: "investors" }, { text: "investors", strength: "must_not", quote: "meeting investors Thursday" }], said, undefined, (w) => whys.push(w));
+  check("each rejection gives its reason (never their words)", JSON.stringify(whys) === JSON.stringify(["reading_off_their_words", "quote_too_short", "exclusion_without_negation"]), whys);
   const pr = WC.groundCriteria([{ text: "taste over a big title", strength: "must", quote: "I'd rather someone with taste than a big title" }], said);
   check("groundCriteria: words of preference are stored as a preference, never a must", pr.length === 1 && pr[0].strength === "prefer", pr);
   check("the scorer is shown their words, with Cue's reading as context only", /"I'm not looking for investors right now" \(reading: investors\)/.test(WC.conditionsPromptBlock([{ label: "W1", text: "x", criteria: [{ text: "investors", strength: "must_not", quote: "I'm not looking for investors right now", at: "" }] }])) && /judge their words/.test(WC.conditionsPromptBlock([{ label: "W1", text: "x", criteria: [{ text: "investors", strength: "must_not", quote: "I'm not looking for investors right now", at: "" }] }])));
