@@ -146,13 +146,58 @@ check("re-asking: guidance to clarify only the gap, respect a decline, carry cor
 const CC = await import("../../src/services/callCommitments.js");
 const CG = await import("../../src/harness/callGrounding.js");
 const closingLine = "Good luck with the launch, Jordan. I'll text you the venue list tomorrow.";
-check("a closing commitment is picked up as a commitment to keep (the call's follow-through)", CC.commitmentsIn([closingLine]).length === 1 && /venue list/.test(CC.commitmentsIn([closingLine])[0]) && CC.commitmentProblem(CC.commitmentsIn([closingLine])[0]) === null);
-check("...and it opens a task through the after-call path, never nothing", CG.promiseOpens({ coveredBy: null, asked: "send me the venue list" }) === "their_ask" && CG.promiseOpens({ coveredBy: null, asked: null }) === "promise_thread" && CG.promiseOpens({ coveredBy: 3, asked: null }) === "task_from_call");
+// A closing commitment lands in a task, through the real chain: processEndedCall -> followThroughOnCallEnd -> track (trackCommitmentsFromTranscript)
+// -> commitmentsIn -> trackCallCommitment -> startTask. Fake deps at the edges only (the database and the sends).
 {
-  const co = src("src/routes/co.ts");
-  const post = co.slice(co.indexOf("export async function runGptLivePostCall"));
-  const ended = co.slice(co.indexOf("async function processEndedCall"));
-  check("...and a GPT-Live call's end reaches that path (post-call -> processEndedCall -> tasksFromCall + auditCall -> keepCallPromise)", /processEndedCall\(/.test(post.slice(0, post.indexOf("\n}\n"))) && /tasksFromCall\(/.test(ended) && /auditCall\(/.test(ended) && /keepCallPromise\(/.test(src("src/harness/callGrounding.ts")));
+  const FT = await import("../../src/services/callFollowThrough.js");
+  const CCm = await import("../../src/services/callCommitments.js");
+  const started: any[] = [], dues: number[] = [];
+  const commitDeps = {
+    open: async () => [],
+    start: (async (a: any) => { started.push(a); return { ok: true, task: { id: 41, goal: a.goal } }; }) as any,
+    setDue: async (_u: string, id: number) => { dues.push(id); },
+    note: async () => null,
+    zone: async () => "America/Los_Angeles",
+  };
+  const end = new Date("2026-11-04T18:12:00Z");
+  const transcript = "assistant: Hey Jordan.\nuser: The venue shortlist is what I need.\nassistant: Good luck with the launch, Jordan. I'll text you the venue list tomorrow.\nuser: Thanks, bye";
+  await FT.followThroughOnCallEnd({ userId: "u-jordan", transcript, startedAt: new Date(end.getTime() - 600_000), endedAt: end }, {
+    now: () => new Date(end.getTime() + 5_000),
+    track: (u: string, t: string, o: any) => CCm.trackCommitmentsFromTranscript(u, t, o, commitDeps as any),
+    ledger: async () => ({ done: [], owed: [], covered: [] }),
+    sends: async () => [],
+    commitments: async () => [],
+    person: async () => null,
+    draft: async () => null,
+    send: async () => ({ sent: false }),
+    runTask: async () => ({ ran: false }),
+    hold: async () => {},
+    record: (async () => {}) as any,
+  } as any);
+  check("a closing commitment opens a task through followThroughOnCallEnd (real chain, fake edges)", started.length === 1 && /^Keep your word from the call: /.test(started[0].goal) && /venue list/.test(started[0].goal) && started[0].source === "promise" && dues.length === 1, started.map((x) => x.goal));
+  check("the chain is wired in the route: processEndedCall -> followThroughOnCallEnd, and GPT-Live's post-call -> processEndedCall", /processEndedCall\(/.test(src("src/routes/co.ts").slice(src("src/routes/co.ts").indexOf("export async function runGptLivePostCall"))) && /m\.followThroughOnCallEnd\(/.test(src("src/routes/co.ts")) && /track: trackCommitmentsFromTranscript/.test(src("src/services/callFollowThrough.ts")));
+}
+// The review's false closes
+check("explicit end: only a request about the call", ["Can we wrap up?", "Can we wrap this up?", "I should let you go", "We can end the call.", "Okay, hang up now", "I need to hop off", "Let's wrap up"].every((t) => P2.explicitEnd(t)) && ["Let's stop this and go over the pitch again", "Let's wrap up the deck first, then the venue", "We could stop this whole plan"].every((t) => !P2.explicitEnd(t) && closes([["assistant", "Here is the plan."], ["user", t]]) === false));
+check("explicit end: the three false closes through callClosing", closes([["assistant", "Hi."], ["user", "Let's stop this and go over the pitch again"]]) === false && closes([["assistant", "Hi."], ["user", "We could stop this whole plan"]]) === false && closes([["assistant", "Hi."], ["user", "Can we wrap this up?"]]) === true && closes([["assistant", "Hi."], ["user", "I should let you go"]]) === true);
+for (const t of ["Oh bye the way, did you see the deck?", "Bye-bye for now, actually one more thing", "Okay bye, what time tomorrow?", "Bye! Oh wait, did you send the link?", "Hang on, gotta go grab the deck, one sec", "Don't hang up yet", "Please don't end the call", "How do I end the call with the investor politely"]) {
+  check(`memberClosed: "${t}" does not close`, P2.memberClosed(t) === false && closes([["assistant", "Here is the plan."], ["user", t]]) === false, t);
+}
+check("memberClosed: real closes still close", ["Okay, bye!", "Bye", "Wait, bye!", "Alright, I have to run, talk soon", "Okay, hang up now", "ok that's all for now"].every((t) => P2.memberClosed(t)));
+check("opensNew: 'oh and' / 'one thing' after a goodbye keeps the call going", closes([["user", "ok bye"], ["assistant", "Talk soon, Jordan."], ["user", "Oh and one more"]]) === false && closes([["user", "ok bye"], ["assistant", "Talk soon, Jordan."], ["user", "One thing, the date"]]) === false);
+// runtime cap order: thread, then inviter, their first-call words last, and only if still over
+{
+  const mk = (extra: number, o: any) => G.liveInstructions({ firstName: "Jordan", direction: "inbound", team: true, opening: { timeOfDay: "Wednesday afternoon", reason: null, firstCall: true, ...o }, identity: "y".repeat(extra) });
+  const words = "gave notice, last day the 21st, freelance or join a studio?";
+  const full = mk(0, { theirWords: words, inviter: "Noor" });
+  const noInviter = mk(0, { theirWords: words });
+  const room = G.GPT_LIVE.maxInstructionChars - noInviter.length;
+  // padded so that with the inviter the prompt reaches the cap, but without it, it fits: the inviter goes, their words stay
+  const pad = room - (full.length - noInviter.length) + 5;
+  const squeezed = mk(pad, { theirWords: words, inviter: "Noor" });
+  check("runtime cap: the inviter goes before their first-call words", !squeezed.includes("Who brought them in") && squeezed.includes(G.theirWordsNote(words)) && squeezed.length < G.GPT_LIVE.maxInstructionChars, squeezed.length);
+  const tighter = mk(room + 50, { theirWords: words, inviter: "Noor" });
+  check("runtime cap: their first-call words go last, only if still over", !tighter.includes(G.theirWordsNote(words)) && !tighter.includes("Who brought them in"));
 }
 check("a goodbye is not proof the request was done, and no invented takeaway or promise fills the closing line", /a goodbye is not proof their request is done/.test(G.BACKEND_FEEL) && /Don't invent a takeaway or a promise to fill the closing line/.test(G.BACKEND_FEEL) && /Never fill the closing line with a takeaway or promise you won't keep/.test(src("prompts/co-system-prompt.md")));
 check("the mid-call notes are reminders of the same rules, never stronger (no 'end the call', no 'goodbye', no 'must')", [G.WIND_DOWN_NOTE, G.AGREED_NOTE].every((n) => !/\b(?:end the call|goodbye|must|never ask|don't ask)\b/i.test(n)));
