@@ -1975,7 +1975,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         ctx.facts?.add(
           "known",
           `What Cue actually sent them in the last 45 days, newest first, the real complete list: ${sent
-            .map((x) => `"${x.name}"${x.link ? `, link ${x.link}` : ""}${x.city ? `, in ${x.city}` : ""}${x.sentOn ? `, sent ${x.sentOn}` : ""}${x.reaction ? `, they said: ${x.reaction.replace(/_/g, " ")}` : ""}`)
+            .map((x) => `"${x.name}"${x.link ? `, link ${x.link}` : ""}${x.city ? `, in ${x.city}` : ""}${x.city ? `, in ${x.city}` : ""}${x.sentOn ? `, sent ${x.sentOn}` : ""}${x.reaction ? `, they said: ${x.reaction.replace(/_/g, " ")}` : ""}`)
             .join("; ")}. Never add, drop, or invent anything beyond this list.`,
         );
         return { ok: true, sent };
