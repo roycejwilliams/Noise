@@ -1524,7 +1524,8 @@ export async function persistIntentFrom(
     // A want they closed at their word is never re-opened by the words that closed it, or by words said before it closed (a call's
     // capture reads the whole call after its own retire read already closed it): only a request said after the close re-opens it.
     if (asks.length) {
-      const held = await closedWantsHeld(user_id, asks, transcript).catch(() => new Set<string>());
+      // A text turn is judged by its newest message; a call (whole transcript) by position.
+      const held = await closedWantsHeld(user_id, asks, transcript, scope === "last_user_message" ? (message ?? WC.theirWordsIn(transcript).split("\n").pop() ?? "") : null).catch(() => new Set<string>());
       for (let i = asks.length - 1; i >= 0; i--) if (held.has(asks[i].text)) asks.splice(i, 1);
       if (!asks.length && !extras.concrete_preferences.length && !extras.wants.length && !extras.availability) return null;
     }
@@ -1813,25 +1814,30 @@ export async function applyCriteriaForTurn(userId: string, raw: unknown, items: 
   return changes.length;
 }
 
-// Pure: is this captured want one they closed at their word, said no later than the close? Their closing words (closed_evidence) in
-// this transcript after the want's own words, or the want's words not found at all, mean the capture read words from before the
-// close: held. Closing words not in this transcript mean it closed earlier and this is a new request: it goes.
-export function heldByClose(transcript: string, wantQuote: string | null, closedEvidence: string | null): boolean {
+// Pure: is this captured want one they closed at their word, said no later than the close?
+//   text turn (newest given): held only when their closing words are in that newest message itself (the message that dropped it is
+//     never a new request). A close from an earlier message means this message is newer: it goes, quoted or not (review of #378:
+//     "ok actually I want a technical cofounder again" after an earlier drop is a new request even when the quote didn't ground).
+//   call (no newest): by position in their lines. Held when the want's own words come before the close; with no grounded words for
+//     the want, held only when the close is in this same call (nothing places the want after it); a close not in this call never holds.
+export function heldByClose(transcript: string, wantQuote: string | null, closedEvidence: string | null, newest: string | null = null): boolean {
   const norm = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
-  // Their lines only, in order (a Cue line repeating their words never places the close).
-  const theirs = norm(transcript.split("\n").filter((l) => /^\s*(user said:|user:|user sent a voice memo:)/i.test(l)).join(" ") || transcript);
   const ev = norm(closedEvidence ?? "");
   if (ev.length < 6) return false;
+  if (newest !== null) return ` ${norm(newest)} `.includes(` ${ev} `);
+  // Their lines only, in order (a Cue line repeating their words never places the close).
+  const theirs = norm(transcript.split("\n").filter((l) => /^\s*(user said:|user:|user sent a voice memo:)/i.test(l)).join(" ") || transcript);
   const closeAt = theirs.lastIndexOf(ev);
   if (closeAt < 0) return false;
   const q = norm(wantQuote ?? "");
-  const askAt = q.length >= 4 ? theirs.lastIndexOf(q) : -1;
-  return askAt < 0 || askAt < closeAt;
+  if (q.split(" ").length < 2) return true;
+  const askAt = theirs.lastIndexOf(q);
+  return askAt >= 0 && askAt < closeAt;
 }
 
 // The captured asks to hold: each that restates (same words, or a near-duplicate) an ask they closed at their word in the last 30 days,
 // when heldByClose says these words aren't newer than the close. Logged; never sent anywhere.
-async function closedWantsHeld(userId: string, asks: CapturedAsk[], transcript: string): Promise<Set<string>> {
+async function closedWantsHeld(userId: string, asks: CapturedAsk[], transcript: string, newest: string | null): Promise<Set<string>> {
   const { rows } = await pool.query(
     `SELECT ask_id, ask_text, closed_reason, closed_evidence FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NOT NULL AND resolved_at > NOW() - INTERVAL '30 days'`,
     [userId],
@@ -1843,7 +1849,7 @@ async function closedWantsHeld(userId: string, asks: CapturedAsk[], transcript: 
   const { normalizeAskText } = await import("../harness/profileWrite.js");
   for (const a of asks) {
     const hit = closed.find((r: any) => normalizeAskText(String(r.ask_text)) === normalizeAskText(a.text) || (a.wantWords?.quote && normalizeAskText(String(r.ask_text)).includes(normalizeAskText(a.wantWords.quote))));
-    if (!hit || !heldByClose(transcript, a.wantWords?.quote ?? null, hit.closed_evidence)) continue;
+    if (!hit || !heldByClose(transcript, a.wantWords?.quote ?? null, hit.closed_evidence, newest)) continue;
     out.add(a.text);
     recordDecision({ layer: 4, decision: "profile.write", userId, outcome: "skip", action: "closed_want_held", reason: "they closed this want at their word; these words aren't newer than the close", proposal: { askId: hit.ask_id } }).catch(() => {});
   }

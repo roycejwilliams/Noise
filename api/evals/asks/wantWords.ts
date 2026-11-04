@@ -104,6 +104,13 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   check("an emotional want with no conditions stays a want, not a task with made-up details", entry(A_ROOM)?.kind === "ask" && !entry(A_ROOM)?.criteria);
   // Pure grounding, the same rule both reads use.
   check("groundWant: a quote that isn't in their lines is never kept as theirs", WC.groundWant("I need a CTO by Friday", "I'm looking for a cofounder").provenance === "inferred" && WC.groundWant("looking for a cofounder", "I'm looking for a cofounder").provenance === "stated");
+  // Review of #378 item 2: one word, a paraphrase, an exclusion with no words that exclude, or a preference stored as a must.
+  const said = "I'm meeting investors Thursday. Not investors for the cofounder though. I'd rather someone with taste than a big title.";
+  check("groundCriteria: 'investors' lifted from 'I'm meeting investors Thursday' never grounds as an exclusion", WC.groundCriteria([{ text: "no investors at all", strength: "must_not", quote: "investors" }, { text: "no investors at all", strength: "must_not", quote: "meeting investors Thursday" }], said).length === 0);
+  check("groundCriteria: 'not investors' never grounds as 'no one in finance' (Cue's reading off their words)", WC.groundCriteria([{ text: "no one in finance", strength: "must_not", quote: "Not investors" }], said).length === 0 && WC.groundCriteria([{ text: "investors", strength: "must_not", quote: "Not investors" }], said).length === 1);
+  const pr = WC.groundCriteria([{ text: "taste over a big title", strength: "must", quote: "I'd rather someone with taste than a big title" }], said);
+  check("groundCriteria: words of preference are stored as a preference, never a must", pr.length === 1 && pr[0].strength === "prefer", pr);
+  check("the scorer is shown their words, with Cue's reading as context only", /"I'm not looking for investors right now" \(reading: investors\)/.test(WC.conditionsPromptBlock([{ label: "W1", text: "x", criteria: [{ text: "investors", strength: "must_not", quote: "I'm not looking for investors right now", at: "" }] }])) && /judge their words/.test(WC.conditionsPromptBlock([{ label: "W1", text: "x", criteria: [{ text: "investors", strength: "must_not", quote: "I'm not looking for investors right now", at: "" }] }])));
   check("groundCriteria: bad strength, no quote, or Cue's words are all dropped", WC.groundCriteria([{ text: "x", strength: "urgent", quote: "looking" }, { text: "y", strength: "must" }, { text: "z", strength: "must", quote: "Got it, someone technical" }], WC.theirWordsIn(callTranscript)).length === 0);
 }
 
@@ -145,8 +152,21 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   const call = `user: ${SAID_COF}.\nassistant: Got it.\nuser: Actually, ${DROP}.\nassistant: Understood.`;
   await P.persistIntentFrom(U, { asks: [{ text: A_COF, type: "seeking", quote: SAID_COF }], concrete_preferences: [], wants: [], availability: null } as any, call, "whole_transcript", null, { via: "call" });
   check("call: the capture after the call's own retire read doesn't re-open the want they dropped later in that call", entries().every((e) => e.text !== A_COF) && w.asks.filter((x) => x.ask_text === A_COF && !x.resolved_at).length === 0 && w.decisions.some((d) => d.action === "closed_want_held"), { open: entries().map((e) => e.text), decisions: w.decisions.map((d) => d.action) });
-  check("pure: closing words after the want's words hold; closing words from before (or not in this conversation) don't", P.heldByClose(call, SAID_COF, DROP) && !P.heldByClose(`user: ${DROP}\nassistant: ok\nuser: ${SAID_COF} again after all`, `${SAID_COF} again after all`, DROP) && !P.heldByClose(`user: ${SAID_COF}`, SAID_COF, DROP));
+  check("pure, call: closing words after the want's words hold; the want said after the close, or a close not in this call, don't", P.heldByClose(call, SAID_COF, DROP) && !P.heldByClose(`user: ${DROP}\nassistant: ok\nuser: ${SAID_COF} again after all`, `${SAID_COF} again after all`, DROP) && !P.heldByClose(`user: ${SAID_COF}`, SAID_COF, DROP));
+  check("pure, call: no grounded words for the want, held only when the close is in this same call", P.heldByClose(call, null, DROP) && !P.heldByClose(`user: ${SAID_COF}`, null, DROP));
+  // Review of #378 item 1: on a text turn only the newest message decides. "drop the cofounder search" earlier, then a new request whose
+  // quote didn't ground (a paraphrase): it goes. The message that drops it is held, quoted or not.
+  const AGAIN = "ok actually I want a technical cofounder again";
+  check("pure, text: a newer message without the closing words is never held, even with no grounded quote", !P.heldByClose(`user: ${DROP}\nassistant: ok\nuser: ${AGAIN}`, null, DROP, AGAIN) && !P.heldByClose(`user: ${AGAIN}`, AGAIN, DROP, AGAIN));
+  check("pure, text: the message that holds the closing words is held", P.heldByClose(`user: ${DROP}, found one`, null, DROP, `${DROP}, found one`));
   check("the retire read (text turn and call alike) keeps their closing words on the ask it closes, which is what the hold reads", /closed_evidence = COALESCE\(closed_evidence, \(\$3::text\[\]\)\[array_position\(\$2::text\[\], ask_id\)\]\)/.test(src("services/profileExtraction.ts")) && /asks\.map\(\(id\) => \(quote\(id\) \?\? ""\)\.slice\(0, 300\) \|\| null\)/.test(src("services/profileExtraction.ts")));
+  // The review's case end to end: an earlier drop, then a new request on a text turn whose quote is Cue's paraphrase (doesn't ground).
+  const before = w.asks.filter((x) => x.ask_text === A_COF && !x.resolved_at).length;
+  await P.persistIntentFrom(U, { asks: [{ text: A_COF, type: "seeking", quote: "Wants a technical cofounder again" }], concrete_preferences: [], wants: [], availability: null } as any, `user: ${DROP}\nassistant: Understood.\nuser: ${AGAIN}`, "last_user_message", AGAIN, { via: "text" });
+  check("text: after an earlier drop, 'ok actually I want a technical cofounder again' re-opens it though its quote didn't ground", before === 0 && w.asks.some((x) => x.ask_text === A_COF && !x.resolved_at) && entries().some((e) => e.text === A_COF && e.provenance === "inferred"), { before, open: entries().map((e) => [e.text, e.provenance]) });
+  // Close it again for the next case.
+  for (const x of w.asks.filter((x) => x.ask_text === A_COF && !x.resolved_at)) Object.assign(x, { resolved_at: new Date(), closed_reason: "member", closed_evidence: DROP });
+  w.intent = w.intent.map((e) => (e.text === A_COF ? { ...e, status: "resolved" } : e));
   const BACK = "ok I'm back on it, I'm looking for a technical cofounder who's built consumer before";
   await P.persistIntentFrom(U, { asks: [{ text: A_COF, type: "seeking", quote: BACK }], concrete_preferences: [], wants: [], availability: null } as any, `user: ${BACK}`, "last_user_message", BACK, { via: "text" });
   check("text: a request said after the close (their drop isn't in it) re-opens it as a new want", entries().some((e) => e.text === A_COF && e.quote === BACK) && w.asks.some((x) => x.ask_text === A_COF && !x.resolved_at));

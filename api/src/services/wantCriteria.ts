@@ -50,15 +50,36 @@ export function groundWant(quote: unknown, ownWords: string): { quote: string | 
   return q && norm(q).split(" ").length >= 2 && quoteIsTheirs(q, ownWords) ? { quote: q, provenance: "stated" } : { quote: null, provenance: "inferred" };
 }
 
-// Pure: the conditions the read found, kept only when said outright in their own words. No quote, no condition: a date, budget,
-// urgency or requirement they didn't say is never added.
+// Words that make a statement a preference, never a requirement ("I'd rather", "taste matters more than seniority").
+const PREFER_WORDS = /\b(rather|prefer|preferably|ideally|bonus|nice to have|if possible|matters? more|matters? less|more important than|less important than)\b/i;
+// Words that make it an exclusion ("not investors right now", "no founders", "I don't want").
+const NEGATION = /\b(not|no|never|without|except|avoid|none|nobody|skip)\b|n't\b/i;
+const STOP = new Set(["someone", "people", "person", "anyone", "with", "that", "this", "they", "them", "their", "have", "been", "from", "into", "right", "really", "just", "want", "looking", "would", "should", "about", "some", "more", "less", "than"]);
+const contentWords = (t: string) => norm(t).split(" ").filter((x) => x.length >= 4 && !STOP.has(x));
+// Pure: does Cue's reading of a condition stay on their words? At least one content word of the reading shares its stem (first 5
+// letters) with a word of the quote: "no one in finance" read from "not investors" does not.
+export function readingOnTheirWords(text: string, quote: string): boolean {
+  const q = contentWords(quote).map((x) => x.slice(0, 5));
+  const t = contentWords(text);
+  return t.length > 0 && t.some((x) => q.includes(x.slice(0, 5)));
+}
+
+// Pure: the conditions the read found, kept only when said outright in their own words (review of #378):
+//   - a quote of theirs of two words or more ("investors" alone, lifted from "I'm meeting investors Thursday", is not a condition)
+//   - Cue's reading stays on those words (readingOnTheirWords)
+//   - an exclusion needs words that exclude (a negation); without one it is dropped, never stored as must_not
+//   - words of preference ("I'd rather", "matters more than") are always a preference, never a must or must_not
+// No quote, no condition: a date, budget, urgency or requirement they didn't say is never added.
 export function groundCriteria(raw: unknown, ownWords: string, now: string = new Date().toISOString()): Criterion[] {
   const out: Criterion[] = [];
   for (const c of Array.isArray(raw) ? raw : []) {
     const text = typeof c?.text === "string" ? c.text.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT) : "";
-    const strength = typeof c?.strength === "string" && STRENGTHS.includes(c.strength) ? (c.strength as Strength) : null;
+    let strength = typeof c?.strength === "string" && STRENGTHS.includes(c.strength) ? (c.strength as Strength) : null;
     const quote = typeof c?.quote === "string" ? c.quote.trim().slice(0, 200) : "";
-    if (!text || !strength || !quote || !quoteIsTheirs(quote, ownWords)) continue;
+    if (!text || !strength || !quote || norm(quote).split(" ").length < 2 || !quoteIsTheirs(quote, ownWords)) continue;
+    if (!readingOnTheirWords(text, quote)) continue;
+    if (PREFER_WORDS.test(quote)) strength = "prefer";
+    else if (strength === "must_not" && !NEGATION.test(quote)) continue;
     if (out.some((o) => norm(o.text) === norm(text))) continue;
     out.push({ text, strength, quote, at: now });
   }
@@ -153,7 +174,7 @@ export function conditionsPromptBlock(wants: WantLine[]): string {
   const ls = labelConditions(wants);
   if (!ls.length) return "";
   const multi = wants.length > 1;
-  return `\nConditions they put on ${multi ? "these wants (each belongs to its own want only)" : "this"}, in their words:\n${ls.map((l) => `${l.label}${multi ? ` (for ${l.want})` : ""}, ${strengthWords(l.c.strength)}: "${l.c.text}"`).join("\n")}\nFor every candidate, say for each condition whether it holds for that candidate on what's listed: "yes", "no", or "unknown" when nothing listed says either way. Never guess: "unknown" is the honest answer when the line is silent. Judge the score on the want itself; the conditions are applied separately.\n`;
+  return `\nConditions they put on ${multi ? "these wants (each belongs to its own want only)" : "this"}, in their own words (Cue's short reading after each is context only; judge their words):\n${ls.map((l) => `${l.label}${multi ? ` (for ${l.want})` : ""}, ${strengthWords(l.c.strength)}: "${l.c.quote}" (reading: ${l.c.text})`).join("\n")}\nFor every candidate, say for each condition whether what they said holds for that candidate on what's listed: "yes", "no", or "unknown" when nothing listed says either way. For a "must not", "yes" means the candidate is what they ruled out. Never guess: "unknown" is the honest answer when the line is silent. Judge the score on the want itself; the conditions are applied separately.\n`;
 }
 
 export const CONDITIONS_FIELDS = `conditions: one entry per listed condition, {"label": "C1", "holds": "yes" | "no" | "unknown"}; [] when no conditions are listed.`;
