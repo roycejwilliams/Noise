@@ -84,7 +84,7 @@ const run = async (raw: string, a: any[] = []) => {
     return { rows: [{ id: String(db.decisions.length), created_at: new Date() }] };
   }
   if (/^SELECT type, payload FROM proactive_candidates WHERE id = \$2 AND user_id = \$1 AND status = 'pending'/.test(sql)) return { rows: db.candidates.filter((c) => String(c.id) === String(a[1]) && c.user_id === a[0] && c.status === "pending").map((c) => ({ type: c.type, payload: c.payload })) };
-  if (/^INSERT INTO network_introductions/.test(sql)) { (db as any).declined = [...((db as any).declined ?? []), { a: a[0], b: a[1] }]; return { rows: [] }; }
+  if (/^INSERT INTO network_introductions/.test(sql)) { (db as any).declineSql = sql; (db as any).declined = [...((db as any).declined ?? []), { a: a[0], b: a[1] }]; return { rows: [] }; }
   if (/^INSERT INTO co_memories/.test(sql)) { db.memories.push({ user: a[0], type: a[1], content: String(a[2]) }); return { rows: [{ id: db.memories.length }] }; }
   if (/^SELECT MAX\(created_at\) AS at FROM co_memories/.test(sql)) return { rows: [{ at: null }] };
   if (/^SELECT created_at FROM users WHERE id = \$1/.test(sql)) return { rows: [{ created_at: new Date("2026-01-01T00:00:00Z") }] };
@@ -291,7 +291,10 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   const items = (held: string[], intro = false): any => ({ id: String(++seq), type: "event_offer", band: DR.BAND.find, label: "a find for you: X", intro, expiresAt: null, held });
   check("3: a held item is never mentioned or spoken on a call", W.waitingMention([items(["emotional_timing"])]) === null && W.callWaitingLines([items(["kind_restraint"])]).length === 0 && W.waitingMention([items([]), items(["away_hold"])])!.includes("one thing"));
   check("3: a safety hold shows nothing at all in what Cue knows, other holds show as held", W.visibleHeld([items(["safety_hold"]), items(["away_hold"]), items([])]).length === 2);
-  check("3: a safety hold on them holds every item (the text path gets the call path's guard)", /safety = member\.state\.safetyHold \? \["safety_hold"\] : \[\]/.test(src("harness/proactive.ts")) && W.couldGo([items(["safety_hold"])]).length === 0);
+  const safeState = { now: new Date(), sends: [], lastInboundAt: null, safetyHold: true } as any;
+  const names = (cand: Candidate) => PR.candidateChecks(cand, safeState).filter((k) => !k.pass).map((k) => k.name);
+  check("round 2 (2): under a safety hold a pull holds exactly what the pick holds (offers), and a requested task result still goes", names(c("event_offer", { askId: "profile", fromProfile: true, match: {} })).includes("safety_hold") && !names(c("task_update", { door: true, cls: "requested", messages: ["x"] })).includes("safety_hold") && !/safety = member\.state\.safetyHold/.test(src("harness/proactive.ts")));
+  check("round 2 (2): the text path still raises no mention under a safety hold", /!turn\.knowledge\?\.restraint\?\.safetyHold/.test(src("routes/sendblue.ts")));
   reset();
   const pc = row("event_offer", { payload: { askId: "profile", fromProfile: true, picked: true, match: { name: "X" } } });
   const checks = await PR.pulledChecks(RIVER, [PR.rowToCandidate(pc)], new Date());
@@ -304,7 +307,8 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   // 4. busy, slow, time bound
   check("4: the whole pull is bounded (15s) and a busy pick is waited for only briefly", W.PULL_TIMEOUT_MS <= 15_000 && W.PULL_BUSY_WAIT_MS <= 6_000);
   const TC = src("agent/conversationTools.ts");
-  check("4: no \"will arrive\" promise on slow or busy", !/will arrive as its own text in a moment/.test(TC) && /don't promise it will arrive/.test(TC));
+  check("4: no \"will arrive\" promise on slow or busy", !/will arrive as its own text in a moment/.test(TC) && /don't promise it will arrive/.test(TC) || /make no claim either way/.test(TC));
+  check("round 2 (3): slow says only that nothing is ready to send right now, no claim either way", /Nothing is ready to send right now\. Say that in one plain line; make no claim either way/.test(TC) && !/didn't come together/.test(TC));
   const order: string[] = [];
   const reg = {} as any;
   const both = await Promise.all([PR.pullDispatch(reg, "no-such-user", { pulled: true }), PR.pullDispatch(reg, "no-such-user", { pulled: true })]);
@@ -330,6 +334,18 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   const tease = row("network_tease", { payload: { askId: "a1", candidate: { candidate_id: "99999999-0000-4000-8000-000000000009", match_reason: "r" } } });
   const ap = await WK.applyOne({ query: (q: string, a?: any[]) => run(q, a) } as any, RIVER, { profile: null } as any, { ref: `waiting:${tease.id}`, source: "waiting", group: "waiting", text: "someone I think you should meet", theirWords: null, canCorrect: false } as any, "remove", null, "no");
   check("7: removing a possible intro is them declining it: the pair is recorded as declined, once, in canonical order", "ref" in ap && ((db as any).declined ?? []).length === 1 && (db as any).declined[0].a < (db as any).declined[0].b, (db as any).declined);
+  const dsql: string = (db as any).declineSql ?? "";
+  check("round 2 (4): the decline updates a pair row still unanswered on their side, and leaves one they answered or that was introduced", /DO UPDATE SET status = 'declined' WHERE network_introductions\.status NOT IN \('introduced', 'declined'\) AND network_introductions\.(a|b)_interested_at IS NULL/.test(dsql), dsql);
+  check("round 2 (4): it reads their own side's column (a for the lower id, b for the higher)", new RegExp(`network_introductions\\.${RIVER < "99999999-0000-4000-8000-000000000009" ? "a" : "b"}_interested_at IS NULL`).test(dsql));
+  // round 2 (1): the day's find cap
+  reset();
+  for (let n = 0; n < PR.DAILY_FIND_CAP; n++) { const done = row("event_offer", { payload: { askId: "profile", fromProfile: true, match: {} } }); done.status = "sent"; }
+  const f1 = row("event_offer", { payload: { askId: "profile", fromProfile: true, picked: true, match: { name: "Over" } } });
+  const capChecks = await PR.pulledChecks(RIVER, [PR.rowToCandidate(f1)], new Date());
+  check("round 2 (1): a find over today's cap is held (so never mentioned, spoken or offered)", !!capChecks && capChecks.get(String(f1.id))!.includes("daily_find_cap"), capChecks && [...capChecks]);
+  const t1 = row("task_update", { payload: { door: true, cls: "requested", messages: ["x"] } });
+  const capChecks2 = await PR.pulledChecks(RIVER, [PR.rowToCandidate(t1)], new Date());
+  check("round 2 (1): what they asked for is not held by the find cap", !!capChecks2 && !capChecks2.get(String(t1.id))!.includes("daily_find_cap"));
 }
 
 // ================================================================ 10. send time
