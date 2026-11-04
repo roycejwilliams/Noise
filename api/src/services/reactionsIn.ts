@@ -15,11 +15,15 @@ const bare = (s: string) => s.replace(/️/g, "").trim();
 const EMOJI_KIND: [string, ReactionKind][] = [["❤", "love"], ["👍", "like"], ["👎", "dislike"], ["😂", "laugh"], ["‼", "emphasize"], ["❓", "question"], ["❔", "question"]];
 const KIND_EMOJI: Record<Exclude<ReactionKind, "emoji">, string> = { love: "❤️", like: "👍", dislike: "👎", laugh: "😂", emphasize: "‼️", question: "❓" };
 const VERB_KIND: Record<string, Exclude<ReactionKind, "emoji">> = { loved: "love", liked: "like", disliked: "dislike", "laughed at": "laugh", emphasized: "emphasize", questioned: "question" };
-const Q = `[“"']([\\s\\S]+?)[”"']`;
-// "Loved an image" has no quote to find the text by.
-const VERB = /^(loved|liked|disliked|laughed at|emphasized|questioned)\s+(?:[“"']([\s\S]+?)[”"']|an?\s+(?:image|photo|attachment|video|voice message|link|sticker)\b[\s\S]*)\s*$/i;
-const CUSTOM = new RegExp(`^reacted\\s+(\\S+)\\s+to\\s+${Q}\\s*$`, "i");
-const REMOVED = new RegExp(`^removed\\s+an?\\s+(heart|like|dislike|laugh|exclamation mark|question mark|[^“"']{1,24}?)\\s+from\\s+${Q}\\s*$`, "i");
+// The exact iMessage strings and nothing looser (review of #384): the quote is curly and wraps the WHOLE message, and the media form is the
+// whole message too. Anything else is a real message ("Loved a link you sent, yes please introduce me to Dana"). A real tapback that
+// doesn't match runs a normal turn, as before; a real message read as a tapback would lose its yes, so when unsure it is NOT a reaction.
+const MEDIA = "(?:image|photo|attachment|video|voice message|link|sticker)";
+const VERB = new RegExp(`^(loved|liked|disliked|laughed at|emphasized|questioned)\\s+(?:“([\\s\\S]+)”|an?\\s+${MEDIA})$`, "i");
+// A real emoji only (one, with skin tone or joined parts), never a word.
+const EMOJI_ONE = "\\p{Extended_Pictographic}\\uFE0F?[\\u{1F3FB}-\\u{1F3FF}]?(?:\\u200D\\p{Extended_Pictographic}\\uFE0F?[\\u{1F3FB}-\\u{1F3FF}]?)*";
+const CUSTOM = new RegExp(`^reacted\\s+(${EMOJI_ONE})\\s+to\\s+“([\\s\\S]+)”$`, "iu");
+const REMOVED = new RegExp(`^removed\\s+an?\\s+(heart|like|dislike|laugh|exclamation mark|question mark|${EMOJI_ONE})\\s+from\\s+“([\\s\\S]+)”$`, "iu");
 const REMOVED_KIND: Record<string, ReactionKind> = { heart: "love", like: "like", dislike: "dislike", laugh: "laugh", "exclamation mark": "emphasize", "question mark": "question" };
 const trimQuote = (s: string) => s.replace(/…$/, "").trim();
 
@@ -41,11 +45,18 @@ export function parseReaction(text: string): IncomingReaction | null {
   if (m) return { kind: kindOfEmoji(m[1]), emoji: m[1], quoted: trimQuote(m[2]), removed: false };
   m = t.match(REMOVED);
   if (m) {
-    const kind = REMOVED_KIND[m[1].toLowerCase()] ?? "emoji";
-    return { kind, emoji: kind === "emoji" ? m[1] : KIND_EMOJI[kind as Exclude<ReactionKind, "emoji">], quoted: trimQuote(m[2]), removed: true };
+    const named = REMOVED_KIND[m[1].toLowerCase()];
+    return named ? { kind: named, emoji: KIND_EMOJI[named as Exclude<ReactionKind, "emoji">], quoted: trimQuote(m[2]), removed: true } : { kind: kindOfEmoji(m[1]), emoji: m[1], quoted: trimQuote(m[2]), removed: true };
   }
   return null;
 }
+// The same shape as a stored tapback line ("User said: Loved “…”"), for a query that must skip them (harness/proactive.ts
+// loadLastWrittenInbound). A guard for ranking, never for deciding what a message means: parseReaction is the one reader.
+export const REACTION_LINE_SQL = "^User[^:]*:[[:space:]]*(Loved|Liked|Disliked|Laughed at|Emphasized|Questioned|Reacted [^ ]+ to|Removed an? [^“]{1,24} from) (“.*”|an? (image|photo|attachment|video|voice message|link|sticker))[[:space:]]*$";
+export const sameEmoji = (a: string, b: string): boolean => bare(a) === bare(b);
+// The one light check Cue may send after a tapback on a consequential ask ("Is that a yes to meeting Dana?"): exempt from the repeat-
+// question rules, which would otherwise read it as asking again what the tapback "answered".
+export const LIGHT_CHECK = /^\s*(?:so\s+)?is that a yes\b/i;
 export const isReaction = (text: string): boolean => parseReaction(text) !== null;
 
 const norm = (s: string) => s.toLowerCase().replace(/[“”"'’‘]/g, "").replace(/\s+/g, " ").trim();
@@ -82,7 +93,7 @@ export async function recentSentTexts(userId: string, limit = 40): Promise<SentT
 export type TargetClass = "consequential_ask" | "interest_ask" | "find" | "update" | "unknown";
 // An ask that would do, send, spend or share something, or connect them with a person, if it were said yes to.
 const ACTION_ASK = /\b(?:intro(?:duce|duction)?|connect (?:you|the two)|put you (?:two )?in touch|meet (?:him|her|them|[A-Z]\w+)|opt[- ]?in|share (?:your|my|that|it)|on your behalf|book|reserve|rsvp|sign you up|pay|buy|purchase|send (?:it|that|this|them|him|her|the)|email (?:them|him|her)|draft|reach out|message (?:them|him|her))\b/i;
-const OFFER = /\b(?:want me to|should i|shall i|do you want me to|would you like me to|can i|ok if i|okay if i|want to meet|want an intro)\b/i;
+const OFFER = /\b(?:want me to|should i|shall i|do you want me to|would you like me to|can i|ok if i|okay if i|want to meet|want an intro|want to come|wanna come|you in|are you in|save you a seat|save you a spot|join|come with|come along|rsvp for you|count you in)\b/i;
 const INTEREST = /\b(?:interest(?:s|ed)? you|interested\??$|worth a look|worth (?:it|your time)|on your radar|appeal to you|fit for you|sound (?:good|fun|like you))\b/i;
 
 // Pure: what the targeted text asked of them. Consequential wins: when in doubt about an ask, it is one.

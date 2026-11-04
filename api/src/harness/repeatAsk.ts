@@ -9,6 +9,7 @@
 //
 // Pure: takes the conversation as text and returns what repeats.
 
+import { isReaction, LIGHT_CHECK } from "../services/reactionsIn.js";
 export type Turn = { from: "co" | "them"; text: string };
 
 const COMMON = new Set(["a", "an", "the", "and", "or", "to", "of", "in", "on", "for", "with", "is", "are", "it", "this", "that", "you", "your", "i", "me", "my", "do", "does", "so", "just", "if", "at", "as", "be", "we", "us"]);
@@ -98,10 +99,11 @@ export const LOOKBACK_TURNS = 14;
 export function repeatedQuestion(draft: string, turns: Turn[]): { question: string; earlier: string } | null {
   const recent = turns.slice(-LOOKBACK_TURNS);
   for (const q of questionsIn(draft)) {
-    if (ALWAYS_ASKABLE.test(q)) continue;
+    if (ALWAYS_ASKABLE.test(q) || LIGHT_CHECK.test(q)) continue;
     for (let i = 0; i < recent.length; i++) {
       if (recent[i].from !== "co") continue;
-      const theirs = recent.slice(i + 1).filter((t) => t.from === "them" && t.text.trim().length > 0);
+      // A tapback is not an answer (services/reactionsIn.ts).
+      const theirs = recent.slice(i + 1).filter((t) => t.from === "them" && t.text.trim().length > 0 && !isReaction(t.text));
       if (!theirs.length) continue;
       const yes = theirs.some((t) => saidYes(t.text));
       const earlier = questionsIn(recent[i].text).find((e) => sameQuestion(q, e, yes));

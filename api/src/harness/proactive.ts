@@ -27,6 +27,7 @@
 // for a few minutes, ranks matching first and drops what expired. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
+import { REACTION_LINE_SQL } from "../services/reactionsIn.js";
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
 import { inventedFailure } from "../services/speakable.js";
 import { sentinelIn, sentinelRule } from "../services/sentinelBody.js";
@@ -1878,6 +1879,17 @@ async function loadLastInbound(db: Queryable, userId: string): Promise<Date | nu
   return rows[0]?.at ? new Date(rows[0].at) : null;
 }
 
+// Their latest WRITTEN message (or call): a tapback is not one, so a tapback right after their request leaves that request the latest
+// (answersLastText). The other readers keep loadLastInbound: a tapback is still contact.
+export async function loadLastWrittenInbound(db: Queryable, userId: string): Promise<Date | null> {
+  const { rows } = await db.query(
+    `SELECT MAX(created_at) AS at FROM co_memories
+     WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%') AND content !~ $2`,
+    [userId, REACTION_LINE_SQL],
+  );
+  return rows[0]?.at ? new Date(rows[0].at) : null;
+}
+
 async function loadPerson(userId: string): Promise<(Person & { optedOut: boolean }) | null> {
   const { rows } = await pool.query(
     `SELECT u.first_name, u.phone_number, COALESCE(u.sms_opted_out, false) AS sms_opted_out, cp.city
@@ -2306,7 +2318,7 @@ async function atTheDoor(opts: { userId: string; type: ExemptType; targetKey: st
   if (!opts.door || !isDoorType(opts.type)) return null;
   const now = opts.now ?? new Date();
   const cls: SendClass = opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
-  const lastIn = opts.answers ? await loadLastInbound(pool, opts.userId).catch(() => null) : null;
+  const lastIn = opts.answers ? await loadLastWrittenInbound(pool, opts.userId).catch(() => null) : null;
   const route = doorRoute({ cls, now, soonAt: opts.soonAt ?? null, answersLast: !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now), timeSensitive: opts.door.timeSensitive, safety: opts.door.safety });
   if (!route.door) return null;
   const q = await enterDoor({ userId: opts.userId, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, cls, summary: opts.door.summary, validUntil: opts.door.validUntil, now, restraintKind: opts.coInitiated?.kind ?? null, intro: opts.door.intro, soonAt: opts.soonAt ?? null, after: opts.door.after ?? null, taskId: opts.door.taskId ?? null, close: opts.door.close ?? null, awaitingReply: opts.door.awaitingReply });
@@ -2407,7 +2419,7 @@ export async function sendExempt(opts: {
     }
     const now = opts.now ?? new Date();
     // Its class (harness/notifyGate.ts): Cue's own text, a delivery they asked for, or Cue's answer to their latest message.
-    const lastIn = await loadLastInbound(client, opts.userId).catch(() => null);
+    const lastIn = await loadLastWrittenInbound(client, opts.userId).catch(() => null);
     const answersLast = !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now);
     const cls: SendClass = opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
     // What it serves, read inside the lock (harness/closedSubject.ts): a task's result or check-in for a task they closed or dropped

@@ -56,12 +56,14 @@ export function reactionFor(emoji: string): string {
   return NAMED[bare(emoji)] ?? emoji;
 }
 
-// Whether a reaction may go to Sendblue: one of its six names, or exactly one emoji. Anything else (words, several emoji, an empty
-// string) is not sent as a reaction at all, so the caller falls back to the plain text it already has.
+// Whether a reaction may go to Sendblue (https://docs.sendblue.com/api-v2/reactions/): one of its six names, or exactly ONE emoji in its
+// emoji form. A text-style character (© ☺, or ❤ without its variation selector) is rejected by Sendblue with a 400, so it is refused
+// here and the caller falls back to the plain text. Anything else (words, several emoji, an empty string) likewise.
 export function sendableReaction(reaction: string): boolean {
-  const r = bare(String(reaction ?? ""));
+  const r = String(reaction ?? "").trim();
   if ((SENDBLUE_REACTIONS as readonly string[]).includes(r)) return true;
-  return /^\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?(\u200D\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?)*$/u.test(r);
+  const one = "(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic}\\uFE0F)";
+  return new RegExp(`^${one}[\\u{1F3FB}-\\u{1F3FF}]?(?:\\u200D${one}[\\u{1F3FB}-\\u{1F3FF}]?)*$`, "u").test(r);
 }
 
 // Closing tapbacks were logged by name before they could be any emoji.

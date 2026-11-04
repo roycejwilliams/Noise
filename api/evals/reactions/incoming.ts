@@ -40,6 +40,11 @@ const P = await import("../../src/services/provenance.js");
 const X = await import("../../src/services/exchangeRecord.js");
 const T = await import("../../src/services/tapbacks.js");
 const S = await import("../../src/services/sendblue.js");
+const RA = await import("../../src/harness/repeatAsk.js");
+const MC = await import("../../src/harness/moveCheck.js");
+const EC = await import("../../src/harness/exchangeCount.js");
+const PR = await import("../../src/harness/proactive.js");
+const KR = await import("../../src/services/kindRestraint.js");
 
 const INTRO = "Dana is going Thursday and builds climate hardware like you. Want me to introduce you two?";
 const FIND = "Found a seed-stage climate mixer on the 14th, worth a look: https://lu.ma/climate-mixer";
@@ -147,6 +152,74 @@ const Q = (t: string) => `“${t}”`;
   check("an unsupported reaction is refused before anything is sent, so the caller falls back to text", bad === false && sentToSendblue.length === before);
   const good = await S.sendReaction("handle-good-1", T.reactionFor("👎"));
   check("a supported one goes out by name", good === true && sentToSendblue.at(-1)?.body?.reaction === "dislike" && sentToSendblue.at(-1)?.body?.message_handle === "handle-good-1");
+}
+
+// 7. review of #384
+{
+  const real = [
+    "Loved a link you sent, yes please introduce me to Dana", "Loved a photo of the venue, yes intro me to Dana", "Liked a video I saw today. Yes book it",
+    "Reacted badly to “your text”", 'Loved "Dune"', "Liked 'em all", 'Loved "Dune" and yes, intro me to Dana', "Loved “Dune” and yes, intro me to Dana",
+    "Loved “Want me to intro you to Dana?”\nyes do it", "yes do it\nLoved “Want me to intro you to Dana?”", "Reacted to “your text”", "Reacted lol to “your text”",
+    "Loved the event!", "Liked it", "Emphasized \"yes\" — I mean it, intro me to Dana\"",
+  ];
+  check("real messages that merely start like a tapback are not reactions", real.every((m) => R.parseReaction(m) === null), real.filter((m) => R.parseReaction(m)).join(" | "));
+  check("... and so a yes in them still counts as theirs", Y.yesIsTheirs("yes please introduce me to Dana", real[0]) === true && Y.yesIsTheirs("Yes book it", real[2]) === true);
+  check("the exact media strings are reactions", ["Loved an image", "Liked a photo", "Emphasized a video", "Loved a voice message", "Liked a link", "Loved a sticker", "Loved an attachment"].every((m) => R.parseReaction(m) !== null));
+  check("Reacted needs a real emoji", R.parseReaction(`Reacted 🔥 to ${Q("x yes")}`)?.emoji === "🔥" && R.parseReaction(`Reacted 🫡 to ${Q("hello there")}`) !== null && R.parseReaction(`Reacted yes to ${Q("hello there")}`) === null);
+  check("a straight-quoted string is not taken for a reaction", R.parseReaction('Liked "Want me to intro you to Dana?"') === null);
+  check("kindRestraint reads through the same parser", KR.readInbound({ at: new Date(), text: `Disliked ${Q("a thing Cue sent today")}` } as any).signal === "negative" && KR.readInbound({ at: new Date(), text: "Loved a link you sent, yes" } as any).signal === "reply");
+}
+{
+  // the repeat-question gate and the light check
+  const base = "Cue: Want me to intro you to Dana at Thursday's dinner?\nUser said: Liked “Want me to intro you to Dana at Thursday's dinner?”";
+  const turns = RA.turnsFromConversation(base);
+  check("a tapback is not an answer to the repeat gate: the same ask is not 'already answered'", RA.repeatedQuestion("Want me to intro you to Dana at the Thursday dinner?", turns) === null);
+  check("the one light check is never a repeat", RA.repeatedQuestion("Is that a yes to the intro to Dana at Thursday's dinner?", turns) === null && RA.repeatQuestionCheck("Is that a yes to meeting Dana?", base).pass);
+  const written = RA.turnsFromConversation("Cue: Want me to intro you to Dana at Thursday's dinner?\nUser said: sure thanks");
+  check("control: after a written reply the same question is still a repeat", RA.repeatedQuestion("Want me to intro you to Dana at the Thursday dinner?", written) !== null);
+  const done = X.doneFrom(base);
+  const names = (d: string) => MC.recordMisses(d, { done, unresolved: [] }).map((m) => m.name);
+  check("after a tapback only the light check may follow: it passes the move check", names("Is that a yes to meeting Dana?").length === 0);
+  check("... and the same ask again, reworded, is a miss", names("Want me to intro you to Dana at the Thursday dinner?").some((n) => n === "reoffer" || n === "reask"));
+  const at = (m: number) => new Date(Date.UTC(2026, 10, 3, 12, m));
+  const rows = [{ from: "co" as const, text: "Want me to intro you to Dana at Thursday's dinner?", at: at(0) }, { from: "them" as const, text: "Liked “Want me to intro you to Dana at Thursday's dinner?”", at: at(1) }, { from: "co" as const, text: "Is that a yes to meeting Dana?", at: at(2) }];
+  const hits = EC.countMember({ rows, closed: [], closeTurns: [], since: at(-5), until: at(30) } as any);
+  check("exchangeCount does not count the light check as a re-ask or a double ask", hits.length === 0, JSON.stringify(hits));
+  const rows2 = [rows[0], rows[1], { from: "co" as const, text: "Want me to introduce you to Dana at the Thursday dinner?", at: at(2) }];
+  check("... but a re-ask in other words after the tapback is still a double ask", EC.countMember({ rows: rows2, closed: [], closeTurns: [], since: at(-5), until: at(30) } as any).some((h) => h.kind === "double_ask"));
+}
+{
+  // invites
+  for (const t of ["Want to come to Friday's dinner? 8pm", "Are you in for Friday's dinner?", "Want me to save you a seat at Friday's dinner?", "Want to join the Friday dinner?", "Want to come with me to the mixer?"]) check(`invite is consequential: ${t}`, R.classifyTarget(t) === "consequential_ask");
+  const heart = R.interpretReaction(R.parseReaction(`Loved ${Q("Want to come to Friday's dinner? 8pm")}`)!, { handle: "h", text: "Want to come to Friday's dinner? 8pm", how: "quote" });
+  check("a heart on an invite gets the light check and is not a yes", heart.meaning === "unconfirmed_yes" && /Is that a yes/.test(heart.instruction));
+}
+{
+  // answersLastText: a tapback after their request leaves the request the latest
+  const t = (m: number) => new Date(Date.UTC(2026, 10, 3, 12, m));
+  // The fake runs the query's own pattern (POSIX classes translated for JS) over the stored lines.
+  const rowsDb = [{ content: `User said: Loved ${Q("Done, the deck is ready")}`, created_at: t(10) }, { content: "User said: make me a deck for Thursday", created_at: t(0) }];
+  const db: any = { query: async (sql: string, p: unknown[]) => {
+    const re = new RegExp(String(p[1]).replace(/\[\[:space:\]\]/g, "\\s"));
+    const ok = rowsDb.filter((r) => !re.test(r.content));
+    return { rows: [{ at: ok.length ? new Date(Math.max(...ok.map((r) => +r.created_at))) : null }] };
+  } };
+  const last = await PR.loadLastWrittenInbound(db, "u1");
+  check("the last written message skips the tapback", last?.getTime() === t(0).getTime());
+  check("a task asked at their request still answers their latest message after a tapback", PR.answersLastText(t(0), last, t(15)) === true && PR.answersLastText(t(0), t(10), t(15)) === false);
+}
+{
+  // removals
+  const convo = ["Co replied: " + INTRO, `User said: Liked ${Q(INTRO)}`, `User said: Loved ${Q(INTRO)}`, `User said: Removed a like from ${Q(INTRO)}`].join("\n");
+  check("a removal clears only the matching emoji: the heart stays after the like is taken back", X.doneFrom(convo).find((d) => d.kind === "offer" || d.kind === "question")?.reacted === "❤️");
+  const both = convo + `\nUser said: Removed a heart from ${Q(INTRO)}`;
+  check("... and clears when the last one is taken back", X.doneFrom(both).every((d) => !d.reacted));
+  check("a removal is read as removed, and the route ends the turn on it (code, in routes/sendblue.ts)", R.parseReaction(`Removed a heart from ${Q(INTRO)}`)?.removed === true && (await import("node:fs")).readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8").includes('action: "reaction_removed"'));
+}
+{
+  // Sendblue's emoji form
+  check("text-style characters are not sendable; their emoji forms are", ["©", "☺", "❤", "‼", "✍"].every((x) => !T.sendableReaction(x)) && ["©️", "☺️", "❤️", "✍️", "✈️", "🫡", "🔥"].every(T.sendableReaction));
+  check("❤️ still goes as love, bare ❤ too", T.reactionFor("❤️") === "love" && T.reactionFor("❤") === "love");
 }
 
 console.log(`\n${total - failed}/${total} passed`);

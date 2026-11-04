@@ -13,7 +13,7 @@
 // The move (answer, summarize, steps, act, close, feeling, ask, quiet) is chosen by the turn read on text, and by the call brain itself
 // on a call; the draft is checked against it in harness/moveCheck.ts. Pure, apart from the loaders at the bottom.
 import { questionsIn, turnsFromConversation } from "../harness/repeatAsk.js";
-import { isReaction, parseReaction, quotesText } from "./reactionsIn.js";
+import { isReaction, parseReaction, quotesText, sameEmoji } from "./reactionsIn.js";
 
 export const EXCHANGE_MOVES = ["answer", "summarize", "steps", "act", "close", "feeling", "ask", "quiet"] as const;
 export type ExchangeMove = (typeof EXCHANGE_MOVES)[number];
@@ -77,7 +77,10 @@ export function doneFrom(recentConversation: string, sent: { name: string; url: 
     let reacted: string | null = null;
     for (const x of later) {
       const rx = parseReaction(x.text);
-      if (rx && quotesText(t.text, rx.quoted)) reacted = rx.removed ? null : rx.emoji;
+      if (rx && quotesText(t.text, rx.quoted)) {
+        if (!rx.removed) reacted = rx.emoji;
+        else if (reacted && sameEmoji(reacted, rx.emoji)) reacted = null;
+      }
     }
     const mark = reacted ? { reacted } : {};
     const card = t.text.match(/\[sent (?:Cue|Co)'s contact card\]/i);

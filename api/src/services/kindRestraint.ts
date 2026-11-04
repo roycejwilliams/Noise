@@ -20,6 +20,7 @@
 //             count; nothing a member let pass before restraint existed holds them back.
 // Answers to their own explicit ask (an event offer for an open ask) are never suppressed: they asked (harness/proactive.ts).
 // Every read and write is scoped to one member.
+import { parseReaction } from "./reactionsIn.js";
 import pool from "../db/db.js";
 import { MOOD_FALLBACK_TOPIC } from "./moodHold.js";
 
@@ -91,18 +92,18 @@ export type ReadInbound = { at: Date; signal: Signal; quoted: string | null };
 
 // iMessage reactions arrive as text: Loved “…”, Liked “…”, Disliked “…”, Laughed at “…”, Emphasized “…”, Questioned “…”, and the
 // newer Reacted 🔥 to “…”. A threaded reply is logged with [Replying to Co's text: "…"] (services/inlineReply.ts).
-const TAPBACK = /^(loved|liked|disliked|laughed at|emphasized|questioned|reacted\s+(\S+)\s+to)\s+[“"']([\s\S]+?)[”"']\s*$/i;
+// (The tapback reader is services/reactionsIn.ts parseReaction: one parser, so the two can never disagree.)
 const THREADED = /\[Replying to (?:Co|Cue)'s text: "([\s\S]+?)"(?:\s*\([^)]*\))?\]\s*$/;
 
 // Pure: one of their lines as a signal. `text` is what they sent (the "User said: " prefix is removed by the reader).
 export function readInbound(line: InboundLine): ReadInbound {
   const text = line.text.trim();
-  const tb = text.match(TAPBACK);
+  const tb = parseReaction(text);
   if (tb) {
-    const verb = tb[1].toLowerCase();
-    const emoji = tb[2] ?? "";
-    const negative = verb === "disliked" || /👎/.test(emoji);
-    return { at: line.at, signal: negative ? "negative" : verb === "questioned" ? "reply" : "positive", quoted: tb[3].replace(/…$/, "").trim() };
+    // A taken-back reaction says nothing either way.
+    if (tb.removed) return { at: line.at, signal: "reply", quoted: tb.quoted || null };
+    const negative = tb.kind === "dislike" || /👎/.test(tb.emoji);
+    return { at: line.at, signal: negative ? "negative" : tb.kind === "question" ? "reply" : "positive", quoted: tb.quoted || null };
   }
   const th = text.match(THREADED);
   if (th) return { at: line.at, signal: "reply", quoted: th[1].replace(/…$/, "").trim() };
