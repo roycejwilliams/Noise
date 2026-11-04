@@ -222,6 +222,15 @@ async function loadContextParts(userId: string, include: readonly KnowledgeSecti
   const picture = rawPicture && names ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : names ? rawPicture : "";
   // The recap through the live guards (services/whatCoKnows.ts): a line on something they removed is out, a corrected one says so.
   if (safeRecap[0]) safeRecap[0] = await import("./whatCoKnows.js").then(async (W) => W.guardBlock(String(safeRecap[0]), await W.forgottenRows(userId))).catch(() => String(safeRecap[0]));
+  // The suggestions through the same live guards as the recap: one they removed is out, a corrected one says so (3 rows now, not 1).
+  if (safeRecommendation.length) {
+    const W = await import("./whatCoKnows.js");
+    const forgotten = await W.forgottenRows(userId).catch(() => []);
+    for (let i = 0; i < safeRecommendation.length; i++) {
+      try { safeRecommendation[i] = W.guardBlock(String(safeRecommendation[i]), forgotten); } catch { safeRecommendation[i] = ""; }
+    }
+    for (let i = safeRecommendation.length - 1; i >= 0; i--) if (!String(safeRecommendation[i] ?? "").trim()) safeRecommendation.splice(i, 1);
+  }
   const recapAt = recapResult.rows[0]?.created_at ? new Date(recapResult.rows[0].created_at) : null;
   const profile = profileResult.rows[0] ?? null;
   return {
@@ -801,10 +810,12 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     .join("\n\n");
 
   // Finds Cue's recent texts named (a debrief, a follow-up) stay in the facts however old the send: "where was that one" on a call.
+  // Finds Cue's recent texts named (a debrief, a follow-up) come first and are filled with no window, ranked by how recently a text named
+  // them, so the size cap never drops them. Their zone, so the send date is their day.
   const { sentNamedIn } = await import("./turnContext.js");
-  const named = sentNamedIn(sent, k.exchanges.filter((x) => x.from === "co" && !x.call).slice(-6).map((x) => x.text));
-  await fillDetails(named, { withinDays: 60 }).catch(() => {});
-  const sentLines = await strip(sentDetailLines({ sent }, 7, new Date(), { also: named }));
+  const named = sentNamedIn(sent, k.exchanges.filter((x) => x.from === "co" && !x.call).map((x) => x.text).reverse());
+  await fillDetails(named, { withinDays: 36500, max: 3 }).catch(() => {});
+  const sentLines = await strip(sentDetailLines({ sent }, 7, new Date(), { also: named, zone, referentMax: CALL_SENT_MAX - 400 }));
   const thread = callThread(k.exchanges, { guardsUnread: !!k.guardsUnread });
   const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread });
 
