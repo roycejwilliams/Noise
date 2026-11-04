@@ -283,6 +283,7 @@
     "evals/relevance/lateJoiner.ts",
     "evals/events/checkinNoShow.ts",
     "evals/followups/evidence.ts",
+    "evals/luma/checkIn.ts",
     "evals/llm/structuredJudge.ts",
     "evals/cache/toolOrder.ts",
     "evals/review/outsideActions.ts",

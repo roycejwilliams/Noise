@@ -6,6 +6,7 @@ import { runCalendarFollowReachOutAgent } from "../agent/calendarFollowReachOut.
 import { handleEventCanceled, handleEventUpdated } from "../services/eventChangeDetection.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { sendEmail } from "../otpActions.js";
+import { handleGuestCheckIn, logFirstDelivery } from "../services/lumaCheckIn.js";
 
 const router = express.Router();
 
@@ -175,6 +176,8 @@ router.post("/webhook", (req: Request, res: Response) => {
   res.sendStatus(200);
 
   const { type, data } = payload ?? {};
+  // The first delivery of each type logs its raw type and field names (never values), since no live check-in has fired yet.
+  logFirstDelivery(String(type), payload).catch(() => {});
   switch (type) {
     case "event.created": {
       const eventId = data?.api_id;
@@ -205,7 +208,7 @@ router.post("/webhook", (req: Request, res: Response) => {
       // The literal field linking a guest payload back to its event is
       // unconfirmed against a real delivery — trying every plausible shape
       // and logging clearly if none match, rather than guessing silently.
-      const eventId = data?.event_api_id ?? data?.event?.api_id ?? data?.event_id;
+      const eventId = data?.event_api_id ?? data?.event?.api_id ?? data?.event_id ?? data?.guest?.event_api_id;
       if (!eventId) {
         console.error(
           `luma/webhook: ${type} payload has no recognizable event id field; its keys (never its values, which can carry guests\' details):`,
@@ -213,11 +216,15 @@ router.post("/webhook", (req: Request, res: Response) => {
         );
         break;
       }
-      // guest.updated is also the check-in signal ("User checks in" on the
-      // flow board) — TODO: the presence-filter logic that consumes
-      // approval_status/checked_in_at for the one-time nudge isn't built yet;
-      // this only re-triggers scoring, it doesn't yet act on check-in itself.
+      // guest.updated carries the door check-in (checked_in_at) at Noise's own events: the member counts as arrived at once
+      // (services/lumaCheckIn.ts), which starts the in-room matching and, the morning after, earns the debrief. Other hosts'
+      // events never send us a webhook.
       runScoringPass(eventId, undefined, type);
+      if (type === "guest.updated") {
+        handleGuestCheckIn({ ...data, event_api_id: eventId }, undefined)
+          .then((r) => r !== "not_a_checkin" && console.log(`luma/webhook: guest.updated (${eventId}) — check-in: ${r}`))
+          .catch((err: any) => console.error(`luma/webhook: guest.updated (${eventId}) — check-in failed:`, err?.message ?? err));
+      }
       break;
     }
     case "event.updated": {
