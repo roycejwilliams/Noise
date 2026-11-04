@@ -1934,9 +1934,12 @@ export async function pulledChecks(userId: string, cands: Candidate[], now: Date
     const ev = evaluateCandidates({ ...member.state, midConversation: false, candidates: cands }, { ignorePacing: true, pulled: true, teamHold });
     const out = new Map(ev.perCandidate.map((p) => [p.candidate.id, p.checks.filter((k) => !k.pass).map((k) => k.name)]));
     const personal = ev.userOk ? [] : gate(ev.userChecks).failed.map((k) => k.name);
-    // A safety hold on them: nothing is raised, whatever its type.
-    const safety = member.state.safetyHold ? ["safety_hold"] : [];
-    for (const [id, names] of out) out.set(id, [...new Set([...names, ...personal, ...safety])]);
+    // The safety hold holds exactly what the dispatch holds (offers and SAFETY_HOLD_ALSO, in candidateChecks): what they asked for still goes.
+    // The day's find cap, as the lock reads it: finds past what's left today are held.
+    const finds = cands.filter((c) => c.topicKey !== MOOD_FALLBACK_TOPIC && isDiscoveryFind(c));
+    const sentToday = finds.length ? await findsSentToday(userId, person.timezone, now).catch(() => DAILY_FIND_CAP) : 0;
+    const over = new Set(finds.slice(Math.max(0, DAILY_FIND_CAP - sentToday)).map((c) => c.id));
+    for (const [id, names] of out) out.set(id, [...new Set([...names, ...personal, ...(over.has(id) ? ["daily_find_cap"] : [])])]);
     return out;
   } catch (err: any) {
     console.error("proactive: the pull's checks couldn't be read (non-fatal):", err?.message ?? err);

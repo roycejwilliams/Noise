@@ -1023,7 +1023,9 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       await must(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = 'removed by the member', decided_at = NOW(), updated_at = NOW() WHERE id = $2 AND user_id = $1 AND status = 'pending'`, [userId, Number(a)]);
       if (held.rows?.[0]?.type === "network_tease" && cand?.candidate_id) {
         const [pa, pb] = [userId, String(cand.candidate_id)].sort();
-        await db.query(`INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id) VALUES ($1, $2, 'declined', $3, $4) ON CONFLICT (person_a_id, person_b_id) DO NOTHING`, [pa, pb, cand.match_reason ?? "", (held.rows[0].payload?.askId ?? null)]);
+        // An existing pair row still unanswered on their side becomes declined; one they already answered, or that was introduced, is left.
+        const mine = userId === pa ? "a_interested_at" : "b_interested_at";
+        await db.query(`INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id) VALUES ($1, $2, 'declined', $3, $4) ON CONFLICT (person_a_id, person_b_id) DO UPDATE SET status = 'declined' WHERE network_introductions.status NOT IN ('introduced', 'declined') AND network_introductions.${mine} IS NULL`, [pa, pb, cand.match_reason ?? "", (held.rows[0].payload?.askId ?? null)]);
       }
       return { ref: item.ref, source: "waiting", was, now: null };
     }

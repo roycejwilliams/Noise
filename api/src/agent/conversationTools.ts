@@ -1955,7 +1955,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: true, waiting: 0, note: "Nothing is waiting for them right now. Say so in one plain line; don't make something up or promise something is coming." };
         }
         if (r.status === "none_ready") return { ok: true, waiting: r.waiting, sent: 0, note: "Something is waiting but none of it can go right now (their own settings, or timing). Say that in one plain line without listing or describing it, and don't say when." };
-        if (r.status === "slow" || r.status === "busy") return { ok: true, sent: 0, note: "It didn't come together just now. Say so in one plain line and that they can ask again in a bit; don't promise it will arrive, don't say when, don't describe what it is." };
+        if (r.status === "slow" || r.status === "busy") return { ok: true, sent: 0, note: "Nothing is ready to send right now. Say that in one plain line; make no claim either way about whether something will or won't arrive, don't say when, don't describe what it is." };
         notDone("What was waiting for them couldn't be read just now.");
         return { ok: false, error: "Couldn't read what's waiting right now. Say so plainly and offer to try again in a bit." };
       },
