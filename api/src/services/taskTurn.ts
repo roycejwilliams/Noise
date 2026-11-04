@@ -900,10 +900,9 @@ export function warningChecks(text: string, o: { thing: string; when: string; al
 }
 
 // Pure: the line in plain words when no draft holds up. Better than going quiet on a window.
-export function fallbackWarning(thing: string, when: string, doc: boolean): string {
+export function fallbackWarning(thing: string, when: string): string {
   const plural = /s$/i.test(thing) && !/\b(?:this|plan|brief|analysis)$/i.test(thing);
   const pron = thing === "it" ? "it" : plural ? "them" : "it";
-  if (doc) return `${thing === "it" ? "The document" : thing[0].toUpperCase() + thing.slice(1)} isn't finished yet, I'll have it to you ${when}.`;
   return thing === "it" ? `No luck yet, I'll have it for you ${when}.` : `No luck on ${thing} yet, I'll have ${pron} for you ${when}.`;
 }
 
@@ -933,7 +932,6 @@ export async function warnIfWindowMissed(task: CoTask, w: CommitWindow, nextAt: 
   }
   const re = rescheduledWindow(nextAt, now, deps.zone, w);
   const thing = promisedThing(task.goal);
-  const doc = wantsDocument(task.goal, task.theirWords);
   const facts = { what_you_promised: task.goal.replace(/^(?:Keep your word from the call|Keep your promise):\s*/i, ""), window_words: w.words, what_isnt_there_yet: thing, new_time: re.when, their_local_time: localStamp(now, deps.zone) };
   const bad = (t: string) => warningChecks(t, { thing, when: re.when, alsoNames: task.theirWords }).filter((c) => !c.pass);
   let text: string | null = null;
@@ -944,7 +942,7 @@ export async function warnIfWindowMissed(task: CoTask, w: CommitWindow, nextAt: 
     const second = await draft(facts, { draft: first, failed: bad(first).map((c) => c.reason ?? c.name).join("; ") }).catch(() => null);
     if (second && !bad(second).length) text = second;
   }
-  text ??= fallbackWarning(thing, re.when, doc);
+  text ??= fallbackWarning(thing, re.when);
   const r = deps.warn ? await deps.warn(text, `task:${task.id}:window:${w.deadline}`).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) })) : { sent: false, reason: "no send path" };
   if (!r.sent && r.reason !== "already sent") return { sent: false, what: `window: warning not sent (${r.reason ?? "unknown"})` };
   await deps.setWindow?.(re.window);

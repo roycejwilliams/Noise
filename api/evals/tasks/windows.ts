@@ -101,11 +101,11 @@ const local = (iso: string | Date, zone = SF) => new Date(iso).toLocaleString("e
   check("a status preamble fails", TT.warningChecks("Quick update: won't have the private dining options tonight after all. I'll get them to you in the morning.", { thing: "the private dining options", when: "in the morning" }).some((c) => c.name === "warning_no_preamble" && !c.pass));
   check("a line with no new time fails", TT.warningChecks("No luck on the rooms yet.", { thing: "the rooms", when: "in the morning" }).some((c) => c.name === "warning_new_time" && !c.pass));
   check("a line that doesn't say what's missing fails", TT.warningChecks("I'll have something for you in the morning.", { thing: "the rooms", when: "in the morning" }).some((c) => c.name === "warning_names_it" && !c.pass));
-  const fb = TT.fallbackWarning(TT.promisedThing("Keep your word from the call: \"I'll text you the options tonight\""), "in the morning", false);
+  const fb = TT.fallbackWarning(TT.promisedThing("Keep your word from the call: \"I'll text you the options tonight\""), "in the morning");
   check("the fallback line, from Cue's own promise", fb === "No luck on the options yet, I'll have them for you in the morning.", fb);
   check("...passes the same checks", TT.warningChecks(fb, { thing: "the options", when: "in the morning" }).every((c) => c.pass));
-  const fd = TT.fallbackWarning("the plan", "by 3pm", true);
-  check("a document's fallback says it isn't finished and when it comes, and passes", fd === "The plan isn't finished yet, I'll have it to you by 3pm." && TT.warningChecks(fd, { thing: "the plan", when: "by 3pm" }).every((c) => c.pass), fd);
+  const fp = TT.fallbackWarning("the plan", "by 3pm");
+  check("the fallback never promises a document: it's the same plain line for a plan", fp === "No luck on the plan yet, I'll have it for you by 3pm." && !/document|finished/i.test(fp) && TT.warningChecks(fp, { thing: "the plan", when: "by 3pm" }).every((c) => c.pass), fp);
 }
 
 // ======================================================================= 3. the reproduction: first wake finds nothing, next check 3h out
