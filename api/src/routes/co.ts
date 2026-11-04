@@ -699,7 +699,9 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
     // and the inviter they named themselves (services/firstCall.ts). A failed read is a later call: the four phases, as before.
     const first = await import("../services/firstCall.js").then((m) => m.firstCallFacts(o.userId)).catch(() => ({ firstCall: false }));
     // A later call opens from where they left off: one line, the most recent open thread or topic (services/firstCall.ts laterCallThread).
-    const thread = (first as { firstCall?: boolean }).firstCall ? null : await import("../services/firstCall.js").then((m) => m.laterCallThread(o.userId)).catch(() => null);
+    // Outbound, only when they asked for the call: on Cue's own unrequested calls whoever is confirmed on the line may not be them.
+    const memberAsked = o.direction === "inbound" || (await import("../services/callReason.js").then((m) => m.heldCallReason(o.userId)?.result.reason?.kind === "member_asked").catch(() => false));
+    const thread = (first as { firstCall?: boolean }).firstCall || !memberAsked ? null : await import("../services/firstCall.js").then((m) => m.laterCallThread(o.userId)).catch(() => null);
     const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone), first, thread });
     const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, budgetLimited: admitted.budgetLimited }, Date.now(), admitted.id);
     G.markCall(o.callSid, o.userId, "pending");

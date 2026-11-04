@@ -174,7 +174,7 @@ export const LIVE_VOICE_RULES: { from: "call prompt" | "CO_VOICE" | "VARIETY_GUI
   { from: "OPENING_NOTE", line: "How you work behind the scenes is never news." },
   { from: "call prompt", line: "Never state a fact you weren't given, about them, other people, events, or yourself and what you can do. If you don't know, say so." },
   { from: "call prompt", line: "If someone goes quiet: let it breathe, and say nothing just to fill it." },
-  { from: "call prompt", line: "If they say \"hello?\" in the middle of the call, they think the line dropped: say you're still here and pick up where you were, never greet them like a new call." },
+  { from: "call prompt", line: "If they say \"hello?\" in the middle of the call, they think the line dropped: say you're still here and pick up where you were, never greet them like a new call", end: ", unless it comes right after they agreed with a point you had just finished: then they're done." },
   // Cut where the source goes on to "or after you've done something for them mid-call" (nothing is done on a GPT-Live call).
   { from: "call prompt", line: "The goodbye comes only at the real end of the call, when they're done or need to go: never sign off at the end of an ordinary turn", end: "." },
   { from: "call prompt", line: "Say that goodbye once." },
@@ -288,24 +288,33 @@ export const VOICEMAIL_NOW = "Their voicemail is recording now, and someone else
 // someone showing Cue off to a friend, "You're not rushing" stated as fact). Guidance only: no sentence check can tell a question that
 // fits from one that doesn't. The thinking has the same four in BACKEND_NOTE.
 export const LIVE_FEEL = [
-  "One question at most, and not every turn: a reaction or an opinion often beats one.",
+  "One question at most, not every turn, never again in other words: a reaction or an opinion often beats one.",
   "Keep it light and brief with others around, a quick hi, or little time.",
-  "Back-to-back short agreements, thanks, \"I'm good\", or \"hello?\" after your point: they're done, not a dropped line. One closing line, goodbye, no new question.",
+  "After a point you finished, short agreements in a row, thanks, \"I'm good\", or \"yeah, I agree, hello?\" mean they're done: one closing line, goodbye, no new question.",
 ];
 
 // Pure: GPT-Live's whole prompt. Role and style (who's on the line, who called whom, how to open, Cue's voice), then the three
 // policies. Nothing about the member beyond their first name, the call's situation and the opening's background: what Cue knows
 // about them is the thinking's (BACKEND_NOTE).
+export const NAME_MAX = 24;
 export function liveInstructions(o: { firstName: string; direction: "inbound" | "outbound"; team: boolean; opening?: OpeningContext; identity?: string }): string {
-  const bg = o.opening ? openingBackground(o.opening, o.direction) : "";
-  const vm = o.direction === "outbound" ? `\n${VOICEMAIL_WAIT}` : "";
-  return `${LIVE_WHO} You're on a phone call with ${o.firstName || "a member"}.\n${callSituation({ direction: o.direction, team: o.team })}\n${o.direction === "outbound" ? OPEN_WHEN_THEY_ANSWER : OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK} ${OPEN_NO_MIND}${bg ? `\n${bg}` : ""}${vm}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n${LIVE_FEEL.join("\n")}\n\n${LIVE_POLICY}`;
+  const name = (o.firstName || "a member").slice(0, NAME_MAX);
+  const build = (opening: OpeningContext | undefined) => {
+    const bg = opening ? openingBackground({ ...opening, inviter: opening.inviter ? opening.inviter.slice(0, NAME_MAX) : opening.inviter }, o.direction) : "";
+    const vm = o.direction === "outbound" ? `\n${VOICEMAIL_WAIT}` : "";
+    return `${LIVE_WHO} You're on a phone call with ${name}.\n${callSituation({ direction: o.direction, team: o.team })}\n${o.direction === "outbound" ? OPEN_WHEN_THEY_ANSWER : OPEN_IN_OWN_WORDS} ${OPEN_NO_STOCK} ${OPEN_NO_MIND}${bg ? `\n${bg}` : ""}${vm}\n\n${[...LIVE_VOICE_RULES.map((r) => r.line + (r.end ?? "")), o.identity ?? ""].filter(Boolean).join("\n")}\n${LIVE_FEEL.join("\n")}\n\n${LIVE_POLICY}`;
+  };
+  // The cap holds at runtime, not just in a test: over it, the thread goes first, then their texted words.
+  let out = build(o.opening);
+  if (o.opening && out.length >= GPT_LIVE.maxInstructionChars) out = build({ ...o.opening, thread: null });
+  if (o.opening && out.length >= GPT_LIVE.maxInstructionChars) out = build({ ...o.opening, thread: null, theirWords: null });
+  return out;
 }
 
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms). How long an answer runs (2026-11-02: the
 // 10-31 delegated answers ran p50 ~400 characters, ~70 words, ~25 s spoken; 2 of 3 GPT-Live calls failed short_spoken_replies) follows
 // OpenAI's delegation guide ("Keep answers concise ... Avoid long explanations"): guidance, never a cap in code.
-export const BACKEND_FEEL = `They're winding down when they give short agreements in a row ("yeah, I agree"), say thanks or "I'm good", or say "hello?" right after you made your point. On the first clear sign, never ask a new question or bring a topic back: if the voice hasn't closed yet, write one short closing line, the takeaway or the next step, and a goodbye; if it has, end the call with your tool and write nothing. A reaction, an agreement or an opinion often beats another question: ask at most one question every other turn. Match the moment: if they're with other people, just saying hi, or short on time, keep it light and brief, with no deep questions. When they ask for your read on themselves or a decision, give an opinion and the reason for it, and leave room for them to disagree; never state their feelings or motives as fact.`;
+export const BACKEND_FEEL = `They're winding down when they give short agreements in a row ("yeah, I agree"), say thanks or "I'm good", or agree and then say "hello?" right after you finished a point (a "hello?" alone means the line dropped). Only after a finished point, never after your question, offer or a step that continues. On the first clear sign, never ask a new question or bring a topic back: if the voice hasn't closed yet, write one short closing line, the takeaway or the next step, and a goodbye; if it has, end the call with your tool and write nothing. A reaction, an agreement or an opinion often beats another question: ask at most one question every other turn. Match the moment: if they're with other people, just saying hi, or short on time, keep it light and brief, with no deep questions. When they ask for your read on themselves or a decision, give an opinion and the reason for it, and leave room for them to disagree; never state their feelings or motives as fact.`;
 export const BACKEND_NOTE = `# How this call runs
 This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. When it takes several steps, say the first few as short complete steps and stop there so they can say go on; never leave a step, a condition or a safety instruction half said. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. What you can do on this call, if anything, is in the note that comes with each turn. When they're wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual. ${BACKEND_FEEL}`;
 
@@ -461,35 +470,47 @@ export function liveCallWords(req: OaiRequest, exchange: (x: { side: "member" | 
 // Pure: a cheap, deterministic closing signal from the call itself (Royce's 2026-11-04 review: "Yeah, I agree. Hello", then "Yeah, I agree"
 // again, and he had to say "we could end the call"). True when their last two turns are each three words or fewer and nothing but
 // agreement or thanks, or when their last turn is that plus a "hello?" check. Never true on one bare "yeah" or "thanks": they may go on.
-const ASSENT = new Set("yeah yes yep yup ok okay sure right totally exactly true agree agreed i sounds good cool got it fair thanks thank you thx great fine alright mm hmm mhm uh huh perfect no problem appreciate that".split(" "));
+// Agreement or thanks in three words or fewer. Bare "okay", "right", "sure", "mm-hmm", "no", "it", "that", "got" are not here: they are
+// how a walkthrough, a backchannel or a no-answer sounds, never a goodbye. "I agree" is matched as a phrase, since "i" alone is not.
+const ASSENT = new Set("yeah yes yep yup totally exactly true agree agreed sounds good cool thanks thank you thx great perfect appreciate".split(" "));
+const ASSENT_PHRASE = /^(?:(?:yeah|yes|yep|totally|exactly)\s+)?(?:i\s+agree|agreed|makes\s+sense|sounds\s+good)$/;
 const assentWords = (t: string): string[] | null => {
   const w = t.toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(Boolean);
-  return w.length >= 1 && w.length <= 3 && w.every((x) => ASSENT.has(x)) ? w : null;
+  if (w.length < 1 || w.length > 3) return null;
+  return w.every((x) => ASSENT.has(x)) || ASSENT_PHRASE.test(w.join(" ")) ? w : null;
 };
+const msgText = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
+// Cue's turn left something to answer or in motion: a question, an offer, a capped walkthrough ("say go on"), a step that continues, or
+// Cue still working or checking. An agreement after any of these is an answer or a "go ahead", never a goodbye.
+const NOT_FINISHED = /\?|\b(?:want me to|should i|shall i|would you like|do you want|go on|the rest|more steps|next (?:step|one)|step (?:one|two|three|four|five|\d)|when you'?re ready|let me know|one (?:moment|sec|second)|hang on|hold on|give me a (?:sec|second|moment|minute)|let me (?:check|look|pull|see|find)|looking (?:that|into|it)|checking|bear with me|still working)\b/i;
+// Pure: whether the last thing Cue said finished a point (a statement, nothing left open), and it was past the opening.
+function cueFinishedAPoint(req: OaiRequest): boolean {
+  const cue = req.messages.filter((m) => m.role === "assistant").map(msgText).map((t) => t.trim()).filter(Boolean);
+  if (cue.length < 2) return false;
+  const lastTwoSentences = cue[cue.length - 1].split(/(?<=[.!?])\s+/).slice(-2).join(" ");
+  return !NOT_FINISHED.test(lastTwoSentences);
+}
 export function windDownSignal(req: OaiRequest): boolean {
-  const txt = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
-  const theirs = req.messages.filter((m) => m.role === "user").map(txt).map((t) => t.trim()).filter(Boolean);
+  const theirs = req.messages.filter((m) => m.role === "user").map(msgText).map((t) => t.trim()).filter(Boolean);
   const last = theirs[theirs.length - 1];
-  if (!last) return false;
+  if (!last || req.messages[req.messages.length - 1]?.role !== "user" || theirs.length < 2 || !cueFinishedAPoint(req)) return false;
+  // "Yeah, I agree. Hello?" after a finished point: a closing sign. A "hello?" on its own, or after anything else, is the line dropping.
   const hello = /^(.*?)[\s,.!?]*\b(?:hello|hi|hey|you there)\b[\s.!?]*$/is.exec(last);
-  if (hello && hello[1].trim() && assentWords(hello[1])) return true;
-  return theirs.length >= 2 && !!assentWords(last) && !!assentWords(theirs[theirs.length - 2]);
+  if (hello) return !!hello[1].trim() && !!assentWords(hello[1]);
+  return !!assentWords(last) && !!assentWords(theirs[theirs.length - 2]);
 }
 export const WIND_DOWN_NOTE = "(Cue's note, not their words.) They're winding down: their last turns were short agreements. Don't ask a new question or bring a topic back. If the voice hasn't closed yet, write one short closing line, the takeaway or the next step, and a goodbye; if it has, end the call with your tool and write nothing.";
-// Pure: the last two things Cue said both ended on a question (guidance for the rhythm: a reaction or an opinion often beats another question).
+// Pure: Cue's last turn ended on a question (guidance for the rhythm: a reaction or an opinion often beats another question).
 export function askedLastTurn(req: OaiRequest): boolean {
-  const txt = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
-  const cue = req.messages.filter((m) => m.role === "assistant").map(txt).map((t) => t.trim()).filter(Boolean);
+  const cue = req.messages.filter((m) => m.role === "assistant").map(msgText).map((t) => t.trim()).filter(Boolean);
   return /\?["')\]]*$/.test(cue[cue.length - 1] ?? "");
 }
 export const NO_QUESTION_NOTE = "(Cue's note, not their words.) Your last turn ended on a question. End this one on a reaction, an agreement or an opinion instead, unless you need an answer to go on.";
-// Pure: their last turn is a short agreement (three words or fewer) after a turn of Cue's that asked nothing: the "Yeah. So," moment of the
+// Pure: their last turn is a short agreement (three words or fewer) after a finished point of Cue's: the "Yeah. So," moment of the
 // 2026-11-04 call, where Cue filled the space with another topic. Softer than windDownSignal: one agreement alone is not a goodbye.
 export function agreedBriefly(req: OaiRequest): boolean {
-  const txt = (m: OaiRequest["messages"][number]) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => p?.text ?? "").join("") : "");
   const last = req.messages[req.messages.length - 1];
-  const cue = req.messages.filter((m) => m.role === "assistant").map(txt).map((t) => t.trim()).filter(Boolean);
-  return !!last && last.role === "user" && !!assentWords(txt(last).trim()) && cue.length >= 2 && !/\?["')\]]*$/.test(cue[cue.length - 1]);
+  return !!last && last.role === "user" && !!assentWords(msgText(last).trim()) && cueFinishedAPoint(req);
 }
 export const AGREED_NOTE = "(Cue's note, not their words.) They agreed in a few words and you hadn't asked anything. Don't fill the space with a new question or topic: a short reaction is enough, and if your point is made, one closing line and a goodbye.";
 export type ThinkOptions = {
