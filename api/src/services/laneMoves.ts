@@ -229,7 +229,7 @@ export async function moveLane(input: MoveInput, store: LaneStore = currentStore
   if (rule === "their_words") return refuse("a task becomes a lookout only on their own words, never by a move Cue proposes; if they ask you to keep watching, that's theirs to say", "refused_their_words_only");
   if (!rule) return refuse(`${LANE_WORDS[from]} to ${LANE_WORDS[to]} isn't a move Cue makes`, "refused_not_a_move");
   // The fact (their quoted yes is in this message); whether it's a yes to this offer is the tool guard's read (services/theirYes.ts).
-  if (!yesIsTheirs(input.theirYes, input.message)) return refuse("the quoted yes isn't in their message", "needs_yes");
+  if (!yesIsTheirs(input.theirYes, input.message, input.recent)) return refuse("the quoted yes isn't in their message", "needs_yes");
   const hits = matchLaneItem(await store.items(userId, from), input.item);
   if (hits.length !== 1) return refuse(hits.length ? `"${input.item.slice(0, 80)}" matches more than one of their ${LANE_WORDS[from]}` : `"${input.item.slice(0, 80)}" isn't one of their ${LANE_WORDS[from]}`, hits.length ? "ambiguous" : "not_found");
   const item = hits[0];

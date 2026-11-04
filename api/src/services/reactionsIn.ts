@@ -15,54 +15,142 @@ const bare = (s: string) => s.replace(/️/g, "").trim();
 const EMOJI_KIND: [string, ReactionKind][] = [["❤", "love"], ["👍", "like"], ["👎", "dislike"], ["😂", "laugh"], ["‼", "emphasize"], ["❓", "question"], ["❔", "question"]];
 const KIND_EMOJI: Record<Exclude<ReactionKind, "emoji">, string> = { love: "❤️", like: "👍", dislike: "👎", laugh: "😂", emphasize: "‼️", question: "❓" };
 const VERB_KIND: Record<string, Exclude<ReactionKind, "emoji">> = { loved: "love", liked: "like", disliked: "dislike", "laughed at": "laugh", emphasized: "emphasize", questioned: "question" };
-// The exact iMessage strings and nothing looser (review of #384): the quote is curly and wraps the WHOLE message, and the media form is the
-// whole message too. Anything else is a real message ("Loved a link you sent, yes please introduce me to Dana"). A real tapback that
-// doesn't match runs a normal turn, as before; a real message read as a tapback would lose its yes, so when unsure it is NOT a reaction.
-const MEDIA = "(?:image|photo|attachment|video|voice message|link|sticker)";
-const VERB = new RegExp(`^(loved|liked|disliked|laughed at|emphasized|questioned)\\s+(?:“([\\s\\S]+)”|an?\\s+${MEDIA})$`, "i");
-// A real emoji only (one, with skin tone or joined parts), never a word.
-const EMOJI_ONE = "\\p{Extended_Pictographic}\\uFE0F?[\\u{1F3FB}-\\u{1F3FF}]?(?:\\u200D\\p{Extended_Pictographic}\\uFE0F?[\\u{1F3FB}-\\u{1F3FF}]?)*";
-const CUSTOM = new RegExp(`^reacted\\s+(${EMOJI_ONE})\\s+to\\s+“([\\s\\S]+)”$`, "iu");
-const REMOVED = new RegExp(`^removed\\s+an?\\s+(heart|like|dislike|laugh|exclamation mark|question mark|${EMOJI_ONE})\\s+from\\s+“([\\s\\S]+)”$`, "iu");
-const REMOVED_KIND: Record<string, ReactionKind> = { heart: "love", like: "like", dislike: "dislike", laugh: "laugh", "exclamation mark": "emphasize", "question mark": "question" };
+// The exact iMessage strings and nothing looser (review of #384): case-sensitive, single literal spaces, the quote wrapping the WHOLE message,
+// and the media form being the whole message. That is only the SHAPE of a reaction. A typed message can have the same shape ("Loved “Dune”,
+// yes intro me to the “film club”"), so a quoted one counts only when its quote is from one of Cue's own recent texts, or the payload names
+// the text (readReaction / verifyReaction). Unsure is NOT a reaction: a real message read as a tapback would lose its yes.
+const MEDIA = "(?:an image|a photo|an attachment|a video|a voice message|a link|a sticker)";
+const VERBS = "(Loved|Liked|Disliked|Laughed at|Emphasized|Questioned)";
+const VERB = new RegExp(`^${VERBS} (?:“([\\s\\S]+)”|"([\\s\\S]+)"|${MEDIA})$`);
+// A real emoji only (one, with skin tone or joined parts, a keycap, or a flag), never a word.
+export const EMOJI_ONE = "(?:\\p{Extended_Pictographic}\\uFE0F?[\\u{1F3FB}-\\u{1F3FF}]?(?:\\u200D\\p{Extended_Pictographic}\\uFE0F?[\\u{1F3FB}-\\u{1F3FF}]?)*|[0-9#*]\\uFE0F?\\u20E3|\\p{Regional_Indicator}{2})";
+const CUSTOM = new RegExp(`^Reacted (${EMOJI_ONE}) to (?:“([\\s\\S]+)”|"([\\s\\S]+)")$`, "u");
+const REMOVED = new RegExp(`^Removed (an exclamation mark|a (?:heart|like|dislike|laugh|question mark)|a ${EMOJI_ONE}) from (?:“([\\s\\S]+)”|"([\\s\\S]+)")$`, "u");
+const REMOVED_KIND: Record<string, ReactionKind> = { "a heart": "love", "a like": "like", "a dislike": "dislike", "a laugh": "laugh", "an exclamation mark": "emphasize", "a question mark": "question" };
 const trimQuote = (s: string) => s.replace(/…$/, "").trim();
+// Two quoted pieces inside one "quote" means someone typed it: Cue's reaction quote is one text.
+const TWO_QUOTES = /”[\s\S]*“/;
 
+export type ReactionShape = IncomingReaction & { wrapped: "curly" | "straight" | "none" };
 export function kindOfEmoji(emoji: string): ReactionKind {
   const e = bare(emoji);
   return EMOJI_KIND.find(([k]) => e === k)?.[1] ?? "emoji";
 }
 
-// Pure: their text as a reaction, or null when it's just a message.
-export function parseReaction(text: string): IncomingReaction | null {
-  const t = String(text ?? "").trim();
+// Pure: whether the text has the exact shape of an iMessage reaction. Not yet a reaction: see readReaction.
+export function parseReactionShape(text: string): ReactionShape | null {
+  const t = String(text ?? "");
   if (!t || t.length > 700) return null;
+  const quoted = (curly: string | undefined, straight: string | undefined): { q: string; w: "curly" | "straight" } | null => {
+    if (curly != null) return TWO_QUOTES.test(curly) ? null : { q: curly, w: "curly" };
+    if (straight != null) return { q: straight, w: "straight" };
+    return null;
+  };
   let m = t.match(VERB);
   if (m) {
     const kind = VERB_KIND[m[1].toLowerCase()];
-    return { kind, emoji: KIND_EMOJI[kind], quoted: trimQuote(m[2] ?? ""), removed: false };
+    const q = quoted(m[2], m[3]);
+    if (!q && (m[2] != null || m[3] != null)) return null;
+    return { kind, emoji: KIND_EMOJI[kind], quoted: q ? trimQuote(q.q) : "", removed: false, wrapped: q ? q.w : "none" };
   }
   m = t.match(CUSTOM);
-  if (m) return { kind: kindOfEmoji(m[1]), emoji: m[1], quoted: trimQuote(m[2]), removed: false };
+  if (m) {
+    const q = quoted(m[2], m[3]);
+    return q ? { kind: kindOfEmoji(m[1]), emoji: m[1], quoted: trimQuote(q.q), removed: false, wrapped: q.w } : null;
+  }
   m = t.match(REMOVED);
   if (m) {
-    const named = REMOVED_KIND[m[1].toLowerCase()];
-    return named ? { kind: named, emoji: KIND_EMOJI[named as Exclude<ReactionKind, "emoji">], quoted: trimQuote(m[2]), removed: true } : { kind: kindOfEmoji(m[1]), emoji: m[1], quoted: trimQuote(m[2]), removed: true };
+    const q = quoted(m[2], m[3]);
+    if (!q) return null;
+    const named = REMOVED_KIND[m[1]];
+    const emoji = named ? KIND_EMOJI[named as Exclude<ReactionKind, "emoji">] : m[1].slice(2);
+    return { kind: named ?? kindOfEmoji(emoji), emoji, quoted: trimQuote(q.q), removed: true, wrapped: q.w };
   }
   return null;
 }
-// The same shape as a stored tapback line ("User said: Loved “…”"), for a query that must skip them (harness/proactive.ts
-// loadLastWrittenInbound). A guard for ranking, never for deciding what a message means: parseReaction is the one reader.
-export const REACTION_LINE_SQL = "^User[^:]*:[[:space:]]*(Loved|Liked|Disliked|Laughed at|Emphasized|Questioned|Reacted [^ ]+ to|Removed an? [^“]{1,24} from) (“.*”|an? (image|photo|attachment|video|voice message|link|sticker))[[:space:]]*$";
+
+// Pure: their text as a reaction given Cue's recent texts (newest or oldest, any order), or null when it's just a message. A quoted one
+// must quote one of them (straight quotes too: older clients send those). cue null = no context: only a curly one is taken, which is the
+// safe side for a guard (a tapback is never a yes) and used only where no thread is at hand.
+export function readReaction(text: string, cueTexts: string[] | null): IncomingReaction | null {
+  const sh = parseReactionShape(text);
+  if (!sh) return null;
+  const { wrapped, ...r } = sh;
+  if (wrapped === "none") return r;
+  if (cueTexts === null) return wrapped === "curly" ? r : null;
+  return cueTexts.some((c) => quotesText(c, r.quoted)) ? r : null;
+}
+// Pure: a reaction when the payload names one of Cue's texts or the quote is from one (the webhook's check, with the send log).
+export function verifyReaction(text: string, sent: SentText[], payloadHandle?: string | null): { reaction: IncomingReaction; target: ReactionTarget } | null {
+  const sh = parseReactionShape(text);
+  if (!sh) return null;
+  const { wrapped, ...r } = sh;
+  const target = wrapped === "none" ? null : pickTarget(r, sent, payloadHandle);
+  if (wrapped !== "none" && !target) return null;
+  return { reaction: r, target };
+}
+// Pure: a context-free guard read: the exact shape in curly quotes (or media). Never used to decide a reply, only to refuse a yes.
+export const isReaction = (text: string): boolean => readReaction(text, null) !== null;
+// Pure: Cue's texts in a stored thread ("Co replied: …", "Cue: …", with continuation lines) or an exchange ("Cue: a / b").
+export function cueTextsFrom(conversation: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const raw of String(conversation ?? "").split("\n")) {
+    const line = raw.trim();
+    const co = line.match(/^(?:Co replied|Cue replied|Co said|Cue said|Co|Cue):\s*(.*)$/i);
+    if (co) out.push(co[1]);
+    else if (/^(?:User said|User|Them|Member|User sent[^:]*):/i.test(line)) out.push("\u0000");
+    else if (line && out.length && out[out.length - 1] !== "\u0000") out[out.length - 1] += ` ${line}`;
+  }
+  return out.filter((x) => x !== "\u0000");
+}
+// Verified in this process by the webhook (it has the send log): the guards refuse these as a yes even when the exchange they see is short.
+const verifiedTexts = new Set<string>();
+export function noteVerifiedReaction(text: string): void {
+  if (verifiedTexts.size >= 200) verifiedTexts.delete(verifiedTexts.values().next().value as string);
+  verifiedTexts.add(text);
+}
+// For a guard that has the exchange before their message (or none): a reaction when the webhook verified it, or the exchange shows its text.
+export function isReactionIn(message: string, exchange?: string | null): boolean {
+  if (verifiedTexts.has(message)) return true;
+  return readReaction(message, exchange == null ? null : cueTextsFrom(exchange)) !== null;
+}
+// Pure: whether this raw text, before the member is even looked up, has a removal's shape (it never moves the debounce stamp).
+export const isRemovalShape = (text: unknown): boolean => typeof text === "string" && parseReactionShape(text)?.removed === true;
+
+// The same shape as a stored tapback line ("User said: Loved “…”"), in curly quotes, for a query that must skip them (harness/proactive.ts
+// loadLastWrittenInbound). Ranking only, never what a message means: the readers above decide. Tested against parseReactionShape.
+const SQL_EMOJI = "([0-9#*]️?⃣|[^ -~“”[:space:]]{1,24})";
+export const REACTION_LINE_SQL = `^User[^:]*: (Loved|Liked|Disliked|Laughed at|Emphasized|Questioned|Reacted ${SQL_EMOJI} to|Removed (an exclamation mark|a (heart|like|dislike|laugh|question mark|${SQL_EMOJI})) from) “(?![^”]*”.*“).+”$|^User[^:]*: (Loved|Liked|Disliked|Laughed at|Emphasized|Questioned) (an image|a photo|an attachment|a video|a voice message|a link|a sticker)$`;
 export const sameEmoji = (a: string, b: string): boolean => bare(a) === bare(b);
 // The one light check Cue may send after a tapback on a consequential ask ("Is that a yes to meeting Dana?"): exempt from the repeat-
 // question rules, which would otherwise read it as asking again what the tapback "answered".
 export const LIGHT_CHECK = /^\s*(?:so\s+)?is that a yes\b/i;
-export const isReaction = (text: string): boolean => parseReaction(text) !== null;
+// A second ask riding in the same sentence ("…, and want me to book the 8pm?") makes it a new offer, not the light check.
+const SECOND_ASK = /\b(?:and|or|also|plus|then|while)\b[^?]*\b(?:want me to|want (?:a|the)|should i|shall i|can i|would you like|do you want|book|send|draft|share|reserve|order|introduce|intro)\b/i;
+export const isLightCheck = (q: string): boolean => LIGHT_CHECK.test(q) && !SECOND_ASK.test(q);
+
+// Pure: whether a taken-back reaction ends the turn with no reply. It does only when nothing of theirs is waiting for an answer: reading
+// their lines newest first (rows: their thread's lines, oldest first, as stored; ownId is the removal's own row), a written line of theirs
+// before any Cue reply means the removal must not end the turn (a "yes, book the 8pm" in the same burst is still owed its answer).
+export function removalEndsTurn(rows: { id: number | string; content: string }[], ownId: number | string): boolean {
+  const lines = rows.filter((r) => String(r.id) !== String(ownId));
+  const cue = lines.filter((r) => /^(?:Co|Cue) (?:replied|said):/.test(r.content)).map((r) => r.content.replace(/^(?:Co|Cue) (?:replied|said):\s*/, ""));
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const c = lines[i].content;
+    if (/^(?:Co|Cue) (?:replied|said):/.test(c)) return true;
+    const mine = c.match(/^User[^:]*:\s*([\s\S]*)$/);
+    if (!mine) continue;
+    if (readReaction(mine[1], cue)) continue;
+    return false;
+  }
+  return true;
+}
 
 const norm = (s: string) => s.toLowerCase().replace(/[“”"'’‘]/g, "").replace(/\s+/g, " ").trim();
 // Pure: whether a quoted piece (iMessage shortens long ones) is from this text.
 export function quotesText(sent: string, quoted: string): boolean {
   const q = norm(quoted).slice(0, 60);
+  if (q.length >= 2 && q.length < 6) return norm(sent) === q;
   return q.length >= 6 && norm(sent).includes(q);
 }
 
@@ -122,7 +210,7 @@ export function interpretReaction(r: IncomingReaction, target: ReactionTarget): 
   const rule = "A reaction is never a yes: don't confirm, introduce, send, book, spend, or share anything because of it.";
   const done = (meaning: ReactionMeaning, line: string): Interpretation => ({ meaning, target: cls, instruction: `${head} ${line} ${rule}`, actsOn: false });
 
-  if (r.removed) return done("removed", "They took that reaction back, so it says nothing now: don't reply to it or treat it as a change of mind.");
+  if (r.removed) return done("removed", "They took that reaction back, so it says nothing now: don't reply to the removal itself or treat it as a change of mind, and answer anything of theirs that is still waiting.");
   if (!target) return done("unclear", "Don't guess which text it meant. If it matters to what comes next, ask which one in a few words; otherwise leave it.");
   if (r.kind === "dislike") return done("feedback", "Read it as feedback on that specific text: it didn't land. Don't resend or defend it, and don't go ahead with what it proposed. If it isn't obvious what missed, ask once, briefly.");
   if (r.kind === "question") return done("question", "Read it as puzzlement about that specific text. Clear that one up plainly, and don't go ahead with what it proposed.");

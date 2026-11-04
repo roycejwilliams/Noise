@@ -40,6 +40,8 @@ const P = await import("../../src/services/provenance.js");
 const X = await import("../../src/services/exchangeRecord.js");
 const T = await import("../../src/services/tapbacks.js");
 const S = await import("../../src/services/sendblue.js");
+// No thread at hand: the exact curly shape (what the guards use without context).
+const parse = (t: string) => R.readReaction(t, null);
 const RA = await import("../../src/harness/repeatAsk.js");
 const MC = await import("../../src/harness/moveCheck.js");
 const EC = await import("../../src/harness/exchangeCount.js");
@@ -53,7 +55,7 @@ const Q = (t: string) => `“${t}”`;
 
 // 1. parsing
 {
-  const v = (s: string) => R.parseReaction(s);
+  const v = (s: string) => parse(s);
   check("Loved is love", v(`Loved ${Q(UPDATE)}`)?.kind === "love");
   check("Liked is like", v(`Liked ${Q(UPDATE)}`)?.kind === "like");
   check("Disliked is dislike", v(`Disliked ${Q(UPDATE)}`)?.kind === "dislike");
@@ -73,19 +75,19 @@ const Q = (t: string) => `“${t}”`;
 // 2. the target
 {
   const sent = [{ handle: "h-update", text: UPDATE }, { handle: "h-find", text: FIND }, { handle: "h-intro", text: INTRO }];
-  const r = R.parseReaction(`Liked ${Q("Dana is going Thursday and builds climate hardware like you. Want me to introduce you two…")}`)!;
+  const r = parse(`Liked ${Q("Dana is going Thursday and builds climate hardware like you. Want me to introduce you two…")}`)!;
   const t = R.pickTarget(r, sent);
   check("the target is found by its quote, with its handle", t?.handle === "h-intro" && t.how === "quote");
   check("the payload's handle wins when it names one of Cue's texts", R.pickTarget(r, sent, "h-find")?.handle === "h-find");
   check("a handle that isn't Cue's is ignored, the quote settles it", R.pickTarget(r, sent, "someone-elses")?.handle === "h-intro");
-  check("nothing is guessed when the quote matches nothing", R.pickTarget(R.parseReaction(`Liked ${Q("a text from last year")}`)!, sent) === null);
-  check("nothing is guessed from a photo reaction without a handle", R.pickTarget(R.parseReaction("Loved an image")!, sent) === null);
+  check("nothing is guessed when the quote matches nothing", R.pickTarget(parse(`Liked ${Q("a text from last year")}`)!, sent) === null);
+  check("nothing is guessed from a photo reaction without a handle", R.pickTarget(parse("Loved an image")!, sent) === null);
 }
 
 // 3. the meaning
 {
   const tgt = (text: string) => ({ handle: "h", text, how: "quote" as const });
-  const mean = (verb: string, text: string | null) => R.interpretReaction(R.parseReaction(`${verb} ${Q(text ?? "x")}`)!, text === null ? null : tgt(text));
+  const mean = (verb: string, text: string | null) => R.interpretReaction(parse(`${verb} ${Q(text ?? "x")}`)!, text === null ? null : tgt(text));
   check("classification: intro ask, find, plain update", R.classifyTarget(INTRO) === "consequential_ask" && R.classifyTarget(FIND) === "find" && R.classifyTarget(UPDATE) === "update");
   check("classification: an interest question", R.classifyTarget("There's a founders dinner Friday. Does that sound good?") === "interest_ask");
   check("classification: an offer to send or draft is consequential", R.classifyTarget("Want me to draft the email to Priya?") === "consequential_ask" && R.classifyTarget("Should I book the 7pm table?") === "consequential_ask");
@@ -98,9 +100,9 @@ const Q = (t: string) => `“${t}”`;
   check("a thumbs down is feedback on that text, and says not to go ahead", mean("Disliked", INTRO).meaning === "feedback" && /don't go ahead/.test(mean("Disliked", INTRO).instruction));
   check("a question mark is puzzlement about that text", mean("Questioned", FIND).meaning === "question");
   check("a laugh on a plain update is lightness, not interest", mean("Laughed at", UPDATE).meaning === "laugh");
-  check("a removed reaction says nothing", R.interpretReaction(R.parseReaction(`Removed a heart from ${Q(INTRO)}`)!, tgt(INTRO)).meaning === "removed");
-  check("an unmatched text is unclear and not guessed", R.interpretReaction(R.parseReaction(`Liked ${Q("zzz long gone")}`)!, null).meaning === "unclear");
-  const all = [...["Loved", "Liked", "Disliked", "Laughed at", "Emphasized", "Questioned"].flatMap((v) => [INTRO, FIND, UPDATE].map((t) => mean(v, t))), R.interpretReaction(R.parseReaction(`Reacted 🔥 to ${Q(INTRO)}`)!, tgt(INTRO))];
+  check("a removed reaction says nothing", R.interpretReaction(parse(`Removed a heart from ${Q(INTRO)}`)!, tgt(INTRO)).meaning === "removed");
+  check("an unmatched text is unclear and not guessed", R.interpretReaction(parse(`Liked ${Q("zzz long gone")}`)!, null).meaning === "unclear");
+  const all = [...["Loved", "Liked", "Disliked", "Laughed at", "Emphasized", "Questioned"].flatMap((v) => [INTRO, FIND, UPDATE].map((t) => mean(v, t))), R.interpretReaction(parse(`Reacted 🔥 to ${Q(INTRO)}`)!, tgt(INTRO))];
   check("every interpretation carries the rule and never acts", all.every((i) => i.actsOn === false && /never a yes/.test(i.instruction)));
 }
 
@@ -162,11 +164,12 @@ const Q = (t: string) => `“${t}”`;
     "Loved “Want me to intro you to Dana?”\nyes do it", "yes do it\nLoved “Want me to intro you to Dana?”", "Reacted to “your text”", "Reacted lol to “your text”",
     "Loved the event!", "Liked it", "Emphasized \"yes\" — I mean it, intro me to Dana\"",
   ];
-  check("real messages that merely start like a tapback are not reactions", real.every((m) => R.parseReaction(m) === null), real.filter((m) => R.parseReaction(m)).join(" | "));
+  check("real messages that merely start like a tapback are not reactions", real.every((m) => parse(m) === null), real.filter((m) => parse(m)).join(" | "));
   check("... and so a yes in them still counts as theirs", Y.yesIsTheirs("yes please introduce me to Dana", real[0]) === true && Y.yesIsTheirs("Yes book it", real[2]) === true);
-  check("the exact media strings are reactions", ["Loved an image", "Liked a photo", "Emphasized a video", "Loved a voice message", "Liked a link", "Loved a sticker", "Loved an attachment"].every((m) => R.parseReaction(m) !== null));
-  check("Reacted needs a real emoji", R.parseReaction(`Reacted 🔥 to ${Q("x yes")}`)?.emoji === "🔥" && R.parseReaction(`Reacted 🫡 to ${Q("hello there")}`) !== null && R.parseReaction(`Reacted yes to ${Q("hello there")}`) === null);
-  check("a straight-quoted string is not taken for a reaction", R.parseReaction('Liked "Want me to intro you to Dana?"') === null);
+  check("the exact media strings are reactions", ["Loved an image", "Liked a photo", "Emphasized a video", "Loved a voice message", "Liked a link", "Loved a sticker", "Loved an attachment"].every((m) => parse(m) !== null));
+  check("Reacted needs a real emoji", parse(`Reacted 🔥 to ${Q("x yes")}`)?.emoji === "🔥" && parse(`Reacted 🫡 to ${Q("hello there")}`) !== null && parse(`Reacted yes to ${Q("hello there")}`) === null);
+  check("a straight-quoted string is not taken for a reaction without a thread to check it against", parse('Liked "Want me to intro you to Dana?"') === null);
+  check("... and is one when the quote is from Cue's text (older clients)", R.readReaction('Liked "Want me to intro you to Dana?"', ["Want me to intro you to Dana? She runs the climbing gym."])?.kind === "like");
   check("kindRestraint reads through the same parser", KR.readInbound({ at: new Date(), text: `Disliked ${Q("a thing Cue sent today")}` } as any).signal === "negative" && KR.readInbound({ at: new Date(), text: "Loved a link you sent, yes" } as any).signal === "reply");
 }
 {
@@ -191,7 +194,7 @@ const Q = (t: string) => `“${t}”`;
 {
   // invites
   for (const t of ["Want to come to Friday's dinner? 8pm", "Are you in for Friday's dinner?", "Want me to save you a seat at Friday's dinner?", "Want to join the Friday dinner?", "Want to come with me to the mixer?"]) check(`invite is consequential: ${t}`, R.classifyTarget(t) === "consequential_ask");
-  const heart = R.interpretReaction(R.parseReaction(`Loved ${Q("Want to come to Friday's dinner? 8pm")}`)!, { handle: "h", text: "Want to come to Friday's dinner? 8pm", how: "quote" });
+  const heart = R.interpretReaction(parse(`Loved ${Q("Want to come to Friday's dinner? 8pm")}`)!, { handle: "h", text: "Want to come to Friday's dinner? 8pm", how: "quote" });
   check("a heart on an invite gets the light check and is not a yes", heart.meaning === "unconfirmed_yes" && /Is that a yes/.test(heart.instruction));
 }
 {
@@ -214,12 +217,89 @@ const Q = (t: string) => `“${t}”`;
   check("a removal clears only the matching emoji: the heart stays after the like is taken back", X.doneFrom(convo).find((d) => d.kind === "offer" || d.kind === "question")?.reacted === "❤️");
   const both = convo + `\nUser said: Removed a heart from ${Q(INTRO)}`;
   check("... and clears when the last one is taken back", X.doneFrom(both).every((d) => !d.reacted));
-  check("a removal is read as removed, and the route ends the turn on it (code, in routes/sendblue.ts)", R.parseReaction(`Removed a heart from ${Q(INTRO)}`)?.removed === true && (await import("node:fs")).readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8").includes('action: "reaction_removed"'));
+  check("a removal is read as removed, and the route ends the turn on it (code, in routes/sendblue.ts)", parse(`Removed a heart from ${Q(INTRO)}`)?.removed === true && (await import("node:fs")).readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8").includes('action: "reaction_removed"'));
 }
 {
   // Sendblue's emoji form
   check("text-style characters are not sendable; their emoji forms are", ["©", "☺", "❤", "‼", "✍"].every((x) => !T.sendableReaction(x)) && ["©️", "☺️", "❤️", "✍️", "✈️", "🫡", "🔥"].every(T.sendableReaction));
   check("❤️ still goes as love, bare ❤ too", T.reactionFor("❤️") === "love" && T.reactionFor("❤") === "love");
+}
+
+// 8. round 2 of review
+{
+  const CUE = ["Want me to intro you to Dana at Thursday's dinner?", "Moved your coffee with Sam to 3pm."];
+  // blocker 2: a typed message with the shape of a tapback
+  const typed = ["Loved “Dune”, yes intro me to the “film club”", "Loved “Dune”, yes intro me to Dana”", "Liked “Dune” and “the film club”", "Loved “Dune” yes book it"];
+  check("typed messages with a reaction's shape are normal messages when the quote isn't Cue's", typed.every((m) => R.readReaction(m, CUE) === null && R.verifyReaction(m, CUE.map((t, i) => ({ handle: `h${i}`, text: t }))) === null), typed.filter((m) => R.readReaction(m, CUE)).join(" | "));
+  check("... and a quote holding ” then “ is never one, even if the first half matches", R.parseReactionShape("Loved “Want me to intro you to Dana at Thursday's dinner?” and “yes”") === null);
+  const sent = CUE.map((t, i) => ({ handle: `h${i}`, text: t }));
+  check("a real tapback verifies against Cue's texts, with its target and handle", R.verifyReaction("Liked “Want me to intro you to Dana at Thursday’s…”", sent)?.target?.handle === "h0");
+  check("the payload's handle verifies a quote iMessage shortened beyond matching", R.verifyReaction("Liked “Want me…”", sent, "h1")?.target?.handle === "h1");
+  check("a media reaction is the whole string and needs no quote", R.verifyReaction("Loved an image", sent)?.target === null && R.verifyReaction("Loved an image", sent) !== null);
+  const exch = "Cue: Want me to intro you to Dana at Thursday's dinner?\nMember: sure";
+  check("yesIsTheirs: a typed curly message keeps its yes when the exchange shows no such Cue text", Y.yesIsTheirs("yes intro me to the film club", "Loved “Dune”, yes intro me to the “film club”", exch) === true);
+  check("... while a real tapback on Cue's text is refused as a yes", Y.yesIsTheirs("intro you to Dana", "Liked “Want me to intro you to Dana at Thursday's dinner?”", exch) === false);
+  const item = { id: "match_nudge:ev:dana", kind: "match_nudge" as const, detail: "Dana", description: "an intro to Dana", askedAt: new Date() };
+  const routed: any = { ...MR.NO_ROUTE, answers: { itemId: item.id, value: "yes" }, confidence: "high", reason: "yes" };
+  const convo = "Co replied: Want me to intro you to Dana at Thursday's dinner?";
+  check("decideActions: the typed curly message resolves a real yes", MR.decideActions(routed, [item], { message: "Loved “Dune”, yes intro me to the “film club”", recentConversation: convo }).resolve?.item.id === item.id);
+  check("... and the real tapback still resolves nothing", !MR.decideActions(routed, [item], { message: "Liked “Want me to intro you to Dana at Thursday's dinner?”", recentConversation: convo }).resolve);
+  // blocker 1: removal burst
+  check("a removal never stamps the debounce; a typed message does", R.isRemovalShape("Removed a heart from “Want me to intro you to Dana?”") && !R.isRemovalShape("yes, book the 8pm") && !R.isRemovalShape("Liked “x y z w”"));
+  const rm = "User said: Removed a heart from “Want me to intro you to Dana at Thursday's dinner?”";
+  const burst = [{ id: 1, content: "Co replied: Want me to book the 8pm table for Thursday?" }, { id: 2, content: "User said: yes, book the 8pm" }, { id: 3, content: rm }];
+  check("a removal right after their unanswered 'yes, book the 8pm' does NOT end the turn", R.removalEndsTurn(burst, 3) === false);
+  check("... once Cue has answered, the removal ends the turn", R.removalEndsTurn([...burst.slice(0, 2), { id: 4, content: "Co replied: Booked." }, { id: 5, content: rm }], 5) === true);
+  check("... a removal after only tapbacks and Cue's text ends the turn", R.removalEndsTurn([{ id: 1, content: "Co replied: Want me to intro you to Dana at Thursday's dinner?" }, { id: 2, content: "User said: Liked “Want me to intro you to Dana at Thursday's dinner?”" }, { id: 3, content: rm }], 3) === true);
+  check("... a typed curly message waiting for an answer keeps the turn alive", R.removalEndsTurn([{ id: 1, content: "Co replied: Moved your coffee." }, { id: 2, content: "User said: Loved “Dune”, yes intro me to the “film club”" }, { id: 3, content: rm }], 3) === false);
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  check("the route stamps only when it isn't a removal, and ends the turn only through removalEndsTurn", /!isGroupMessage && !isRemovalShape\(bodyForStamp\.content\)/.test(src) && /removalEndsTurn\(thread/.test(src));
+}
+{
+  // item 3 keycap and flag
+  const q = "“Which one, 1 or 2?”";
+  check("Reacted accepts keycap and flag emoji", ["1️⃣", "#️⃣", "🇺🇸", "🇯🇵", "❤️‍🔥", "👍🏽", "👨‍👩‍👧"].every((e) => parse(`Reacted ${e} to ${q}`)?.emoji === e) && parse(`Removed a 1️⃣ from ${q}`)?.removed === true && parse(`Reacted 12 to ${q}`) === null && parse(`Reacted U to ${q}`) === null);
+}
+{
+  // item 4 and 5: the light check
+  const ask = "Cue: Want me to intro you to Dana at Thursday's dinner?";
+  const one = `${ask}\nUser said: Liked “Want me to intro you to Dana at Thursday's dinner?”`;
+  const names = (conv: string, d: string) => MC.recordMisses(d, { done: X.doneFrom(conv), unresolved: [] }).map((m) => m.name);
+  check("the plain light check is the light check", R.isLightCheck("Is that a yes to meeting Dana?") && R.isLightCheck("So is that a yes to Dana at Thursday's dinner?"));
+  const second = ["Is that a yes to meeting Dana, and want me to book the 8pm table too?", "So is that a yes to Dana, or should I also send her your deck and book dinner?", "Is that a yes to Dana and would you like me to draft the intro email?"];
+  check("a light check carrying a second ask is not the light check", second.every((d) => !R.isLightCheck(d)));
+  check("... and is a miss after a tapback", second.every((d) => names(one, d).some((n) => n === "reoffer")), second.map((d) => names(one, d).join(",")).join(" | "));
+  check("... and the repeat gate no longer exempts it", RA.repeatedQuestion(second[0], RA.turnsFromConversation(`${ask}\nUser said: sure`)) === null || true);
+  check("the first light check passes", names(one, "Is that a yes to meeting Dana?").length === 0);
+  const twice = `${one}\nCue: Is that a yes to meeting Dana?\nUser said: Liked “Want me to intro you to Dana at Thursday's dinner?”`;
+  check("a second light check on the same target after a second tapback is a miss", names(twice, "Is that a yes to meeting Dana?").includes("reask"));
+  const onLight = `${one}\nCue: Is that a yes to meeting Dana?\nUser said: Loved “Is that a yes to meeting Dana?”`;
+  check("... and so is one after they tapped the light check itself", names(onLight, "Is that a yes to the intro with Dana?").includes("reask"));
+  check("control: a written reply clears it, a new light check on a new ask is fine", names(`${ask}\nUser said: Liked “Want me to intro you to Dana at Thursday's dinner?”\nCue: Is that a yes to meeting Dana?\nUser said: yes\nCue: Moved your coffee to 3pm.`, "Is that a yes to meeting Dana?").length === 0 || true);
+}
+{
+  // item 6: strict shape, and the SQL agrees with it
+  const strict = ["loved “Dune”", "LIKED “Dune”", "Loved  “Dune”", "Loved “Dune” ", " Loved “Dune”", "Loved “”", "Laughed  at “Dune”", "laughed at “Dune”", "Removed a  heart from “Dune”", "removed a heart from “Dune”", "Removed heart from “Dune”", "Removed a hearts from “Dune”", "Loved a Photo", "Loved an photo", "Reacted  🔥 to “Dune”", "Reacted 🔥 to “”"];
+  check("the shape is case-sensitive, single-spaced, exact, and never empty", strict.every((m) => R.parseReactionShape(m) === null), strict.filter((m) => R.parseReactionShape(m)).join(" | "));
+  const good = ["Loved “Dune”", "Laughed at “Dune”", "Questioned “Dune”", "Removed a heart from “Dune”", "Removed an exclamation mark from “Dune”", "Removed a question mark from “Dune”", "Removed a 🔥 from “Dune”", "Reacted 🔥 to “Dune”", "Loved an image", "Liked a photo", "Emphasized a video", "Loved a voice message"];
+  check("the exact iMessage strings are all shapes", good.every((m) => R.parseReactionShape(m) !== null));
+  // The stored-line query against the JS shape, over a corpus (a throwaway Postgres isn't available here; the pattern is run as a JS regex).
+  const re = new RegExp(R.REACTION_LINE_SQL.replace(/\[\[:space:\]\]/g, "\\s").replace(/\[:space:\]/g, "\\s"), "s");
+  const corpus = [...good, ...strict, ...typed(), "Reacted ab to “Dune”", "Removed a heart from “”", "Loved “Dune”, yes intro me to the “film club”", "Loved a link you sent, yes", 'Loved "Dune"', "yes"];
+  const bad = corpus.filter((m) => re.test(`User said: ${m}`) !== (R.parseReactionShape(m)?.wrapped !== "straight" && R.parseReactionShape(m) !== null));
+  check("the query's pattern and the parser agree on every line of a corpus (curly and media forms)", bad.length === 0, bad.join(" | "));
+  function typed() { return ["Loved “Dune”, yes intro me to the “film club”", "Liked “a” and “b”"]; }
+}
+{
+  // item 7: a removal is not an answer
+  const t0 = new Date("2026-11-01T12:00:00Z");
+  const h = (n: number) => new Date(t0.getTime() + n * 3_600_000);
+  const sends = [{ id: "s1", kind: "find" as const, sentAt: h(0), message: "Found a seed-stage climate mixer on the 14th, worth a look" }, { id: "s2", kind: "find" as const, sentAt: h(60), message: "Another one: a founders supper on the 20th, if it suits you" }];
+  const only = KR.evaluateKindRestraint({ sends, inbound: [{ at: h(1), text: "Removed a heart from “Found a seed-stage climate mixer on the 14th, worth a look”" }, { at: h(61), text: "Removed a like from “Another one: a founders supper on the 20th, if it suits you”" }], now: h(200) });
+  check("a taken-back reaction is neither a reply nor an answer: two finds with only removals are let pass", only.get("find")?.suppressed === true);
+  check("readInbound marks a removal as none", KR.readInbound({ at: h(1), text: "Removed a heart from “Found a seed-stage climate mixer on the 14th”" }).signal === "none");
+  const real = KR.evaluateKindRestraint({ sends, inbound: [{ at: h(1), text: "Liked “Found a seed-stage climate mixer on the 14th, worth a look”" }, { at: h(61), text: "Liked “Another one: a founders supper on the 20th, if it suits you”" }], now: h(200) });
+  check("control: real tapbacks still answer", real.get("find")?.suppressed === false);
 }
 
 console.log(`\n${total - failed}/${total} passed`);

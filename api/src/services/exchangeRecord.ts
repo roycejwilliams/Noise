@@ -13,7 +13,7 @@
 // The move (answer, summarize, steps, act, close, feeling, ask, quiet) is chosen by the turn read on text, and by the call brain itself
 // on a call; the draft is checked against it in harness/moveCheck.ts. Pure, apart from the loaders at the bottom.
 import { questionsIn, turnsFromConversation } from "../harness/repeatAsk.js";
-import { isReaction, parseReaction, quotesText, sameEmoji } from "./reactionsIn.js";
+import { isLightCheck, readReaction, quotesText, sameEmoji } from "./reactionsIn.js";
 
 export const EXCHANGE_MOVES = ["answer", "summarize", "steps", "act", "close", "feeling", "ask", "quiet"] as const;
 export type ExchangeMove = (typeof EXCHANGE_MOVES)[number];
@@ -34,7 +34,7 @@ export type DoneKind = "link" | "find" | "card" | "document" | "question" | "off
 // replied: they wrote back after it (a question or offer they've had the chance to answer).
 // reacted: the tapback they gave the text this came from (services/reactionsIn.ts), e.g. "👍". Seen, but not an answer: it leaves
 // replied as it was, so a question stays open, and it tells the read not to ask the same thing again as if it were unseen.
-export type DoneItem = { id: string; kind: DoneKind; label: string; url: string | null; replied: boolean; reacted?: string | null };
+export type DoneItem = { id: string; kind: DoneKind; label: string; url: string | null; replied: boolean; reacted?: string | null; lightChecked?: boolean };
 export type UnresolvedState = "open" | "delivered" | "solved" | "dropped";
 // closedAt: when it closed (closed items read from the stores): their words lift it only when said after that (see moveCheck.ts).
 export type UnresolvedItem = { id: string; label: string; state: UnresolvedState; closedAt?: string | null };
@@ -66,6 +66,7 @@ export const INTEREST_Q = /\b(?:interest(?:s|ed)? you|interested\??$|worth a loo
 // first); sent is what's on file as sent (finds and events), newest first. Newest first, at most DONE_MAX, numbered D1...
 export function doneFrom(recentConversation: string, sent: { name: string; url: string | null }[] = []): DoneItem[] {
   const turns = turnsFromConversation(recentConversation);
+  const coTexts = turns.filter((t) => t.from === "co").map((t) => t.text);
   const raw: Omit<DoneItem, "id">[] = [];
   const seenUrl = new Set<string>();
   for (let i = turns.length - 1; i >= 0; i--) {
@@ -73,16 +74,18 @@ export function doneFrom(recentConversation: string, sent: { name: string; url: 
     if (t.from !== "co") continue;
     const later = turns.slice(i + 1).filter((x) => x.from === "them" && x.text.trim());
     // A tapback is not a written reply; the newest reaction on this very text stands (a removed one clears it).
-    const replied = later.some((x) => !isReaction(x.text));
+    const replied = later.some((x) => !readReaction(x.text, coTexts));
     let reacted: string | null = null;
     for (const x of later) {
-      const rx = parseReaction(x.text);
+      const rx = readReaction(x.text, coTexts);
       if (rx && quotesText(t.text, rx.quoted)) {
         if (!rx.removed) reacted = rx.emoji;
         else if (reacted && sameEmoji(reacted, rx.emoji)) reacted = null;
       }
     }
-    const mark = reacted ? { reacted } : {};
+    // The one light check, if Cue already sent it after this reaction (it is asked once).
+    const lightChecked = !!reacted && turns.slice(i + 1).some((x) => x.from === "co" && questionsIn(x.text).some(isLightCheck));
+    const mark = reacted ? { reacted, ...(lightChecked ? { lightChecked } : {}) } : {};
     const card = t.text.match(/\[sent (?:Cue|Co)'s contact card\]/i);
     if (card) raw.push({ kind: "card", label: "Cue's contact card", url: null, replied, ...mark });
     const doc = t.text.match(/\[sent a document: ([^\]]+)\]/i);
