@@ -1365,6 +1365,13 @@ export function sendblueRouter(io: Server): Router {
           }),
         ]);
 
+        // A taken-back reaction (services/reactionsIn.ts) says nothing: the line is kept so the record clears the reaction it removed, and
+        // nobody is answered. In code, not a prompt line. The text is only ever the whole iMessage string, so nothing else rides in it.
+        if (hasText && !hasMedia && parseReaction(resolvedContent)?.removed) {
+          await recordDecision({ layer: 3, decision: "turn.reaction_in", userId: user.id, outcome: "skip", action: "removed", proposal: { reason: "a taken-back reaction needs no reply" } }).catch(() => {});
+          return res.status(200).send({ received: true, action: "reaction_removed" });
+        }
+
         // Same text sent again within a couple of minutes (confirmed live:
         // people resend when a reply is slow). The reply agent is told so it
         // answers once instead of treating each copy as a new message.
