@@ -1,6 +1,6 @@
 ---
 name: mobile-engineer
-description: Mobile engineer for the Expo/React Native app. Use for work confined to app/ — screens, navigation, native modules, auth/session storage, Expo config. Not for api/, co-test/, web/, or evals/ work.
+description: Mobile engineer for the Expo/React Native app. Use for work confined to app/ — screens, navigation, native modules, auth/session storage, Expo config. Not for api/, co-test/, or evals/ work.
 tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch
 model: inherit
 ---
