@@ -25,6 +25,7 @@ import { retiredBy } from "./callContext.js";
 import { memberTerms, queryProblems } from "./sweepQuery.js";
 import { avoidHits } from "./memberLimits.js";
 import { recordAnthropicUsage } from "./llmUsage.js";
+import { classifyScope } from "../harness/scope.js";
 
 // What goal planning reads from the member record (Phase A4, 2026-10-10 audit: it saw goal text and city only, so it planned searches
 // for a room they'd said they don't want, for kinds they'd ruled out, and for things an open ask was already searching).
@@ -77,12 +78,12 @@ export function edgePrompt(goals: string[], o: { city: string | null; today: str
 ${goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
 ${r?.person ? `\nWho they are (Cue's record): ${r.person.slice(0, PLAN_RECORD_LIMITS.person)}\n` : ""}${r?.statedTaste.length ? `\nThe kind of room they've told Cue they want, in their words: ${r.statedTaste.map((t) => `"${t}"`).join("; ")}. Write edges for that kind of room; never one for the kind they said they don't want.\n` : ""}${r?.avoid.length ? `\nThey told Cue to stop suggesting: ${r.avoid.map((a) => `"${a}"`).join(", ")}. Never an edge for one of those.\n` : ""}${r?.openAsks.length ? `\nTheir open asks already have their own searches; don't write an edge that repeats one: ${r.openAsks.slice(0, PLAN_RECORD_LIMITS.asks).map((a) => `"${a}"`).join("; ")}.\n` : ""}
 
-Cue searches the world each day for things worth texting them about: events and gatherings, programs and cohorts, open calls, fellowships and grants, communities, people worth meeting. For each goal:
+Cue searches the world each day for things worth texting them about, all in service of meeting the right people: events and gatherings, communities, people worth meeting, and now and then a fellowship, accelerator or cohort as a community to join (surfaced once, never tracked by application cycle or deadline). Cue never searches for funding or investors, grants to apply for, job postings or job boards, errands, shopping or travel. For each goal:
 - kind: "findable" if the goal itself is something like that to look for; "work" if it's their own work plan (partnering, pitching, building, launching, raising); "co_task" if it's something Cue itself is doing for them (drafting, sending, planning, keeping something going).
-- edges: up to ${EDGE_LIMITS.perGoal} short searches for the FINDABLE side of the goal, things that would actually help it along, named the way a good researcher would search for the thing itself, in a few words ("SF AI founder events November", "consumer AI pre-seed open calls", "founder wellness community SF"). Never a name (theirs, their company, partners or people), never a description of them, never the goal reworded, never a strategy, a how-to or advice. A work plan or Cue task gets only its findable side; if it has none, give no edges.
+- edges: up to ${EDGE_LIMITS.perGoal} short searches for the FINDABLE side of the goal (a goal about taxes, errands, shopping, travel, funding or investors, or job postings has none; a job change gets people and rooms: recruiting events, job fairs and communities in the field), things that would actually help it along, named the way a good researcher would search for the thing itself, in a few words ("SF AI founder events November", "consumer AI pre-seed open calls", "founder wellness community SF"). Never a name (theirs, their company, partners or people), never a description of them, never the goal reworded, never a strategy, a how-to or advice. A work plan or Cue task gets only its findable side; if it has none, give no edges.
 - until: the last day it can still matter (YYYY-MM-DD) when the goal is tied to a date or window ("the November launch" -> its last day in November); null when it has none.
 - superseded_by: the number of a LATER goal in this list that replaces it (a changed plan, a cancelled date), else null.
-- place_bound: true when what would help it happens near where they live (events, venues, local groups and places in their city); false when it can be done from anywhere (funding, programs, jobs, learning, anything remote).
+- place_bound: true when what would help it happens near where they live (events, local groups and places in their city); false when it can be done from anywhere (online communities, programs and cohorts, learning, anything remote).
 - why: one short reason, especially when there are no edges.
 
 Answer only with JSON: [{"n": 1, "kind": "...", "edges": ["..."], "until": null, "superseded_by": null, "place_bound": false, "why": "..."}, ...]`;
@@ -152,8 +153,12 @@ export function parseEdges(goals: string[], raw: string, firstName?: string | nu
     const k = String(r.kind ?? "");
     const kind: GoalKind = isCoTaskGoal(goal) ? "co_task" : k === "findable" || k === "co_task" ? (k as GoalKind) : "work";
     const explicit = isCoTaskGoal(goal) || (!!arr.length && (k === "findable" || k === "co_task" || k === "work"));
-    const edges = (Array.isArray(r.edges) ? r.edges : [])
+    // The purpose boundary (harness/scope.ts): a goal that is an errand, shopping, travel, admin, a funding or investor search or a job
+    // watch has no findable side, and no edge that reads as one is kept, however the model wrote it. The goal stays on file.
+    const outside = classifyScope(goal).scope === "out";
+    const edges = (Array.isArray(r.edges) && !outside ? r.edges : [])
       .map((e: unknown) => String(e ?? "").replace(/\s+/g, " ").trim().slice(0, EDGE_LIMITS.chars))
+      .filter((e: string) => classifyScope(e).scope !== "out")
       // A kind they ruled out is never searched (services/memberLimits.ts; Phase A2), however the model wrote it.
       .filter((e: string) => e && !goals.some((g) => restates(e, g)) && !queryProblems(e, { terms, source: "events" }).length && !avoidHits(e, o.avoid ?? []).length)
       .slice(0, EDGE_LIMITS.perGoal);
@@ -163,7 +168,7 @@ export function parseEdges(goals: string[], raw: string, firstName?: string | nu
     const by = Number(r.superseded_by);
     const supersededBy = Number.isInteger(by) && by > i + 1 && by <= goals.length && by - 1 !== o.direction ? goals[by - 1] : null;
     // A goal the answer never reached (a cut-off read) is unread, not "no findable side".
-    const why = !found[i] && !isCoTaskGoal(goal) ? "couldn't be read this time" : String(r.why ?? "").trim().slice(0, 200) || (edges.length ? "" : "no findable side");
+    const why = outside ? "outside what Cue searches for (remembered only)" : !found[i] && !isCoTaskGoal(goal) ? "couldn't be read this time" : String(r.why ?? "").trim().slice(0, 200) || (edges.length ? "" : "no findable side");
     const placeBound = r.place_bound === true ? true : r.place_bound === false ? false : null;
     return { goal, kind, edges, why, until, supersededBy, explicit, placeBound };
   });
