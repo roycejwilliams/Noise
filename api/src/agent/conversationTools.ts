@@ -24,6 +24,7 @@ import { findSent, type TurnContext } from "../services/turnContext.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
+import { SHARED_NOT_ASKED_GUIDANCE, sharedNotAsked } from "../harness/scope.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
@@ -764,6 +765,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         connection: z.string().optional().describe("Only when scope is mixed: just the connection part, as a short phrase. Then start the task for that part alone."),
       }),
       execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom, scope: scopeIn, connection }) => {
+        // A personal share is heard, not worked (harness/scope.ts sharedNotAsked): no task or look-out comes out of it.
+        if (sharedNotAsked(ctx.resolvedContent)) {
+          notDone("No task was started: they shared something, they didn't ask for anything.");
+          return { ok: false, error: SHARED_NOT_ASKED_GUIDANCE };
+        }
         // Not something Cue does (drafting their email, a plan sheet, reading their email): no task, by text or on a call.
         if (NOT_ASSISTANT_ASK.test(`${goal}\n${steps.join("\n")}\n${firstStep}`)) {
           notDone("No task was started: that isn't something Cue does.");
@@ -1583,7 +1589,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (c) return { ok: false, error: c.hold };
         // The purpose boundary (harness/scope.ts): an errand, shopping, travel, a general research project, a job-board watch, a funding
         // search is still remembered (saved below, as kind "outside"), but never searched, checked in on or promised.
-        // The verdict is the model's: this call's own scope, else the turn read's; code only backs it with the narrow backstop. A mixed ask is
+        if (sharedNotAsked(ctx.resolvedContent)) {
+          notDone("No ask was saved: they shared something, they didn't ask for anything.");
+          return { ok: false, error: SHARED_NOT_ASKED_GUIDANCE };
+        }
+                // The verdict is the model's: this call's own scope, else the turn read's; code only backs it with the narrow backstop. A mixed ask is
         // saved as its connection part alone, or (no clean part) not at all and Cue asks one short question.
         const verdict = scopeIn ? parseVerdict({ scope: scopeIn, connection }) : workVerdict(ctx.turnScope);
         const sc = judgeScope(what, verdict);
