@@ -64,6 +64,17 @@ check("the document offer, delivery, receipts, Google Docs and plan-file modules
 check("the research line in the menu sends finds, not a brief", !/send a brief/.test(src("services/capabilities.ts")));
 check("no venue_brief document kind anywhere in the source", !/venue_brief/.test(callers.length ? Cap.ABILITIES.map((a) => `${a.can} ${a.use ?? ""}`).join("") : ""));
 
+// ---- goals: no draft piece that ends in a document
+const GO = await import("../../src/services/goalOwnership.js");
+const cleaned = GO.cleanItems([{ text: "a note to the venue", who: "co", how: "draft" }, { text: "venues for 40", who: "co", how: "research" }, { text: "founder dinners", who: "co", how: "watch" }]);
+check("a draft piece is no longer Cue's: it stays the member's; research and watch stay", cleaned[0].owner === "member" && cleaned[0].how === null && cleaned[1].how === "research" && cleaned[2].how === "watch", cleaned);
+const plan = GO.itemTaskPlan({ id: 1, title: "launch" } as any, { n: 2, text: "venues for 40", owner: "co", how: "research", reach: "internal", taskId: null, status: "offered" } as any);
+check("a goal piece's task never says 'send it as a document'", !/document|Draft/.test(plan.steps.join(" ") + plan.goal), plan);
+check("no offer line says Cue can draft", GO.offerFactLines([{ text: "venues", how: "research", suggest: null }, { text: "dinners", how: "watch", suggest: null }]).every((l) => !/draft/i.test(l)));
+const goalsSrc = src("services/goalOwnership.ts") + src("agent/conversationTools.ts") + src("services/capabilities.ts");
+check("the takeOnGoal schema, sheet and guidance no longer offer drafts", !/"research", "draft"|research, draft|drafts, watching|offer to draft/.test(goalsSrc));
+check("a goal piece task already open as a draft closes as dropped when it wakes, no text", /\^Draft:\/i\.test\(t\.goal\)/.test(src("services/taskTurn.ts")) && /drafting a piece as a document was removed/.test(src("services/taskTurn.ts")));
+
 // ---- the Gmail cleanup: nothing without --apply
 const S = await import("../../src/scripts/revokeGmailGrants.js");
 const calls: string[] = [];

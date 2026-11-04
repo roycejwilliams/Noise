@@ -913,7 +913,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         title: z.string().describe("The goal in a few words, in their terms."),
         theirWords: z.string().describe("A quote of their own words handing it over, copied exactly from their message."),
         items: z
-          .array(z.object({ text: z.string().describe("The piece, in a few words."), who: z.enum(["co", "member"]), how: z.enum(["research", "draft", "watch", "reminder"]).optional().describe("Only for who: co.") }))
+          .array(z.object({ text: z.string().describe("The piece, in a few words."), who: z.enum(["co", "member"]), how: z.enum(["research", "watch", "reminder"]).optional().describe("Only for who: co.") }))
           .max(10)
           .optional()
           .describe("The goal's pieces. Leave out only when the goal is in a file they sent (file): its pieces come from the file."),
@@ -1001,7 +1001,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             : `Open your reply with a plain, warm offer, in your own words and short, to remind them about ${reminderPiece?.text ?? "it"}, and ask what day suits them. Make it simply an offer, never framed against a limit (no "what I can do is", "all I can", "the most I can"). A line of real help can follow it. If they say yes, pickGoalItems with piece ${reminderPiece?.n ?? 1} and the day they give in checkIn.`
           : mayTake.length
             ? "Offer the split once, in your own words, naturally, in this reply: what you'd take and what stays with them. No list, no numbers, no form. Nothing starts until they pick."
-            : "Nothing here is yours to take on your own: every piece stays with them. Help in the moment, and offer to draft anything they'd send themselves.";
+            : "Nothing here is yours to take on your own: every piece stays with them. Help in the moment.";
         if (ctx.dryRun) {
           ctx.facts?.add("known", `Goal they handed you, "${title}": ${guidance}`);
           if (!read.clubWorld) return { ok: true, youMayOffer: reminderPiece ? [{ n: reminderPiece.n, text: reminderPiece.text, how: "reminder", suggestedDay: reminderPiece.suggest?.day ?? null }] : [], guidance };

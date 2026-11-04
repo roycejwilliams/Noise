@@ -1148,6 +1148,12 @@ async function runDueTask(t: CoTask): Promise<void> {
   const L = await import("./commitmentLog.js");
   // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
   if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
+  // A goal piece that was to be drafted and sent as a document (removed 2026-11-04): nothing writes it now, so it closes honestly as
+  // dropped, no text, and is never promised again.
+  if (t.kind === "work" && t.followup?.goalId != null && !t.followup?.checkin && /^Draft:/i.test(t.goal)) {
+    await closeTask(t.userId, t.id, "dropped", "drafting a piece as a document was removed; nothing was written or sent").catch(() => false);
+    return;
+  }
   // A goal's check-in or reminder (services/goalOwnership.ts): real state first, then one text through the task-update path.
   if (t.kind === "work" && t.followup?.checkin) await import("./goalOwnership.js").then((g) => g.runGoalCheckin(t)).catch((err: any) => console.error("goal check-in failed (non-fatal):", err?.message ?? err));
   else if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
