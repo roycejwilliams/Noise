@@ -154,9 +154,9 @@ export async function getPresence(eventId: string, userId: string) {
   return rows[0] ? { sharing_seen_at: at(rows[0].sharing_seen_at), arrived_at: at(rows[0].arrived_at), location_stopped_at: at(rows[0].location_stopped_at) } : null;
 }
 
-// Marks them arrived once. True only the first time. Arriving is evidence they're going: an earlier "can't make it" (by text, or read
+// Marks them arrived once (via: their location, their word, or Luma's door scan at Noise's own event, services/lumaCheckIn.ts). True only the first time. Arriving is evidence they're going: an earlier "can't make it" (by text, or read
 // from a call, which they never saw played back) is cleared, so they're back in the room (eventScoring.ts inRoomPool; review of #380).
-export async function markArrived(eventId: string, userId: string, via: "location" | "text"): Promise<boolean> {
+export async function markArrived(eventId: string, userId: string, via: "location" | "text" | "door"): Promise<boolean> {
   const { rows } = await pool.query(
     `INSERT INTO event_presence (event_api_id, user_id, arrived_at, arrived_via) VALUES ($1, $2, NOW(), $3)
      ON CONFLICT (event_api_id, user_id) DO UPDATE SET arrived_at = COALESCE(event_presence.arrived_at, NOW()),
