@@ -551,7 +551,7 @@ const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partn
     if (!exp || exp.getTime() <= at.getTime()) lapsed = true;
   }
   check("pause: through a three-day matching pause, the deferred intro ask never expires (its valid-until stays ahead of each defer)", !lapsed && !!exp && exp.getTime() > pt("2026-11-06T10:00:00").getTime());
-  check("pause: the dispatch's defer writes that valid-until for a door text", /THEN \$4::timestamptz WHEN type = 'event_offer'/.test(src("harness/proactive.ts")) && /deferredDoorExpiry\(c\.expiresAt, draft\.defer\)/.test(src("harness/proactive.ts")));
+  check("pause: the dispatch's defer writes that valid-until for a door text", /THEN \$4::timestamptz WHEN type IN \('event_offer', 'pre_arrival'\)/.test(src("harness/proactive.ts")) && /deferredDoorExpiry\(c\.expiresAt, draft\.defer\)/.test(src("harness/proactive.ts")));
 }
 
 console.log(`\none door: ${total - failed}/${total} passed`);
