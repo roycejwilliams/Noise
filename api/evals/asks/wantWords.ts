@@ -286,6 +286,17 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   check("control: 'someone currently building in AI and no investors please' keeps 'no investors' for as long as the want", g2.length === 1 && g2[0].timed === false && !WC.conditionExpired({ ...g2[0], at: new Date(Date.now() - 400 * 86_400_000).toISOString() }), g2);
   check("control: a time word in a clause about the other person in the same sentence doesn't count either", WC.conditionTimed("no recruiters", "No recruiters, I want someone who's fundraising these days."  ) === false);
   check("the sentence a quote came from is found in their words; a quote not in them has none", WC.sentenceOf("I don't want to meet any recruiters", said) === "For now, I don't want to meet any recruiters." && WC.sentenceOf("no crypto", said) === null);
+  // Review of #382: only the clause holding the quote counts, with a time clause standing alone right before it.
+  const T = (q: string, said: string) => WC.conditionTimed(q, said);
+  const s1 = "No investors, and for now no crypto people either.";
+  check("'No investors, and for now no crypto people either.': only crypto is timed", T("no crypto people", s1) && !T("No investors", s1));
+  const s2 = "Has to be in SF, but right now I'd skip anyone in sales.";
+  check("'Has to be in SF, but right now I'd skip anyone in sales.': only sales is timed", T("I'd skip anyone in sales", s2) && !T("Has to be in SF", s2));
+  check("'At the moment I'm tired, no one from big tech.': untimed (the time words are about them, in another clause)", !T("no one from big tech", "At the moment I'm tired, no one from big tech."));
+  // The latest time they said it is the one that holds.
+  check("'I don't want recruiters. For now I don't want recruiters.': timed", T("I don't want recruiters", "I don't want recruiters. For now I don't want recruiters."));
+  check("'For now I don't want recruiters. Actually I never want recruiters.': untimed", !T("want recruiters", "For now I don't want recruiters. Actually I never want recruiters."));
+  check("sentenceOf finds the latest sentence the quote is in", WC.sentenceOf("want recruiters", "For now I don't want recruiters. Actually I never want recruiters.") === "Actually I never want recruiters.");
   check("a condition saved before this (no timed flag) still reads its quote", WC.conditionExpired({ quote: "not investors right now", at: old }) && !WC.conditionExpired({ quote: "no crypto please", at: old }));
 }
 

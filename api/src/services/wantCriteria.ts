@@ -131,20 +131,33 @@ export function pruneExpiredCriteria(intent: unknown, now: Date = new Date()): {
   return { intent: out, expired };
 }
 
-// Pure: the sentence of theirs a quote was taken from (their words split at . ! ? and line breaks), or null when it isn't found.
+// Pure: the sentence of theirs a quote was taken from (their words split at . ! ? and line breaks), the latest one when they said it
+// more than once (the newest wording is what holds), or null when it isn't found.
 export function sentenceOf(quote: string, ownWords: string): string | null {
   const q = norm(quote);
   if (!q) return null;
-  return String(ownWords ?? "").split(/(?<=[.!?])\s+|\n+/).find((x) => ` ${norm(x)} `.includes(` ${q} `)) ?? null;
+  const sentences = String(ownWords ?? "").split(/(?<=[.!?])\s+|\n+/);
+  for (let i = sentences.length - 1; i >= 0; i--) if (` ${norm(sentences[i])} `.includes(` ${q} `)) return sentences[i];
+  return null;
 }
 
-// Pure: is a condition limited in time? Its quote, or the sentence of theirs it came from, by the same position rules (timeBound): the
-// model often quotes "I don't want to meet any recruiters" from "For now, I don't want to meet any recruiters" (live check, 2026-11-03).
-// A time word in that sentence about the other person ("someone currently building in AI") still doesn't count.
+// A clause that is only a time phrase ("For now, ..."): it limits the clause right after it.
+const TIME_ONLY = /^(right now|for now|at the moment|this month|this year|currently|these days)$/i;
+
+// Pure: is a condition limited in time (review of #382)? Its quote, or the clause of theirs holding it (the latest sentence it came
+// from, split at commas, semicolons, "and" and "but"), or a time clause standing alone right before that clause ("For now, I don't
+// want to meet any recruiters"). Each by the same position rules (timeBound): a time word in another clause of the sentence, or one
+// about the other person, never counts.
 export function conditionTimed(quote: string, ownWords: string): boolean {
   if (timeBound(quote)) return true;
   const sentence = sentenceOf(quote, ownWords);
-  return !!sentence && timeBound(sentence);
+  if (!sentence) return false;
+  const clauses = sentence.split(/[,;]|\s+(?:and|but)\s+/i).map((x) => x.trim()).filter((x) => norm(x));
+  const q = norm(quote);
+  let at = -1;
+  for (let i = clauses.length - 1; i >= 0; i--) if (` ${norm(clauses[i])} `.includes(` ${q} `)) { at = i; break; }
+  if (at < 0) return false;
+  return timeBound(clauses[at]) || (at > 0 && TIME_ONLY.test(norm(clauses[at - 1])));
 }
 
 export type CriterionReject = "no_quote_of_theirs" | "quote_too_short" | "reading_off_their_words" | "exclusion_without_negation" | "malformed" | "duplicate";
