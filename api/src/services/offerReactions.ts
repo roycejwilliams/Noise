@@ -35,6 +35,8 @@ export async function recordRevealedOffers(userId: string, matches: TierMatch[])
         [userId, key, m.name, m.kind === "opportunity" ? "opportunity" : "event", "url" in m ? (m.url ?? null) : null],
       )
       .catch((err: any) => console.error("recordRevealedOffers failed (non-fatal):", err?.message ?? err));
+    // Parked, never scheduled: a sign they meant to go arms it later (services/recommendationOutcome.ts, services/outcomes.ts).
+    await import("./recommendationOutcome.js").then((R) => R.scheduleOutcomeFollowUp(userId, "", m)).catch(() => {});
   }
 }
 

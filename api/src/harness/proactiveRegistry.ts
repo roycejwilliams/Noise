@@ -3,6 +3,7 @@
 // under PROACTIVE_RULES + CONFIRMED_FACTS, with code-checked output rules)
 // and what to record once it actually went out, or was dropped.
 import { isStated } from "../services/provenance.js";
+import { followUpEvidence } from "../services/followUpEvidence.js";
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
@@ -113,6 +114,13 @@ async function whatCoSent(userId: string, followupIds: string[]): Promise<SentRe
   return null;
 }
 
+// The follow-up won't go: its source rows are dropped, with why (the harness records the skip itself).
+async function dropDebriefSources(p: DebriefPayload, reason: string): Promise<void> {
+  const why = reason.slice(0, 200);
+  if (p.outcomeFollowupIds?.length) await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped', drop_reason = $2 WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds, why]).catch(() => {});
+  if (p.checkinFollowupIds?.length) await pool.query(`UPDATE event_checkin_followups SET harness_status = 'dropped', drop_reason = $2 WHERE id = ANY($1::uuid[])`, [p.checkinFollowupIds, why]).catch(() => {});
+}
+
 // The longest a debrief waits on whether they made it, from when it was first queued.
 export const DEBRIEF_WAIT_MAX_HOURS = 72;
 async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResult> {
@@ -129,35 +137,54 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     const end = endOfLocalDay(date, tz);
     if (end.getTime() > Date.now()) return { defer: nextLocalHour(end, tz, 10), reason: `"${p.eventName}" is on ${date}, which hasn't happened yet` };
   }
-  // A Noise event they didn't make it to: the no-show flow covers the night (services/eventCheckinFollowUp.ts debriefForEvent).
+  // What the record supports (Royce, 2026-11-04, permanent: never assume a member went). Attended: a Luma door scan at Noise's own
+  // event, an arrival Cue saw, a walk-in, or their stated word that they went. Intent: they said they're going, or registered. Nothing
+  // else earns a follow-up, and a "no" drops it. Read now, so a reaction or a scan after it was queued counts.
+  let came = false;
   if (p.eventApiId) {
-    const said = await (await import("../services/eventCheckinFollowUp.js")).debriefForEvent(c.userId, p.eventApiId);
-    if (said === "skip") return skip("they didn't make it: the no-show flow covers that night");
+    // A Noise event they didn't make it to: the no-show flow covers the night (services/eventCheckinFollowUp.ts debriefForEvent).
+    const CF = await import("../services/eventCheckinFollowUp.js");
+    const said = await CF.debriefForEvent(c.userId, p.eventApiId);
+    const door = said === "send" ? await CF.doorStanding(c.userId, p.eventApiId) : null;
+    const settle = said === "send" && door ? (door.say === "wait" ? "wait" : "send") : said;
     // A wait never outlives the debrief's first 3 days: each defer moves the candidate's expiry on, so the bound is its age (review
     // of #275). Still unknown then (the night never settled, the door never read): nothing is sent on a guess.
-    if (said === "wait") {
+    if (settle === "skip") return skip("they didn't make it: the no-show flow covers that night");
+    if (settle === "wait") {
       if (Date.now() - c.createdAt.getTime() > DEBRIEF_WAIT_MAX_HOURS * 3_600_000) return skip("whether they made it never settled");
       return { defer: new Date(Date.now() + 2 * 3_600_000), reason: "whether they made it isn't settled yet" };
     }
+    came = !!door?.came;
+    // Registered at a door Luma tracked that night, never scanned: the no-show flow owns them (its ask, then its note), not a debrief.
+    if (door && !door.came && door.tracked && !(p.walkinCheckinIds ?? []).length) return skip("the door was tracked and they weren't scanned: the no-show flow covers that night");
+  }
+  const keys = await debriefItemKeys(p);
+  const rows = await pool
+    .query(`SELECT item_key, result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [c.userId, keys])
+    .then((r) => r.rows as { item_key: string; result: string; provenance: string | null }[])
+    .catch(() => []);
+  const reactions = await pool
+    .query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [c.userId, keys])
+    .then((r) => r.rows.map((x: any) => String(x.reaction)))
+    .catch(() => [] as string[]);
+  const evidence = followUpEvidence({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 });
+  if (evidence.level === "none") {
+    await dropDebriefSources(p, evidence.declined ? `declined: ${evidence.why}` : evidence.why);
+    return skip(evidence.declined ? "they said it isn't for them: no follow-up" : "no sign they went or meant to go: no follow-up");
   }
   // A follow-up on something Co sent needs a record that Co sent it.
   const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds) : null;
-  const onlyAboutASend = !p.eventApiId && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
+  const onlyAboutASend = (!p.eventApiId || p.form === "opening") && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
   if (onlyAboutASend && !sent) return skip("no record of Cue sending it to them");
   const pointed = await peopleCoPointedTo(c.userId, p.eventApiId);
   // They already told Cue how it went with everyone Cue pointed them to, and the debrief carries nothing else (no walk-in call offer,
   // no recommendation follow-up): nothing is left to ask (review of #376).
   if (pointed.told.length && !pointed.ask.length && !(p.walkinCheckinIds ?? []).length && !(p.outcomeFollowupIds ?? []).length) return skip("they already told Cue how it went with everyone Cue pointed them to");
   const people = pointed.ask;
-  // Did they go? Only a check-in, a walk-in, or their own stated word that they went (Royce, 2026-10-09: "How was the Claude
-  // Founder Salon?" went to someone Co had only recommended it to; 2026-10-12 review: word matching read "going to practice my
-  // pitch before the launch" as having gone). Otherwise the debrief asks whether they made it.
-  const keys = await debriefItemKeys(p);
-  const rows = await pool
-    .query(`SELECT item_key, result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [c.userId, keys])
-    .then((r) => r.rows as { item_key: string; result: string; provenance: string | null }[])
-    .catch(() => []);
-  return draftDebriefText(firstName, p, people, sent, date, wentOnRecord(p, rows), pointed.told);
+  // Did they go? Only a door scan, an arrival, a check-in, a walk-in, or their own stated word that they went (Royce, 2026-10-09:
+  // "How was the Claude Founder Salon?" went to someone Co had only recommended it to; 2026-10-12 review: word matching read "going
+  // to practice my pitch before the launch" as having gone). Otherwise the debrief asks whether they made it.
+  return draftDebriefText(firstName, p, people, sent, date, evidence.level === "attended", pointed.told);
 }
 
 // The outcome keys one debrief is about: the event's own key, each recommendation it follows up (its event or name key, and the
@@ -176,11 +203,12 @@ async function debriefItemKeys(p: DebriefPayload): Promise<string[]> {
   return [...keys];
 }
 
-// Pure: whether the record says they went: a check-in at the door, a walk-in, or their own stated word that they went and how it
-// was (a stated helped / didn't help). A stated "going" is a plan, not having gone: it gets the question, never "how was it"
-// (services/provenance.ts). Rows are already scoped to this debrief's item keys.
-export function wentOnRecord(p: Pick<DebriefPayload, "checkinFollowupIds" | "walkinCheckinIds">, rows: { result: string; provenance?: string | null }[]): boolean {
-  if ((p.checkinFollowupIds ?? []).length || (p.walkinCheckinIds ?? []).length) return true;
+// Pure: whether the record says they went: a walk-in, a door scan or arrival Cue saw (came), or their own stated word that they went
+// and how it was (a stated helped / didn't help). A stated "going" is a plan, not having gone: it gets the question, never "how was it"
+// (services/provenance.ts). Being on the guest list (a check-in follow-up row) is registering, not going: since 2026-11-04 it never
+// counts (it was the 9-07 fallback, "registered + event ended"). Rows are already scoped to this debrief's item keys.
+export function wentOnRecord(p: Pick<DebriefPayload, "walkinCheckinIds"> & { checkinFollowupIds?: string[] }, rows: { result: string; provenance?: string | null }[], came = false): boolean {
+  if (came || (p.walkinCheckinIds ?? []).length) return true;
   return rows.some((r) => (r.result === "helped" || r.result === "didnt_help") && isStated(r.provenance));
 }
 
@@ -205,7 +233,7 @@ export function attendanceConfirmed(p: Pick<DebriefPayload, "eventName" | "check
 // A line that takes for granted they went ("How was…", "anyone stood out", "who did you meet").
 export const PRESUMES_THEY_WENT = /\bhow (?:was|did|'d|’d)\b|\bhow['’]d\b|\b(?:anyone|anything|who) stood out\b|\bwho did you (?:meet|talk|end up)\b|\bdid you (?:meet|enjoy|have fun)\b|\bmeet anyone\b|\bwhat did you think of\b/i;
 
-export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null, went = true, told: { name: string; what: string }[] = []): Promise<DraftResult> {
+export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null, went = false, told: { name: string; what: string }[] = []): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;
   // A Tier 3 opportunity (accelerator, investor, mentor — see
   // tieredRecommendation.ts's category) has no eventApiId (it's not a real
@@ -213,7 +241,9 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
   // exist for a physical event). "Who did you meet there?" doesn't apply —
   // ask whether they actually did anything with it instead (2026-09-17,
   // closing the loop on outcomes for Tier 3).
-  const isOpportunity = !p.eventApiId && !walkin && (p.checkinFollowupIds ?? []).length === 0;
+  // Decided by what the find is (services/findForm.ts), not by whether it has an event id: a listing or program on an event platform
+  // has one too and used to get the event's "how was X" (2026-11-04). Payloads from before carry no form and read as they did.
+  const isOpportunity = p.form ? p.form === "opening" : !p.eventApiId && !walkin && (p.checkinFollowupIds ?? []).length === 0;
   const text = await draftProactive({
     functionId: "proactive.debrief",
     firstName,
@@ -236,7 +266,8 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
   });
   if (!text) return skip("model chose SKIP");
   // Code backstop: an unconfirmed debrief never takes for granted that they went.
-  if (!went && !isOpportunity && PRESUMES_THEY_WENT.test(text)) return skip("it assumes they went, and nothing says they did");
+  // An opening (a listing, program, job) never gets "how was it" either, whatever the record says.
+  if ((!went || isOpportunity) && PRESUMES_THEY_WENT.test(text)) return skip("it assumes they went, and nothing says they did");
   return {
     messages: [text],
     text,

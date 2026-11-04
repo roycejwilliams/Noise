@@ -6,6 +6,7 @@ import { DateTime } from "luxon";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { memberZone } from "./memberTime.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
+import { dayIn, eventEndOf, formOf } from "./findForm.js";
 
 // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
 // "named someone?" classifier + wiring signal weighting into future
@@ -28,12 +29,14 @@ import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 // event_offer_resolved/recap all follow this same shape).
 const TIER3_FOLLOWUP_DELAY_DAYS = 5;
 
-// The day a follow-up is about: a real event date, or the dates a Tier 3
-// post itself states (2026-09-26: an X post for an Oct 7 demo day had
-// statedDates, which were ignored, so Co asked "did anything come of it?"
-// on Sep 26, a fixed 5 days after sending it). The last day when it spans.
+// The day a follow-up is about: a real event's own date, the last day when it spans. Never an opening's window (2026-11-04: a job
+// listing's statedDates anchored a morning-after "how was it"). statedDates count only for a find classified as an event
+// (services/findForm.ts); a listing, program or fellowship (an opening, or a deadline) has no such day.
 export function followUpDate(match: any): string | null {
-  const d = match?.event_date ?? match?.statedDates?.end ?? match?.statedDates?.start ?? null;
+  if (!match || formOf(match) === "opening") return null;
+  const isEvent = match.form === "event" || match.kind === "co_event" || match.kind === "public_event" || !!match.event_date || !!match.details?.startAt;
+  if (!isEvent) return null;
+  const d = dayIn(match.event_date) ?? eventEndOf(match);
   return typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : null;
 }
 
@@ -53,18 +56,21 @@ export function isRealEventForFollowUp(match: any): boolean {
   return form === "event" && hasStartTime(match);
 }
 
+// Parked, not scheduled (2026-11-04): a reveal files the find's details so a later sign can arm a follow-up, and nothing is queued
+// or sent from it. harness_status 'awaiting_evidence' is read by no sender (enqueueDueOutcomeFollowUps takes only NULL).
+export const AWAITING_EVIDENCE = "awaiting_evidence";
+
 export async function scheduleOutcomeFollowUp(userId: string, askText: string, match: TierMatch): Promise<void> {
   const eventDate = followUpDate(match);
-  if (!isRealEventForFollowUp(match)) return; // only a real event, with a day to anchor "the morning after", is followed up
+  if (!isRealEventForFollowUp(match)) return; // only a real event, with a day to anchor "the morning after", is parked for a follow-up
 
   try {
     await pool.query(
-      // One follow-up per recommended event/opportunity, however many times
-      // it got recommended (2026-09-14: the same event produced two
-      // follow-ups sent 2 seconds apart).
-      `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at)
+      // One parked find per recommended event/opening, however many times it got recommended (2026-09-14: the same event produced
+      // two follow-ups sent 2 seconds apart).
+      `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at, harness_status)
        SELECT $1::uuid, $2::text, $3::int, $4::text, $5::jsonb,
-         CASE WHEN $6::date IS NOT NULL THEN $6::date + INTERVAL '1 day 11 hours' ELSE NOW() + ($7 || ' days')::interval END
+         CASE WHEN $6::date IS NOT NULL THEN $6::date + INTERVAL '1 day 11 hours' ELSE NOW() + ($7 || ' days')::interval END, '${AWAITING_EVIDENCE}'
        WHERE NOT EXISTS (
          SELECT 1 FROM recommendation_outcome_followups
          WHERE user_id = $1 AND (
@@ -72,11 +78,44 @@ export async function scheduleOutcomeFollowUp(userId: string, askText: string, m
            OR lower(match_name) = lower($4)
          )
        )`,
-      [userId, askText, match.tier, match.name, JSON.stringify(match), eventDate, TIER3_FOLLOWUP_DELAY_DAYS],
+      [userId, askText, (match as any).tier ?? 3, match.name, JSON.stringify(match), eventDate, TIER3_FOLLOWUP_DELAY_DAYS],
     );
+    // Parked first from a sweep or search (no ask text yet): the reply that reveals it brings the words.
+    if (askText) {
+      await pool.query(
+        `UPDATE recommendation_outcome_followups SET ask_text = $2 WHERE user_id = $1 AND ask_text = '' AND (('event:' || (match ->> 'event_api_id')) = $3 OR ('name:' || lower(match_name)) = $3)`,
+        [userId, askText, (match as any).event_api_id ? `event:${(match as any).event_api_id}` : `name:${String(match.name).toLowerCase()}`],
+      );
+    }
   } catch (err: any) {
     console.error("scheduleOutcomeFollowUp: insert failed (non-fatal):", err?.message ?? err);
   }
+}
+
+const KEY_MATCH = `(('event:' || (match ->> 'event_api_id')) = $2 OR ('name:' || lower(match_name)) = $2)`;
+
+// A sign that they meant to go (said they're going or signed up) or went: the parked follow-up becomes a real one. An event's is due
+// the morning after its own date; an opening has no such day, so it waits the fixed delay from now. Never for a declined find.
+export async function armOutcomeFollowUp(userId: string, itemKey: string): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE recommendation_outcome_followups
+     SET harness_status = NULL,
+         send_at = CASE WHEN match ->> 'form' = 'event' OR match ->> 'kind' IN ('co_event', 'public_event') OR match ->> 'event_date' IS NOT NULL
+                        THEN send_at ELSE NOW() + ($3 || ' days')::interval END
+     WHERE user_id = $1 AND harness_status = '${AWAITING_EVIDENCE}' AND ${KEY_MATCH}`,
+    [userId, itemKey, TIER3_FOLLOWUP_DELAY_DAYS],
+  );
+  return rowCount ?? 0;
+}
+
+// They said no (or the record shows nothing): the parked or armed follow-up that hasn't gone is dropped, with the reason kept.
+export async function dropOutcomeFollowUp(userId: string, itemKey: string, reason: string): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE recommendation_outcome_followups SET harness_status = 'dropped', drop_reason = $3
+     WHERE user_id = $1 AND sent_at IS NULL AND COALESCE(harness_status, '') IN ('', '${AWAITING_EVIDENCE}', 'queued') AND ${KEY_MATCH}`,
+    [userId, itemKey, reason.slice(0, 200)],
+  );
+  return rowCount ?? 0;
 }
 
 // Same expiry reasoning as sendblue.ts's EVENT_OFFER_EXPIRY_DAYS — a reply
@@ -258,6 +297,7 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
       eventName: row.match_name,
       eventEnd: eventDate ? endOfLocalDay(eventDate, timezone) : anchor!,
       eventDate: eventDate ?? null,
+      form: formOf(match) === "opening" || !eventDate ? "opening" : "event",
       timezone,
       part: { outcomeFollowupIds: [row.id], askText: row.ask_text },
     }).catch((err: any) => {
@@ -278,6 +318,9 @@ export type DebriefPayload = {
   eventName: string;
   // The day it's about, when known (followUpDate). Never followed up before.
   eventDate?: string | null;
+  // What the find is (services/findForm.ts): an opening (a listing, program, fellowship, job) never gets an event's "how was it".
+  // Older payloads carry none and are read as before.
+  form?: "event" | "opening" | null;
   outcomeFollowupIds: string[];
   checkinFollowupIds: string[];
   walkinCheckinIds: string[];
@@ -295,6 +338,7 @@ export async function enqueueDebrief(opts: {
   eventName: string;
   eventEnd: Date;
   eventDate?: string | null;
+  form?: "event" | "opening" | null;
   timezone: string | null;
   part: Partial<Pick<DebriefPayload, "outcomeFollowupIds" | "checkinFollowupIds" | "walkinCheckinIds" | "askText">>;
 }): Promise<{ queued: boolean }> {
@@ -302,6 +346,7 @@ export async function enqueueDebrief(opts: {
     eventApiId: opts.eventApiId,
     eventName: opts.eventName,
     eventDate: opts.eventDate ?? null,
+    form: opts.form ?? null,
     outcomeFollowupIds: opts.part.outcomeFollowupIds ?? [],
     checkinFollowupIds: opts.part.checkinFollowupIds ?? [],
     walkinCheckinIds: opts.part.walkinCheckinIds ?? [],
@@ -312,7 +357,7 @@ export async function enqueueDebrief(opts: {
     userId: opts.userId,
     type: "debrief",
     targetKey: `debrief:${opts.eventApiId ?? opts.eventName.toLowerCase()}`,
-    summary: `Morning-after "how was ${opts.eventName}?" (one text covering who they met there)`,
+    summary: `Morning-after follow-up on "${opts.eventName}" (asks whether they went; how it went only with evidence they did)`,
     payload,
     dueAt,
     expiresAt: new Date(dueAt.getTime() + 3 * 24 * 60 * 60 * 1000),
@@ -320,6 +365,7 @@ export async function enqueueDebrief(opts: {
       ...existing,
       eventName: existing.eventName || incoming.eventName,
       eventDate: existing.eventDate ?? incoming.eventDate ?? null,
+      form: existing.form === "event" || incoming.form === "event" ? "event" : existing.form ?? incoming.form ?? null,
       askText: existing.askText ?? incoming.askText,
       outcomeFollowupIds: Array.from(new Set([...(existing.outcomeFollowupIds ?? []), ...incoming.outcomeFollowupIds])),
       checkinFollowupIds: Array.from(new Set([...(existing.checkinFollowupIds ?? []), ...incoming.checkinFollowupIds])),

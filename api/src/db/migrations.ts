@@ -1915,6 +1915,13 @@ export async function runMigrations(): Promise<void> {
       .query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS harness_status TEXT`)
       .catch((err: Error) => console.error(`${table}.harness_status migration failed:`, err));
   }
+  // Why a follow-up was dropped (2026-11-04: dropped quietly, reason kept). 'awaiting_evidence' in harness_status is a find parked until
+  // they say they're going or went (services/recommendationOutcome.ts).
+  for (const table of ["recommendation_outcome_followups", "event_checkin_followups"]) {
+    await pool
+      .query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS drop_reason TEXT`)
+      .catch((err: Error) => console.error(`${table}.drop_reason migration failed:`, err));
+  }
 
   // Layer 1 intake harness (2026-09-14, src/harness/intake.ts). A valid
   // email sent before the name used to be dropped (users.email is only

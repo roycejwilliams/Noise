@@ -69,7 +69,7 @@ export function outboundOpeningGuide(reason: CallReason | null | undefined): str
       return `Cue is calling about something personal in their life. Don't name it: whoever picks up hears this line. Greet them warmly and ask one open, light question about them. ${NOT_CO_WORK}`;
     // Their words stay out of the guide: they often carry the feeling ("nervous about the Q&A"), which the first line never names
     // (2026-10-08 live check: 3 of 3 lines asked "still feeling nervous?"). The call brain gets them ({{call_reason}}).
-    return `Cue called because of this, a moment in their life: ${reason.text}. Open on it: greet them, then one light question about the thing itself (how it went, how it's shaping up, whether it's still on), never about how they feel about it. Their moment, in a friend's words. ${NOT_CO_WORK}`;
+    return `Cue called because of this, a moment in their life: ${reason.text}. Open on it: greet them, then one light question about the thing itself (${reason.kind === "how_it_went" ? "whether it ended up happening, never taking for granted that they went" : "how it's shaping up, whether it's still on, or whether it happened"}), never about how they feel about it. Their moment, in a friend's words. ${NOT_CO_WORK}`;
   }
   if (reason?.kind === "intake") return `This is their first real conversation with Cue: Cue called to get to know them. Greet them and open on them. ${NOT_CO_WORK}`;
   return `${reason?.kind === "member_asked" ? "They asked Cue to call. " : ""}Then pick up ONE specific, real thing about them and their week, as a light question or as "last we talked ...": something they said, have coming up or are working on, whatever a friend who knows them would naturally bring up. ${NOT_CO_WORK}`;

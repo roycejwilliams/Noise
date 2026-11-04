@@ -261,7 +261,7 @@ export function callReasonFor(s: CallReasonState): CallReasonResult {
     if (t.dueDate) {
       const d = daysBetween(today, t.dueDate);
       if (d < 0 && d >= -CALL_REASON.justHappenedDays) {
-        cands.push({ kind: "how_it_went", key, text: `${t.text} (it was ${relDay(t.dueDate, today)}, ${t.dueDate})`, at: t.dueDate, theirWords: t.openedQuote, feeling: t.feeling });
+        cands.push({ kind: "how_it_went", key, text: `${t.text} (it was ${relDay(t.dueDate, today)}, ${t.dueDate}; a plan of theirs, nothing says it happened: ask whether it did, never assume it)`, at: t.dueDate, theirWords: t.openedQuote, feeling: t.feeling });
         continue;
       }
       if (d >= 0 && d <= CALL_REASON.comingUpDays) {

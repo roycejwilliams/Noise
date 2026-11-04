@@ -74,7 +74,7 @@ check("draft: a settled no-show: the whole debrief is skipped before any model c
 const reg = fs.readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
 const dd = reg.slice(reg.indexOf("async function draftDebrief("), reg.indexOf("async function debriefItemKeys("));
 check("draftDebrief asks debriefForEvent for a Noise event before drafting", dd.indexOf("debriefForEvent(c.userId, p.eventApiId)") > 0 && dd.indexOf("debriefForEvent(") < dd.indexOf("draftDebriefText("));
-check("a skip ends the whole debrief; a wait defers it, bounded by the candidate's age (2c runs it)", /if \(said === "skip"\) return skip\(/.test(dd) && /c\.createdAt\.getTime\(\) > DEBRIEF_WAIT_MAX_HOURS/.test(dd));
+check("a skip ends the whole debrief; a wait defers it, bounded by the candidate's age (2c runs it)", /if \(settle === "skip"\) return skip\(/.test(dd) && /c\.createdAt\.getTime\(\) > DEBRIEF_WAIT_MAX_HOURS/.test(dd));
 check("draftDebrief still waits until the day is over first", dd.indexOf("hasn't happened yet") > 0 && dd.indexOf("hasn't happened yet") < dd.indexOf("debriefForEvent("));
 const ecf = fs.readFileSync(new URL("../../src/services/eventCheckinFollowUp.ts", import.meta.url), "utf8");
 check("the queue step doesn't decide it (it runs up to a day before the event ends)", !ecf.slice(ecf.indexOf("export async function enqueueDueEventCheckinFollowUps")).includes("debriefFor"));

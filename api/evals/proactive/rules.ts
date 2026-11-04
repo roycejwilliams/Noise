@@ -257,8 +257,10 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
 // never sent it).
 {
   const { followUpDate } = await import("../../src/services/recommendationOutcome.js");
-  check("follow-up date: a post's stated date counts", followUpDate({ statedDates: { start: "2026-10-07", end: null } }) === "2026-10-07");
-  check("follow-up date: the last day when it spans", followUpDate({ statedDates: { start: "2026-10-05", end: "2026-10-11" } }) === "2026-10-11");
+  // 2026-11-04: a post's stated dates anchor a morning-after only when the find is an event (services/findForm.ts); an opening's window never does.
+  check("follow-up date: an event post's stated date counts", followUpDate({ form: "event", statedDates: { start: "2026-10-07", end: null } }) === "2026-10-07");
+  check("follow-up date: the last day when it spans", followUpDate({ form: "event", statedDates: { start: "2026-10-05", end: "2026-10-11" } }) === "2026-10-11");
+  check("follow-up date: an opening's window is not an event's day", followUpDate({ form: "opening", statedDates: { start: "2026-10-05", end: "2026-10-11" } }) === null && followUpDate({ statedDates: { start: "2026-10-05", end: "2026-10-11" } }) === null);
   check("follow-up date: a real event date wins", followUpDate({ event_date: "2026-10-10", statedDates: { start: "2026-10-01", end: null } }) === "2026-10-10");
   check("follow-up date: none is none", followUpDate({}) === null && followUpDate({ statedDates: { start: "soon" } }) === null);
   const ro = readFileSync(new URL("../../src/services/recommendationOutcome.ts", import.meta.url), "utf8");

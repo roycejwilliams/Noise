@@ -2198,11 +2198,9 @@ export function sendblueRouter(io: Server): Router {
               addEventFacts(replyFacts, match, null, revealZone);
               if (!match.whyItFits) addFact(replyFacts, "known", `Why "${match.name}" fits them: ${match.reason}`);
               addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier. Share why it fits now, naturally, as part of your reply: "${match.name}". Be honest it's a suggestion, not a guarantee it's right for them.${linkSent ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything, it already went out." : match.url ? " Its link didn't go through, so share it in your reply with shareLink if it helps." : " There's no link for it, so don't mention one."}`);
-              // Outcome-learning loop (Royce, 2026-09-02) — schedule the
-              // "who did you meet?" follow-up right at the moment real
-              // details are actually revealed, same trigger point the
-              // Figma board shows. No-op for Tier 3 (no event_date) — see
-              // scheduleOutcomeFollowUp.
+              // Outcome-learning loop (Royce, 2026-09-02). Nothing is scheduled here (2026-11-04: never assume a member went):
+              // the find's details are parked, and a follow-up exists only once they say they're going or went, or register
+              // (services/outcomes.ts settleFollowUpForResult).
               scheduleOutcomeFollowUp(user.id, parsed.askText, match).catch((err: any) =>
                 console.error("sendblue: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
               );
