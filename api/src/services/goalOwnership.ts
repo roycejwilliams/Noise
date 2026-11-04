@@ -40,7 +40,6 @@ export type ItemOwner = "co" | "member";
 export type ItemHow = "research" | "watch" | "reminder";
 // Who or what a piece reaches beyond Co and the member (the authority and spend guard).
 export type ItemReach = "internal" | "money" | "public" | "others" | "unread";
-// suggest: the light-path reminder's suggested time (suggestedReminderAt), as an ISO instant and the day in words for checkIn.
 export type GoalItem = { n: number; text: string; owner: ItemOwner; how: ItemHow | null; reach: ItemReach; taskId: number | null; status: "offered" | "taken" | "theirs" | "declined"; suggest?: { at: string; day: string } | null };
 export type GoalStatus = "offered" | "active" | "closed";
 export type Goal = {
@@ -83,59 +82,13 @@ export function cleanItems(raw: unknown): Omit<GoalItem, "reach" | "taskId" | "s
   return out;
 }
 
-// Pure: what Co may offer to take. Outside the club's world only a reminder (a light commitment), never the ownership split; an
-// item that spends money, posts publicly or touches someone else (or wasn't read) always stays theirs.
+// Pure: what Co may offer to take. Outside the club's world (taxes, inbox, errands: the purpose boundary, Royce 2026-11-04) nothing, not
+// even a reminder; an item that spends money, posts publicly or touches someone else (or wasn't read) always stays theirs.
 export function splitFor(items: Omit<GoalItem, "taskId" | "status">[], clubWorld: boolean): GoalItem[] {
   return items.map((i) => {
-    const mayBeCos = i.owner === "co" && i.reach === "internal" && (clubWorld || i.how === "reminder");
+    const mayBeCos = i.owner === "co" && i.reach === "internal" && clubWorld;
     return { ...i, owner: mayBeCos ? "co" : "member", how: mayBeCos ? i.how : null, taskId: null, status: mayBeCos ? "offered" : "theirs" };
   });
-}
-
-// Pure: a goal outside the club's world has exactly one light piece on offer: a reminder for the whole goal and its deadline, named
-// after the goal ("the quarterly taxes and expense reports, ahead of Oct 30"). Any item-level piece Co marked as its own (a reminder
-// for one item included) is set aside as theirs, so the offer is never scoped to one part (Royce, 2026-10-13: "Co can hold a light
-// commitment like a reminder").
-// Pure: a deadline in their own words ("before the 30th", "by Friday", "due Oct 20"): only after by/before/due/no later than, read with
-// the widened time reader (promiseBinding.ts deadlineFromWhen), as their day. Null when none.
-export function deadlineInTheirWords(text: string, now: Date, zone: string | null): GoalMoment | null {
-  for (const m of text.matchAll(/\b(by|before|no later than|due)\s+([^.,;!?\n]{2,30})/gi)) {
-    const w = deadlineFromWhen(m[2], now, zone);
-    if (w && w.deadline.getTime() > now.getTime()) return { date: DateTime.fromJSDate(w.deadline).setZone(wordsZone(zone)).toISODate()!, words: m[0].trim() };
-  }
-  return null;
-}
-
-// Pure: when to suggest the reminder, from their deadline, in their zone (Royce, 2026-10-13): three days before it at 10am; if that's
-// past or under 24 hours away, the day before at 10am; if that's past too, none. Never past the task limit (14 days): a deadline
-// further out gets the furthest day the ledger can hold. No deadline, no suggestion. day is the words a yes passes to checkIn
-// ("Oct 27"), which planCheckin reads back to the same 10am.
-export function suggestedReminderAt(moment: GoalMoment | null, now: Date, zone: string | null): { at: string; day: string } | null {
-  if (!moment) return null;
-  const z = wordsZone(zone);
-  const deadline = DateTime.fromISO(moment.date, { zone: z });
-  if (!deadline.isValid) return null;
-  const at10 = (d: DateTime) => d.set({ hour: GOAL_LIMITS.checkinHour, minute: 0, second: 0, millisecond: 0 });
-  let t = at10(deadline.minus({ days: 3 }));
-  if (t.toMillis() < now.getTime() + 24 * HOUR) t = at10(deadline.minus({ days: 1 }));
-  if (t.toMillis() <= now.getTime()) return null;
-  const limit = now.getTime() + TASK_LIMITS.maxHours * HOUR;
-  if (t.toMillis() > limit) {
-    t = at10(DateTime.fromMillis(limit, { zone: z }));
-    if (t.toMillis() > limit) t = t.minus({ days: 1 });
-    if (t.toMillis() <= now.getTime()) return null;
-  }
-  return { at: t.toUTC().toISO()!, day: t.toFormat("LLL d") };
-}
-
-export function withLightReminder(items: GoalItem[], title: string, moment: GoalMoment | null, o: { now?: Date; zone?: string | null } = {}): GoalItem[] {
-  const rest = items.map((i) => (i.owner === "co" ? { ...i, owner: "member" as const, how: null, status: "theirs" as const } : i));
-  const n = Math.max(0, ...items.map((i) => i.n)) + 1;
-  const day = moment ? DateTime.fromISO(moment.date) : null;
-  const what = title.trim().replace(/^(?:the|my|our|your)\s+/i, "").replace(/[.!?]+$/, "").slice(0, 100);
-  // "Quarterly taxes" reads as "the quarterly taxes"; a name-like start ("SF Week", "Harbor Hall") keeps its capitals.
-  const lead = /^[A-Z][a-z]/.test(what) && !/^[A-Z][a-z]+\s+[A-Z]/.test(what) ? what[0].toLowerCase() + what.slice(1) : what;
-  return [...rest, { n, text: `the ${lead}${day?.isValid ? `, ahead of ${day.toFormat("LLL d")}` : ""}`, owner: "co", how: "reminder", reach: "internal", taskId: null, status: "offered", suggest: suggestedReminderAt(moment, o.now ?? new Date(), o.zone ?? null) }];
 }
 
 // Pure: the facts that back Co's offer on a goal AS AN OFFER: what Co can do for them if they say yes, offered in this reply, with
@@ -144,7 +97,7 @@ export const OFFERED_NOT_SET_WORDS = "offered in this reply, only if they say ye
 export function offerFactLines(pieces: Pick<GoalItem, "text" | "how" | "suggest">[]): string[] {
   return pieces.map((p) =>
     p.how === "reminder"
-      ? `Cue can hold a reminder for them about ${p.text.replace(/, ahead of .*$/, "")} and text them ${p.suggest ? `on ${p.suggest.day}` : "on a day they pick"} (${OFFERED_NOT_SET_WORDS}).`
+      ? `Cue can hold a reminder for them about ${p.text.replace(/, ahead of .*$/, "")} and text them on a day they pick (${OFFERED_NOT_SET_WORDS}).`
       : `Cue can ${p.how === "watch" ? "watch for" : "research"} ${p.text} for them (${OFFERED_NOT_SET_WORDS}).`,
   );
 }
@@ -153,7 +106,7 @@ export function offerFactLines(pieces: Pick<GoalItem, "text" | "how" | "suggest"
 
 export type GoalRead = { clubWorld: boolean; why: string; reach: Map<number, ItemReach>; read: boolean };
 export function goalReadPrompt(title: string, theirWords: string, items: { n: number; text: string }[]): string {
-  return `A member of a private social club handed their companion, Cue, a goal. Cue's energy goes to goals in the club's world: launches, events, creative projects, city life, meeting people, anything that ends with people in a room. Pure productivity grind (taxes, expense reports, inbox management, chores, admin) is not the club's world.
+  return `A member of a private social club handed their companion, Cue, a goal. Cue's energy goes to goals that end with the right people in a room: meeting people, finding events and communities, preparing for a conversation, an introduction, following up so a connection goes somewhere. A job change, a launch or a move counts for its people side only (the people and rooms it needs). Everything else is not the club's world: taxes, expense reports, inbox management, chores, admin, errands, shopping, travel, general research, job boards, funding searches, writing and creative production as such.
 
 Their goal: "${title}"
 Their words: "${theirWords.slice(0, 400)}"
@@ -307,7 +260,7 @@ export async function acceptGoal(input: { userId: string; goalId: number; take: 
   const { taken, refused } = pickedItems(goal, input.take);
   const reminders = taken.filter((i) => i.how === "reminder");
   const work = taken.filter((i) => i.how !== "reminder");
-  if (!goal.clubWorld && work.length) return { ok: false, why: "this goal is outside the club's world: hold at most a light reminder for it, never take pieces of the work" };
+  if (!goal.clubWorld && work.length) return { ok: false, why: "this goal is outside what Cue works on: nothing is taken, not even a reminder" };
   const checkinWords = input.checkinWords?.trim() || null;
   if (!taken.length && !checkinWords) return { ok: false, why: refused.length ? refused.map((r) => `item ${r.n}: ${r.why}`).join("; ") : "they didn't take anything" };
   // The check-in (or a reminder) needs a real time, or it isn't held.
@@ -552,18 +505,12 @@ export function goalFactLines(goals: Goal[], tasks: Pick<CoTask, "id" | "status"
   return goals.map((g) => {
     const cos = g.items.filter((i) => i.owner === "co" && (i.status === "offered" || i.status === "taken"));
     const theirs = g.items.filter((i) => i.status === "theirs" || i.status === "declined" || i.owner === "member");
-    // A light goal (outside the club's world): only the reminder Co offered, never a list of what's theirs (Co echoed it as a decline).
-    if (!g.clubWorld) {
-      const rem = g.items.find((i) => i.owner === "co" && i.how === "reminder");
-      const held = rem?.taskId ? tasks.find((t) => t.id === rem.taskId && t.status === "open") : null;
-      return g.status === "offered"
-        ? { kind: "known" as const, text: `Goal #${g.id} they handed you, "${g.title}": you offered to hold a reminder for them${g.moment ? ` ahead of ${g.moment.words}` : ""}${rem ? ` (piece ${rem.n})` : ""}${rem?.suggest ? `, suggested for ${rem.suggest.day}` : ""}. If they say yes, pickGoalItems with goal #${g.id}, that piece and checkIn "${rem?.suggest?.day ?? "the time they agree"}". Never offer it again.` }
-        : { kind: "scheduled" as const, text: `Goal #${g.id}, "${g.title}": you're holding a reminder for them${held?.nextCheckAt ? `, set for ${localStamp(held.nextCheckAt, zone)} (task #${held.id})` : ""}.` };
-    }
+    // Outside the club's world: heard and kept on file; nothing was offered or held (no reminder, no pieces).
+    if (!g.clubWorld) return { kind: "known" as const, text: `Goal #${g.id} they handed you, "${g.title}": this isn't something Cue works on or holds a reminder for. Nothing was offered or started.` };
     if (g.status === "offered") {
       return {
         kind: "known" as const,
-        text: `Goal #${g.id} they handed you, "${g.title}" (their words: "${g.theirWords.slice(0, 160)}"), split offered ${localStamp(g.offeredAt, zone)}. Pieces you could take: ${cos.map((i) => `${i.n}. ${i.text}`).join("; ") || "(none: hold at most a light reminder)"}. Pieces that stay theirs: ${theirs.map((i) => `${i.n}. ${i.text}`).join("; ") || "(none)"}. Nothing is started until they pick: when they do, pickGoalItems with goal #${g.id}. Never offer the split again.`,
+        text: `Goal #${g.id} they handed you, "${g.title}" (their words: "${g.theirWords.slice(0, 160)}"), split offered ${localStamp(g.offeredAt, zone)}. Pieces you could take: ${cos.map((i) => `${i.n}. ${i.text}`).join("; ") || "(none)"}. Pieces that stay theirs: ${theirs.map((i) => `${i.n}. ${i.text}`).join("; ") || "(none)"}. Nothing is started until they pick: when they do, pickGoalItems with goal #${g.id}. Never offer the split again.`,
       };
     }
     const checkin = g.checkinTaskId ? tasks.find((t) => t.id === g.checkinTaskId && t.status === "open") : null;
