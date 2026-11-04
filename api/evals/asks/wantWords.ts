@@ -270,6 +270,25 @@ const callTranscript = [`user: ${SAID_COF}.`, "assistant: Got it, someone techni
   check("'someone currently building in AI' said 400 days ago still applies", !WC.conditionExpired({ quote: "someone currently building in AI", at: longAgo }) && WC.conditionExpired({ quote: "not investors right now", at: longAgo }));
 }
 
+// ================================================================ 6d. the time words in the sentence they came from (live check c7, 2026-11-03)
+{
+  // The real read quoted "I don't want to meet any recruiters" from "For now, I don't want to meet any recruiters": the quote alone has no
+  // time word, so the condition never expired. Grounding now reads the sentence of theirs the quote came from, by the same rules.
+  const said = "For now, I don't want to meet any recruiters. What I'm after is a mentor in fintech.";
+  const g = WC.groundCriteria([{ text: "recruiters", strength: "must_not", quote: "I don't want to meet any recruiters" }], said);
+  const old = new Date(Date.now() - 61 * 86_400_000).toISOString();
+  check("c7: 'For now, I don't want to meet any recruiters' quoted without 'For now' is still limited in time", g.length === 1 && g[0].timed === true, g);
+  check("... so it expires 60 days after it was said, and not before", WC.conditionExpired({ ...g[0], at: old }) && !WC.conditionExpired({ ...g[0], at: new Date(Date.now() - 59 * 86_400_000).toISOString() }));
+  check("... and leaves what's in force once expired", WC.criteriaOf({ criteria: [{ ...g[0], at: old }] }).length === 0);
+  // Control: the sentence's time word is about the other person, so it never limits the condition.
+  const said2 = "I want to meet someone currently building in AI and no investors please.";
+  const g2 = WC.groundCriteria([{ text: "investors", strength: "must_not", quote: "no investors please" }], said2);
+  check("control: 'someone currently building in AI and no investors please' keeps 'no investors' for as long as the want", g2.length === 1 && g2[0].timed === false && !WC.conditionExpired({ ...g2[0], at: new Date(Date.now() - 400 * 86_400_000).toISOString() }), g2);
+  check("control: a time word in a clause about the other person in the same sentence doesn't count either", WC.conditionTimed("no recruiters", "No recruiters, I want someone who's fundraising these days."  ) === false);
+  check("the sentence a quote came from is found in their words; a quote not in them has none", WC.sentenceOf("I don't want to meet any recruiters", said) === "For now, I don't want to meet any recruiters." && WC.sentenceOf("no crypto", said) === null);
+  check("a condition saved before this (no timed flag) still reads its quote", WC.conditionExpired({ quote: "not investors right now", at: old }) && !WC.conditionExpired({ quote: "no crypto please", at: old }));
+}
+
 // ================================================================ 7. conditions said with a time limit expire (Royce, 2026-11-03)
 {
   const now = new Date();
