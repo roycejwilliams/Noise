@@ -397,7 +397,10 @@ export async function assembleContext(
   const exchangeP = Promise.all([import("./memberWorld.js"), fenceP]).then(([M, fence]) => (fence.failed ? null : M.readRecentExchange(fence))).catch(() => null);
   // When they were active on any channel (timestamps only), so a question they answered by call or to a teammate never "waits".
   const activityP = Promise.all([import("./memberWorld.js"), fenceP]).then(([M, fence]) => (fence.failed ? null : M.readRecentActivity(fence))).catch(() => null);
-  const [profile, snapshot, sent, knowledge, threads, offersThisWeek, emotional, inlineTarget, ledger] = await Promise.all([
+  // What the pick could send them on a pull right now (harness/waiting.ts): held items and a safety hold leave it empty, so nothing is
+  // mentioned or offered that couldn't go.
+  const waitingP = import("../harness/waiting.js").then(async (W) => W.couldGo(await W.loadWaiting(userId))).catch(() => [] as import("../harness/waiting.js").WaitingItem[]);
+  const [profile, snapshot, sent, knowledge, threads, offersThisWeek, emotional, inlineTarget, ledger, waiting] = await Promise.all([
     pool.query(`SELECT * FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     getPersonSnapshot(userId).catch(() => null),
     loadSentItems(userId).then(async (items) => {
@@ -423,6 +426,7 @@ export async function assembleContext(
     getEmotionalContext(userId).catch(() => null),
     Promise.resolve(opts.inlineTarget ?? null).catch(() => null),
     ledgerFacts(userId, `${message}\n${opts.ledgerContext ?? ""}`, zone).catch(() => ({ lines: [] as string[], named: [] as string[] })),
+    waitingP,
   ]);
   // Another member's details stripped from everything this context carries that isn't their own words (2026-10-09 audit and
   // review of #118). Fails closed: if the names can't be read, none of these are sent.
@@ -503,7 +507,6 @@ export async function assembleContext(
   const stopNote = await Promise.all([import("./askRetire.js"), stopNotesP]).then(([A, notes]) => A.firstSurviving(notes, keep)).catch(() => null);
   const coldStart = await coldStartP;
   const door = await doorP;
-  const waiting = await import("../harness/waiting.js").then((W) => W.loadWaiting(userId)).catch(() => []);
   // Asks and goals read raw go through keep like everything else here (another member's details stripped, fails closed).
   const rawSearching = await searchingP;
   const keptAsks = keepAll(rawSearching.asks), keptGoals = keepAll(rawSearching.goals);

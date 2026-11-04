@@ -32,10 +32,12 @@ import type { GateCheck } from "./core.js";
 import type { Counted, NotifyChannel, SendClass } from "./notifyGate.js";
 import { holdingRules, covers } from "./notifyGate.js";
 import type { Preference } from "../services/memberPreferences.js";
+import { hoursZone } from "../services/localHours.js";
+import { wordsZone } from "../services/memberTime.js";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const zoneOf = (z: string | null | undefined) => z || "America/Los_Angeles";
+const zoneOf = (z: string | null | undefined) => hoursZone(z);
 
 // What Cue starts on its own: the classes every default here reads. Requested and replies never.
 export const isUnrequested = (cls: SendClass): boolean => cls === "unsolicited" || cls === "checkin";
@@ -270,7 +272,7 @@ export function attentionChecks(o: { now: Date; zone: string | null; cls: SendCl
 // keeps the current default: no learned hour. The usual window is the narrowest run of hours (at least minWidth, at most maxWidth) that
 // holds at least `coverage` of their replies; a member who writes all day has none. It is then cut to Cue's own hours
 // (services/localHours.ts, 8am to 9pm) and to what their own rules allow, and when nothing is left it is no window at all.
-export const SEND_TIME = { minReplies: 12, minDays: 5, lookbackDays: 45, coverage: 0.7, minWidth: 3, maxWidth: 8, clusterMinutes: 30, startHour: 8, endHour: 21 } as const;
+export const SEND_TIME = { minReplies: 12, minDays: 5, lookbackDays: 45, coverage: 0.7, minWidth: 3, maxWidth: 8, clusterMinutes: 30, minLeadHours: 6, startHour: 8, endHour: 21 } as const;
 export type UsualHours = { hours: number[]; replies: number; days: number };
 
 // Pure: the hours (0-23, their zone) they usually write in, or null when there is too little to say.
@@ -305,12 +307,16 @@ export function usualReplyHours(times: Date[], zone: string | null | undefined, 
 
 // Pure: whether a member's own explicit rules allow a send of this class at this hour of their day (an "earliest" or a "latest" time of
 // day). Their rules always win over the learned hour: an hour they forbid is never one Cue waits for.
-export function hourAllowedByRules(prefs: Preference[], cls: SendClass, channel: NotifyChannel, hour: number, now: Date): boolean {
+export function hourAllowedByRules(prefs: Preference[], cls: SendClass, channel: NotifyChannel, hour: number, now: Date, zone?: string | null): boolean {
   return holdingRules(prefs, now).every((p) => {
     if (!covers(p.area === "checkins" ? "checkins" : p.covers, cls) || (p.channel !== "all" && p.channel !== channel)) return true;
     const m = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
-    if (p.rule.earliest && hour * 60 + 59 < m(p.rule.earliest)) return false;
-    if (p.rule.latest && hour * 60 >= m(p.rule.latest)) return false;
+    // The rule's clock is read in the zone the gate reads it in (notifyGate.ruleBlocks: their zone now, else the rule's own).
+    const at = DateTime.fromJSDate(now).setZone(zoneOf(zone)).set({ hour, minute: 0, second: 0, millisecond: 0 }).setZone(wordsZone(zone ?? p.zone));
+    const start = at.hour * 60 + at.minute;
+    const end = start + 59;
+    if (p.rule.earliest && end < m(p.rule.earliest)) return false;
+    if (p.rule.latest && start >= m(p.rule.latest)) return false;
     return true;
   });
 }
@@ -327,13 +333,19 @@ export function sendTimeCheck(o: { now: Date; zone: string | null; cls: SendClas
   if (typeof pay.morningDay === "string" && pay.morningDay === local.toISODate()) return null;
   const usual = usualReplyHours(o.att.history ?? o.att.inbound, o.zone, o.now);
   if (!usual) return null;
-  const hours = usual.hours.filter((h) => hourAllowedByRules(o.prefs, o.cls, o.channel, h, o.now));
+  const hours = usual.hours.filter((h) => hourAllowedByRules(o.prefs, o.cls, o.channel, h, o.now, o.zone));
   if (!hours.length || hours.includes(local.hour)) return null;
   let next = local.startOf("hour");
   for (let i = 0; i < 48 && !hours.includes(next.hour); i++) next = next.plus({ hours: 1 });
   if (!hours.includes(next.hour)) return null;
   const at = next.toJSDate();
-  if (o.item.expiresAt && o.item.expiresAt.getTime() <= at.getTime()) return null;
+  // Anything happening today is never moved, and a find needs at least SEND_TIME.minLeadHours between the usual hour and its end (the
+  // event's start, else its valid-until), or it goes now.
+  const match = ((o.item.payload ?? {}) as { match?: { details?: { startAt?: string | null } | null; startAt?: string | null } | null }).match;
+  const startMs = Date.parse(String(match?.details?.startAt ?? match?.startAt ?? ""));
+  const ends = [Number.isFinite(startMs) ? startMs : null, o.item.expiresAt ? o.item.expiresAt.getTime() : null].filter((x): x is number => x !== null);
+  if (Number.isFinite(startMs) && DateTime.fromMillis(startMs).setZone(zoneOf(o.zone)).toISODate() === local.toISODate()) return null;
+  if (ends.length && Math.min(...ends) < at.getTime() + SEND_TIME.minLeadHours * HOUR) return null;
   return { name: "usual_hour", pass: false, reason: `their usual reply hours (${usual.replies} replies over ${usual.days} days): it waits for the next one`, retryAt: at };
 }
 

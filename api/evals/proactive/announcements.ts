@@ -429,7 +429,7 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
   check("gate: a 'no check-ins' rule doesn't (an announcement isn't a check-in)", checkinsOnly.pass === true);
   check("gate: no rule, it passes", NG.memberRuleCheck([], { now: day, cls, channel: "text", sent: [] }).pass === true);
   const pr2 = src("harness/proactive.ts");
-  check("gate: applied to every candidate before the pick and again inside the send lock", /memberRuleCheck\(state\.memberRules\.prefs, \{ now: state\.now, cls: opts\.pulled \? "requested" : candidateClass\(candidate\.type, answering, candidate\.payload\)/.test(pr2) && /const cls = opts\.pulled \? \("requested" as SendClass\) : candidateClass\(c\.type, answering, c\.payload\);\s*if \(!isSafetyFollowUp\(c\)\) \{\s*const \{ retryAt: _r, \.\.\.rule \} = await memberRuleGate\(client, \{ userId: person\.userId, now, cls, channel: "text" \}\);/.test(pr2));
+  check("gate: applied to every candidate before the pick and again inside the send lock", /memberRuleCheck\(state\.memberRules\.prefs, \{ now: state\.now, cls: candidateClass\(candidate\.type, answering, candidate\.payload\)/.test(pr2) && /const cls = candidateClass\(c\.type, answering, c\.payload\);\s*if \(!isSafetyFollowUp\(c\)\) \{\s*const \{ retryAt: _r, \.\.\.rule \} = await memberRuleGate\(client, \{ userId: person\.userId, now, cls, channel: "text" \}\);/.test(pr2));
 }
 
 {

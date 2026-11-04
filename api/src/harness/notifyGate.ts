@@ -226,6 +226,11 @@ export function teamHoldCheck(h: { id: string; expiresAt: Date }): GateCheck & {
   return { name: MEMBER_RULE, pass: false, reason: `${TEAM_HOLD} ${h.id} holds it`, retryAt: h.expiresAt };
 }
 
+// Whether the team holds what Cue starts for this member now (a pull reads it before picking); a read that fails holds.
+export async function teamHoldNow(userId: string, now: Date): Promise<boolean> {
+  return import("../services/teamHold.js").then((T) => T.activeTeamHold(userId, now)).then((h) => !!h).catch(() => true);
+}
+
 // The whole gate for one send, read fresh: their rules and what's been sent. A rules read that fails holds the send (it can't know a
 // rule isn't there) and says so; it's retried like any hold.
 // throughTeamHold: another member's own words passed along (a relay): stale if a team hold kept it for weeks, so it goes through the
