@@ -10,7 +10,7 @@ import pool from "../db/db.js";
 import type { Doc } from "./documentSheet.js";
 import { deliveredThing } from "./speakable.js";
 
-// email: a plan sheet sent to their own email (agent/loopTools.ts emailPlan), recorded so it shows with the rest.
+// email: an older plan sheet sent to their own email (the plan sheet is gone), recorded so it shows with the rest.
 export type Channel = "pdf_text" | "google_docs" | "text_fallback" | "email";
 // delivered: it reached them in its final form. pdf_pending: it went as text because the PDF failed, and the PDF is to follow.
 // pdf_failed: the PDF never made it after every retry (the text version stands).

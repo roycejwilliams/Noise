@@ -135,7 +135,6 @@ export function documentOfferDue(s: OfferState): OfferDecision {
 // already carrying for them. Loaded once a turn (loadArtifactSignals); every decision on it is pure.
 export type ArtifactSignals = {
   notes: { kind: string | null; what: string | null; picked: string | null; when: string | null; headcount: number | null; city: string | null; area: string | null; updatedAt: Date | null } | null;
-  emailPlanAt: Date | null;
   // Newest delivered documents (services/deliveryReceipts.ts), title and kind, so nothing they already have is offered.
   delivered: { title: string; kind: string | null; at: Date }[];
   // Goals of the work Co already has under way for them: open tasks and research briefs.
@@ -219,7 +218,7 @@ export function pendingLine(topic: string): string {
 
 // openWork comes from the turn (services/turnContext.ts), which already read their tasks and briefs.
 export async function loadArtifactSignals(userId: string, o: { drift?: Drift[]; delivered?: ArtifactSignals["delivered"]; openWork?: string[] } = {}): Promise<ArtifactSignals> {
-  const [notes, emailPlanAt] = await Promise.all([
+  const [notes] = await Promise.all([
     pool
       .query(`SELECT brief, updated_at FROM search_briefs WHERE user_id = $1 AND updated_at > NOW() - INTERVAL '7 days'`, [userId])
       .then((r) => {
@@ -228,12 +227,8 @@ export async function loadArtifactSignals(userId: string, o: { drift?: Drift[]; 
         return { kind: b.kind ?? null, what: b.what || null, picked: b.picked ?? null, when: b.when ?? null, headcount: typeof b.headcount === "number" ? b.headcount : null, city: b.city ?? null, area: b.area ?? null, updatedAt: r.rows[0].updated_at ? new Date(r.rows[0].updated_at) : null };
       })
       .catch(() => null),
-    pool
-      .query(`SELECT created_at FROM harness_decisions WHERE user_id = $1 AND decision = 'loop.emailPlan' AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId])
-      .then((r) => (r.rows[0] ? new Date(r.rows[0].created_at) : null))
-      .catch(() => null),
   ]);
-  return { notes, emailPlanAt, delivered: o.delivered ?? [], openWork: o.openWork ?? [], drift: o.drift ?? [] };
+  return { notes, delivered: o.delivered ?? [], openWork: o.openWork ?? [], drift: o.drift ?? [] };
 }
 
 // Recorded when Co's text made the offer, so it's never made twice (conversationReply.ts after the turn, the post-call onSent).

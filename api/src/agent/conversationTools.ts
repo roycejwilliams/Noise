@@ -2,7 +2,7 @@ import { notToTeammate } from "../services/teamLines.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
-import { situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
+import { NOT_ASSISTANT_ASK, situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
 import { guardRefusalTellsThem, guardTools, isGuardRefusal, withReason } from "./toolGuard.js";
 import { doorOpen } from "../services/theDoor.js";
 import { proactivePaused } from "../services/proactivePause.js";
@@ -771,6 +771,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
       }),
       execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom }) => {
+        // Not something Cue does (drafting their email, a plan sheet, a job search, reading their email): no task, by text or on a call.
+        if (NOT_ASSISTANT_ASK.test(`${goal}\n${theirWords}\n${ctx.resolvedContent}`)) {
+          notDone("No task was started: that isn't something Cue does.");
+          return { ok: false, error: "That's not something you do. Say so plainly and point back to the people side (who to meet, what's worth going to). Never say you drafted, sent or planned it." };
+        }
         const T = await import("../services/coTasks.js");
         // On a call, the same need started again on the same call (a repeat, a retry) is the job already running: nothing new starts.
         const dispatchKey = ctx.onCall && ctx.callKey ? T.dispatchKeyFor(ctx.callKey, goal) : null;
@@ -1294,6 +1299,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: true };
         }
         ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${subject.name}".` : `Noted they can't make "${subject.name}"; Cue won't send them anything more about it.`);
+        // Where it serves matching: a calendar file for the Noise event they're going to, to their own email (services/eventCalendar.ts).
+        // Nothing else gets one.
+        if (going && !ctx.dryRun) {
+          const c = await import("../services/eventCalendar.js").then((m) => m.sendGoingCalendar(ctx.userId, subject.eventApiId)).catch(() => ({ sent: false }));
+          if (c.sent) ctx.facts?.add("did_this_turn", `Emailed them a calendar file for "${subject.name}", to their own email on file.`);
+        }
         return { ok: true };
       },
     }),

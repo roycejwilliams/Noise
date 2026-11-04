@@ -102,7 +102,7 @@ check("the context only loads Google for members who connected their calendar, a
 
 // ------------------------------------------------ Cue's tools and pages
 const { capabilitySheet, ABILITIES } = await import("../../src/services/capabilities.js");
-check("Cue never offers Gmail: no ability, no sheet line", !ABILITIES.some((a) => a.id === "google" || a.tool === "googleConnection") && !capabilitySheet({ team: true }).some((l) => /Gmail/.test(l)));
+check("Cue never offers Gmail: no ability, no sheet line", !ABILITIES.some((a) => a.id === "google" || a.tool === "googleConnection") && !capabilitySheet({ team: true }).some((l) => /connect Gmail|connected Gmail|connect their Gmail/i.test(l)));
 const route = src("routes/google.ts");
 check("the pages never show anyone's data and are mounted at /google", !/busy|waiting|snapshot|SELECT/.test(route.replace(/export const CALENDAR_GRANT_COPY = \{[\s\S]*?\} as const;/, "")) && /app\.use\("\/google", createGoogleRouter\(\)\)/.test(src("server.ts")));
 check("an expired, reused or old combined-grant link says so and asks for a new one", /status\(410\)/.test(route) && !/consentUrlFor/.test(route));

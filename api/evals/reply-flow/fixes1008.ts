@@ -169,7 +169,7 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   check("A1: within 48 hours with changed notes, it's raised and marked urgent", !!urgent && urgent.urgent && /48 hours/.test(D.driftLine(urgent)));
   check("A1: nothing changed, nothing raised", D.receiptDrift(delivered, { notes: { headcount: 12, when: "Oct 17", updatedAt: daysAgo(1) } }, NOW) === null);
 
-  const base = { now: NOW, helpAsks: [], threads: [], recurring: [], needsCare: false, history: [] as any[], notes: null, emailPlanAt: null, delivered: [], openWork: [], drift: [hc!], message: "sounds good", coLines: [] as string[] };
+  const base = { now: NOW, helpAsks: [], threads: [], recurring: [], needsCare: false, history: [] as any[], notes: null, delivered: [], openWork: [], drift: [hc!], message: "sounds good", coLines: [] as string[] };
   const due = O.artifactOfferDue("drift", base);
   check("A1: the drift offer is due, with a readDocument then writeDocument(revises, changed) path", due.due && /readDocument 12/.test((due as any).line) && /revises 12/.test((due as any).line), due);
   check("A1: once per version", !O.artifactOfferDue("drift", { ...base, history: [{ topic: "[drift] doc #12 v1", source: "offered", status: "offered", at: daysAgo(3) }] }).due);
@@ -181,14 +181,14 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
 
 // ---------------------------------------------------------------- A2, A3: plan sheet and venue brief
 {
-  const base = { now: NOW, helpAsks: [], threads: [], recurring: [], needsCare: false, history: [] as any[], notes: null as any, emailPlanAt: null as Date | null, delivered: [] as any[], openWork: [] as string[], drift: [], message: "", coLines: [] as string[] };
+  const base = { now: NOW, helpAsks: [], threads: [], recurring: [], needsCare: false, history: [] as any[], notes: null as any, delivered: [] as any[], openWork: [] as string[], drift: [], message: "", coLines: [] as string[] };
   const settled = { ...base, notes: { kind: "venue", what: "dinner", picked: "Rich Table", when: "Friday", headcount: 12, city: "San Francisco", area: null, updatedAt: hoursAgo(1) }, coLines: ["Drinks at Spruce at 7pm, then Rich Table at 8:15pm."] };
   // A sheet and a venue brief are not offered any more (2026-11-04): neither is ever due, whatever the moment.
   const host = { ...base, message: "I'm hosting a dinner for 14 founders on Oct 18 in Hayes Valley" };
   check("A2/A3: a settled plan, a timed walkthrough, a hosting message: no sheet and no brief offer", !O.artifactOfferDue("plan", settled).due && !O.artifactOfferDue("plan", { ...base, coLines: ["6pm: get there early.\n6:30pm: greet.\n7pm: toast.\n7:30pm: seat everyone."] }).due && !O.artifactOfferDue("brief", host).due);
 
   // docOfferLines: at most one offer, drift > plan > brief > document; none on top of an ask or a waiting offer or in a heavy moment.
-  const ctx = { due: { topic: "splitting cofounder roles", why: "x" }, pending: null, history: [], needsCare: false, signals: { notes: settled.notes, emailPlanAt: null, delivered: [], openWork: [], drift: [] } };
+  const ctx = { due: { topic: "splitting cofounder roles", why: "x" }, pending: null, history: [], needsCare: false, signals: { notes: settled.notes, delivered: [], openWork: [], drift: [] } };
   const one = O.docOfferLines(ctx, "I'm hosting a dinner for 14 founders on Oct 18", { now: NOW, coLines: settled.coLines });
   check("one offer a reply: no sheet or brief offer; the document notice or nothing", one.offer?.kind !== "plan" && one.offer?.kind !== "brief" && !/one-page sheet|venue brief/.test(one.hint ?? ""), one);
   const heavy = O.docOfferLines(ctx, "I'm hosting a dinner for 14 founders on Oct 18", { now: NOW, coLines: settled.coLines, heavyNow: true });

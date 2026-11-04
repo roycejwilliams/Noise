@@ -231,6 +231,7 @@
     "evals/docs/docsGrant.ts",
     "evals/browserPilot/rules.ts",
     "evals/research/findsNotDocument.ts",
+    "evals/removal/assistantHelpers.ts",
     "evals/research/quality.ts",
     "evals/time/local.ts",
     "evals/delivery/shape.ts",

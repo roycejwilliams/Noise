@@ -90,7 +90,7 @@ export type DeliverTo = { userId: string; firstName: string; phone: string; zone
 // record (deliverAndRecord logs them with the document's key).
 export const DOC_QA_MS = 10_000;
 const lastDocQa = new Map<string, { at: number; qa: unknown }>();
-// A sheet measured on its own (the plan, services/planEmail.ts buildPlanFiles): its real QA is what the design metrics record.
+// A sheet measured on its own (a document): its real QA is what the design metrics record.
 export function noteDocQa(userId: string, r: { ran: boolean; findings: unknown[] }): void {
   lastDocQa.set(userId, { at: Date.now(), qa: { ran: r.ran, findings: r.findings, first: r.findings.length, fixed: [] } });
 }
@@ -151,7 +151,7 @@ const realDeps = async (): Promise<DeliverDeps> => {
     qa: (html, doc, userId) => docQa(html, doc, userId),
   };
 };
-// The real senders with one part swapped: a plan sends its own rendered sheet (agent/loopTools.ts emailPlan) through the same
+// The real senders with one part swapped: a document sends its own rendered sheet through the same
 // delivery, receipt and fallback path as a document.
 export async function deliverDepsWith(over: Partial<DeliverDeps>): Promise<DeliverDeps> {
   return { ...(await realDeps()), ...over };
