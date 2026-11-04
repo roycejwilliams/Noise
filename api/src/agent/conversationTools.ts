@@ -241,7 +241,7 @@ export const NEW_FOR_THEM = new Set([
   "sendContactCard", "whatCoKnows", "correctWhatCoKnows", "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "moveLane",
   "answerShareAsks", "shareAskInIntros", "answerBriefName", "shareLocationYes", "flagSafetyConcern", "checkInvitesLeft", "markArrived",
   "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
-  "firstRead",
+  "firstRead", "deleteImages",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
   "shareFinds", "researchBrief",
   "calendarConnection", "setSearchArea",
@@ -1291,6 +1291,23 @@ export function createConversationTools(ctx: ConversationToolContext) {
           if (c.sent) ctx.facts?.add("did_this_turn", `Emailed them a calendar file for "${subject.name}", to their own email on file.`);
         }
         return { ok: true };
+      },
+    }),
+
+    // "Delete the photos I sent you" (services/memberAssets.ts): their images' bytes, gone now. Never says it deleted anything that
+    // wasn't (the count comes back from the delete itself).
+    deleteImages: tool({
+      description: toolUse("deleteImages"),
+      inputSchema: z.object({ numbers: z.array(z.number().int().positive()).optional().describe("Their image numbers (#N) to delete; leave it out for all of them.") }),
+      execute: async ({ numbers }) => {
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing deleted." };
+        const n = await import("../services/memberAssets.js").then((m) => m.deleteAssets(ctx.userId, numbers?.length ? numbers : null)).catch(() => null);
+        if (n === null) {
+          notDone("Their photos weren't deleted: the delete failed.");
+          return { ok: false, error: "The delete didn't go through. Don't say it did; say it didn't work and to try again." };
+        }
+        ctx.facts?.add(n ? "did_this_turn" : "known", n ? `Deleted ${n} of the photos they'd sent${numbers?.length ? ` (${numbers.map((x) => `#${x}`).join(", ")})` : ""}.` : "They had no saved photos to delete (by those numbers).");
+        return { ok: true, deleted: n, note: n ? "Say in a few words they're deleted." : "Say plainly there was nothing to delete." };
       },
     }),
 

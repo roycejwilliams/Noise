@@ -161,6 +161,15 @@ export const ABILITIES: Ability[] = [
     use: "Send what you found that fits: each one as its link, then a one-line caption under it, in the order you list them, best first. Send the first good finds as soon as you have them and keep working if more would help, so they aren't waiting a minute for everything. Captions say what it is and why it fits them, tied to what they told you they want and the reason behind it when you know it (where it could take them, as a real possibility, never a promise), using only the facts from its results or its page, and say plainly what's unconfirmed (availability for their date, the final price). Links must come from your results or pages you read this turn, or from your notes; link each thing's own page (a venue's listing, a DJ's profile) rather than a page of search results, so they land on the thing you described. Something sold out, already over, or already sent to them can't go out.",
   },
   {
+    id: "images_delete",
+    sheet: "Cue deletes the photos they texted whenever they ask, all of them or by number, and they can remove each one from what Cue knows. Cue doesn't save new photos.",
+    can: "Cue deletes the photos they've texted it whenever they ask: all of them or by number. The bytes are gone at once.",
+    onCall: true,
+    tool: "deleteImages",
+    limits: { perTurn: 2 },
+    use: "When they ask you to delete or forget the photos or images they sent (all, or specific ones they describe, like \"the photo of my ID\"): match what they describe to the images you see and pass those numbers. Say they're gone only when the result says it deleted some; say plainly when there was nothing to delete.",
+  },
+  {
     id: "find_reaction",
     sheet: null,
     can: "When they react to an option from the venue research Cue sent (\"the second one looks great\", \"not that one\", \"nothing like that please\"), Cue notes it, and it shapes which options Cue puts first next time.",
@@ -777,6 +786,7 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   saveAsk: START,
   // Save what they said: an event they're into, their notes, tasks, preferences, corrections and consent.
   noteReaction: SAVE,
+  deleteImages: SAVE,
   updateTask: SAVE,
   closeTask: SAVE,
   updateNotes: SAVE,
@@ -813,7 +823,7 @@ export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
   "noteReaction", "noteMetAgain", "noteRoomMeeting", "findReaction", "updateNotes", "updateLoop",
   "startTask", "researchBrief", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "markGoal", "moveLane", "updateGoing", "followUp", "firstRead",
   "answerProposal", "answerShareAsks", "shareAskInIntros", "answerBriefName", "requestEventIntro", "markArrived",
-  "voiceRead", "shareLocationYes",
+  "voiceRead", "shareLocationYes", "deleteImages",
   "sendInvite", "calendarConnection",
 ]);
 
@@ -831,6 +841,7 @@ export const callRunFor = (tool: string): CallRun | null => CALL_RUN[tool] ?? nu
 //     result's page, too slow to wait on mid-turn, so on a call that work is a task too.
 export const LIVE_CALL_LEFT_OUT: Readonly<Record<string, string>> = {
   calendarConnection: "grants access to their calendar",
+  deleteImages: "deletes their photos for good",
 };
 export function liveCallToolNames(): string[] {
   return callToolNames().filter((t) => CALL_RUN[t]?.run === "now" && !LIVE_CALL_LEFT_OUT[t]);

@@ -82,6 +82,30 @@ const goalsSrc = src("services/goalOwnership.ts") + src("agent/conversationTools
 check("the takeOnGoal schema, sheet and guidance no longer offer drafts", !/"research", "draft"|research, draft|drafts, watching|offer to draft/.test(goalsSrc));
 check("a goal piece task already open as a draft closes as dropped when it wakes, no text", /\^Draft:\/i\.test\(t\.goal\)/.test(src("services/taskTurn.ts")) && /drafting a piece as a document was removed/.test(src("services/taskTurn.ts")));
 
+// ---- photos: deletable by them, never a claimed deletion that didn't happen
+const WK = await import("../../src/services/whatCoKnows.js");
+const items = WK.knownItems({ profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], photos: [{ n: 3, sentOn: "2026-10-20" }] } as any);
+const ph = items.find((i: any) => i.ref === "photo:3");
+check("what Cue knows lists each photo they sent, removable, with no description of it", !!ph && ph.source === "photo" && /^photo 3, sent 2026-10-20$/.test(ph.text), ph);
+check("a photo removal deletes through deleteAssets and records it", /photoRemovals/.test(src("services/whatCoKnows.ts")) && /deleteAssets\(userId, \[n\]\)/.test(src("services/whatCoKnows.ts")) && /refused\.push\(\{ ref: item\.ref, why: "that photo isn't on file" \}\)/.test(src("services/whatCoKnows.ts")));
+const MA = await import("../../src/services/memberAssets.js");
+const runDelete = async (rowCount: number | "throw", numbers?: number[]) => {
+  const facts: { k: string; t: string }[] = []; const nd: string[] = [];
+  MA.useAssetDb({ query: async (q: string) => { if (rowCount === "throw") throw new Error("db down"); return { rows: [], rowCount }; } });
+  console.log = () => {};
+  const t = T.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "delete my photos", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false, isTeam: false, sendCoReply: async () => true, facts: { add: (k: string, t: string) => facts.push({ k, t }), text: () => "" } } as any);
+  const r = await (t.tools as any).deleteImages.execute({ numbers }, {});
+  console.log = quiet; MA.useAssetDb(null);
+  return { r, facts, nd };
+};
+const del2 = await runDelete(2, [1, 2]);
+check("deleteImages: the count comes from the delete itself, and only then is it said done", del2.r.ok && del2.r.deleted === 2 && del2.facts.some((f) => f.k === "did_this_turn" && /Deleted 2/.test(f.t)), del2);
+const del0 = await runDelete(0);
+check("deleteImages: nothing to delete is said plainly, never as a deletion", del0.r.ok && del0.r.deleted === 0 && !del0.facts.some((f) => f.k === "did_this_turn"), del0);
+const delErr = await runDelete("throw");
+check("deleteImages: a failed delete is not claimed", delErr.r.ok === false && !delErr.facts.some((f) => f.k === "did_this_turn"), delErr);
+check("deleteImages is a call tool (text and calls), left out of GPT-Live's quick set, and it changes something", Cap.callToolNames().includes("deleteImages") && !Cap.liveCallToolNames().includes("deleteImages") && Cap.CHANGES_SOMETHING.has("deleteImages"));
+
 // ---- the Gmail cleanup: nothing without --apply
 const S = await import("../../src/scripts/revokeGmailGrants.js");
 const calls: string[] = [];

@@ -82,7 +82,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -171,6 +171,8 @@ export type RawKnown = {
   tastes: { id: string; type: "room_taste"; text: string; quote: string | null }[];
   asks: { id: string; text: string }[];
   files: { n: number; sentOn: string }[];
+  // Photos they texted (services/memberAssets.ts): kept for them alone, listed so each can be removed here.
+  photos?: { n: number; sentOn: string }[];
   // Where Co looks for each of their wants (services/wantPlace.ts): the want's own place, or none (their home city stands in).
   // searching: where on the map Cue searches it (services/placeResolve.ts), when that's said differently from their place.
   places?: { key: string; want: string; place: string | null; source?: string | null; until?: string | null; searching?: string | null }[];
@@ -259,6 +261,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
+  for (const f of r.photos ?? []) add(`photo:${f.n}`, "photo", "files", `photo ${f.n}, sent ${f.sentOn}`, null, false);
   for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.held ? `${w.label} (held for now)` : w.label, null, false);
   for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
   for (const x of r.pairOutcomes ?? []) {
@@ -375,7 +378,7 @@ const GUARDED_BY: Record<Guarded, string[]> = {
   // The raw exchanges and memories that say a removed thing (memberKnowledge exchanges, the reply's memory search): only specific removals.
   their_words: [],
 };
-const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:"];
+const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:", "photo:"];
 const plainOf = (t: string) => t.replace(/^(my read|looking out for|not for you): /, "");
 
 // Pure: the row that says this text is gone (or changed), if any. rows: live guards (forgottenRows / liveGuards).
@@ -550,7 +553,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     chain = p.catch(() => undefined);
     return p;
   };
-  const [prof, claims, snap, threads, kit, tastes, asks, files, zone, places] = await Promise.all([
+  const [prof, claims, snap, threads, kit, tastes, asks, files, photos, zone, places] = await Promise.all([
     q(`SELECT city, long_term_direction, availability_pattern, goals, life_chapters, blockers, activity_preferences, avoid, intent FROM co_profiles WHERE user_id = $1`, [userId]),
     q(`SELECT id, text, provenance, kind, quote, expires_on FROM member_claims WHERE user_id = $1 ORDER BY said_on DESC LIMIT 40`, [userId]),
     q(`SELECT snapshot FROM person_snapshots WHERE user_id = $1`, [userId]),
@@ -560,6 +563,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     q(`SELECT id, memory_type, content FROM co_memories WHERE user_id = $1 AND memory_type = 'room_taste' AND created_at > NOW() - INTERVAL '180 days' ORDER BY created_at DESC LIMIT 5`, [userId]),
     q(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY last_mentioned_at DESC NULLS LAST, created_at DESC LIMIT 12`, [userId]),
     import("./memberFiles.js").then((m) => m.filesOnFile(userId)).catch(() => [] as { n: number; sentOn: string }[]),
+    import("./memberAssets.js").then((m) => m.listAssets(userId)).then((a) => a.map((x) => ({ n: x.n, sentOn: x.at.toISOString().slice(0, 10) }))).catch(() => [] as { n: number; sentOn: string }[]),
     import("./memberTime.js").then((m) => m.memberZone(userId)).catch(() => null),
     // Where Co looks for each want they have open: an open ask's row, or a goal's (kept only if it's still one of their goals, below).
     // A removed place is shown as "near home" (still correctable: "actually SF" lands on it). Goal rows are read wide and filtered to
@@ -618,6 +622,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
       return live.map((x) => ({ id: x.id, text: P.describePreference(x, { applied: P.ruleApplied(x, ctx) }), quote: x.words[x.words.length - 1] ?? null }));
     }),
     files,
+    photos,
     // The same list a pull and a reply read; a read that fails fails the view (never "nothing is waiting" on a guess).
     // Held ones are shown as held; one under a safety hold is not shown at all. A read that fails leaves this group out, not the view.
     waiting: await import("../harness/waiting.js").then(async (W) => {
@@ -936,7 +941,7 @@ export function fieldFor(ref: string): string {
   if (kind === "free") return "when they said they're free";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -968,6 +973,7 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   }
   // Files go after the transaction (only memberFiles.ts touches their table), and only once everything else held.
   const fileRemovals: { item: KnownItem }[] = [];
+  const photoRemovals: { item: KnownItem }[] = [];
   const decisions: Parameters<typeof recordDecision>[0][] = [];
   const client = await pool.connect();
   try {
@@ -1004,6 +1010,11 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
         }
         if (c.action === "remove" && !removalYes.has(ref)) {
           refused.push({ ref, why: "their message doesn't ask to remove this line, so it stays" });
+          continue;
+        }
+        if (item.source === "photo") {
+          if (c.action === "remove") photoRemovals.push({ item });
+          else refused.push({ ref, why: "a photo can only be removed" });
           continue;
         }
         if (item.source === "file") {
@@ -1067,6 +1078,17 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     changedRefs.add(item.ref);
     decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { kind: "file", on: new Date().toISOString().slice(0, 10), id: n }, checks: [{ name: "removal_asked", pass: true }] });
   }
+  for (const { item } of photoRemovals) {
+    const { deleteAssets } = await import("./memberAssets.js");
+    const n = Number(item.ref.split(":")[1]);
+    if (!Number.isFinite(n) || !(await deleteAssets(userId, [n]).catch(() => 0))) {
+      refused.push({ ref: item.ref, why: "that photo isn't on file" });
+      continue;
+    }
+    applied.push({ ref: item.ref, source: "photo", was: `photo ${n}`, now: null });
+    changedRefs.add(item.ref);
+    decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "photo", proposal: { kind: "photo", on: new Date().toISOString().slice(0, 10), id: n }, checks: [{ name: "removal_asked", pass: true }] });
+  }
   for (const d of decisions) await recordDecision(d).catch(() => {});
   // Their search area corrected (searchArea.ts): resolved now, not at the next sweep, so where it searches is settled (or asked about)
   // in this same reply (review of #336).
@@ -1115,7 +1137,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "pair", "knows", "cond", "waiting"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";
