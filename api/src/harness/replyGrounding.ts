@@ -548,7 +548,12 @@ async function introRecordFacts(userId: string): Promise<string[]> {
     pool
       .query(
         `SELECT m.content, m.memory_type, m.created_at, u.first_name FROM co_memories m JOIN users u ON u.id = m.user_id
-         WHERE m.user_id = $1 AND m.memory_type IN ('event_intro_email_sent', 'event_guest_match_nudge', 'recommendation') ORDER BY m.created_at DESC LIMIT 10`,
+         WHERE m.user_id = $1 AND m.memory_type IN ('event_intro_email_sent', 'event_guest_match_nudge', 'recommendation')
+           AND m.id IN (
+             (SELECT id FROM co_memories WHERE user_id = $1 AND memory_type IN ('event_intro_email_sent', 'event_guest_match_nudge') ORDER BY created_at DESC LIMIT 20)
+             UNION ALL
+             (SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'recommendation' ORDER BY created_at DESC LIMIT 10))
+         ORDER BY m.created_at DESC`,
         [userId],
       )
       .then((r) => r.rows as { content: string; memory_type: string; created_at: Date; first_name: string | null }[]),
@@ -744,7 +749,7 @@ export function ongoingFactsFor(asks: { text: string; kind: "find" | "help" }[])
   // All of them (2026-09-26: with seven open and three listed, "I'll keep an
   // eye out" for the fourth was called unsupported).
   const find = asks.filter((a) => a.kind === "find" && a.text).slice(0, 8);
-  const help = asks.filter((a) => a.kind === "help" && a.text).slice(0, 3);
+  const help = asks.filter((a) => a.kind === "help" && a.text).slice(0, 8);
   const out: { kind: FactKind; text: string }[] = [];
   if (find.length) {
     out.push({ kind: "ongoing", text: `Cue's daily search is looking for: ${find.map((a) => `"${a.text}"`).join("; ")}. If something real fits, Cue may text them about it (at most one text a day). Cue can't promise it will find anything, or when.` });

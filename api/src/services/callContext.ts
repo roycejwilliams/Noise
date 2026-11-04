@@ -192,8 +192,8 @@ async function loadContextParts(userId: string, include: readonly KnowledgeSecti
     // found me" case without growing every call's opening context.
     pool.query(
       `SELECT content, memory_type FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'recommendation' AND created_at > NOW() - INTERVAL '3 days'
-       ORDER BY created_at DESC LIMIT 1`,
+       WHERE user_id = $1 AND memory_type = 'recommendation' AND created_at > NOW() - INTERVAL '14 days'
+       ORDER BY created_at DESC LIMIT 3`,
       [userId],
     ),
     // Emotion loop: the same read of how they've been feeling that texts
@@ -231,7 +231,7 @@ async function loadContextParts(userId: string, include: readonly KnowledgeSecti
     picture,
     model: snapshot,
     recap: safeRecap[0] ? { text: String(safeRecap[0]), at: recapAt } : null,
-    recommendation: safeRecommendation[0] ? String(safeRecommendation[0]) : null,
+    recommendation: safeRecommendation.length ? safeRecommendation.slice(0, 3).map(String).join(" | ") : null,
     emotionalLine,
     names,
   };
@@ -262,7 +262,7 @@ function profileLines(p: ContextParts, keep: (text: string) => boolean = () => t
     // Their arc: goals they have closed. A lens for the call, not something to recite.
     arcLine(profile?.intent),
     wants.length ? `Wants: ${wants.slice(0, 2).join(", ")}` : null,
-    p.recommendation ? `Most recent thing Cue suggested: ${p.recommendation}` : null,
+    p.recommendation ? `Recent things Cue suggested, newest first: ${p.recommendation}` : null,
   ].filter((l) => l !== `Blockers: `);
 }
 
@@ -800,7 +800,11 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     .filter(Boolean)
     .join("\n\n");
 
-  const sentLines = await strip(sentDetailLines({ sent }, 7));
+  // Finds Cue's recent texts named (a debrief, a follow-up) stay in the facts however old the send: "where was that one" on a call.
+  const { sentNamedIn } = await import("./turnContext.js");
+  const named = sentNamedIn(sent, k.exchanges.filter((x) => x.from === "co" && !x.call).slice(-6).map((x) => x.text));
+  await fillDetails(named, { withinDays: 60 }).catch(() => {});
+  const sentLines = await strip(sentDetailLines({ sent }, 7, new Date(), { also: named }));
   const thread = callThread(k.exchanges, { guardsUnread: !!k.guardsUnread });
   const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread });
 

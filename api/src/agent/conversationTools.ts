@@ -1962,19 +1962,20 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({}),
       execute: async () => {
         if (ctx.dryRun) return { ok: true, sent: [] };
-        // The turn's one list (services/turnContext.ts), last 30 days.
-        const cutoff = Date.now() - 30 * 86_400_000;
-        const items = (ctx.turn?.sent ?? (await sentItems(ctx.userId))).filter((x) => x.sentAt.getTime() > cutoff).slice(0, 15);
+        // The turn's one list (services/turnContext.ts), as far back as it reaches (45 days; it was 30 days and 15 items, so an older find
+        // was "not sent").
+        const cutoff = Date.now() - 45 * 86_400_000;
+        const items = (ctx.turn?.sent ?? (await sentItems(ctx.userId))).filter((x) => x.sentAt.getTime() > cutoff).slice(0, 30);
         if (!items.length) {
-          ctx.facts?.add("known", "Cue hasn't sent them any events or opportunities in the last 30 days.");
+          ctx.facts?.add("known", "Cue hasn't sent them any events or opportunities in the last 45 days.");
           return { ok: true, sent: [] };
         }
         const fmt = await memberDate(ctx.userId);
-        const sent = items.map((r) => ({ name: r.name, kind: r.kind, link: r.url, sentOn: fmt(r.sentAt), reaction: r.reaction }));
+        const sent = items.map((r) => ({ name: r.name, kind: r.kind, link: r.url, city: r.details?.city ?? r.city ?? null, sentOn: fmt(r.sentAt), reaction: r.reaction }));
         ctx.facts?.add(
           "known",
-          `What Cue actually sent them in the last 30 days, newest first, the real complete list: ${sent
-            .map((x) => `"${x.name}"${x.link ? `, link ${x.link}` : ""}${x.sentOn ? `, sent ${x.sentOn}` : ""}${x.reaction ? `, they said: ${x.reaction.replace(/_/g, " ")}` : ""}`)
+          `What Cue actually sent them in the last 45 days, newest first, the real complete list: ${sent
+            .map((x) => `"${x.name}"${x.link ? `, link ${x.link}` : ""}${x.city ? `, in ${x.city}` : ""}${x.sentOn ? `, sent ${x.sentOn}` : ""}${x.reaction ? `, they said: ${x.reaction.replace(/_/g, " ")}` : ""}`)
             .join("; ")}. Never add, drop, or invent anything beyond this list.`,
         );
         return { ok: true, sent };

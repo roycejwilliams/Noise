@@ -385,6 +385,13 @@ export function referredSent(sent: readonly SentItem[], o: { message: string; me
   return [...out].slice(0, 2);
 }
 
+// Pure: the finds Cue sent that Cue's own recent texts named (a follow-up, a debrief), newest send first, at most max. A call opens with
+// no question yet, so what the thread was just about is the referent it can resolve; its stored fields stay in the call's facts.
+export function sentNamedIn(sent: readonly SentItem[], texts: readonly string[], max = 3): SentItem[] {
+  const said = norm(texts.join(" \n "));
+  return sent.filter((x) => norm(x.name).length >= 3 && said.includes(norm(x.name))).slice(0, max);
+}
+
 // A thing Co sent, by the name the member (or Co's tool) used for it.
 export function findSent(sent: SentItem[], name: string): SentItem | undefined {
   const want = norm(name);

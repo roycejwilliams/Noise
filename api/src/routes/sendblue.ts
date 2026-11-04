@@ -2024,6 +2024,7 @@ export function sendblueRouter(io: Server): Router {
             const referred = T.referredSent(turn.sent, { message: resolvedContent, meantLabel: meantItem?.label ?? null, meantUrl: meantItem?.url ?? null, lastCoText: lastCo });
             if (referred.length) {
               const zone = await mt.memberZone(user.id).catch(() => null);
+              await T.fillDetails(referred, { withinDays: 60 }).catch(() => {});
               for (const f of referred) {
                 for (const line of T.sentFindFacts(f, new Date(), zone)) addFact(replyFacts, "known", line);
                 // The referent the turn read resolved, when the facts build didn't already name it: its own stored offer.
