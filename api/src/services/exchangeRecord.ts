@@ -51,8 +51,24 @@ export type ExchangeBase = { done: DoneItem[]; unresolved: UnresolvedItem[]; pri
 export type ExchangeRead = { move: ExchangeMove; meant: Meant | null; told: Told[]; closes: { item: string; how: "solved" | "dropped" }[]; reopens: string[]; again: string | null };
 export type ExchangeRecord = ExchangeBase & { read: ExchangeRead | null };
 
-// Their words ask about a find Cue sent: where, when, the link, the price, who hosts, how to get in, or when Cue sent it.
-export const ASKS_ABOUT_FIND = /\b(?:where|what (?:day|date|time)|when|which (?:day|city)|link|address|location|located|how much|price|cost|free|who(?:'s| is| was)? (?:hosting|running|the host)|host(?:ing)?|how (?:do|can|would) i (?:get in|sign up|register|rsvp|join)|get in|rsvp|sign up|register|approval|did you (?:already )?send|send (?:it|that)|sent (?:it|that|me))\b/i;
+// Their words ask about a find Cue sent: where it is, what day or time it is, the link, the price, who hosts it, how to get in, or when
+// (or whether) Cue sent it. Narrow on purpose: it needs a question about the thing itself ("where is that", "what day did you send it",
+// "u send that when"), never a feeling that happens to use "when" or "it".
+export const ASKS_ABOUT_FIND = new RegExp(
+  [
+    String.raw`\bwhere\b.{0,40}\b(?:is|was|'s|located|held|happening|at)\b`,
+    String.raw`\bwhere(?:'s| is| was)\b`,
+    String.raw`\b(?:what|which) (?:day|date|time|city|neighbou?rhood|part of town)\b`,
+    String.raw`\bwhen (?:is|was|does|did|do|will)\b.{0,30}\b(?:it|that|this|the \w+|you)\b`,
+    String.raw`\b(?:you|u)\s+(?:send|sent)\b.{0,30}\bwhen\b|\bwhen\b.{0,30}\b(?:you|u)\s+(?:send|sent)\b`,
+    String.raw`\b(?:link|address|location|located|venue|price|cost|how much|ticket)\b`,
+    String.raw`\bwho(?:'s| is| was)? (?:hosting|running|the host)\b`,
+    String.raw`\bhow (?:do|can|would|should) i (?:get in|sign up|register|rsvp|join|apply)\b`,
+    String.raw`\bdid you (?:already |even )?send\b`,
+    String.raw`\b(?:send|resend|text) (?:me )?(?:it|that|the link)(?: again)?\b`,
+  ].join("|"),
+  "i",
+);
 
 export const DONE_MAX = 16;
 export const UNRESOLVED_MAX = 16;
