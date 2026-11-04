@@ -352,7 +352,10 @@ export function callClosing(b: OaiRequest): boolean {
   if (lastAt < 0) return false;
   const coBefore = [...b.messages.slice(0, lastAt)].reverse().find((m) => m.role === "assistant" && textOf(m.content ?? "").trim());
   const coLastWords = coBefore ? textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2) : [];
-  return memberClosed(textOf(b.messages[lastAt]?.content ?? "")) || coLastWords.some((x) => GOODBYE.test(x.trim()) || CO_CLOSING.test(x));
+  const reply = textOf(b.messages[lastAt]?.content ?? "");
+  // A reply to Cue's goodbye closes the call in any words, unless it opens something new ("Wait, what about step three?"): then it goes on.
+  const opensNew = /\?|^\W*(?:wait|actually|hold on|one (?:more|last)|before you go|but|also|can you|could you|what about|how about)\b/i.test(reply);
+  return memberClosed(reply) || (!opensNew && coLastWords.some((x) => GOODBYE.test(x.trim()) || CO_CLOSING.test(x)));
 }
 
 // The stream of OpenAI chunks ElevenLabs reads. Text is cleaned and guarded sentence by sentence; a tool call passes through whole.
