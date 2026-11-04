@@ -116,7 +116,7 @@ export async function secondContactRate(o: { sinceDays?: number; includeRecent?:
 }
 
 // The intro's "did it help?" follow-up ("your intro to <name>", tier 0, scheduled when the intro went; services/networkIntroNudge.ts),
-// answered (routes/sendblue.ts, the outcome_followup branch): their answer lands on their side of the pair's record deterministically,
+// answered (the text reply turn's outcome_followup branch): their answer lands on their side of the pair's record deterministically,
 // not only when the reply's model picks noteRoomMeeting (review of #380). The reply's own classifier read of their words decides:
 // something good came of it: met (inferred) and useful yes (their words); it wasn't worthwhile: useful no (their words); anything
 // else: nothing. Cue's noteRoomMeeting in the same reply, from their exact words, replaces it (their newer word wins). Never the
