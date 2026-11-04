@@ -211,6 +211,13 @@ async function hasPendingOrAnsweredNudge(eventId: string, personId: string, cand
 // Reuses event_guest_match_nudges as the "awaiting a reply" record so
 // findPendingMatchNudge picks up their answer the same way it would a
 // normal scoring-driven nudge.
+// Pure read: does the person's own ranking for this event hold this candidate out by one of their conditions?
+export async function heldByTheirCondition(eventId: string, personId: string, candidateId: string): Promise<boolean> {
+  const { rankingFor } = await import("./eventBrief.js");
+  const r = (await rankingFor(eventId, personId).catch(() => [])).find((x) => x.candidate_id === candidateId);
+  return !!r?.heldByCondition;
+}
+
 async function maybeAskCandidateDirectly(
   eventId: string,
   eventName: string,
@@ -226,6 +233,14 @@ async function maybeAskCandidateDirectly(
   // is never told why (their answer from Co is the same either way).
   // false: refused, so a member's own request is never reported as asked (review of #359).
   if (await RM.mayAsk(eventId, candidate.user_id, asker.user_id, "eventGuestMatchHandoff.directAsk")) return false;
+  // Their own conditions, from the score this room already has of the asker for them (their ranking; no new scorer call): when what
+  // they said rules the asker out, or a requirement of theirs can't be confirmed for the asker, they're never asked (review of #378).
+  // No ranking of theirs that includes the asker: nothing to read, the ask goes as before. Refused the same way as mayAsk.
+  if (await heldByTheirCondition(eventId, candidate.user_id, asker.user_id)) {
+    const { recordDecision } = await import("../harness/core.js");
+    recordDecision({ layer: 6, decision: "match.direct_ask", userId: candidate.user_id, outcome: "skip", action: "their_condition", reason: "their own condition holds the asker out", proposal: { eventId } }).catch(() => {});
+    return false;
+  }
   // The emergency pause: the asker was already told Co would check, so the ask isn't dropped. It waits in deferred_sends
   // (which holds it while the pause is on) and goes once the pause lifts, if the event and the pair are still valid then.
   const paused = await RM.matchingPause(eventId);

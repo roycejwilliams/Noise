@@ -60,6 +60,10 @@ export type RankedCandidate = {
   // A newly qualifying person whose additive heads-up is waiting for their other open question to be answered: the next pass
   // still counts them as new, so the heads-up goes once the slot frees instead of being lost (review of #211).
   additivePending?: boolean;
+  // This person's own conditions keep the candidate out or under the bar (services/wantCriteria.ts: an exclusion that holds, a
+  // requirement that failed or nobody can confirm). Read before this person is ever asked about the candidate (review of #378,
+  // eventGuestMatchHandoff.ts maybeAskCandidateDirectly). Internal only; no words of theirs are stored with it.
+  heldByCondition?: boolean;
 };
 
 // Luma gives us email/phone/name, never a user_id — this is the only place
@@ -928,6 +932,7 @@ async function scoreMatchedGroupInScope(
           shareReason: s.shareReason,
           mutual: s.mutual,
           method: "ask" as const,
+          ...(s.conditions && (s.conditions.excluded.length || s.conditions.unverified.length) && adj.score < MATCH_NUDGE_MIN_SCORE ? { heldByCondition: true } : {}),
           graph: e ? { score: e.score, want: e.want, offer: e.offer, mutual: e.mutual } : null,
         };
       })

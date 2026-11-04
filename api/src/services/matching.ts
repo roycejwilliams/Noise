@@ -491,10 +491,10 @@ export function frameLine(f: RoomFrame): string {
 }
 
 export function buildRoomFramePrompt(f: RoomFrame, digest: string, askerContext?: string): string {
-  const wants = askWants(f.asks);
+  const wants = frameWants(f);
   const lines = [
     ...f.asks.map((a, i) => `- W${i + 1} ${a.type === "offering" ? "can offer" : "looking for"}: "${a.text}"`),
-    ...(f.goal?.text ? [`- where they're headed: "${f.goal.text}"${f.asks.length ? " (the frame when none of the lines above is about people)" : ""}`] : []),
+    ...(f.goal?.text ? [`- W${f.asks.length + 1} where they're headed: "${f.goal.text}"${f.asks.length ? " (the frame when none of the lines above is about people)" : ""}`] : []),
   ];
   return `Someone wants to be connected with people who match this: "${frameLine(f)}"
 
@@ -554,7 +554,7 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
   // A line with a hidden part (a private ask or a blocker) means the prompt holds it: no text is recorded for the call.
   const noTraceText = toScore.some((c) => hiddenTextsOf(c, hidden).length > 0);
-  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden, { noTraceText, failLoudly: opts.failLoudly }, askWants(f.asks));
+  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden, { noTraceText, failLoudly: opts.failLoudly }, frameWants(f));
   return [...scored, ...zero];
 }
 
@@ -582,6 +582,12 @@ function getGoalFrame(intent: unknown): StatedIntent | null {
 // Pure: the asker's wants as the scoring prompts label them (W1, W2... in the frame's order), each with its own conditions.
 export function askWants(asks: StatedIntent[]): WantLine[] {
   return asks.map((a, i) => ({ label: `W${i + 1}`, text: String(a.text ?? ""), criteria: criteriaOf(a) }));
+}
+
+// Pure: a room frame's wants as its prompt labels them: each ask, then the goal riding along (W<n+1>), each with its own conditions,
+// so a condition they put on a goal counts when the fit rests on that goal, the same as an ask's (review of #378).
+export function frameWants(f: RoomFrame): WantLine[] {
+  return askWants(f.goal?.text ? [...f.asks, f.goal] : f.asks);
 }
 
 export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk, getOpenAsksOfType, getGoalFrame };
