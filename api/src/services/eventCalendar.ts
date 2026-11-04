@@ -6,7 +6,8 @@ import { DateTime } from "luxon";
 
 export type CalendarEvent = { id: string; name: string; startAt: string; endAt?: string | null; timezone?: string | null; venue?: string | null; address?: string | null; url?: string | null };
 
-const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+// RFC 5545 TEXT escaping: backslash first, then semicolon and comma, and every line break (CRLF, LF or a lone CR) as \n.
+export const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r\n|\r|\n/g, "\\n");
 // Lines are folded at 75 octets, continuation lines start with a space (RFC 5545).
 function fold(line: string): string {
   if (Buffer.byteLength(line, "utf8") <= 75) return line;
@@ -41,7 +42,7 @@ export function buildEventIcs(e: CalendarEvent, now: Date): string | null {
     `DTEND:${utc(end)}`,
     `SUMMARY:${esc(e.name.trim())}`,
     ...(where ? [`LOCATION:${esc(where)}`] : []),
-    ...(e.url ? [`URL:${e.url}`] : []),
+    ...(e.url && /^https:\/\/\S+$/.test(e.url) ? [`URL:${e.url}`] : []),
     "END:VEVENT",
     "END:VCALENDAR",
   ];
@@ -53,6 +54,9 @@ type Deps = {
   loadEvent: (eventApiId: string) => Promise<CalendarEvent | null>;
   loadEmail: (userId: string) => Promise<string | null>;
   send: (o: { to: string; subject: string; text: string; ics: string; filename: string }) => Promise<boolean>;
+  // Once per member per event: a ledger key claimed before the send and given back if it fails.
+  claim: (userId: string, key: string) => Promise<boolean>;
+  release: (userId: string, key: string) => Promise<void>;
   now?: () => Date;
 };
 
@@ -66,6 +70,15 @@ const realDeps: Deps = {
     const { usableEmail } = await import("./identity.js");
     const { rows } = await pool.query(`SELECT email FROM users WHERE id = $1`, [userId]);
     return usableEmail(rows[0]?.email);
+  },
+  claim: async (userId, key) => {
+    const { default: pool } = await import("../db/db.js");
+    const r = await pool.query(`INSERT INTO proactive_sends (user_id, type, target_key, exempt) VALUES ($1, 'event_calendar', $2, true) ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`, [userId, key]);
+    return !!r.rows[0];
+  },
+  release: async (userId, key) => {
+    const { default: pool } = await import("../db/db.js");
+    await pool.query(`DELETE FROM proactive_sends WHERE user_id = $1 AND target_key = $2 AND type = 'event_calendar'`, [userId, key]).catch(() => {});
   },
   send: async ({ to, subject, text, ics, filename }) => {
     const [{ ALLOW_REAL_SENDS }, { CO_EMAIL_FROM }] = await Promise.all([import("../otpActions.js"), import("./emailFrom.js")]);
@@ -85,6 +98,10 @@ export async function sendGoingCalendar(userId: string, eventApiId: string, deps
   if (!to) return { sent: false, why: "no email on file" };
   const ics = buildEventIcs(event, now);
   if (!ics) return { sent: false, why: "no readable start time" };
+  // At most once per member per event, however many times they say they're going.
+  const key = `event_calendar:${eventApiId}`;
+  if (!(await d.claim(userId, key).catch(() => false))) return { sent: false, why: "already sent" };
   const ok = await d.send({ to, subject: `${event.name} on your calendar`, text: `The calendar file for ${event.name} is attached.`, ics, filename: "event.ics" }).catch(() => false);
+  if (!ok) await d.release(userId, key).catch(() => {});
   return ok ? { sent: true } : { sent: false, why: "couldn't send" };
 }

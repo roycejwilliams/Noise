@@ -16,7 +16,8 @@ const NOW = new Date("2026-11-10T20:00:00Z");
 
 // ---- going to a Noise event: a calendar file with the right time and timezone
 const sent: any[] = [];
-const deps = (email: string | null, ev: any) => ({ loadEvent: async () => ev, loadEmail: async () => email, send: async (o: any) => (sent.push(o), true), now: () => NOW });
+const claimed = new Set<string>();
+const deps = (email: string | null, ev: any, sendOk = true) => ({ loadEvent: async () => ev, loadEmail: async () => email, send: async (o: any) => (sendOk ? (sent.push(o), true) : false), claim: async (u: string, k: string) => (claimed.has(`${u}|${k}`) ? false : (claimed.add(`${u}|${k}`), true)), release: async (u: string, k: string) => void claimed.delete(`${u}|${k}`), now: () => NOW });
 const EVENT = { id: "evt-1", name: "Founders Dinner", startAt: "2026-11-11T19:00:00-08:00", endAt: "2026-11-11T22:00:00-08:00", timezone: "America/Los_Angeles", venue: "The Battery", address: "717 Battery St, San Francisco", url: "https://lu.ma/fd" };
 const ics = EC.buildEventIcs(EVENT, NOW)!;
 check("the file is a calendar with one event", /BEGIN:VCALENDAR/.test(ics) && (ics.match(/BEGIN:VEVENT/g) ?? []).length === 1 && /END:VCALENDAR\r\n$/.test(ics));
@@ -26,9 +27,20 @@ check("name, place and link are in it", /SUMMARY:Founders Dinner/.test(ics) && /
 check("an unreadable start gives no file", EC.buildEventIcs({ ...EVENT, startAt: "soon" }, NOW) === null);
 const r = await EC.sendGoingCalendar("u1", "evt-1", deps("jordan@studio.co", EVENT));
 check("going: the file is emailed to the member's own address, once", r.sent && sent.length === 1 && sent[0].to === "jordan@studio.co" && /DTSTART:20261112T030000Z/.test(sent[0].ics) && sent[0].filename === "event.ics", sent);
+const again = await EC.sendGoingCalendar("u1", "evt-1", deps("jordan@studio.co", EVENT));
+check("saying they're going again sends nothing more (one per member per event)", !again.sent && again.why === "already sent" && sent.length === 1, again);
+const other = await EC.sendGoingCalendar("u2", "evt-1", deps("sam@studio.co", EVENT));
+check("another member going to the same event gets their own", other.sent && sent.length === 2 && sent[1].to === "sam@studio.co");
+const failedSend = await EC.sendGoingCalendar("u3", "evt-1", deps("lee@studio.co", EVENT, false));
+const retried = await EC.sendGoingCalendar("u3", "evt-1", deps("lee@studio.co", EVENT));
+check("a failed send gives its key back, so a retry can go", !failedSend.sent && retried.sent && sent.length === 3);
+const raw = "a\\b;c,d\r\ne\nf\rg";
+check("ICS text escaping: backslash, semicolon, comma and every kind of line break", EC.esc(raw) === "a\\\\b\\;c\\,d\\ne\\nf\\ng", EC.esc(raw));
+const tricky = EC.buildEventIcs({ ...EVENT, name: "Dinner; drinks, and a toast for 12\nsecond line", venue: "Bar, Inc.", url: "https://lu.ma/x\r\nEND:VCALENDAR" }, NOW)!;
+check("a name or place can't start a new line in the file, and a bad URL is left out", /SUMMARY:Dinner\\; drinks\\, and a toast for 12\\nsecond line/.test(tricky) && !/URL:/.test(tricky) && (tricky.match(/END:VCALENDAR/g) ?? []).length === 1, tricky);
 const noEmail = await EC.sendGoingCalendar("u1", "evt-1", deps(null, EVENT));
 const noEvent = await EC.sendGoingCalendar("u1", "evt-x", deps("a@b.co", null));
-check("no email on file or no such event: nothing is sent", !noEmail.sent && !noEvent.sent && sent.length === 1);
+check("no email on file or no such event: nothing is sent", !noEmail.sent && !noEvent.sent && sent.length === 3);
 
 // ---- only updateGoing builds one; plans get none
 const conv = src("agent/conversationTools.ts");
