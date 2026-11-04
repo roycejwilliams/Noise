@@ -18,6 +18,7 @@ import { capabilitySheet } from "./capabilities.js";
 import { ledgerFacts } from "./coFacts.js";
 import { type EventDetails } from "./eventDetails.js";
 import { DateTime } from "luxon";
+import { ASKS_ABOUT_FIND } from "./exchangeRecord.js";
 import { renderDetailsAsOf } from "./asOf.js";
 import { describeRead, readLinksLater, savedRead, type LinkRead } from "./linkReader.js";
 import { loadKit, type Kit } from "./memberKit.js";
@@ -366,9 +367,6 @@ export function sentDetailHints(ctx: Pick<TurnContext, "sent">, withinDays = 5):
     .slice(0, 5)
     .flatMap((s) => describeRead(s.name, s.read!).hints);
 }
-
-// Their words ask about a find Cue sent: where, when, the link, the price, who hosts, how to get in, or when Cue sent it.
-export const ASKS_ABOUT_FIND = /\b(?:where|what (?:day|date|time)|when|which (?:day|city)|link|address|location|located|how much|price|cost|free|who(?:'s| is| was)? (?:hosting|running|the host)|host(?:ing)?|how (?:do|can|would) i (?:get in|sign up|register|rsvp|join)|get in|rsvp|sign up|register|approval|did you (?:already )?send|send (?:it|that)|sent (?:it|that|me))\b/i;
 
 // Pure: the finds Cue sent that their message points at, so their stored fields reach the reply however old the send is. The referent
 // the turn read resolved (meant, #368) first; else a find they name; else, for a question about a find, the one Cue's last text named.

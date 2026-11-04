@@ -7,9 +7,9 @@
 import { isLightCheck, LIGHT_CHECK } from "../services/reactionsIn.js";
 import { ALWAYS_ASKABLE, questionsIn, sameQuestion } from "./repeatAsk.js";
 import { namesItem } from "../services/callClaims.js";
-import { INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeBase, type ExchangeRecord } from "../services/exchangeRecord.js";
+import { ASKS_ABOUT_FIND, INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeBase, type ExchangeRecord } from "../services/exchangeRecord.js";
 
-export type MoveMiss = { name: "resend" | "reoffer" | "double_ask" | "reask" | "wrong_referent" | "ignores_correction" | "referent_tie" | "asks_which" | "reopen" | "question_after_close" | "find_after_close" | "off_move"; why: string };
+export type MoveMiss = { name: "resend" | "reoffer" | "double_ask" | "reask" | "wrong_referent" | "ignores_correction" | "referent_tie" | "asks_which" | "reopen" | "question_after_close" | "find_after_close" | "off_move" | "non_answer"; why: string };
 // A question asking which thing they meant, in Cue's own words.
 export const WHICH_Q = /\b(?:which (?:one|of (?:these|those|them|the two|the))|which (?:\w+ )?(?:do|did) you mean|(?:do|did) you mean (?:the|that)|are you (?:asking|talking) about (?:the|that))\b/i;
 
@@ -193,8 +193,24 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
 
 // Pure: what the draft gets wrong against the move and the record. Empty when nothing does (or when there's no read to judge from).
 // theirs: their latest message (its topic words never make a reopening: they raised it).
+
+// A direct factual question (where, what day, which, who, how much, did you send ...) answered by nothing: a reassurance or a nod with no
+// fact, no link, no number or place, and no honest "I don't have it". "No worries, easy to miss" in reply to "what day did you send that"
+// is the example (2026-11-04). A brief honest "I don't know, here's the link", "the address shows after approval" or a link passes.
+export const DIRECT_FACT_Q = /(?:^|[.!?]\s+|\n)\s*(?:what|which|when|where|who|how much|how many|did you|do you|is it|was it|can you (?:send|tell|share))\b|\b(?:what|which) (?:day|date|time|city)\b|\bwhere (?:is|was|'s)\b|\bwhen did you\b/i;
+export const DEFLECTION = /\b(?:no worries|no problem|no stress|totally fine|all good|that happens|easy to miss|happens to (?:all|the best)|don'?t worry|it'?s okay|it'?s ok|understandable|no biggie|so much going on|in the middle of everything)\b/i;
+const HONEST_GAP = /\b(?:don'?t (?:have|know)|do not (?:have|know)|not sure|isn'?t (?:shown|listed|stored|public|on file|available)|aren'?t (?:shown|listed)|not (?:shown|listed|stored|public|on file)|shows? (?:up )?(?:only )?after|after (?:host )?approval|once (?:you'?re|you are) (?:approved|in|registered)|can'?t (?:see|tell|find)|couldn'?t (?:see|find)|no (?:address|date|time|record))\b/i;
+export function nonAnswer(draft: string, theirs: string): MoveMiss | null {
+  const t = theirs.trim();
+  if (!t || !draft.trim() || !(DIRECT_FACT_Q.test(t) || (ASKS_ABOUT_FIND.test(t) && /\?\s*$/.test(t)))) return null;
+  const d = draft.replace(/\s+/g, " ");
+  const hasFact = /https?:\/\//.test(d) || /\d/.test(d) || HONEST_GAP.test(d) || /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b|\b(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b|\b(?:yesterday|today|tonight|last (?:week|night)|this (?:week|morning))\b/i.test(d);
+  if (hasFact || !DEFLECTION.test(d)) return null;
+  return { name: "non_answer", why: `answers none of what they asked ("${t.slice(0, 80)}"): it reassures but gives no fact. Answer from the record, or say plainly what isn't stored and give the link` };
+}
 export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined, theirs = ""): MoveMiss[] {
-  if (!rec?.read || !draft.trim()) return [];
+  const non = nonAnswer(draft, theirs);
+  if (!rec?.read || !draft.trim()) return non ? [non] : [];
   const r = rec.read;
   const qs = questionsIn(draft.replace(URL, "")).filter((q) => !askable(q));
   const urls = (draft.match(URL) ?? []).map(normUrl);
@@ -229,12 +245,13 @@ export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined
     if (urls.some((u) => ![again, ...theirsAsked].some((d) => d?.url && normUrl(d.url) === u))) out.push({ name: "find_after_close", why: "brings a new link or find after they closed" });
   } else if (r.move === "summarize" && qs.length) out.push({ name: "off_move", why: "asks a question in a summary they asked for" });
   else if (r.move === "feeling" && urls.length) out.push({ name: "off_move", why: "brings a link or find while they're with a feeling" });
+  if (non) out.push(non);
   return out;
 }
 
 // The one rewrite's note: what missed, and the move to perform. Never a line to say.
-export function moveRedraftNote(misses: MoveMiss[], rec: ExchangeRecord): string {
-  const move = rec.read?.move;
+export function moveRedraftNote(misses: MoveMiss[], rec: ExchangeRecord | null | undefined): string {
+  const move = rec?.read?.move;
   return `Not sent. Judged against the whole exchange, this draft ${misses.map((x) => x.why).join("; ")}. ${move ? `This turn's move is ${move}: ${MOVE_MEANINGS[move]}. ` : ""}Rewrite it in your own words so it does that and none of the above, then call sendReply again.`;
 }
 
