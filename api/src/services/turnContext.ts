@@ -124,6 +124,9 @@ export type TurnContext = {
   // Their world in one read (services/memberWorld.ts, the stand-in for discoveryStatus): what waits on them, what's running, what's
   // next, their live thread and their clock, fenced. A check-in reads it (Royce, 2026-10-14).
   world?: import("./memberWorld.js").MemberWorld | null;
+  // What the pick is holding for them (harness/waiting.ts, notification grouping item 9), best first, labels only and stripped of other
+  // members' details. Present only when something waits: it turns on anythingForMe and the reply's one allowed mention.
+  waiting?: import("../harness/waiting.js").WaitingItem[];
 };
 
 // The sections of member knowledge a text reply reads. The path reads the rest itself: the thread (raw, with its hold lines and the
@@ -500,6 +503,7 @@ export async function assembleContext(
   const stopNote = await Promise.all([import("./askRetire.js"), stopNotesP]).then(([A, notes]) => A.firstSurviving(notes, keep)).catch(() => null);
   const coldStart = await coldStartP;
   const door = await doorP;
+  const waiting = await import("../harness/waiting.js").then((W) => W.loadWaiting(userId)).catch(() => []);
   // Asks and goals read raw go through keep like everything else here (another member's details stripped, fails closed).
   const rawSearching = await searchingP;
   const keptAsks = keepAll(rawSearching.asks), keptGoals = keepAll(rawSearching.goals);
@@ -536,7 +540,7 @@ export async function assembleContext(
       }),
     )
     .catch(() => null);
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, statusCheck, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead, world };
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, statusCheck, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead, world, ...(waiting.length ? { waiting } : {}) };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

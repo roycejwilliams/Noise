@@ -251,7 +251,7 @@ export function orderForCache<T extends Record<string, any>>(tools: T): T {
 export const NEW_FOR_THEM = new Set([
   "sendContactCard", "whatCoKnows", "correctWhatCoKnows", "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "moveLane",
   "answerShareAsks", "shareAskInIntros", "answerBriefName", "shareLocationYes", "flagSafetyConcern", "checkInvitesLeft", "markArrived",
-  "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "shareLink", "requestEventIntro", "followUp",
+  "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
   "firstRead", "makePage", "updatePage", "takeDownPage", "readInspo", "readReference", "makeDeck", "updateDeck", "openArtifact",
   "shareArtifact", "deleteImages", "resetLink", "resendLink", "stopSharing", "searchEvents", "webSearch", "searchPosts", "readPage",
   "shareFinds", "draftEmail", "emailPlan", "researchBrief", "writeDocument", "readDocument", "writeFromFile", "deleteMyFiles",
@@ -1932,6 +1932,35 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // "Anything for me?" (harness/waiting.ts, notification grouping item 9): the door's pick, now, as the answer to their text. What goes is
+    // marked sent by the same ledger as any pick, so it is never sent again, and it lands in the exchange record. Their own rules still hold it.
+    anythingForMe: tool({
+      description: toolUse("anythingForMe"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was sent." };
+        const W = await import("../harness/waiting.js");
+        const r = await W.pullWaiting(ctx.userId);
+        const logged = (status: string, n: number) => recordDecision({ layer: 3, decision: "waiting.pull", userId: ctx.userId, outcome: status === "sent" ? "act" : "skip", action: status, proposal: { texts: n } }).catch(() => {});
+        if (r.status === "sent") {
+          await logged("sent", r.delivered.length);
+          // What went is the turn's whole answer (the same way a page's link is): no leftover text or fallback line after it.
+          ctx.onLinkDelivered?.();
+          ctx.facts?.add("did_this_turn", `Texted them what was waiting for them (${r.delivered.length} text${r.delivered.length === 1 ? "" : "s"}) because they asked.`);
+          return { ok: true, sent: r.delivered.length, moreWaiting: r.left > 0, note: "It went as its own text(s); that is the whole answer. Don't repeat or summarize it." + (r.left > 0 ? " There is more waiting; don't list it. If they ask for more they can ask again." : "") };
+        }
+        await logged(r.status, 0);
+        if (r.status === "nothing") {
+          ctx.facts?.add("known", "Nothing is waiting for them right now.");
+          return { ok: true, waiting: 0, note: "Nothing is waiting for them right now. Say so in one plain line; don't make something up or promise something is coming." };
+        }
+        if (r.status === "none_ready") return { ok: true, waiting: r.waiting, sent: 0, note: "Something is waiting but none of it can go right now (their own settings, or timing). Say that in one plain line without listing or describing it, and don't say when." };
+        if (r.status === "slow" || r.status === "busy") return { ok: true, sent: 0, note: "It's being put together and will arrive as its own text in a moment. Say that in one short line; don't describe what it is." };
+        notDone("What was waiting for them couldn't be read just now.");
+        return { ok: false, error: "Couldn't read what's waiting right now. Say so plainly and offer to try again in a bit." };
+      },
+    }),
+
     // Search right now when they ask and nothing was searched this turn.
     // Send a link as its own message, only if it's actually on file.
     shareLink: tool({
@@ -2156,9 +2185,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // Tools that can't apply this turn aren't offered (capabilities.ts situations).
   if (ctx.turn) {
     const t = ctx.turn;
-    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, walkinDue: !!ctx.walkinAsk, doorOpen: t.door ? doorOpen(t.door).open : false, voiceRead: voiceReadPrereqs() });
+    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, walkinDue: !!ctx.walkinAsk, doorOpen: t.door ? doorOpen(t.door).open : false, voiceRead: voiceReadPrereqs(), waiting: !!t.waiting?.length });
     for (const name of toolsOutOfSituation(s)) delete (tools as Record<string, unknown>)[name];
   }
+  // "Anything for me?" exists only on a turn known to have something waiting (harness/waiting.ts), turn or no turn: a reply with nothing
+  // waiting is offered exactly the tools it always was.
+  if (!ctx.turn?.waiting?.length) delete (tools as Record<string, unknown>).anythingForMe;
   // The voice read's answers exist only where the read can run at all (never in production), turn or no turn.
   if (!voiceReadPrereqs()) delete (tools as Record<string, unknown>).voiceRead;
 

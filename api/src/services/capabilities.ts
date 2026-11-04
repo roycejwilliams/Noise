@@ -600,6 +600,15 @@ export const ABILITIES: Ability[] = [
     use: "Call it when they tell you, in this message, to search somewhere else from now on for everything, not just one ask (\"switch the search to San Francisco going forward\", \"look in Oakland from now on\"). Pass the place and their words saying it, copied exactly. One ask or goal in a new place is that ask's place (saveAsk's place, or correctWhatCoKnows), not this. Their home city by name sets it back to home. If it comes back with askThem, nothing changed: ask that in one line inside your reply. Say it changed only once this comes back ok, and say where it searches now; if it didn't go through, say plainly nothing changed.",
   },
   {
+    id: "waiting",
+    // Listed only on a turn that has something waiting (SITUATIONAL below), so no other reply's tools or sheet change.
+    sheet: null,
+    can: "When they ask whether there's anything for them, Cue brings what it has been holding, best first, as one message.",
+    tool: "anythingForMe",
+    limits: { perTurn: 1, perDay: 6 },
+    use: "When they ask whether there's anything for them (\"anything for me?\", \"what've you got?\", \"anything new?\", \"got anything for me today?\"), call this. It sends what Cue has been holding for them right now, best first, as its own text (at most three texts, or two finds with their captions); that text is the whole answer, so don't repeat or summarize it. If it says nothing is waiting or nothing can go now, say so in one plain line: no list, no promise of when, nothing about anyone else.",
+  },
+  {
     id: "list_sent",
     sheet: null,
     can: "Cue can recap what it has sent or recommended them, and resend a link from it.",
@@ -836,7 +845,8 @@ export const LIMITS: string[] = [
 // walkin: the walk-in question is due this turn (routes/sendblue.ts walkinAskDue); without it the walk-in ask isn't listed.
 // voiceRead: the voice read can run here at all (services/voiceRead.ts voiceReadPrereqs; never in production); without it the voice
 // read's entry isn't listed.
-export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean; door?: boolean; walkin?: boolean; voiceRead?: boolean };
+// waiting: something is waiting for them at the door (harness/waiting.ts); listed only on a turn known to have it, like the walk-in ask.
+export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean; door?: boolean; walkin?: boolean; voiceRead?: boolean; waiting?: boolean };
 const SITUATIONAL: Record<string, keyof Situation> = {
   kit: "kit",
   task_update: "tasks",
@@ -846,13 +856,14 @@ const SITUATIONAL: Record<string, keyof Situation> = {
   first_read: "door",
   walkin_ask: "walkin",
   voice_read: "voiceRead",
+  waiting: "waiting",
 };
-export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean; doorOpen?: boolean; walkinDue?: boolean; voiceRead?: boolean }): Situation {
-  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday, walkin: !!o.walkinDue, ...(o.doorOpen === undefined ? {} : { door: o.doorOpen }), ...(o.voiceRead ? { voiceRead: true } : {}) };
+export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean; doorOpen?: boolean; walkinDue?: boolean; voiceRead?: boolean; waiting?: boolean }): Situation {
+  return { ...(o.waiting ? { waiting: true } : {}), kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday, walkin: !!o.walkinDue, ...(o.doorOpen === undefined ? {} : { door: o.doorOpen }), ...(o.voiceRead ? { voiceRead: true } : {}) };
 }
 // An entry is left out only when its situation is known not to apply; one the caller didn't read (door) stays. The walk-in ask is
 // the other way round: listed only on a turn known to have it due (one turn of one night; every other reply's sheet is unchanged).
-const ONLY_WHEN_KNOWN = new Set<keyof Situation>(["walkin", "voiceRead"]);
+const ONLY_WHEN_KNOWN = new Set<keyof Situation>(["walkin", "voiceRead", "waiting"]);
 const outOf = (s: Situation | undefined, key: keyof Situation) => (ONLY_WHEN_KNOWN.has(key) ? s?.[key] !== true : !!s && s[key] === false);
 const sheetLine = (a: Ability): string | null => (a.sheet === undefined ? a.can : a.sheet);
 export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
@@ -1016,7 +1027,7 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
 export const CHANGES_NOTHING: ReadonlySet<string> = new Set([
   "sendReply", "reactInsteadOfReplying", "leaveItAtReaction", "markTopicAsked", "askedWalkin",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readReference", "readInspo", "readDocument", "openArtifact",
-  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows",
+  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows", "anythingForMe",
   "sendContactCard", "shareFinds", "draftEmail", "emailPlan", "shareLink", "resendLink", "sendProductUpdates",
   "saveFeedbackForTeam", "flagSafetyConcern",
 ]);

@@ -64,7 +64,7 @@ import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
 import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, type ClosedSet, type ClosedSubject } from "./closedSubject.js";
-import { attentionChecks, deliveredItems, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
+import { attentionChecks, deliveredItems, SEND_TIME, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
 
 // How soon a check-in whose feeling read couldn't answer is tried again (harness/attention.ts feelingCheck infra).
 export const FEELING_READ_RETRY_MINUTES = 30;
@@ -824,7 +824,7 @@ export function watchOfferMatches(logged: string, lastCoLine: string): boolean {
 // (the first look, today or tomorrow, a task that texts them itself); a check-in before then talks over that promise. A safety
 // follow-up is never held by it.
 export const NEW_MEMBER_QUIET_HOURS = 24;
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "moodHold" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away" | "joinedAt">, opts: { answering?: boolean; recapApproved?: boolean } = {}): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "moodHold" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away" | "joinedAt">, opts: { answering?: boolean; recapApproved?: boolean; pulled?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -896,7 +896,8 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   // On a hard day only companionship goes (Royce, 2026-11-02, notification grouping item 8, harness/attention.ts hardDayHolds): a find
   // or an offer Cue starts on its own waits until they're okay, at most the hold's cap (heldForMood). Timing only, never dropped for it.
   // What they asked for (an answer to their ask, a delivery) still goes, as the 09-18 rule had it ("we can't isolate them").
-  if (hardDayHolds({ cls: candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type], payload: c.payload, held: heldForMood(state) })) {
+  // (Not for a pulled one: they asked, and a hard day never means a member who asks gets nothing.)
+  if (!opts.pulled && hardDayHolds({ cls: candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type], payload: c.payload, held: heldForMood(state) })) {
     checks.push({ name: "hard_day", pass: false, reason: `a hard day: only companionship goes; a find or an offer Cue starts waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
   if (draftWaitRead(c, state)?.hold) {
@@ -1003,16 +1004,17 @@ export function pacedByEngagement(c: Pick<Candidate, "type" | "payload">): boole
   return !((c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true);
 }
 
-export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean; recapApproved?: boolean } = {}): Evaluation {
+export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean; recapApproved?: boolean; pulled?: boolean } = {}): Evaluation {
   // Opt-out and local hours apply to the person; caps and the unanswered
   // pause apply per lane, so each candidate is checked against its own lane.
+  // Pulled (harness/waiting.ts: they asked "anything for me?"): this is the turn's own answer, so their hours don't hold it.
   const byLane: Record<Lane, GateCheck[]> = {
-    room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing }),
-    other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing }),
+    room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing, skipHours: opts.pulled }),
+    other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing, skipHours: opts.pulled }),
   };
   const legacyByLane: Record<Lane, GateCheck[]> = {
-    room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing, legacyPace: true }),
-    other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing, legacyPace: true }),
+    room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing, legacyPace: true, skipHours: opts.pulled }),
+    other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing, legacyPace: true, skipHours: opts.pulled }),
   };
   const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
@@ -1022,10 +1024,11 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     const laneChecks = (pacedByEngagement(candidate) ? byLane : legacyByLane)[laneOf(candidate.type)].filter(
       (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(morning && MORNING_SKIPS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap") && !safetyPassesHold(k, candidate),
     );
-    const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering, recapApproved: opts.recapApproved })];
+    const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering, recapApproved: opts.recapApproved, pulled: opts.pulled })];
     // The member's own rules (harness/notifyGate.ts), before any draft is written. A safety follow-up keeps its precedence.
     if (state.memberRules && !isSafetyFollowUp(candidate)) {
-      const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: candidateClass(candidate.type, answering, candidate.payload), channel: "text", sent: state.memberRules.sent });
+      // A pulled delivery is something they asked for, so a rule that covers only what Cue starts doesn't hold it; one that covers all does.
+      const { retryAt: _r, ...rule } = memberRuleCheck(state.memberRules.prefs, { now: state.now, cls: opts.pulled ? "requested" : candidateClass(candidate.type, answering, candidate.payload), channel: "text", sent: state.memberRules.sent });
       checks.push(rule);
     }
     // A member's attention (harness/attention.ts): the defaults with no rule of theirs, the back-off after silence, one thread a day.
@@ -1589,7 +1592,7 @@ export type ProactiveRegistry = Record<ProactiveType, TypeSpec>;
 
 // ---------- persistence
 
-function rowToCandidate(r: any): Candidate {
+export function rowToCandidate(r: any): Candidate {
   return {
     id: String(r.id),
     userId: r.user_id,
@@ -1795,8 +1798,8 @@ async function midConversationNow(db: Queryable, userId: string, now: Date, last
 }
 // A member's attention (harness/attention.ts): their own messages' times (8 days, the window the gate's ledger read covers), what the
 // pick sent today as candidates (their thread ids on them), and whether Cue's last message closed with the interest question.
-async function loadInboundTimes(db: Queryable, userId: string): Promise<Date[]> {
-  const { rows } = await db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%') AND created_at > NOW() - INTERVAL '8 days'`, [userId]);
+async function loadInboundTimes(db: Queryable, userId: string, days = 8): Promise<Date[]> {
+  const { rows } = await db.query(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%') AND created_at > NOW() - ($2 || ' days')::interval`, [userId, String(days)]);
   return rows.map((r: any) => new Date(r.created_at));
 }
 // The defaults read again inside the send's lock (review of #367): two sends at once (the cron and the morning sweep's own dispatch) can't
@@ -1818,14 +1821,18 @@ async function lockedDefaults(db: Queryable, o: { userId: string; now: Date; zon
 
 async function loadAttention(db: Queryable, userId: string, now: Date, zone: string | null, sent: Counted[]): Promise<AttentionState> {
   const dayStart = DateTime.fromJSDate(now).setZone(hoursZone(zone)).startOf("day").toJSDate();
-  const [inbound, { rows: today }, { rows: last }] = await Promise.all([
-    loadInboundTimes(db, userId),
+  // The longer read is what their usual reply hour is learned from (harness/attention.ts SEND_TIME); the 8-day window the back-off and
+  // "replies often" read is cut from it, so it is the same data (no new table).
+  const [history, { rows: today }, { rows: last }] = await Promise.all([
+    loadInboundTimes(db, userId, SEND_TIME.lookbackDays),
     db.query(`SELECT type, target_key, payload FROM proactive_candidates WHERE user_id = $1 AND status = 'sent' AND COALESCE(decided_at, updated_at) >= $2`, [userId, dayStart]),
     db.query(`SELECT COALESCE(payload->>'closingAsked', 'false') = 'true' AS asked, COALESCE(decided_at, updated_at) AS at FROM proactive_candidates WHERE user_id = $1 AND status = 'sent' ORDER BY COALESCE(decided_at, updated_at) DESC, (payload ? 'closingAsked') DESC LIMIT 1`, [userId]),
   ]);
+  const inbound = history.filter((t) => t.getTime() > now.getTime() - 8 * DAY);
   return {
     sent,
     inbound,
+    history,
     sentToday: today.map((r: any) => ({ type: String(r.type), targetKey: String(r.target_key), payload: r.payload ?? {} })),
     lastAsked: last[0]?.at ? { at: new Date(last[0].at), asked: last[0].asked === true } : null,
   };
@@ -2135,7 +2142,7 @@ async function sendWithLedger(
   c: Candidate,
   person: Person,
   messages: string[],
-  opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[] } = {},
+  opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[]; pulled?: boolean } = {},
   extras: { candidate: Candidate; messages: string[] }[] = [],
   // A note riding in this text with its own once-only key (the name notice): claimed here, inside the lock, or the text goes without it.
   ride: { candidate: Candidate; without: string[] } | null = null,
@@ -2168,14 +2175,15 @@ async function sendWithLedger(
     const morning = morningFind(c, now, person.timezone);
     const checks = [
       // A safety follow-up is never held for the conversation (isSafetyFollowUp).
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt, midConversation: midConversation && !isSafetyFollowUp(c) }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
+      // A pulled delivery is the answer to the text they just sent, so the conversation going on is the point, not a reason to wait.
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt, midConversation: midConversation && !isSafetyFollowUp(c) && !opts.pulled }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c), skipHours: opts.pulled }).filter(
         (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(morning && MORNING_SKIPS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
       ),
-      ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
+      ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering, pulled: opts.pulled }),
     ];
     // The member's own rules, read inside the lock with what's been sent (harness/notifyGate.ts): two sends at once can't both pass a
     // cap, and a rule set after this was queued still decides it. A safety follow-up keeps its precedence (it goes, and counts).
-    const cls = candidateClass(c.type, answering, c.payload);
+    const cls = opts.pulled ? ("requested" as SendClass) : candidateClass(c.type, answering, c.payload);
     if (!isSafetyFollowUp(c)) {
       const { retryAt: _r, ...rule } = await memberRuleGate(client, { userId: person.userId, now, cls, channel: "text" });
       checks.push(rule);
@@ -2912,7 +2920,14 @@ async function oneDispatchAtATime(userId: string, fn: () => Promise<void>): Prom
     dispatchInFlight.delete(userId);
   }
 }
-async function dispatchForUserInScope(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
+// pulled (harness/waiting.ts, notification grouping item 9): they asked "anything for me?", so this pick is the answer to their text, not
+// something Cue started. It doesn't wait for the gathering window, the hold or the spacing, isn't held by their hours or the conversation
+// going on, and counts as requested for their own rules; everything else is the same pick: the bands (matching first), the expiry, the
+// day's find cap, what they closed, the composer's caps (3 bubbles, 2 finds), the draft's checks and the send-time ledger. onWent is told
+// what actually went (the delivered texts), once, after the ledger row and the type's own record were written.
+export type DispatchOpts = { ignorePacing?: boolean; dryRun?: boolean; pulled?: boolean; onWent?: (w: { candidates: string[]; delivered: string[] }) => void };
+async function dispatchForUserInScope(registry: ProactiveRegistry, userId: string, opts: DispatchOpts = {}): Promise<void> {
+  if (opts.pulled && !opts.ignorePacing) opts = { ...opts, ignorePacing: true };
   // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
   if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUserInScope(registry, userId, opts));
   const person = await loadPerson(userId);
@@ -2924,6 +2939,8 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
 
   const now = new Date();
   const member = await memberSendState(userId, person, now);
+  // A pull is the answer to their text: the pick's own hold ("nothing good to send now") and the space after a handed-off task don't hold it.
+  if (opts.pulled) (member.holdUntil = null, (member.spaceUntil = null));
   // A hold, or the spacing after work was handed to a task (harness/payloadFirst.ts): nothing goes. Unlike hold_until, new candidates
   // don't clear the space.
   // Said, not silent (Royce, 2026-10-13): why nothing goes, once per hold.
@@ -2953,7 +2970,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   const deadFound = closedAmong(all, closedAtStart);
   const dead = deadFound.map((f) => f.candidate);
   if (!opts.dryRun) await dropClosed(registry, userId, deadFound, "dispatch");
-  const state: PickState = { ...member.state, candidates: all.filter((c) => !dead.includes(c)) };
+  const state: PickState = { ...member.state, ...(opts.pulled ? { midConversation: false } : {}), candidates: all.filter((c) => !dead.includes(c)) };
   // The learned preference is written when it flips, from the same read.
   if (member.raw.kinds && !opts.dryRun) await syncKindPreferences(userId, member.raw.kinds.verdicts, member.raw.kinds.stored).catch(() => 0);
   // Grouped by their thread (harness/attention.ts): an item whose ids don't say which of their threads it serves is read once, when
@@ -3077,7 +3094,8 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     else logDraftDecision(userId, decision, type);
   };
   if (decision.kind === "wait" || !picked.pick) {
-    if (!opts.dryRun) await pool.query(
+    // (Not for a pull: a pick that finds nothing worth sending right now doesn't hold the member's regular pick for hours.)
+    if (!opts.dryRun && !opts.pulled) await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
        ON CONFLICT (user_id) DO UPDATE SET hold_until = EXCLUDED.hold_until`,
       [userId, decision.holdHours ?? RULES.pickNoneHoldHours],
@@ -3597,6 +3615,8 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
       recordDecision({ layer: 7, decision: "proactive.thread_fold", userId, outcome: "skip", action: `fold:${f.candidate.type}`, reason: f.why, proposal: { candidate: f.candidate.id, into: c.id } }).catch(() => {});
     }
   }
+  // What went to them, for the pull that asked for it (harness/waiting.ts). Ids and the texts that were delivered; never logged.
+  opts.onWent?.({ candidates: [c.id, ...extras.map((e) => e.candidate.id)], delivered: result.delivered });
   await registry[c.type].onSent?.(c, person, result.delivered, composed ? undefined : draft.meta).catch((err: any) =>
     console.error(`proactive: onSent(${c.type}) failed (non-fatal):`, err?.message ?? err),
   );

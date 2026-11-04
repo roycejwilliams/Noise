@@ -130,6 +130,8 @@ export type TextPicture = {
   // They sent the same text again while waiting (answer once), and a walk-in check-in with no ask on file (ask it, once).
   repeat?: string | null;
   walkinAsk?: string | null;
+  // What the pick is holding for them and the one mention a normal reply may make of it (harness/waiting.ts waitingMention).
+  waiting?: string | null;
   turn: Pick<TurnContext, "tasks" | "todayEvent"> | null;
 };
 
@@ -143,6 +145,7 @@ export function judgeText(p: TextPicture): Decision {
   else if (p.read?.aboutCo) instructions.push(ABOUT_CO_INSTRUCTION);
   if (p.repeat) instructions.push(p.repeat);
   if (p.walkinAsk) instructions.push(p.walkinAsk);
+  if (p.waiting) instructions.push(p.waiting);
   if (p.clarify) instructions.push(p.clarify);
   const kind: DecisionKind = p.safetyConcern ? "act" : p.owed || p.read?.asksForList ? "deliver" : p.clarify || p.walkinAsk ? "ask" : "act";
   const why = p.safetyConcern
@@ -191,12 +194,15 @@ export type BriefingPicture = {
   // Their local time and what's ahead (services/timeline.ts), or null when it didn't load.
   clock: { fact: string; note?: string | null } | null;
   finds: VoiceFinds;
+  // What the pick is holding for them, as the call's lines (harness/waiting.ts callWaitingLines): spoken only if they ask whether there's
+  // anything for them, best first. A guard's veto empties it with the finds.
+  waiting?: string[];
   // Guards that veto offers on this call, applied after the brain judges (e.g. a safety hold: services/safety.ts).
   vetoes?: { guard: GuardName; why: string }[];
 };
 export type CallBriefing = { rightNow: string; findsNow: string };
 // The briefing that was built, or the fallback a slow or failed build falls to (a guard: never a pause, never a guessed offer).
-export type BriefingDecision = Decision & { briefing: CallBriefing; source: "built" | "fallback" };
+export type BriefingDecision = Decision & { briefing: CallBriefing; source: "built" | "fallback"; waiting?: string[] };
 
 export function renderFinds(f: VoiceFinds): string {
   if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;
@@ -207,9 +213,10 @@ export function renderFinds(f: VoiceFinds): string {
 const pacificClock = (now: Date) => `It is ${DateTime.fromJSDate(now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`;
 
 // The finds the call is handed follow the decision: only a "deliver" with no event_offer rule hands any over.
-function findsFor(d: Pick<Decision, "dontSay">, finds: VoiceFinds): string {
+function findsFor(d: Pick<Decision, "dontSay">, finds: VoiceFinds, waiting: string[] = []): string {
   const held = ruledOut(d, "event_offer");
-  return held ? renderFinds(finds.available ? { available: false, reason: held.why } : finds) : renderFinds(finds);
+  const base = held ? renderFinds(finds.available ? { available: false, reason: held.why } : finds) : renderFinds(finds);
+  return waiting.length ? `${base}\n${waiting.join("\n")}`.slice(0, 2800) : base;
 }
 
 // Pure: what the call may offer and how it reads the clock. Something on file is delivered; nothing means wait (no event offered).
@@ -220,7 +227,8 @@ export function judgeBriefing(p: BriefingPicture): BriefingDecision {
   const offering = p.finds.available && p.finds.items.length > 0;
   const why = offering ? "Cue has finds on file for them that the call can offer" : "nothing on file to offer, so the call offers no event";
   const dontSay: Rule[] = offering ? [] : [{ what: "event_offer", why: p.finds.available ? "nothing on file to offer" : p.finds.reason }];
-  const findsNow = findsFor({ dontSay }, p.finds);
+  const waiting = p.waiting ?? [];
+  const findsNow = findsFor({ dontSay }, p.finds, waiting);
   const judged: BriefingDecision = {
     surface: "call",
     kind: offering ? "deliver" : "wait",
@@ -230,6 +238,7 @@ export function judgeBriefing(p: BriefingPicture): BriefingDecision {
     dontSay,
     briefing: { rightNow, findsNow },
     source: "built",
+    ...(waiting.length ? { waiting } : {}),
   };
   return (p.vetoes ?? []).reduce((d, v) => vetoBriefingOffers(d, p.finds, v.guard, v.why), judged);
 }
@@ -237,9 +246,11 @@ export function judgeBriefing(p: BriefingPicture): BriefingDecision {
 // A guard's veto after the brain: the call offers nothing. It only ever adds the hold; nothing here can lift one.
 export function vetoBriefingOffers(d: BriefingDecision, finds: VoiceFinds, guard: GuardName, why: string): BriefingDecision {
   const dontSay: Rule[] = ruledOut(d, "event_offer") ? d.dontSay : [...d.dontSay, { what: "event_offer", why }];
+  // A veto (a safety hold above all) empties what's waiting with the finds: it is offered only where finds are.
   const findsNow = findsFor({ dontSay }, finds);
+  const { waiting: _held, ...rest } = d;
   return {
-    ...d,
+    ...rest,
     kind: "wait",
     why: d.kind === "wait" ? d.why : `${why} (the ${guard} guard holds the offers)`,
     guards: d.guards.includes(guard) ? d.guards : [...d.guards, guard],

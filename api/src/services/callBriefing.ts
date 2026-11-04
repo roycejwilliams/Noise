@@ -46,12 +46,15 @@ export async function planCallBriefing(userId: string, now: Date = new Date()): 
   const slow = new Promise<"slow">((r) => setTimeout(() => r("slow"), SHARED_WAIT_MS).unref?.());
   const k = await (shared.read ? Promise.race([shared.read, slow]).then((x) => (x === "slow" ? own() : x)) : own()).catch(() => null);
   const city: string | null = k?.identity.city ?? null;
-  const [clock, finds, safetyHold] = await Promise.all([
+  const [clock, finds, safetyHold, waiting] = await Promise.all([
     timelineFor(userId, city, now).catch(() => null),
     voiceFinds(userId, now).catch((): VoiceFinds => ({ available: false, reason: "the lookup didn't load" })),
     safetyHoldOrUnknown(userId),
+    // What the pick is holding for them (harness/waiting.ts), the same list a text's pull and a reply read: labels only, never another
+    // member's details. A read that fails is nothing to say, not a guess.
+    import("../harness/waiting.js").then(async (W) => W.callWaitingLines((await W.waitingOrNull(userId, now)) ?? [])).catch((): string[] => []),
   ]);
-  return judgeBriefing({ userId, now, clock, finds, vetoes: safetyHold ? [{ guard: "safety", why: SAFETY_HOLD_WHY }] : [] });
+  return judgeBriefing({ userId, now, clock, finds, waiting, vetoes: safetyHold ? [{ guard: "safety", why: SAFETY_HOLD_WHY }] : [] });
 }
 
 // The safety guard for a call's offers, failing closed: a hold on (services/safety.ts, offers paused 3 days), or a read that
