@@ -772,7 +772,7 @@ export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; li
 // Never on a call, whatever the registry says: anything that needs another member's yes (an intro), anything that costs money,
 // and everything not listed here (web research, reading pages, drafting email: slow or multi-step, so a task or a promise
 // picks it up right after the call).
-export type CallRun = { run: "now"; kind: "send" | "save" | "start" | "read"; ms: number } | { run: "after"; waitMs: number };
+export type CallRun = { run: "now"; kind: "send" | "save" | "start" | "read"; ms: number };
 const SEND: CallRun = { run: "now", kind: "send", ms: 4000 };
 const SAVE: CallRun = { run: "now", kind: "save", ms: 3000 };
 const START: CallRun = { run: "now", kind: "start", ms: 3000 };

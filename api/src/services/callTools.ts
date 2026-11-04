@@ -34,7 +34,6 @@ function within<T>(work: Promise<T>, ms: number): Promise<T | typeof STILL_GOING
   const late = new Promise<typeof STILL_GOING>((r) => { timer = setTimeout(() => r(STILL_GOING), ms); });
   return Promise.race([work, late]).finally(() => { if (timer) clearTimeout(timer); });
 }
-const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
 // A start tool run again on the same call this soon after it came back done is a retry of it (a re-sent delegation), not a new ask.
 export const START_RETRY_MS = 20_000;
 // What a start is for: its goal (startTask) or what's looked for (researchBrief, saveAsk).
@@ -101,7 +100,6 @@ Whenever you'd say you'll do something for them after the call (look for somethi
 // Keyed by the call's token; an hour is longer than any call.
 const CALL_MEMORY_MS = 60 * 60_000;
 
-// okAt: when a page or a deck (by kind) last went through on this call; failTextSent: the one honest text already went.
 // voiceReadOff: they said stop (or no) to the voice read on this call: every later turn drops its lines and carries the note.
 // onFile: what this call can text them by name (their finds, what searchEvents found on the call, what Cue sent before), read once.
 // found: events a search on this call returned, by name. owed: links a send on this call didn't get to them yet (sent the moment
@@ -110,7 +108,7 @@ type OnFile = { name: string; url: string; caption: string };
 // jobs: durable work started or queued on this call (its goal and their words, or what an owed send was for): what a spoken "I've
 // started" or "I'll text you" may stand on (callClaims.ts jobBacked). started: each start tool's last done result and when, so a retry
 // inside START_RETRY_MS is that job, whatever its words.
-type CallMem = { jobs?: string[]; started?: Record<string, { at: number; need: string; result: unknown }[]>; at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
+type CallMem = { jobs?: string[]; started?: Record<string, { at: number; need: string; result: unknown }[]>; at: number; did: string[]; voiceReadOff?: boolean; onFile?: Promise<OnFile[]>; found?: OnFile[]; owed?: OnFile[]; inflight?: Map<string, OnFile[]> };
 const callMemory = new Map<string, CallMem>();
 function memoryFor(key: string): CallMem {
   const now = Date.now();
