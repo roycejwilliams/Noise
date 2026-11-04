@@ -33,7 +33,7 @@ import type { ReplySnapshot, SnapEntry } from "../services/memberSnapshot.js";
 import { voiceReadPrereqs } from "../services/voiceRead.js";
 import { kitLines } from "../services/memberKit.js";
 import { situationFor, type Situation } from "../services/capabilities.js";
-import { carryingBlock, sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
+import { carryingBlock, referredSent, sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { TEAM_BUILDER_LINE, isTeamMember } from "../services/extensions.js";
@@ -395,7 +395,10 @@ export async function gatherReplyFacts(
   for (const line of await introRecordFacts(userId).catch(() => [] as string[])) addFact(rf, "did_before", line);
   // What's on file for what Co recently sent: times and places, and what isn't
   // (services/turnContext.ts), before Co ever says it doesn't have them.
-  if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
+  if (opts.turn) {
+    const lastCo = (opts.context ?? "").split(/\n/).reverse().find((l) => /^(?:Co|Cue) replied:/i.test(l)) ?? null;
+    for (const line of sentDetailLines(opts.turn, 5, new Date(), { zone, also: referredSent(opts.turn.sent, { message, lastCoText: lastCo }) })) addFact(rf, "known", line);
+  }
   // A live question ("still spots?", "what time?", "how much?"): the Luma pages of what Co sent them lately, read now, so the answer
   // is today's (Phase B, B3, services/asOf.ts). Only this member's own sends. Everything else stored stays labelled as of its read.
   if (opts.turn) {
@@ -515,6 +518,15 @@ export async function gatherReplyFacts(
     addFact(rf, "scheduled", `A call is scheduled for ${local.toFormat("cccc, LLLL d 'at' h:mm a")} (${row.timezone}).`);
   }
 
+  // The find they're asking about, if it isn't the newest one: its own stored record (addStoredOfferFacts).
+  if (opts.turn?.sent?.length) {
+    const newest = (() => { try { return String(JSON.parse(reveal.rows[0]?.content ?? "{}")?.match?.name ?? ""); } catch { return ""; } })();
+    const lastCo = (opts.context ?? "").split(/\n/).reverse().find((l) => /^(?:Co|Cue) replied:/i.test(l)) ?? null;
+    for (const f of referredSent(opts.turn.sent, { message, lastCoText: lastCo })) {
+      if (f.name.toLowerCase() === newest.toLowerCase()) continue;
+      await addStoredOfferFacts(rf, userId, f.name, zone).catch(() => false);
+    }
+  }
   if (reveal.rows[0]) {
     try {
       const { match } = JSON.parse(reveal.rows[0].content) as { match: any };
@@ -770,6 +782,28 @@ export function addEventFacts(
     const missing = missingEventDetails(match.name, match.details);
     if (missing) addFact(rf, "unknown", missing);
   }
+}
+
+// The stored record of one find the member is asking about, by name, however long ago it went out (45 days, the sent list's reach).
+// The reply otherwise reads only the single newest event_offer_pending from the last 3 days, so a find sent five days ago with newer
+// finds since never reached the reply (2026-11-04, "Where is that one located?"). Not the newest N rows of anything: the one asked
+// about. Its saved details are used as stored (enrichMatch only reads a page when none were saved). Returns whether a record was found.
+export async function addStoredOfferFacts(rf: ReplyFacts, userId: string, name: string, zone: string | null, db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<boolean> {
+  const want = name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (want.length < 3) return false;
+  const { rows } = await db.query(
+    `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'event_offer_pending' AND created_at > NOW() - INTERVAL '45 days' AND content ILIKE $2 ORDER BY created_at DESC LIMIT 10`,
+    [userId, `%${name.replace(/[%_\\]/g, " ")}%`],
+  );
+  for (const r of rows) {
+    let match: any = null;
+    try { match = JSON.parse(r.content)?.match; } catch { continue; }
+    if (!match?.name || String(match.name).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() !== want) continue;
+    addEventFacts(rf, await enrichMatch(match), null, zone);
+    if (match.city && !match.details?.city && !match.details?.venue && !match.details?.address) addFact(rf, "known", `"${match.name}" is in ${match.city}; its street address isn't stored.`);
+    return true;
+  }
+  return false;
 }
 
 // tail: the reply's own tail, which leaves out the snapshot's entries (the reply reads those in its cached prefix). Every other reader

@@ -17,6 +17,7 @@ import pool from "../db/db.js";
 import { capabilitySheet } from "./capabilities.js";
 import { ledgerFacts } from "./coFacts.js";
 import { type EventDetails } from "./eventDetails.js";
+import { DateTime } from "luxon";
 import { renderDetailsAsOf } from "./asOf.js";
 import { describeRead, readLinksLater, savedRead, type LinkRead } from "./linkReader.js";
 import { loadKit, type Kit } from "./memberKit.js";
@@ -45,6 +46,8 @@ export type SentItem = {
   checkedAt?: string | null;
   // Its date or deadline as on file (an opportunity's deadline, an event's date or start), so nothing past it is raised as waiting.
   endsOn?: string | null;
+  // Its city as stored with the send (the offer's match.city), for when no details were saved.
+  city?: string | null;
 };
 
 export type TurnContext = {
@@ -237,6 +240,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: an
       had.postText ??= item.postText;
       had.reaction ??= item.reaction;
       had.endsOn ??= item.endsOn ?? null;
+      had.city ??= item.city ?? null;
     }
   };
   for (const r of revealed) {
@@ -257,6 +261,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: an
       postText: m.opportunity?.postText ?? m.evidence ?? null,
       checkedAt: m.checkedAt ?? null,
       endsOn: endsOnOf(m),
+      city: m.city ?? m.details?.city ?? null,
     });
   }
   for (const r of recs) {
@@ -313,23 +318,43 @@ export async function fillDetails(items: SentItem[], opts: { withinDays?: number
 // What's on file for each recent send, and what isn't, as facts: "I don't
 // have the start time" is then only ever true.
 // now: the moment it's read for (tests pin it; 2026-10-11 the Phase B test went red a day later on the real clock).
-export function sentDetailLines(ctx: Pick<TurnContext, "sent"> & { google?: string[] }, withinDays = 5, now = new Date()): string[] {
+export function sentDetailLines(ctx: Pick<TurnContext, "sent"> & { google?: string[] }, withinDays = 5, now = new Date(), o: { zone?: string | null; also?: readonly SentItem[] } = {}): string[] {
   const cutoff = now.getTime() - withinDays * 86_400_000;
-  return [...sentLines(ctx, cutoff, now), ...(ctx.google ?? [])];
+  return [...sentLines(ctx, cutoff, now, o), ...(ctx.google ?? [])];
 }
 
-function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number, now = new Date()): string[] {
-  return ctx.sent
-    .filter((s) => s.sentAt.getTime() > cutoff)
-    .slice(0, 5)
-    .map((s) => {
-      if (s.read) return describeRead(s.name, s.read).facts.join(" ");
-      if (!s.details) return `Cue sent them "${s.name}"${s.url ? ` (${s.url})` : ""}; its page hasn't been read yet, so Cue has no start time or address for it.`;
-      // Stale volatile lines say so (Phase B, B3): a reply never states a days-old spot count or time as current.
-      const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now).join(" ");
-      const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "address"].filter(Boolean);
-      return `Details on file for "${s.name}", which Cue sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`;
-    });
+// When Cue sent it, in their zone: "Oct 30". Cue's own record of what went out.
+export function sentOnWords(at: Date, zone: string | null = null): string {
+  const d = DateTime.fromJSDate(at);
+  const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
+  return d.isValid ? d.setZone(z).toFormat("LLL d") : "an earlier day";
+}
+
+// Pure: everything stored about one find Cue sent, as facts: the day it went out, the link, and its page or saved fields, with what
+// isn't on file said as exactly that (never "nothing on file" for a find whose record exists). A place only shown after host approval
+// is said as that, with the link.
+export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null = null): string[] {
+  const out = [`Cue sent them "${s.name}" on ${sentOnWords(s.sentAt, zone)}${s.url ? `; the link it sent: ${s.url}` : "; no link is on file for it"}.`];
+  if (s.read) out.push(describeRead(s.name, s.read).facts.join(" "));
+  else if (s.details) {
+    out.push(...renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now, zone));
+    const city = s.details.city ?? s.city;
+    if (!s.details.online && !s.details.venue && !s.details.address && !s.details.city && city) out.push(`"${s.name}" is in ${city}; the exact address is only shown to registered guests.`);
+    const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "street address"].filter(Boolean);
+    if (missing.length) out.push(`Not stored for "${s.name}": ${missing.join(", ")}${s.url ? `; its page (${s.url}) is where to check` : ""}.`);
+  } else {
+    if (s.city) out.push(`"${s.name}" is in ${s.city}; its street address isn't stored.`);
+    out.push(`Its page hasn't been read yet, so Cue has no start time or address for "${s.name}"${s.url ? `; the link is the place to check` : ""}.`);
+  }
+  return out;
+}
+
+function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number, now = new Date(), o: { zone?: string | null; also?: readonly SentItem[] } = {}): string[] {
+  const recent = ctx.sent.filter((s) => s.sentAt.getTime() > cutoff).slice(0, 5);
+  // A find the member's question points at stays in the facts however old it is (2026-11-04: "Where is that one located?" about a find
+  // sent five days before had dropped out of the five-day window, and Cue said nothing was on file).
+  const extra = (o.also ?? []).filter((s) => !recent.includes(s));
+  return [...recent, ...extra].map((s) => sentFindFacts(s, now, o.zone ?? null).join(" "));
 }
 
 // Co's own reads of those pages and anything unconfirmed: hints for drafting,
@@ -340,6 +365,26 @@ export function sentDetailHints(ctx: Pick<TurnContext, "sent">, withinDays = 5):
     .filter((s) => s.sentAt.getTime() > cutoff && s.read)
     .slice(0, 5)
     .flatMap((s) => describeRead(s.name, s.read!).hints);
+}
+
+// Their words ask about a find Cue sent: where, when, the link, the price, who hosts, how to get in, or when Cue sent it.
+export const ASKS_ABOUT_FIND = /\b(?:where|what (?:day|date|time)|when|which (?:day|city)|link|address|location|located|how much|price|cost|free|who(?:'s| is| was)? (?:hosting|running|the host)|host(?:ing)?|how (?:do|can|would) i (?:get in|sign up|register|rsvp|join)|get in|rsvp|sign up|register|approval|did you (?:already )?send|send (?:it|that)|sent (?:it|that|me))\b/i;
+
+// Pure: the finds Cue sent that their message points at, so their stored fields reach the reply however old the send is. The referent
+// the turn read resolved (meant, #368) first; else a find they name; else, for a question about a find, the one Cue's last text named.
+export function referredSent(sent: readonly SentItem[], o: { message: string; meantLabel?: string | null; meantUrl?: string | null; lastCoText?: string | null }): SentItem[] {
+  const out = new Set<SentItem>();
+  const normUrlOf = (u: string) => u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
+  const byUrl = (u: string) => sent.find((x) => x.url && normUrlOf(x.url) === normUrlOf(u));
+  if (o.meantUrl) { const f = byUrl(o.meantUrl); if (f) out.add(f); }
+  if (o.meantLabel) { const f = findSent(sent as SentItem[], o.meantLabel); if (f) out.add(f); }
+  const nameIn = (text: string) => sent.filter((x) => norm(x.name).length >= 3 && norm(text).includes(norm(x.name)));
+  for (const f of nameIn(o.message)) out.add(f);
+  if (!out.size && ASKS_ABOUT_FIND.test(o.message) && o.lastCoText) {
+    for (const f of nameIn(o.lastCoText)) out.add(f);
+    for (const u of o.lastCoText.match(/https?:\/\/[^\s)>\]"']+/g) ?? []) { const f = byUrl(u); if (f) out.add(f); }
+  }
+  return [...out].slice(0, 2);
 }
 
 // A thing Co sent, by the name the member (or Co's tool) used for it.
