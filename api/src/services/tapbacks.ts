@@ -48,10 +48,20 @@ export function sameReaction(a: string, b: string): boolean {
   return bare(a) === bare(b);
 }
 
-// The standard iMessage tapbacks go by name so they look native; the rest as emoji.
+// The six standard iMessage tapbacks go by name so they look native (the names Sendblue's send-reaction takes); any other single
+// emoji goes as the emoji itself. See sendableReaction for what is allowed out.
+export const SENDBLUE_REACTIONS = ["love", "like", "dislike", "laugh", "emphasize", "question"] as const;
+const NAMED: Record<string, (typeof SENDBLUE_REACTIONS)[number]> = { "❤": "love", "👍": "like", "👎": "dislike", "😂": "laugh", "‼": "emphasize", "❗": "emphasize", "❓": "question", "❔": "question" };
 export function reactionFor(emoji: string): string {
-  const e = bare(emoji);
-  return e === bare("❤️") ? "love" : e === "😂" ? "laugh" : e === "👍" ? "like" : emoji;
+  return NAMED[bare(emoji)] ?? emoji;
+}
+
+// Whether a reaction may go to Sendblue: one of its six names, or exactly one emoji. Anything else (words, several emoji, an empty
+// string) is not sent as a reaction at all, so the caller falls back to the plain text it already has.
+export function sendableReaction(reaction: string): boolean {
+  const r = bare(String(reaction ?? ""));
+  if ((SENDBLUE_REACTIONS as readonly string[]).includes(r)) return true;
+  return /^\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?(\u200D\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?)*$/u.test(r);
 }
 
 // Closing tapbacks were logged by name before they could be any emoji.

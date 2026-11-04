@@ -65,6 +65,7 @@ import { networkIntroFact, resolveNetworkTeaseReply, resolveNetworkIntroReplySta
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { ackAllowed, describeTapbacks, reactionFor, tapbackHistory } from "../services/tapbacks.js";
+import { parseReaction } from "../services/reactionsIn.js";
 import { LOOP_GUIDE } from "../agent/loop.js";
 import { burstWaitMs } from "../services/beats.js";
 import { describeNotes } from "../agent/loopTools.js";
@@ -1963,6 +1964,22 @@ export function sendblueRouter(io: Server): Router {
         // The record and the move, in this reply's tail (never the cached prefix), and handed to the draft check (agent/conversationTools.ts
         // sendReply, harness/moveCheck.ts). What "that" meant is kept briefly as Cue's own item labels. A close on a turn that touches
         // their safety, or on a heavy moment (the capped heavyHold), is never the move: the feeling is (review of #368).
+        // Their tapback (services/reactionsIn.ts): which of Cue's texts it was on and what it means there. It is context for the reply and
+        // a line in the decision log; nothing is recorded as an answer, and no tool treats it as their yes (the guards live with the tools).
+        // Text only: calls have no tapbacks.
+        const reactionIn = hasText ? parseReaction(resolvedContent) : null;
+        if (reactionIn) {
+          try {
+            const R = await import("../services/reactionsIn.js");
+            const sentTexts = await R.recentSentTexts(user.id).catch(() => [] as import("../services/reactionsIn.js").SentText[]);
+            const target = R.pickTarget(reactionIn, sentTexts, req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle ?? null);
+            const meant = R.interpretReaction(reactionIn, target);
+            addInstruction(replyFacts, meant.instruction);
+            recordDecision({ layer: 3, decision: "turn.reaction_in", userId: user.id, outcome: "act", action: meant.meaning, proposal: { kind: reactionIn.kind, emoji: reactionIn.emoji, removed: reactionIn.removed, target: meant.target, found: target?.how ?? null, handle: target?.handle ? target.handle.slice(-8) : null } }).catch(() => {});
+          } catch (err: any) {
+            console.error("sendblue: reading their reaction failed (non-fatal):", err?.message ?? err);
+          }
+        }
         if (exchangeBase) {
           const X = await import("../services/exchangeRecord.js");
           const read0 = turnRead?.exchange ?? null;

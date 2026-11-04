@@ -17,6 +17,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { recordAnthropicUsage } from "./llmUsage.js";
+import { isReaction } from "./reactionsIn.js";
 
 const words = (s: unknown) =>
   String(s ?? "")
@@ -29,6 +30,8 @@ const words = (s: unknown) =>
 
 // Pure, the fact: the quoted words are in their message, as whole words, in order.
 export function yesIsTheirs(theirYes: unknown, message: string): boolean {
+  // A tapback is never a yes (services/reactionsIn.ts): its text quotes Cue's own words, which would otherwise pass as theirs.
+  if (isReaction(message)) return false;
   const y = words(theirYes);
   const m = words(message);
   if (!y.length || y.join(" ").length < 2) return false;
@@ -214,6 +217,7 @@ export async function judgeRemoval(r: RemovalRead): Promise<RemovalVerdict> {
 // Both checks, in order: the fact first (no model call for a quote that isn't theirs), then the read.
 export type YesCheck = { ok: true; why: string } | { ok: false; kind: "quote" | "not_yes" | "unread"; why: string };
 export async function confirmYes(o: { theirYes: unknown; message: string; recent: string | null | undefined; ability: string }): Promise<YesCheck> {
+  if (isReaction(o.message)) return { ok: false, kind: "not_yes", why: "a reaction is not a yes" };
   if (!yesIsTheirs(o.theirYes, o.message)) return { ok: false, kind: "quote", why: "the quoted yes isn't in their message" };
   const v = await judgeYes({ recent: o.recent ?? "", message: o.message, ability: o.ability });
   if (!v.read) return { ok: false, kind: "unread", why: v.why };

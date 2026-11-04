@@ -1,7 +1,7 @@
 import { isTestHandle, isTestNumber, testHandle } from "./testNumbers.js";
 import { stripCues } from "./voiceCues.js";
 import { sendLimiter } from "./sendLimiter.js";
-import { claimReaction, confirmReaction, releaseReaction } from "./tapbacks.js";
+import { claimReaction, confirmReaction, releaseReaction, sendableReaction } from "./tapbacks.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { noteSent } from "./turnReplies.js";
 import { SendblueAPI } from "sendblue";
@@ -308,6 +308,11 @@ export async function markRead(number: string): Promise<void> {
 // It then counts as the turn having answered them (services/turnReplies.ts), so a turn that dies after it is never replayed as a
 // full turn. The early "on it" tapback passes nothing: like a "looking" line, it answers nothing.
 export async function sendReaction(messageHandle: string, reaction: string, o: { answerFor?: string } = {}): Promise<boolean> {
+  // Only what Sendblue takes: one of its six names or a single emoji. Anything else isn't sent as a reaction; the caller falls back.
+  if (!sendableReaction(reaction)) {
+    console.warn(`sendReaction: "${String(reaction).slice(0, 20)}" isn't a reaction Sendblue can send; not sending`);
+    return false;
+  }
   // A message gets one reaction from Co, whichever path asks (services/tapbacks.ts).
   // The message already has one, so there's nothing more to send.
   if (!claimReaction(messageHandle)) {
