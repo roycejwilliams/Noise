@@ -45,7 +45,7 @@ export type CoTask = {
   awaitingReply: boolean;
   theirReplyAt: string | null;
   // "followup": a check-in Co decides the timing of (services/followUps.ts).
-  // "research_brief": a find and a document, run as a fixed sequence (services/researchBrief.ts), not a model loop.
+  // "research_brief": retired (2026-11-04, with the document layer); old rows are read as history and closed unsent when they come due.
   kind?: "work" | "followup" | "research_brief";
   followup?: any;
   targetKey?: string | null;
@@ -486,31 +486,8 @@ export async function markTexted(userId: string, id: number): Promise<void> {
   await pool.query(`UPDATE co_tasks SET texts_sent = texts_sent + 1, last_texted_at = NOW(), awaiting_reply = true WHERE user_id = $1 AND id = $2`, [userId, id]);
 }
 
-// A research brief the member asked for (agent/loopTools.ts researchBrief): due now, run once in the background.
-export async function startResearchBrief(input: { userId: string; theirWords: string; goal: string; params: Record<string, unknown> }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
-  // The same lock as startTask: the cap counts both, and the open-brief check below is a read then an insert. (The brief read goes
-  // through the pool: it runs after the lock is held, so it sees any brief a start before this one committed.)
-  return underTaskLock(input.userId, (db) => startResearchBriefLocked(input, db));
-}
-async function startResearchBriefLocked(input: Parameters<typeof startResearchBrief>[0], db: TaskDb): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
-  const open = await openTasks(input.userId, db);
-  if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
-  // openTasks reads work tasks only, so the old check here (open.some(kind === "research_brief")) could never be true and a
-  // repeated ask started another brief while the first was still running. Read the open briefs themselves; the insert re-checks.
-  const busy = briefAlreadyOpen(await recentBriefs(input.userId));
-  if (busy) return { ok: false, why: busy };
-  const { rows } = await db.query(
-    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, kind, followup, source)
-     SELECT $1, $2, $3, '[]'::jsonb, 'research and send the brief', NOW(), $4::jsonb, 'research_brief', $5::jsonb, 'ask'
-     WHERE NOT EXISTS (SELECT 1 FROM co_tasks WHERE user_id = $1 AND kind = 'research_brief' AND status = 'open') RETURNING *`,
-    [input.userId, input.goal.trim().slice(0, 200), input.theirWords.trim().slice(0, 400), JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), JSON.stringify(input.params)],
-  );
-  if (!rows[0]) return { ok: false, why: "a research brief is already being put together for them" };
-  return { ok: true, task: rowTo(rows[0]) };
-}
-
 // ---------------------------------------------------------------- research briefs, as the reply sees them
-// A brief isn't a work task (no steps, no model loop: services/researchBrief.ts), so openTasks leaves it out and everything that
+// A brief isn't a work task (no steps, no model loop: retired), so openTasks leaves it out and everything that
 // counts or wakes work tasks is unchanged. The reply still has to see it: "what are you working on for me?" answers from these
 // lines too, and a finished brief stays in view for a few days so "did you send that?" has its answer.
 export type BriefView = { id: number; goal: string; theirWords: string; status: CoTask["status"]; createdAt: string; closedAt: string | null; outcome: string | null; held: { text: string; at: string } | null };

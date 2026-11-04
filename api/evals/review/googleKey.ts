@@ -12,7 +12,7 @@ check("it wins over the old name where both are set", G.googleKey({ GOOGLE_API_K
 check("the old name still works where only it is set (production)", G.googleKey({ GOOGLE_PLACES_API_KEY: "b" } as any) === "b");
 check("neither set: empty, never undefined", G.googleKey({} as any) === "");
 const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
-check("every Google call reads the one key", !/process\.env\.GOOGLE_PLACES_API_KEY!/.test(src("services/geocoding.ts")) && (src("services/geocoding.ts").match(/key: googleKey\(\)/g) ?? []).length === 2 && /const GOOGLE_KEY = \(\) => process\.env\.GOOGLE_API_KEY \|\| process\.env\.GOOGLE_PLACES_API_KEY/.test(src("services/artImagery.ts")));
+check("every Google call reads the one key", !/process\.env\.GOOGLE_PLACES_API_KEY!/.test(src("services/geocoding.ts")) && (src("services/geocoding.ts").match(/key: googleKey\(\)/g) ?? []).length === 2);
 console.log(`google key: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();

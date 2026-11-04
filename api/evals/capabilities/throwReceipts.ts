@@ -128,7 +128,7 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   const r = turn({ webSearch: async () => { throw boom; } });
   await quietly(async () => { for (const q of ["a", "b", "c", "d", "e"]) await r.tools.webSearch.execute({ what: q }, {}).catch(() => {}); });
   check("a tool that only reads keeps its one free retry after a throw", r.runs.length === 4, r.runs);
-  check("the read-only list holds reads only: nothing that sends or changes", (["draftEmail", "shareFinds", "shareLink", "sendContactCard", "saveAsk", "writeDocument", "correctWhatCoKnows"] as const).every((n) => !READS_ONLY.has(n)) && READS_ONLY.has("webSearch") && READS_ONLY.has("readPage"));
+  check("the read-only list holds reads only: nothing that sends or changes", (["draftEmail", "shareFinds", "shareLink", "sendContactCard", "saveAsk", "correctWhatCoKnows"] as const).every((n) => !READS_ONLY.has(n)) && READS_ONLY.has("webSearch") && READS_ONLY.has("readPage"));
   // A refusal with no throw keeps its old words: nothing came of it.
   const plain = turn({ draftEmail: async () => ({ ok: false, error: "Read the place's page first." }) });
   const p: any[] = [];
@@ -141,10 +141,10 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   let yesReads = 0;
   (await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => (yesReads++, { yes: true, why: "fixture: they asked", read: true }));
   const rf = G.createReplyFacts();
-  const tools: any = guardTools({ writeDocument: { execute: async () => { throw boom; }, inputSchema: z.object({ what: z.string().optional() }) } }, { userId: "u-1", resolvedContent: "put that in a doc for me", dryRun: false, notDone: (w) => G.addFact(rf, "not_done", w) });
+  const tools: any = guardTools({ correctWhatCoKnows: { execute: async () => { throw boom; }, inputSchema: z.object({ what: z.string().optional() }) } }, { userId: "u-1", resolvedContent: "yes, correct that", dryRun: false, notDone: (w) => G.addFact(rf, "not_done", w) });
   await quietly(async () => {
-    await tools.writeDocument.execute({ what: "plan", theirYes: "put that in a doc for me" }, {}).catch(() => {});
-    await tools.writeDocument.execute({ what: "plan", theirYes: "put that in a doc for me", why: "again" }, {}).catch(() => {});
+    await tools.correctWhatCoKnows.execute({ what: "plan", theirYes: "yes, correct that" }, {}).catch(() => {});
+    await tools.correctWhatCoKnows.execute({ what: "plan", theirYes: "yes, correct that", why: "again" }, {}).catch(() => {});
   });
   await settle(1);
   check("a repeat after a throw makes no second yes read and logs no second row", yesReads === 1 && decisions.length === 1 && decisions[0].action === "not_done" && !decisions.some((d) => d.action === "needs_yes"), { yesReads, decisions: decisions.map((d) => d.action) });

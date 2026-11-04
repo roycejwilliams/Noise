@@ -17,7 +17,6 @@ const A = await import("../../src/harness/attention.js");
 const { DateTime } = await import("luxon");
 const CG = await import("../../src/harness/callGate.js");
 const D = await import("../../src/services/deferredSends.js");
-const RB = await import("../../src/services/researchBrief.js");
 const { proactiveRegistry } = await import("../../src/harness/proactiveRegistry.js");
 const { default: pool } = await import("../../src/db/db.js");
 const { default: sendblue } = await import("../../src/services/sendblue.js");
@@ -389,8 +388,6 @@ const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partn
   const row = db.candidates.find((c) => c.target_key === "research_brief:77");
   check("brief: a requested brief waits at the door (queued, not sent this minute)", r.sent === false && r.door === true && r.queued === true && db.outbox.length === 0);
   check("brief: as a candidate under its own type and key, requested, with its words as written", !!row && row.type === "task_update" && row.payload.door === true && row.payload.cls === "requested" && row.payload.messages[0].startsWith("The venue brief"));
-  check("brief: a queued line is not told: the task stays open until the pick sends it", RB.briefLineOutcome({ sent: false, door: true, queued: true }, 0) === "queued" && /if \(next === "queued"\) \{[\s\S]{0,400}holdBriefLine\([\s\S]{0,200}return;/.test(src("services/researchBrief.ts")));
-  check("brief: the line carries its task and how to close it when it goes", /taskId: task\.id, close: \{ status, outcome \}/.test(src("services/researchBrief.ts")));
   const asCand: Candidate = { id: "b", userId: ELI, type: "task_update", targetKey: row.target_key, topicKey: row.target_key, summary: row.summary, priority: row.priority, dueAt: new Date(row.due_at), expiresAt: row.expires_at ? new Date(row.expires_at) : null, payload: row.payload, attempts: 0, createdAt: new Date(row.due_at) };
   const draft = await proactiveRegistry.task_update.draft(asCand, { userId: ELI, firstName: "Eli", phoneNumber: PHONE, city: "San Francisco", timezone: ZONE });
   check("brief: the pick sends it exactly as written (no second draft, no model)", "messages" in draft && draft.messages.join("|") === row.payload.messages.join("|"));
@@ -400,7 +397,6 @@ const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partn
   check("brief: it arrives, first, through the pick", s.sends.length === 1 && s.sends[0].lead.id === "b");
   check("brief: a requested door text skips the lanes' quota like any answer (never starved by caps), and keeps the spacing", PR.isAnswering(asCand) && PR.sendIsExempt(asCand, []));
   check("brief: the event brief (the day before a Co event) is a requested candidate in the pick", G.candidateClass("event_brief", false) === "requested" && PR.bandOfCandidate(cand("event_brief", { expiresAt: pt("2026-11-10T18:00:00") }), pt("2026-11-09T10:00:00")) === DR.BAND.requested);
-  check("brief: the research brief's lines pass a door spec", /type: "task_update", targetKey: `research_brief:\$\{task\.id\}`[\s\S]{0,200}door \}\)/.test(src("services/researchBrief.ts")));
 }
 
 // ================================================================ 6. a notice within a few hours still goes immediately; a reply is never delayed
@@ -535,7 +531,6 @@ const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partn
   const s4 = simulate({ candidates: [dated, undated], from: pt("2026-11-02T09:55:00"), to: pt("2026-11-24T12:00:00"), lastInboundAt: pt("2026-11-02T07:00:00"), joinedAt: pt("2026-10-01T10:00:00"), prefs: longNone });
   check("late: held three weeks, neither result goes out late: the dated one ends at its date, the undated at the 14-day backstop", s4.sends.length === 0 && s4.expired.includes("dated") && s4.expired.includes("undated"));
   check("late: the backstop is a real expiry (the dispatch sweep drops and logs it, and the task is noted as never told)", !!undated.expiresAt && undated.expiresAt.getTime() === t0.getTime() + 14 * 86_400_000 && /never went, so they were never told/.test(src("harness/proactiveRegistry.ts")));
-  check("brief: a line that ended at the door is never told, and the brief stops looking", RB.briefLineOutcome({ sent: false, door: true, queued: false, reason: PR.DOOR_ENDED }, 1) === "untold" && RB.briefLineOutcome({ sent: false, door: true, queued: false, reason: "already sent" }, 1) === "told");
   reset();
   db.candidates.push({ id: 70, user_id: ELI, type: "task_update", target_key: "research_brief:70", topic_key: "research_brief:70", summary: "s", payload: { door: true, messages: ["x"], cls: "requested" }, due_at: new Date(0), expires_at: new Date(0), priority: 50, status: "expired" });
   const again = await PR.sendExempt({ userId: ELI, phoneNumber: PHONE, type: "task_update", targetKey: "research_brief:70", messages: ["x"], timezone: ZONE, door: { summary: "s", validUntil: DR.doorValidUntil("requested", new Date(), ZONE) } });

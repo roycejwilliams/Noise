@@ -68,7 +68,6 @@ check("too soon only where the caller asks for the lead", G.checkTiming(SOON, fa
 const E = await import("../../src/services/eventStart.js");
 const S = await import("../../src/services/sendCheck.js");
 const ES = await import("../../src/services/eventSurfacingSweep.js");
-const PS = await import("../../src/services/planSheet.js");
 const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 const at = (mins: number) => new Date(NOW.getTime() + mins * 60_000).toISOString();
 const page = (o: any = {}) => ({ startAt: ANGEL.startAt, endAt: "2026-10-17T20:00:00.000Z", timezone: ZONE, online: false, venue: "Angel Island", address: null, city: "San Francisco", hosts: [], price: null, spotsRemaining: null, requiresApproval: false, soldOut: false, guestCount: null, description: null, ...o });
@@ -154,17 +153,6 @@ check("a call's events come from the reply's own search (so the lead applies), s
 {
   const an = src("services/coEventAnnouncement.ts");
   check("a Noise event isn't announced once it started or inside the hour, at creation or when a held one goes (pinned)", /if \(!event \|\| eventStartProblem\(\{ startAt: event\.start_at, endAt: event\.end_at \}, new Date\(\), START_LEAD_MINUTES\) !== null\)/.test(an) && /const late = eventStartProblem\(\{ startAt: event\.start_at, endAt: event\.end_at \}, new Date\(\), START_LEAD_MINUTES\);\n\s+if \(late \|\| r\.opted_out\)/.test(an));
-}
-
-// ---------------------------------------------------------------- a plan's event steps
-{
-  const LINK = "https://lu.ma/soon";
-  const rec = (startAt: string) => (l: string): any => (l === LINK ? { name: "A talk", hasRecord: true, startAt, endAt: null, timezone: ZONE, venue: "The Battery", address: "717 Battery St" } : null);
-  const input = { title: "Today", note: "A plan.", steps: [{ link: LINK, what: "A talk" }] } as any;
-  const probs = (startAt: string) => PS.planProblems(input, PS.resolvePlan(input, ZONE, rec(startAt)), { facts: "The Battery, 717 Battery St", theirs: "", now: NOW, recordFor: rec(startAt) });
-  check("a plan can't put on an event starting in 30 minutes (the hour's grace is for their own steps)", probs(at(30)).some((p) => /can't go on a plan \(it starts at/.test(p)), probs(at(30)));
-  check("...or one that started 20 minutes ago", probs(at(-20)).some((p) => /can't go on a plan \(it already started/.test(p)), probs(at(-20)));
-  check("...and one three hours out is fine", !probs(at(180)).some((p) => /can't go on a plan/.test(p)), probs(at(180)));
 }
 
 // ---------------------------------------------------------------- online: 15 minutes, in person: 60 (Royce, 2026-10-17)

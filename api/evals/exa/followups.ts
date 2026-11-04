@@ -19,7 +19,6 @@ const { default: pool } = await import("../../src/db/db.js");
 const X = await import("../../src/services/exaSearch.js");
 const T = await import("../../src/services/taskWeb.js");
 const O = await import("../../src/services/webOpportunitySearch.js");
-const RB = await import("../../src/services/researchBrief.js");
 const MT = await import("../../src/harness/memberThreads.js");
 const LT = await import("../../src/agent/loopTools.js");
 // The one way a text leaves (services/sendblue.ts), stood in for: what would have been sent is recorded, nothing goes out.
@@ -182,84 +181,6 @@ try {
   check("... and an empty search is still 'nothing found'", cp2.checks.some((c) => c.reason === "nothing found"), cp2.checks);
   rowsFor = () => [];
 
-  // The research brief (a background venue brief): a find whose every search failed is a failure, never "no venues fit".
-  exa = DOWN;
-  const ask = { what: "a private dining room for 12", city: "San Francisco", slot: null } as any;
-  const thrown = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then(() => null, (e) => e);
-  check("the venue find, Exa down: it throws SearchFailed (the search never ran), never returns 'no venues'", thrown instanceof RB.SearchFailed && /Web search failed: Exa 500/.test(thrown.message), String(thrown));
-  exa = () => ({ status: 200, body: { results: [] } });
-  const none = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then((f) => f, (e) => e);
-  check("... an empty search is no venues, not a failure", Array.isArray(none) && none.length === 0, String(none));
-  // Every pass blocked by the web search budget: the search never ran, the same as a failure.
-  budget = [FULL, FULL, FULL];
-  const blockedFind = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then(() => null, (e) => e);
-  check("the venue find, the budget blocked every pass: it throws SearchFailed, never returns 'no venues'", blockedFind instanceof RB.SearchFailed && /^No web search right now/.test(blockedFind.message), String(blockedFind));
-  budget = [];
-  // A brief is a member's ask: its searches draw from the direct-ask share. With 80 of the day's 150 used, the sweep's share (75) is
-  // gone and the direct-ask share still has room (re-review of #235: the brief defaulted to the sweep's share and was blocked).
-  sqlLog.length = 0;
-  budget = [80, 80, 80];
-  exa = () => ({ status: 200, body: { results: [] } });
-  const shared = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then((f) => f, (e) => e);
-  const reserved = sqlLog.filter((l) => /INSERT INTO web_search_log/.test(l.sql));
-  check("a venue brief with the sweep's share used up (80 of 150): its search is reserved from the direct-ask share and runs", Array.isArray(shared) && reserved.length > 0 && reserved.every((l) => l.p[1] === "request"), { shared: String(shared), reserved: reserved.map((l) => l.p[1]) });
-  budget = [];
-
-  check("a find that didn't run is tried again at the next two wakes, and only the third run tells them", RB.BRIEF_SEARCH_RETRIES === 2 && RB.briefSearchNext(1) === "retry" && RB.briefSearchNext(2) === "retry" && RB.briefSearchNext(3) === "tell" && RB.briefSearchNext(4) === "tell");
-  check("the retry is the claim's own lease to the next wake (no new machinery)", /UPDATE co_tasks SET next_check_at = NOW\(\) \+ INTERVAL '45 minutes', wakes = wakes \+ 1/.test(src("services/coTasks.ts")));
-  // Approved by Royce, 2026-10-17, verbatim.
-  check("the line they get is the approved one, word for word", RB.SEARCH_FAILED_LINE === "My search didn't go through just now, so I couldn't look for venues yet. Want me to try again?", RB.SEARCH_FAILED_LINE);
-
-  // The whole brief run (runResearchBriefTask), wake by wake, with the search down: the database, Exa, the model and the send are
-  // stood in for, and the clock is pinned inside their hours (noon in San Francisco), so a text is a send, not a hold.
-  const RealDate = Date;
-  const NOON = new RealDate("2026-10-17T19:00:00Z").getTime();
-  const pinned = class extends RealDate {
-    constructor(...a: any[]) {
-      super(...((a.length ? a : [NOON]) as [any]));
-    }
-    static now() {
-      return NOON;
-    }
-  } as DateConstructor;
-  const briefTask = (wakes: number) => ({ id: 42, userId: "u1", goal: "venue brief", theirWords: "find me a private dining room for 12 on Nov 2", steps: [], planNext: null, nextCheckAt: null, status: "open", wakes, notes: [], textsSent: 0, lastTextedAt: null, createdAt: "2026-10-17T18:00:00Z", deadline: null, finalCheckAt: null, finalTold: false, awaitingReply: false, theirReplyAt: null, kind: "research_brief", followup: { what: "a private dining room for 12", city: "San Francisco", date: "2026-11-02", start: "19:00", headcount: 12, budget: "$2,000", neighborhood: "SoMa" } }) as any;
-  const runBrief = async (wakes: number) => {
-    sqlLog.length = 0;
-    texts.length = 0;
-    globalThis.Date = pinned;
-    try {
-      await RB.runResearchBriefTask(briefTask(wakes));
-    } finally {
-      globalThis.Date = RealDate;
-    }
-    const closes = sqlLog.filter((l) => /^\s*UPDATE co_tasks SET status = \$3/.test(l.sql));
-    const holds = sqlLog.filter((l) => /UPDATE co_tasks SET followup = jsonb_set/.test(l.sql));
-    const exaCalls = sqlLog.filter((l) => /INSERT INTO web_search_log/.test(l.sql)).length;
-    // A line that doesn't answer their latest message waits at the door for Cue's next message (harness/door.ts): its words, as queued.
-    // One per target key.
-    const doorRows = new Map(sqlLog.filter((l) => /INSERT INTO proactive_candidates/.test(l.sql)).map((l) => [String(l.p[2]), l]));
-    const queued = [...doorRows.values()].map((l) => JSON.parse(String(l.p[5] ?? "{}")) as { messages?: string[]; close?: { status: string; outcome: string }; taskId?: number });
-    // Sent (texts) and queued at the door (queued) are kept apart: a queued line hasn't reached them yet, and its task stays open.
-    return { texts: [...texts], queued: queued.flatMap((q) => q.messages ?? []), queuedClose: queued.map((q) => q.close ?? null), queuedTask: queued.map((q) => q.taskId ?? null), closes: closes.map((c) => ({ status: c.p[2], outcome: c.p[3] })), holds: holds.length, exaCalls };
-  };
-  rowsFor = (sql) => (/SELECT u\.first_name, u\.phone_number, cp\.city/.test(sql) ? [{ first_name: "Jordan", phone_number: "+15550100001", city: "San Francisco" }] : []);
-  exa = DOWN;
-  const w1 = await runBrief(1);
-  check("the brief, search down, wake 1: the find ran, then nothing sent, nothing closed, nothing held (left for the next wake)", w1.exaCalls > 0 && w1.texts.length === 0 && w1.queued.length === 0 && w1.closes.length === 0 && w1.holds === 0, w1);
-  const w2 = await runBrief(2);
-  check("... wake 2 (its second try): still nothing sent and nothing closed", w2.exaCalls > 0 && w2.texts.length === 0 && w2.queued.length === 0 && w2.closes.length === 0 && w2.holds === 0, w2);
-  const w3 = await runBrief(3);
-  // The line doesn't answer a fresh message of theirs, so it waits at the door for Cue's next message (harness/door.ts): nothing is sent
-  // this minute, the task stays open (held to look again), and the door closes it as dropped, saying the search didn't run, once it went.
-  check("... wake 3: exactly one line, the approved one, queued at the door (not sent yet); the task stays open and closes as dropped once it goes", w3.texts.length === 0 && w3.queued.length === 1 && w3.queued[0] === RB.SEARCH_FAILED_LINE && w3.closes.length === 0 && w3.holds === 1 && w3.queuedTask[0] === 42 && w3.queuedClose[0]?.status === "dropped" && /search didn't run/.test(w3.queuedClose[0]?.outcome ?? ""), w3);
-  budget = [FULL, FULL, FULL];
-  exa = () => ({ status: 200, body: { results: [] } });
-  const b1 = await runBrief(1);
-  check("the brief, every search blocked by the budget, wake 1: nothing sent, nothing closed (a retry, the same as a failure)", b1.texts.length === 0 && b1.queued.length === 0 && b1.closes.length === 0, b1);
-  budget = [];
-  const ok2 = await runBrief(2);
-  check("a retry where the search works: the normal path (the find runs; with nothing found it's the brief's own 'no venues' line, never the failure line)", ok2.exaCalls > 0 && ok2.texts.length === 0 && ok2.queued.length === 1 && ok2.queued[0] !== RB.SEARCH_FAILED_LINE && /couldn't verify any venues that fit/.test(ok2.queued[0]) && ok2.closes.length === 0 && ok2.queuedClose[0]?.status === "done", ok2);
-  rowsFor = () => [];
 } finally {
   globalThis.fetch = realFetch;
   (sendblue.messages as any).send = realSend;

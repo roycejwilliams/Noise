@@ -44,11 +44,6 @@ const mails = [
   ED.galleryEmail({ preview: "p", eyebrow: "e", headline: "h", body: ["b"], close: "c" }),
 ];
 check("the code's emails sign as Cue, never Co", mails.every((m) => !oldNamesIn(m.replace(/<[^>]+>/g, " ")).length), mails.map((m) => oldNamesIn(m.replace(/<[^>]+>/g, " "))));
-const DS = await import("../../src/services/documentSheet.js");
-check("a document's file name starts with Cue", DS.docFilename("Venue options", "2026-10-14") === "Cue-Venue-Options-2026-10-14.pdf");
-const LP = await import("../../src/services/coPages/linkPreview.js");
-const head = LP.genericHead(null) + LP.previewHead({ title: "Supper plan", description: "d", url: null, imageUrl: null, iconBase: null } as any) + LP.coMarkHtml();
-check("a page's link preview names Cue", /content="Cue"/.test(head) && !oldNamesIn(head.replace(/<[^>]+>/g, " ")).length && !/content="Co"/.test(head), head.slice(0, 400));
 const E = await import("../../src/services/elevenLabsCalls.js");
 const fs = await import("node:fs");
 const prompt = fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");

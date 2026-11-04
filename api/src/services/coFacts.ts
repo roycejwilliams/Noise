@@ -93,6 +93,7 @@ export function toolAction(tool: string, input: any): { relation: string; label:
       return Array.isArray(input?.items) ? input.items.map((i: any) => ({ relation: "sent", label: s(i?.caption).slice(0, 120) || s(i?.link), url: s(i?.link) })).filter((x: any) => x.url) : null;
     case "draftEmail":
       return [{ relation: "did", label: `drafted an email${s(input?.to) ? ` to ${s(input.to)}` : ""} for them to send: ${s(input?.subject)}` }];
+    // Kept to read old records: this tool was removed 2026-11-04.
     case "emailPlan":
       return [{ relation: "sent", label: `a one-page plan sheet: ${s(input?.title)}` }];
     case "writeDocument":
@@ -100,10 +101,12 @@ export function toolAction(tool: string, input: any): { relation: string; label:
     // Work Co took on (a call or a text): the record that it really started, not just that it said it would (2026-10-08 call review).
     case "startTask":
       return s(input?.goal) ? [{ relation: "did", label: `took on a task for them: ${s(input.goal).slice(0, 160)}` }] : null;
+    // Kept to read old records: this tool was removed 2026-11-04.
     case "researchBrief":
       return s(input?.what) ? [{ relation: "did", label: `started researching a venue brief for them: ${s(input.what).slice(0, 160)}` }] : null;
     case "closeTask":
       return [{ relation: "did", label: `closed a task (${s(input?.status) || "done"})${s(input?.outcome) ? `: ${s(input.outcome).slice(0, 160)}` : ""}` }];
+    // Kept to read old records: this tool was removed 2026-11-04.
     case "offerDocument":
       return [{ relation: "did", label: "offered to write something up for them as a document" }];
     case "saveAsk":
@@ -167,9 +170,8 @@ export function rowsNamedIn(rows: LedgerRow[], text: string): LedgerRow[] {
 // A document is made fresh each time: having sent one is never a reason not to send another (Royce, 2026-10-07: "send it again" got
 // "scroll up", and the same request repeated got "it's the same one I already built and sent").
 export const DOCUMENT_LABEL = /^a document \(PDF\)/;
-// One rule with the receipts (services/deliveryReceipts.ts, 2026-10-08): asked again means the same version again; asked for a
-// change means readDocument, then the next version; never again on Co's own initiative.
-export const DOCUMENT_AGAIN = "If they ask for it again (lost it, can't find it, send it again), send the same version again with writeDocument, never \"it's already up\". If they want it changed, readDocument first, then writeDocument with revises and changed for the next version. Never send it again on your own.";
+// A document Cue sent before the document layer was removed (2026-11-04) stays in the record as history. Cue can't send it again or change it.
+export const DOCUMENT_AGAIN = "Cue doesn't make or send documents any more, so it can't send this again or change it. Don't offer to.";
 
 export function ledgerLine(r: LedgerRow, today = localToday(), zone: string | null = DEFAULT_ZONE): string {
   // Their day, not the UTC one: a 6pm Pacific send is that Pacific day (Royce, 2026-10-07).

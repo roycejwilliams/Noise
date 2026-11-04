@@ -43,7 +43,7 @@ export const MOOD_RULES: Record<MoodRule, { where: string; ruling: string; test:
   // The document offer's own gate (services/documentOffer.ts offerGate, #260) waits on the same cap (offerMoodHeld): the offerDocument
   // tool's re-check and any caller without the reply's moment; the notice stays owed. One log rule: a reply logs it here.
   heavy_offer_hold: { where: "harness/replyGrounding.ts heavyMoment -> heavyHold (door, cold-start steer, document offer moment); services/documentOffer.ts offerGate (offerMoodHeld)", ruling: "timing only, capped (Royce 2026-10-19)", test: "evals/proactive/moodHeavyOffers.ts" },
-  recap_hold: { where: "jobs/postCallFollowUp.ts recapOfferFor, holdRecapForMood; harness/proactive.ts recapWaitRead (recap_mood_wait)", ruling: "timing only, capped (Royce 2026-10-19: feelings change timing and tone, never cancel)", test: "evals/calls/recapMoodHold.ts" },
+  recap_hold: { where: "jobs/postCallFollowUp.ts recapOfferFor, holdRecapForMood; harness/proactive.ts recapWaitRead (recap_mood_wait)", ruling: "timing only, capped (Royce 2026-10-19: feelings change timing and tone, never cancel)", test: "evals/proactive/moodHolds.ts" },
   // Royce, 2026-10-19: "feelings change timing and tone, never cancel." A draft that saw the feeling and chose SKIP while they're
   // struggling waits once (moodDraftSkipAt, mood_draft_wait) and is written again later, the feeling as tone only.
   draft_skip_wait: { where: "harness/proactive.ts drafting (feelingForDraft) -> a model SKIP while struggling waits once (moodDraftSkipAt, mood_draft_wait)", ruling: "timing only, capped (Royce 2026-10-19)", test: "evals/proactive/moodDraftSkips.ts" },

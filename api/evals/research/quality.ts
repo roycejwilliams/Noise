@@ -4,7 +4,6 @@
 // recording feeding ranking.
 import { readFileSync } from "node:fs";
 const Q = await import("../../src/services/researchQuality.js");
-const RB = await import("../../src/services/researchBrief.js");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? ` :: ${JSON.stringify(detail).slice(0, 300)}` : ""}`); } };
 const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
@@ -24,10 +23,6 @@ check("an event search needs only the city", Q.assembleQuery("event", "a talk on
 check("missing budget or date isn't load-bearing: searched around, shown as unknown", Q.assembleQuery("venue", "dinner", state({ budget: null, date: null })).ok);
 check("sources below the bar are skipped", Q.belowTheBar("https://sf.funcheap.com/free-zoo-day/") && Q.belowTheBar("https://www.groupon.com/deals/x") && !Q.belowTheBar("https://www.sfmoma.org/event/x/") && !Q.belowTheBar("https://www.eventbrite.com/e/portfolio-night-1"));
 const tool = src("agent/loopTools.ts");
-check("the brief tool asks first when a load-bearing fact is missing (nothing starts)", /const q = Q\.assembleQuery\("venue", input\.what, known\);\s*if \(!q\.ok\) return \{ ok: false, askThem: q\.question/.test(tool));
-check("the task backstops it: missing facts are asked, never searched on a guess", /if \(!q\.ok\) \{[\s\S]{0,200}await tellThenClose\(q\.question, "dropped"/.test(src("services/researchBrief.ts")));
-check("options are read only from their own page (never a listicle), up to six asked of the search", /k\.official \|\| PEERSPACE_LISTING/.test(src("services/researchBrief.ts")) && /max: BRIEF_LIMITS\.maxOptions/.test(src("services/researchBrief.ts")) && /Up to \$\{Math\.min\(6, Math\.max\(1, opts\.max \?\? 3\)\)\}/.test(src("services/taskWeb.ts")));
-check("the task's search is the assembled query, not the raw ask", /findVenueOptions\(task\.userId, q\.query,/.test(src("services/researchBrief.ts")));
 
 // ---- 2. fixed fields; unknown stays unknown
 const at = "2026-10-07T21:00:00.000Z";
@@ -43,21 +38,9 @@ check("a hedge in the page's own words stands", Q.schemaFields("venue", { rate: 
   check("a group minimum isn't a capacity: it goes as unknown", ["16 people or more", "minimum 20 guests", "at least 10", "15+ guests", "Min. 12"].every((v) => cap(v) === null), ["16 people or more", "15+ guests"].map(cap));
   check("a real capacity stands, ranges and maximums included", cap("Maximum seated: 40, maximum standing: 70") === "Maximum seated: 40, maximum standing: 70" && cap("8 to 150 guests seated") !== null && cap("up to 250 guests for a standing reception") !== null && cap("Mastro's Terrace: 80 seated or 200 standing") !== null);
 }
-// ---- the find (services/researchBrief.ts findVenueOptions): more than one angle, one option per place, factless own pages
-{
-  const rb = src("services/researchBrief.ts");
-  const find = rb.slice(rb.indexOf("export async function findVenueOptions"), rb.indexOf("type BriefParams"));
-  check("the find runs up to three passes, each later one naming what's already found", /const angles = \[/.test(find) && (find.match(/angles = \[([^\]]*)\]/)?.[1].split('", "').length ?? 0) === 3 && /already found/.test(find) && /\$\{seen \? ` \$\{seen\}\.` : ""\}/.test(find));
-  check("the find stops early only once it has a full brief's worth of distinct places", /if \(i > 0 && ownPlaces\(\)\.length >= BRIEF_LIMITS\.maxOptions\) break;/.test(find));
-  check("one option per place: a second page on the same site isn't another option", /placeKey\(x\) === placeKey\(k\)/.test(find) && /findIndex\(\(x\) => placeKey\(x\) === placeKey\(k\)\) === i/.test(find));
-  check("the find reads each own page itself, so a name-checked own page with no search details still counts", /readsPageItself: true/.test(find) && /ownPage: "private events or private dining page"/.test(find));
-  check("a brief heading is the place's core name, not a room the search named", /coreName\(k\.name\)\]/.test(find));
-}
 check("an estimate with no evidence is unknown", Q.schemaFields("event", { price: { value: "typically $30" } }, at).find((f) => f.key === "price")?.value === null);
 check("a long prose answer is replaced by the page's own short words", Q.schemaFields("venue", { capacity: { value: "x".repeat(200), evidence: "Up to 75 guests" } }, at).find((f) => f.key === "capacity")?.value === "Up to 75 guests");
 check("a long answer with no short quote is unknown", Q.schemaFields("venue", { capacity: { value: "x".repeat(200), evidence: "y".repeat(200) } }, at).find((f) => f.key === "capacity")?.value === null);
-const doc = RB.buildBrief({ title: "t", asked: "a", memberContext: [], finds: [{ name: "The Interval", url: "https://longnow.org/interval/book/", checkedAt: at, reader: "sdk", fields: v }] });
-check("unknowns render as unknown in the brief", doc.sections[0].bullets.includes("Minimum: unknown") && doc.sections[0].bullets.includes("Open 2026-10-22 from 6:00 pm: unknown"));
 check("a value that repeats its own label loses it", Q.schemaFields("venue", { capacity: { value: "Capacity: 80 seated or 200 standing" } }, at).find((f) => f.key === "capacity")?.value === "80 seated or 200 standing");
 check("size is read from the largest number stated", Q.findFeatures({ type: "venue", url: "https://www.perbaccosf.com/dining/", fields: [{ key: "capacity", label: "Capacity", value: "Groups ranging from 8 to 150 guests seated and up to 250 guests", checkedAt: at }] }).includes("size:large"));
 check("every field carries its check time", v.every((f) => f.checkedAt === at));
@@ -83,7 +66,6 @@ const r3 = await Q.freshForShow(old, async () => null, now);
 check("a failed re-read: every stale field unknown", r3.find?.fields.filter((f) => f.key !== "capacity").every((f) => f.value === null));
 const r4 = await Q.freshForShow(old, async () => ({ gone: true, fields: [] }), now);
 check("a page that's gone: the find isn't shown at all", r4.find === null);
-check("a re-sent brief runs every find through the re-check", /if \(p\.again\) \{[\s\S]{0,300}Q\.freshForShow\(f,/.test(src("services/researchBrief.ts")));
 
 // ---- 4. outcomes feed ranking
 const find = (url: string, rate: string) => ({ type: "venue" as const, url, fields: [{ key: "rate", label: "Rate", value: rate, checkedAt: at }, { key: "capacity", label: "Capacity", value: "60 people", checkedAt: at }] });
@@ -101,7 +83,6 @@ check("ranking orders, never drops", Q.rankFinds([A, B, A], { stats: likedHigh, 
 const qsrc = src("services/researchQuality.ts");
 check("an outcome is recorded only on a find shown to that member", /WHERE user_id = \$1 AND id = \$2 AND shown_at IS NOT NULL AND \(outcome IS NULL OR outcome = 'ignored'\)/.test(qsrc));
 check("unreacted finds become 'ignored' after 72 hours, on the task cron", Q.IGNORED_AFTER_HOURS === 72 && /markIgnoredFinds\(\)/.test(src("jobs/index.ts")));
-check("every find shown is recorded when the brief goes, and ranked before it's built", /if \(sent\) await Q\.recordShownFinds\(/.test(src("services/researchBrief.ts")) && /Q\.rankFinds\(/.test(src("services/researchBrief.ts")));
 check("Cue records reactions through its own tool, matched to an option it actually sent", /findReaction: tool\(/.test(tool) && /recentShownFinds\(ctx\.userId\)/.test(tool) && /doesn't match an option you showed them/.test(tool));
 const caps = src("services/capabilities.ts");
 check("the reaction tool is in Cue's registry", /id: "find_reaction"[\s\S]{0,400}tool: "findReaction"/.test(caps));

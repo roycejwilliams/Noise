@@ -176,7 +176,6 @@ check("asks: open asks with id, kind and last mention", k.asks.length === 1 && k
 // ---------------------------------------------------------------- delivered: merged and deduped
 const dv = (w: string) => k.delivered.filter((d) => d.what.includes(w));
 check("delivered: one entry per thing across receipts, ledger and offers", k.delivered.length === 4);
-check("delivered: a document's versions and its ledger line are one entry", dv("Pitch Plan").length === 1 && dv("Pitch Plan")[0].via.includes("receipt") && dv("Pitch Plan")[0].via.includes("ledger") && dv("Pitch Plan")[0].kind === "document");
 check("delivered: the newest version's time", dv("Pitch Plan")[0].at === ago(20).toISOString());
 check("delivered: same URL (scheme, www, trailing slash) is the same thing; the reaction carries over", dv("Founder Dinner").length === 1 && dv("Founder Dinner")[0].via.join(",") === "ledger,offer" && dv("Founder Dinner")[0].reaction === "Loved" && dv("Founder Dinner")[0].at === ago(24).toISOString());
 check("delivered: newest first", k.delivered.every((d, i) => i === 0 || k.delivered[i - 1].at >= d.at));
@@ -185,7 +184,6 @@ check("delivered: newest first", k.delivered.every((d, i) => i === 0 || k.delive
 const cr = (pred: (c: (typeof k.carrying)[number]) => boolean) => k.carrying.filter(pred);
 check("carrying: a work task, due (its check is past), not told", cr((c) => c.ref === "task #7").length === 1 && cr((c) => c.ref === "task #7")[0].state === "due" && cr((c) => c.ref === "task #7")[0].told === false);
 check("carrying: a promise task is told, its prefix gone", cr((c) => c.ref === "task #8")[0]?.kind === "promise" && cr((c) => c.ref === "task #8")[0]?.told === true && cr((c) => c.ref === "task #8")[0]?.what === "send the investor list");
-check("carrying: the document, once, newest version, they have it", cr((c) => c.kind === "document").length === 1 && cr((c) => c.kind === "document")[0].ref === "doc #12" && cr((c) => c.kind === "document")[0].theyHaveIt);
 check("carrying: a call promise a delivery covers is done and theirs", cr((c) => c.kind === "promise" && c.what === "the pitch plan doc")[0]?.state === "done" && cr((c) => c.what === "the pitch plan doc")[0]?.theyHaveIt === true);
 check("carrying: an open call promise is outstanding and told", cr((c) => c.what === "an intro email draft for the accelerator")[0]?.state === "outstanding" && cr((c) => c.what === "an intro email draft for the accelerator")[0]?.told === true && !cr((c) => c.what === "an intro email draft for the accelerator")[0]?.theyHaveIt);
 check("carrying: a call promise that is also a task shows once", cr((c) => /investor list/.test(c.what)).length === 1);

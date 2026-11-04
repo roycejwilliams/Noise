@@ -183,7 +183,7 @@ const ROYCE = ["partnering with Sequin AI for a November launch party", "have Cu
 // ---- 7. wiring
 {
   check("the turn loads the cold-start view for every reply", /loadColdStart\(userId, \{ profile, asks(: knowledge \? asks : undefined)? \}\)/.test(src("services/turnContext.ts")) && /coldStart(, [^;]*)? \};/.test(src("services/turnContext.ts")));
-  check("the reply grounding adds it, after the set-aside goal and never beside it or a document offer", /addColdStartSteer\(rf, opts\.turn\.coldStart, \{ emotional: opts\.turn\.emotional, otherQuestion: aside \? "a set-aside goal to ask about" : docQuestion \}\)/.test(src("harness/replyGrounding.ts")));
+  check("the reply grounding adds it, after the set-aside goal and never beside it", /addColdStartSteer\(rf, opts\.turn\.coldStart, \{ emotional: opts\.turn\.emotional, otherQuestion: aside \? "a set-aside goal to ask about" : null \}\)/.test(src("harness/replyGrounding.ts")));
   const cr = src("agent/conversationReply.ts");
   check("a reply that offers a call or meets a safety concern never also steers", /if \(input\.safetyConcern\) withdrawColdStartSteer[\s\S]{0,120}else if \(callOfferEligible\) withdrawColdStartSteer/.test(cr));
   check("what the reply did is recorded once it went out (never on a dry run)", /const cold = input\.facts\.coldStart;\s*if \(cold && state\.sent && !opts\.dryRun && opts\.record !== false\)/.test(cr) && /recordSteer\(input\.userId/.test(cr));

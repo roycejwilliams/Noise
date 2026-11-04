@@ -27,9 +27,6 @@ const M = await import("../../src/services/memberTime.js");
 const TT = await import("../../src/services/taskTurn.js");
 const CT = await import("../../src/services/coTasks.js");
 const FT = await import("../../src/services/followThrough.js");
-const DD = await import("../../src/services/documentDelivery.js");
-const RC = await import("../../src/services/deliveryReceipts.js");
-const DS = await import("../../src/services/documentSheet.js");
 const CC = await import("../../src/services/callCommitments.js");
 const OL = await import("../../src/services/openLoops.js");
 const { narratesInternalState } = await import("../../src/services/speakable.js");
@@ -240,69 +237,6 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   check("a closed window never warns", await (async () => { script.push({ text: "Nothing yet." }); const h = harness(NOW); await TT.runTaskTurnWith(baseTask({ window: { ...w, closedAt: NOW.toISOString() } }), h.deps); return h.log.warns.length === 0; })());
 }
 
-// ======================================================================= 5. a promised plan goes through the document path, and counts
-{
-  const PLAN_GOAL = "Keep your word from the call: \"I'll put together the plan for keeping Cue present after the Sequin AI November event and text you the draft tonight\"";
-  const THEIRS = "After the Sequin AI November event I want the people we meet to remember us. I don't want it to be a one night thing.";
-  check("a plan Cue is writing is a document commitment", FT.wantsDocument(PLAN_GOAL, THEIRS));
-  check("a doc, PDF or write-up is too", FT.wantsDocument("Keep your promise: \"I'll send you the PDF tonight\"") && FT.wantsDocument("Keep your promise: \"I'll text you a write-up of what we said\""));
-  check("'text you the plan for Saturday' stays a text (an itinerary, not a page Cue writes)", !FT.wantsDocument("Keep your promise: \"I'll text you the plan for Saturday\""));
-  check("the task's prompt tells Cue to send it with writeDocument, their words in sections, its plan in suggestions", /WHAT YOU PROMISED IS A DOCUMENT\. Send it with writeDocument/.test(TT.documentPromiseLine({ source: "promise", goal: PLAN_GOAL, theirWords: THEIRS })));
-  check("the task runner has texting's own tool: the same input and the registry's description", /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("services/taskTurn.ts")) && /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("agent/loopTools.ts")) && /description: toolUse\("writeDocument"\)/.test(src("services/taskTurn.ts")));
-
-  // A planning doc, honestly grounded: their points in their words, Co's plan in suggestions.
-  const planDoc = {
-    title: "Staying present after the Sequin AI event",
-    note: "A plan for after the November event, from what you told me.",
-    sections: [{ heading: "What you want", bullets: ["The people you meet at the Sequin AI November event remember you", "Not a one night thing"] }],
-    suggestions: ["Send each new contact a short personal note within two days of the event", "Host a small dinner for the people who connected most", "Share a one-page recap of what you heard in the room", "Check in with your closest new contacts a month later"],
-  };
-  check("a planning doc that is mostly Cue's suggestions passes the grounding honestly", DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }).length === 0, DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }));
-  const invented = { ...planDoc, sections: [{ heading: "What you want", bullets: ["You said Sequin AI wants a quarterly dinner series at Nopa with 40 founders"] }] };
-  check("a member claim they never made is refused", DS.documentProblems(DS.resolveDocument(invented), { theirs: THEIRS }).length > 0);
-
-  // The document path: grounded, hours and opt-out checked right before, delivered, recorded.
-  const rec: any[] = [], delivered: any[] = [];
-  const tdeps = (blocked: string | null = null): any => ({ receipts: RC.memoryReceipts(), theirWords: async () => THEIRS, blocked: async () => blocked, deliver: async (doc: any, to: any, target: string) => { delivered.push({ title: doc.title, target, to }); return { ok: true, via: target, filename: "Co-x.pdf" }; }, record: async (...a: any[]) => { rec.push(a); }, now: () => NOW });
-  const o = { userId: "u-test", taskId: 601, firstName: "Jordan", phone: "+14155550100", zone: SF, taskTheirWords: THEIRS, read: "" };
-  const night = await DD.sendDocumentForTask(planDoc as any, o, tdeps("it's outside their hours (8am to 9pm their time)"));
-  check("outside their hours: not sent, nothing recorded", !night.ok && (night as any).blocked && delivered.length === 0 && rec.length === 0, night);
-  const out = await DD.sendDocumentForTask(planDoc as any, o, tdeps("they opted out of texts"));
-  check("opted out: not sent", !out.ok && delivered.length === 0);
-  const sent = await DD.sendDocumentForTask(planDoc as any, o, tdeps());
-  check("inside their hours: sent as the PDF (no Google ask in their words)", sent.ok && delivered.length === 1 && delivered[0].target === "pdf_text", { sent, delivered });
-  check("...and recorded (co_facts + their thread) with the task as the source", rec.length === 1 && rec[0][0] === "u-test" && rec[0][2] === "pdf_text" && rec[0][3] === "task:601", rec);
-  check("the gate re-reads hours, the pause and opt-out right before it goes", /proactivePaused\(\)/.test(src("services/documentDelivery.ts")) && /deliverableAt\(now, zone\)/.test(src("services/documentDelivery.ts")) && /SELECT sms_opted_out, archived_at FROM users WHERE id = \$1/.test(src("services/documentDelivery.ts")));
-  check("the record is the label sendsSince reads as a document, plus a line in their thread", /label: `a document \(PDF\): \$\{doc\.title\}`/.test(src("services/documentDelivery.ts")) && /\/\^a document\\b\/i\.test\(label\)/.test(src("services/followThrough.ts")) && /writeMemory\(userId, "text_exchange", `Co replied: \[sent a document: \$\{doc\.title\}\]`\)/.test(src("services/documentDelivery.ts")));
-
-  // The whole turn: Co writes the document with the tool; no text goes; the promise is kept and the task closes itself.
-  script.push({ tool: "writeDocument", input: planDoc }, { text: "Sent." });
-  const { deps, log } = harness(NOW);
-  const docRec: any[] = [];
-  deps.writeDocument = async (input: any, x: { read: string }) => { const r = await DD.sendDocumentForTask(input, { ...o, read: x.read }, { ...tdeps(), record: async (...a: any[]) => { docRec.push(a); } }); log.docs.push(r); return r; };
-  const r = await TT.runTaskTurnWith(baseTask({ id: 601, goal: PLAN_GOAL, theirWords: THEIRS }), deps);
-  check("a plan-doc commitment goes through the document path", log.docs.length === 1 && log.docs[0].ok && docRec.length === 1, { did: r.did, docs: log.docs });
-  check("...never as text", log.texts.length === 0 && log.warns.length === 0);
-  check("the document send counts as the promise kept: the task closes as done", log.closed.length === 1 && /^done: Kept: sent the document/.test(log.closed[0]) && r.action === "finished", log.closed);
-  check("promiseKeptBy: a document after the promise keeps a plan-doc promise; a text doesn't", (() => {
-    const at = TONIGHT_AT;
-    const doc = FT.promiseKeptBy({ goal: PLAN_GOAL, theirWords: THEIRS, at }, [{ at: NOW, text: "a document (PDF): Staying present", kind: "document" }]);
-    const txt = FT.promiseKeptBy({ goal: PLAN_GOAL, theirWords: THEIRS, at }, [{ at: NOW, text: "Here's the plan: send notes, host a dinner, share a recap, check in a month later.", kind: "text", forThis: true }]);
-    return doc.kept && !txt.kept;
-  })());
-  check("the turn's own document counts in the close check", (await TT.promiseCloseCheck({ goal: PLAN_GOAL, theirWords: THEIRS, createdAt: TONIGHT_AT.toISOString(), source: "promise" }, [], { now: () => NOW, sentSince: async () => [] }, ["Staying present"])).ok);
-  check("...and without it, a plan promise isn't closable", !(await TT.promiseCloseCheck({ goal: PLAN_GOAL, theirWords: THEIRS, createdAt: TONIGHT_AT.toISOString(), source: "promise" }, ["Here's the plan in a text"], { now: () => NOW, sentSince: async () => [] })).ok);
-  // One delivery, one line (2026-10-08): after the document, Co tries to text "it's ready" too. The text tool refuses; nothing else goes.
-  {
-    script.push({ tool: "writeDocument", input: planDoc }, { tool: "tellThem", input: { what: "The plan is ready as a PDF for you and Jacqueline to go through together." } }, { text: "Done." });
-    const h = harness(NOW);
-    const lines: string[] = [];
-    h.deps.writeDocument = async (input: any, x: { read: string }) => DD.sendDocumentForTask(input, { ...o, read: x.read }, { ...tdeps(), deliver: async (doc: any, to: any, target: string) => { lines.push(to.line); return { ok: true, via: target, filename: "Co-x.pdf" }; } });
-    await TT.runTaskTurnWith(baseTask({ id: 602, goal: PLAN_GOAL, theirWords: THEIRS }), h.deps);
-    check("after the document, no text about it goes (attachment + its one line only)", lines.length === 1 && h.log.texts.length === 0, { lines, texts: h.log.texts });
-  }
-}
-
 // ======================================================================= 6. where windows come from
 {
   const calls: any[] = [];
@@ -310,7 +244,6 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   await CC.trackCallCommitment({ userId: "u1", sentence: "I'll text you the options.", theirLine: "find me a private dining room", now: new Date("2026-10-08T02:20:00Z") }, cdeps);
   check("a call commitment with no time carries the confirmation's window ('tonight'), in their zone", calls[0]?.window?.words === "tonight" && local(calls[0].window.deadline) === "10/07, 23:59", calls[0]?.window);
   await CC.trackCallCommitment({ userId: "u1", sentence: "I'll put together the plan for after the Sequin event and text you the draft tonight.", theirLine: "what's the plan after the event", now: new Date("2026-10-08T02:20:00Z") }, cdeps);
-  check("a plan commitment from a call is set up as a document (writeDocument), not a text", /writeDocument/.test(calls[1]?.steps?.[0]?.text ?? "") && /writeDocument/.test(calls[1]?.firstPlan ?? ""), calls[1]);
   check("a reply's promise carries its window too, in their zone", /window: commitmentWindow\(sentence, now, zone\)/.test(src("services/promises.ts")) && /const zone = await memberZone\(o\.userId\)/.test(src("services/promises.ts")));
 }
 

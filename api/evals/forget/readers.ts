@@ -111,7 +111,6 @@ const all = (k: unknown) => JSON.stringify(k);
 {
   const k = await MK.memberKnowledge(U, { now: NOW }, { ...deps(), forgotten: async () => removedRows() });
   check("layer: a lesson with any part saying the removed thing goes whole (no \"keep it light\" left to widen); the other stays", !GONE.test(all(k.lessons)) && k.lessons.length === 1 && k.lessons[0].text === "He wants climate founders, small rooms, never mixers");
-  check("layer: a document they have, named by the removed thing, is gone from delivered and carrying; the canary doc stays", !/Prep notes/.test(all(k.delivered)) && !/Prep notes/.test(all(k.carrying)) && /Climate founders dinner plan/.test(all(k.delivered)));
   check("layer: a find Cue sent first, named by it or from a post saying it, is gone; the canary find stays", !/Family law clinic|legal aid fair/.test(all(k.delivered)) && /Climate Founders Breakfast/.test(all(k.delivered)));
   check("layer: a loop titled with the removed thing is gone; the canary loop stays, its detail without that part", !GONE.test(all(k.carrying)) && CANARY.test(all(k.carrying)) && /small rooms/.test(all(k.carrying)));
   check("layer: a promise result saying it is gone; the other stays", !/checklist/.test(all(k.carrying)) && /climate founders shortlist/.test(all(k.carrying)));
@@ -122,7 +121,7 @@ const all = (k: unknown) => JSON.stringify(k);
   check("layer: lessons alone still go through the removals", only.lessons.length === 1 && !GONE.test(all(only.lessons)));
   // No removals: everything as before, word for word.
   const none = await MK.memberKnowledge(U, { now: NOW }, { ...deps(), forgotten: async () => [] });
-  check("layer, no removals: both lessons, both loops, both sends, docs and finds, as they were", none.lessons.length === 2 && GONE.test(all(none.lessons)) && GONE.test(all(none.carrying)) && GONE.test(all(none.delivered)) && /Prep notes/.test(all(none.delivered)) && /Family law clinic/.test(all(none.delivered)) && /legal aid fair/.test(all(none.delivered)));
+  check("layer, no removals: both lessons, both loops, both sends, docs and finds, as they were", none.lessons.length === 2 && GONE.test(all(none.lessons)) && GONE.test(all(none.carrying)) && GONE.test(all(none.delivered)) && /Family law clinic/.test(all(none.delivered)) && /legal aid fair/.test(all(none.delivered)));
   // A correction (not a removal) never cuts these sources: "Oakland" corrected to "Berkeley" leaves a lesson naming Oakland as it is.
   const corr = await MK.memberKnowledge(U, { now: NOW, include: ["lessons"] }, { ...deps(), lessons: async () => [{ text: "Lives in Oakland, likes small dinners", at: ago(3) }], forgotten: async () => W.liveGuards([{ field: "city", old: "Oakland", now: "Berkeley", ref: "profile:city", removed: false }]) });
   check("layer: a correction leaves a lesson's words as they are (only removals cut)", corr.lessons[0]?.text === "Lives in Oakland, likes small dinners");

@@ -165,7 +165,7 @@ const quiet = <T>(fn: () => Promise<T>): Promise<T> => {
 {
   prompts = [];
   const a = await PC.draftPostCallText("Jordan", TRANSCRIPT, "Planning a founders dinner.");
-  const b = await PC.draftPostCallText("Jordan", TRANSCRIPT, "Planning a founders dinner.", [], { theySaid: [], coInferred: [] }, null, false, null, false, []);
+  const b = await PC.draftPostCallText("Jordan", TRANSCRIPT, "Planning a founders dinner.", [], { theySaid: [], coInferred: [] }, null, null, [], []);
   check("no corrections: the same request as without the argument, word for word", prompts.length === 2 && prompts[0] === prompts[1], prompts.map((p) => p.length));
   check("no corrections: nothing of the correction in it, the rules today's", !/what_you_said_on_the_call_that_was_wrong|carries a correction/.test(prompts[0]) && JSON.stringify(a?.rules) === JSON.stringify({ maxSentences: 3, maxChars: 360 }) && a?.corrections.length === 0 && b?.corrections.length === 0, a);
 }
@@ -276,7 +276,7 @@ try {
   check("onSent marks only what the sent draft carried (its meta)", /async onSent\(c, _p, messages, meta\)/.test(reg) && /markCarriedCorrections\(c\.userId, meta\)/.test(reg));
   check("the dispatch hands the sent draft's meta to onSent (never a composed bundle's)", /onSent\?\.\(c, person, result\.delivered, composed \? undefined : draft\.meta\)/.test(src("harness/proactive.ts")));
   check("the webhook hands the call's turns to the source check, run with the finds once the ledger is read; the audit gets the done list, the finds and the flags", /offerSource: \{ turns, given: /.test(src("routes/co.ts")) && /m\.unsourcedInCall\(o\.offerSource!\.turns, \{ \.\.\.o\.offerSource!\.given, foundOnCall: L\.foundLines\(foundOnCall\)\.join\("\\n"\) \}\)/.test(src("routes/co.ts")) && /auditCall\(user_id, cleanTranscript, knownBeforeCall, \{ doneOnCall, foundOnCall, offerFlags, correctionsHeld \}\)/.test(src("routes/co.ts")) && /const correctionsHeld = ledger \? undefined : /.test(src("routes/co.ts")));
-  check("the SKIP retry carries doneOnCall (only the correction drops)", /if \(!text && correcting\) return draftPostCallText\(firstName, transcript, contextSummary, promiseResults, claims, confirmationSent, recapOffer, knowledge, recapGentle, doneOnCall\);/.test(pc));
+  check("the SKIP retry carries doneOnCall (only the correction drops)", /if \(!text && correcting\) return draftPostCallText\(firstName, transcript, contextSummary, promiseResults, claims, confirmationSent, knowledge, doneOnCall\);/.test(pc));
   const ct = src("services/callTools.ts");
   check("a search on the call keeps what it found with its done row (both record sites)", (ct.match(/recordDone\(name, plan\.kind, [^)]*, urls, foundFor\(name, r\)\)/g) ?? []).length === 2 && /recordDoneOnCall\(i\.userId, \{ tool, kind, input, urls, found \}\)/.test(ct));
 }

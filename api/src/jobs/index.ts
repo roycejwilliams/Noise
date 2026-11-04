@@ -158,20 +158,6 @@ export async function runAutoIntakeCalls(io: Server): Promise<void> {
 }
 
 export function registerJobs(io: Server) {
-  // Co pages past their 90 days lose their content; the link answers 404 (services/coPages/store.ts, security review 2026-10-11).
-  cron.schedule("20 4 * * *", () => {
-    import("../services/coPages/store.js")
-      .then((m) => m.wipeExpiredCoPages())
-      .then((n) => { if (n) console.log(`co pages: wiped ${n} expired`); })
-      .catch((err: any) => console.error("co pages: expiry wipe failed:", err?.message ?? err));
-  });
-  // Pages and decks they've been using that expire within a week: one notice each, one word keeps it (services/coPages/expiry.ts).
-  cron.schedule("40 16 * * *", () => {
-    import("../services/coPages/expiry.js")
-      .then((m) => m.enqueueExpiryWarnings())
-      .then((n) => { if (n) console.log(`co pages: queued ${n} expiry notices`); })
-      .catch((err: any) => console.error("co pages: expiry notices failed:", err?.message ?? err));
-  });
   // Model prompt/answer text past its 14 days is deleted, with or without a member on it (services/llmTraceText.ts).
   cron.schedule("35 4 * * *", () => {
     import("../services/llmTraceText.js")
@@ -275,17 +261,6 @@ export function registerJobs(io: Server) {
       await runDueDeferredSends();
     } catch (err: any) {
       console.error("deferred send cron error (non-fatal):", err?.message ?? err);
-    }
-  });
-
-  // A document whose PDF failed went as text (services/documentDelivery.ts); the PDF it promised follows from here, inside their
-  // delivery hours, with backoff, never the text again (deliveryReceipts.ts receipts in pdf_pending).
-  cron.schedule("*/5 * * * *", async () => {
-    try {
-      const { retryPendingPdfs } = await import("../services/documentDelivery.js");
-      await retryPendingPdfs();
-    } catch (err: any) {
-      console.error("pdf retry cron error (non-fatal):", err?.message ?? err);
     }
   });
 

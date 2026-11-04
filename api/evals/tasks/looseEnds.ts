@@ -29,7 +29,6 @@ const CG = await import("../../src/harness/callGate.js");
 const P = await import("../../src/harness/proactive.js");
 const SP = await import("../../src/services/speakable.js");
 const CT = await import("../../src/services/coTasks.js");
-const RB = await import("../../src/services/researchBrief.js");
 const FU = await import("../../src/services/followUps.js");
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 let total = 0, failed = 0;
@@ -73,22 +72,9 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   check("an open brief stops a second one", /already being put together/.test(CT.briefAlreadyOpen([{ status: "open", held: null }]) ?? ""));
   check("a finished brief waiting for their hours stops it too, and hands Cue the line to say now", /Tell them that now/.test(CT.briefAlreadyOpen([{ status: "open", held: { text: "I looked, but couldn't verify any venues that fit.", at: "" } }]) ?? ""));
   const ct = src("services/coTasks.ts");
-  const start = ct.slice(ct.indexOf("export async function startResearchBrief"), ct.indexOf("// ---------------------------------------------------------------- research briefs, as the reply sees them"));
-  check("the guard reads the open briefs themselves, not openTasks (which is work tasks only)", /briefAlreadyOpen\(await recentBriefs\(input\.userId\)\)/.test(start) && !/open\.some\(\(t\) => t\.kind === "research_brief"\)/.test(start));
-  check("the insert re-checks, so two asks at once still make one brief", /WHERE NOT EXISTS \(SELECT 1 FROM co_tasks WHERE user_id = \$1 AND kind = 'research_brief' AND status = 'open'\)/.test(start));
   check("work tasks still read kind = 'work' only (counts, wake-ups)", /status = 'open' AND kind = 'work' ORDER BY/.test(ct) && /AND awaiting_reply AND kind = 'work'/.test(ct));
 
   // (b) the member hears how it ended
-  check("sent (or already sent) = told", RB.briefLineOutcome({ sent: true }, 1) === "told" && RB.briefLineOutcome({ sent: false, reason: "already sent" }, 1) === "told");
-  check("outside their hours = held to their morning", RB.briefLineOutcome({ sent: false, reason: "outside local hours" }, 1) === "hold");
-  check("held only so long: a line that never fits stops holding", RB.briefLineOutcome({ sent: false, reason: "outside local hours" }, RB.BRIEF_HOLD_MAX_WAKES) === "untold");
-  check("paused, opted out or failed = untold", ["proactive outreach is paused", "opted out", "boom"].every((reason) => RB.briefLineOutcome({ sent: false, reason }, 1) === "untold"));
-  const rb = src("services/researchBrief.ts");
-  check("no closing line goes through a fire-and-forget say() any more", !/await say\(/.test(rb) && (rb.match(/await tellThenClose\(/g) ?? []).length >= 3);
-  check("told: closed as planned; held: the task stays open with the line and wakes in their hours; untold: dropped, saying so", /if \(next === "hold"\)[\s\S]{0,700}holdBriefLine\(task\.userId, task\.id, \{ text, status, outcome \}, (?:held \?\? )?nextSendable\(new Date\(\), zone\)\)/.test(rb) && /closeTask\(task\.userId, task\.id, next === "told" \? status : "dropped", next === "told" \? outcome : `\$\{outcome\}; never told them/.test(rb));
-  check("a held line is said on the next wake without running the find again", rb.indexOf("if (held?.text)") > 0 && rb.indexOf("if (held?.text)") < rb.indexOf("findVenueOptions(task.userId"));
-  check("a brief that found nothing is closed as done only through tellThenClose (never before they're told)", !/closeTask\(task\.userId, task\.id, "done", `no brief/.test(rb));
-  check("holdBriefLine only touches an open brief", /WHERE user_id = \$1 AND id = \$2 AND status = 'open' AND kind = 'research_brief'/.test(ct));
 
   // (c) the reply sees them
   const B = (o: Partial<import("../../src/services/coTasks.js").BriefView>) => ({ id: 7, goal: "Venue options: private dinner for twelve", theirWords: "find me a private dining room for twelve", status: "open" as const, createdAt: "2026-10-07T17:00:00Z", closedAt: null, outcome: null, held: null, ...o });
@@ -140,14 +126,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
 
 // ---- 2026-10-08 follow-on: a brief whose PDF won't send still reaches them; "asked for space" is skip
 {
-  const RB = await import("../../src/services/researchBrief.js");
   const { narratesInternalState } = await import("../../src/services/speakable.js");
-  const t = RB.briefOptionsText("Venue options: a launch dinner for 40", [{ name: "Perbacco", url: "https://www.perbaccosf.com/dining/" }, { name: "Mastro's", url: "https://www.mastrosrestaurants.com/private-events-san-francisco/" }]);
-  check("the fallback names what it is and lists each option with its link", /^The venue options for a launch dinner for 40 wouldn't come through as a PDF, so here they are:/.test(t) && /1\. Perbacco: https:\/\/www\.perbaccosf\.com\/dining\//.test(t) && /2\. Mastro's: https:/.test(t));
-  check("the fallback never narrates Cue's state", narratesInternalState(t) === null);
-  const rb = src("services/researchBrief.ts");
-  check("a brief whose document didn't go is kept and re-sent, never closed silently", /if \(!delivered\.sent\) \{[\s\S]{0,500}holdBriefDoc\(/.test(rb) && !/"the brief couldn't be sent"/.test(rb));
-  check("the retry re-sends the same document (no new find), through the receipts, then texts the options", /pendingDoc\?\.doc[\s\S]{0,300}sendBrief\(pendingDoc\.doc/.test(rb) && /briefOptionsText\(pendingDoc\.title, pendingDoc\.options\)/.test(rb) && RB.DOC_RETRIES >= 1 && !/deliverDocument\(/.test(rb.slice(rb.indexOf("export async function runResearchBriefTask"))));
   const fu = src("services/followUps.ts");
   check("asking for space is skip, never later", /that is skip, never later/.test(fu) && /Never "later" because they asked for space/.test(fu));
 }

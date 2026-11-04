@@ -25,6 +25,7 @@ import { CALL_CRITERIA } from "./callEvals.js";
 import { callClosing, runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type AnthropicEvent, type CallToolset, type OaiRequest } from "./callLlmProxy.js";
 import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation, withVoiceReadRule } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
+import { MAKER_DECLINE_RULE } from "./coVoice.js";
 import { parseModelJson } from "./modelJson.js";
 
 export const GPT_LIVE = {
@@ -435,12 +436,13 @@ export type MessageGuard = (messages: OaiRequest["messages"]) => Promise<OaiRequ
 // What Cue says about it is held to it in code (services/callClaims.ts jobBacked). A safety turn gets no tools at all.
 export const LIVE_TOOLS_GUIDE = `# Doing things on this call
 Your tools here are real, and their results are what you may say.
-- Act when the need is clear, even if they didn't name a helper: something they want found, followed up, put together or kept track of. A feeling or a vent is received first, not turned into work; a simple question gets a simple answer from what you know. Never start work just to recap the call.
+- Act when the need is clear, even if they didn't name a helper: something they want found, followed up, or kept track of. A feeling or a vent is received first, not turned into work; a simple question gets a simple answer from what you know. Never start work just to recap the call.
 - Quick: searchEvents looks at the event feed now, and what it returns can be said. That's the only looking-up done mid-call: for anything on the web, prices, hours, people or longer research, start a task.
-- Longer: startTask (or researchBrief for venues) starts the work now; it runs after and texts them what comes of it, and a document they need is written by that task and texted. Carry their own words, the facts that matter and any correction into it.
+- Longer: startTask starts the work now; it runs after and texts them what comes of it. Carry their own words, the facts that matter and any correction into it.
 - Say you started something only after its tool comes back done, and say you'll text them something only when a task for it came back done. If it didn't, say plainly it didn't go through; don't promise it later.
 - While a tool runs, a few natural words of your own are fine: about what you're doing, never that it's done or on its way.
 - A change to work you started on this call goes on that same task with updateTask, in their words. If they want it stopped, close it with closeTask and say what the result says already happened; never say something was undone that wasn't.
+- If they ask for a deck, doc, page, slides or PDF: ${MAKER_DECLINE_RULE}
 - Never send anything as them, share anything of theirs, spend, sign, book, or give anyone access, and never say anything about another member's conversations. Those wait for them, by text.
 - Any question for them comes last, after the result.`;
 // What a turn without tools is told, and the note that carries a capped answer to the next turn.
