@@ -129,6 +129,8 @@ export function carryLaneNotes(draft: string, pending: readonly string[], sent: 
 // Pure: the kind a kind job may write for an ask, or null to leave it. A lookout keeps its kind; one never read gets find, which is
 // what a lookout is (find + intent lookout).
 export function askKindAfter(row: { kind: string | null; intent: string | null }, proposed: AskKind): AskKind | null {
+  // Outside the purpose boundary (askKind.ts outsideAsk): even a look-out is remembered only, never swept or checked in on.
+  if (proposed === "outside") return row.kind === "outside" ? null : "outside";
   if (row.intent === "lookout") return row.kind ? null : "find";
   return row.kind === proposed ? null : proposed;
 }
@@ -295,7 +297,7 @@ const realStore: LaneStore = {
     return true;
   },
   addLookout: async (userId, text, from, theirYes) => {
-    const [{ askExpiresAtForUser }, { ASK_KIND_VERSION }] = await Promise.all([import("./askExpiry.js"), import("./askKind.js")]);
+    const [{ askExpiresAtForUser }, { ASK_KIND_VERSION, outsideAsk }] = await Promise.all([import("./askExpiry.js"), import("./askKind.js")]);
     const { rows: open } = await pool.query(`SELECT 1 FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND intent = 'lookout' AND lower(trim(ask_text)) = lower(trim($2)) LIMIT 1`, [userId, text]);
     if (open.length) return true;
     const id = crypto.randomUUID();
@@ -308,8 +310,8 @@ const realStore: LaneStore = {
     );
     await pool.query(
       `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, kind_version, intent, intent_why, last_mentioned_at)
-       VALUES ($1, $2, $3, $4, 'find', NOW(), $5, 'lookout', $6, NOW()) ON CONFLICT (user_id, ask_id) DO NOTHING`,
-      [userId, id, text, expires, ASK_KIND_VERSION, `moved from ${LANE_WORDS[from]} at their word: "${theirYes.slice(0, 160)}"`],
+       VALUES ($1, $2, $3, $4, $7, NOW(), $5, 'lookout', $6, NOW()) ON CONFLICT (user_id, ask_id) DO NOTHING`,
+      [userId, id, text, expires, ASK_KIND_VERSION, `moved from ${LANE_WORDS[from]} at their word: "${theirYes.slice(0, 160)}"`, outsideAsk(text) ? "outside" : "find"],
     );
     return true;
   },

@@ -118,7 +118,7 @@ async function sources(userId: string, now: Date): Promise<LoopSources> {
     // A research brief in progress is something Co is carrying for them too (it closes by the same task status read).
     q(`SELECT id, goal, deadline, awaiting_reply, their_reply_at, notes FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind IN ('work', 'research_brief') ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
     q(`SELECT brief, updated_at FROM search_briefs WHERE user_id = $1`, [userId]),
-    q(`SELECT ask_id, ask_text, awaiting_response_since, last_mentioned_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
+    q(`SELECT ask_id, ask_text, awaiting_response_since, last_mentioned_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind IS DISTINCT FROM 'outside' ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
     q(`SELECT target_key, payload->'match'->>'name' AS name, payload->'match' AS match FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND decided_at > NOW() - interval '2 days' ORDER BY decided_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
   ]);
   // The offer's day is theirs; a zone that can't be read falls back (memberTime.ts), as every loop day does.

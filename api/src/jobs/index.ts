@@ -532,6 +532,7 @@ export function registerJobs(io: Server) {
            GROUP BY person_id, ask_id
          ) re ON re.person_id = ac.user_id AND re.ask_id = ac.ask_id
          WHERE ac.resolved_at IS NULL AND u.sms_opted_out = false
+           AND ac.kind IS DISTINCT FROM 'outside'
            AND (
              COALESCE(ac.last_checked_at, ac.created_at) <= NOW() - INTERVAL '7 days'
              OR (re.newest > COALESCE(ac.last_checked_at, ac.created_at)
@@ -726,6 +727,9 @@ export function registerJobs(io: Server) {
           // never searched then and not counted as a search; otherwise searched (a mixed one, its find part only), and a part with no
           // task is listed for the team. Each logged once on their day. Kind never changes.
           let askText = String(row.ask_text ?? "");
+          // The purpose boundary (harness/scope.ts), asked again at the sweep: an out-of-scope ask is remembered, never searched
+          // (its kind moves to "outside" in the next kind job; a row not yet moved is still skipped here).
+          if ((await import("../services/askKind.js")).outsideAsk(askText)) continue;
           if (row.kind === "find") {
             const AS = await import("../services/askSplit.js");
             const sp = await AS.askSearchPlan(row.user_id, row).catch(() => null);

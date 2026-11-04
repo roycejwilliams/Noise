@@ -4,7 +4,7 @@ import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
-import { classifyAsk, isCoCommitment, markIntentResolved } from "./askKind.js";
+import { classifyAsk, isCoCommitment, markIntentResolved, outsideAsk } from "./askKind.js";
 import { classifyEntryKind } from "./entryKind.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork, sweepStandingAsksForNewcomer } from "./relevance.js";
@@ -1776,7 +1776,7 @@ export async function persistCapturedIntent(
   // Co's own promises and deliverables ("draft and text a plan", "will be delivered once ready") are tasks Co tracks
   // elsewhere, never a member's ask to check in on or search for (2026-10-08 sweep review, askKind.ts isCoCommitment).
   if (ask && !deduped && kind === "ask" && (opts.keepSearchRow || !isCoCommitment(ask.text))) {
-    const [expiresAt, askKind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), opts.keepSearchRow ? Promise.resolve("find" as const) : classifyAsk(ask.text)]);
+    const [expiresAt, askKind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), outsideAsk(ask.text) ? Promise.resolve("outside" as const) : opts.keepSearchRow ? Promise.resolve("find" as const) : classifyAsk(ask.text)]);
     await pool
       .query(
         `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at)

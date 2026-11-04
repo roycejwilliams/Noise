@@ -13,7 +13,12 @@ import { withTraceUser } from "./llmTraceText.js";
 
 // "person": someone to meet or talk to ("a founder who's done a pre-seed raise to talk to"), which only an intro can meet, never a
 // search of events and pages (Royce, 2026-10-09: that ask came back empty five mornings running). Routed to intros, not swept.
-export type AskKind = "find" | "help" | "person";
+// "outside": remembered, never worked on (the purpose boundary, harness/scope.ts, Royce 2026-11-04): an errand, shopping, travel, a general
+// research project, a job-board watch, a funding or investor search. The row stays so Cue still knows what they said (and shows it back);
+// it is never swept, checked in on, turned into a task or a look-out. Decided in code, no model call.
+export type AskKind = "find" | "help" | "person" | "outside";
+import { classifyScope } from "../harness/scope.js";
+export const outsideAsk = (text: string): boolean => classifyScope(text).scope === "out";
 
 // Co's own deliverables and promises are not asks (2026-10-08): "plan will be
 // delivered once ready" and "I'll send the outline tonight" were saved as
@@ -53,6 +58,8 @@ Answer with one word: find, help or person.`;
 }
 
 export async function classifyAsk(text: string): Promise<AskKind> {
+  // Outside the purpose boundary: remembered, never searched or checked in on. First, so nothing else spends on it.
+  if (outsideAsk(text)) return "outside";
   // Co's own promise or deliverable: never searched, no model call needed.
   if (isCoCommitment(text)) return "help";
   try {
@@ -78,19 +85,27 @@ export async function classifyAsk(text: string): Promise<AskKind> {
 // ASK_KIND_VERSION: open find asks classified under an older prompt are read again once (2026-10-09: person asks and action requests
 // were saved as find asks and searched every morning).
 // A lookout's kind is never changed here (Royce, 2026-10-13, lane moves): every kind write goes through laneMoves.ts setAskKind.
-export const ASK_KIND_VERSION = 2;
+export const ASK_KIND_VERSION = 3;
 type KindDb = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify?: (text: string) => Promise<AskKind> } = {}): Promise<number> {
   const db = deps.db ?? pool;
   const classify = deps.classify ?? classifyAsk;
   const { setAskKind } = await import("./laneMoves.js");
   const { rows } = await db.query(
-    `SELECT id, user_id, ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR (kind = 'find' AND COALESCE(kind_version, 1) < $2)) LIMIT $1`,
+    `SELECT id, user_id, ask_text, kind, intent, kind_checked_at FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR (kind = 'find' AND COALESCE(kind_version, 1) < $2)) LIMIT $1`,
     [limit, ASK_KIND_VERSION],
   );
   for (const r of rows) {
     // A lookout keeps its kind; it's only marked checked (or given find, if it never had one), so it isn't read again every run.
-    const kind = r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : await withTraceUser(r.user_id, () => withMember(r.user_id, () => classify(r.ask_text))); // under the ask's member, its cost theirs
+    // Version 3 (the purpose boundary): an open find ask read under an older version is checked once in code, with no model call; only
+    // an ask that is outside moves (to "outside"), the rest keep the kind they were given.
+    const kind: AskKind = outsideAsk(r.ask_text)
+      ? "outside"
+      : r.kind_checked_at && r.kind === "find" && r.intent !== "lookout"
+        ? "find"
+        : r.intent === "lookout"
+          ? ((r.kind as AskKind | null) ?? "find")
+          : await withTraceUser(r.user_id, () => withMember(r.user_id, () => classify(r.ask_text))); // under the ask's member, its cost theirs
     await setAskKind(db, { id: r.id, read: { kind: r.kind ?? null, intent: r.intent ?? null }, kind, version: ASK_KIND_VERSION }).catch(() => {});
   }
   // Open "find" asks that read as Co's own promise or deliverable are NOT switched off here any more (Royce, 2026-10-13: a member
