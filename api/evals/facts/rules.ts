@@ -192,7 +192,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   check("an older send isn't loaded as a recent detail", T.sentDetailLines({ sent: [{ ...grok, sentAt: new Date(now - 9 * 86_400_000) }] }).length === 0);
   check("a first offer is found by the name Cue's tool uses", T.findSent([grok, dayt], "daytonaio AI Builders demo night")?.key === "name:daytonaio ai builders demo night" && T.findSent([grok, dayt], "Grok Bot x Notion")?.key === "event:evt-1" && T.findSent([grok], "pottery") === undefined);
   const rg = src("harness/replyGrounding.ts");
-  check("reply facts come from the turn's picture: sends with details, asks; no model-written summary of them", /if \(opts\.turn\) \{[\s\S]{0,400}sentDetailLines\(opts\.turn, 5, new Date\(\), \{ zone, also: referredSent\(opts\.turn\.sent[\s\S]{0,120}addFact\(rf, "known", line\)/.test(rg) && /addOngoingSearchFacts\(rf, userId, opts\.turn\?\.asks\)/.test(rg) && !/Cue's summary of what they've told it/.test(rg));
+  check("reply facts come from the turn's picture: sends with details, asks; no model-written summary of them", /if \(opts\.turn\) \{[\s\S]{0,200}sentDetailLines\(opts\.turn, 5, new Date\(\), \{ zone, also: opts\.turn\.referents \?\? \[\] \}\)\) addFact\(rf, "known", line\)/.test(rg) && /addOngoingSearchFacts\(rf, userId, opts\.turn\?\.asks\)/.test(rg) && !/Cue's summary of what they've told it/.test(rg));
   const sb = src("routes/sendblue.ts");
   check("no separate partial loads left in the text route", !/sentDetailFacts|lessonsFor\(|gatherDots\(/.test(sb) && /lessons = turn\?\.lessons \?\? \[\]/.test(sb) && /turn,\n/.test(sb));
 }
