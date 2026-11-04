@@ -686,7 +686,7 @@ ${TOOL_TURN_RULES(input.isVoice)}
 
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
 
-  // The one artifact offer this reply was told it may make (a plan sheet, a venue brief, a stale document's fix), recorded only when
+  // The one artifact offer this reply was told it may make (a stale document's fix), recorded only when
   // a text that went out makes it, so it's never offered twice (services/documentOffer.ts). Bookkeeping, never a gate on the text.
   const artifact = input.facts.artifactOffer;
   if (artifact && state.sent && !opts.dryRun && opts.record !== false) {

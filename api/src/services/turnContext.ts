@@ -479,7 +479,7 @@ export async function assembleContext(
   const windows = new Map(rawTasks.filter((t) => t.status === "open" && t.window && !t.window.closedAt).map((t) => [`task #${t.id}`, { words: t.window!.words, deadline: t.window!.deadline, zone: t.window!.zone ?? null }]));
   const carrying = carryFromKnowledge(knowledge?.carrying ?? [], zone, windows).flatMap((c) => { const label = keep(c.label); return label ? [{ ...c, label }] : []; });
   const openWork = keepAll([...rawTasks.filter((t) => t.status === "open").map((t) => t.goal), ...rawBriefs.filter((b) => b.status === "open").map((b) => `research brief: ${b.goal}`)]);
-  // The plan sheet, venue brief and stale-document offers decide per reply from these (services/documentOffer.ts docOfferLines).
+  // The stale-document offer decides per reply from these (services/documentOffer.ts docOfferLines).
   if (docOffer) {
     docOffer.signals = await import("./documentOffer.js")
       .then((m) => m.loadArtifactSignals(userId, { drift, openWork, delivered: [...new Map(receipts.map((r) => [r.docKey, r])).values()].map((r) => ({ title: r.title, kind: r.kind, at: r.deliveredAt })) }))

@@ -31,7 +31,7 @@ export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|
 export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; driveGrant?: "docs"; shared?: boolean; updatedInPlace?: boolean; newDocBecause?: string; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
 
 // The kinds that may become a shared Google Doc, and the optional narrowing list of members (at most two user ids).
-export const SHARED_DOC_KINDS: readonly DocKind[] = ["venue_brief", "partnership_plan", "readout"];
+export const SHARED_DOC_KINDS: readonly DocKind[] = ["partnership_plan", "readout"];
 export function docsTestPair(env: NodeJS.ProcessEnv = process.env): string[] {
   return String(env.GOOGLE_DOCS_TEST_USERS ?? "").split(",").map((s) => s.trim()).filter((s) => /^[0-9a-f-]{36}$/i.test(s)).slice(0, 2);
 }
@@ -144,7 +144,7 @@ const realDeps = async (): Promise<DeliverDeps> => {
     docMeta: (token, fileId) => d.googleDocMeta(token, fileId),
     look: async (userId, doc) => {
       const DS = await import("./designSystem.js");
-      // A venue brief, a partnership plan or a readout is work; anything else (their goals, a plan for themselves) is personal.
+      // A partnership plan or a readout is work; anything else (their goals, a plan for themselves) is personal.
       const ds = await DS.loadDesignSystem(userId, doc.kind && doc.kind !== "other" ? "professional" : "personal");
       return ds.answered.size && !ds.dontCare ? DS.fillDesign(ds, {}).style : null;
     },
@@ -201,7 +201,7 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
 // explicit, logged yes; nothing sets that yet), and the link texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the narrowing list, or a
 // kind that isn't a shared working artifact, never gets one.
 async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<DeliverResult> {
-  if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a venue brief, partnership plan or readout (and, when GOOGLE_DOCS_TEST_USERS is set, only for those members)", notAllowed: true };
+  if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a partnership plan or readout (and, when GOOGLE_DOCS_TEST_USERS is set, only for those members)", notAllowed: true };
   const token = deps.googleToken ? await deps.googleToken(to.userId).catch(() => null) : null;
   if (!token || !deps.uploadDoc) return { ok: false, why: "they haven't connected Google Docs", notConnected: true };
   const day = dayFor(to);

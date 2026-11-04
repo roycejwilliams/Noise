@@ -183,37 +183,20 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
 {
   const base = { now: NOW, helpAsks: [], threads: [], recurring: [], needsCare: false, history: [] as any[], notes: null as any, emailPlanAt: null as Date | null, delivered: [] as any[], openWork: [] as string[], drift: [], message: "", coLines: [] as string[] };
   const settled = { ...base, notes: { kind: "venue", what: "dinner", picked: "Rich Table", when: "Friday", headcount: 12, city: "San Francisco", area: null, updatedAt: hoursAgo(1) }, coLines: ["Drinks at Spruce at 7pm, then Rich Table at 8:15pm."] };
-  const plan = O.artifactOfferDue("plan", settled);
-  check("A2: a settled plan (a pick, a date, 2+ times) may be offered as a one-page sheet", plan.due && /one-page sheet with the times/.test((plan as any).line), plan);
-  const walk = O.artifactOfferDue("plan", { ...base, coLines: ["6pm: get there early.\n6:30pm: greet the first guests.\n7pm: toast.\n7:30pm: seat everyone."] });
-  check("A2: a 4+ timed-step walkthrough Cue just gave may be offered too", walk.due);
-  check("A2: three timed steps aren't enough", !O.artifactOfferDue("plan", { ...base, coLines: ["6pm: arrive.\n7pm: toast.\n8pm: dinner."] }).due);
-  check("A2: not when emailPlan ran in the last 24h", !O.artifactOfferDue("plan", { ...settled, emailPlanAt: hoursAgo(3) }).due);
-  check("A2: not when they already have a sheet for it", !O.artifactOfferDue("plan", { ...settled, delivered: [{ title: "Rich Table, Friday", kind: "plan", at: hoursAgo(2) }] }).due);
-  check("A2: shares the fortnight cooldown with every other offer", !O.artifactOfferDue("plan", { ...settled, history: [{ topic: "how to split cofounder roles", source: "offered", status: "offered", at: daysAgo(5) }] }).due);
-  check("A2: never the same plan twice", !O.artifactOfferDue("plan", { ...settled, history: [{ topic: "[plan] Rich Table, Friday", source: "offered", status: "offered", at: daysAgo(30) }] }).due);
-
+  // A sheet and a venue brief are not offered any more (2026-11-04): neither is ever due, whatever the moment.
   const host = { ...base, message: "I'm hosting a dinner for 14 founders on Oct 18 in Hayes Valley" };
-  const brief = O.artifactOfferDue("brief", host);
-  check("A3: hosting with a size and date, nothing covering it: offer a venue brief naming rates, minimums, capacity", brief.due && /rates, minimums and capacity/.test((brief as any).line) && /researchBrief/.test((brief as any).line), brief);
-  const noDate = O.artifactOfferDue("brief", { ...base, message: "I'm hosting a dinner for 14 founders" });
-  check("A3: a load-bearing fact missing: ask that one question instead", noDate.due && /ask that one question/.test((noDate as any).line) && !/rates, minimums/.test((noDate as any).line), noDate);
-  check("A3: no size and no date: nothing", !O.artifactOfferDue("brief", { ...base, message: "I'm hosting a dinner sometime" }).due);
-  check("A3: a brief or task already covering it: nothing", !O.artifactOfferDue("brief", { ...host, openWork: ["venue brief for the founders dinner"] }).due);
-  check("A3: they already have a venue brief: nothing", !O.artifactOfferDue("brief", { ...host, delivered: [{ title: "Venue options", kind: "venue_brief", at: daysAgo(2) }] }).due);
-  check("A3: no hosting signal (a dinner that happened): nothing", !O.artifactOfferDue("brief", { ...base, message: "had a great dinner for 14 last night" }).due);
+  check("A2/A3: a settled plan, a timed walkthrough, a hosting message: no sheet and no brief offer", !O.artifactOfferDue("plan", settled).due && !O.artifactOfferDue("plan", { ...base, coLines: ["6pm: get there early.\n6:30pm: greet.\n7pm: toast.\n7:30pm: seat everyone."] }).due && !O.artifactOfferDue("brief", host).due);
 
   // docOfferLines: at most one offer, drift > plan > brief > document; none on top of an ask or a waiting offer or in a heavy moment.
   const ctx = { due: { topic: "splitting cofounder roles", why: "x" }, pending: null, history: [], needsCare: false, signals: { notes: settled.notes, emailPlanAt: null, delivered: [], openWork: [], drift: [] } };
   const one = O.docOfferLines(ctx, "I'm hosting a dinner for 14 founders on Oct 18", { now: NOW, coLines: settled.coLines });
-  check("one offer a reply: the plan sheet wins over the brief and the document notice", one.offer?.kind === "plan" && /one-page sheet/.test(one.hint ?? "") && !/offerDocument/.test(one.hint ?? ""), one);
+  check("one offer a reply: no sheet or brief offer; the document notice or nothing", one.offer?.kind !== "plan" && one.offer?.kind !== "brief" && !/one-page sheet|venue brief/.test(one.hint ?? ""), one);
   const heavy = O.docOfferLines(ctx, "I'm hosting a dinner for 14 founders on Oct 18", { now: NOW, coLines: settled.coLines, heavyNow: true });
   check("a heavy moment: no offer at all", heavy.hint === null && !heavy.offer, heavy);
   const ask = O.docOfferLines(ctx, "can you make me a pdf of this?", { now: NOW, coLines: settled.coLines });
   check("never an offer on top of their own ask", !ask.offer && !!ask.ask);
   const waiting = O.docOfferLines({ ...ctx, pending: { topic: "[plan] Rich Table, Friday" } }, "yes please", { now: NOW, coLines: settled.coLines });
-  check("a waiting plan offer: a yes means the one-page sheet; no new offer", /one-page sheet/.test(waiting.pending ?? "") && /never offer it again/.test(waiting.pending ?? "") && !waiting.offer);
-  check("a waiting brief offer: a yes means researchBrief", /researchBrief/.test(O.pendingLine("[brief] founders dinner")));
+  check("an old waiting plan or brief offer: a yes means saying plainly it isn't something Cue does", /not something you do/.test(waiting.pending ?? "") && !waiting.offer && /not something you do/.test(O.pendingLine("[brief] founders dinner")) && !/researchBrief/.test(O.pendingLine("[brief] founders dinner")));
   check("a waiting drift offer: a yes means readDocument then writeDocument", /readDocument, then send the corrected version with writeDocument/.test(O.pendingLine("[drift] doc #12 v1")));
   check("an old row with no prefix is a document offer", O.parseTopic("splitting cofounder roles").kind === "document" && /write it with writeDocument/.test(O.pendingLine("splitting cofounder roles")));
   check("the record: Cue's text made the offer (bookkeeping only)", O.madeArtifactOffer("Want me to put the night on a one-page sheet with the times?", "plan") && !O.madeArtifactOffer("See you Friday.", "plan") && O.madeArtifactOffer("I can pull a venue brief with rates and minimums for a few rooms.", "brief"));

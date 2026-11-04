@@ -122,7 +122,7 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "
 
 // privateNames: the other member(s) a blocked turn is about, so a reply can't name them
 // (harness/discretion.ts).
-// artifactOffer: the one offer (a plan sheet, a venue brief, a stale document's fix) this reply was told it may make; recorded only
+// artifactOffer: the one offer (a stale document's fix) this reply was told it may make; recorded only
 // if a text Co sends makes it (services/documentOffer.ts).
 // goalSetAside: a goal Co set aside from context that they haven't heard about yet (services/goalEdges.ts); the reply may raise it.
 // coldStart: set for a member with fewer than two findable interests on file (services/coldStart.ts): whether this reply was offered
@@ -452,7 +452,7 @@ export async function gatherReplyFacts(
     addInstruction(rf, `If they say they're running late, can't make it, or aren't sure about "${today.name}", answer them normally and warmly, record it with updateGoing, never pressure them to come, and never offer to contact the host.`);
   }
   // Writing something up as a document (services/documentOffer.ts): an offer still waiting on its answer, or a moment Co may offer, once.
-  // The same notice covers a plan sheet, a venue brief and a stale delivered document, at most one offer a reply, never in a heavy
+  // The same notice covers a stale delivered document, at most one offer a reply, never in a heavy
   // moment (this message's feeling, recorded before the reply drafts).
   let docQuestion: string | null = null;
   let docOffered = false;

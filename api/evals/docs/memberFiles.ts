@@ -83,13 +83,13 @@ const filesHandlers = (rows: any[] = [{ n: 2, text: FILE_TEXT }]): Handler[] => 
 const sent: any[] = [];
 F.fileSteps.deliver = (async (doc: any, to: any, target: any) => { sent.push({ doc, to, target }); return { ok: true, via: target, filename: "x" }; }) as any;
 {
-  const grounded = { title: "Harbor Hall venue brief", note: "For the Friday dinner.", kind: "venue_brief", sections: [{ heading: "The space", bullets: ["Capacity 120 standing.", "Load-in from 5pm.", "Bar minimum of 4000 dollars on Friday nights."] }], suggestions: [] };
+  const grounded = { title: "Harbor Hall venue brief", note: "For the Friday dinner.", kind: "partnership_plan", sections: [{ heading: "The space", bullets: ["Capacity 120 standing.", "Load-in from 5pm.", "Bar minimum of 4000 dollars on Friday nights."] }], suggestions: [] };
   let draftSaw: any = null;
   F.fileSteps.draft = async (o: any) => { draftSaw = o; return grounded as any; };
   reset(filesHandlers());
   facts.length = 0; sent.length = 0;
   const t = make();
-  const r = await t.writeFromFile.execute({ kind: "venue_brief", want: "a venue brief" }, {});
+  const r = await t.writeFromFile.execute({ kind: "partnership_plan", want: "a venue brief" }, {});
   const everything = JSON.stringify({ r, facts, notDone, logged: log.filter((l) => /INSERT INTO co_memories|harness_decisions|search_briefs|saveBrief/i.test(l.sql)).map((l) => l.p) });
   check("from their newest file: drafted from their file and their own words, sent to them only", r.ok && sent.length === 1 && sent[0].to.userId === "u1" && sent[0].to.phone === "+15550100001" && draftSaw.fileText === FILE_TEXT && /Harbor Hall for 120/.test(draftSaw.theirWords), { r, notDone });
   check("nothing the conversation keeps carries the file's words or the document's title (only 'their file #2')", !/Harbor|Capacity|Load-in|4000|venue brief"/.test(everything.replace(/a venue brief/g, "")) && /their file #2/.test(everything), everything.slice(0, 400));
@@ -98,7 +98,7 @@ F.fileSteps.deliver = (async (doc: any, to: any, target: any) => { sent.push({ d
   F.fileSteps.draft = async () => ({ ...grounded, sections: [{ heading: "The space", bullets: ["Capacity 120 standing.", "The venue is the best in the Mission and sold out every weekend this year."] }] }) as any;
   reset(filesHandlers());
   sent.length = 0; notDone.length = 0;
-  const bad = await make().writeFromFile.execute({ kind: "venue_brief", want: "a venue brief" }, {});
+  const bad = await make().writeFromFile.execute({ kind: "partnership_plan", want: "a venue brief" }, {});
   check("rule 4: a draft with a claim not in their file or words is refused, nothing sent, and the refusal carries none of it", !bad.ok && sent.length === 0 && !/Mission|sold out/.test(JSON.stringify({ bad, notDone })));
 
   reset(filesHandlers([]));

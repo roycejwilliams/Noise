@@ -18,7 +18,7 @@ export type DocSectionInput = { heading?: string; paragraphs?: string[]; bullets
 // suggestions: anything of Co's own (ideas, options, recommendations), marked as Co's on the page and kept out of the member's points.
 // kind: what the document is for. The shared working artifacts around events and partnerships (a venue brief, a partnership plan, a
 // readout) are the ones that may become a shared Google Doc (services/documentDelivery.ts); everything else ("other") stays a PDF.
-export const DOC_KINDS = ["venue_brief", "partnership_plan", "readout", "other"] as const;
+export const DOC_KINDS = ["partnership_plan", "readout", "other"] as const;
 export type DocKind = (typeof DOC_KINDS)[number];
 export type DocInput = { title: string; note?: string; sections: DocSectionInput[]; suggestions?: string[]; kind?: string };
 // research: a section built by code from one verified find (services/researchBrief.ts), not from the member's words. It is exempt
@@ -44,7 +44,7 @@ export const WRITE_DOCUMENT_INPUT = z.object({
     .max(10)
     .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. ONLY what they said, in their words; your own ideas go in suggestions, never here."),
   suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation, a framing you wrote for them, written out in full. It appears on the page marked as Cue's suggestions, apart from their points. Each is the idea itself, never a note about the document or about Cue. Leave it out when you have none."),
-  kind: z.enum(["venue_brief", "partnership_plan", "readout", "other"]).optional().describe("What it is for: venue_brief (for a venue or space around an event), partnership_plan (working with a partner, sponsor or host), readout (what came of an event, for a host or partner), or other (anything else: their goals, a plan for themselves, a summary). Leave it out for other."),
+  kind: z.enum(["partnership_plan", "readout", "other"]).optional().describe("What it is for: partnership_plan (working with a partner, sponsor or host), readout (what came of an event, for a host or partner), or other (anything else: their goals, a plan for themselves, a summary). Leave it out for other."),
   saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out: it comes as a PDF in this conversation. Only when they ask for a Google Doc in their own words set google_doc (or both, if they want the PDF too)."),
   revises: z.number().int().optional().describe("Only when they asked to change a document you already delivered: its doc number from \"Documents you've delivered\". Write the whole new version (start from readDocument), and it goes as the next version."),
   changed: z.string().optional().describe("With revises: what changed, in a few words they'd recognize (\"updated the budget section\"). It becomes the one line sent with the new version."),

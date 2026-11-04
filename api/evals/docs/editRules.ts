@@ -17,8 +17,8 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
 const PAIR = ["11111111-1111-4111-8111-111111111111"];
 process.env.GOOGLE_DOCS_TEST_USERS = PAIR.join(",");
-const v1 = D.resolveDocument({ title: "Venue brief for the Mission dinner", note: "", kind: "venue_brief", sections: [{ heading: "The room", bullets: ["Alder and Ash, about 40 seated, Friday dinner."] }], suggestions: [] });
-const v2 = D.resolveDocument({ title: "Venue brief for the Mission dinner", note: "", kind: "venue_brief", sections: [{ heading: "The room", bullets: ["Mesa Verde, about 40 seated, Saturday dinner."] }], suggestions: [] });
+const v1 = D.resolveDocument({ title: "Venue brief for the Mission dinner", note: "", kind: "partnership_plan", sections: [{ heading: "The room", bullets: ["Alder and Ash, about 40 seated, Friday dinner."] }], suggestions: [] });
+const v2 = D.resolveDocument({ title: "Venue brief for the Mission dinner", note: "", kind: "partnership_plan", sections: [{ heading: "The room", bullets: ["Mesa Verde, about 40 seated, Saturday dinner."] }], suggestions: [] });
 const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-11T18:00:00Z") };
 
 // ---------------------------------------------------------------- the Drive call
@@ -109,13 +109,13 @@ const run = async (o: { update?: any; meta?: any; token?: any; oldGrant?: boolea
   const deliver = (d: any, t: any, target: any) => X.deliverDocument(d, t, target, deps);
   await X.deliverAndRecord(v1, to, { askedForGoogle: false, source: "reply" }, { deliver, receipts, log: async () => null });
   const plan = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "task:1" }, { deliver, receipts, log: async () => null });
-  check("review of #143: a plan or re-run brief without a note still goes, with what changed worked out (section by name and number)", plan.sentOk.length === 1 && plan.line === "Updated the venue brief: changes to the room section (section 1).", plan.line);
+  check("review of #143: a plan or re-run brief without a note still goes, with what changed worked out (section by name and number)", plan.sentOk.length === 1 && plan.line === "Updated the plan: changes to the room section (section 1).", plan.line);
   check("and its receipt carries that note", receipts.all.at(-1)?.changeNote === "changes to the room section (section 1)");
   const again = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "reply", resend: true }, { deliver, receipts, log: async () => null });
   check("asking for it again still sends the version they have", again.sentOk.length === 1);
   const v3 = D.resolveDocument({ ...v2, sections: [...v2.sections, { heading: "Catering", bullets: ["In house."] }] } as any);
   const added = await X.deliverAndRecord(v3, to, { askedForGoogle: false, source: "task:2" }, { deliver, receipts, log: async () => null });
-  check("review of #143: a note that only adds a section still names the document", added.line === "Updated the venue brief: a new Catering section.", added.line);
+  check("review of #143: a note that only adds a section still names the document", added.line === "Updated the plan: a new Catering section.", added.line);
   const sec = (h: string, b: string[]) => ({ heading: h, paragraphs: [], bullets: b });
   const a = { title: "T", note: "", suggestions: [], sections: [sec("Budget", ["$5k"]), sec("Timeline", ["May"]), sec("Room", ["40"])] } as any;
   check("whatChanged: changed, added and removed sections by name, in Cue's own voice (review of #143: never 'Cue's suggestions')", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "changes to the Budget section (section 1), and a new Catering section" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "new suggestions from me" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "no more Timeline section");
@@ -123,7 +123,7 @@ const run = async (o: { update?: any; meta?: any; token?: any; oldGrant?: boolea
 {
   // The Doc is looked up by its document, however many receipts they have.
   const receipts = R.memoryReceipts();
-  const base: any = { userId: PAIR[0], version: 1, title: "x", kind: "venue_brief", doc: v1, contentHash: "h", status: "delivered", line: null, taskId: null, source: "t", changeNote: null, error: null, nextRetryAt: null };
+  const base: any = { userId: PAIR[0], version: 1, title: "x", kind: "partnership_plan", doc: v1, contentHash: "h", status: "delivered", line: null, taskId: null, source: "t", changeNote: null, error: null, nextRetryAt: null };
   await receipts.insert({ ...base, docKey: "brief", channel: "google_docs", link: "https://docs.google.com/document/d/OLD/edit", driveFileId: "OLD", deliveredAt: new Date("2026-01-01") });
   for (let i = 0; i < 80; i++) await receipts.insert({ ...base, docKey: `other-${i}`, channel: "pdf_text", link: null, driveFileId: null, deliveredAt: new Date(`2026-10-0${1 + (i % 9)}`) });
   const found = await receipts.googleDocFor(PAIR[0], "brief");

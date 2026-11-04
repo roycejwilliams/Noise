@@ -492,7 +492,7 @@ export function askedWhenWords(askedAt: Date, sendAt: Date, zone?: string | null
 // Sequin AI November Event" -> "Co Presence Plan"); any other title ("Staying present after the event") is named by its kind ("plan"),
 // since the attachment already shows the title.
 const DOC_NOUN = /\b(?:plan|brief|guide|outline|memo|summary|readout|recap|proposal|playbook|itinerary|checklist|list|deck|notes|doc|document|write-?up|breakdown|report)$/i;
-const KIND_NOUN: Record<string, string> = { partnership_plan: "plan", venue_brief: "venue brief", readout: "readout" };
+const KIND_NOUN: Record<string, string> = { partnership_plan: "plan", readout: "readout" };
 export function deliveredThing(title: string, kind?: string | null): string {
   const head = (title.split(/\s*[:|–—]\s*|\s+-\s+/)[0].trim() || title.trim()).replace(/^(?:the|a|an|your)\s+/i, "");
   if (DOC_NOUN.test(head)) return head;

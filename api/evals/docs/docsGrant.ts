@@ -127,7 +127,7 @@ const DF = "https://www.googleapis.com/auth/drive.file";
   const X = await import("../../src/services/documentDelivery.js");
   const { googleTools } = await import("../../src/services/googleTools.js");
   const asked: string[] = [];
-  const db = (rows: any[]) => ({ query: async (q: string, a: any[] = []) => (asked.push(q), /FROM document_deliveries/.test(q) && a[0] === "u1" && (a[1] as string[]).includes("venue_brief") ? { rows } : { rows: [] }) });
+  const db = (rows: any[]) => ({ query: async (q: string, a: any[] = []) => (asked.push(q), /FROM document_deliveries/.test(q) && a[0] === "u1" && (a[1] as string[]).includes("partnership_plan") ? { rows } : { rows: [] }) });
   check("no document made for them yet: the Docs moment hasn't come", !(await X.docsMomentReached("u1", db([]), {})));
   check("a document that could be a Google Doc has been made: the moment has come", await X.docsMomentReached("u1", db([{ "?column?": 1 }]), {}));
   check("... and only kinds that can become a Google Doc count (a personal PDF never opens the ask)", /kind = ANY\(\$2::text\[\]\)/.test(asked.at(-1) ?? ""));

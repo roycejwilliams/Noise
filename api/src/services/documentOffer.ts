@@ -38,8 +38,8 @@ export type OfferHistoryRow = { topic: string; source: "offered" | "asked"; stat
 // What is being offered (2026-10-08 review A1-A3, A5). One record (document_offers), the kind carried as a prefix on the topic
 // ("[plan] dinner at Rich Table, Friday"); a row with no prefix is a document offer, as every row before this was.
 //   document  a write-up when they're circling on something (the original offer)
-//   plan      a one-page sheet with the times, for a settled plan or a timed walkthrough Co just gave
-//   brief     a venue brief (rates, minimums, capacity) when they're hosting and nothing covers it yet
+//   plan      (retired 2026-11-04: never offered; kept so old history rows still parse)
+//   brief     (retired 2026-11-04: never offered; kept so old history rows still parse)
 //   drift     a new version of a delivered document that's gone stale (services/receiptDrift.ts), once per version
 //   recap     a one-page recap of a call that landed a decision (jobs/postCallFollowUp.ts)
 export const OFFER_KINDS = ["document", "plan", "brief", "drift", "recap"] as const;
@@ -129,7 +129,7 @@ export function documentOfferDue(s: OfferState): OfferDecision {
   return { due: false, why: "nothing they are unsure about right now" };
 }
 
-// ---------------------------------------------------------------- the other artifacts: a plan sheet, a venue brief, a stale document
+// ---------------------------------------------------------------- the other artifacts: a stale document (a plan sheet and a venue brief are no longer offered)
 
 // What code can see beyond the document notice: their working notes, the latest plan email, what they already have, and what Co is
 // already carrying for them. Loaded once a turn (loadArtifactSignals); every decision on it is pure.
@@ -174,43 +174,14 @@ export function artifactOfferDue(kind: OfferKind, s: ArtifactState): ArtifactDec
     if (!d) return { due: false, kind, why: s.drift.length ? "already offered for this version" : "nothing they have is out of date" };
     return { due: true, kind, topic: kindTopic("drift", d.key), why: d.reasons.join("; "), line: `${driftLine(d)} If it fits this message, you may say so once, plainly, and offer the corrected version; on a yes, readDocument ${d.docId}, then writeDocument with revises ${d.docId} and changed saying what changed. Only once for this version; if it doesn't fit, leave it.` };
   }
-  if (kind === "plan") {
-    const n = s.notes;
-    const timed = timesIn([s.message, ...s.coLines].join("\n")).length;
-    const settled = !!(n?.picked && n.when && timed >= 2);
-    const walkthrough = timedSteps(lastCo) >= 4;
-    if (!settled && !walkthrough) return { due: false, kind, why: "no settled plan with times, and no timed walkthrough just now" };
-    if (s.emailPlanAt && (s.now.getTime() - s.emailPlanAt.getTime()) / 3_600_000 < 24) return { due: false, kind, why: "the plan was emailed to them in the last day" };
-    const topic = settled ? `${n!.picked}, ${n!.when}` : lastCo.replace(/\s+/g, " ").slice(0, 80);
-    if (hasIt(s.delivered, topic, ["plan", "plan_sheet", "itinerary"], 1, s.now)) return { due: false, kind, why: "they already have a sheet for it" };
-    if (offeredBefore(s.history, "plan", topic)) return { due: false, kind, why: "already offered a sheet for this plan" };
-    return { due: true, kind, topic: kindTopic("plan", topic), why: settled ? "the plan is settled: a pick, a date and times" : "you just gave them a walkthrough with times", line: `${settled ? `Their plan looks settled (${n!.picked}, ${n!.when}, with times).` : "Your last message walked them through it with times."} If it fits, you may offer once, in one light line, to put it on a one-page sheet with the times. Don't make it until they say yes; then writeDocument.` };
-  }
-  if (kind === "brief") {
-    const n = s.notes;
-    const hostingNow = HOSTING.test(s.message);
-    const fromNotes = !!(n && (n.kind === "venue" || /\b(?:venue|space|room|dinner|event)\b/i.test(n.what ?? "")) && (n.headcount || n.when));
-    if (!hostingNow && !fromNotes) return { due: false, kind, why: "no hosting signal" };
-    const sizeWords = s.message.match(SIZE)?.[0] ?? "";
-    const size = n?.headcount ?? (Number(sizeWords.match(/\d{1,4}/)?.[0] ?? 0) || null);
-    const date = n?.when ?? (s.message.match(DATE)?.[0] ?? null);
-    if (!size && !date) return { due: false, kind, why: "hosting, but no size or date yet" };
-    const what = (n?.what || s.message).replace(/\s+/g, " ").slice(0, 80);
-    if (s.openWork.some((w) => sameTopic(w, what) || /\bbrief\b|\bvenue\b/i.test(w))) return { due: false, kind, why: "a brief or task already covers it" };
-    if (hasIt(s.delivered, what, ["venue_brief"], 14, s.now)) return { due: false, kind, why: "they already have a venue brief for it" };
-    if (offeredBefore(s.history, "brief", what)) return { due: false, kind, why: "already offered a brief for this" };
-    const missing = !size ? "how many people" : !date ? "the date" : !(n?.city || n?.area) && !/\b(?:in|near|around)\s+[A-Z]/.test(s.message) ? "the area" : null;
-    const line = missing
-      ? `They're hosting (${what}) and nothing is under way for it. One load-bearing detail is missing, ${missing}: ask that one question instead of offering anything yet.`
-      : `They're hosting (${what}${size ? `, ${size} people` : ""}${date ? `, ${date}` : ""}) and nothing is under way for it. If it fits, you may offer once, in one line, to put together a venue brief, naming what they'd get: rates, minimums and capacity for a few real rooms. On a yes, researchBrief.`;
-    return { due: true, kind, topic: kindTopic("brief", what), why: missing ? `hosting; missing ${missing}` : "hosting with a size or a date, and nothing covers it", line };
-  }
+  // A sheet and a venue brief are not offered any more (2026-11-04: plan sheets and research briefs as documents were removed).
+  if (kind === "plan" || kind === "brief") return { due: false, kind, why: "Cue no longer offers a sheet or a brief" };
   return { due: false, kind, why: "document offers go through documentOfferDue" };
 }
 
 // Pure: the one artifact offer for this reply, if any (at most one offer per reply). A stale document first (it's about what they
-// already hold), then the moment's plan sheet or venue brief; the document notice is separate (documentOfferDue) and yields to these.
-export const ARTIFACT_ORDER: OfferKind[] = ["drift", "plan", "brief"];
+// already hold), then nothing else; the document notice is separate (documentOfferDue) and yields to these.
+export const ARTIFACT_ORDER: OfferKind[] = ["drift"];
 export function nextArtifactOffer(s: ArtifactState): Extract<ArtifactDecision, { due: true }> | null {
   for (const k of ARTIFACT_ORDER) {
     const d = artifactOfferDue(k, s);
@@ -237,12 +208,12 @@ export function pendingLine(topic: string): string {
   const t = parseTopic(topic);
   const yes: Record<OfferKind, string> = {
     document: "write it with writeDocument",
-    plan: "put the plan on a one-page sheet with the times, with writeDocument",
-    brief: "start it with researchBrief",
+    plan: "tell them plainly that is not something you do",
+    brief: "tell them plainly that is not something you do",
     drift: "readDocument, then send the corrected version with writeDocument (revises, changed)",
     recap: "write the one-page recap of what was decided on the call, from their own words, with writeDocument",
   };
-  const what: Record<OfferKind, string> = { document: `write up "${t.text}" as a document`, plan: `put "${t.text}" on a one-page sheet`, brief: `put together a venue brief for "${t.text}"`, drift: `send a corrected version of ${t.text}`, recap: `write up a one-page recap of ${t.text}` };
+  const what: Record<OfferKind, string> = { document: `write up "${t.text}" as a document`, plan: `do something Cue no longer does ("${t.text}")`, brief: `do something Cue no longer does ("${t.text}")`, drift: `send a corrected version of ${t.text}`, recap: `write up a one-page recap of ${t.text}` };
   return `You offered to ${what[t.kind]} and are waiting on their answer. If this message says yes, or asks for it, ${yes[t.kind]}. If they pass or change the subject, let it go and never offer it again.`;
 }
 
@@ -331,7 +302,7 @@ export type DocOfferContext = {
   due: { topic: string; why: string } | null;
   pending: { topic: string } | null;
   lastDocument?: { topic: string } | null;
-  // For the other artifacts (plan sheet, venue brief, a stale document): the shared record and their state, decided per reply.
+  // For the other artifacts (a stale document): the shared record and their state, decided per reply.
   history?: OfferHistoryRow[];
   needsCare?: boolean;
   // The mood hold as read when the context loaded (loadOfferState), for a caller without the reply's moment.
@@ -374,7 +345,7 @@ export async function loadDocOfferContext(userId: string, now = new Date()): Pro
 }
 
 // Pure: the lines for a reply. An offer waiting on its answer, or a moment Co may offer (once, if it fits this message). At most one
-// offer per reply: a stale document, a plan sheet or a venue brief (artifactOfferDue) comes first, else the document notice.
+// offer per reply: a stale document (artifactOfferDue) comes first, else the document notice.
 // turn: this message's weight and Co's recent lines, for the other artifacts.
 export function docOfferLines(
   c: DocOfferContext | null | undefined,

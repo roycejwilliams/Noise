@@ -15,7 +15,7 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
 const PAIR = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
 process.env.GOOGLE_DOCS_TEST_USERS = PAIR.join(",");
-const doc = D.resolveDocument({ title: "Venue options for the Mission dinner", note: "From today.", kind: "venue_brief", sections: [{ heading: "The shortlist", bullets: ["Alder and Ash, about 40 seated."] }], suggestions: [] });
+const doc = D.resolveDocument({ title: "Venue options for the Mission dinner", note: "From today.", kind: "partnership_plan", sections: [{ heading: "The shortlist", bullets: ["Alder and Ash, about 40 seated."] }], suggestions: [] });
 const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-11T18:00:00Z") };
 
 // ---------------------------------------------------------------- 1. the file ID is kept

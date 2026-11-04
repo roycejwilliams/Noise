@@ -50,9 +50,9 @@ const CO_LINES = ["Drinks at Spruce at 7pm, then Rich Table at 8:15pm."];
   check("no times on the read (a state built without them): struggling holds, as before", O.documentOfferDue(state({ needsCare: true })).due === false && O.offerMoodHeld({ needsCare: true }) && !O.offerMoodHeld({ needsCare: false, moodHold: HELD }));
   // The other offers share the gate: a plan sheet, a venue brief, a corrected version.
   const art = { now: NOW, helpAsks: [], threads: [], recurring: [], needsCare: false, history: [] as any[], notes: SETTLED, emailPlanAt: null, delivered: [], openWork: [], drift: [], message: "", coLines: CO_LINES };
-  check("plan sheet: waits while held, goes when okay or at the cap", !O.artifactOfferDue("plan", { ...art, needsCare: true, moodHold: HELD }).due && O.artifactOfferDue("plan", { ...art, needsCare: true, moodHold: OKAY }).due && O.artifactOfferDue("plan", { ...art, needsCare: true, moodHold: CAPPED }).due);
+  check("plan sheet and venue brief: never offered now, held or released (they were removed, 2026-11-04)", !O.artifactOfferDue("plan", { ...art, needsCare: true, moodHold: OKAY }).due && !O.artifactOfferDue("plan", { ...art, needsCare: true, moodHold: CAPPED }).due);
   const host = { ...art, notes: null, coLines: [], message: "I'm hosting a dinner for 14 founders on Oct 28 in Hayes Valley" };
-  check("venue brief: waits while held, goes when okay or at the cap", !O.artifactOfferDue("brief", { ...host, needsCare: true, moodHold: HELD }).due && O.artifactOfferDue("brief", { ...host, needsCare: true, moodHold: OKAY }).due && O.artifactOfferDue("brief", { ...host, needsCare: true, moodHold: CAPPED }).due);
+  check("a hosting message gets no brief offer either", !O.artifactOfferDue("brief", { ...host, needsCare: true, moodHold: OKAY }).due && !O.artifactOfferDue("brief", { ...host, needsCare: false }).due);
   check("a heavy moment waits too (heavyNow, the reply's capped heavyHold), with a reason that says so", O.offerGate({ now: NOW, needsCare: false, heavyNow: true, history: [] }) === "this message is a heavy moment; the offer waits for a later reply");
 }
 
@@ -63,9 +63,9 @@ const CO_LINES = ["Drinks at Spruce at 7pm, then Rich Table at 8:15pm."];
   check("in a reply the moment decides: heavy (held) -> no hint", O.docOfferLines(ctx(moment(true)), "ok").hint === null);
   check("in a reply the moment decides: released -> the hint, though the context's older read still says held (never gated twice)", /offerDocument/.test(O.docOfferLines(ctx(moment(false)), "ok").hint ?? ""));
   const plan = (o: Record<string, unknown>) => ({ due: null, pending: null, history: [], needsCare: true, moodHold: HELD, signals: { notes: SETTLED, emailPlanAt: null, delivered: [], openWork: [], drift: [] }, ...o }) as any;
-  check("a plan sheet in a reply: held by the moment, offered once it lets go (not held again by the context)", !O.docOfferLines(plan(moment(true)), "sounds good", { now: NOW, coLines: CO_LINES }).offer && O.docOfferLines(plan(moment(false)), "sounds good", { now: NOW, coLines: CO_LINES }).offer?.kind === "plan");
+  check("a plan sheet in a reply: never offered, whatever the moment", !O.docOfferLines(plan(moment(true)), "sounds good", { now: NOW, coLines: CO_LINES }).offer && !O.docOfferLines(plan(moment(false)), "sounds good", { now: NOW, coLines: CO_LINES }).offer);
   check("no moment (a caller without one): the context's capped hold decides, held", O.docOfferLines(ctx(), "ok").hint === null && !O.docOfferLines(plan({}), "sounds good", { now: NOW, coLines: CO_LINES }).offer);
-  check("no moment, released (okay or the cap): it goes", /offerDocument/.test(O.docOfferLines(ctx({ moodHold: OKAY }), "ok").hint ?? "") && /offerDocument/.test(O.docOfferLines(ctx({ moodHold: CAPPED }), "ok").hint ?? "") && O.docOfferLines(plan({ moodHold: OKAY }), "sounds good", { now: NOW, coLines: CO_LINES }).offer?.kind === "plan");
+  check("no moment, released (okay or the cap): it goes", /offerDocument/.test(O.docOfferLines(ctx({ moodHold: OKAY }), "ok").hint ?? "") && /offerDocument/.test(O.docOfferLines(ctx({ moodHold: CAPPED }), "ok").hint ?? ""));
   check("not struggling: the hint as before", /offerDocument/.test(O.docOfferLines(ctx({ needsCare: false, moodHold: null }), "ok").hint ?? ""));
   check("the context keeps the notice owed under a hard time (computed without the mood gate)", /const d = documentOfferDue\(\{ \.\.\.state, needsCare: false \}\);/.test(src("services/documentOffer.ts")));
   check("their own ask for a document is never held by mood (the ask line, not an offer)", !!O.docOfferLines(ctx(moment(true)), "can you make me a pdf of this?").ask);
