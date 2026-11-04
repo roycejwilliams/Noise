@@ -38,11 +38,25 @@ export async function recordSuggestionOutcome(
       [userId, kind, itemKey, itemName, result, note ?? null, from?.provenance ?? null, from?.quote ? from.quote.slice(0, 300) : null],
     )
     .catch((err: any) => console.error("recordSuggestionOutcome failed (non-fatal):", err?.message ?? err));
+  await settleFollowUpForResult(userId, itemKey, result);
   // Their own words later confirm a row that was there already: it becomes stated, with those words.
   if (from?.provenance === "stated") {
     await pool
       .query(`UPDATE suggestion_outcomes SET provenance = 'stated', quote = $4 WHERE user_id = $1 AND item_key = $2 AND result = $3 AND provenance IS DISTINCT FROM 'stated'`, [userId, itemKey, result, from.quote ? from.quote.slice(0, 300) : null])
       .catch((err: any) => console.error("recordSuggestionOutcome: confirming the row failed (non-fatal):", err?.message ?? err));
+  }
+}
+
+// What a recorded result does to the find's follow-up (Royce, 2026-11-04: never assume a member went). A sign they meant to go or went
+// (acted, helped, didnt_help) arms the parked follow-up; a no drops it with the reason. "interested" is a yes to hearing more, not a
+// plan to go, so it arms nothing. Never throws.
+export async function settleFollowUpForResult(userId: string, itemKey: string, result: SuggestionResult): Promise<void> {
+  try {
+    const R = await import("./recommendationOutcome.js");
+    if (result === "acted" || result === "helped" || result === "didnt_help") await R.armOutcomeFollowUp(userId, itemKey);
+    else if (result === "declined") await R.dropOutcomeFollowUp(userId, itemKey, "they said it isn't for them");
+  } catch (err: any) {
+    console.error("settleFollowUpForResult failed (non-fatal):", err?.message ?? err);
   }
 }
 

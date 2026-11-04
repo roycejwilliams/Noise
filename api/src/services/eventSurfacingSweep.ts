@@ -1099,7 +1099,7 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
   if (revealed) {
     // A direct reveal skipped the yes/no step; their reaction to it is
     // waited on instead (services/offerReactions.ts). The real details went
-    // out, so the debrief gets scheduled.
+    // out. Nothing is scheduled by it (2026-11-04): the find is parked, and a follow-up exists only once they say they're going or went.
     await recordRevealedOffers(userId, [match]);
     await pool
       .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', 'revealed_directly')`, [userId])

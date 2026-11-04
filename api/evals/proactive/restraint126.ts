@@ -92,7 +92,9 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("interest or a pass never counts", !R.wentOnRecord(p, [{ result: "interested", provenance: "stated" }, { result: "declined", provenance: "stated" }]));
   check("their stated went and liked it: confirmed", R.wentOnRecord(p, [{ result: "helped", provenance: "stated" }]));
   check("their stated went and didn't: confirmed", R.wentOnRecord(p, [{ result: "didnt_help", provenance: "stated" }]));
-  check("a check-in at the door: confirmed", R.wentOnRecord({ ...p, checkinFollowupIds: ["c1"] }, []));
+  // 2026-11-04 (never assume a member went): being on the guest list is registering, not going. Only a door scan or an arrival Cue saw (came) counts.
+  check("being on the guest list (a check-in follow-up row) is registering, not going", !R.wentOnRecord({ ...p, checkinFollowupIds: ["c1"] }, []));
+  check("a door scan or an arrival Cue saw: confirmed", R.wentOnRecord(p, [], true));
   check("a walk-in: confirmed", R.wentOnRecord({ ...p, walkinCheckinIds: ["w1"] }, []));
   const presumes = ["How was the Claude Founder Salon?", "Anyone stood out?", "Who did you meet there?", "Did you have fun at the salon?", "How'd the salon go?", "How\u2019d it go?", "Meet anyone interesting?"];
   const asks = ["Did you end up making it to the Claude Founder Salon?", "Were you able to get to the founder salon last night?"];
@@ -100,9 +102,9 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("asking whether they made it passes", asks.every((t) => !R.PRESUMES_THEY_WENT.test(t)), asks.filter((t) => R.PRESUMES_THEY_WENT.test(t)));
   const reg = src("harness/proactiveRegistry.ts");
   check("an unconfirmed event's debrief is told to ask whether they made it", /nothing says they went\. Ask, lightly, whether they ended up making it/.test(reg));
-  check("code backstop: an unconfirmed debrief that assumes they went is skipped", /if \(!went && !isOpportunity && PRESUMES_THEY_WENT\.test\(text\)\) return skip/.test(reg));
+  check("code backstop: an unconfirmed debrief that assumes they went is skipped", /if \(\(!went \|\| isOpportunity\) && PRESUMES_THEY_WENT\.test\(text\)\) return skip/.test(reg));
   const draft = reg.slice(reg.indexOf("async function draftDebrief("), reg.indexOf("async function debriefItemKeys("));
-  check("the debrief decides went from the record only: this debrief's stated outcomes, never their texts", /wentOnRecord\(p, rows\)/.test(draft) && /FROM suggestion_outcomes WHERE user_id = \$1 AND item_key = ANY\(\$2::text\[\]\)/.test(draft) && !/text_exchange|attendanceConfirmed\(/.test(draft));
+  check("the debrief decides went from the record only: this debrief's stated outcomes, never their texts", /followUpEvidence\(\{ rows, reactions, came/.test(draft) && /FROM suggestion_outcomes WHERE user_id = \$1 AND item_key = ANY\(\$2::text\[\]\)/.test(draft) && !/text_exchange|attendanceConfirmed\(/.test(draft));
   check("the went rule reads only a stated helped / didn't help", /\(r\.result === "helped" \|\| r\.result === "didnt_help"\) && isStated\(r\.provenance\)/.test(reg));
 }
 

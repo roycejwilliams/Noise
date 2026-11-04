@@ -173,6 +173,40 @@ export async function debriefForEvent(userId: string, eventApiId: string, deps: 
   }
 }
 
+// Did they come, and was the door tracked (Royce, 2026-11-04: never assume a member went)? Came: a Luma door scan at one of Noise's own
+// events, an arrival Cue saw, or a walk-in. Tracked: Luma recorded at least one check-in for the event, so a registered guest with none
+// really didn't scan (the no-show flow's, services/eventNoShow.ts); an untracked door says nothing either way. Only Noise's own events
+// have a door: another host's event never sends or shows a check-in. A door list that can't be read waits.
+export type DoorStanding = { say: "ok" | "wait"; came: boolean; tracked: boolean };
+type DoorDeps = DebriefDeps & { ours?: (eventId: string) => Promise<boolean> };
+let doorDepsForTests: DoorDeps = {};
+export function setDoorDepsForTests(d: DoorDeps): void {
+  doorDepsForTests = d;
+}
+export async function doorStanding(userId: string, eventApiId: string, given: DoorDeps = {}): Promise<DoorStanding> {
+  const deps = { ...doorDepsForTests, ...given };
+  try {
+    const { rows } = await pool.query(`SELECT email, phone_number FROM users WHERE id = $1`, [userId]);
+    const u = rows[0] ?? {};
+    const { cameTonight, lumaCheckedIn } = await import("./eventUnmatchedFollowUp.js");
+    const { isTestEvent } = await import("./roomMatching.js");
+    const ours = deps.ours ? await deps.ours(eventApiId) : isTestEvent(eventApiId) || (await (await import("./eventPresence.js")).presenceEvents()).some((e) => e.api_id === eventApiId);
+    let guests: import("./luma.js").LumaGuest[] | undefined;
+    if (ours && (!isTestEvent(eventApiId) || deps.guestList)) {
+      const read = deps.guestList ?? (async (id: string) => (await import("./luma.js")).getEventGuestList(id));
+      try {
+        guests = await read(eventApiId);
+      } catch {
+        return { say: "wait", came: false, tracked: false };
+      }
+    }
+    const came = await cameTonight(eventApiId, { user_id: userId, email: u.email, phone_number: u.phone_number }, lumaCheckedIn(guests));
+    return { say: "ok", came, tracked: !!guests?.some((g) => !!g.checked_in_at) };
+  } catch {
+    return { say: "wait", came: false, tracked: false };
+  }
+}
+
 // Layer 7 (2026-09-14): no longer sends at end+3h. Merged into the same
 // per-event "debrief" candidate as the recommendation outcome follow-up
 // (recommendationOutcome.ts enqueueDebrief), due the morning after.
