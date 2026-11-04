@@ -1740,11 +1740,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const { localDay, memberZone } = await import("../services/memberTime.js");
         const today = localDay(new Date(), await memberZone(ctx.userId).catch(() => null));
-        const said = SC.plannedNotHappened(outcome, metOn, today);
-        await SC.recordSecondContact(ctx.userId, pick, said.outcome, note ?? null, new Date(), said.metOn, ctx.onCall ? "call" : "text");
+        // Their words this turn decide a same-day plan ("dinner with her tonight"): the note the model wrote and what they said.
+        const said = SC.plannedNotHappened(outcome, metOn, today, `${note ?? ""}\n${ctx.resolvedContent ?? ""}`);
+        await SC.recordSecondContact(ctx.userId, pick, said.outcome, note ?? null, new Date(), said.metOn, ctx.onCall ? "call" : "text", said.plannedOn);
         if (said.planned) {
-          ctx.facts?.add("did_this_turn", `Noted that they plan to see ${pick.firstName} on ${metOn}; it hasn't happened yet, so it isn't recorded as a meeting.`);
-          return { ok: true, recorded: "not_yet", note: `${metOn} is still ahead, so this is recorded as planned, not as having met. Never say they met.` };
+          const when = said.plannedOn ? ` on ${said.plannedOn}` : "";
+          ctx.facts?.add("did_this_turn", `Noted that they plan to see ${pick.firstName}${when}; it hasn't happened yet, so it isn't recorded as a meeting.`);
+          return { ok: true, recorded: "not_yet", note: `That's still ahead, so this is recorded as planned, not as having met. Never say they met.` };
         }
         ctx.facts?.add("did_this_turn", `Noted that they ${said.outcome === "met_again" ? "saw" : said.outcome === "talked_again" ? "talked with" : said.outcome === "not_yet" ? "haven't seen" : "don't plan to see"} ${pick.firstName} again.`);
         return { ok: true };

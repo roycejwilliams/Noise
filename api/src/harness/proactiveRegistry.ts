@@ -59,27 +59,34 @@ export const PEOPLE_POINTED_TO_SQL = `SELECT DISTINCT u.id, u.first_name FROM ev
      WHERE o.event_id = $1 AND o.person_id = $2 AND o.status = 'interested' AND u.first_name <> ''
        AND NOT EXISTS (SELECT 1 FROM co_pairs p WHERE p.event_id = o.event_id AND p.a_id = LEAST(o.person_id, o.candidate_id)
          AND p.b_id = GREATEST(o.person_id, o.candidate_id) AND p.origin = 'member' AND p.intro_sent_at IS NULL)`;
-// Pure: the people still worth asking about. One they already told Cue about (their own side of that night's pair says, in their
-// words, whether they met: noteRoomMeeting on a text, the call's read) is never asked again (2026-11-03: "met Ellis, great talk" at
-// 10pm, then "did you and Ellis end up talking?" the next morning). Inferred evidence doesn't count; the other side's never does.
-export function stillToAsk(people: { id: string; first_name: string }[], pairs: { a_id: string; b_id: string; a_evidence?: any; b_evidence?: any }[], userId: string): string[] {
-  const told = new Set<string>();
+// Pure: the people still worth asking about, and the ones they already told Cue about (their own side of that night's pair says, in
+// their words, whether they met or how it went: noteRoomMeeting on a text, the call's read). An already-told person is never asked
+// again (2026-11-03: "met Ellis, great talk" at 10pm, then "did you and Ellis end up talking?" the next morning). Inferred evidence
+// doesn't count; the other side's never does. told carries what they said, theirs only, so the debrief never asks "who did you meet?"
+// about someone they already named (review of #376).
+export type PointedPeople = { ask: string[]; told: { name: string; what: string }[] };
+const TOLD_WORDS: Record<string, string> = { "met:yes": "they met", "met:no": "they didn't meet", "useful:yes": "it was worth it", "useful:somewhat": "it was fine", "useful:no": "it wasn't a fit" };
+export function stillToAsk(people: { id: string; first_name: string }[], pairs: { a_id: string; b_id: string; a_evidence?: any; b_evidence?: any }[], userId: string): PointedPeople {
+  const told = new Map<string, string>();
   for (const r of pairs) {
     const mine = r.a_id === userId ? r.a_evidence : r.b_id === userId ? r.b_evidence : null;
-    if (mine?.met?.how === "stated" || mine?.useful?.how === "stated") told.add(String(r.a_id === userId ? r.b_id : r.a_id));
+    const said = [mine?.met?.how === "stated" ? TOLD_WORDS[`met:${mine.met.value}`] : null, mine?.useful?.how === "stated" ? TOLD_WORDS[`useful:${mine.useful.value}`] : null].filter(Boolean);
+    if (said.length) told.set(String(r.a_id === userId ? r.b_id : r.a_id), [...new Set(said)].join(", "));
   }
-  return [...new Set(people.filter((p) => !told.has(String(p.id))).map((p) => p.first_name))];
+  const ask = [...new Set(people.filter((p) => !told.has(String(p.id))).map((p) => p.first_name))];
+  const toldList = people.filter((p) => told.has(String(p.id))).map((p) => ({ name: p.first_name, what: told.get(String(p.id))! }));
+  return { ask, told: toldList.filter((t, i) => toldList.findIndex((x) => x.name === t.name) === i) };
 }
-export async function peopleCoPointedTo(userId: string, eventApiId: string | null): Promise<string[]> {
-  if (!eventApiId) return [];
+export async function peopleCoPointedTo(userId: string, eventApiId: string | null): Promise<PointedPeople> {
+  if (!eventApiId) return { ask: [], told: [] };
   const { rows } = await pool.query(PEOPLE_POINTED_TO_SQL, [eventApiId, userId]);
-  if (!rows.length) return [];
+  if (!rows.length) return { ask: [], told: [] };
   // A pair read that fails asks about nobody by name (the debrief then asks who they met), never someone they may have answered.
   const pairs = await pool
     .query(`SELECT a_id, b_id, a_evidence, b_evidence FROM co_pairs WHERE event_id = $1 AND (a_id = $2 OR b_id = $2)`, [eventApiId, userId])
     .then((r) => r.rows)
     .catch(() => null);
-  if (!pairs) return [];
+  if (!pairs) return { ask: [], told: [] };
   return stillToAsk(rows.map((r: any) => ({ id: String(r.id), first_name: r.first_name })), pairs, userId);
 }
 
@@ -137,7 +144,11 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds) : null;
   const onlyAboutASend = !p.eventApiId && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
   if (onlyAboutASend && !sent) return skip("no record of Cue sending it to them");
-  const people = await peopleCoPointedTo(c.userId, p.eventApiId);
+  const pointed = await peopleCoPointedTo(c.userId, p.eventApiId);
+  // They already told Cue how it went with everyone Cue pointed them to, and the debrief carries nothing else (no walk-in call offer,
+  // no recommendation follow-up): nothing is left to ask (review of #376).
+  if (pointed.told.length && !pointed.ask.length && !(p.walkinCheckinIds ?? []).length && !(p.outcomeFollowupIds ?? []).length) return skip("they already told Cue how it went with everyone Cue pointed them to");
+  const people = pointed.ask;
   // Did they go? Only a check-in, a walk-in, or their own stated word that they went (Royce, 2026-10-09: "How was the Claude
   // Founder Salon?" went to someone Co had only recommended it to; 2026-10-12 review: word matching read "going to practice my
   // pitch before the launch" as having gone). Otherwise the debrief asks whether they made it.
@@ -146,7 +157,7 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     .query(`SELECT item_key, result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [c.userId, keys])
     .then((r) => r.rows as { item_key: string; result: string; provenance: string | null }[])
     .catch(() => []);
-  return draftDebriefText(firstName, p, people, sent, date, wentOnRecord(p, rows));
+  return draftDebriefText(firstName, p, people, sent, date, wentOnRecord(p, rows), pointed.told);
 }
 
 // The outcome keys one debrief is about: the event's own key, each recommendation it follows up (its event or name key, and the
@@ -194,7 +205,7 @@ export function attendanceConfirmed(p: Pick<DebriefPayload, "eventName" | "check
 // A line that takes for granted they went ("How was…", "anyone stood out", "who did you meet").
 export const PRESUMES_THEY_WENT = /\bhow (?:was|did|'d|’d)\b|\bhow['’]d\b|\b(?:anyone|anything|who) stood out\b|\bwho did you (?:meet|talk|end up)\b|\bdid you (?:meet|enjoy|have fun)\b|\bmeet anyone\b|\bwhat did you think of\b/i;
 
-export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null, went = true): Promise<DraftResult> {
+export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null, went = true, told: { name: string; what: string }[] = []): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;
   // A Tier 3 opportunity (accelerator, investor, mentor — see
   // tieredRecommendation.ts's category) has no eventApiId (it's not a real
@@ -213,6 +224,7 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
       what_co_said_when_it_sent_it: sent?.caption ?? null,
       today: new Date().toISOString().slice(0, 10),
       people_co_pointed_them_to_there: people,
+      ...(told.length ? { they_already_told_cue_how_it_went_with: told.map((t) => `${t.name}: ${t.what}`).join("; ") } : {}),
       what_they_were_looking_for: p.askText,
       they_checked_in_at_the_door: walkin ? "yes, and Cue doesn't know them well yet" : null,
     },
@@ -220,7 +232,7 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
       ? `Cue only suggested "${p.eventName}" to them; nothing says they went. Ask, lightly, whether they ended up making it, naming it. Never assume they went: no "how was it", no "who did you meet". One easy question, no pressure either way.`
       : isOpportunity
       ? `Ask if they got a chance to look into or apply to "${p.eventName}" (an opening Cue pointed them to on the date above, not an event) — did anything come of it. If what Cue said about it shows it's still ahead of today, SKIP. One text, not a survey.`
-      : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Cue pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
+      : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Cue pointed them to and ask if they ended up talking.` : told.length ? " They already told you how it went with the people in they_already_told_cue_how_it_went_with: never ask about them again or ask who they met; ask only what else stood out." : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
   });
   if (!text) return skip("model chose SKIP");
   // Code backstop: an unconfirmed debrief never takes for granted that they went.

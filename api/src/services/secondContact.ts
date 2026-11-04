@@ -34,12 +34,20 @@ export function pickIntro(list: Introduced[], name: string): Introduced | null |
 }
 
 // Pure: what to record when they gave a day. A meeting or talk dated after today (their own day) hasn't happened: "we're meeting
-// Tuesday" is not yet, never a second contact (2026-11-03: no completion invented from a plan). The day is dropped with it, since it
-// is when they plan to meet, not when they met.
-export function plannedNotHappened(outcome: SecondContactOutcome, metOn: string | null | undefined, today: string): { outcome: SecondContactOutcome; metOn: string | null; planned: boolean } {
+// Tuesday" is not yet, never a second contact (2026-11-03: no completion invented from a plan). The same day said as a plan ("dinner
+// with her tonight", before it happened: their words in the future tense, nothing in the past tense) is not yet too (review of #376).
+// The day is kept as when they plan to meet (plannedOn), never as when they met, so the intro check-in can come after it.
+const FUTURE = /\b(?:tonight|this (?:evening|afternoon|morning|weekend)|later(?: today)?|tomorrow|next (?:week|\w+day)|on (?:mon|tues|wednes|thurs|fri|satur|sun)day|going to (?:meet|see|grab|have|get|talk|call)|gonna|will (?:meet|see|grab|have|talk|call)|'ll (?:meet|see|grab|have|talk|call)|(?:are|am|'re|'m) (?:meeting|seeing|grabbing|having|getting|catching|talking)|plan(?:ning)? to|set up (?:a|for)|scheduled)\b/i;
+const PAST = /\b(?:met|saw|had|grabbed|talked|caught up|went|spoke|got (?:coffee|lunch|dinner|drinks)|did (?:coffee|lunch|dinner|drinks)|just (?:left|got back|finished))\b/i;
+export function soundsPlanned(words: string): boolean {
+  const t = String(words ?? "").toLowerCase().replace(/[’‘]/g, "'");
+  return FUTURE.test(t) && !PAST.test(t);
+}
+export function plannedNotHappened(outcome: SecondContactOutcome, metOn: string | null | undefined, today: string, words = ""): { outcome: SecondContactOutcome; metOn: string | null; planned: boolean; plannedOn: string | null } {
   const day = metOn && /^\d{4}-\d{2}-\d{2}$/.test(metOn) ? metOn : null;
-  if (day && MET.has(outcome) && day > today) return { outcome: "not_yet", metOn: null, planned: true };
-  return { outcome, metOn: day, planned: false };
+  if (day && MET.has(outcome) && day > today) return { outcome: "not_yet", metOn: null, planned: true, plannedOn: day };
+  if ((!day || day === today) && MET.has(outcome) && soundsPlanned(words)) return { outcome: "not_yet", metOn: null, planned: true, plannedOn: day ?? (/\btonight|today|this (?:evening|afternoon|morning)\b/i.test(words) ? today : null) };
+  return { outcome, metOn: day, planned: false, plannedOn: null };
 }
 
 // Pure: the fact's label, in the member's record. Their side only.
@@ -52,12 +60,12 @@ export function secondContactLabel(firstName: string, outcome: SecondContactOutc
 // metOn: when they met or talked, if they said ("we met last Tuesday"); the metric counts that day, not the day they told Co.
 // source: where they said it (a text, or the call's read). An event intro's pair record (services/roomMatching.ts, the outcome record)
 // gets the same answer as "kept talking", on their side only.
-export async function recordSecondContact(userId: string, intro: Introduced, outcome: SecondContactOutcome, note: string | null, now = new Date(), metOn: string | null = null, source: "text" | "call" = "text"): Promise<void> {
+export async function recordSecondContact(userId: string, intro: Introduced, outcome: SecondContactOutcome, note: string | null, now = new Date(), metOn: string | null = null, source: "text" | "call" = "text", plannedOn: string | null = null): Promise<void> {
   const { recordFactChecked } = await import("./coFacts.js");
   await recordFactChecked({
     ownerUserId: userId, subject: "member", relation: SECOND_CONTACT_RELATION, label: secondContactLabel(intro.firstName, outcome, now), visibility: "owner",
     source: source === "call" ? "callLearning" : "noteMetAgain", happenedAt: now,
-    meta: { otherId: intro.otherId, introducedAt: intro.introducedAt.toISOString(), outcome, note: note?.slice(0, 200) ?? null, ...(metOn && /^\d{4}-\d{2}-\d{2}$/.test(metOn) ? { metOn } : {}) },
+    meta: { otherId: intro.otherId, introducedAt: intro.introducedAt.toISOString(), outcome, note: note?.slice(0, 200) ?? null, ...(metOn && /^\d{4}-\d{2}-\d{2}$/.test(metOn) ? { metOn } : {}), ...(outcome === "not_yet" && plannedOn && /^\d{4}-\d{2}-\d{2}$/.test(plannedOn) ? { plannedOn } : {}) },
   });
   await notePairKeptTalking(userId, intro.otherId, outcome, source, now).catch(() => {});
 }

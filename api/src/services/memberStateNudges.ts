@@ -100,8 +100,12 @@ export type IntroFact = {
   // The other member is still a member (archived members are never named back).
   otherActive: boolean;
   // They already told Cue, in their own words, how it went with this person since the intro (noteMetAgain or noteRoomMeeting on a
-  // text, the call's read): the "did you two connect?" question is answered, so it isn't asked (2026-11-03). Their side only.
+  // text, the call's read): met or not, useful or not, kept talking or not going to. The "did you two connect?" question is answered,
+  // so it isn't asked (2026-11-03). A plan ("not yet") is never an answer (review of #376). Their side only.
   outcomeSaid?: boolean;
+  // Their latest word since the intro is a plan with a day (a second-contact fact's plannedOn, YYYY-MM-DD): the check-in is due only
+  // after that day, as its own state (the day is in its fingerprint), and what they said before or on it doesn't hold it back.
+  plannedOn?: string | null;
 };
 export type CaredItem = {
   itemKey: string;
@@ -133,6 +137,8 @@ export type Snapshot = {
   // The last time they kept a find or said yes to something (movement).
   lastKeptAt: Date | null;
   commitments: CommitmentFact[];
+  // The intros couldn't be read this time (review of #376): an intro entry is unknown, not gone.
+  introsUnread?: boolean;
 };
 
 // ---------------------------------------------------------------- pure helpers
@@ -205,14 +211,19 @@ export function detectIntroNudges(s: Snapshot): NudgeEntry[] {
     // An event intro can go out ahead of the event: wait long enough that the event has come and gone.
     const after = i.how === "event" ? Math.max(NUDGE.introAfterDays, NUDGE.eventIntroAfterDays) : NUDGE.introAfterDays;
     if (age < after * DAY || age > NUDGE.introWithinDays * DAY) continue;
-    // Their own texts only: have THEY brought the person up since the intro.
-    if (s.ownLines.some((l) => l.at.getTime() > i.introducedAt.getTime() && namesPerson(l.text, i.otherFirstName))) continue;
+    // A plan with a day: nothing until that day is over in their zone; then mentions up to it were the plan, not news.
+    const plan = i.plannedOn && /^\d{4}-\d{2}-\d{2}$/.test(i.plannedOn) ? i.plannedOn : null;
+    const planOver = plan ? localAt(plan, 0, s.zone).getTime() + DAY : null;
+    if (planOver && s.now.getTime() < planOver) continue;
+    const since = Math.max(i.introducedAt.getTime(), planOver ?? 0);
+    // Their own texts only: have THEY brought the person up since the intro (or since their plan's day).
+    if (s.ownLines.some((l) => l.at.getTime() > since && namesPerson(l.text, i.otherFirstName))) continue;
     const dueAt = wellTimed(s.now, s.zone);
     out.push({
       type: "intro_nudge",
       kind: "intro_followup",
       entryKey: `intro:${i.otherId}`,
-      fingerprint: fingerprint(["intro", i.otherId, localDay(i.introducedAt, s.zone)]),
+      fingerprint: fingerprint(["intro", i.otherId, localDay(i.introducedAt, s.zone), ...(plan ? [`planned:${plan}`] : [])]),
       summary: `The intro to ${i.otherFirstName} by email ${Math.floor(age / DAY)} days ago; they haven't brought it up since`,
       facts: introNudgeFacts(i, s.now),
       meta: { otherId: i.otherId, otherFirstName: i.otherFirstName },
@@ -438,30 +449,47 @@ async function introsOf(userId: string): Promise<IntroFact[]> {
       .query(`SELECT 1 FROM recommendation_outcome_followups WHERE user_id = $1 AND lower(match_name) = lower($2) LIMIT 1`, [userId, `your intro to ${first}`])
       .then((r) => r.rows.length > 0)
       .catch(() => true);
-    // A read that fails is treated as answered, like the follow-up read above: never a second ask on a guess.
-    const said = await outcomeSaidSince(userId, String(p.id), i.at).catch(() => true);
-    out.push({ otherId: String(p.id), otherFirstName: first, introducedAt: i.at, how: i.how, eventName: ev, reasonAsEmailed: i.how === "network" ? i.reason : null, hasOutcomeFollowup: follow, otherActive: !p.archived_at, outcomeSaid: said });
+    // A read that fails throws (review of #376): the snapshot marks the intros unread, the pass tries again next hour, and a queued
+    // check-in waits instead of being dropped as "the state changed".
+    const said = await outcomeSaidSince(userId, String(p.id), i.at);
+    out.push({ otherId: String(p.id), otherFirstName: first, introducedAt: i.at, how: i.how, eventName: ev, reasonAsEmailed: i.how === "network" ? i.reason : null, hasOutcomeFollowup: follow, otherActive: !p.archived_at, outcomeSaid: said.answered, plannedOn: said.plannedOn });
   }
   return out;
 }
 
-// Pure: whether their own side of a pair record holds something they said (not inferred) after the intro.
-export function statedSince(mine: Record<string, { how?: string; at?: string } | undefined> | null | undefined, since: Date): boolean {
-  return Object.values(mine ?? {}).some((e) => e?.how === "stated" && !!e.at && new Date(e.at).getTime() > since.getTime());
+// Pure: whether their own side of a pair record answers "did you two connect?" with something they said (not inferred) after the
+// intro: met (yes or no), how useful it was, or kept talking yes or no. "Not yet" is a plan, never an answer (review of #376).
+export function statedSince(mine: Record<string, { value?: string; how?: string; at?: string } | undefined> | null | undefined, since: Date): boolean {
+  const after = (e: { how?: string; at?: string } | undefined) => e?.how === "stated" && !!e.at && new Date(e.at).getTime() > since.getTime();
+  const m = mine ?? {};
+  return after(m.met) || after(m.useful) || (after(m.kept_talking) && (m.kept_talking?.value === "yes" || m.kept_talking?.value === "no"));
 }
-// Their own word since the intro: a second-contact fact about this person (their record, owner-only), or their side of the pair record.
-async function outcomeSaidSince(userId: string, otherId: string, since: Date): Promise<boolean> {
+// Pure: their latest second-contact word about this person since the intro. Met, talked or not going to: answered. Not yet: a plan,
+// with its day when they gave one. Rows newest first.
+export function secondContactSince(rows: { outcome?: string | null; plannedOn?: string | null }[]): { answered: boolean; plannedOn: string | null } {
+  const latest = rows[0];
+  if (!latest) return { answered: false, plannedOn: null };
+  if (latest.outcome === "not_yet") return { answered: false, plannedOn: latest.plannedOn ?? null };
+  return { answered: ["met_again", "talked_again", "not_going_to"].includes(String(latest.outcome)), plannedOn: null };
+}
+// Their own word since the intro: their second-contact facts about this person (their record, owner-only), then their side of the
+// pair record. Throws on a failed read (never a guess either way).
+async function outcomeSaidSince(userId: string, otherId: string, since: Date): Promise<{ answered: boolean; plannedOn: string | null }> {
   const fact = await pool.query(
-    `SELECT 1 FROM co_facts WHERE owner_user_id = $1 AND relation = 'second_contact' AND retired_at IS NULL AND meta->>'otherId' = $2 AND happened_at > $3 LIMIT 1`,
+    `SELECT meta->>'outcome' AS outcome, meta->>'plannedOn' AS "plannedOn" FROM co_facts
+     WHERE owner_user_id = $1 AND relation = 'second_contact' AND retired_at IS NULL AND meta->>'otherId' = $2 AND happened_at > $3
+     ORDER BY happened_at DESC LIMIT 5`,
     [userId, otherId, since],
   );
-  if (fact.rows.length) return true;
+  const sc = secondContactSince(fact.rows);
+  if (sc.answered) return sc;
   const { rows } = await pool.query(
     `SELECT CASE WHEN a_id = $1 THEN a_evidence ELSE b_evidence END AS mine FROM co_pairs
      WHERE ((a_id = $1 AND b_id = $2) OR (a_id = $2 AND b_id = $1)) AND intro_sent_at IS NOT NULL`,
     [userId, otherId],
   );
-  return rows.some((r: any) => statedSince(r.mine, since));
+  if (rows.some((r: any) => statedSince(r.mine, since))) return { answered: true, plannedOn: null };
+  return sc;
 }
 
 async function caredOf(userId: string, zone: string | null): Promise<CaredItem[]> {
@@ -518,11 +546,15 @@ async function caredOf(userId: string, zone: string | null): Promise<CaredItem[]
 // it, with the member-level rules (memberRules), to draftProactive (harness/proactive.ts draftWithKnowledge).
 export async function loadSnapshot(userId: string, now = new Date()): Promise<Snapshot> {
   const zone = await memberZone(userId).catch(() => null);
+  let introsUnread = false;
   const { goalEntries } = await import("../harness/profileWrite.js");
   const { goalHash, goalStates, isCoTaskGoal } = await import("./goalEdges.js");
   const [ownLines, intros, cared, prof, states, surface, kept, threads, rechecked] = await Promise.all([
     ownLinesOf(userId),
-    introsOf(userId).catch(() => [] as IntroFact[]),
+    introsOf(userId).catch(() => {
+      introsUnread = true;
+      return [] as IntroFact[];
+    }),
     caredOf(userId, zone).catch(() => [] as CaredItem[]),
     pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]),
     goalStates(userId).catch(() => new Map()),
@@ -558,6 +590,7 @@ export async function loadSnapshot(userId: string, now = new Date()): Promise<Sn
     intent,
     lastGoalSurfaceAt: [surface.rows[0]?.at, rechecked.rows[0]?.at].filter(Boolean).map((x: any) => new Date(x)).sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
     lastKeptAt: kept.rows[0]?.at ? new Date(kept.rows[0].at) : null,
+    ...(introsUnread ? { introsUnread: true } : {}),
     commitments: threads.rows.map((t: any) => ({
       threadId: String(t.id),
       text: String(t.text),
@@ -577,8 +610,12 @@ async function storedOf(userId: string): Promise<StoredEntry[]> {
 
 // The entry as it stands right now, if the state a candidate was queued for still holds (re-read at draft time, never trusted from
 // the queue). Its facts are today's: "tomorrow" at queue time is "today" when it goes.
+// Throws when the state couldn't be read (an intro entry while the intros are unread): the caller waits, never reads it as gone.
+export const STATE_UNREAD = "the state couldn't be read just now";
+export const STATE_UNREAD_MAX_HOURS = 48;
 export async function currentEntry(userId: string, entryKey: string, fp: string, now = new Date()): Promise<NudgeEntry | null> {
   const s = await loadSnapshot(userId, now);
+  if (s.introsUnread && entryKey.startsWith("intro:")) throw new Error(STATE_UNREAD);
   return detectAll(s).find((e) => e.entryKey === entryKey && e.fingerprint === fp) ?? null;
 }
 
@@ -680,16 +717,20 @@ export function draftFactsOf(c: { payload: any }): Facts {
   return Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined));
 }
 
-type Cand = { id: string; userId: string; type: string; payload: any };
+type Cand = { id: string; userId: string; type: string; payload: any; createdAt?: Date };
 type Person = { firstName: string };
-type Draft = { messages: string[]; text: string; rules: any } | { skip: string };
+type Draft = { messages: string[]; text: string; rules: any } | { skip: string } | { defer: Date; reason: string };
 
 export async function draftStateNudge(c: Cand, person: Person, deps: { current?: typeof currentEntry; leak?: (text: string, otherId: string) => Promise<string | null> } = {}): Promise<Draft> {
   const type = c.type as NudgeType;
   const p = c.payload ?? {};
   if (!NUDGE_TYPES.includes(type) || !p.entryKey || !p.fingerprint) return { skip: "not a member-state nudge" };
   // Re-read: the state it was queued for must still hold (they brought it up, the deadline passed, the goal closed...).
-  const now = await (deps.current ?? currentEntry)(c.userId, String(p.entryKey), String(p.fingerprint)).catch(() => null);
+  // A read that fails waits an hour and is read again (review of #376: it was dropped as "the state changed", for good).
+  let unread = false;
+  const now = await (deps.current ?? currentEntry)(c.userId, String(p.entryKey), String(p.fingerprint)).catch(() => ((unread = true), null));
+  // Bounded by the candidate's age: a state that stays unreadable for STATE_UNREAD_MAX_HOURS is dropped, saying so.
+  if (unread) return c.createdAt && Date.now() - new Date(c.createdAt).getTime() > STATE_UNREAD_MAX_HOURS * HOUR ? { skip: `${STATE_UNREAD} for ${STATE_UNREAD_MAX_HOURS} hours` } : { defer: new Date(Date.now() + HOUR), reason: STATE_UNREAD };
   if (!now) return { skip: "the state it was about has changed" };
   const { draftProactive, nameTokens } = await import("../harness/proactive.js");
   // Today's facts for the same state (built the same way, from the recipient's own record); the queued ones only if they're missing.
