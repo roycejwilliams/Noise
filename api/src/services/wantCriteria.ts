@@ -17,7 +17,8 @@
 // silently relaxed and nothing is invented when the line is silent:
 //   must_not yes                 -> that want is out for this candidate
 //   must no                      -> that want is out for this candidate
-//   must or must_not unknown     -> uncertain: never a match on that want (held below the bar), never assumed either way
+//   must unknown                 -> uncertain: never a match on that want (held below the bar), never assumed either way
+//   must_not unknown             -> passes: an exclusion is applied only when confirmed (Royce, 2026-11-03, option A)
 //   prefer yes / no              -> up or down a little, never across the bar either way (a preference is not a filter)
 // Pure, apart from nothing: every function here is a pure step the capture and matching paths call.
 import { quoteIsTheirs } from "./provenance.js";
@@ -287,8 +288,9 @@ export function applyConditions(score: number, judged: Judged, wants: WantLine[]
       perWant.push({ label: w.label, excluded: true, unverified: false });
       continue;
     }
-    // Nobody can confirm it either way (Royce, 2026-11-03): a requirement or an exclusion read "unknown" holds the want under the bar.
-    const unsure = mine.filter((l) => (l.c.strength === "must" || l.c.strength === "must_not") && h(l) === "unknown");
+    // A requirement nobody can confirm holds the want under the bar. An exclusion nobody can confirm does not (Royce, 2026-11-03,
+    // option A): only a confirmed exclusion holds or excludes; the double opt-in protects the member, who can decline the ask.
+    const unsure = mine.filter((l) => l.c.strength === "must" && h(l) === "unknown");
     perWant.push({ label: w.label, excluded: false, unverified: unsure.length > 0 });
     unverified.push(...unsure.map((l) => l.c.text));
     const step = mine.filter((l) => l.c.strength === "prefer").reduce((s, l) => s + (h(l) === "yes" ? PREFER_STEP : h(l) === "no" ? -PREFER_STEP : 0), 0);
