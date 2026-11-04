@@ -51,6 +51,9 @@ export type ExchangeBase = { done: DoneItem[]; unresolved: UnresolvedItem[]; pri
 export type ExchangeRead = { move: ExchangeMove; meant: Meant | null; told: Told[]; closes: { item: string; how: "solved" | "dropped" }[]; reopens: string[]; again: string | null };
 export type ExchangeRecord = ExchangeBase & { read: ExchangeRead | null };
 
+// Their words ask about a find Cue sent: where, when, the link, the price, who hosts, how to get in, or when Cue sent it.
+export const ASKS_ABOUT_FIND = /\b(?:where|what (?:day|date|time)|when|which (?:day|city)|link|address|location|located|how much|price|cost|free|who(?:'s| is| was)? (?:hosting|running|the host)|host(?:ing)?|how (?:do|can|would) i (?:get in|sign up|register|rsvp|join)|get in|rsvp|sign up|register|approval|did you (?:already )?send|send (?:it|that)|sent (?:it|that|me))\b/i;
+
 export const DONE_MAX = 16;
 export const UNRESOLVED_MAX = 16;
 export const MEANT_HOURS = 24;

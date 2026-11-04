@@ -477,14 +477,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // Cue's own words, when it re-sends or re-offers what's done, re-asks what they told, points "that" at the wrong thing, reopens
         // something they closed, or adds a question after they closed. Once a turn and only while a redraft can follow; never on a turn
         // that touches their safety. Past that, the draft goes on to the fact check as before.
-        if (ctx.exchange?.read && canRedraft && !state.moveNudged && !ctx.safetyConcern && !state.safetyFlagged) {
+        if (canRedraft && !state.moveNudged && !ctx.safetyConcern && !state.safetyFlagged) {
           const { moveMisses, moveRedraftNote } = await import("../harness/moveCheck.js");
           const misses = moveMisses(draft, ctx.exchange, ctx.resolvedContent ?? "");
           if (misses.length) {
             state.moveNudged = true;
             if (!ctx.dryRun) {
               const { recordDecision } = await import("../harness/core.js");
-              await recordDecision({ layer: 3, decision: "reply.move_check", userId: ctx.userId, outcome: "skip", action: misses.map((m) => m.name).join(","), proposal: { move: ctx.exchange.read.move, misses: misses.map((m) => m.name) } }).catch(() => {});
+              await recordDecision({ layer: 3, decision: "reply.move_check", userId: ctx.userId, outcome: "skip", action: misses.map((m) => m.name).join(","), proposal: { move: ctx.exchange?.read?.move ?? null, misses: misses.map((m) => m.name) } }).catch(() => {});
             }
             return stillOwed(), { ok: false, error: moveRedraftNote(misses, ctx.exchange) };
           }
