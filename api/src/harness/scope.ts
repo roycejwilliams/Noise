@@ -78,6 +78,12 @@ const splitClauses = (t: string) => t.split(/\s*(?:[,;]|\band\b|\balso\b|\bplus\
 // The scope of a piece of work: the model's verdict when there is one (it wins, including over the backstop), else the backstop.
 export function judgeScope(text: string, verdict?: ScopeVerdict | null): Scope {
   if (!verdict) return classifyScope(text);
+  // The backstop's unmistakable cases (a phone plan, a job-listings watch, a dentist, taxes, travel booking, product shopping) are guarded
+  // by code whatever the verdict says: a model's "in" does not start them. Everything else is the model's.
+  if (verdict.scope === "in") {
+    const hard = classifyScope(text);
+    if (hard.scope === "out") return hard;
+  }
   if (verdict.scope === "out") return { scope: "out", kind: "model", why: "judged outside connections by the read that chose the work" };
   if (verdict.scope === "mixed") return { scope: "mixed", kind: "model", why: "judged as a connection ask bundled with something outside", connection: verdict.connection };
   return { scope: "in", kind: null, why: "judged connection work by the read that chose it" };
@@ -92,7 +98,7 @@ export function workText(w: { goal?: string | null; steps?: unknown; firstPlan?:
 
 // The ask that closes honestly, in words for the model (guidance, not a message): tone only, fresh words every time, never a forced intro.
 export const OUT_OF_SCOPE_GUIDANCE = "That isn't something Cue does. Say so briefly and naturally in your own words, fresh every time (never a stock line, never the same wording twice), only as much as the moment needs. Don't force an unrelated introduction as a redirect and don't apologise at length. Never say or imply you started, did, found or will do it. If the message also had a connection part (who to meet, an event, a community, preparing for a conversation), help with that part on its own.";
-export const MIXED_GUIDANCE = "This bundles a connection ask with something Cue doesn't do. Start work for ONLY the connection part (who to meet, an event, a community, preparing for a conversation), written as its own goal and steps (start it again with scope \"in\"), and tell them briefly, in your own fresh words, that the rest isn't something Cue does. Never say or imply you'll do the rest.";
+export const MIXED_GUIDANCE = "This bundles a connection ask with something Cue doesn't do. Start work for ONLY the connection part (who to meet, an event, a community, preparing for a conversation), written as its own goal and steps, and tell them briefly, in your own fresh words, that the rest isn't something Cue does. Never say or imply you'll do the rest.";
 export const CLARIFY_GUIDANCE = "Part of this is something Cue doesn't do, and no clean connection part (who to meet, an event, a community, preparing for a conversation) could be pulled out of it. Start nothing. Ask ONE short question in your own words about the people or rooms they want, and nothing else. Never say or imply you started, did or will do the rest.";
 
 export function startRefusal(s: Scope): string {
@@ -110,3 +116,7 @@ export function connectionPart(text: string, verdict?: ScopeVerdict | null): str
   if (sc.scope === "mixed") return sc.connection && sc.connection.trim().length >= 4 ? sc.connection.trim() : null;
   return t || null;
 }
+
+// The verdict a piece of work is held to: a turn read of "mixed" means the message held both, and the work the model then writes is the
+// connection part on its own (the backstop still guards the unmistakable outs), so it is held as "in".
+export const workVerdict = (v: ScopeVerdict | null | undefined): ScopeVerdict | null => (v && v.scope === "mixed" ? { scope: "in", connection: v.connection } : v ?? null);
