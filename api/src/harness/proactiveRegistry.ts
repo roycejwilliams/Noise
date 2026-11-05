@@ -171,6 +171,9 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     .catch(() => [] as string[]);
   const evidence = followUpEvidence({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 });
   if (doorMissed && evidence.level !== "attended") return skip("the door was tracked and they weren't scanned: the no-show flow covers that night");
+  // Their stated word is the only evidence, and the debrief is only about a recommendation: they already told Cue how it went, so a
+  // debrief would re-ask it (settleFollowUpForResult closes the row when they say it; this covers one queued before they did).
+  if (evidence.level === "attended" && !came && !(p.walkinCheckinIds ?? []).length && !(p.checkinFollowupIds ?? []).length) return skip("they already told Cue how it went");
   if (evidence.level === "none") {
     await dropDebriefSources(p, evidence.declined ? `declined: ${evidence.why}` : evidence.why);
     return skip(evidence.declined ? "they said it isn't for them: no follow-up" : "no sign they went or meant to go: no follow-up");
