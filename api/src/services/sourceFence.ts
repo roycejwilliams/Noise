@@ -24,6 +24,7 @@ export const SOURCES = {
   queuedFinds: "a: finds queued to them (proactive_candidates, a count only)",
   lessonOriginals: "a: the lessons Cue already checked for them (lesson.check, the guessed lesson only)",
   exchange: "a: their recent texts with Cue, both sides, as sent (text_exchange, never to or from a teammate); the member-world read (services/memberWorld.ts)",
+  recall: "a: their own older conversation, text_exchange and stored call_transcript rows, searched by topic and date on ask (services/conversationRecall.ts); read through the removal guards and this fence, returned as history",
   activity: "a: when they were last active on any channel (their texts, voice memos, calls, texts to a teammate): timestamps only, never what was said",
 } as const;
 // The two other paths the 10-13 fixes added read no member data at all, so they have nothing to fence:
