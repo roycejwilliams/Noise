@@ -17,12 +17,14 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 
 const u = "00000000-0000-4000-8000-0000000000d1";
+const u2 = "00000000-0000-4000-8000-0000000000d2";
 const ev = "evt-noise-1104";
 const world = { handles: new Set<string>(), arrivals: [] as { ev: string; user: string; via: string }[], arrived: false };
 (pool as any).query = async (sql: string, p: any[] = []) => {
   if (/INSERT INTO inbound_webhook_handles/.test(sql)) { if (world.handles.has(p[0])) return { rows: [] }; world.handles.add(p[0]); return { rows: [{ handle: p[0] }] }; }
   if (/DELETE FROM inbound_webhook_handles/.test(sql)) { world.handles.delete(p[0]); return { rows: [] }; }
-  if (/FROM users WHERE archived_at IS NULL/.test(sql)) return { rows: p[0] === "jordan@example.com" ? [{ id: u }] : [] };
+  if (/FROM users WHERE archived_at IS NULL AND LOWER\(email\)/.test(sql)) return { rows: p[0] === "jordan@example.com" ? [{ id: u }] : p[0] === "other@example.com" ? [{ id: u2 }] : [] };
+  if (/FROM users WHERE archived_at IS NULL AND phone_number/.test(sql)) return { rows: p[0] === "+14155550101" ? [{ id: u }] : p[0] === "+14155550102" ? [{ id: u2 }] : [] };
   if (/INSERT INTO event_presence \(event_api_id, user_id, arrived_at, arrived_via\)/.test(sql)) {
     if (world.arrivals.some((a) => a.ev === p[0] && a.user === p[1])) return { rows: [] };
     world.arrivals.push({ ev: p[0], user: p[1], via: p[2] }); world.arrived = true;
@@ -35,7 +37,8 @@ const world = { handles: new Set<string>(), arrivals: [] as { ev: string; user: 
   return { rows: [] };
 };
 let rescored: string[] = [];
-const deps = { ours: async (id: string) => id === ev, rescore: (id: string) => { rescored.push(id); } };
+let listed = true;
+const deps = { ours: async (id: string) => id === ev, rescore: (id: string) => { rescored.push(id); }, onGuestList: async () => listed };
 const guest = (over: any = {}) => ({ id: "gst-1", event_api_id: ev, user_email: "Jordan@Example.com", checked_in_at: "2026-11-04T01:05:00.000Z", approval_status: "approved", ...over });
 
 // 1. what the payload says, whatever its shape
@@ -79,6 +82,31 @@ const guest = (over: any = {}) => ({ id: "gst-1", event_api_id: ev, user_email: 
   const failing = { ...deps, arrive: async () => { throw new Error("db down"); } };
   let threw = false; try { await L.handleGuestCheckIn(guest({ id: "gst-3" }), undefined, failing); } catch { threw = true; }
   check("a failed arrival releases the claim so a retry is processed", threw && (await L.handleGuestCheckIn(guest({ id: "gst-3" }), undefined, deps)) === "arrived");
+}
+
+// 3c. who the guest is: email first, phone only without an email; a split identity is refused; the member must be on the list
+{
+  world.handles.clear(); world.arrivals.length = 0; rescored = [];
+  const errs: string[] = [];
+  const realErr = console.error; console.error = (...a: any[]) => { errs.push(a.join(" ")); };
+  const split = await L.handleGuestCheckIn(guest({ id: "gst-4", user_email: "jordan@example.com", phone_number: "+14155550102" }), undefined, deps);
+  console.error = realErr;
+  check("a guest whose email and phone are different members is refused, nobody arrives", split === "identity_conflict" && !world.arrivals.length && !rescored.length, { split });
+  check("the refusal is logged without the email, phone or ids", errs.length === 1 && !/jordan|example\.com|\+1415|0000d/i.test(errs[0]), errs);
+  const emailWins = await L.handleGuestCheckIn(guest({ id: "gst-5", user_email: "jordan@example.com", phone_number: "+14155550199" }), undefined, deps);
+  check("email first: a phone that matches nobody doesn't block the email's member", emailWins === "arrived" && world.arrivals[0]?.user === u, { emailWins, a: world.arrivals });
+  world.arrivals.length = 0;
+  const phoneOnly = await L.handleGuestCheckIn(guest({ id: "gst-6", user_email: undefined, phone_number: "+14155550102" }), undefined, deps);
+  check("phone is used only when the guest has no email", phoneOnly === "arrived" && world.arrivals[0]?.user === u2, { phoneOnly, a: world.arrivals });
+  world.arrivals.length = 0;
+  const phoneNotUsed = await L.handleGuestCheckIn(guest({ id: "gst-7", user_email: "stranger@example.com", phone_number: "+14155550101" }), undefined, deps);
+  check("an email that matches nobody is not rescued by the phone", phoneNotUsed === "not_a_member" && !world.arrivals.length, { phoneNotUsed });
+  listed = false;
+  const off = await L.handleGuestCheckIn(guest({ id: "gst-8" }), undefined, deps);
+  check("a member not on the event's guest list is refused, nobody arrives", off === "not_on_guest_list" && !world.arrivals.length, { off });
+  listed = true;
+  check("...and the claim is released, so a later edit once they're listed is processed", (await L.handleGuestCheckIn(guest({ id: "gst-8" }), undefined, deps)) === "arrived");
+  world.arrivals.length = 0; world.handles.clear(); world.arrived = false; rescored = [];
 }
 
 // 4. after the event: checked in -> the debrief ("how was it"), through the real draft
