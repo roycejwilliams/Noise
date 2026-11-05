@@ -406,6 +406,14 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   const nullEmb = okRes(await look(MEAN, { topic: "dog" }, d({ embed: async () => null })));
   check("meaning: no vector from the model is keyword only", !nullEmb.results.some((h) => h.via));
 
+  // pgvector 0.8: the meaning query runs in its own short transaction with iterative scan set for it alone
+  const stmts: string[] = [];
+  const txDb = { query: db.query, tx: async (fn: any) => fn(async (sql: string, args: unknown[]) => { stmts.push(sql.slice(0, 40)); return db.query(sql, args); }) };
+  const viaTx = okRes(await look(MEAN, { topic: "dog" }, d({ db: txDb })));
+  check("meaning: iterative scan is set (for that query only) before the meaning read, and the answer is the same", /^SET LOCAL hnsw\.iterative_scan = relaxed_/.test(stmts[0] ?? "") && stmts.length === 2 && viaTx.results.some((h) => h.via === "meaning"), stmts);
+  const txFail = okRes(await look(MEAN, { topic: "dog" }, d({ db: { query: db.query, tx: async () => { throw new Error("unrecognized configuration parameter"); } } })));
+  check("meaning: if the setting is refused the plain query still answers", txFail.results.some((h) => h.via === "meaning"));
+
   // timing: kinds, ms and counts; no words
   timings.length = 0;
   await look(MEAN, { topic: "dog" }, d());
@@ -415,6 +423,51 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   check("timing: it carries no conversation text, name or query word", !/puppy|couch|Priya|dog|hound/i.test(JSON.stringify(t)), t);
   const src = (await import("node:fs")).readFileSync(new URL("../../src/services/conversationRecall.ts", import.meta.url), "utf8");
   check("timing: the logged line is the timing object alone", /console\.log\(`recall\.timing \$\{JSON\.stringify\(t\)\}`\)/.test(src));
+}
+
+// ---- round 3: correction suffix next to quoted text, ordinary word forms, paging at the call budget
+{
+  const C3 = "00000000-0000-4000-8000-00000000c030";
+  add(C3, "2026-10-01T10:00:00Z", "text_exchange", "User said: I live in Berlin right now [Replying to Cue's text: \"how is the glaze going?\"]");
+  add(C3, "2026-10-02T10:00:00Z", "text_exchange", "User said: look at this [They also sent a photo. It shows: a map of Berlin]");
+  removed.push(...W.liveGuards([{ field: "city", old: "Berlin", now: "Lisbon", ref: "claim:c1", removed: false }]));
+  const c = okRes(await look(C3, { topic: "live berlin" }));
+  const m = c.results.find((h) => /I live in/.test(h.matched.text))!;
+  check("correction: the reply tag is still peeled when a correction is appended (quote not taken for their words)", !!m && !/glaze/.test(m.matched.text) && m.matched.outside?.some((o) => o.kind === "reply_target" && /glaze/.test(o.text)), m?.matched);
+  check("correction: the correction rides in its own field, not in their words", !!m && !/since corrected/.test(m.matched.text) && /Lisbon/.test(m.matched.corrected ?? ""), m?.matched);
+  const ph = okRes(await look(C3, { topic: "look at this" })).results.find((h) => /look at this/.test(h.matched.text))!;
+  check("correction: a photo tag is peeled the same way", ph.matched.outside?.some((o) => o.kind === "photo") === true, ph.matched);
+  removed.length = 0;
+
+  const W3 = "00000000-0000-4000-8000-00000000c031";
+  add(W3, "2026-10-01T10:00:00Z", "text_exchange", "User said: my dogs are loud and my dog is old");
+  add(W3, "2026-10-02T10:00:00Z", "text_exchange", "User said: James called about the notes");
+  add(W3, "2026-10-03T10:00:00Z", "text_exchange", "User said: we are moving next month, I moved once before, a move is hard");
+  add(W3, "2026-10-04T10:00:00Z", "text_exchange", "User said: the date is Friday and the dates changed");
+  add(W3, "2026-10-05T10:00:00Z", "text_exchange", "User said: Émile called me back");
+  add(W3, "2026-10-06T10:00:00Z", "text_exchange", "User said: a dogma about parties and a note on jam");
+  const hit = async (topic: string, re: RegExp) => re.test(texts(okRes(await look(W3, { topic })).results));
+  check("words: 'dogs' finds both dog and dogs, not dogma", await hit("dogs", /dogs are loud/) && !(/dogma/.test(texts(okRes(await look(W3, { topic: "dogs" })).results))));
+  check("words: 'dog' (three letters) finds dogs too", await hit("dog", /dogs are loud/));
+  check("words: 'James' finds James, not jam", await hit("James", /James called/) && !/jam\b/.test(texts(okRes(await look(W3, { topic: "James" })).results)));
+  check("words: 'notes' finds note and notes", await hit("notes", /about the notes/) && await hit("notes", /a note on jam/));
+  check("words: 'moving' finds moving, moved and move", await hit("moving", /we are moving next month/) && R.termRegex(R.topicTerms("moving")[0]).test("I moved once") && R.termRegex(R.topicTerms("moving")[0]).test("a move is hard"));
+  check("words: 'dates' finds date and dates", await hit("dates", /the date is Friday/));
+  check("words: a name with an accent opens a word in JS as in SQL (Émile, ÉMILE yes; inside another word no)", R.termRegex(R.topicTerms("Émile")[0]).test("Émile called") && R.termRegex(R.topicTerms("Émile")[0]).test("ÉMILE called") && !R.termRegex(R.topicTerms("Émile")[0]).test("pémile called"), R.topicTerms("Émile"));
+  check("words: the SQL pattern for a short stem is whole-word alternatives, a long stem a word start", /^\\m\(.*\)\\M$/.test(R.termPattern(R.topicTerms("moving")[0])) && R.termPattern(R.topicTerms("notes")[0]) === "\\mnote");
+
+  // paging at the call budget: rows of about 700 characters, the correction newest
+  const ST = "00000000-0000-4000-8000-00000000c032";
+  const body = (i: number) => `User said: glaze ${i} ${"and the supplier detail ".repeat(40)}`.slice(0, 700);
+  for (let i = 0; i < 9; i++) add(ST, new Date(Date.UTC(2026, 7, 2 + i)).toISOString(), "text_exchange", body(i));
+  add(ST, "2026-10-24T18:00:00Z", "text_exchange", `User said: scratch the glaze ${"x ".repeat(340)}`.slice(0, 700));
+  const stall = okRes(await R.recallConversation(ST, { topic: "glaze supplier" }, deps(), { resultChars: R.RECALL.callResultChars }));
+  const size = JSON.stringify(stall).length + R.recallNote(stall).length;
+  check("budget: at the call budget the first page still shows something and advances", stall.found >= 2 && stall.nextOffset !== null && stall.nextOffset > 0, { found: stall.found, next: stall.nextOffset });
+    check("budget: the newest is there and the whole result plus note fits the call proxy's 6,000", stall.results.some((h) => h.newest) && size <= 6000, size);
+  let off = 0, pages = 0, seen = 0;
+  while (pages < 30) { const pg = okRes(await R.recallConversation(ST, { topic: "glaze supplier", offset: off }, deps(), { resultChars: R.RECALL.callResultChars })); seen += pg.found; pages++; if (pg.nextOffset === null) break; if (pg.nextOffset <= off) { pages = 99; break; } off = pg.nextOffset; }
+  check("budget: paging on always moves forward and reaches the end", pages < 30 && seen >= 10, { pages, seen });
 }
 
 // ---- injection text is history

@@ -38,13 +38,19 @@ await client.query("SET LOCAL statement_timeout = '30s'");
 
 const explainer: RecallDeps["db"] = {
   query: async (sql, args) => {
+    if (/^SET LOCAL /.test(sql)) return client.query(sql);
     const kind = kindOf(sql);
-    const ex = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, args as any[]);
+    const ex = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, args as any[]).catch((e) => { console.log(`  (${kind} failed: ${String(e?.message ?? e).slice(0, 120)})`); throw e; });
     const root = ex.rows[0]["QUERY PLAN"][0];
     const b = buffers(root.Plan);
     plans.push({ kind, exec: root["Execution Time"], plan: root["Planning Time"], nodes: [...new Set(nodesOf(root.Plan))], hit: b.hit, read: b.read, rows: root.Plan["Actual Rows"] });
     return client.query(sql, args as any[]);
   },
+};
+// The meaning query runs as the module runs it: with iterative scan set for it alone (a savepoint inside the read-only transaction).
+(explainer as any).tx = async (fn: any) => {
+  await client.query("SAVEPOINT recall_meaning");
+  try { return await fn((sql: string, args: unknown[]) => explainer.query(sql, args)); } finally { await client.query("RELEASE SAVEPOINT recall_meaning"); }
 };
 const unit = Array.from({ length: 1536 }, (_, i) => (i === 0 ? 1 : 0));
 const timings: any[] = [];
