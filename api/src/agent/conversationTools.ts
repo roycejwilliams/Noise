@@ -1,4 +1,4 @@
-import { parseVerdict, workVerdict } from "../harness/scope.js";
+import { judgeScope, parseVerdict, startRefusal, workVerdict } from "../harness/scope.js";
 import { notToTeammate } from "../services/teamLines.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
@@ -1574,14 +1574,21 @@ export function createConversationTools(ctx: ConversationToolContext) {
         place: z.string().optional().describe("Only when they said where it's for (\"I'm in Chicago\", \"in SF\"): that place, in their words. Never guessed."),
         until: z.string().optional().describe("Only when they said how long it's for (\"til Friday\", \"through the 17th\"): the last day, YYYY-MM-DD."),
         theirWords: z.string().optional().describe("With place or until: their exact words that say it, copied from what they said."),
+        scope: z.enum(["in", "out", "mixed"]).optional().describe("Your own judgment of what they want: \"in\" is meeting people (who to meet, events, rooms or communities they would attend, a conversation to prepare for); \"out\" is errands, shopping and lookups (a consumer service, comparing products or plans, travel, general research, watching job boards, funding searches); \"mixed\" is both."),
+        connection: z.string().optional().describe("Only when scope is mixed: just the connection part, as a short phrase."),
       }),
-      execute: async ({ what, differentFrom, place, until, theirWords }) => {
+      execute: async ({ what, differentFrom, place, until, theirWords, scope: scopeIn, connection }) => {
         // Something that may be an open task of Co's (services/statusCheck.ts, Royce 2026-10-13): said once, Co decides.
         const c = await statusCandidate(what, differentFrom, "saveAsk");
         if (c) return { ok: false, error: c.hold };
         // The purpose boundary (harness/scope.ts): an errand, shopping, travel, a general research project, a job-board watch, a funding
         // search is still remembered (saved below, as kind "outside"), but never searched, checked in on or promised.
-        const outsideNow = (await import("../services/askKind.js")).outsideAsk(what);
+        // The verdict is the model's: this call's own scope, else the turn read's; code only backs it with the narrow backstop. A mixed ask is
+        // saved as its connection part alone, or (no clean part) not at all and Cue asks one short question.
+        const verdict = scopeIn ? parseVerdict({ scope: scopeIn, connection }) : workVerdict(ctx.turnScope);
+        const sc = judgeScope(what, verdict);
+        if (sc.scope === "mixed") return { ok: false, error: startRefusal(sc) };
+        const outsideNow = sc.scope === "out";
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would save ask for ${ctx.userId}: "${what}"`);
         } else {
