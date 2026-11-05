@@ -1,3 +1,4 @@
+import { parseVerdict } from "../harness/scope.js";
 import { notToTeammate } from "../services/teamLines.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
@@ -96,6 +97,8 @@ export type ConversationToolContext = {
   // The whole exchange and this turn's move (services/exchangeRecord.ts): a draft that misses the move, or re-sends, re-asks, points
   // "that" at the wrong thing or reopens something closed, gets one rewrite toward the move (harness/moveCheck.ts).
   exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null;
+  // The turn read's scope verdict on what they asked for (services/readTurn.ts), used by the start-task guard when the tool call carries none.
+  turnScope?: import("../harness/scope.js").ScopeVerdict | null;
   // The reaction already put on their text this turn (routes/sendblue.ts ack),
   // so Co can leave it at that (leaveItAtReaction).
   ackSent?: string | null;
@@ -754,8 +757,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           .optional()
           .describe("True when they asked you to keep watching over time and tell them when something turns up (\"let me know when...\", \"keep an eye out for...\"), not for one result now."),
         differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
+        scope: z
+          .enum(["in", "out", "mixed"])
+          .optional()
+          .describe("Your own judgment of this work. \"in\": it is about meeting people (who to meet and why, finding people, events, rooms or communities they would attend, preparing for a conversation or an event, an introduction, following through on a connection; for a career change, the people and rooms). \"out\": concierge work (a consumer service, comparing products or plans, travel, general research, watching job boards, funding or investor searches, venues or vendors for their own event, drafting their documents). \"mixed\": both in one request. Being about a person doesn't make it \"in\"."),
+        connection: z.string().optional().describe("Only when scope is mixed: just the connection part, as a short phrase. Then start the task for that part alone."),
       }),
-      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom }) => {
+      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom, scope: scopeIn, connection }) => {
         // Not something Cue does (drafting their email, a plan sheet, reading their email): no task, by text or on a call.
         if (NOT_ASSISTANT_ASK.test(`${goal}\n${steps.join("\n")}\n${firstStep}`)) {
           notDone("No task was started: that isn't something Cue does.");
@@ -764,7 +772,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const T = await import("../services/coTasks.js");
         // The purpose boundary (harness/scope.ts), asked first so a refused task costs no lookups; startTask asks it again, the one
         // check every task goes through (promises, goal pieces, calls and look-outs never come through this tool).
-        const outside = T.scopeRefusal({ goal, steps, firstPlan: firstStep });
+        // The verdict is the model's: this call's own scope, else the turn read's. Code only backs it with the narrow backstop.
+        const verdict = scopeIn ? parseVerdict({ scope: scopeIn, connection }) : ctx.turnScope ?? null;
+        const outside = T.scopeRefusal({ goal, steps, firstPlan: firstStep, scope: verdict });
         if (outside) {
           notDone(`No task was started: ${outside.outOfScope?.scope === "mixed" ? "it bundled something Cue doesn't do with the connection part" : "that isn't something Cue does"}.`);
           return { ok: false, error: outside.why };
@@ -834,7 +844,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const offer = lookout ? T.watchOfferIn(String(ctx.lastCoMessage ?? "")) : null;
         const offerLogged = offer ? await import("../harness/proactive.js").then((P) => P.replyWatchOfferLogged(ctx.userId, String(ctx.lastCoMessage ?? ""))).catch(() => false) : false;
         const origin = lookout ? T.lookoutOriginAt({ message: ctx.resolvedContent, quote: theirWords, lastCoMessage: ctx.lastCoMessage, offerLogged }) : null;
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Cue's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}), ...(dispatchKey ? { dispatchKey } : {}) });
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Cue's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, scope: verdict, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}), ...(dispatchKey ? { dispatchKey } : {}) });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };
