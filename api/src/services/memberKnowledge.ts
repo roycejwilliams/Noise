@@ -107,6 +107,42 @@ export type CarryItem = {
   detail: string | null;
 };
 
+// A transition: a thread about a life change (a move, a new role, going solo, starting over, a breakup, a new city, a career pivot),
+// member_threads rows with transition_source set (harness/memberThreads.ts). Picture Memory spec step 2 (2026-11-05).
+//   quote:   the member's own words that opened it (null on a closed one: it shrinks to its one dated line).
+//   openedOn / closedOn: ISO days (their day is the reader's to render).
+//   source:  provenance in the snapshot's vocabulary: "said" (they said it outright) or "inferred"; channel: where they said it.
+//   corrections: what they changed about it; the earlier wording stays (was), the later one qualifies it (now), never replaces it.
+// Not rendered into any prompt yet (step 6 wires it into the snapshot).
+export type TransitionCorrection = { at: string; was: string; now: string | null; quote: string | null };
+export type Transition = {
+  id: string;
+  text: string;
+  quote: string | null;
+  openedOn: string;
+  closedOn: string | null;
+  status: "open" | "waiting" | "resolved" | "changed";
+  source: "said" | "inferred";
+  channel: "text" | "call" | null;
+  corrections: TransitionCorrection[];
+};
+// The section's size: open ones in full, closed ones as one dated line each, until this many characters; the rest are counted, never
+// silently dropped (transitionsOmitted). No count or age cutoff.
+export const TRANSITIONS_BUDGET_CHARS = 3000;
+export type RawTransition = {
+  id: string;
+  text: string;
+  quote: string;
+  openedAt: Date;
+  status: string;
+  closedQuote: string | null;
+  closedAt: Date | null;
+  lastTouchedAt: Date;
+  source: string;
+  channel: string | null;
+  corrections: { at: Date; was: string; now: string | null; quote: string | null }[];
+};
+
 export type Lesson = { text: string };
 export type Correction = { field: string; was: string; now: string | null };
 // "stated": what kind of room they told Co they want (services/roomTaste.ts), first; "taste": how what Co sent landed.
@@ -154,6 +190,10 @@ export type MemberKnowledge = {
   exchanges: Fact<Exchange>[];
   person: Fact<{ text: string }> | null;
   limits: Fact<Limits> | null;
+  // Opt-in (include: ["transitions"]); [] otherwise.
+  transitions?: Fact<Transition>[];
+  // How many transitions the character budget left out (never silently).
+  transitionsOmitted?: number;
   // How many things they asked Co to remove (services/whatCoKnows.ts), never what they were: read with exchanges or corrections.
   removedCount?: number;
   // The live guards' read (their removals and corrections) failed, so exchanges and the rest came back unguarded. Said, never silent
@@ -162,7 +202,9 @@ export type MemberKnowledge = {
 };
 
 export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"] as const;
-export type KnowledgeSection = (typeof KNOWLEDGE_SECTIONS)[number];
+// Sections read only when a caller asks for them in include: the default read is unchanged for its ~25 callers.
+export const OPT_IN_SECTIONS = ["transitions"] as const;
+export type KnowledgeSection = (typeof KNOWLEDGE_SECTIONS)[number] | (typeof OPT_IN_SECTIONS)[number];
 export const EXCHANGE_DEFAULTS = { limit: 20, days: 14 } as const;
 // Corrections: the recent ones by default; goal planning reads them all (a goal retired by an old correction must stay retired).
 export const CORRECTION_DEFAULTS = { limit: 8, days: 90 as number | null } as const;
@@ -221,6 +263,7 @@ export type KnowledgeDeps = {
   restraint: (userId: string, now: Date) => Promise<RawRestraint>;
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
   person: (userId: string) => Promise<string>;
+  transitions?: (userId: string) => Promise<RawTransition[]>;
   // What they corrected or removed through Co (services/whatCoKnows.ts, the live guards): exchanges that say a removed thing are left
   // out, and ones that still say a corrected-away value carry the correction inline. Optional, so stubs without it work.
   forgotten?: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
@@ -230,7 +273,41 @@ const rows = (sql: string, args: unknown[]) => pool.query(sql, args).then((r) =>
 const dateOrNull = (x: unknown) => (x ? new Date(x as string) : null);
 const dayString = (x: unknown) => (x == null ? null : x instanceof Date ? x.toISOString().slice(0, 10) : String(x).slice(0, 10));
 
+// One member's transitions: every query takes the member's id as the bound $1, never in the text. Returns open ones and closed ones
+// (no age or count cutoff here; the budget is applied in transitionsOf). Their corrections come from the one corrections table
+// (item_ref thread:<id>, not removals: a removal is gone, never read).
+export async function loadTransitions(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<RawTransition[]> {
+  const [{ rows: ts }, { rows: cs }] = await Promise.all([
+    q.query(
+      `SELECT id, text, opened_quote, opened_at, status, closed_quote, closed_at, last_touched_at, transition_source, transition_channel
+       FROM member_threads WHERE user_id = $1 AND transition_source IS NOT NULL ORDER BY last_touched_at DESC`,
+      [userId],
+    ),
+    q.query(
+      `SELECT to_jsonb(pc)->>'item_ref' AS item_ref, old_value, new_value, quote, corrected_at FROM profile_corrections pc
+       WHERE user_id = $1 AND to_jsonb(pc)->>'item_ref' LIKE 'thread:%' AND (to_jsonb(pc)->>'removed') IS DISTINCT FROM 'true' ORDER BY corrected_at`,
+      [userId],
+    ),
+  ]);
+  return ts.map((r) => ({
+    id: String(r.id),
+    text: String(r.text ?? ""),
+    quote: String(r.opened_quote ?? ""),
+    openedAt: new Date(r.opened_at),
+    status: String(r.status),
+    closedQuote: r.closed_quote ?? null,
+    closedAt: dateOrNull(r.closed_at),
+    lastTouchedAt: new Date(r.last_touched_at),
+    source: String(r.transition_source),
+    channel: r.transition_channel ?? null,
+    corrections: cs
+      .filter((c) => c.item_ref === `thread:${r.id}`)
+      .map((c) => ({ at: new Date(c.corrected_at), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), quote: c.quote ?? null })),
+  }));
+}
+
 export const realKnowledgeDeps: KnowledgeDeps = {
+  transitions: (userId) => loadTransitions(userId),
   profile: async (userId) => {
     const r = (await rows(`SELECT u.first_name, cp.city, cp.goals, cp.intent, cp.updated_at FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]))[0];
     return r ? { firstName: r.first_name ?? null, city: r.city ?? null, goals: Array.isArray(r.goals) ? r.goals.map(String) : null, intent: r.intent ?? null, updatedAt: dateOrNull(r.updated_at) } : null;
@@ -377,6 +454,49 @@ export function withoutRemovedSent<T extends { name: string; postText?: string |
   if (!removed.length) return items;
   const same = (t: string | null | undefined) => !t || W.guardText(t, removed) === t;
   return items.filter((i) => same(i.name) && same(i.postText));
+}
+
+// Pure: the transitions section. Rows are already guarded (their removals dropped, their words through guardText). Open ones first (most
+// recently touched), then closed ones (most recently closed); each open one in full, each closed one as one dated line; cut at the
+// character budget with the rest counted. A later change qualifies the earlier one (corrections keep was), nothing is overwritten.
+export function transitionsOf(raw: RawTransition[], budget: number = TRANSITIONS_BUDGET_CHARS): { items: Fact<Transition>[]; omitted: number } {
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const items = raw
+    .filter((r) => r.text.trim() && (r.source === "said" || r.source === "inferred") && !Number.isNaN(r.openedAt.getTime()))
+    .map((r): { t: Fact<Transition>; open: boolean; rank: number } => {
+      const open = r.status === "open" || r.status === "waiting";
+      const corrections: TransitionCorrection[] = r.corrections.map((c) => ({ at: c.at.toISOString(), was: c.was, now: c.now, quote: c.quote }));
+      // Closing as "changed" with their words is itself the correction: the earlier wording stays, their words qualify it.
+      if (r.status === "changed" && r.closedQuote?.trim()) corrections.push({ at: (r.closedAt ?? r.lastTouchedAt).toISOString(), was: r.text.trim(), now: null, quote: r.closedQuote.trim() });
+      const status = (["open", "waiting", "resolved", "changed"] as const).find((x) => x === r.status) ?? "open";
+      return {
+        open,
+        rank: (open ? r.lastTouchedAt : r.closedAt ?? r.lastTouchedAt).getTime(),
+        t: {
+          id: r.id,
+          text: r.text.trim(),
+          quote: open ? r.quote.trim() || null : null,
+          openedOn: day(r.openedAt),
+          closedOn: open || !r.closedAt ? null : day(r.closedAt),
+          status,
+          source: r.source as "said" | "inferred",
+          channel: r.channel === "text" || r.channel === "call" ? r.channel : null,
+          corrections,
+          verifiedAt: (open ? r.lastTouchedAt : r.closedAt ?? r.lastTouchedAt).toISOString(),
+        },
+      };
+    })
+    .sort((a, b) => Number(b.open) - Number(a.open) || b.rank - a.rank);
+  const out: Fact<Transition>[] = [];
+  let used = 0;
+  for (const { t } of items) {
+    const size = JSON.stringify(t).length;
+    // Always keep the first (a budget smaller than one item must not empty the section); stop at the first that doesn't fit so the rank holds.
+    if (out.length && used + size > budget) break;
+    out.push(t);
+    used += size;
+  }
+  return { items: out, omitted: items.length - out.length };
 }
 
 const DAY = 86_400_000;
@@ -597,7 +717,7 @@ export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> |
 // ---------------------------------------------------------------- the strip (every string, inside)
 
 // Keys whose values are structure, not prose: never rewritten (a kind, a state, an id, a time, a URL, the zone, their own name).
-const STRUCTURAL = new Set(["hash", "userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
+const STRUCTURAL = new Set(["hash", "openedOn", "closedOn", "channel", "userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
 // Their own words: a claim's quote. (Their exchange lines are kept by the walk below, by from === "member".)
 const OWN_WORDS = new Set(["quote"]);
 
@@ -631,6 +751,7 @@ const empty = (userId: string, now: Date, identity: Fact<Identity>): MemberKnowl
   exchanges: [],
   person: null,
   limits: null,
+  transitions: [],
 });
 
 export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {}, deps: Partial<KnowledgeDeps> = {}): Promise<MemberKnowledge> {
@@ -653,6 +774,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
+  const transitionsRaw = await skip("transitions", "transitions", () => (d.transitions ? d.transitions(userId) : Promise.resolve([] as RawTransition[])), [] as RawTransition[]);
   const [states, asks, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, limits] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
@@ -680,7 +802,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   // loops, promise results) and its record of what it sent: each is written from their words, so a thing they had Cue forget
   // can't come back through one of them. A part that says it goes; a line that is only it goes.
   let guardsUnread = false;
-  const guards = (["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
+  const guards = ((["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) || on("transitions")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
   const removed = guards.filter((r) => r.removed);
   const W = guards.length ? await import("./whatCoKnows.js") : null;
   const g = (t: string): string | null => (W && removed.length ? W.guardText(t, removed) : t);
@@ -708,6 +830,27 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (removed.length) k.removedCount = removed.length;
   if (guardsUnread) k.guardsUnread = true;
   if (on("exchanges")) k.exchanges = exchanges.flatMap((e) => { const content = W ? W.guardText(e.content, guards) : e.content; return content === null ? [] : [{ ...e, content }]; }).map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
+  if (on("transitions")) {
+    // Fails closed: without the guards read nothing is returned (a removed transition must never come back from a failed read).
+    if (guardsUnread || !d.forgotten) k.transitions = [];
+    else {
+      const gone = (id: string) => removed.some((r) => r.ref === `thread:${id}`);
+      const guarded = transitionsRaw.flatMap((t) => {
+        const text = g(t.text);
+        if (gone(t.id) || text === null || !text.trim()) return [];
+        const quote = g(t.quote);
+        const closedQuote = t.closedQuote ? g(t.closedQuote) : null;
+        const corrections = t.corrections.flatMap((c) => {
+          const was = g(c.was);
+          return was === null ? [] : [{ ...c, was, now: c.now === null ? null : g(c.now), quote: c.quote ? g(c.quote) : null }];
+        });
+        return [{ ...t, text, quote: quote ?? "", closedQuote, corrections }];
+      });
+      const built = transitionsOf(guarded);
+      k.transitions = built.items;
+      if (built.omitted) k.transitionsOmitted = built.omitted;
+    }
+  }
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
   if (on("limits") && limits) k.limits = { avoid: limits.avoid, availability: limits.availability, ...(limits.rules?.length ? { rules: limits.rules } : {}), verifiedAt: latest(limits.at) };
 

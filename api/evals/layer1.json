@@ -64,6 +64,7 @@
     "evals/silence/rules.ts",
     "evals/corrections/rules.ts",
     "evals/member/knowledge.ts",
+    "evals/member/transitions.ts",
     "evals/member/doneGoalCorrections.ts",
     "evals/presence/rules.ts",
     "evals/outsideEvents/rules.ts",
