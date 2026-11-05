@@ -1,4 +1,4 @@
-import { parseVerdict } from "../harness/scope.js";
+import { parseVerdict, workVerdict } from "../harness/scope.js";
 import { notToTeammate } from "../services/teamLines.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
@@ -773,7 +773,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // The purpose boundary (harness/scope.ts), asked first so a refused task costs no lookups; startTask asks it again, the one
         // check every task goes through (promises, goal pieces, calls and look-outs never come through this tool).
         // The verdict is the model's: this call's own scope, else the turn read's. Code only backs it with the narrow backstop.
-        const verdict = scopeIn ? parseVerdict({ scope: scopeIn, connection }) : ctx.turnScope ?? null;
+        const verdict = scopeIn ? parseVerdict({ scope: scopeIn, connection }) : workVerdict(ctx.turnScope);
         const outside = T.scopeRefusal({ goal, steps, firstPlan: firstStep, scope: verdict });
         if (outside) {
           notDone(`No task was started: ${outside.outOfScope?.scope === "mixed" ? "it bundled something Cue doesn't do with the connection part" : "that isn't something Cue does"}.`);
@@ -869,7 +869,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async ({ understood, lookFor, theirWords }) => {
         const { giveFirstRead } = await import("../services/theDoor.js");
-        const r = await giveFirstRead({ understood, lookFor, theirWords }, { userId: ctx.userId, message: ctx.resolvedContent, dryRun: ctx.dryRun, paused: proactivePaused() });
+        const r = await giveFirstRead({ understood, lookFor, theirWords }, { userId: ctx.userId, message: ctx.resolvedContent, dryRun: ctx.dryRun, paused: proactivePaused(), scope: workVerdict(ctx.turnScope) });
         if (!r.ok) {
           notDone(`No first read was recorded: ${r.error}`);
           return { ok: false, error: r.error };
