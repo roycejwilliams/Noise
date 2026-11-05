@@ -1,0 +1,102 @@
+{
+  "hash": "e1c4e719ca10e8de",
+  "case": "checkin-late-night",
+  "recorded_at": "2026-11-05T04:39:18.030Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"All good here. It's pretty late, you up okay?\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 151,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 60,
+        "output_tokens_details": {
+          "thinking_tokens": 57
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgjAVRhPQdxwGcc3WmXob",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS7AUKEAgTGAI4AUIIdGhpbmtpbmcSDCGsXzG8q0iQz4dSHBoMjkpqerX66RQvrVNPIjBw53+sNbjtqpoJWxk0qbhNORBEcn7K2C9ZmCgQIE2MIHe5olv3r8u3oOBFTw4g8+YqiQWBmisS5HeJ2D7pDuBlYP5zDFgBHAQqVOK3qK5mH5VJPTrRPnH92lqDtE3fp+3coiT5uerT1TkbQSgBTX5YtklmwSLGv2q0UnOEF3tJWbSJzE91TJDm65Pr8xq+G4uVEfpWlSbLnxLn2RKZ3cu2r4v3GqV0ou8gZi8bXjmi02Z8pf/txw8oPMlaLiTokBztod/NC466t38JnEBbVyg0eJf/xvh9PZJfrolwK0ovZTY2/guyYqh5Vf1xMR7ZOq0Mm366XPNxB6JbrIOrD4U/L1TIvTmc8RQYZ/ed9mIqbkRRVHK9BguP76Z3jW17eTchjuxcqf83ITMAH6oaeu+BXJBrxa/tkJFumqwEjIq+gZRyj9bFoM8zgLhvrF7Ln7BXr7gmyNold+zdW+Kf0K9MuAvMFHkWnw7pVuMWORZEi2viwBSEbZQFt3Q4pR8baS1tg0RIGghZA1QMQVLfM3oSnsThdxNehOidH3+KZG5Tchfvz2dzQZM1VtXtEYDfpLMGLckvP6sXJuWMCoq2Ya5JWnp+C4v/0GCQlr6J2T/Pi0ZpCWT2fk05bF8fqERSb1o2jv8tZy7cWjfKWZhGms7d7sELjbMcanvWPPfvdOdDdpVyBBEbxpjxIYDuHz3Zx7Y8PvsADXEY80DgODS4+JToxOM8im6MMjMFtlD40TERrOay7mlM9xqZBGTQ9mn4a9Ofo1dnQ8yyon2itejWyXdC8t48gqywZ9yd2U+kKDKRUl3JgVcDLbrrnz9wMGeTmbNaVors7Is8eMlnp+NeWjZ7dlUslWSafmKa3ZuJ5UVWnqvqbQQ6A5kukBG6AcIVxCqZXaOC5Q3DbUeia+1+Aygvm+kNrgkaG/lWaxKfGAE="
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 151,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 60,
+          "output_tokens_details": {
+            "thinking_tokens": 57
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "e1c4e719ca10e8de",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

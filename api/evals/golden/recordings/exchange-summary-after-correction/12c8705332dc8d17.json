@@ -1,7 +1,7 @@
 {
   "hash": "12c8705332dc8d17",
   "case": "exchange-summary-after-correction",
-  "recorded_at": "2026-11-05T04:07:36.633Z",
+  "recorded_at": "2026-11-05T04:44:51.401Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\":\"They're correcting Cue, asking for the Theo problem statement instead of the one Cue just gave\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"problem statement about Theo situation\", \"pushback\": \"wanted the problem statement to be about Theo, not the other one\", \"lesson\": \"When they ask for 'my problem statement', check which issue they mean rather than defaulting to the most recent topic.\", \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"scope\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"goals_challenges\"], \"missing\": [\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"], \"move\": \"answer\", \"refers_to\": {\"phrase\": \"the problem about Theo\", \"item\": null, \"not_item\": null, \"between\": []}, \"answered\": [], \"closes\": [], \"reopens\": [], \"asks_again\": null}",
+      "text": "{\"reason\":\"They're correcting Cue's previous answer and asking for the Theo problem statement instead\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"problem statement about Theo\",\"pushback\":\"wanted the Theo problem statement, not the matching one\",\"lesson\":\"when they ask for 'their problem statement', use the topic they were just discussing, not an unrelated one\",\"dots\":[],\"emotion\":null,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"goals_challenges\"],\"missing\":[\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
       "usage": {
         "input_tokens": 5786,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 410,
+        "output_tokens": 382,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgj852hsTehXe6qpW36Hz",
+        "id": "msg_011CgjAuoZSaF8oFNHx6vYob",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\":\"They're correcting Cue, asking for the Theo problem statement instead of the one Cue just gave\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"problem statement about Theo situation\", \"pushback\": \"wanted the problem statement to be about Theo, not the other one\", \"lesson\": \"When they ask for 'my problem statement', check which issue they mean rather than defaulting to the most recent topic.\", \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"scope\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"goals_challenges\"], \"missing\": [\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"], \"move\": \"answer\", \"refers_to\": {\"phrase\": \"the problem about Theo\", \"item\": null, \"not_item\": null, \"between\": []}, \"answered\": [], \"closes\": [], \"reopens\": [], \"asks_again\": null}"
+            "text": "{\"reason\":\"They're correcting Cue's previous answer and asking for the Theo problem statement instead\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"problem statement about Theo\",\"pushback\":\"wanted the Theo problem statement, not the matching one\",\"lesson\":\"when they ask for 'their problem statement', use the topic they were just discussing, not an unrelated one\",\"dots\":[],\"emotion\":null,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"goals_challenges\"],\"missing\":[\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 410,
+          "output_tokens": 382,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

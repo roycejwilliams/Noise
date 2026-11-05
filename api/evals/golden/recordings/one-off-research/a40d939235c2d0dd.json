@@ -1,7 +1,7 @@
 {
   "hash": "a40d939235c2d0dd",
   "case": "one-off-research",
-  "recorded_at": "2026-10-17T17:34:51.073Z",
+  "recorded_at": "2026-11-05T04:38:13.634Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-haiku-5-5",
-      "text": "{\"asks\": [{\"ask\": \"A1\", \"intent\": \"question\", \"why\": \"\\\"Can you do some research on Sarah Hao before our call?\\\" asks for one piece of research to be done before a specific event, with no request to keep watching.\"}]}",
+      "text": "{\"asks\": [{\"ask\": \"A1\", \"intent\": \"question\", \"why\": \"\\\"Can you do some research on Sarah Hao before our call?\\\" is a one-time request with a single deliverable due before the call, so one reply finishes it.\"}]}",
       "usage": {
         "input_tokens": 310,
         "cache_creation_input_tokens": 0,
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 134,
+        "output_tokens": 133,
         "output_tokens_details": {
-          "thinking_tokens": 55
+          "thinking_tokens": 53
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,18 +54,18 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011Cg8DG9hpbLAdgxhUfHgMX",
+        "id": "msg_011CgjAQeRxjs88yEAeHi1vj",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "CAQS0QUKEAgSGAI4AUIIdGhpbmtpbmcSDAohYCdY6XdA2C9tFBoM69aPKaa7N4lw6x7pIjBJwN4vtMeyzfEUjkJOurKush4syaJLpem9yjeY9havgt4p38oHHJNvOt2pkm9Q/0sq7gSUhB5RSWH31YumI5H0ofg4G8qQKHqCZnkBJaZ9YeqiTvQ/is1n3lRt0+Jz2S0D0asqJW53kcbB/pnUURuFU21iTuSvPeArkNpLB9WNcwzJ8c0bIAtIviTKsfD7gOu5utWhuSCrrrXhOpjiIYp8qMiMifcJ8uik3DGZukJ2kG6EQjMRFvmx6TSAxAJ86WQxoCyWA2HKr6sKS+PE/vsiqAQhwsh0CuoPVNnBkdvs0j+fIEoyGdNlgjGSMYBHgNjSRzDNx5MNN+uyVQcynTZlmJUkCBltlx11gvaxtHegNnZkVeiYKgNsK5gxo+doHkzmHrzAlJVTEz5Wr9ZEAt4M9d6zarAhRn8DLpTns7Fq5t5b1yJF2NzJwc2/N/OEktAUBEAMjn2IOy74o0SoFiWZd3wAIDumj86xOetVArRx3zO3TphQVw9mHgZZAzy0Gcktjl6bYDE0mBf+MUKP/FIz4mOAVOZJPC2LziuvgQbU9VTTQ8T6xq6zB2VpjpkP3nLCHWGPs+oUtmvC9KJ8/ptT3kgDjrsbOj/jJUZv6KIojEmo8k48cDkjMXzMCpLQLjxfaPItZ2cdFHa8E3H1hlK7rLpuhx8xs+Qp6kfsZbJ32uaxVtdStkSKgVmitke1ePpJGje2NSUh+v+bjgd+7cCfSVNGNfH++OifVe9xzUb7LJXHS5VKAQ+YfaKc7ain/jk+ZzW4CaK/BBDNYAi7VMmrOIIG1bNyBtSDT1JSocs7UEPIyuIQhwo/mE4F/iA0aKebA+E1N7slc1eEjI1As+vzL8Gn4nbhcifYi34rLeTCcBZaGyBUqzu767Wj72V9qqKDGAE="
+            "signature": "CAQS9wUKEAgTGAI4AUIIdGhpbmtpbmcSDOX3a2DXvUG6TPkwBhoMSt3ajiiswxwuwxbKIjCwNo56zmJEGw5XfytGvA7/6pJcjNThue/GzFyWLk+FfLIqpzEs0jVsNkkRd2JtrMMqlAUfeEFA1mCd2zWVgFzfahsyAWIf/w0ApsANDr1k+TzGS+Hh3Bj/nKc14o4MBSJoGQDa+X2lQLFk9DNZv/PZODZgoXbbRMy9jyDF9pIrG4mbt6dhY8KtVgF7MUe+BqvdU0HDxh6AJVZUmvqOOevO0EaHKEHpS2gyJyuSPSY8W4PmOK+6LcQ251Q9lQMSAo8yl46bKP9ktUx5Ytb9gZ8owj87AepeiwHwflIANq5rdJc/gB3k9lcMCRykIkmtAkWhar/N1lAvll7O/TWcgg0LO6oJbHUeJFxJ3Fmlv8L9mgo58xo/pDalRwd9cSc1ptuxW2BvA/Lyl3I7oLsr9FcpE2JdBGwrryzJPvCrTnixv/oWz65BEs/a2K8d/d6/5g9uw7wkoPPgGowGzdyZl4tHWOm2mO7HOHj7oIvHc1YZUUkZyiXVyi6pAMfxNL+yXm9VVlnN2NyZJCYOao3eRBS4Hkro96sXzRv+hRlNAs34Lc1BUcFO3kHg2YBc35xJnCvow8H6YsqcybOZqs+GaP6u9fCJc0NLj7tduVp/6VbGlyyRIL8qI5sbIGh0EXQUDk63BfC4GYWd0jgmMH0cWbsjtjGZhFAkgTfgz1wQlFqlp08vTOoEZeTmTGeJwJ0HEKL3QG/8Dspa2wWyi3tzBGqkPkJGDswk/hQx1gjHhEaotsk+p0a1hRfQ0n8ipSQAbO2uvTWxblb5ew3vfIbjhVQV84ClHq/nNdDPMFY0DmtPfgJL2BGKr0EUbJUH5qF/3F5aceE4rBipdWgk4RFX7m99TEF/mwNEYTR3ncjNmHyFDTdszCDdMe/RO70MvFvNevpyqDo9qwzg8KdANO33WXxLa1ahuLxuNZ2OZFr4rWfD8brk/raJATAYAQ=="
           },
           {
             "type": "text",
-            "text": "{\"asks\": [{\"ask\": \"A1\", \"intent\": \"question\", \"why\": \"\\\"Can you do some research on Sarah Hao before our call?\\\" asks for one piece of research to be done before a specific event, with no request to keep watching.\"}]}"
+            "text": "{\"asks\": [{\"ask\": \"A1\", \"intent\": \"question\", \"why\": \"\\\"Can you do some research on Sarah Hao before our call?\\\" is a one-time request with a single deliverable due before the call, so one reply finishes it.\"}]}"
           }
         ],
         "container": null,
@@ -80,9 +80,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 134,
+          "output_tokens": 133,
           "output_tokens_details": {
-            "thinking_tokens": 55
+            "thinking_tokens": 53
           },
           "service_tier": "standard",
           "inference_geo": "global",

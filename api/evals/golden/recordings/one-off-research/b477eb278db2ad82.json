@@ -1,0 +1,102 @@
+{
+  "hash": "b477eb278db2ad82",
+  "case": "one-off-research",
+  "recorded_at": "2026-11-05T04:38:14.585Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2128,
+    "system": "",
+    "messages": 1,
+    "last": "user: Someone asked Cue for this: \"Can you do some research on Sarah Hao before our call?\" Answer \"find\" if Cue could meet it by finding something out in the world: an event, a group or community (including researching which ones exist), people to meet or befriend (even when it's worded as wanting to conn...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2128,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Someone asked Cue for this: \"Can you do some research on Sarah Hao before our call?\"\n\nAnswer \"find\" if Cue could meet it by finding something out in the world: an event, a group or community (including researching which ones exist), people to meet or befriend (even when it's worded as wanting to connect with a kind of person), a program or an opportunity.\n\nAnswer \"help\" only if it's asking Cue to work something out with them: advice, deciding, planning, writing, organizing, figuring out what to offer. Finding sponsors or investors by name is \"help\": Cue's search can't find those.\n\nAnswer \"help\" as well when it isn't something to find at all: something Cue said it would do or deliver (a plan, a draft, a text, an intro), a status (\"will be delivered once ready\"), or a statement of what they're doing themselves (offering to partner with a company, launching, hosting, a deal in progress) with nothing in it to go and find.\n\nAnswer \"help\" too when it asks Cue to take an action for them (email, call, text, book, reserve, contact someone or somewhere): that's something to do, not something to find.\n\nAnswer \"person\" if it's asking for one particular kind of person to meet or talk to one on one (an advisor, a founder who has done something, a mentor, someone to introduce them to). People in general (a community, friends, a crowd to be around) are \"find\".\n\nAnswer \"outside\" when it asks Cue for errands, shopping or lookups that are not about meeting anyone: a consumer service (a dentist, a therapist, a gym, a lawyer, an apartment), comparing products or phone plans, travel, general research, drafting their documents, watching job boards or listings, funding or investor searches, tracking application deadlines. Being about a person, or helping a goal, does not make something connection work; finding people, events, rooms or communities they would attend (including through people they know for a career change) is never \"outside\".\n\nIf it bundles a connection ask with something outside, answer with the kind of the connection part, then \" | mixed: \" and only the connection part in a short phrase.\n\nAnswer with one word: find, help, person or outside (or the mixed form).",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "outside",
+      "usage": {
+        "input_tokens": 682,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 73,
+        "output_tokens_details": {
+          "thinking_tokens": 69
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgjAQkYZnZ7cLnDKjs5cp",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSuwYKEAgTGAI4AUIIdGhpbmtpbmcSDCC+qbXOwyak+tvxhBoMgJeeU5AZHcUEProDIjBxFUf9n9cAr+h0em8P71Gw368i292tcLvluhUS1QUVMuWGHrKT8kBSNEjczr8Liroq2AV7YSUqrNdOuSTH8aoBFxlopVuHZdoUNrnlNw5Z95/O6IzIVBCg1GLiZPiJxRN2q6qwJPrzZRJnPOkW75Cw4mqzG/SUx26RPrjm5fax0/gTW2OGZyM5twtVaYPEGCCSBU8tdPhFsxUsES1sJFMJZ72qgfA8daoOBV9nim3wIRWbpyUwfW/ega2CcAyKWdqy6MLHiW0VXpCvxE8wyGlH6I/PcHbiB/sz83RSfayRnZBbAPchF88P7Jcvo6o714OSF2qTn5w5H34qeaITOCp5CCaZd4xDm9PJp1rBYXlWBy0oPH7yLD+sEQIFBHClqUiI+iozwtH8U1IT+NzNOIYDwCL3wcU814YU06tw5F2GzVcS9Pt3wc25EkWOupRrWB59mteLtuq0FN3F8Lg6Fs95sATRHFncauv5dZAFiDK6rSPmvs5ZD/vXKcgxA7LPw9hQe0yKxieaqdhjg9arYguSy+7R7fqmhdUK6m6eObpTPrHdyxrpqTTJJ1l5kEl1u7eVKaVNXX8p02Q9oqgF0yN8eixPI3vn2dKmv00uqDYAKb+1WUNVya0v0mjgZU/7CjgbBvcr9k82vii5ZhFGBsg5TGHUoA8OQ6iBkYFuNXzrukiWUzLJAxkzC8/vFvLO/MBuEL1WpCscks+Fzm901w5d43qi59LlF18M7HKx+r1TuUQMkzJv82VtO906yA9X64XcnEM6cP8ja0m+Emcwki89ORD8K3lfpNTrgS0wRMgGq697mHpmMmcfy0/h6eAXvKWGmpBvkdfD/TQ7UGuOJ7PdSMVhl6DRiR0WR8ZrNqU9+oVA0yTQr/pd46sj1PJqh5AclRIIXUAU3IWAteZTbJMwXtH2TCuk92JOQr0Jc+1cDLSN8saZtNXaJ41ngaz6x1cUrc+HfCWR5bSfb3poRIzCaEugbnBDBKrSz8LQJ42N2k7+6Mi7h/wA97NiZEvBNPb6za8Lx9QvSlBTEBgB"
+          },
+          {
+            "type": "text",
+            "text": "outside"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 682,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 73,
+          "output_tokens_details": {
+            "thinking_tokens": 69
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "b477eb278db2ad82",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

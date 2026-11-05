@@ -1,0 +1,95 @@
+{
+  "hash": "6ebf3d51a4833891",
+  "case": "plan-backstop-rebuilt",
+  "recorded_at": "2026-11-05T04:40:25.135Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6048,
+    "system": "",
+    "messages": 1,
+    "last": "user: A member of a private club in San Francisco has these goals on file, oldest first (today is 2026-10-13): 1. meet other climate founders who actually see each other 2. find a Saturday hiking crew in the Bay Area 3. raise a pre-seed round for a climate software startup Who they are (Cue's record): Run...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6048,
+      "messages": [
+        {
+          "content": "A member of a private club in San Francisco has these goals on file, oldest first (today is 2026-10-13):\n1. meet other climate founders who actually see each other\n2. find a Saturday hiking crew in the Bay Area\n3. raise a pre-seed round for a climate software startup\n\nWho they are (Cue's record): Runs product at a small climate startup; new to SF.\n\nThe kind of room they've told Cue they want, in their words: \"small rooms, people who see each other again\". Write edges for that kind of room; never one for the kind they said they don't want.\n\n\nCue searches the world each day for things worth texting them about, all in service of meeting the right people: events and gatherings, communities, people worth meeting, and now and then a fellowship, accelerator or cohort as a community to join (surfaced once, never tracked by application cycle or deadline). Cue never searches for funding or investors, grants to apply for, job postings or job boards, errands, shopping or travel. For each goal:\n- kind: \"findable\" if the goal itself is something like that to look for; \"work\" if it's their own work plan (partnering, pitching, building, launching, raising); \"co_task\" if it's something Cue itself is doing for them (drafting, sending, planning, keeping something going).\n- edges: up to 2 short searches for the FINDABLE side of the goal (a goal about taxes, errands, shopping, travel, funding or investors, or job postings has none; a job change gets people and rooms: recruiting events, job fairs and communities in the field), things that would actually help it along, named the way a good researcher would search for the thing itself, in a few words (\"SF AI founder events November\", \"consumer AI pre-seed open calls\", \"founder wellness community SF\"). Never a name (theirs, their company, partners or people), never a description of them, never the goal reworded, never a strategy, a how-to or advice. A work plan or Cue task gets only its findable side; if it has none, give no edges.\n- until: the last day it can still matter (YYYY-MM-DD) when the goal is tied to a date or window (\"the November launch\" -> its last day in November); null when it has none.\n- superseded_by: the number of a LATER goal in this list that replaces it (a changed plan, a cancelled date), else null.\n- place_bound: true when what would help it happens near where they live (events, local groups and places in their city); false when it can be done from anywhere (online communities, programs and cohorts, learning, anything remote).\n- why: one short reason, especially when there are no edges.\n\nAnswer only with JSON: [{\"n\": 1, \"kind\": \"...\", \"edges\": [\"...\"], \"until\": null, \"superseded_by\": null, \"place_bound\": false, \"why\": \"...\"}, ...]",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5",
+      "thinking": {
+        "type": "disabled"
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "[{\"n\": 1, \"kind\": \"findable\", \"edges\": [\"SF climate founder meetups\", \"small climate tech dinners San Francisco\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is to meet climate founders in small recurring rooms; local climate founder gatherings fit the 'people who see each other again' preference.\"}, {\"n\": 2, \"kind\": \"findable\", \"edges\": [\"Bay Area Saturday hiking group\", \"SF weekend hiking meetup\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is to find a recurring Saturday hiking crew locally, which is a findable community.\"}, {\"n\": 3, \"kind\": \"work\", \"edges\": [], \"until\": null, \"superseded_by\": null, \"place_bound\": false, \"why\": \"Raising a pre-seed round is their own fundraising work; funding and investor searches are out of scope for Cue.\"}]",
+      "usage": {
+        "input_tokens": 874,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 312,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgjAaKVTRTMUJ6xMn2mGb",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "[{\"n\": 1, \"kind\": \"findable\", \"edges\": [\"SF climate founder meetups\", \"small climate tech dinners San Francisco\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is to meet climate founders in small recurring rooms; local climate founder gatherings fit the 'people who see each other again' preference.\"}, {\"n\": 2, \"kind\": \"findable\", \"edges\": [\"Bay Area Saturday hiking group\", \"SF weekend hiking meetup\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is to find a recurring Saturday hiking crew locally, which is a findable community.\"}, {\"n\": 3, \"kind\": \"work\", \"edges\": [], \"until\": null, \"superseded_by\": null, \"place_bound\": false, \"why\": \"Raising a pre-seed round is their own fundraising work; funding and investor searches are out of scope for Cue.\"}]"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 874,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 312,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "6ebf3d51a4833891",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

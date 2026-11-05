@@ -1,0 +1,102 @@
+{
+  "hash": "f76c6ec7bbfb53fa",
+  "case": "continuous-follow-up",
+  "recorded_at": "2026-11-05T04:44:16.473Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other c...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other companies efficient and I want it to matter for people like him.\"\n\nCue's text:\n\"\"\"This is the real reason, not just a career pivot. Watching that up close, year after year, probably sharpened something an MBA case study never could.\n\nTen years making other companies efficient is actually a serious asset here. You know where the waste hides, you know how to build margin back into a broken chain. That's not nothing against a problem like this.\n\nWhere in the chain are you thinking about starting, the farmer side or somewhere downstream?\"\"\"\n\nDoes the text build on his answer with something of Cue's own (a real observation, a position, or a question that follows from what he just said and moves it forward), WITHOUT paraphrasing his answer back to him, and without filling in what he didn't say (his childhood, what his grandfather felt, which part of the chain)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"'Watching that up close, year after year, probably sharpened something' paraphrases his answer and invents an internal effect he never stated.\"}",
+      "usage": {
+        "input_tokens": 412,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 199,
+        "output_tokens_details": {
+          "thinking_tokens": 141
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgjAsJi4bPh6LYFMbuU8A",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvAGCsQCCBMYAipAvFNHnCrR03YUePnVUucByfR8/XYt54rBt7UqLeXSVVaXcVaxf0CNEKq3xVzAjkdUlVzuQfY4NJPDJ/OTvbEeQDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBn5Ow1wbCAToIBBAAGgwC2ooDTzcFx3wEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCY6UTx0MpdEA0uIfbQhokQ7swGlmO+Dl8zYmzU5vrH+yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxUBKCtwn9e9zCsDyoaDJZwbCzXF+qFNRRqnyIwTE6ObOPXfOR+SWu8qDjsINeae+QdvJTY82xYS70bvS7my50IYdAUxa9Y9Rm5tN8tKtgD+BnyHMpnNgtjWDyF4jmyiARAixzYf5hIMtGI6q/I7UvYj2jCv9zB7IlELbEHzwb0UDDFUERfYvPV9XywmtqjIeAjv8KjaEZ3Npan/DqpSXcD4RjJp2b2s8z8JrUDX4ipSF03ia7aQUYlS8jwIJ88yK9qvHCBUa457GbuWfNzVKXHvcIGy4QSD7KL9REXrbTWkmA3ZBF9X1UvnJmL3fUK7Kvp29N+bzazF9OfAzu3di45x7EHSS5dgKv90Y+d64SMN4GQd3pxNVYcTGZ47xA/jqIjsfWbuQXxMSVfVZ+W8DOLQgmpiIwUCiRdDNAzaTjhow7Eg+HKudc9M4eXOJv64X/hn/sUA8v34xBM9mMOnvtjz43BsEhJ+0gQy78f2CvoJk0+a6Q/uugVgfxXVWhZV0cNaFg12K3tQPqJHd4DRLxuht6LOiLV/1OH+uukvjkGqruAMWVaQaUm6+Bswi7dE8T72ism2kJQc9hOsnIyvLtO4kte5vHhkyRjJ8FGtVYmQYxLj+cpGtQyuxqgPDwyDnBGh6msqhM0vbiqQ2gMU49FGuNeBu27ACLDknF/qlk0gF0iwXWTRIgven+We/uxJ3f+ru4Xvn86zOg7nGWeO0XnUGpXqWeZYRgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"'Watching that up close, year after year, probably sharpened something' paraphrases his answer and invents an internal effect he never stated.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 412,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 199,
+          "output_tokens_details": {
+            "thinking_tokens": 141
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "f76c6ec7bbfb53fa",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

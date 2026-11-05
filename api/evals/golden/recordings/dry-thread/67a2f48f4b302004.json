@@ -1,0 +1,102 @@
+{
+  "hash": "67a2f48f4b302004",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-05T04:43:59.679Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Fair. You handed me a birthday with no phone, water, and the first hopeful morning in months, and then telling your team you need a real break after running on empty for weeks, and I gave you two flat lines back.\n\nThat's a lot in one day. Walking off the noise on purpose, then finally saying out loud what you needed, those aren't small things, especially after the stretch you've been in.\n\nTwo weeks starting Monday sounds like exactly the right amount of room. Go be unreachable.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 285,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 62,
+        "output_tokens_details": {
+          "thinking_tokens": 59
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgjArAiaBiHKeLiFuusmM",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS/wUKEAgTGAI4AUIIdGhpbmtpbmcSDC4yeps8r2ctHCGNdxoMirM8Qndx54oV5KjUIjAIfj0GvuBV92p1TZf+oKuhDxJKyb933UDwPA+PvXoEMoF276MJnMumrolwrzNuxrAqnAUF2u1Ta/MLLb2a/+lXtDvxuL2zPImboGvd06IEj+zjdYCKxlxXFx9fKAELy5Ss2xSy4WiHJGg4BbU3II8VKn0tzTuniUWCthv0/elKGSOK4tZcpBPZIzhtA14AfXsKfLw31sTfX6pIcWCVwCXrXJOo3l9lO51xeADrPQqLoUYEgu0YBVwm2yYZCXKG8hNiGdcdvXOXoF3mSzmYHqWKYF7yxW5H1v4hbhxpfSSXGu77mWRxxZvG6UdxoNLEvJDJ2GnRlXq68zz8A3IuleVCTkSYAvSSi7xgxgbjr1yUcmMaATdPO6zZnBSSYZ9VXCB/RHPstI5HplbTLk7P9YFZhI6e3it3JEiA3GRfqIhYxWwhPPRdv1sbAopb8byaG4LBwopwY4ID9W25v7GVfbVLXqVjZBCxKyX3SOlQIf1QrJVoH8xLpTyaTImglT9B7+6yrLRtMd4zzLug6UltR0nU95BmH4BB3pWO7JYAgJ8BAnrUGgzJnhTv7+BBVi5y993/2qs1kqaIm14LxlBqUvYRPvI0L09zMIjiadTLdMBFM3vJMPk+VuBOneGJSjWZ8tN4PBIrCbCDGcUdzd/+f34fyHJbiRX41mWfVIZmbo++PWfn7uChZJ7dYR/XQS+OxE9MfGrd9+0cseU22edHPcUEDZTW/bg4awm3fsaeTmjFHYmGmOS5cz0hLI9aAXS1VThnrZHBcqOCPHwqmizHAtdQ1prnwVmZDMG6vUoLXpDjD4GARTKtIWw60RsDkpwDq7tcuzsIM5tJZAWiKzpHOk5wbEGc8Q04E8JX+DVKqgkGr1+EVS19MLk7y2O+pv6MF/MG9+asuwBoDEJm0p/lCr/TA5z1JbxZQId1jL8m57dtxHiIZm0tM1kvmd2xYe8ESRgB"
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 285,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 62,
+          "output_tokens_details": {
+            "thinking_tokens": 59
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "67a2f48f4b302004",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
