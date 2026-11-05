@@ -63,7 +63,9 @@ export function deriveMilestones(s: Source): Omit<Milestone, "markedAt">[] {
 // Pure: the one to mark now, if any. Newest that's still fresh, nothing if one
 // was marked lately.
 export function pickToMark(all: Milestone[], now: Date): Milestone | null {
-  all = all.filter((m) => m.confirmed !== false);
+  // A row already stored is judged now, at pick time, not only when it was derived: a thread_done for something outside the purpose
+  // boundary (an errand, a purchase) is never marked, and "N days with Cue" rows from before they were removed are never picked.
+  all = all.filter((m) => m.confirmed !== false && (m.kind as string) !== "with_co" && !(m.kind === "thread_done" && classifyScope(`${m.text}\n${m.then ?? ""}\n${m.now ?? ""}`).scope === "out"));
   const lastMarked = all.filter((m) => m.markedAt).map((m) => new Date(m.markedAt!).getTime()).sort((a, b) => b - a)[0];
   if (lastMarked && now.getTime() - lastMarked < MARK_EVERY_DAYS * dayMs) return null;
   const fresh = all
