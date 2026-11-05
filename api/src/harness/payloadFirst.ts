@@ -148,7 +148,7 @@ export async function readOffer(draft: string, recent: string, tasks: Pick<CoTas
 
 // The work, given to a task due now: the one Co already has for it, or a new
 // one. The task cron (every 15 minutes) does it and texts the verified result.
-export async function handOffWork(userId: string, d: Extract<PayloadDecision, { handOff: true }>): Promise<{ ok: true; taskId: number; started: boolean } | { ok: false; why: string }> {
+export async function handOffWork(userId: string, d: Extract<PayloadDecision, { handOff: true }>, scope: import("./scope.js").ScopeVerdict | null = null): Promise<{ ok: true; taskId: number; started: boolean } | { ok: false; why: string }> {
   let taskId = d.taskId;
   let started = false;
   // Only hand it off if the result could go out: a task that texted in the last
@@ -165,6 +165,7 @@ export async function handOffWork(userId: string, d: Extract<PayloadDecision, { 
       steps: [],
       firstPlan: `Do it now and send them the result, instead of asking whether they still want it: ${d.work}`,
       inHours: 1,
+      scope,
     });
     if (!s.ok) {
       // Already on it under the same goal: wake that one.
@@ -205,7 +206,7 @@ export function theirAskOf(payload: unknown): string | null {
 // deliver it now (at its task limit, or a task text would be blocked), so the
 // question doesn't go out: the candidate is dropped and its source asks again on
 // its own schedule (a 24h hold was re-queued every hour; review of #59).
-export async function payloadFirst(o: { userId: string; kind: string; draft: string; recent: string; theirAsk?: string | null; dryRun?: boolean }): Promise<PayloadFirstResult> {
+export async function payloadFirst(o: { userId: string; kind: string; draft: string; recent: string; theirAsk?: string | null; dryRun?: boolean; scope?: import("./scope.js").ScopeVerdict | null }): Promise<PayloadFirstResult> {
   if (PAYLOAD_FIRST_EXEMPT.has(o.kind)) return null;
   if (!/\?/.test(o.draft)) return null;
   const tasks = await openTasks(o.userId).catch(() => [] as CoTask[]);
@@ -213,7 +214,7 @@ export async function payloadFirst(o: { userId: string; kind: string; draft: str
   const d = decidePayloadFirst(await readOffer(o.draft, o.recent, tasks, o.theirAsk ?? null), o.draft, theirs, tasks);
   if (!d.handOff) return { kept: d.why };
   if (o.dryRun) return { wouldHandOff: d.why };
-  const h = await handOffWork(o.userId, d);
+  const h = await handOffWork(o.userId, d, o.scope ?? null);
   if (!h.ok) return { hold: `could do it, but: ${h.why}` };
   return { handedTo: h.taskId, started: h.started, why: d.why };
 }

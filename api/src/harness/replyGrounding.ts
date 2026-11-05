@@ -1,3 +1,4 @@
+import { workVerdict } from "./scope.js";
 // Layer 3 harness: grounding for the conversational reply (Royce,
 // 2026-09-14). Co kept inventing things about its own actions and the world
 // ("This is text, I can't actually call", "I'll get you the link as soon as
@@ -2200,7 +2201,7 @@ async function bindThisReply(draft: string, rf: ReplyFacts, src: GroundingSource
   const names = (rf.privateNames ?? []).filter(Boolean);
   const namesMember = (s: string) => names.some((n) => new RegExp(`\\b${n.split(/[^\w]+/).filter(Boolean).join("[-\\s]?")}\\b`, "i").test(s));
   try {
-    const deps = await B.realBindDeps(userId, src.message);
+    const deps = await B.realBindDeps(userId, src.message, workVerdict(rf.turnScope));
     // A call promise with no scheduled call goes to the claim read (it sees scheduled-call facts); cut below if that read didn't run.
     deps.deferCallsToClaimRead = true;
     const open = deps.openPromise;
@@ -2452,7 +2453,7 @@ export async function groundReply(
   if (opts.userId && opts.record !== false && unbackedFollowup(draft, rf)) {
     // This turn's own receipts go with it, so work this turn already started is never opened again as a promise task.
     const startedThisTurn = rf.facts.filter((f) => f.kind === "did_this_turn").map((f) => f.text);
-    const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message, privateNames: rf.privateNames, discreet: isDiscreetTurn(rf.instructions), startedThisTurn }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
+    const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message, privateNames: rf.privateNames, discreet: isDiscreetTurn(rf.instructions), startedThisTurn, scope: workVerdict(rf.turnScope) }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
     if (tracked.ok) {
       addFact(rf, "did_this_turn", promiseFact(tracked.task));
       promiseTaskId = tracked.task.id;
