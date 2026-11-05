@@ -128,7 +128,7 @@ export function requestKey(name: string, input: unknown): string {
 // not listed is treated as one that sends or changes something, so a new tool is never retried by default.
 export const READS_ONLY: ReadonlySet<string> = new Set([
   "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
-  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows",
+  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows", "lookBack",
 ]);
 
 // Pure: the receipt for a voiceRead call (services/voiceReadConsent.ts): which answer the model read, never their words or message, so

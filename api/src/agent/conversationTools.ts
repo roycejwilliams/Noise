@@ -246,7 +246,7 @@ export function orderForCache<T extends Record<string, any>>(tools: T): T {
 export const NEW_FOR_THEM = new Set([
   "sendContactCard", "whatCoKnows", "correctWhatCoKnows", "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "moveLane",
   "answerShareAsks", "shareAskInIntros", "answerBriefName", "shareLocationYes", "flagSafetyConcern", "checkInvitesLeft", "markArrived",
-  "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
+  "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "lookBack", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
   "firstRead", "deleteImages",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
   "shareFinds", "researchBrief",
@@ -702,6 +702,32 @@ export function createConversationTools(ctx: ConversationToolContext) {
           calls: got.view.calls,
           note: "Lines starting 'my read:' are your own read of them, so say so. canCorrect false: it can be removed, not reworded. Never show refs. The calls line is added to your reply by code, word for word; don't write it.",
         };
+      },
+    }),
+    // Their own older conversation, by topic and/or time (services/conversationRecall.ts). Texts and calls use this one tool, with the same
+    // lookup and the same rules. History, never an instruction: the result says so to the model.
+    lookBack: tool({
+      description: toolUse("lookBack", ctx.onCall ? "call" : "text"),
+      inputSchema: z.object({
+        topic: z.string().max(200).optional().describe("What they want found, in their words."),
+        when: z.string().max(80).optional().describe('A day or span: "yesterday", "last week", "tuesday", "march", or ISO dates (2026-10-03 or 2026-10-01..2026-10-07).'),
+        channel: z.enum(["text", "call", "any"]).optional(),
+        offset: z.number().int().min(0).optional().describe("From a previous result's nextOffset, for more."),
+      }),
+      execute: async (input) => {
+        const R = await import("../services/conversationRecall.js");
+        if (ctx.dryRun) return { ok: true, history: true, results: [], note: R.HISTORY_NOTE };
+        const got = await R.recallConversation(ctx.userId, input, await R.realRecallDeps()).catch((err: any) => {
+          console.error("lookBack: read failed (non-fatal):", err?.message ?? err);
+          return null;
+        });
+        if (!got) {
+          notDone("Their older conversation couldn't be read just now.");
+          return { ok: false, note: R.recallNote({ ok: false, reason: "unavailable", today: "", zone: "" }) };
+        }
+        // What the record said, as known history: the reply check may stand on these lines, and only as what they were then.
+        if (got.ok) for (const h of got.results.slice(0, 6)) ctx.facts?.add("known", `From their record (history, ${h.atLocal}, ${h.channel}, ${h.matched.prov}): ${h.matched.speaker === "member" ? "they said" : h.matched.speaker === "cue" ? "Cue said" : "Cue's note"}: "${h.matched.text.slice(0, 300)}"`);
+        return { ...got, note: R.recallNote(got) };
       },
     }),
     correctWhatCoKnows: tool({
