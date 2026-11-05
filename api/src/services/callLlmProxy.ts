@@ -673,7 +673,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let toolCorpus = "";
   for (let step = 0; ; step++) {
     const blocks: ABlock[] = [];
-    const runs: Promise<{ block: ABlock; raw: unknown; timedOut: boolean }>[] = [];
+    const runs: Promise<{ block: ABlock; raw: unknown; timedOut: boolean; noCorpus?: boolean }>[] = [];
     let cur: { kind: "text"; text: string } | { kind: "co"; id: string; name: string; json: string } | { kind: "el"; args: boolean } | { kind: "skip" } | null = null;
     let elCalled = false;
     for await (const ev of deps.stream(req)) {
@@ -761,7 +761,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (!runs.length) { if (pendingJob.length) dropPendingJob("says work started or promises it, and nothing was started"); break; }
     const settled = await Promise.all(runs);
     const results = settled.map((x) => x.block);
-    for (const r of results) if (r.type === "tool_result") toolCorpus += `\n${r.content}`;
+    for (const x of settled) if (x.block.type === "tool_result" && !x.noCorpus) toolCorpus += `\n${x.block.content}`;
     // What came back done: only now may the turn's words say it went (services/callTools.ts marks a send that reached them delivered).
     claims.inFlight = false;
     let roundTried = 0, roundWent = 0;
@@ -917,7 +917,7 @@ export const TOOL_TOO_SLOW = "Not back yet: it keeps running on its own and land
 
 // One of Co's tools, inside what's left of the turn's budget. Past it, the tool is left to finish on its own (its write still lands
 // and the guard still logs it) and the model is told it isn't back yet.
-async function runTool(co: CallToolset, id: string, name: string, input: unknown, leftMs: number, onTool?: ProxyDeps["onTool"]): Promise<{ block: ABlock; raw: unknown; timedOut: boolean }> {
+async function runTool(co: CallToolset, id: string, name: string, input: unknown, leftMs: number, onTool?: ProxyDeps["onTool"]): Promise<{ block: ABlock; raw: unknown; timedOut: boolean; noCorpus?: boolean }> {
   const started = Date.now();
   const p = Promise.resolve()
     .then(() => co.run(name, input, id))
@@ -930,7 +930,8 @@ async function runTool(co: CallToolset, id: string, name: string, input: unknown
   const timedOut = r === TOOL_TOO_SLOW || (!!r && typeof r === "object" && (r as { stillRunning?: unknown }).stillRunning === true);
   onTool?.({ name, input, result: r === TOOL_TOO_SLOW ? null : r, ms: Date.now() - started, timedOut });
   const content = r === TOOL_TOO_SLOW ? JSON.stringify({ ok: false, stillRunning: true, note: TOOL_TOO_SLOW }) : JSON.stringify(r ?? { ok: true });
-  return { block: { type: "tool_result", tool_use_id: id, content: content.slice(0, 6000) }, raw: r === TOOL_TOO_SLOW ? null : r, timedOut };
+  // lookBack's result is old words from their record: history for the model to read, never a source that backs what Cue says it did or what is true now (conversationRecall.ts).
+  return { block: { type: "tool_result", tool_use_id: id, content: content.slice(0, 6000) }, raw: r === TOOL_TOO_SLOW ? null : r, timedOut, ...(name === "lookBack" ? { noCorpus: true } : {}) };
 }
 
 // The real upstream: Anthropic's streaming Messages API.
