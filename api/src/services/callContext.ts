@@ -592,7 +592,6 @@ export function pairCalls(rows: { created_at: Date | string; memory_type: string
 // not the end of the build, so a long one can't take every later short one with it.
 // thread: the text thread (callThread), after the rest and before what was sent, outside max: it has its own budget (the reply's), and
 // a full summary never drops it, nor it anything else.
-export const SENT_HEADER = "What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n";
 export function assembleCallSummary(o: { haveIt?: string | null; now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number; thread?: string | null }): string {
   const max = o.max ?? CALL_CONTEXT_MAX;
   const sentMax = o.sentMax ?? CALL_SENT_MAX;
@@ -675,6 +674,7 @@ const withinWait = <T,>(p: Promise<T>, what: string): Promise<T> =>
     p.then(resolve, reject).finally(() => clearTimeout(t));
   });
 
+export const SENT_HEADER = "What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n";
 export async function buildCallKnowledge(userId: string): Promise<CallKnowledge> {
   // Both reads start before the first await, so the briefing (started right after this, services/callTrigger.ts) finds the
   // member-knowledge read already registered.
