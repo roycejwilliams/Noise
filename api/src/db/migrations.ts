@@ -14,6 +14,27 @@ import pool from "./db.js";
 // ever crashing the server) — so this function itself only rejects if
 // something outside a statement's own try/catch throws, not for an
 // individual DDL failure.
+// A Luma door scan is an arrival too (services/lumaCheckIn.ts, 2026-11-04): the check on arrived_via takes 'door'. A no-op when the
+// constraint already allows it, so a boot doesn't take an ACCESS EXCLUSIVE lock on event_presence every time. Never throws.
+export async function ensureDoorArrivals(db: { query: (sql: string) => Promise<{ rows: any[] }> } = pool): Promise<"noop" | "changed" | "failed"> {
+  try {
+    const { rows } = await db.query(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'event_presence'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%arrived_via%'`,
+    );
+    if (rows.some((r: any) => String(r.def).includes("'door'"))) return "noop";
+    await db.query(`DO $$ DECLARE c text; BEGIN
+        FOR c IN SELECT conname FROM pg_constraint WHERE conrelid = 'event_presence'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%arrived_via%' LOOP
+          EXECUTE format('ALTER TABLE event_presence DROP CONSTRAINT %I', c);
+        END LOOP;
+        ALTER TABLE event_presence ADD CONSTRAINT event_presence_arrived_via_check CHECK (arrived_via IN ('location', 'text', 'door'));
+      END $$`);
+    return "changed";
+  } catch (err: any) {
+    console.error("event_presence.arrived_via 'door' migration failed:", err?.message ?? err);
+    return "failed";
+  }
+}
+
 export async function runMigrations(): Promise<void> {
   // Harness decision log (2026-09-14) — see src/harness/core.ts. One row
   // per gated AI decision in any layer: what was proposed, which hard
@@ -123,21 +144,14 @@ export async function runMigrations(): Promise<void> {
         sharing_seen_at TIMESTAMPTZ,
         near_since TIMESTAMPTZ,
         arrived_at TIMESTAMPTZ,
-        arrived_via TEXT CHECK (arrived_via IN ('location', 'text')),
+        arrived_via TEXT CHECK (arrived_via IN ('location', 'text', 'door')),
         away_since TIMESTAMPTZ,
         left_at TIMESTAMPTZ,
         PRIMARY KEY (event_api_id, user_id)
       )`,
     )
-    // A Luma door scan is an arrival too (services/lumaCheckIn.ts, 2026-11-04): the check on arrived_via takes 'door'.
-    .then(() =>
-      pool.query(`DO $$ DECLARE c text; BEGIN
-        FOR c IN SELECT conname FROM pg_constraint WHERE conrelid = 'event_presence'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%arrived_via%' LOOP
-          EXECUTE format('ALTER TABLE event_presence DROP CONSTRAINT %I', c);
-        END LOOP;
-        ALTER TABLE event_presence ADD CONSTRAINT event_presence_arrived_via_check CHECK (arrived_via IN ('location', 'text', 'door'));
-      END $$`),
-    )
+    // A Luma door scan is an arrival too (ensureDoorArrivals below): its own statement with its own catch, so a failure here never skips the rest of this chain.
+    .then(() => ensureDoorArrivals())
     // The pre-arrival text and opt-in location, per event (services/preArrival.ts, 2026-09-30).
     .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_someone_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_quote TEXT`))
     // The member brief (services/eventBrief.ts): their yes or no to being named in it, asked once when they RSVP.
