@@ -1,3 +1,4 @@
+import { formOf } from "./findForm.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
@@ -38,11 +39,18 @@ export function followUpDate(match: any): string | null {
 
 // A program, cohort, fellowship, accelerator, grant or open call is surfaced once as a community that fits; nothing asks "how was it"
 // about it (the purpose boundary, Royce 2026-11-04). Only a real event, one with a day to anchor "the morning after", gets the follow-up.
-const PROGRAM = /\b(?:fellowships?|accelerators?|incubators?|cohorts?|residenc(?:y|ies)|grants?|scholarships?|programs?|programmes?|open calls?|applications?|apply|funding|competitions?)\b/i;
+// Decided by what the find IS, never by words in its name (a "Pitch Competition", a "Demo Day", a "Mentorship Program Kickoff Mixer"
+// and a "Funding Mixer" are dated rooms): findForm.formOf (a deadline makes it an opening, an event platform's listing is an event),
+// and for a find that only states dates (a web or X post) a real start time as well as the date.
+const hasStartTime = (m: any): boolean => /T\d{2}:\d{2}/.test(String(m?.details?.startAt ?? m?.statedDates?.start ?? "")) || /\b\d{1,2}(?::\d{2})?\s*[ap]m\b/i.test(String(m?.start_time ?? m?.details?.startTime ?? ""));
 export function isRealEventForFollowUp(match: any): boolean {
   if (!followUpDate(match)) return false;
   if (match?.kind === "intro") return true; // "did it help?" for an introduction Cue made (services/networkIntroNudge.ts)
-  return !PROGRAM.test(`${match?.name ?? ""} ${match?.category ?? ""} ${match?.kind ?? ""}`);
+  const form = formOf(match);
+  if (form === "opening") return false; // it has a deadline to apply by: an opening, not a room to go to
+  // An event platform's listing (Noise's own, or the public feed) is a dated room by what it is.
+  if (match?.kind === "co_event" || match?.kind === "public_event" || match?.tier === 1 || match?.tier === 2) return true;
+  return form === "event" && hasStartTime(match);
 }
 
 export async function scheduleOutcomeFollowUp(userId: string, askText: string, match: TierMatch): Promise<void> {
