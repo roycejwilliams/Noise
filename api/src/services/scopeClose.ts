@@ -22,7 +22,7 @@ export function scopeOfTask(t: Pick<CoTask, "goal" | "steps" | "planNext" | "kin
 
 // Pure: whether the member asked for this (or was promised it), so they're owed one line instead of a quiet close.
 export function memberWaitsOn(t: Pick<CoTask, "kind" | "source" | "lookoutOrigin" | "followup">): boolean {
-  if (t.kind !== "work" || t.followup?.checkin) return false;
+  if (t.kind !== "work" || t.followup?.checkin || t.followup?.ownOffer) return false;
   return t.source === "ask" || t.source === "promise" || (t.source === "lookout" && t.lookoutOrigin === "member");
 }
 
