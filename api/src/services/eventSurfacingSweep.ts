@@ -1163,7 +1163,7 @@ export async function onEventOfferDropped(userId: string, payload: EventOfferPay
 // daily pick as the sweep, so it's still paced.
 export async function surfaceNewAsksNow(userId: string): Promise<void> {
   const { rows } = await pool.query(
-    `SELECT ac.id, ac.ask_id, ac.ask_text, ac.split_read, u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences
+    `SELECT ac.id, ac.ask_id, ac.ask_text, ac.scope_connection, ac.split_read, u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences
      FROM ask_checkins ac
      JOIN users u ON u.id = ac.user_id
      LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
@@ -1178,7 +1178,9 @@ export async function surfaceNewAsksNow(userId: string): Promise<void> {
     const sp = await AS.askSearchPlan(userId, row).catch(() => null);
     if (sp) await AS.notePlan(sp.plan, { ...row, user_id: userId }, { taskId: sp.taskId, day: localDay(new Date(), await memberZone(userId).catch(() => null)), sweep: "new_ask" }).catch(() => {});
     if (sp && sp.plan.search === null) continue; // followed as its task, or Co's own promise with no task (noted above)
-    const askText = (await import("./askKind.js")).searchPartOf(sp?.plan.search ?? row.ask_text);
+    // A mixed ask is searched for its connection part only; with no clean part, nothing is searched.
+    const askText = (await import("./askKind.js")).searchPartOf(sp?.plan.search ?? row.ask_text, row);
+    if (askText === null) continue;
     await pool.query(`UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = $1`, [row.id]);
     try {
       await attemptEventSurfacing({

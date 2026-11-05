@@ -1689,6 +1689,10 @@ export async function runMigrations(): Promise<void> {
          ADD COLUMN IF NOT EXISTS last_mentioned_at TIMESTAMPTZ`,
     )
     .catch((err: Error) => console.error("ask_checkins living-asks migration failed:", err));
+  // The purpose boundary (services/askKind.ts): the connection part of an ask the model read as mixed, searched in place of the whole text.
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS scope_connection TEXT`)
+    .catch((err: Error) => console.error("ask_checkins.scope_connection migration failed:", err));
   // How each member likes to be texted (services/textingStyle.ts, 2026-09-26).
   await pool
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS texting_style TEXT[] NOT NULL DEFAULT '{}'`)

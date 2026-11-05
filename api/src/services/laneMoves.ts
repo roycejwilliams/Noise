@@ -137,12 +137,12 @@ export function askKindAfter(row: { kind: string | null; intent: string | null }
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 // The one write of an ask's kind (askKind.ts, goalEdges.ts). `read` is the row as the job read it: the write only lands while the row is
 // still that (a lookout read since is left alone). Marks it checked either way.
-export async function setAskKind(db: Db, o: { id: string | number; userId?: string | null; read: { kind: string | null; intent: string | null }; kind: AskKind; version?: number | null }): Promise<boolean> {
+export async function setAskKind(db: Db, o: { id: string | number; userId?: string | null; read: { kind: string | null; intent: string | null }; kind: AskKind; version?: number | null; connection?: string | null }): Promise<boolean> {
   const next = askKindAfter(o.read, o.kind);
   const r = await db.query(
-    `UPDATE ask_checkins SET kind = COALESCE($2, kind), kind_checked_at = NOW(), kind_version = COALESCE($3, kind_version)
+    `UPDATE ask_checkins SET kind = COALESCE($2, kind), kind_checked_at = NOW(), kind_version = COALESCE($3, kind_version), scope_connection = COALESCE($7, scope_connection)
      WHERE id = $1 AND ($4::text IS NULL OR user_id::text = $4) AND kind IS NOT DISTINCT FROM $5 AND intent IS NOT DISTINCT FROM $6`,
-    [o.id, next, o.version ?? null, o.userId ?? null, o.read.kind, o.read.intent],
+    [o.id, next, o.version ?? null, o.userId ?? null, o.read.kind, o.read.intent, o.connection ?? null],
   );
   return next !== null && (r.rowCount ?? 0) > 0;
 }
