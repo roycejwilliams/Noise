@@ -130,7 +130,16 @@ export function replyScopeGuidance(v: ScopeVerdict | null | undefined): string |
 
 // A personal share: a member telling Cue something about their life (a loss, an illness, a hard stretch, news) without asking for
 // anything. The companion listens (Royce, 2026-11-04: "don't turn every personal update into a matching opportunity or another
-// question"); no path turns it into an ask, a look-out or a task. Deterministic: a disclosure pattern and no request in the same text.
+// question"); no path turns it into an ask, a look-out or a task.
+// The turn read judges it (services/readTurn.ts "message_kind"): "share" (they tell Cue something and ask for nothing), "ask" (they ask Cue
+// for something), "both" (they share and ask in one message: the ask is real and is worked as any ask), or "chat". Only a pure "share"
+// is never captured. The word backstop below is used only where no turn read exists (a call's tool call that carries none), and it
+// yields to any request in the text.
+export type MessageKind = "share" | "ask" | "both" | "chat";
+export function parseMessageKind(v: unknown): MessageKind | null {
+  const w = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return w === "share" || w === "ask" || w === "both" || w === "chat" ? w : null;
+}
 const SHARE = new RegExp(
   [
     "\\b(?:my|our) (?:mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|brother|sister|wife|husband|partner|dog|cat|friend|boyfriend|girlfriend|kid|son|daughter|baby)\\b[^.?!]{0,50}\\b(?:passed|died|is sick|was diagnosed|in the hospital|got sick|is dying|had surgery|left me|broke up)",
@@ -139,9 +148,15 @@ const SHARE = new RegExp(
   ].join("|"),
   "i",
 );
-const ASKS_FOR = /\b(?:can you|could you|would you|will you|please|find me|look for|looking for|any (?:events|dinners|meetups|people|groups)|introduce|intro me|help me (?:find|meet|get)|where can i|who should i|i want to (?:meet|find|go)|i need to (?:meet|find|go)|i'd like to (?:meet|find|go))\b/i;
+// Anything that reads as a request: a question, an ask for Cue to do or find something, a wish to meet or go.
+const ASKS_FOR = /\?|\b(?:can you|could you|would you|will you|please|find me|find us|look for|looking for|look out|keep an eye|keep your eyes|let me know|send me|show me|know (?:anyone|of anyone|somebody|someone)|anyone (?:who|that|hiring)|any (?:\w+ ){0,2}(?:events|dinners|meetups|people|groups|clubs|communities|rooms|circles|classes|mixers|opportunities)|introduce|intro me|help me|where can i|who should i|i want to|i need to|i'd like to|i would like to|i'd love to|i would love to|i wanna|prep me|get me)\b/i;
 export function sharedNotAsked(text: string): boolean {
   const t = String(text ?? "");
   return SHARE.test(t) && !ASKS_FOR.test(t);
+}
+// Whether this message is a pure share, never captured as an ask, look-out or task: the turn read's verdict when there is one (it decides,
+// including "both"), else the word backstop.
+export function isPureShare(kind: MessageKind | null | undefined, text: string): boolean {
+  return kind ? kind === "share" : sharedNotAsked(text);
 }
 export const SHARED_NOT_ASKED_GUIDANCE = "They shared something about their life; they didn't ask for anything. Listen: answer what they feel, have a point of view, and let it be the whole reply. No ask, look-out or task comes out of it, no pivot to events or people, and no question just to keep it going.";

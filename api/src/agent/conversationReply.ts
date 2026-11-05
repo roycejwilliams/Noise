@@ -288,6 +288,7 @@ export async function runConversationReplyAgent(
     redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
     exchange: input.facts.exchange ?? null,
     turnScope: input.facts.turnScope ?? null,
+    turnShare: input.facts.turnShare ?? null,
     onFirstRead: (p) => {
       firstRead = p;
     },

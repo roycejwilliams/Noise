@@ -114,7 +114,7 @@ export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from ".
 import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { understandingGaps, type Gap } from "./understanding.js";
 import { withMember } from "./llmUsage.js";
-import { sharedNotAsked } from "../harness/scope.js";
+import { isPureShare } from "../harness/scope.js";
 import { ASK_JSON, conditionsOnFileBlock, CRITERIA_FOR_JSON, CRITERIA_FOR_RULE, WANT_WORDS_RULE } from "./wantCriteria.js";
 
 export type CoverageAssessment = {
@@ -1479,7 +1479,7 @@ export async function persistIntentFrom(
   scope: IntentScope = "last_user_message",
   message?: string | null,
   // via: where they said it; openItems: the numbered list the read was shown (criteria_for indexes into it).
-  wopts: { via?: WantWords["via"]; openItems?: OpenItem[]; ownWords?: string | null } = {},
+  wopts: { via?: WantWords["via"]; openItems?: OpenItem[]; ownWords?: string | null; messageKind?: import("../harness/scope.js").MessageKind | null } = {},
 ): Promise<ExtractedIntent | null> {
   try {
     // Only what THEY said: an item that's Co's own line echoed back is
@@ -1495,8 +1495,9 @@ export async function persistIntentFrom(
     const onReject = (why: string) => void (rejected[why] = (rejected[why] ?? 0) + 1);
     const captured = normalizeCapturedAsks(parsed, scope)
       .filter((a) => mine(a.text))
-      // A personal share is not an ask (harness/scope.ts sharedNotAsked): remembered in the profile reads, never an ask to search for.
-      .filter((a) => !sharedNotAsked(String(a.quote ?? "")))
+      // A pure personal share is not an ask (harness/scope.ts isPureShare): remembered in the profile reads, never an ask to search for. The
+      // turn read's verdict decides when there is one ("both" keeps the ask); else the word backstop, on the whole message and not the ask's quote.
+      .filter((a) => !isPureShare(wopts.messageKind, ownWords || String(a.quote ?? "")))
       .map((a) => ({ ...a, wantWords: { ...WC.groundWant(a.quote, ownWords), via, criteria: WC.groundCriteria(a.criteria, ownWords, undefined, onReject) } }));
     // Conditions said about something already open (criteria_for): each lands on its own want only, written before the asks below so
     // a deduped restatement in the same turn merges on top of it.

@@ -23,7 +23,7 @@ import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from ".
 import type { CoverageAssessment } from "./profileExtraction.js";
 import type { EmotionTarget, Intensity, TextEmotion, Valence } from "../harness/emotion.js";
 import type { TurnContext } from "./turnContext.js";
-import { parseVerdict, type ScopeVerdict } from "../harness/scope.js";
+import { parseMessageKind, parseVerdict, type MessageKind, type ScopeVerdict } from "../harness/scope.js";
 import { exchangeAddendum, parseExchangeRead, type ExchangeBase, type ExchangeRead } from "./exchangeRecord.js";
 
 // What Co's reaction says it is doing. Meanings, not scripts: the read picks
@@ -78,6 +78,9 @@ export type TurnRead = {
   // or both (with the connection part as a short phrase). Null when they asked Cue for no work. The start-task guard reads it
   // (services/coTasks.ts scopeRefusal); no other model call is made for it.
   scope?: ScopeVerdict | null;
+  // Whether this message only shares (a loss, a hard week, news) and asks for nothing, asks for something, or does both: judged by this
+  // same read. A pure "share" is heard, never captured as an ask, look-out or task; "both" is a real ask (harness/scope.ts isPureShare).
+  messageKind?: MessageKind | null;
 };
 
 const MODES: Mode[] = ["sharing", "reacting", "asking", "logistics", "feedback", "planning", "small_talk"];
@@ -121,6 +124,7 @@ ${priorContext ? `What was already known about them before this conversation: ${
 "feedback": each distinct piece of feedback about how Cue works or should work in general, the kind of thing the team would change (how it searches, what it sends, how it texts), or anything they ask Cue to pass to the team, as one clear sentence the team could act on. Not a correction or disagreement about something Cue said in this conversation (a fact, a person, an opinion, how Cue described itself): Cue just gets that right in its reply, and filing it would turn an ordinary correction into a complaint. [] if none.
 "ack": whether Cue should react to their message with an emoji before replying, the way a friend sometimes does. A reaction is communication: it says something about their specific message, so most messages get null, and a follow-up to something they just asked ("well a couple", "go ahead", "anything else?") gets null. Read the emotional register first: sad, frustrated, relieved and celebrating each call for something different, and on bad news or something sad, react only if it says you're with them, never "❤️" or "😂", which read as liking it. Then match the moment: an emoji about what they said beats a generic one (✈️ when they've landed, 🥟 for the dumplings they're eating). Cue's usual language, so they learn what it means: "🥂" good news or a win; "❤️" something personal and good that matters to them; "😂" when they're genuinely funny; "👀" something to look at or find; "✍️" something to write; "🤝" something agreed or handed to Cue; "🫡" a correction or an instruction taken; "🔥" real news that's genuinely big for them; "👍" a plain okay, never on bad news. Vary it: never the same one as Cue's last reaction, and never a generic one when a specific one fits: if nothing fits this exact message, null. Grown and understated, the way a private club is: never rockets, raised hands or confetti.
 "scope": only when they ask Cue to do, find or keep watching for something, whether Cue should take it on: {"verdict": "in" | "out" | "mixed", "connection": "..."}. "in" is work about meeting people: who to meet and why, finding people, events, rooms and communities they would attend (including for a career change or a job search, through people and rooms), preparing for a conversation or an event (research on that person's company for it is "in"), introductions, following through on a connection. "out" is errands, shopping and lookups a person could do with a search engine: finding a dentist or any consumer service, comparing products or phone plans, planning or booking travel, general research projects, watching job boards or listings, funding or investor searches, venues or vendors for their own event, drafting their documents or emails, admin. Being about a person, or helping a goal, does not make something "in". "mixed" is both in one message, and then "connection" is only the connection part as a short phrase (null if there is none you can state cleanly). When unsure, judge by what they actually want Cue to go and do. null when they ask for nothing, or only share or chat.
+"message_kind": "share" if they only tell Cue something about their life (a loss, an illness, a hard stretch, news, how they feel) and ask Cue for nothing; "ask" if they ask Cue for something (a question, something to find or do, someone to meet); "both" if they share AND ask in the same message (\"I got laid off. Keep an eye out for design meetups for me\", \"I'm so lonely here, any running clubs?\"): the ask is real and counts; \"chat\" for thanks, greetings and small talk.
 "about_co": true if they're asking what Cue is, what Cue does or can do for them, how proactive Cue is, or how to describe Cue (to them, a friend, an investor); otherwise false.
 "asks_for_list": true only if they ask outright for the list of what Cue can do or help with ("what can you do", "what are all the things you can help with", "what else can you do"); false when they ask what Cue is, how to describe it, or about something specific.
 "about_sent": if this message is about one specific thing in "Things Cue sent them recently" (asking about it, reacting to it), its name exactly as listed; otherwise null.
@@ -173,6 +177,7 @@ export function parseTurnRead(obj: any, sentNames: string[], record: ExchangeBas
     ack: mode === "small_talk" ? null : parseAck(obj?.ack),
     coverage: Array.isArray(obj?.missing) ? { missing_topics: topicList(obj.missing), fresh_topics: topicList(obj?.covered_now), ready_to_summarize: false } : null,
     exchange: parseExchangeRead(obj, record),
+    messageKind: parseMessageKind(obj?.message_kind),
     scope: parseVerdict(obj?.scope && typeof obj.scope === "object" ? { scope: obj.scope.verdict, connection: obj.scope.connection } : null),
   };
 }

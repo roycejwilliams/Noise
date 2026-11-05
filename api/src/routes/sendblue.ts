@@ -1992,6 +1992,7 @@ export function sendblueRouter(io: Server): Router {
           }
         }
         replyFacts.turnScope = turnRead?.scope ?? null;
+        replyFacts.turnShare = turnRead?.messageKind ?? null;
         // The reply gets the verdict: work judged outside connections is declined in its own words, and nothing is promised for it.
         { const g = (await import("../harness/scope.js")).replyScopeGuidance(turnRead?.scope); if (g) addInstruction(replyFacts, g); }
         if (exchangeBase) {
@@ -2842,6 +2843,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           sourceRef,
           ...prefs,
           coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
+          messageKind: turnRead?.messageKind ?? null,
         }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err))
           // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts), so the next
           // reply reads it without a rebuild. Code only, no model call; it never throws.
