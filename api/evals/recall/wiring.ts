@@ -153,7 +153,7 @@ check("call: also a miss reads the same", (await quietly(() => callSet.run("look
   check("dates: the tool reads 'yesterday' from when they asked (the turn's arrival)", w.window?.from === "2026-11-09", w.window);
   const t4: any = CTools.createConversationTools({ ...ctxOf(false), dryRun: true }).tools;
   const dry: any = await quietly(() => t4.lookBack.execute({ topic: "glaze" }, { toolCallId: "t", messages: [] }));
-  check("dry run: returns the miss guidance, not an empty shrug", dry.ok && dry.results.length === 0 && /one other way/.test(dry.note) && /can't find it/.test(dry.note), dry.note);
+  check("dry run: returns the miss guidance, not an empty shrug", dry.ok && dry.results.length === 0 && /one other way/.test(dry.note) && /couldn't find it in the history/.test(dry.note) && !/no earlier conversation on file/.test(dry.note), dry.note);
 }
 
 // ---- the registry: a read, nothing changes, nothing starts
