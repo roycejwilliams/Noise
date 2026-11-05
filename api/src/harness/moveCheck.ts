@@ -9,7 +9,7 @@ import { ALWAYS_ASKABLE, questionsIn, sameQuestion } from "./repeatAsk.js";
 import { namesItem } from "../services/callClaims.js";
 import { ASKS_ABOUT_FIND, INTEREST_Q, MOVE_MEANINGS, normUrl, OFFER_Q, type CallReadInput, type CallTurnRead, type DoneItem, type ExchangeBase, type ExchangeRecord } from "../services/exchangeRecord.js";
 
-export type MoveMiss = { name: "resend" | "reoffer" | "double_ask" | "reask" | "wrong_referent" | "ignores_correction" | "referent_tie" | "asks_which" | "reopen" | "question_after_close" | "find_after_close" | "off_move" | "non_answer"; why: string };
+export type MoveMiss = { name: "resend" | "reoffer" | "double_ask" | "reask" | "wrong_referent" | "ignores_correction" | "referent_tie" | "asks_which" | "reopen" | "question_after_close" | "find_after_close" | "off_move"; why: string };
 // A question asking which thing they meant, in Cue's own words.
 export const WHICH_Q = /\b(?:which (?:one|of (?:these|those|them|the two|the))|which (?:\w+ )?(?:do|did) you mean|(?:do|did) you mean (?:the|that)|are you (?:asking|talking) about (?:the|that))\b/i;
 
@@ -194,30 +194,8 @@ export function recordMisses(draft: string, base: Pick<ExchangeBase, "done" | "u
 // Pure: what the draft gets wrong against the move and the record. Empty when nothing does (or when there's no read to judge from).
 // theirs: their latest message (its topic words never make a reopening: they raised it).
 
-// A question about a find Cue sent (where, what day, the link, the price, who hosts it, when Cue sent it) answered by nothing of that find.
-// It fires only when the turn resolved the find they mean (turnContext.ts resolveReferents) and they ask about it. The draft answers if it
-// carries a stored field of THAT find (its city, venue, address, hosts, price, the day it happens or the day Cue sent it, how long ago),
-// its link, a link-delivery ("sending it now"), or an honest gap ("not stored", "I don't have it"; "the address shows after approval" only
-// when that find's record says registration needs approval). A feeling, a reassurance or a guess about the week does not (2026-11-04:
-// "No worries, easy to miss" to "what day did you send that").
-export type ReferentAnswerFacts = { name: string; url: string | null; tokens: string[]; approvalGap: boolean };
-export const DEFLECTION = /\b(?:no worries|no problem|no stress|totally fine|all good|that happens|easy to miss|happens to (?:all|the best)|don'?t worry|it'?s okay|it'?s ok|understandable|no biggie|so much going on|in the middle of everything)\b/i;
-const HONEST_GAP = /\b(?:don'?t (?:have|know)|do not (?:have|know)|not sure|isn'?t (?:shown|listed|stored|public|on file|available)|aren'?t (?:shown|listed)|not (?:shown|listed|stored|public|on file)|can'?t (?:see|tell|find)|couldn'?t (?:see|find)|no (?:address|date|time|record) (?:is |on )?(?:stored|file|listed))\b/i;
-const APPROVAL_GAP = /\b(?:shows? (?:up )?(?:only )?(?:after|once)|after (?:the )?(?:host )?(?:approval|approves|approved)|once (?:you'?re|you are|the host) (?:approved|approves|in|registered))\b/i;
-const DELIVERING = /\b(?:sending|sent|texting|dropping|forwarding|here(?:'s| is| you go)) (?:it|that|you|the link|this)\b|\bsending it\b|\bhere you go\b/i;
-const wordIn = (hay: string, needle: string) => new RegExp(`(?:^|[^a-z0-9])${needle.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[^a-z0-9]|$)`, "i").test(hay);
-export function nonAnswer(draft: string, theirs: string, referents: readonly ReferentAnswerFacts[] = []): MoveMiss | null {
-  const t = theirs.trim();
-  const d = draft.replace(/\s+/g, " ");
-  if (!t || !d.trim() || !referents.length || !ASKS_ABOUT_FIND.test(t)) return null;
-  const answers = referents.some((r) => (r.url && normUrl(d).includes(normUrl(r.url))) || r.tokens.some((tok) => wordIn(d, tok)) || (r.approvalGap && APPROVAL_GAP.test(d)));
-  if (answers || /https?:\/\//.test(d) || HONEST_GAP.test(d) || DELIVERING.test(d)) return null;
-  const f = referents[0];
-  return { name: "non_answer", why: `answers none of what they asked about "${f.name}" ("${t.slice(0, 80)}"): it carries nothing stored about it. Answer from what's stored about "${f.name}" (its city, place, day, price, host, the day Cue sent it, its link), or say plainly which of those isn't stored` };
-}
-export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined, theirs = "", referents: readonly ReferentAnswerFacts[] = []): MoveMiss[] {
-  const non = nonAnswer(draft, theirs, referents);
-  if (!rec?.read || !draft.trim()) return non ? [non] : [];
+export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined, theirs = ""): MoveMiss[] {
+  if (!rec?.read || !draft.trim()) return [];
   const r = rec.read;
   const qs = questionsIn(draft.replace(URL, "")).filter((q) => !askable(q));
   const urls = (draft.match(URL) ?? []).map(normUrl);
@@ -252,7 +230,6 @@ export function moveMisses(draft: string, rec: ExchangeRecord | null | undefined
     if (urls.some((u) => ![again, ...theirsAsked].some((d) => d?.url && normUrl(d.url) === u))) out.push({ name: "find_after_close", why: "brings a new link or find after they closed" });
   } else if (r.move === "summarize" && qs.length) out.push({ name: "off_move", why: "asks a question in a summary they asked for" });
   else if (r.move === "feeling" && urls.length) out.push({ name: "off_move", why: "brings a link or find while they're with a feeling" });
-  if (non) out.push(non);
   return out;
 }
 

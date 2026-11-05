@@ -319,7 +319,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, moveNudged: false, nonAnswerNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
@@ -479,15 +479,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // that touches their safety. Past that, the draft goes on to the fact check as before.
         if (canRedraft && !state.moveNudged && !ctx.safetyConcern && !state.safetyFlagged) {
           const { moveMisses, moveRedraftNote } = await import("../harness/moveCheck.js");
-          // A question about the find they mean, answered by none of it: only with the find resolved for this turn (turn.referents), once,
-          // and kept apart from moveNudged so the rewrite still gets the resend and reoffer checks. A link sent this turn answers a link ask.
-          const T = await import("../services/turnContext.js");
-          const zone = ctx.turn?.referents?.length ? await (await import("../services/memberTime.js")).memberZone(ctx.userId).catch(() => null) : null;
-          const referents = state.nonAnswerNudged || state.linkDelivered ? [] : (ctx.turn?.referents ?? []).map((r) => T.referentAnswer(r, new Date(), zone));
-          const misses = moveMisses(draft, ctx.exchange, ctx.resolvedContent ?? "", referents);
+          const misses = moveMisses(draft, ctx.exchange, ctx.resolvedContent ?? "");
           if (misses.length) {
-            if (misses.some((m) => m.name === "non_answer")) state.nonAnswerNudged = true;
-            if (misses.some((m) => m.name !== "non_answer")) state.moveNudged = true;
+            state.moveNudged = true;
             if (!ctx.dryRun) {
               const { recordDecision } = await import("../harness/core.js");
               await recordDecision({ layer: 3, decision: "reply.move_check", userId: ctx.userId, outcome: "skip", action: misses.map((m) => m.name).join(","), proposal: { move: ctx.exchange?.read?.move ?? null, misses: misses.map((m) => m.name) } }).catch(() => {});
