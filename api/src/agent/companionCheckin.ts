@@ -1,4 +1,5 @@
 import { draftProactive, type OutputRules } from "../harness/proactive.js";
+import { PRESUMES_THEY_WENT } from "../services/followUpEvidence.js";
 import { splitRecap } from "../services/claims.js";
 import { judgeCheckin, ruledOut } from "../brain/index.js";
 
@@ -162,7 +163,7 @@ async function draftFromThread(
       ...(item ? { one_thing_found_for_it: `${item.name}: ${item.reason} ${item.url}` } : {}),
       recap_for_background_only: recap.slice(0, 1500),
     },
-    task: `Write a short text about the_thing_they_are_in_the_middle_of, like a friend who remembered: ask how it's going or where it landed, in a few plain words that show you remember what they said. Let how_they_felt_saying_it shape the tone (gentler if it was weighing on them), without naming the feeling.${
+    task: `Write a short text about the_thing_they_are_in_the_middle_of, like a friend who remembered: ask how it's going or where it landed${thread.dueDate ? " (the_date_they_gave is a plan of theirs and nothing says it happened: if that day has passed, ask whether it happened, never how it went and never as if it did)" : ""}, in a few plain words that show you remember what they said. Let how_they_felt_saying_it shape the tone (gentler if it was weighing on them), without naming the feeling.${
       item
         ? ` Then mention one_thing_found_for_it in one short sentence with its link, as something you came across that might help with it. If it wouldn't actually help with this, leave it out and offer nothing. Nothing else offered.`
         : ` Offer nothing: no events, no links, no suggestions.`
@@ -170,6 +171,8 @@ async function draftFromThread(
     maxSentences: item ? 3 : 2,
   });
   if (!text) return null;
+  // A dated plan is intent, not evidence it happened (Royce, 2026-11-04): a line that takes for granted it did is never sent.
+  if (thread.dueDate && PRESUMES_THEY_WENT.test(text)) return null;
   // The item goes out only with its own link; a text that left it out is
   // held to the no-item rules (no link at all).
   const carriesItem = Boolean(item) && text.includes(item!.url);

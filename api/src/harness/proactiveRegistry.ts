@@ -3,7 +3,7 @@
 // under PROACTIVE_RULES + CONFIRMED_FACTS, with code-checked output rules)
 // and what to record once it actually went out, or was dropped.
 import { isStated } from "../services/provenance.js";
-import { followUpEvidence } from "../services/followUpEvidence.js";
+import { followUpEvidence, PRESUMES_THEY_WENT } from "../services/followUpEvidence.js";
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
@@ -233,8 +233,8 @@ export function attendanceConfirmed(p: Pick<DebriefPayload, "eventName" | "check
     return key.filter((w) => has(t, w)).length >= Math.min(2, key.length) && GOING.test(t) && !NOT_GOING.test(t);
   });
 }
-// A line that takes for granted they went ("How was…", "anyone stood out", "who did you meet").
-export const PRESUMES_THEY_WENT = /\bhow (?:was|did|'d|’d)\b|\bhow['’]d\b|\b(?:anyone|anything|who) stood out\b|\bwho did you (?:meet|talk|end up)\b|\bdid you (?:meet|enjoy|have fun)\b|\bmeet anyone\b|\bwhat did you think of\b/i;
+// Moved to services/followUpEvidence.ts (the text-side drafters outside this file use it too); re-exported for its callers.
+export { PRESUMES_THEY_WENT };
 
 export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null, went = false, told: { name: string; what: string }[] = []): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;
