@@ -115,6 +115,10 @@ export type CarryItem = {
 //   corrections: what they changed about it; the earlier wording stays (was), the later one qualifies it (now), never replaces it.
 // Not rendered into any prompt yet (step 6 wires it into the snapshot).
 export type TransitionCorrection = { at: string; was: string; now: string | null; quote: string | null };
+// An open transition keeps its newest few corrections; a closed one only the latest (it is one dated line). The rest are counted.
+export const TRANSITION_CORRECTIONS_OPEN = 3;
+export const TRANSITION_CORRECTIONS_CLOSED = 1;
+const CLIP = 300;
 export type Transition = {
   id: string;
   text: string;
@@ -125,9 +129,11 @@ export type Transition = {
   source: "said" | "inferred";
   channel: "text" | "call" | null;
   corrections: TransitionCorrection[];
+  correctionsOmitted: number;
 };
-// The section's size: open ones in full, closed ones as one dated line each, until this many characters; the rest are counted, never
-// silently dropped (transitionsOmitted). No count or age cutoff.
+// The section's size: open ones in full, closed ones as one dated line each, until this many characters (corrections count). An item
+// that doesn't fit is skipped and lighter ones after it still fill the room; skipped ones are counted, never silently dropped
+// (transitionsOmitted). No count or age cutoff.
 export const TRANSITIONS_BUDGET_CHARS = 3000;
 export type RawTransition = {
   id: string;
@@ -280,7 +286,9 @@ export async function loadTransitions(userId: string, q: { query: (sql: string, 
   const [{ rows: ts }, { rows: cs }] = await Promise.all([
     q.query(
       `SELECT id, text, opened_quote, opened_at, status, closed_quote, closed_at, last_touched_at, transition_source, transition_channel
-       FROM member_threads WHERE user_id = $1 AND transition_source IS NOT NULL ORDER BY last_touched_at DESC`,
+       FROM member_threads WHERE user_id = $1 AND transition_source IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM profile_corrections pc WHERE pc.user_id = $1 AND to_jsonb(pc)->>'item_ref' = 'thread:' || member_threads.id AND (to_jsonb(pc)->>'removed') = 'true')
+       ORDER BY last_touched_at DESC`,
       [userId],
     ),
     q.query(
@@ -461,27 +469,33 @@ export function withoutRemovedSent<T extends { name: string; postText?: string |
 // character budget with the rest counted. A later change qualifies the earlier one (corrections keep was), nothing is overwritten.
 export function transitionsOf(raw: RawTransition[], budget: number = TRANSITIONS_BUDGET_CHARS): { items: Fact<Transition>[]; omitted: number } {
   const day = (d: Date) => d.toISOString().slice(0, 10);
+  const clip = (x: string) => (x.length > CLIP ? x.slice(0, CLIP) : x);
+  const clipN = (x: string | null) => (x == null ? null : clip(x));
   const items = raw
     .filter((r) => r.text.trim() && (r.source === "said" || r.source === "inferred") && !Number.isNaN(r.openedAt.getTime()))
     .map((r): { t: Fact<Transition>; open: boolean; rank: number } => {
       const open = r.status === "open" || r.status === "waiting";
-      const corrections: TransitionCorrection[] = r.corrections.map((c) => ({ at: c.at.toISOString(), was: c.was, now: c.now, quote: c.quote }));
+      const all: TransitionCorrection[] = r.corrections.map((c) => ({ at: c.at.toISOString(), was: clip(c.was), now: clipN(c.now), quote: clipN(c.quote) }));
       // Closing as "changed" with their words is itself the correction: the earlier wording stays, their words qualify it.
-      if (r.status === "changed" && r.closedQuote?.trim()) corrections.push({ at: (r.closedAt ?? r.lastTouchedAt).toISOString(), was: r.text.trim(), now: null, quote: r.closedQuote.trim() });
+      if (r.status === "changed" && r.closedQuote?.trim()) all.push({ at: (r.closedAt ?? r.lastTouchedAt).toISOString(), was: clip(r.text.trim()), now: null, quote: clip(r.closedQuote.trim()) });
+      all.sort((a, b) => a.at.localeCompare(b.at));
+      const keep = open ? TRANSITION_CORRECTIONS_OPEN : TRANSITION_CORRECTIONS_CLOSED;
+      const corrections = all.slice(-keep);
       const status = (["open", "waiting", "resolved", "changed"] as const).find((x) => x === r.status) ?? "open";
       return {
         open,
         rank: (open ? r.lastTouchedAt : r.closedAt ?? r.lastTouchedAt).getTime(),
         t: {
           id: r.id,
-          text: r.text.trim(),
-          quote: open ? r.quote.trim() || null : null,
+          text: clip(r.text.trim()),
+          quote: open ? clipN(r.quote.trim() || null) : null,
           openedOn: day(r.openedAt),
           closedOn: open || !r.closedAt ? null : day(r.closedAt),
           status,
           source: r.source as "said" | "inferred",
           channel: r.channel === "text" || r.channel === "call" ? r.channel : null,
           corrections,
+          correctionsOmitted: all.length - corrections.length,
           verifiedAt: (open ? r.lastTouchedAt : r.closedAt ?? r.lastTouchedAt).toISOString(),
         },
       };
@@ -491,8 +505,7 @@ export function transitionsOf(raw: RawTransition[], budget: number = TRANSITIONS
   let used = 0;
   for (const { t } of items) {
     const size = JSON.stringify(t).length;
-    // Always keep the first (a budget smaller than one item must not empty the section); stop at the first that doesn't fit so the rank holds.
-    if (out.length && used + size > budget) break;
+    if (used + size > budget) continue;
     out.push(t);
     used += size;
   }
