@@ -28,8 +28,9 @@ const K = await import("../../src/services/askKind.js");
 const LM = await import("../../src/services/laneMoves.js");
 
 // ---- 1. an ask outside the boundary is kept, as kind "outside", and decided in code (no model call)
-check("a phone plan, a jobs watch, an investor search and a trip are outside", ["Find me the cheapest phone plan", "Keep an eye on job listings in climate tech", "Find investors for my seed round", "Plan my trip to Lisbon in March"].every((t) => K.outsideAsk(t)));
-check("founder dinners, an intro, a climate job fair and an investor dinner are not", ["Founder dinners in the Mission", "Someone who has raised a pre-seed to talk to", "Job fairs and recruiting events for climate tech", "Investor dinners in SF"].every((t) => !K.outsideAsk(t)));
+check("a phone plan, a jobs watch and a trip are outside, by the backstop alone", ["Find me the cheapest phone plan", "Keep an eye on job listings in climate tech", "Plan my trip to Lisbon in March"].every((t) => K.outsideAsk(t)));
+check("an investor search and a therapist search are NOT decided by words: the model's read decides them", ["Find investors for my seed round", "Find me a therapist who takes my insurance"].every((t) => !K.outsideAsk(t)));
+check("founder dinners, an intro, a climate job fair and an investor dinner are not", ["Founder dinners in the Mission", "Someone who has raised a pre-seed to talk to", "Job fairs and recruiting events for climate tech", "Investor dinners in SF", "Find a photographer meetup", "help me find a job through people I know"].every((t) => !K.outsideAsk(t)));
 check("classifyAsk decides an out-of-scope ask as outside with no model call", (await K.classifyAsk("Find me the cheapest phone plan")) === "outside" && (await K.classifyAsk("Keep an eye on job listings in climate tech")) === "outside");
 check("a lookout keeps its kind, except that an out-of-scope one moves to outside", LM.askKindAfter({ kind: "find", intent: "lookout" }, "help") === null && LM.askKindAfter({ kind: "find", intent: "lookout" }, "outside") === "outside" && LM.askKindAfter({ kind: "outside", intent: null }, "outside") === null);
 {
@@ -39,14 +40,19 @@ check("a lookout keeps its kind, except that an out-of-scope one moves to outsid
     { id: 2, user_id: "u1", ask_text: "Keep an eye on job listings in climate tech", kind: null, intent: null, kind_checked_at: null },
     { id: 3, user_id: "u1", ask_text: "Founder dinners in the Mission", kind: "find", intent: null, kind_checked_at: new Date() },
     { id: 4, user_id: "u1", ask_text: "Someone who has raised a pre-seed to talk to", kind: null, intent: null, kind_checked_at: null },
+    { id: 5, user_id: "u1", ask_text: "Find me a therapist who takes my insurance", kind: "help", intent: null, kind_checked_at: new Date() },
+    { id: 6, user_id: "u1", ask_text: "Find me an apartment in the Mission", kind: "person", intent: null, kind_checked_at: new Date() },
+    { id: 7, user_id: "u1", ask_text: "Keep an eye out for a gym near me", kind: "find", intent: "lookout", kind_checked_at: new Date() },
   ];
   answer = (sql) => (/SELECT id, user_id, ask_text, kind, intent/.test(sql) ? rows : null);
   const asked: string[] = [];
-  const n = await K.classifyOpenAsks(25, { db: pool, classify: async (t) => (asked.push(t), "person" as const) });
+  const n = await K.classifyOpenAsks(25, { db: pool, read: async (t) => (asked.push(t), /therapist|apartment|gym/.test(t) ? { kind: "outside" as const, connection: null } : /dinners/.test(t) ? { kind: "find" as const, connection: "founder dinners in the Mission" } : { kind: "person" as const, connection: null }) });
   const updates = log.filter((l) => /UPDATE ask_checkins SET kind/.test(l.sql));
   const kindOf = (id: number) => updates.find((u) => u.params[0] === id)?.params[1] ?? "(unchanged)";
-  check("the kind job moves the old phone plan ask and the new jobs ask to outside, with no model call for either", n === 4 && kindOf(1) === "outside" && kindOf(2) === "outside" && !asked.some((t) => /phone plan|job listings/.test(t)), { kinds: [1, 2, 3, 4].map(kindOf), asked });
-  check("an in-scope find ask is left as it was (no model call); an unread in-scope ask is still read once", kindOf(3) === "(unchanged)" && asked.length === 1 && /pre-seed/.test(asked[0]) && kindOf(4) === "person", { asked, k3: kindOf(3), k4: kindOf(4) });
+  check("the kind job moves the old phone plan ask and the new jobs ask to outside, with no model call for either (the backstop)", n === 7 && kindOf(1) === "outside" && kindOf(2) === "outside" && !asked.some((t) => /phone plan|job listings/.test(t)), { kinds: [1, 2, 3, 4].map(kindOf), asked });
+  check("a stored HELP ask, a PERSON ask and a LOOKOUT the model reads as outside move to outside too (every stored ask is read for scope once, not only find asks)", kindOf(5) === "outside" && kindOf(6) === "outside" && kindOf(7) === "outside", [5, 6, 7].map(kindOf));
+  check("an in-scope find ask keeps its kind (read for scope only); an unread in-scope ask takes the read's kind", kindOf(3) === "(unchanged)" && kindOf(4) === "person", { k3: kindOf(3), k4: kindOf(4) });
+  check("the model's connection part for a mixed ask is kept, in the same guarded write", updates.find((u) => u.params[0] === 3)?.params[6] === "founder dinners in the Mission" && updates.every((u) => /intent IS NOT DISTINCT FROM \$6/.test(u.sql)), updates.find((u) => u.params[0] === 3));
   check("remembered, not closed: the kind write never resolves or deletes the ask", updates.every((u) => !/resolved_at|DELETE/.test(u.sql)) && !log.some((l) => /DELETE FROM ask_checkins|resolved_at = /.test(l.sql)));
 }
 
@@ -54,7 +60,7 @@ check("a lookout keeps its kind, except that an out-of-scope one moves to outsid
 {
   const SC = await import("../../src/harness/scope.js");
   check("a mixed ask is searched for the connection part: the errand clause is left out", SC.connectionPart("Founder dinners in the Mission, and book me a dentist") === "Founder dinners in the Mission" && K.searchPartOf("Founder dinners in the Mission and find me a dentist near the Mission") === "Founder dinners in the Mission");
-  check("an ask with nothing outside it is unchanged, and one that is all outside has no part", SC.connectionPart("Founder dinners and mixers in the Mission") === "Founder dinners and mixers in the Mission" && SC.connectionPart("Find me a dentist") === null && K.searchPartOf("Find me a dentist") === "Find me a dentist");
+  check("an ask with nothing outside it is unchanged, and one that is all outside has no part", SC.connectionPart("Founder dinners and mixers in the Mission") === "Founder dinners and mixers in the Mission" && SC.connectionPart("Find me a dentist") === null && K.searchPartOf("Find me a dentist") === null && K.searchPartOf("Founder dinners and a dentist near the Mission", { scope_connection: "founder dinners" }) === "founder dinners" && K.searchPartOf("anything", { kind: "outside" }) === null && K.searchPartOf("Plan my Austin trip and book a table") === null);
   const sweepSrc = src("services/dailySweep.ts") + src("jobs/index.ts") + src("services/eventSurfacingSweep.ts");
   check("all three searches (morning floor, hourly, new ask after a call) use the connection part", (sweepSrc.match(/searchPartOf\(/g) ?? []).length >= 3);
 }
@@ -96,7 +102,7 @@ check("a lookout keeps its kind, except that an out-of-scope one moves to outsid
   ]);
   const out = GE.parseEdges(goals, raw, "Jordan");
   check("a taxes goal has no findable side, stays on file, and says why", out[0].edges.length === 0 && /remembered only/.test(out[0].why), out[0]);
-  check("a funding goal gets no investor search, but an investor dinner is a room", out[1].edges.length === 0 || (out[1].edges.length === 1 && /dinner/.test(out[1].edges[0])), out[1]);
+  check("an investor dinner is a room (kept); a funding search is the model's call, made in the plan prompt below, not a word list", out[1].edges.some((e: string) => /dinner/.test(e)), out[1]);
   check("a job change keeps recruiting events and job fairs, loses job boards and hiring-season monitoring", out[2].edges.join("|") === "climate tech recruiting events SF|climate job fair Bay Area", out[2]);
   check("a people goal is untouched", out[3].edges.length === 2, out[3]);
   const prompt = GE.edgePrompt(goals, { city: "San Francisco", today: "2026-11-04" });
@@ -163,11 +169,55 @@ const jobsSrc = src("jobs/index.ts");
 check("the ask check-in cron skips outside asks", /ac\.kind IS DISTINCT FROM 'outside'/.test(jobsSrc));
 check("the hourly sweep re-checks the ask in code before searching it", /outsideAsk\(askText\)\) continue/.test(jobsSrc));
 check("open loops never carry an outside ask", /kind IS DISTINCT FROM 'outside' ORDER BY created_at DESC/.test(src("services/openLoops.ts")));
-check("the new-ask search reads find asks only, so an outside ask is never searched right after a call", /ac\.kind = 'find'/.test(src("services/eventSurfacingSweep.ts")) && /outsideAsk\(ask\.text\) \? Promise\.resolve\("outside"/.test(src("services/profileExtraction.ts")));
+check("the new-ask search reads find asks only, so an outside ask is never searched right after a call", /ac\.kind = 'find'/.test(src("services/eventSurfacingSweep.ts")) && /classifyAskRead\(ask\.text\)/.test(src("services/profileExtraction.ts")));
 check("the X sweep guidance and tool no longer search for investors, grants or job postings, or by application cycle", !/investors or people/.test(src("services/sweepFind.ts")) && !/applications open OR/.test(src("services/sweepFind.ts")) && /Never funding, investors, grants or job postings/.test(src("services/sweepFind.ts")));
 const cap = await import("../../src/services/capabilities.js");
 const ask = cap.ABILITIES.find((a) => a.id === "save_ask")!;
 check("the saveAsk sheet says funding, job postings, errands and travel are kept on file, not searched or checked in on", /funding, job postings, errands, shopping, travel, general research and advice are kept on file/.test(`${ask.sheet} ${ask.can}`.replace(/Sponsors, investors, /, "")) || /Sponsors, investors, funding, job postings, errands, shopping, travel, general research and advice are kept on file, not searched or checked in on/.test(ask.sheet ?? ""), ask.sheet);
+
+// ---- 8. real events keep their follow-up whatever their name says; programs and openings do not (decided by what the find IS)
+{
+  const R = await import("../../src/services/recommendationOutcome.js");
+  const room = (name: string, over: any = {}) => ({ name, kind: "public_event", tier: 2, event_date: "2026-11-10", details: { startAt: "2026-11-10T18:30:00-08:00" }, ...over });
+  check("dated rooms with 'program', 'cohort', 'competition' or 'funding' in the name still get the morning-after follow-up", ["SF Startup Pitch Competition", "Accelerator Demo Day \u2014 Fall Cohort", "Women in Product: Mentorship Program Kickoff Mixer", "Founders Funding Mixer"].every((n) => R.isRealEventForFollowUp(room(n))), ["SF Startup Pitch Competition", "Founders Funding Mixer"].map((n) => R.isRealEventForFollowUp(room(n))));
+  check("…also when the find is a plain event with a date and a start time", R.isRealEventForFollowUp({ name: "Founders Funding Mixer", form: "event", event_date: "2026-11-10", details: { startAt: "2026-11-10T18:30:00-08:00" } }));
+  check("an opening (a deadline to apply by) gets none, whatever it is called", !R.isRealEventForFollowUp({ name: "Founders Dinner Fellowship", deadline: "2026-11-20", statedDates: { start: "2026-12-01" }, tier: 3 }) && !R.isRealEventForFollowUp({ name: "Harbor Climate Accelerator, cohort 4", form: "opening", statedDates: { start: "2026-11-01", end: "2026-12-01" }, tier: 3 }));
+  check("a web post that only states a start date, with no start time, is not a real event", !R.isRealEventForFollowUp({ name: "Fall cohort starts", tier: 3, statedDates: { start: "2026-11-10" } }));
+  check("no name-word list decides it any more", !/PROGRAM\.test|const PROGRAM = /.test(src("services/recommendationOutcome.ts")) && /formOf\(match\)/.test(src("services/recommendationOutcome.ts")));
+}
+
+// ---- 9. goals: an outside goal gets no check-in, and a queued one is rechecked when it wakes
+{
+  const GJ = await import("../../src/services/goalJourney.js");
+  const now = new Date("2026-11-04T18:00:00Z");
+  const old = new Date(now.getTime() - 120 * 86400e3).toISOString();
+  const g = (id: string, text: string, over: any = {}) => ({ id, kind: "goal", status: "active", text, created_at: old, confirmed_at: old, ...over });
+  check("a goal the model read as outside gets no seasonal check-in", GJ.dueGoalCheckin([g("g1", "Find a gym that fits my schedule", { scope: "out" })], null, now) === null);
+  check("…nor one that is unmistakably outside by its words (taxes)", GJ.dueGoalCheckin([g("g2", "File my taxes by the 15th")], null, now) === null);
+  check("…while an in-scope goal is still checked in on", GJ.dueGoalCheckin([g("g3", "Meet climate founders", { scope: "in" })], null, now)?.id === "g3");
+  check("the check-in is skipped again when it wakes (a candidate queued before the goal was read as outside)", /goalIsOutside\(entry\)\) return skip\(/.test(src("harness/proactiveRegistry.ts")));
+  check("a new goal is read for scope by the same classifyAsk read and the verdict is kept on the entry", /classifyAskRead\(ask\.text\)\)\.kind === "outside" \? \("out" as const\)/.test(src("services/profileExtraction.ts")) && /\.\.\.\(goalScope \? \{ scope: goalScope \} : \{\}\)/.test(src("services/profileExtraction.ts")));
+}
+
+// ---- 10. saveAsk: the model's scope decides; a mixed ask is saved as its connection part or not at all
+for (const voice of [false, true]) {
+  const how = voice ? "call" : "text";
+  const run = async (msg: string, args: any) => {
+    reset();
+    const facts: { kind: string; text: string }[] = [];
+    const t = T.createConversationTools({ userId: "u1", phoneNumber: "+10000000000", resolvedContent: msg, isVoice: voice, onCall: voice, callKey: voice ? "call-1" : undefined, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, isTeam: false, sendCoReply: async () => true, facts: { add: (kind: string, text: string) => facts.push({ kind, text }), text: () => "" } } as any);
+    console.log = () => {};
+    try { return { r: await (t.tools as any).saveAsk.execute(args, {}), facts }; } finally { console.log = quiet; }
+  };
+  const therapist = await run("find me a therapist who takes my insurance", { what: "a therapist who takes their insurance", scope: "out" });
+  check(`(${how}) the model's out is honoured where no word would have caught it: noted on file only`, therapist.r.ok === true && /on file only/.test(therapist.r.note) && !therapist.facts.some((f) => f.kind === "ongoing"), therapist);
+  const meetup = await run("find a photographer meetup", { what: "a photographer meetup" });
+  check(`(${how}) a meetup is saved and promised as before, with no verdict at all`, meetup.r.ok === true && /keep looking/.test(meetup.r.note), meetup);
+  const mixedAsk = await run("find a DJ and some founder dinners", { what: "a DJ and some founder dinners", scope: "mixed", connection: "founder dinners" });
+  check(`(${how}) a mixed ask is not saved whole: Cue is told to save only the connection part`, mixedAsk.r.ok === false && /founder dinners/.test(mixedAsk.r.error) && /ONLY the connection part/.test(mixedAsk.r.error), mixedAsk);
+  const noPart = await run("plan my trip and find a table", { what: "plan my trip and find a table", scope: "mixed" });
+  check(`(${how}) a mixed ask with no clean part asks one short question and saves nothing`, noPart.r.ok === false && /ONE short question/.test(noPart.r.error), noPart);
+}
 
 if (failed) { console.log(`\n${failed} of ${total} checks failed.`); process.exit(1); }
 console.log(`scope boundary (B): ${total} checks passed.`);

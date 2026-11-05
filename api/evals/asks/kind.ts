@@ -45,7 +45,7 @@ check("empty text is not a commitment", !K.isCoCommitment("") && !K.isCoCommitme
 
 // The guard answers before any model call.
 check("a Cue commitment is 'help' without asking the model", (await K.classifyAsk("plan will be delivered once ready")) === "help");
-check("anything else still goes to the model", /if \(isCoCommitment\(text\)\) return "help";\s*try \{\s*const \{ text: out \} = await Promise\.race\(\[\s*generateText\(/.test(ak) && /prompt: askKindPrompt\(text\)/.test(ak));
+check("anything else still goes to the model", /if \(isCoCommitment\(text\)\) return \{ kind: "help", connection: null \};\s*try \{\s*const \{ text: out \} = await Promise\.race\(\[\s*generateText\(/.test(ak) && /prompt: askKindPrompt\(text\)/.test(ak));
 
 // The classifier's instructions.
 const p = K.askKindPrompt("Offering to partner with Sequin AI on a November event");
