@@ -6,6 +6,7 @@
     "evals/reply/stateClaims.ts",
     "evals/reply/askedFor.ts",
     "evals/reply/threadWindow.ts",
+    "evals/recall/conversationRecall.ts",
     "evals/reply/wholeExchange.ts",
     "evals/reply/answerFromRecord.ts",
     "evals/reactions/incoming.ts",
