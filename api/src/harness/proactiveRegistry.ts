@@ -141,6 +141,7 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   // event, an arrival Cue saw, a walk-in, or their stated word that they went. Intent: they said they're going, or registered. Nothing
   // else earns a follow-up, and a "no" drops it. Read now, so a reaction or a scan after it was queued counts.
   let came = false;
+  let doorMissed = false;
   if (p.eventApiId) {
     // A Noise event they didn't make it to: the no-show flow covers the night (services/eventCheckinFollowUp.ts debriefForEvent).
     const CF = await import("../services/eventCheckinFollowUp.js");
@@ -155,8 +156,9 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
       return { defer: new Date(Date.now() + 2 * 3_600_000), reason: "whether they made it isn't settled yet" };
     }
     came = !!door?.came;
-    // Registered at a door Luma tracked that night, never scanned: the no-show flow owns them (its ask, then its note), not a debrief.
-    if (door && !door.came && door.tracked && !(p.walkinCheckinIds ?? []).length) return skip("the door was tracked and they weren't scanned: the no-show flow covers that night");
+    // Registered at a door Luma tracked that night, never scanned: the no-show flow owns them (its ask, then its note), not a debrief,
+    // unless their own stated word that they went says otherwise (decided below, once the evidence is read).
+    doorMissed = !!(door && !door.came && door.tracked && !(p.walkinCheckinIds ?? []).length);
   }
   const keys = await debriefItemKeys(p);
   const rows = await pool
@@ -168,6 +170,7 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     .then((r) => r.rows.map((x: any) => String(x.reaction)))
     .catch(() => [] as string[]);
   const evidence = followUpEvidence({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 });
+  if (doorMissed && evidence.level !== "attended") return skip("the door was tracked and they weren't scanned: the no-show flow covers that night");
   if (evidence.level === "none") {
     await dropDebriefSources(p, evidence.declined ? `declined: ${evidence.why}` : evidence.why);
     return skip(evidence.declined ? "they said it isn't for them: no follow-up" : "no sign they went or meant to go: no follow-up");
