@@ -188,7 +188,7 @@ user: I'm heading to the Grok night either way.`;
   check("the old separate calls stay one switch away", /process\.env\.CALL_LEARNING === "off"/.test(co));
   check("a call opens with the shared picture (inbound and outbound registration)", /buildCallContextSummary\(userId\)\.catch\(\(\) => ""\)/.test(src("routes/co.ts")) && /takeCallContext\(userId, buildCallContextSummary\)/.test(src("routes/co.ts")) && /context_summary: withCallSituation\(o\.contextSummary, /.test(src("services/elevenLabsCalls.ts")));
   const cc = src("services/callContext.ts");
-  check("the call picture: lessons and what Cue sent (with what's on file) come first", cc.indexOf("How to be with them, from times they corrected you") < cc.indexOf("What you sent them lately") && /sentDetailLines\(\{ sent \}, 7, new Date\(\), \{ also: named, zone, referentMax: CALL_SENT_MAX - 400 \}\)/.test(cc) && /fillDetails\(items\)/.test(cc) && !/assembleContext\(/.test(cc));
+  check("the call picture: lessons and what Cue sent (with what's on file) come first", cc.indexOf("How to be with them, from times they corrected you") < cc.indexOf("What you sent them lately") && /sentDetailLines\(\{ sent \}, 7, new Date\(\), \{ also: named, zone, referentMax: share \}\)/.test(cc) && /fillDetails\(items\)/.test(cc) && !/assembleContext\(/.test(cc));
   check("a call never waits on slow page reads", /CALL_CONTEXT_WAIT_MS = 3000/.test(cc));
   const { callAuditPrompt } = await import("../../src/harness/callGrounding.js");
   const ap = callAuditPrompt("assistant: hi", "Cue sent them X.", "Who they are: a builder.");
