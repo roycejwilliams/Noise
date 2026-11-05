@@ -44,7 +44,7 @@ function taskOf(r: any): CoTask {
   return {
     id: Number(r.id), userId: String(r.user_id), goal: String(r.goal ?? ""), theirWords: String(r.their_words ?? ""),
     steps: Array.isArray(r.steps) ? r.steps : [], planNext: r.plan_next ?? null, kind: r.kind === "followup" ? "followup" : r.kind === "research_brief" ? "research_brief" : "work",
-    followup: r.followup ?? null, source: r.source === "promise" ? "promise" : r.source === "lookout" ? "lookout" : "ask",
+    followup: r.followup ?? null, source: (["promise", "lookout"].includes(r.source) ? r.source : "ask") as CoTask["source"],
     // The runtime's own reading of who a look-out is for, so the dry run counts exactly what a wake will do (services/coTasks.ts).
     lookoutOrigin: lookoutOriginOf(r.source, r.followup),
   } as unknown as CoTask;

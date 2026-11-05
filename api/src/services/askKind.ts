@@ -74,12 +74,18 @@ Answer with one word: find, help, person or outside (or the mixed form).`;
 }
 
 // The model's read of an ask: its kind, and for a mixed ask just the connection part (a sweep searches that, never the whole text).
+// Tests only: the model's read of an ask, answered without a model call.
+let askReadForTests: ((text: string) => Promise<AskScopeRead | null>) | null = null;
+export function setAskReadForTests(f: ((text: string) => Promise<AskScopeRead | null>) | null): void {
+  askReadForTests = f;
+}
 // Null when the model read failed (an error, a timeout, an empty answer): the caller stores NOTHING, so a failed read is never taken for "in".
 export async function classifyAskRead(text: string): Promise<AskScopeRead | null> {
   // Unmistakably outside (the backstop): remembered, never searched or checked in on. First, so nothing else spends on it.
   if (outsideAsk(text)) return { kind: "outside", connection: null };
   // Co's own promise or deliverable: never searched, no model call needed.
   if (isCoCommitment(text)) return { kind: "help", connection: null };
+  if (askReadForTests) return askReadForTests(text);
   try {
     const { text: out } = await Promise.race([
       generateText({
