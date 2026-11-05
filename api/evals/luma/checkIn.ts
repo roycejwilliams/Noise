@@ -86,7 +86,8 @@ const guest = (over: any = {}) => ({ id: "gst-1", event_api_id: ev, user_email: 
   world.arrivals.length = 0; world.handles.clear(); world.arrived = false;
   let prompts: string[] = [];
   P.setProactiveModelForTests(async (prompt: string) => { prompts.push(prompt); return /Ask how "/.test(prompt) ? "How was Noise Dinner? Who did you meet?" : /whether they ended up making it/.test(prompt) ? "Did you end up going to Noise Dinner?" : "SKIP"; });
-  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  // The member's day, not the UTC date: between 00:00 UTC and LA midnight a UTC "yesterday" is still today for them (the fallback zone).
+  const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(Date.now() - 86_400_000));
   const cand = { id: "c1", userId: u, type: "debrief", targetKey: `debrief:${ev}`, topicKey: null, summary: "", priority: 50, attempts: 0, dueAt: new Date(), expiresAt: new Date(Date.now() + 72 * 3_600_000), createdAt: new Date(), payload: { eventApiId: ev, eventName: "Noise Dinner", eventDate: yesterday, outcomeFollowupIds: [], checkinFollowupIds: ["chk-1"], walkinCheckinIds: [], askText: null } } as any;
   const person = { userId: u, firstName: "Jordan", phoneNumber: "+14155550101" } as any;
   const door = [{ api_id: "g2", email: "other@example.com", phone: null, name: "O", approval_status: "approved", registered_at: null, checked_in_at: "2026-11-04T01:00:00Z" } as any];
