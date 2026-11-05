@@ -1,0 +1,102 @@
+{
+  "hash": "07c8e1ab07b1b4f1",
+  "case": "checkin-late-night",
+  "recorded_at": "2026-11-05T17:17:13.891Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 12:04am for the member. They texted \"Hey cue\", Cue said \"Hey Noor. What's up?\", and now they texted \"Just checking in\". At 5:30pm Cue had sent them the Harbor Light Fellowship with a question they never an...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 12:04am for the member. They texted \"Hey cue\", Cue said \"Hey Noor. What's up?\", and now they texted \"Just checking in\". At 5:30pm Cue had sent them the Harbor Light Fellowship with a question they never answered.\n\nCue's text:\n\"\"\"Late one, Noor. All good here, just resting easy tonight. Go get some sleep.\"\"\"\n\nIs the text care only, shaped by the hour: it opens soft (noticing it's late, or asking gently if everything's ok or what's keeping them up), and nothing after that care brings up the fellowship, an opportunity, a deadline, a status or anything for them to act on? Answer no if any business or nudge follows the care.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Only says 'Late one, Noor... just resting easy tonight. Go get some sleep' with no mention of the fellowship or any ask.\"}",
+      "usage": {
+        "input_tokens": 302,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 117,
+        "output_tokens_details": {
+          "thinking_tokens": 54
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgkAHbDYoFHonChF9BFnJ",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErQECsQCCBMYAipANvafcKzsofTVWGhNHyw9kGFiw+bt0yX8HuV5/WeX/ep5DTGPTImefkG/IILvKcmXY4Ev8K15n2NaWiJdL4WnUDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBmfSy1wbCAToIBBAAGgwC2ooDTzcFW74EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCdXcJ5B2WzGq0HeBn3kcOwzrevXe52EVxZL5kntklQpiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyVFlbxT51L/bzj8V0aDPfNtaxLPk4+dyTgxCIwz1u2/QX0pJ+5Wsapz64KDt4oqFAGVoAhd55j1KaUUdL7ETF/yRGx1kS237tx2FBqKpwBA8f0570alxqx0zW131BRUfq0NYY5tGy3FST5N+pIs4OFsqJuHY+2sUCYGTo77DsHBKD+e77GShvH2l0E6Igy8Zmt7gRGeTTtPBVKTW15njW30a3JYkiLxBfLV4KH5bYCe+Zfvunui+GQDlyRn62hP+/awDOo9mztODQ2lFI7l728smg11AT2J2zhoHLRITqzmon8mRoy3B+pZYF8GAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Only says 'Late one, Noor... just resting easy tonight. Go get some sleep' with no mention of the fellowship or any ask.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 302,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 117,
+          "output_tokens_details": {
+            "thinking_tokens": 54
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "07c8e1ab07b1b4f1",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
