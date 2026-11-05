@@ -86,7 +86,8 @@ P.setProactiveModelForTests(async (prompt: string) => {
 });
 
 // ---------------------------------------------------------------- finds and helpers
-const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+// The member's day, not the UTC date: between 00:00 UTC and LA midnight a UTC "yesterday" is still today for them (the fallback zone).
+const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(Date.now() - 86_400_000));
 const eventFind = (over: any = {}) => ({ tier: 2, kind: "public_event", name: "Founder Table", event_api_id: "evt-ft", url: "https://lu.ma/ft", event_date: yesterday, reason: "r", ...over });
 const jobFind = (over: any = {}) => ({ tier: 3, kind: "opportunity", form: "opening", name: "Open Fellowship", url: "https://example.com/fellowship", deadline: "2026-12-01", statedDates: { start: yesterday, end: yesterday }, category: "accelerator", ...over });
 const person = { userId: u, firstName: "Jordan", phoneNumber: "+14155550101" } as any;
@@ -196,6 +197,14 @@ CF.setDoorDepsForTests({ ours: async () => true, guestList: async () => [{ api_i
 {
   const d = await draft(regPayload());
   check("registered, door tracked (others scanned), they weren't: the no-show flow's, no debrief", kind(d) === "skip" && /no-show flow/.test(d.r.skip) && d.prompts.length === 0, d.r);
+}
+// "I went" overrides a tracked door with no scan: the member's own word is evidence, the debrief goes.
+{
+  CF.setDoorDepsForTests({ ours: async () => true, guestList: async () => [{ api_id: "g1", email: "someone@example.com", phone: null, name: "S", approval_status: "approved", registered_at: null, checked_in_at: "2026-11-03T20:00:00Z" } as any, { api_id: "g2", email: "jordan@example.com", phone: null, name: "J", approval_status: "approved", registered_at: null, checked_in_at: null } as any] });
+  await O.recordSuggestionOutcome(u, "event", "event:evt-noise", "Noise Dinner", "helped", "went", { provenance: "stated", quote: "I went, loved it" });
+  const d = await draft(regPayload());
+  check("said they went, door tracked and no scan: the debrief, not the no-show flow's skip", kind(d) === "debrief", { k: kind(d), r: d.r });
+  world.outcomes.length = 0;
 }
 CF.setDoorDepsForTests({ ours: async () => true, guestList: async () => [{ api_id: "g2", email: "jordan@example.com", phone: null, name: "J", approval_status: "approved", registered_at: null, checked_in_at: null } as any] });
 {
