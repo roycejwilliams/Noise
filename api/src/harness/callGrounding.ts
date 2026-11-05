@@ -36,6 +36,7 @@ import type { MemberKnowledge } from "../services/memberKnowledge.js";
 import { plainCorrected } from "../services/memberKnowledge.js";
 import { DateTime } from "luxon";
 import { claimKind, itemWords, namesItem } from "../services/callClaims.js";
+import { judgeScope, parseVerdict, type ScopeVerdict } from "./scope.js";
 import { foundLines, type DoneItem, type FoundOnCall } from "../services/callLedger.js";
 
 export type CallClaim = {
@@ -47,6 +48,11 @@ export type CallClaim = {
   limit?: string | null;
   // promise_keepable: the member's own words on the call that asked for it, or null when Co offered it on its own
   asked_quote?: string | null;
+  // promise_keepable: the audit's own judgment of the work promised (harness/scope.ts): "in" is about meeting people, rooms or communities,
+  // "out" is concierge work (a consumer service, flights, comparing products or plans, general research, job boards), "mixed" is both and
+  // then "connection" is only the connection part. Model judgment decides; code only backs it with the narrow backstop.
+  scope?: "in" | "out" | "mixed" | null;
+  connection?: string | null;
   // invented_fact: the exact names, places, times or numbers that had no source
   specifics?: string[] | null;
   // invented_fact about where something stands (#344 on calls): who or what the stage is about, in Cue's words ("Dana", "the pilot
@@ -196,7 +202,7 @@ List every statement by Cue ("assistant" lines only) that is a promise of a futu
 - "capability": a claim about what Cue can or can't do that the registry above contradicts. In "limit", the number of the can't line it breaks ("L3"). If a registry line says Cue does it, it is "ok", not "capability"; put that line's id in "ability".
 - "ok": supported by the facts Cue knew, what the person said, or the registry. Leave these out of the list: only the other types are used.
 
-Return ONLY JSON: {"claims": [{"quote": "Cue's exact words", "type": "...", "what": "...", "ability": "id or null", "limit": "L# or null", "asked_quote": "their exact words or null", "specifics": [], "stage_subject": "for a stage claim only, else null"}]}`;
+Return ONLY JSON: {"claims": [{"quote": "Cue's exact words", "type": "...", "what": "...", "ability": "id or null", "limit": "L# or null", "asked_quote": "their exact words or null", "scope": "promise_keepable only: in | out | mixed", "connection": "mixed only: just the connection part, short", "specifics": [], "stage_subject": "for a stage claim only, else null"}]}`;
 }
 
 export function callAuditChecks(claims: CallClaim[]): GateCheck[] {
@@ -354,7 +360,7 @@ export function askedQuoteFor(c: Pick<CallClaim, "quote" | "asked_quote">, trans
 }
 
 export type OpenCallTask = { id: number; goal: string; theirWords: string; createdAt: string };
-export type PlannedPromise = { what: string; quotes: string[]; asked: string | null; coveredBy: number | null };
+export type PlannedPromise = { what: string; quotes: string[]; asked: string | null; coveredBy: number | null; scope?: ScopeVerdict | null };
 export type AuditPlan = {
   corrections: CallClaim[];
   refused: { quote: string; type: CallClaim["type"]; why: string }[];
@@ -571,7 +577,7 @@ export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { kn
     corrections.push(...o.corrections);
     refused.push(...o.refused);
   }
-  const groups: { what: string; quotes: string[]; asked: string | null }[] = [];
+  const groups: { what: string; quotes: string[]; asked: string | null; scope: ScopeVerdict | null }[] = [];
   for (const c of claims.filter((x) => x.type === "promise_keepable" && x.what)) {
     // Already done with a tool on the call: nothing to keep, nothing opens.
     const doneBy = promiseDoneOnCall({ what: c.what, quotes: [c.quote] }, done);
@@ -586,7 +592,8 @@ export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { kn
     if (g) {
       g.quotes.push(c.quote);
       g.asked = g.asked ?? asked;
-    } else groups.push({ what: c.what, quotes: [c.quote], asked });
+      g.scope = g.scope ?? parseVerdict({ scope: c.scope, connection: c.connection });
+    } else groups.push({ what: c.what, quotes: [c.quote], asked, scope: parseVerdict({ scope: c.scope, connection: c.connection }) });
   }
   const promises = groups.map((g) => {
     const t = ctx.tasks.find((t) => sameCallCommitment({ goal: g.what, theirWords: g.asked }, t) || sameSubject(g.what, t.goal) || g.quotes.some((q) => sameCommitment({ goal: q }, t)));
@@ -639,7 +646,7 @@ export function promiseOpens(p: Pick<PlannedPromise, "coveredBy" | "asked">): "t
   return p.coveredBy ? "task_from_call" : p.asked ? "their_ask" : "promise_thread";
 }
 
-async function openPromiseThread(userId: string, p: PlannedPromise, transcript: string): Promise<"opened" | "blocked" | "failed"> {
+async function openPromiseThread(userId: string, p: PlannedPromise, transcript: string): Promise<"opened" | "blocked" | "failed" | "declined"> {
   const { startTask } = await import("../services/coTasks.js");
   // Never a look-out that names another member (the same guard as a text reply's promise, services/promises.ts trackPromise).
   const { linkedMemberNames } = await import("../services/memberSafeMemories.js");
@@ -647,7 +654,9 @@ async function openPromiseThread(userId: string, p: PlannedPromise, transcript: 
   const names = await linkedMemberNames(userId).catch(() => null);
   if (!names || namesAMember(p.what, names)) return "blocked";
   const t = promiseThreadTask(p, theirLineBefore(transcript, p.quotes[0] ?? ""));
-  const r = await startTask({ userId, ...t });
+  const r = await startTask({ userId, ...t, scope: p.scope ?? null });
+  // Refused for scope: not a failure to fall back from. It is declined, and the caller closes the promise honestly.
+  if (!r.ok && r.outOfScope) return "declined";
   const result = r.ok
     ? `Cue said on the call it would keep an eye out for "${p.what}". It's open as task #${r.task.id}: Cue keeps looking and texts when something real turns up.`
     : null;
@@ -658,6 +667,17 @@ async function openPromiseThread(userId: string, p: PlannedPromise, transcript: 
       .catch(() => null);
   }
   return r.ok ? "opened" : "failed";
+}
+
+// A promise made on a call that is outside connections (the purpose boundary): nothing is searched, opened or called "looked into". It
+// is written the way a correction is, so this call's follow-up text carries it and Cue tells them, briefly, in its own fresh words,
+// that it won't take that on (the type says why in words for the model; never a stock line).
+async function declinePromise(userId: string, p: PlannedPromise, transcript: string): Promise<void> {
+  await writeMemory(
+    userId,
+    "call_correction",
+    JSON.stringify({ quote: (p.quotes[0] ?? p.what).slice(0, 200), type: "promise_unkeepable", note: `outside connections: Cue won't be doing "${p.what.slice(0, 120)}". Tell them so briefly, in your own words, and don't offer to do it or something like it`, call_key: callKey(transcript) }),
+  ).catch((err: any) => console.error("callGrounding: decline note failed (non-fatal):", err?.message ?? err));
 }
 
 // dryRun: reads only (the member's texts, records and open tasks) and returns the plan; nothing is written or searched.
@@ -702,7 +722,15 @@ export async function auditCall(
     // Keep the promises Co can keep, once per commitment. Carried by a task already open from this call: that task is the
     // promise, so nothing else opens or searches. Asked for in their own words: their ask. Otherwise Co's own note, and a look.
     for (const p of plan.promises) {
-      const c = { what: p.what };
+      // The purpose boundary: judged by the audit's own read of the promise (with the narrow backstop behind it). A promise that is
+      // outside connections is never searched, tasked or "looked into"; the member is told, in the post-call text, that Cue won't take it on.
+      const sc = judgeScope(`${p.what}\n${p.asked ?? ""}`, p.scope ?? null);
+      const part = sc.scope === "mixed" ? sc.connection?.trim() || null : null;
+      if (sc.scope === "out" || (sc.scope === "mixed" && !part)) {
+        await declinePromise(userId, p, transcript);
+        continue;
+      }
+      const c = { what: part ?? p.what };
       if (p.coveredBy) {
         await writeMemory(
           userId,
@@ -719,7 +747,11 @@ export async function auditCall(
         ).catch(() => null);
         // A real thread, not one search (#113: "you'll hear from me" has to open something that keeps going): a promise task Co
         // owns, woken daily, texting only when it has something real. If none can open (at the cap), the one search still runs.
-        const opened = await openPromiseThread(userId, p, transcript).catch(() => "failed" as const);
+        const opened = await openPromiseThread(userId, { ...p, what: c.what }, transcript).catch(() => "failed" as const);
+        if (opened === "declined") {
+          await declinePromise(userId, p, transcript);
+          continue;
+        }
         if (opened === "failed") {
           // And actually look (2026-09-23: "I'll dig into those communities
           // and text you" was only ever written down, so nothing searched).
