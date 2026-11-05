@@ -71,7 +71,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   // (a) one at a time
   check("no open brief: a new one may start", CT.briefAlreadyOpen([]) === null && CT.briefAlreadyOpen([{ status: "done", held: null }, { status: "dropped", held: null }]) === null);
   check("an open brief stops a second one", /already being put together/.test(CT.briefAlreadyOpen([{ status: "open", held: null }]) ?? ""));
-  check("a finished brief waiting for their hours stops it too, and hands Cue the line to say now", /Tell them that now/.test(CT.briefAlreadyOpen([{ status: "open", held: { text: "I looked, but couldn't verify any venues that fit.", at: "" } }]) ?? ""));
+  check("a finished brief waiting for their hours stops it too, and hands Cue the line to say now", /Tell them that now/.test(CT.briefAlreadyOpen([{ status: "open", held: { text: "I looked, but couldn't verify any rooms that fit.", at: "" } }]) ?? ""));
   const ct = src("services/coTasks.ts");
   const start = ct.slice(ct.indexOf("export async function startResearchBrief"), ct.indexOf("// ---------------------------------------------------------------- research briefs, as the reply sees them"));
   check("the guard reads the open briefs themselves, not openTasks (which is work tasks only)", /briefAlreadyOpen\(await recentBriefs\(input\.userId\)\)/.test(start) && !/open\.some\(\(t\) => t\.kind === "research_brief"\)/.test(start));
@@ -86,13 +86,13 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   const rb = src("services/researchBrief.ts");
   check("no closing line goes through a fire-and-forget say() any more", !/await say\(/.test(rb) && (rb.match(/await tellThenClose\(/g) ?? []).length >= 3);
   check("told: closed as planned; held: the task stays open with the line and wakes in their hours; untold: dropped, saying so", /if \(next === "hold"\)[\s\S]{0,700}holdBriefLine\(task\.userId, task\.id, \{ text, messages, status, outcome, \.\.\.\(record\?\.length \? \{ record \} : \{\}\) \}, (?:held \?\? )?nextSendable\(new Date\(\), zone\)\)/.test(rb) && /closeTask\(task\.userId, task\.id, next === "told" \? status : "dropped", next === "told" \? outcome : `\$\{outcome\}; never told them/.test(rb));
-  check("a held line is said on the next wake without running the find again", rb.indexOf("if (held?.text)") > 0 && rb.indexOf("if (held?.text)") < rb.indexOf("findVenueOptions(task.userId"));
+  check("a held line is said on the next wake without running the find again", rb.indexOf("if (held?.text)") > 0 && rb.indexOf("if (held?.text)") < rb.indexOf("findRoomOptions(task.userId"));
   check("a brief that found nothing is closed as done only through tellThenClose (never before they're told)", !/closeTask\(task\.userId, task\.id, "done", `no brief/.test(rb));
   check("holdBriefLine only touches an open brief", /WHERE user_id = \$1 AND id = \$2 AND status = 'open' AND kind = 'research_brief'/.test(ct));
 
   // (c) the reply sees them
   const B = (o: Partial<import("../../src/services/coTasks.js").BriefView>) => ({ id: 7, goal: "Venue options: private dinner for twelve", theirWords: "find me a private dining room for twelve", status: "open" as const, createdAt: "2026-10-07T17:00:00Z", closedAt: null, outcome: null, held: null, ...o });
-  const [running, held, done, dropped] = CT.briefFactLines([B({}), B({ held: { text: "I looked, but couldn't verify any venues that fit. Want me to widen the search?", at: "2026-10-08T16:00:00Z" } }), B({ status: "done", closedAt: "2026-10-07T17:20:00Z", outcome: 'sent the brief "Venue options": 1. Spruce; 2. Quince' }), B({ status: "dropped", closedAt: "2026-10-07T17:20:00Z", outcome: "asked them first: missing headcount" })], "America/Los_Angeles");
+  const [running, held, done, dropped] = CT.briefFactLines([B({}), B({ held: { text: "I looked, but couldn't verify any rooms that fit. Want me to widen the search?", at: "2026-10-08T16:00:00Z" } }), B({ status: "done", closedAt: "2026-10-07T17:20:00Z", outcome: 'sent the brief "Venue options": 1. Spruce; 2. Quince' }), B({ status: "dropped", closedAt: "2026-10-07T17:20:00Z", outcome: "asked them first: missing headcount" })], "America/Los_Angeles");
   check("a running brief reads as work in progress, in their time", /^Cue is putting together research brief #7/.test(running) && /PDT/.test(running));
   check("a held brief says what it came to and when it goes", /hasn't reached them yet/.test(held) && /widen the search/.test(held) && /around /.test(held));
   check("a sent brief carries what went out (numbered options)", /finished/.test(done) && /1\. Spruce; 2\. Quince/.test(done));

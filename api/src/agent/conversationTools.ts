@@ -760,7 +760,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         scope: z
           .enum(["in", "out", "mixed"])
           .optional()
-          .describe("Your own judgment of this work. \"in\": it is about meeting people (who to meet and why, finding people, events, rooms or communities they would attend, preparing for a conversation or an event, an introduction, following through on a connection; for a career change, the people and rooms). \"out\": concierge work (a consumer service, comparing products or plans, travel, general research, watching job boards, funding or investor searches, venues or vendors for their own event, drafting their documents). \"mixed\": both in one request. Being about a person doesn't make it \"in\"."),
+          .describe("Your own judgment of this work. \"in\": it is about meeting people (who to meet and why, finding people, events, rooms or communities they would attend, preparing for a conversation or an event, an introduction, following through on a connection; for a career change, the people and rooms). \"out\": errands, shopping and lookups (a consumer service, comparing products or plans, travel, general research, watching job boards, funding or investor searches, venues or vendors for their own event, drafting their documents). \"mixed\": both in one request. Being about a person doesn't make it \"in\"."),
         connection: z.string().optional().describe("Only when scope is mixed: just the connection part, as a short phrase. Then start the task for that part alone."),
       }),
       execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom, scope: scopeIn, connection }) => {
