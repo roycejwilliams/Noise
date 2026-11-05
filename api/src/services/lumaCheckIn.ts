@@ -57,25 +57,71 @@ export type CheckInDeps = {
   ours?: (eventId: string) => Promise<boolean>;
   arrive?: (eventId: string, userId: string) => Promise<boolean>;
   rescore?: (eventId: string, eventName: string | undefined) => void;
+  // Whether this member is on the event's guest list or registration. The webhook's own email or phone is only a claim about who the
+  // guest is; the member must also be someone the event already knows (matchGuestsToUsers over its list, or its event_presence /
+  // event_checkin_followups rows).
+  onGuestList?: (eventId: string, userId: string) => Promise<boolean>;
+  // Whether a "test-" event id is ours. Only layer-1 stubs pass this; production never treats a "test-" id as ours for a check-in.
+  allowTestEvents?: boolean;
 };
-export type CheckInResult = "arrived" | "already_arrived" | "duplicate" | "not_a_checkin" | "no_event" | "not_ours" | "not_a_member";
+export type CheckInResult = "arrived" | "already_arrived" | "duplicate" | "not_a_checkin" | "no_event" | "not_ours" | "not_a_member" | "identity_conflict" | "not_on_guest_list";
+
+async function memberIdBy(column: "email" | "phone", value: string | null): Promise<string | null> {
+  if (!value) return null;
+  const { rows } = await pool.query(
+    column === "email"
+      ? `SELECT id FROM users WHERE archived_at IS NULL AND LOWER(email) = $1 LIMIT 2`
+      : `SELECT id FROM users WHERE archived_at IS NULL AND phone_number = $1 LIMIT 2`,
+    [value],
+  );
+  return rows.length === 1 ? String(rows[0].id) : null;
+}
+
+// Pure-ish: who the guest is. Email first; phone only when the guest has no email. A guest whose email and phone name different
+// members is refused (a mixed-up identity must never mark the wrong person arrived).
+export async function resolveCheckInMember(r: Pick<CheckInRead, "email" | "phone">): Promise<{ userId: string | null; conflict: boolean }> {
+  const byEmail = await memberIdBy("email", r.email);
+  if (r.email) {
+    const byPhone = await memberIdBy("phone", r.phone);
+    if (byEmail && byPhone && byEmail !== byPhone) return { userId: null, conflict: true };
+    return { userId: byEmail, conflict: false };
+  }
+  return { userId: await memberIdBy("phone", r.phone), conflict: false };
+}
+
+async function onEventGuestList(eventId: string, userId: string): Promise<boolean> {
+  const { rows } = await pool
+    .query(`SELECT 1 FROM event_checkin_followups WHERE event_api_id = $1 AND user_id = $2 UNION ALL SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2 LIMIT 1`, [eventId, userId])
+    .catch(() => ({ rows: [] as any[] }));
+  if (rows.length) return true;
+  const guests = await (await import("./luma.js")).getEventGuestList(eventId);
+  const matched = await (await import("./eventScoring.js")).matchGuestsToUsers(guests);
+  return matched.some((m: any) => String(m.user_id) === userId);
+}
 
 export async function handleGuestCheckIn(data: any, eventName: string | undefined, deps: CheckInDeps = {}): Promise<CheckInResult> {
   const r = readGuestWebhook(data);
   if (!r.checkedIn) return "not_a_checkin";
   if (!r.eventId) return "no_event";
-  const ours = deps.ours ?? (async (id: string) => id.startsWith("test-") || (await (await import("./eventPresence.js")).presenceEvents()).some((e) => e.api_id === id));
+  const ours = deps.ours ?? (async (id: string) => (deps.allowTestEvents && id.startsWith("test-")) || (await (await import("./eventPresence.js")).presenceEvents()).some((e) => e.api_id === id));
   if (!(await ours(r.eventId))) return "not_ours";
   // Once per guest per event, however many times it's delivered (Luma retries; guest.updated also fires for other edits).
   const handle = `luma:checkin:${r.eventId}:${r.guestKey ?? r.email ?? r.phone ?? "unknown"}`;
   if (!(await claimOnce(handle))) return "duplicate";
   try {
-    const { rows } = await pool.query(
-      `SELECT id FROM users WHERE archived_at IS NULL AND ((LOWER(email) = $1 AND $1 IS NOT NULL) OR (phone_number = $2 AND $2 IS NOT NULL)) LIMIT 1`,
-      [r.email, r.phone],
-    );
-    const userId = rows[0]?.id ? String(rows[0].id) : null;
+    const { userId, conflict } = await resolveCheckInMember(r);
+    if (conflict) {
+      // Never the email, phone or ids: only that it happened.
+      console.error("lumaCheckIn: the guest's email and phone belong to different members; refused");
+      return "identity_conflict";
+    }
     if (!userId) return "not_a_member";
+    const onList = deps.onGuestList ?? onEventGuestList;
+    if (!(await onList(r.eventId, userId))) {
+      // Not claimed for good: a later edit of the same guest (once the list catches up) may be processed.
+      await pool.query(`DELETE FROM inbound_webhook_handles WHERE handle = $1`, [handle]).catch(() => {});
+      return "not_on_guest_list";
+    }
     const arrive = deps.arrive ?? (async (eventId: string, uid: string) => (await import("./eventPresence.js")).markArrived(eventId, uid, "door"));
     const isNew = await arrive(r.eventId, userId);
     if (!isNew) return "already_arrived";
