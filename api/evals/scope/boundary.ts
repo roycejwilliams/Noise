@@ -158,8 +158,35 @@ check("a task whose stored verdict is in is not closed for scope, whatever its w
 // ---- the backstop's unmistakable cases are guarded by code even when the model says "in" (the model decides everything else)
 await both("'find me a dentist' with scope in on the tool call is still refused", "find me a dentist", { goal: "Find a dentist near Jordan" }, { scope: "in" }, (x) => refused(x) && /isn't something Cue does/.test(x.r.error));
 await both("'watch for PM jobs' with scope in is still refused", "watch for PM jobs", { goal: "Watch for PM jobs", lookout: true }, { scope: "in" }, refused);
-check("the mixed refusal no longer tells the model to say scope in again", !/scope \\?"in\\?"/.test(S.startRefusal({ scope: "mixed", kind: "model", why: "x", connection: "meet founders" })));
-await both("a mixed turn read with no scope on the call: the connection part the model writes starts (the backstop still guards the outs)", "plan my trip to Austin around meeting founders there", { goal: "Meet founders in Austin" }, undefined, made, { scope: "mixed", connection: "meet founders in Austin" });
+check("the mixed refusal tells the model to start only the connection part, as its own call with scope in", /scope \\?"in\\?"/.test(S.startRefusal({ scope: "mixed", kind: "model", why: "x", connection: "meet founders" })) && /meet founders/.test(S.startRefusal({ scope: "mixed", kind: "model", why: "x", connection: "meet founders" })));
+// Mixed stays mixed: under a mixed turn read, a tool call with no scope starts NOTHING, whatever the work says (the reviewer's probes)
+const mixedTurn = { scope: "mixed" as const, connection: "founder dinners this week" };
+for (const [msg, goal] of [["find a therapist near the Mission and founder dinners this week", "Find a therapist near the Mission"], ["find a therapist and founder dinners this week", "Find a therapist and founder dinners this week"], ["research the best CRM tools and founder dinners this week", "Research the best CRM tools"], ["look for remote PM positions and founder dinners this week", "Look for remote PM positions"]] as const) {
+  check(`scopeRefusal under a mixed read refuses '${goal}'`, CT.scopeRefusal({ goal, steps: [goal], firstPlan: goal, scope: mixedTurn }) !== null);
+  await both(`'${goal}' with no scope on the call, under a mixed turn: refused with the connection part to start`, msg, { goal }, undefined, (x) => refused(x) && /founder dinners this week/.test(x.r.error) && /ONLY the connection part/.test(x.r.error), mixedTurn);
+}
+await both("…then 'founder dinners this week' as its own call with scope in starts", "find a therapist and founder dinners this week", { goal: "Find founder dinners this week" }, { scope: "in" }, made, mixedTurn);
+check("a promise, the door and the brief under a mixed read open nothing: they go through the same guard", CT.scopeRefusal({ goal: "Do what you said: find a therapist", scope: mixedTurn }) !== null && /briefVerdict/.test(src("agent/loopTools.ts")) && /scope: o\.scope \?\? null/.test(src("services/theDoor.ts")));
+check("the reply gets guidance on a mixed turn (help with the connection part, set the rest aside, promise nothing), none on an in-scope turn, the decline guidance on out", S.replyScopeGuidance({ scope: "in", connection: null }) === null && S.replyScopeGuidance(null) === null && /connection part/.test(S.replyScopeGuidance(mixedTurn) ?? "") && /don't promise/.test(S.replyScopeGuidance(mixedTurn) ?? "") && S.replyScopeGuidance({ scope: "out", connection: null }) === S.OUT_OF_SCOPE_GUIDANCE && /replyScopeGuidance\(turnRead\?\.scope\)/.test(src("routes/sendblue.ts")));
+check("calls have no turn read: their model's own tool call carries the scope, and a refusal returns the same guidance (nothing extra is added to a call's reply)", /scope: z\s*\.enum/.test(src("agent/conversationTools.ts")));
+
+// ---- Cue's own offers (payloadFirst) must be inside the boundary before they are made; a task from one that reads out closes quietly
+{
+  const PF = await import("../../src/harness/payloadFirst.js");
+  const draft = "Want me to dig into therapists near you?";
+  const theirs = "User said: I need a therapist near the Mission";
+  const read = (scope: any) => ({ question: draft, kind: "research" as const, work: "find a therapist near the Mission", theirWords: "I need a therapist near the Mission", sameAsTask: null, scope });
+  const outD = PF.decidePayloadFirst(read({ scope: "out", connection: null }), draft, theirs, []);
+  const mixD = PF.decidePayloadFirst(read({ scope: "mixed", connection: "founder dinners" }), draft, theirs, []);
+  const inD = PF.decidePayloadFirst(read({ scope: "in", connection: null }), draft, theirs, []);
+  check("an offer the read judged out or mixed is not made and hands nothing off", !outD.handOff && (outD as any).outside === true && !mixD.handOff && (mixD as any).outside === true);
+  check("an in-scope offer is handed off as before, carrying its verdict", inD.handOff === true && (inD as any).scope?.scope === "in");
+  check("payloadFirst drops the candidate for an outside offer (hold), and the task it starts is marked as Cue's own offer", /d\.outside\) return \{ hold: d\.why \}/.test(src("harness/payloadFirst.ts")) && /ownOffer: true/.test(src("harness/payloadFirst.ts")));
+  const sent0 = sentLines.length, c9 = closed.length;
+  await quietly(() => TT.runDueTask(queued(601, "Find a dentist near the Mission", "ask", { followup: { ownOffer: true } }), { handBack: handBack("never sent") }));
+  check("a task started from Cue's own offer that reads out on wake closes quietly: the member never asked, so no 'won't do that' line", sentLines.length === sent0 && closed.length === c9 + 1 && /Nothing was sent about it/.test(closed[closed.length - 1].outcome), { sentLines: sentLines.slice(sent0), closed: closed.slice(c9) });
+}
+
 await both("…and a dentist written under that same mixed turn is still refused", "find a dentist and meet founders", { goal: "Find a dentist near the Mission" }, undefined, refused, { scope: "mixed", connection: "meet founders" });
 
 // ---- a promise Cue would make carries the turn's verdict: "can you find me a therapist", read as out, creates no promise task
@@ -171,13 +198,13 @@ await both("…and a dentist written under that same mixed turn is still refused
   const t2 = await quietly(() => PR.trackPromise({ userId: "u-jordan", reply: "I'll text you tonight with a couple of founder dinners in the Mission.", theirMessage: "any founder dinners?", scope: { scope: "in", connection: null } }));
   check("…and a promise for in-scope work still opens as before", t2.ok === true && created.length === n0 + 1, t2);
   check("the verdict reaches promise binding, the door and payload-first", /workVerdict\(rf\.turnScope\)/.test(src("harness/replyGrounding.ts")) && /scope: o\.scope \?\? null/.test(src("services/theDoor.ts")) && /handOffWork\(o\.userId, d, o\.scope/.test(src("harness/payloadFirst.ts")));
-  check("the reply is told to decline an out turn in its own words", /OUT_OF_SCOPE_GUIDANCE/.test(src("routes/sendblue.ts")));
+  check("the reply is told to decline an out turn in its own words", /replyScopeGuidance/.test(src("routes/sendblue.ts")));
 }
 
 // ---- the research brief only looks for rooms, events and communities
 const rb = src("services/researchBrief.ts");
 check("the research brief searches rooms and events: the event query and schema, no venue path", /assembleQuery\("event"/.test(rb) && /findRoomOptions\(/.test(rb) && !/findVenueOptions|readVenueSource|peerspace/i.test(rb.replace(/The scripted Peerspace venue reader[^\n]*/, "")) && !/assembleQuery\("venue"/.test(src("agent/loopTools.ts")));
-check("the research tool refuses outside work through the same guard", /scopeRefusal\(\{ goal: input\.what, scope: workVerdict\(ctx\.turnScope/.test(src("agent/loopTools.ts")));
+check("the research tool refuses outside work through the same guard", /scopeRefusal\(\{ goal: input\.what, scope: briefVerdict/.test(src("agent/loopTools.ts")));
 
 // ---- the call promise for flights: no search, no 'Looked into', and an honest close
 const CG = await import("../../src/harness/callGrounding.js");
