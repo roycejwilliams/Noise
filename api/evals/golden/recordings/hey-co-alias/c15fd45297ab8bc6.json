@@ -1,7 +1,7 @@
 {
   "hash": "c15fd45297ab8bc6",
   "case": "hey-co-alias",
-  "recorded_at": "2026-11-05T04:40:38.762Z",
+  "recorded_at": "2026-11-05T17:18:19.680Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -54,7 +54,7 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgjAbPhzhkE1AwwuYpLBK",
+        "id": "msg_011CgkANWfbBQHoNUDXy2Kui",
         "type": "message",
         "role": "assistant",
         "content": [

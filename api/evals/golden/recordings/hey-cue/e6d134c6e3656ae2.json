@@ -1,7 +1,7 @@
 {
   "hash": "e6d134c6e3656ae2",
   "case": "hey-cue",
-  "recorded_at": "2026-11-05T04:40:30.396Z",
+  "recorded_at": "2026-11-05T17:18:11.030Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -105,7 +105,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"claims\":[]}",
+      "text": "{\"claims\": []}",
       "usage": {
         "input_tokens": 3414,
         "cache_creation_input_tokens": 0,
@@ -114,7 +114,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 10,
+        "output_tokens": 9,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -124,13 +124,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgjAamf566ZcKQDr8kLKU",
+        "id": "msg_011CgkAMsTxyc353r5YKztmL",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"claims\":[]}"
+            "text": "{\"claims\": []}"
           }
         ],
         "container": null,
@@ -145,7 +145,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 10,
+          "output_tokens": 9,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

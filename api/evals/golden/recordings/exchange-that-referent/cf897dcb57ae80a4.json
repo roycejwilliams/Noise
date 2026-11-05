@@ -1,7 +1,7 @@
 {
   "hash": "cf897dcb57ae80a4",
   "case": "exchange-that-referent",
-  "recorded_at": "2026-11-05T04:45:42.136Z",
+  "recorded_at": "2026-11-05T17:23:15.419Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -54,7 +54,7 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgjAykWzrtBC1FfkJQMec",
+        "id": "msg_011CgkAkJWxVkhDfC4VmvTuz",
         "type": "message",
         "role": "assistant",
         "content": [

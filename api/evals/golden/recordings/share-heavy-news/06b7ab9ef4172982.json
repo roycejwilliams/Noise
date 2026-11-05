@@ -1,0 +1,102 @@
+{
+  "hash": "06b7ab9ef4172982",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-11-05T17:20:01.645Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"This is the kind of news that stops everything else. I'm glad you're there with him.\n\nHow are you holding up, sitting in that waiting room.\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"How are you holding up, sitting in that waiting room\\\" asks rather than presumes, with no mention of the dinner or news request.\"}",
+      "usage": {
+        "input_tokens": 297,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 158,
+        "output_tokens_details": {
+          "thinking_tokens": 98
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgkAVur3n9vKtxQ9FwUus",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EscFCsQCCBMYAipAhDncc2LdDnPGs/m/YfMo5iRGy8HCkhdcy4ZbqMl6XpiEtBnlgktHTuhBuj9B+V+GB1lVYy2GTmBU/zDBwwxtBDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBwfWy1wbCAToIBBAAGgwC2ooDTzcFne8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCZdKs/EGGNK3WynBi0StK9nm29+ITrjMP5a9EfDNBrhCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyyswpNWU2rqriXTAQaDPT+ScScr7aK1InECiIwlwq14wmbzInKJQzbxHw/yON77J/fSYzryEDixax1SDTCKMKSANL8tnp3iwXdm4FuKq8CR2nQotwxw/+HsyoPqywzJ0GKTVX8UR3R6/Dx+l7aSkM+vYtfH+n1OBiI14lOKOE0wMfPuAeUtg491Io/92A9/NPwG0xl15yLewqYLgjvwID0ghqe3Kw68jgq4zSKQgCtfR7O5y0kAwPN2tYnC0I9OfJss+tZrN9Bp5WxwAV2SeWIz1FvFXOnNDYl/iARDJaW/H2u5SLqxnHtNgQ7QIg/ZvfIbBaR5SAMGX4NT4xR7EkLQmO9+bFT7ty4f7B7USwFYk83n/hO1auur9M+mZBaS1V4r6c4/lv9pTk2jXoztKoiSN3DMHSprJxwAelenNwgK/yUKfxvfyTOq1aPshkbQNQzKzAf8xigpk9goAS1zYH1rYSwU6DTaZU2BCafvy4vlQeHGDfRorVoNnt5rNcHGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"How are you holding up, sitting in that waiting room\\\" asks rather than presumes, with no mention of the dinner or news request.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 297,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 158,
+          "output_tokens_details": {
+            "thinking_tokens": 98
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "06b7ab9ef4172982",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

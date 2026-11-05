@@ -1,7 +1,7 @@
 {
   "hash": "6679ebb1399d3ad1",
   "case": "exchange-that-referent",
-  "recorded_at": "2026-11-05T04:45:40.622Z",
+  "recorded_at": "2026-11-05T17:23:12.966Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -124,7 +124,7 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgjAyau4b3CSzu8ErGJdN",
+        "id": "msg_011CgkAk6cqSoLDN5ouH2mAK",
         "type": "message",
         "role": "assistant",
         "content": [

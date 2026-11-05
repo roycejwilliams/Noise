@@ -1,0 +1,102 @@
+{
+  "hash": "8246c3388dcb2520",
+  "case": "continuous-follow-up",
+  "recorded_at": "2026-11-05T17:21:40.877Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other c...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other companies efficient and I want it to matter for people like him.\"\n\nCue's text:\n\"\"\"This is the real thing, not a career pivot on paper. You're not guessing at the problem, you watched it firsthand.\n\nTen years of making companies efficient is a real toolkit for this. Where's the inefficiency actually sitting, at the farm gate, in storage and logistics, or in who takes the margin in between?\"\"\"\n\nDoes the text build on his answer with something of Cue's own (a real observation, a position, or a question that follows from what he just said and moves it forward), WITHOUT paraphrasing his answer back to him, and without filling in what he didn't say (his childhood, what his grandfather felt, which part of the chain)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"you watched it firsthand\\\" paraphrases his own stated experience back to him\"}",
+      "usage": {
+        "input_tokens": 381,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 239,
+        "output_tokens_details": {
+          "thinking_tokens": 195
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgkAd9TonPSsGwQixoPni",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvIHCsQCCBMYAipASzozy3N2AH7r/p4rnWhyZEsvH9EasXTAQQrbkTrh0ZKhD8xyPzrB8jBgbZQs+3QokO8+cSSIMR675paJSwkvJDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBpPay1wbCAToIBBAAGgwC2ooDTzcFJrsEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiApsTVr1Ya6dw9rsEwsEg+UNFD5azEzmRkeq/9sPH7iRiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzsJ8Kx0rDUlBBtotQaDKHQx3bZhkWl5EUuXiIwHDiMjsraNIdbEQgnQru2YxHK73V3BwguQAJ07AucOPJ/slvs0WLutNh9pskA3K4VKtoEPbBaYtHXcIBIZxz3ge9Y8OKPcH0hGcFqnf8KhFRsrFf8LLPcrbTgv6mgWDASG/Aub1hPkEAu8N/gpZOmDKGDZOtwM3mwVZoAf1Ipbf57yuofgKg9CZX5dn0TY2ytrtVRD1VfgfMYZxGPp9oUMGbDNQStovzxMfbNx2n4bCihUn/w4n6YB4x9zOWakfser3WRpHDRhyJpCsyC/rfSgwDswWviYYimUwP5VucRADT1bMncbQ5mBntFxAG6TmIyouEUMjuihoFiTgrgvQA9DTRLo7g8dy0iNENa65M4/lQJAOcR4RVuG1ITTaDeyp14968r7UCCNKczlKe2AM8OLSy7U7BIIi9SHF0++yN6eTp71EXURMRQVJi2h1ivKUueZ+lZfUu+aWQ5cHnCiR+GHSoj+/Ey9M29tdrWyeMRTaem0dXPkl4QziLdZOirsqBtJ4Urxy6NFFUvGX35HrUiq2AdnjeuntXHQkz9tqaIMzd4brEDcZs7byJn7FlPGo7XQmRJ9kPNGlcxBJjlj/sHhw9LYLyLLc8FzkexFN7TBs8Dlvcp82ohoYLWx2p4TxzIDvU1BNt3R5gDr7Qnpd8pA2YwR6/eAx82ZzemNPzLEoY1WYdaBI754eCQO8xboHzsVppBkQlR7sV5c6OWK5/+nvGQBEkOeExa/C2lNZ5/k2ps7gGBbwmTL/H7P3UwBFDZ/wf14LCoXycy9Z4YIsV4budCBAFXdfdPWgluA1adfu+GLNYEjwdbJbkMryhRxHdaiy5KT5m25q1EnUReAPejj4fTrHZQvHN1/7+Nr0MYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"you watched it firsthand\\\" paraphrases his own stated experience back to him\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 381,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 239,
+          "output_tokens_details": {
+            "thinking_tokens": 195
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "8246c3388dcb2520",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
