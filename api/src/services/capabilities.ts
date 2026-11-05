@@ -1,3 +1,4 @@
+import { RECALL_USE, RECALL_CALL_USE } from "./conversationRecall.js";
 import { CRISIS_RESOURCES } from "./safetyText.js";
 // Everything Co can do, in one place (Royce, 2026-09-25: "Co value is in
 // it's intelligence"; "me having to code it to send a vcard is something
@@ -517,6 +518,19 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 1 },
     use: "Read everything Cue knows about them, grouped, with their own words where Cue has them. Call it when they ask what you know about them, what you have on them or what you remember about them, and before you correct or remove something they say is wrong or want forgotten (it gives each item's refs). Then tell them in plain language, short, grouped the way it comes back, in their own words where it gives them, saying 'you' not 'they'; leave out the refs, and end by saying they can correct or remove anything. Only what it returns: never add to it from the conversation.",
   },
+  // Look back through their own older conversation, text and calls (services/conversationRecall.ts, 2026-11-05). A read of their own
+  // retained record: nothing sent, nothing changed, nothing disclosed.
+  {
+    id: "look_back",
+    // The tool's own description says when to use it; the sheet stays under its budget.
+    sheet: null,
+    can: "Cue can look back through the older conversations it has had with them, texts and calls, when they ask what was said or when.",
+    onCall: true,
+    tool: "lookBack",
+    limits: { perTurn: 3, perDay: 40 },
+    use: RECALL_USE,
+    callUse: RECALL_CALL_USE,
+  },
   {
     id: "correct_what_co_knows",
     sheet: null,
@@ -777,6 +791,8 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
   // A quick look: the event feed (no web search on a call) and what Cue knows about them.
   searchEvents: { run: "now", kind: "read", ms: 5000 },
   whatCoKnows: { run: "now", kind: "read", ms: 3000 },
+  // Their own record, one indexed read per member: quick enough to wait for on a call.
+  lookBack: { run: "now", kind: "read", ms: 5000 },
   // Start work that runs after the call.
   startTask: START,
   // Their yes is a short model read first (services/theirYes.ts), so these get a little longer.
@@ -811,7 +827,7 @@ export const CALL_RUN: Readonly<Record<string, CallRun>> = {
 export const CHANGES_NOTHING: ReadonlySet<string> = new Set([
   "sendReply", "reactInsteadOfReplying", "leaveItAtReaction", "markTopicAsked", "askedWalkin",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
-  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows", "anythingForMe",
+  "listOpenAsks", "listSentOffers", "checkInvitesLeft", "whatCoKnows", "lookBack", "anythingForMe",
   "sendContactCard", "shareFinds", "shareLink", "sendProductUpdates",
   "saveFeedbackForTeam", "flagSafetyConcern",
 ]);

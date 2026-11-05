@@ -7,6 +7,7 @@
     "evals/reply/askedFor.ts",
     "evals/reply/threadWindow.ts",
     "evals/recall/conversationRecall.ts",
+    "evals/recall/wiring.ts",
     "evals/reply/wholeExchange.ts",
     "evals/reply/answerFromRecord.ts",
     "evals/reactions/incoming.ts",
