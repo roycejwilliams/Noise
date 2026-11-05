@@ -149,7 +149,7 @@ const SHARE = new RegExp(
   "i",
 );
 // Anything that reads as a request: a question, an ask for Cue to do or find something, a wish to meet or go.
-const ASKS_FOR = /\?|\b(?:can you|could you|would you|will you|please|find me|find us|look for|looking for|look out|keep an eye|keep your eyes|let me know|send me|show me|know (?:anyone|of anyone|somebody|someone)|anyone (?:who|that|hiring)|any (?:\w+ ){0,2}(?:events|dinners|meetups|people|groups|clubs|communities|rooms|circles|classes|mixers|opportunities)|introduce|intro me|help me|where can i|who should i|i want to|i need to|i'd like to|i would like to|i'd love to|i would love to|i wanna|prep me|get me)\b/i;
+const ASKS_FOR = /\?|\b(?:can you|could you|would you|will you|please|find me|find us|look for|looking for|look out|keep an eye|keep your eyes|let me know|send me|show me|know (?:anyone|of anyone|somebody|someone)|anyone (?:who|that|hiring)|any (?:\w+ ){0,2}(?:events|dinners|meetups|people|groups|clubs|communities|rooms|circles|classes|mixers|opportunities)|introduce|intro me|help me|where can i|who should i|i want to|i need to|i'd (?:still |really )?(?:like|love|want)|i would (?:still |really )?(?:like|love|want)|i (?:still |really )?want|i wanna|prep me|get me)\b/i;
 export function sharedNotAsked(text: string): boolean {
   const t = String(text ?? "");
   return SHARE.test(t) && !ASKS_FOR.test(t);
