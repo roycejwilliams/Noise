@@ -809,13 +809,21 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     .filter(Boolean)
     .join("\n\n");
 
-  // Finds Cue's recent texts named (a debrief, a follow-up) stay in the facts however old the send: "where was that one" on a call.
-  // Finds Cue's recent texts named (a debrief, a follow-up) come first and are filled with no window, ranked by how recently a text named
-  // them, so the size cap never drops them. Their zone, so the send date is their day.
-  const { sentNamedIn } = await import("./turnContext.js");
-  const named = sentNamedIn(sent, k.exchanges.filter((x) => x.from === "co" && !x.call).map((x) => x.text).reverse());
-  await fillDetails(named, { withinDays: 36500, max: 3 }).catch(() => {});
-  const sentLines = await strip(sentDetailLines({ sent }, 7, new Date(), { also: named, zone, referentMax: CALL_SENT_MAX - 400 }));
+  // Finds Cue's recent texts named (a debrief, a follow-up) come first, resolved the way a text turn resolves them (turnContext.ts
+  // resolveReferents): ranked by how recently a text named them, then older ones looked up by name with no window, all through the
+  // removals, each with its stored record filled (offer details, city, saved page) so the size cap never drops them and a find with no
+  // saved offer details still carries its city and link. Their zone, so the send date is their day.
+  const { sentNamedIn, namedPhrases, loadSentNamed, fillReferents, dropRemoved, answerFromRecordNote } = await import("./turnContext.js");
+  const coTexts = k.exchanges.filter((x) => x.from === "co" && !x.call).map((x) => x.text).reverse();
+  const named = await dropRemoved(userId, sentNamedIn(sent, coTexts));
+  if (named.length < 3) {
+    const phrases = [...new Set(coTexts.slice(0, 3).flatMap((t) => namedPhrases(t)))].slice(0, 4);
+    const older = await withinWait(Promise.all(phrases.map((n) => loadSentNamed(userId, n).catch(() => [] as SentItem[]))), "the older finds read").catch(() => [] as SentItem[][]);
+    for (const x of await dropRemoved(userId, older.flat())) if (named.length < 3 && !named.some((f) => f.key === x.key && f.url === x.url)) named.push(x);
+  }
+  await withinWait(fillReferents(userId, named), "the referent read").catch(() => {});
+  const recordNote = answerFromRecordNote(named);
+  const sentLines = await strip([...(recordNote ? [recordNote] : []), ...sentDetailLines({ sent }, 7, new Date(), { also: named, zone, referentMax: CALL_SENT_MAX - 400 })]);
   const thread = callThread(k.exchanges, { guardsUnread: !!k.guardsUnread });
   const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread });
 

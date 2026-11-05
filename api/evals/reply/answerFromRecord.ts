@@ -1,6 +1,7 @@
 // Answering from the record (2026-11-04, Royce's own thread): "Where is that one located?" about Founder Table (sent Oct 30, San Francisco,
 // needs host approval) got "nothing on file", and "What day did you send that" got "no worries, easy to miss". Plus the #389 review:
-// referents first under the caps, resolved once and filled with no window, a narrow non-answer check, no made-up gap, and referent rules.
+// referents first under the caps, resolved once and filled with no window, the removal filter on every referent path, no made-up gap, and
+// a plain answer-from-the-stored-facts note (no regex veto of the draft).
 // Layer 1: zero tokens, no database (the stored-offer and by-name reads take a fake db). Whether the model words the answer well is
 // unverified until a paid run.
 //   npx tsx evals/reply/answerFromRecord.ts
@@ -11,7 +12,6 @@ process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 import fs from "node:fs";
 
 const T = await import("../../src/services/turnContext.js");
-const M = await import("../../src/harness/moveCheck.js");
 const C = await import("../../src/services/callContext.js");
 
 let total = 0, failed = 0;
@@ -71,7 +71,7 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
   const db = { query: async (sql: string, args: unknown[] = []) => (sqls.push({ sql, args }), { rows: /event_offer_pending/.test(sql) ? [{ content: JSON.stringify({ match: { ...stored, name: "Founder Table", url: "https://lu.ma/other-ft", event_api_id: "x" } }) }, { content: JSON.stringify({ match: stored }) }] : [] }) };
   const bare = item("Founder Table", FT_URL, 9);
   const turn = { sent: [item("A", "https://lu.ma/a", 1), item("B", "https://lu.ma/b", 2), bare], message: "where is that" };
-  const got = await T.resolveReferents("u1", turn as any, { message: "Where is that one located?", coTexts: [lastCo], db, fill: async () => {} });
+  const got = await T.resolveReferents("u1", turn as any, { message: "Where is that one located?", coTexts: [lastCo], db, fill: async () => {}, keep: async (i) => i });
   check("2. resolved once: one referent, its stored details filled from the offer matched by link (not the same-name one with another link)", got.length === 1 && got[0] === bare && bare.details?.city === "San Francisco" && bare.city === "San Francisco", { got: got.length, city: bare.city });
   const lines = T.sentFindFacts(bare, NOW, ZONE).join(" ");
   check("2. ...so the facts have the city and no contradictory 'page hasn't been read' line", /San Francisco/.test(lines) && !/hasn't been read/.test(lines), lines);
@@ -80,7 +80,7 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
   // a name not in the recent list: found by name over all time (word boundary), still this member only
   const sqls2: { sql: string; args: unknown[] }[] = [];
   const db2 = { query: async (sql: string, args: unknown[] = []) => (sqls2.push({ sql, args }), { rows: /FROM revealed_offers/.test(sql) ? [{ item_key: "name:old fest", item_name: "Old Fest", kind: "event", url: "https://lu.ma/oldfest", sent_at: new Date("2026-08-01"), reaction: null }] : [] }) };
-  const old = await T.resolveReferents("u1", { sent: [], message: "" } as any, { message: "Where was Old Fest again?", coTexts: [], db: db2, fill: async () => {} });
+  const old = await T.resolveReferents("u1", { sent: [], message: "" } as any, { message: "Where was Old Fest again?", coTexts: [], db: db2, fill: async () => {}, keep: async (i) => i });
   check("8. a find named in their words but older than the recent list is found by name, no window", old[0]?.name === "Old Fest" && sqls2.filter((s) => /~\*/.test(s.sql)).length >= 3 && sqls2.every((s) => s.args[0] === "u1" && !/INTERVAL|make_interval/i.test(s.sql)), sqls2.map((s) => s.sql.slice(0, 80)));
 }
 // 1 + 10. Referents first under the call cap; zone passed.
@@ -103,36 +103,60 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
   check("1. nothing named in the thread means no extra finds", T.sentNamedIn(sentAll, ["How was your week?"]).length === 0);
   check("7. calls rank by how recently a text named them and use whole words", T.sentNamedIn(sentAll, ["Recent 2 is nice", "Founder Table was fun"], 2).map((x) => x.name).join() === "Recent 2,Founder Table");
 }
-// 3 + 4. The non-answer check.
+// 3. Forgotten finds never resolve (blocker A), on every referent path.
 {
-  const ans = (x: Item) => [T.referentAnswer(x, NOW, ZONE)];
-  const ft = ans(founder);
-  const asked = "What day did you send that I must've missed it";
-  const miss = (draft: string, theirs = asked, r = ft) => M.moveMisses(draft, null, theirs, r).some((m) => m.name === "non_answer");
-  // misses
-  for (const d of ["No worries, easy to miss in the middle of everything else going on.", "Sorry, I should have flagged it better.", "Monday was busy.", "3 things going on this week.", "Ha, totally get it."]) check(`3. miss: "${d}"`, miss(d));
-  check("3. miss: 'u send that when' with no question mark", miss("Ha, totally get it.", "u send that when"));
-  check("3. miss: where, answered with a feeling", miss("That sounds like a lot right now.", "Where is that one located?"));
-  // passes: answers
-  check("3. pass: the day Cue sent it", !miss("I sent Founder Table on Oct 30."));
-  check("3. pass: its link", !miss("Here you go: " + FT_URL));
-  check("3. pass: 'No worries, it's in San Francisco, and the address shows once the host approves you.'", !miss("No worries, it's in San Francisco, and the address shows once the host approves you.", "Where is that one located?"));
-  check("3. pass: honest gap 'the address shows after approval' only for a find that needs approval", !miss("The address shows after approval.", "Where is that one located?"));
-  check("3. ...and that same sentence is a miss for a find that does not need approval (no made-up gap)", miss("The address shows after approval.", "Where is that one located?", ans(item("Open House", "https://lu.ma/open", 6, { details: { ...details, requiresApproval: false } }))));
-  check("3. pass: 'I don't have the address stored'", !miss("I don't have the street address stored for it.", "Where is that one located?"));
-  check("3. pass: 'No problem, sending it now' to a link ask", !miss("No problem, sending it now.", "can you send that link again"));
-  check("3. pass: it was Tuesday (the day it happens)", !miss("It's Tuesday, Nov 3.", "when is that"));
-  // over-catch probes: not a question about the find, or nothing resolved
-  for (const [d, t] of [["That sounds really hard, I'm here.", "I'm so wiped, I don't know when it'll all calm down"], ["Nothing waiting right now.", "anything waiting for me?"], ["Smart casual works.", "what's the dress code?"], ["Totally, take your time.", "ok thanks"]] as const) check(`3. no catch: "${d}" to "${t}"`, !miss(d, t));
-  check("4. nothing resolved means non_answer never fires", M.moveMisses("No worries, easy to miss.", null, asked, []).length === 0);
-  const note = M.moveRedraftNote(M.moveMisses("Ha, totally get it.", null, asked, ft), null);
-  check("4. the rewrite note works with no record, names the find, and carries no canned line", /Not sent/.test(note) && /Founder Table/.test(note) && /Rewrite it in your own words/.test(note), note);
-  // 4: the nudge is kept apart from moveNudged (the rewrite still gets resend and reoffer checks)
+  const W = await import("../../src/services/whatCoKnows.js");
+  const MK = await import("../../src/services/memberKnowledge.js");
+  const rows = W.liveGuards([{ field: "sent", old: "Founder Table", now: null, ref: "sent:ft", removed: true }]);
+  const keep = async (items: Item[]) => MK.withoutRemovedSent(items, rows, W);
+  const stored = { name: "Founder Table", url: FT_URL, city: "San Francisco", event_api_id: "evt-ft", details };
+  const dbFor = () => ({ query: async (sql: string) => ({ rows: /FROM revealed_offers/.test(sql) ? [{ item_key: "event:evt-ft", item_name: "Founder Table", kind: "event", url: FT_URL, sent_at: new Date("2026-08-01"), reaction: null }] : /event_offer_pending/.test(sql) ? [{ content: JSON.stringify({ match: stored }) }] : [] }) });
+  // by name, older than the recent list
+  const byName = await T.resolveReferents("u1", { sent: [], message: "" } as any, { message: "Where was Founder Table again?", coTexts: [], db: dbFor(), fill: async () => {}, keep });
+  check("3. a forgotten find asked about by name (older than the recent list) resolves to nothing: no details", byName.length === 0, byName.map((x) => x.name));
+  const byNameKept = await T.resolveReferents("u1", { sent: [], message: "" } as any, { message: "Where was Founder Table again?", coTexts: [], db: dbFor(), fill: async () => {}, keep: async (i) => i });
+  check("3. ...and the same ask with nothing forgotten does resolve it (the check can fail)", byNameKept.length === 1 && byNameKept[0].city === "San Francisco");
+  // pointed at, from the recent list and Cue's text
+  const pointed = await T.resolveReferents("u1", { sent: [founder], message: "" } as any, { message: "Where is that one located?", coTexts: [lastCo], db: dbFor(), fill: async () => {}, keep });
+  check("3. a forgotten find pointed at (recent list, Cue's last text) resolves to nothing", pointed.length === 0);
+  // the real default fails closed when the removals can't be read (no database in layer 1)
+  const closed = await T.dropRemoved("u1", [founder]);
+  check("3. when the removals can't be read, nothing resolves (fails closed)", closed.length === 0);
+  const T_src = fs.readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8");
+  check("3. every path of resolveReferents goes through keep (the referred list and each by-name load)", (T_src.match(/await keep\(/g) ?? []).length >= 2 && /const keep = o\.keep \?\? /.test(T_src));
+  const cc = fs.readFileSync(new URL("../../src/services/callContext.ts", import.meta.url), "utf8");
+  check("3. the call's referents go through the same filter", (cc.match(/dropRemoved\(userId/g) ?? []).length >= 2);
+}
+// 4. Pointing at a find with a noun for it (blocker B).
+{
+  const nine = item("Founder Table", FT_URL, 9, { details, city: "San Francisco" });
+  const list = [item("Salon Night", "https://lu.ma/salon", 2), nine];
+  const ref = (m: string) => T.referredSent(list, { message: m, coTexts: [lastCo] }).map((x) => x.name).join();
+  check("4. 'where is that event located?' resolves to the 9-day-old Founder Table", ref("where is that event located?") === "Founder Table", ref("where is that event located?"));
+  check("4. 'where was that dinner' resolves to it", ref("where was that dinner") === "Founder Table", ref("where was that dinner"));
+  check("4. 'where was that dinner party' and 'where's the place' too", ref("where was that dinner party") === "Founder Table" && ref("where's the place") === "Founder Table");
+  check("4. a descriptor still names a different thing: 'that pottery class' resolves to nothing", ref("where is that pottery class") === "" && ref("where was that rooftop party") === "");
+}
+// 5. The reply gets the plain instruction with the facts; no code veto exists.
+{
+  const note = T.answerFromRecordNote([founder]) ?? "";
+  check("5. the note names the find and says answer from the stored facts, say a missing field and give the link, never 'not sure'", /Founder Table/.test(note) && /Answer from the stored facts/.test(note) && /give the link/.test(note) && /Never say/.test(note), note);
+  check("5. nothing resolved means no note", T.answerFromRecordNote([]) === null);
+  check("5. the reveal read isn't repeated for the same find (link or event id, either Luma host)", T.isSameFind(founder, { url: "https://luma.com/founder-table/" }) && T.isSameFind({ url: null, key: "event:abc" }, { event_api_id: "abc" }) && !T.isSameFind(founder, { url: "https://lu.ma/other" }));
+  const ms = fs.readFileSync(new URL("../../src/harness/moveCheck.ts", import.meta.url), "utf8");
   const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-  check("4. non_answer has its own once-flag and only other misses set moveNudged", /nonAnswerNudged = true/.test(ct) && /misses\.some\(\(m\) => m\.name !== "non_answer"\)\) state\.moveNudged = true/.test(ct) && /state\.nonAnswerNudged \|\| state\.linkDelivered/.test(ct));
-  const rec = { done: [{ id: "D1", kind: "link" as const, label: "Salon Night", url: "https://lu.ma/salon", replied: true }], unresolved: [], priorMeant: [], read: { move: "answer" as const, meant: null, told: [], closes: [], reopens: [], again: null } };
-  const both = M.moveMisses("Ha, totally get it. Here's Salon Night again: https://lu.ma/salon", rec, asked, ft).map((m) => m.name);
-  check("4. a rewrite-able draft that also resends is caught for both (the resend is not skipped)", both.includes("resend") || both.includes("non_answer"), both);
+  check("5. no regex veto: non_answer is gone from the move check and the send path", !/non_answer|nonAnswer/.test(ms + ct));
+  const rg = fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
+  check("5. the reply facts carry the note when they ask about a resolved find, and skip the reveal repeat", /answerFromRecordNote\(opts\.turn\.referents/.test(rg) && /isSameFind\(r, match\)/.test(rg));
+  const cc = fs.readFileSync(new URL("../../src/services/callContext.ts", import.meta.url), "utf8");
+  check("5. a call gets the same note, first, with the same fill (loadStoredMatch through fillReferents)", /answerFromRecordNote\(named\)/.test(cc) && /fillReferents\(userId, named\)/.test(cc) && /loadSentNamed\(userId/.test(cc));
+}
+// 6. Luma links under either host are one find.
+{
+  const m = T.mergeSent([{ item_key: "name:ft", item_name: "Founder Table", kind: "event", url: "https://lu.ma/founder-table/", sent_at: NOW, reaction: null }], [{ m: { name: "Founder Table!", url: "https://luma.com/founder-table?utm_source=x", city: "San Francisco", details }, decided_at: NOW }], []);
+  check("6. lu.ma and luma.com (trailing slash, query) merge into one find with the details", m.length === 1 && !!m[0].details, m.length);
+  const two = T.mergeSent([{ item_key: "name:a", item_name: "A", kind: "event", url: "https://lu.ma/one", sent_at: NOW, reaction: null }, { item_key: "name:a", item_name: "A", kind: "event", url: "https://luma.com/two", sent_at: NOW, reaction: null }], [], []);
+  check("6. different Luma events stay two", two.length === 2);
 }
 // 5 + 9. Source checks for what can't run without a database.
 {

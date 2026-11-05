@@ -226,18 +226,21 @@ export async function loadSentItems(userId: string, days = 45): Promise<SentItem
   return mergeSent(revealed, offers, recs, dated);
 }
 
+// One key per link: no scheme or www, no query or fragment, no trailing slash or punctuation, lower case, and Luma's two hosts (lu.ma,
+// luma.com) as one, so the same event sent under either link is one find.
+export const normUrlOf = (u: string): string => u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase().replace(/^lu\.ma(?=\/|$)/, "luma.com");
+
 // Pure: the three sources as one list, one entry per thing, revealed_offers'
 // key first (the router's), details and post text filled in from the offers.
 // dated: Co's sent-record rows (name, when, when_end): they only fill a date in on something already listed, never add an item.
 export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: any[] = []): SentItem[] {
   const items: SentItem[] = [];
   const idOf = (x: SentItem) => (x.key?.startsWith("event:") ? x.key : null);
-  const urlKey = (u: string | null) => (u ? u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase() : null);
   // The same thing: the same event id or link; with neither on one side, the same name. Two events of one name with different links or
   // ids (another city, another date) stay two (a lookup by url or id finds the right one).
   const same = (a: SentItem, b: SentItem) => {
     if (idOf(a) && idOf(b)) return idOf(a) === idOf(b);
-    if (a.url && b.url) return urlKey(a.url) === urlKey(b.url);
+    if (a.url && b.url) return normUrlOf(a.url) === normUrlOf(b.url);
     return norm(a.name) === norm(b.name);
   };
   const add = (item: SentItem) => {
@@ -363,29 +366,19 @@ export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null
   return out;
 }
 
-// Pure: what in a reply would answer a question about this find: its stored fields as the words a reply would use (city, venue, address,
-// hosts, price, the day it happens, the day Cue sent it, how many days ago), and whether "the address shows after approval" is true
-// of it (only when its record says registration needs host approval). moveCheck.ts reads this and nothing else of the find.
-export type ReferentAnswer = { name: string; url: string | null; tokens: string[]; approvalGap: boolean };
-export function referentAnswer(s: SentItem, now = new Date(), zone: string | null = null): ReferentAnswer {
-  const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
-  const days = (d: DateTime) => [d.toFormat("LLL d"), d.toFormat("LLLL d"), d.toFormat("cccc"), d.toFormat("ccc d")];
-  const tokens: string[] = [];
-  const d = s.details;
-  const read = (f: { value: string } | undefined | null) => (f?.value ? [f.value] : []);
-  tokens.push(...[d?.city, s.city, d?.venue, d?.address, ...(d?.hosts ?? []), d?.price && d.price !== "free" ? d.price : null].filter((x): x is string => !!x && x.length >= 3));
-  if (d?.price === "free") tokens.push("free");
-  if (s.read) for (const f of ["venue", "address", "host", "cost"] as const) tokens.push(...read((s.read as any).fields?.[f]));
-  const at = (iso: string | null | undefined) => { if (!iso) return null; const x = DateTime.fromISO(iso, { setZone: true }); return x.isValid ? x : null; };
-  const start = at(d?.startAt ?? s.endsOn);
-  if (start) tokens.push(...days(start.setZone(d?.timezone || z)));
-  const sentD = DateTime.fromJSDate(s.sentAt).setZone(z);
-  tokens.push(...days(sentD));
-  const n = Math.max(0, Math.round((now.getTime() - s.sentAt.getTime()) / 86_400_000));
-  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
-  tokens.push(`${n} days ago`, ...(n <= 10 ? [`${words[n]} days ago`] : []));
-  if (n >= 7 && n < 14) tokens.push("last week");
-  return { name: s.name, url: s.url, tokens: [...new Set(tokens.map((t) => t.trim()).filter(Boolean))], approvalGap: d?.requiresApproval === true };
+// The plain instruction that goes with a resolved find: its stored facts (sentFindFacts) are the answer. For the reply, when the member
+// asks about it; for a call, whenever one is resolved (no question yet). It instructs the model and carries no wording of its own.
+export function answerFromRecordNote(referents: readonly Pick<SentItem, "name">[]): string | null {
+  if (!referents.length) return null;
+  const names = referents.map((r) => `"${r.name}"`).join(" and ");
+  return `They are asking about ${names}, which Cue sent them. Answer from the stored facts listed for it (the day Cue sent it, its city, its link, its date and time). If a field isn't stored, say so and give the link. Never say you're not sure, or that you have nothing on file, about anything listed there.`;
+}
+
+// True when a stored match is this find: the same event id or the same link (Luma's two hosts count as one).
+export function isSameFind(item: Pick<SentItem, "url" | "key">, m: { url?: string | null; event_api_id?: string | null } | null | undefined): boolean {
+  if (!m) return false;
+  if (item.key?.startsWith("event:") && m.event_api_id && item.key === `event:${m.event_api_id}`) return true;
+  return !!(item.url && m.url && normUrlOf(item.url) === normUrlOf(m.url));
 }
 
 // The referents (named or pointed at) come first, then the recent sends, so a size cap (a call's CALL_SENT_MAX) cuts the oldest recent
@@ -407,7 +400,6 @@ export function sentDetailHints(ctx: Pick<TurnContext, "sent">, withinDays = 5):
     .flatMap((s) => describeRead(s.name, s.read!).hints);
 }
 
-const normUrlOf = (u: string) => u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
 // Whole-word match of a name in a text ("coffee" in a sentence is not a find named "Coffee" unless the whole name is there as words).
 const WORD_STOP = new Set(["the", "a", "an", "and", "of", "at", "in", "on", "to", "for", "with"]);
 const namedIn = (text: string, name: string): number => {
@@ -419,7 +411,11 @@ const namedIn = (text: string, name: string): number => {
 };
 // Their words point at something Cue said, with a pointing word and no noun of their own ("that", "that one", "the link"); a question
 // that names a different thing ("that pottery class") is not pointing at the last find.
-export const POINTING = /\b(?:that|this|it|those)\b(?!\s+(?:[a-z']+\s+){0,2}(?:class|event|dinner|night|party|meetup|workshop|lunch|brunch|mixer|talk|show|festival|session|gig|retreat|conference)\b)|\b(?:that|this|the) one\b|\bthe (?:link|address|location|venue|price|date|time|day|city)\b/i;
+const GENERIC_NOUN = "event|dinner|party|meetup|thing|one|place|night|lunch|brunch|mixer|session|gathering|get-together";
+const SPECIFIC_NOUN = "class|event|dinner|night|party|meetup|workshop|lunch|brunch|mixer|talk|show|festival|session|gig|retreat|conference";
+// "that event", "that dinner", "the place", "that one" point at the find Cue last named; "that pottery class" (a descriptor word, then a
+// noun) names something of its own.
+export const POINTING = new RegExp(String.raw`\b(?:that|this|it|those)\b(?!\s+(?:(?!(?:${GENERIC_NOUN})\b)[a-z']+\s+){1,2}(?:${SPECIFIC_NOUN})\b)|\b(?:that|this|the) (?:${GENERIC_NOUN})\b|\bthe (?:link|address|location|venue|price|date|time|day|city)\b`, "i");
 
 // Pure: the finds Cue sent that their message points at, so their stored fields reach the reply however old the send is. In order: the
 // referent the turn read resolved (meant, #368: its link, else its label); the finds they name (whole words); else, when they point
@@ -463,7 +459,8 @@ const reEsc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // member. Null when none is stored.
 export async function loadStoredMatch(userId: string, item: Pick<SentItem, "name" | "url" | "key">, db: Db = pool): Promise<any | null> {
   const apiId = item.key?.startsWith("event:") ? item.key.slice(6) : null;
-  const pats = [item.url ? `%${likeEsc(normUrlOf(item.url))}%` : null, apiId ? `%${likeEsc(apiId)}%` : null, !item.url && !apiId ? `%${likeEsc(item.name)}%` : null].filter((x): x is string => !!x);
+  const likeUrl = (u: string) => normUrlOf(u).replace(/^luma\.com(?=\/)/, ""); // a Luma event is stored under either host: match on its path
+  const pats = [item.url ? `%${likeEsc(likeUrl(item.url))}%` : null, apiId ? `%${likeEsc(apiId)}%` : null, !item.url && !apiId ? `%${likeEsc(item.name)}%` : null].filter((x): x is string => !!x);
   if (!pats.length) return null;
   const { rows } = await db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'event_offer_pending' AND content ILIKE ANY($2::text[]) ORDER BY created_at DESC LIMIT 20`, [userId, pats]);
   for (const r of rows) {
@@ -504,21 +501,23 @@ export function namedPhrases(message: string): string[] {
   return [...new Set(out)].slice(0, 3);
 }
 
-// Resolve, once per turn, the finds their message points at and fill each one's stored record with no window: the saved page read, the
-// stored offer's details and city, found by link or event id. The turn's lists and the facts then read this one result. The turn read's
-// meant (an item's link and label) is passed in; a referent not in the recent list is looked up by name, whole words, however old.
-export async function resolveReferents(userId: string, turn: Pick<TurnContext, "sent" | "message">, o: { message: string; meantLabel?: string | null; meantUrl?: string | null; coTexts?: readonly string[]; db?: Db; fill?: (items: SentItem[]) => Promise<void> } = { message: "" }): Promise<SentItem[]> {
-  const db = o.db ?? pool;
-  let found = referredSent(turn.sent, { message: o.message, meantLabel: o.meantLabel, meantUrl: o.meantUrl, coTexts: o.coTexts });
-  if (!found.length && ASKS_ABOUT_FIND.test(o.message)) {
-    const names = [o.meantLabel, ...namedPhrases(o.message)].filter((x): x is string => !!x);
-    for (const n of names) {
-      const older = await loadSentNamed(userId, n, db).catch(() => [] as SentItem[]);
-      for (const x of older) if (!found.some((f) => f.key === x.key && f.url === x.url)) found.push(x);
-      if (found.length) break;
-    }
-    found = found.slice(0, 2);
+// Through the removals (memberKnowledge.ts withoutRemovedSent): a find they had Cue forget is no referent, however it was found. The
+// finds loaded by name or link bypass the reply's own list, so this is the same filter applied to them. Fails closed: when the removals
+// can't be read, nothing resolves (a forgotten find is never answered with its details).
+export async function dropRemoved<T extends { name: string; postText?: string | null }>(userId: string, items: T[]): Promise<T[]> {
+  if (!items.length) return items;
+  try {
+    const [W, M] = await Promise.all([import("./whatCoKnows.js"), import("./memberKnowledge.js")]);
+    return M.withoutRemovedSent(items, await W.forgottenRows(userId), W);
+  } catch {
+    return [];
   }
+}
+
+// Fill each referent's stored record with no window: the stored offer's details and city, found by link or event id, then the saved
+// page read. The one filling both the text turn and the call use.
+export async function fillReferents(userId: string, found: SentItem[], o: { db?: Db; fill?: (items: SentItem[]) => Promise<void> } = {}): Promise<void> {
+  const db = o.db ?? pool;
   await Promise.all(found.map(async (i) => {
     const m = await loadStoredMatch(userId, i, db).catch(() => null);
     if (m) {
@@ -530,6 +529,25 @@ export async function resolveReferents(userId: string, turn: Pick<TurnContext, "
     }
   }));
   await (o.fill ?? ((items: SentItem[]) => fillDetails(items, { withinDays: 36500, max: 3 })))(found).catch(() => {});
+}
+
+// Resolve, once per turn, the finds their message points at and fill each one's stored record with no window. The turn's lists and the
+// facts then read this one result. The turn read's meant (an item's link and label) is passed in; a referent not in the recent list is
+// looked up by name, whole words, however old. Every path goes through the removals (dropRemoved; o.keep replaces it in tests).
+export async function resolveReferents(userId: string, turn: Pick<TurnContext, "sent" | "message">, o: { message: string; meantLabel?: string | null; meantUrl?: string | null; coTexts?: readonly string[]; db?: Db; fill?: (items: SentItem[]) => Promise<void>; keep?: (items: SentItem[]) => Promise<SentItem[]> } = { message: "" }): Promise<SentItem[]> {
+  const db = o.db ?? pool;
+  const keep = o.keep ?? ((items: SentItem[]) => dropRemoved(userId, items));
+  let found = await keep(referredSent(turn.sent, { message: o.message, meantLabel: o.meantLabel, meantUrl: o.meantUrl, coTexts: o.coTexts }));
+  if (!found.length && ASKS_ABOUT_FIND.test(o.message)) {
+    const names = [o.meantLabel, ...namedPhrases(o.message)].filter((x): x is string => !!x);
+    for (const n of names) {
+      const older = await keep(await loadSentNamed(userId, n, db).catch(() => [] as SentItem[]));
+      for (const x of older) if (!found.some((f) => f.key === x.key && f.url === x.url)) found.push(x);
+      if (found.length) break;
+    }
+    found = found.slice(0, 2);
+  }
+  await fillReferents(userId, found, { db, fill: o.fill });
   return found;
 }
 
