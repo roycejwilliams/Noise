@@ -171,16 +171,15 @@ check("going: the parked follow-up is armed", world.rof[0].harness_status === nu
   // ...and then they say they went
   await O.recordSuggestionOutcome(u, "event", "event:evt-ft", "Founder Table", "helped", "went", { provenance: "stated", quote: "I went, it was great" });
   const d3 = await draft(payloadFor(q[0]));
-  check("went: the debrief ('how was it')", kind(d3) === "debrief" && /How was Founder Table/.test(d3.r.text), { k: kind(d3), r: d3.r });
+  check("went after going: the row is closed and a debrief queued earlier doesn't re-ask it", world.rof[0].harness_status === "dropped" && /already told/.test(world.rof[0].drop_reason ?? "") && kind(d3) === "skip" && /already told/.test(d3.r.skip) && d3.prompts.length === 0, { s: world.rof[0].harness_status, d3: d3.r });
 }
 reset();
 await R.scheduleOutcomeFollowUp(u, "founder events", eventFind() as any);
 await O.recordSuggestionOutcome(u, "event", "event:evt-ft", "Founder Table", "helped", "went", { provenance: "stated", quote: "I went, it was great" });
-check("went (first word on it): armed", world.rof[0].harness_status === null);
+check("stated 'went, loved it': the row is closed, not armed (the outcome is already known)", world.rof[0].harness_status === "dropped" && /already told/.test(world.rof[0].drop_reason ?? ""), world.rof[0]);
 {
   const q = await dueRows();
-  const d = await draft(payloadFor(q[0]));
-  check("went: the debrief is sent", kind(d) === "debrief", { k: kind(d), r: d.r });
+  check("stated 'went, loved it': nothing is queued, so no debrief re-asks it", q.length === 0, q);
 }
 // Cue's own read, never stated: not evidence they went
 reset();
@@ -189,7 +188,7 @@ await O.recordSuggestionOutcome(u, "event", "event:evt-ft", "Founder Table", "he
 {
   CF.setDoorDepsForTests({ ours: async () => false });
   const q = await dueRows();
-  check("Cue's own read of 'went' (not stated) is not evidence: nothing is sent", q.length === 1 && kind(await draft(payloadFor(q[0]))) === "skip" && world.rof[0].harness_status === "dropped");
+  check("Cue's own read of 'went' (not stated) is not evidence: nothing is sent", q.length === 0 && world.rof[0].harness_status === "dropped");
 }
 
 // ================================================================ 5. registered: door tracked / untracked

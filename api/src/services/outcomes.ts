@@ -47,13 +47,15 @@ export async function recordSuggestionOutcome(
   }
 }
 
-// What a recorded result does to the find's follow-up (Royce, 2026-11-04: never assume a member went). A sign they meant to go or went
-// (acted, helped, didnt_help) arms the parked follow-up; a no drops it with the reason. "interested" is a yes to hearing more, not a
-// plan to go, so it arms nothing. Never throws.
+// What a recorded result does to the find's follow-up (Royce, 2026-11-04: never assume a member went). A stated plan (acted) arms the
+// parked follow-up, which asks only whether they went. A stated went / didn't help is already the outcome: the row is closed, since a
+// debrief would re-ask what they told Cue. A no drops it with the reason. "interested" is a yes to hearing more, not a plan to go, so it
+// arms nothing. Never throws.
 export async function settleFollowUpForResult(userId: string, itemKey: string, result: SuggestionResult): Promise<void> {
   try {
     const R = await import("./recommendationOutcome.js");
-    if (result === "acted" || result === "helped" || result === "didnt_help") await R.armOutcomeFollowUp(userId, itemKey);
+    if (result === "acted") await R.armOutcomeFollowUp(userId, itemKey);
+    else if (result === "helped" || result === "didnt_help") await R.dropOutcomeFollowUp(userId, itemKey, "they already told Cue how it went");
     else if (result === "declined") await R.dropOutcomeFollowUp(userId, itemKey, "they said it isn't for them");
   } catch (err: any) {
     console.error("settleFollowUpForResult failed (non-fatal):", err?.message ?? err);
