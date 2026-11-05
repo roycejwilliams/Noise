@@ -1681,6 +1681,13 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_threads_user ON member_threads (user_id, status)`))
     .catch((err: Error) => console.error("member_threads table init failed:", err));
 
+  // A transition is a kind of thread (Royce 2026-11-05, Cue Memory Spec step 2): one about a life change. NULL = an ordinary thread, so no
+  // existing row changes meaning. transition_source: "said" (they said it outright) or "inferred"; transition_channel: "text" or "call".
+  // `kind` stays thread/commitment (a transition can also be a commitment).
+  await pool
+    .query(`ALTER TABLE member_threads ADD COLUMN IF NOT EXISTS transition_source TEXT, ADD COLUMN IF NOT EXISTS transition_channel TEXT`)
+    .catch((err: Error) => console.error("member_threads transition columns init failed:", err));
+
   // Offers to write something up as a document, and the documents written (services/documentOffer.ts, 2026-10-07).
   await pool
     .query(

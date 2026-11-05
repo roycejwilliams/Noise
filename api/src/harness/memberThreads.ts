@@ -49,12 +49,20 @@ export type MemberThread = {
   kind: "thread" | "commitment";
   closedQuote: string | null;
   lastTouchedAt: string;
+  // A transition is a thread about a life change (a move, a new role, going solo, starting over, a breakup, a new city, a career
+  // pivot). null = an ordinary thread. "said": they said it outright; "inferred": read from what they said. The quote that opened it
+  // is theirs either way (the gate). transitionChannel: where they said it. Picture Memory spec step 2 (2026-11-05).
+  transition: TransitionSource | null;
+  transitionChannel: LineVia | null;
 };
+
+export type TransitionSource = "said" | "inferred";
+export type LineVia = "text" | "call";
 
 // A line the member said, with when. Text replies come from "User said:"
 // memories; calls from the "user:" lines of the stored transcript. Co's own
 // lines and call summaries never count as their words.
-export type OwnLine = { at: string; text: string };
+export type OwnLine = { at: string; text: string; via?: LineVia };
 
 const MAX_OPEN = 6;
 const LOOKBACK_DAYS = 14;
@@ -127,10 +135,10 @@ export function findQuote(quote: string, lines: OwnLine[]): OwnLine | null {
   return hit;
 }
 
-export type ProposedOpen = { text: string; quote: string; when?: string | null; nextStep?: string; commitment?: boolean };
+export type ProposedOpen = { text: string; quote: string; when?: string | null; nextStep?: string; commitment?: boolean; transition?: unknown };
 export type ProposedClose = { id: string; status: "resolved" | "changed"; quote: string; newText?: string | null };
 
-export type AcceptedOpen = { text: string; quote: string; quotedAt: string; dueDate: string | null; dueLabel: string | null; nextStep: NextStep; kind: "thread" | "commitment" };
+export type AcceptedOpen = { text: string; quote: string; quotedAt: string; dueDate: string | null; dueLabel: string | null; nextStep: NextStep; kind: "thread" | "commitment"; transition: TransitionSource | null; transitionChannel: LineVia | null };
 
 // Pure: what goes through. `zone` is their time zone (or null → UTC), used to
 // read "Friday" relative to the day they said it.
@@ -159,7 +167,7 @@ export function gateThreadChanges(
     if (!reason && hit && !closed.some((x) => x.id === c.id)) closed.push({ ...c, quotedAt: hit.at });
   }
 
-  for (const o of [...opens, ...closed.filter((c) => c.status === "changed" && c.newText).map((c) => ({ text: c.newText!, quote: c.quote }) as ProposedOpen)]) {
+  for (const o of [...opens, ...closed.filter((c) => c.status === "changed" && c.newText).map((c) => ({ text: c.newText!, quote: c.quote, transition: live.find((x) => x.id === c.id)?.transition ? "said" : undefined }) as ProposedOpen)]) {
     const text = typeof o.text === "string" ? o.text.trim().slice(0, 200) : "";
     const hit = findQuote(o.quote, lines);
     let reason: string | null = null;
@@ -188,7 +196,10 @@ export function gateThreadChanges(
       }
     }
     const nextStep = NEXT_STEPS.includes(o.nextStep as NextStep) ? (o.nextStep as NextStep) : "check_in";
-    opened.push({ text, quote: o.quote.trim(), quotedAt: hit.at, dueDate, dueLabel, nextStep, kind: o.commitment && dueDate ? "commitment" : "thread" });
+    // The model proposes the kind; the source is "said" unless it says it read it between their words. A transition is always
+    // opened from a quote of theirs (the gate above), so there is no transition without their own words.
+    const transition: TransitionSource | null = o.transition === "inferred" ? "inferred" : o.transition === "said" || o.transition === true ? "said" : null;
+    opened.push({ text, quote: o.quote.trim(), quotedAt: hit.at, dueDate, dueLabel, nextStep, kind: o.commitment && dueDate ? "commitment" : "thread", transition, transitionChannel: transition ? hit.via ?? null : null });
   }
   return { opened, closed, checks };
 }
@@ -203,11 +214,11 @@ What ${firstName} said recently, oldest first (their exact words):
 ${lines.map((l) => `- [${localStamp(`${l.at}:00Z`, zone)}] ${l.text}`).join("\n")}
 
 1. Close a thread only when their words say how it landed or that it changed ("the pitch went great", "we moved it to November"). "quote" must be copied exactly from their words above, at least a few words. Being quiet about it is not a close.
-2. Open a thread for each thing that matters to them right now and isn't on the list yet (usually one to four): something coming up with an outcome, a decision they're weighing, something they're working toward or worried about. Name it in their own terms (a short line, plain words, "they" for them, and the date if they gave one). "quote" is copied exactly from their words. If the quote names when ("Friday", "October 10th", "next week"), copy that phrase exactly as "when". Mark "commitment": true only when they said they themselves will do something by then ("I'll send the deck Friday").
+2. Open a thread for each thing that matters to them right now and isn't on the list yet (usually one to four): something coming up with an outcome, a decision they're weighing, something they're working toward or worried about. Name it in their own terms (a short line, plain words, "they" for them, and the date if they gave one). "quote" is copied exactly from their words. If the quote names when ("Friday", "October 10th", "next week"), copy that phrase exactly as "when". Mark "commitment": true only when they said they themselves will do something by then ("I'll send the deck Friday"). If it's a life change (a move, a new role or company, going solo, starting over, a breakup, a new city, a career pivot), set "transition": "said" if they said it outright or "inferred" if you're reading it from what they said; otherwise null.
 3. "nextStep": "check_in" (the default: there'll be news a friend would ask about), "look_up" (they asked for something to be found), "suggest_someone" (they want to meet a kind of person), or "remember" (only a background fact with nothing to ask about later).
 Most of the time nothing changes; return empty lists then.
 
-Return ONLY JSON: {"close": [{"id": "...", "status": "resolved" | "changed", "quote": "...", "newText": "what it changed to, or null"}], "open": [{"text": "...", "quote": "...", "when": null, "nextStep": "check_in", "commitment": false}]}`;
+Return ONLY JSON: {"close": [{"id": "...", "status": "resolved" | "changed", "quote": "...", "newText": "what it changed to, or null"}], "open": [{"text": "...", "quote": "...", "when": null, "nextStep": "check_in", "commitment": false, "transition": null}]}`;
 }
 
 function rowToThread(r: any): MemberThread {
@@ -223,6 +234,8 @@ function rowToThread(r: any): MemberThread {
     kind: r.kind,
     closedQuote: r.closed_quote,
     lastTouchedAt: new Date(r.last_touched_at).toISOString(),
+    transition: r.transition_source === "said" || r.transition_source === "inferred" ? r.transition_source : null,
+    transitionChannel: r.transition_channel === "text" || r.transition_channel === "call" ? r.transition_channel : null,
   };
 }
 
@@ -245,8 +258,8 @@ export async function ownLines(userId: string, days = LOOKBACK_DAYS): Promise<Ow
   const out: OwnLine[] = [];
   for (const r of rows) {
     const at = new Date(r.created_at).toISOString().slice(0, 16);
-    if (r.memory_type === "call_transcript") for (const t of userLinesFromTranscript(String(r.content))) out.push({ at, text: t.slice(0, 500) });
-    else out.push({ at, text: String(r.content).replace(/^User said:\s*/, "").slice(0, 500) });
+    if (r.memory_type === "call_transcript") for (const t of userLinesFromTranscript(String(r.content))) out.push({ at, text: t.slice(0, 500), via: "call" });
+    else out.push({ at, text: String(r.content).replace(/^User said:\s*/, "").slice(0, 500), via: "text" });
   }
   return out;
 }
@@ -362,9 +375,9 @@ export async function applyThreadProposal(
       // rebuilds applying one proposal used to open it twice and queue two check-ins. The second insert is refused and skipped.
       const { rows } = await pool
         .query(
-          `INSERT INTO member_threads (user_id, text, opened_quote, opened_at, feeling, due_date, next_step, kind)
-           VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8) RETURNING id`,
-          [userId, o.text, o.quote, o.quotedAt + ":00Z", feeling, o.dueDate, o.nextStep, o.kind],
+          `INSERT INTO member_threads (user_id, text, opened_quote, opened_at, feeling, due_date, next_step, kind, transition_source, transition_channel)
+           VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9, $10) RETURNING id`,
+          [userId, o.text, o.quote, o.quotedAt + ":00Z", feeling, o.dueDate, o.nextStep, o.kind, o.transition, o.transitionChannel],
         )
         .catch((err: any) => {
           if (err?.code === "23505") return { rows: [] as any[] };
