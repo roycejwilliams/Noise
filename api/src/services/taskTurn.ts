@@ -32,7 +32,7 @@ import { REMINDER_RETRY } from "./relay.js";
 import { goalBody, promiseKeptBy, reminderTiedTo, reminderPromise, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
-import { closeOutOfScope, handBackDepsFor, memberWaitsOn, OUTCOME_QUIET, OUTCOME_UNTOLD, scopeOfTask, TELL_ATTEMPTS } from "./scopeClose.js";
+import { closeOutOfScope, handBackDepsFor, memberWaitsOn, OUTCOME_QUIET, OUTCOME_TOLD, OUTCOME_UNTOLD, scopeOfTask, TELL_ATTEMPTS } from "./scopeClose.js";
 import { MAKER_DECLINE_RULE } from "./coVoice.js";
 import type { GateCheck } from "../harness/core.js";
 import { withMember } from "./llmUsage.js";
@@ -1154,6 +1154,9 @@ export async function runDueTask(t: CoTask, o: { handBack?: (t: CoTask) => Promi
   if (sc.scope === "out") {
     const deps = await (o.handBack ?? handBackDepsFor)(t).catch(() => null);
     const r = deps ? await closeOutOfScope(t, sc, deps).catch(() => null) : null;
+    // A later step threw after the line went (the ledger key scope:<id> exists): closed as told, never "never told".
+    if (!r && deps && (await deps.wasTold?.().catch(() => false))) await closeTask(t.userId, t.id, "dropped", OUTCOME_TOLD).catch(() => false);
+    else
     // No deps at all (the member could not be read): a member who asked for it is not silently closed either; a task of Cue's own is.
     if (!r && (!memberWaitsOn(t) || (t.wakes ?? 0) >= TELL_ATTEMPTS)) await closeTask(t.userId, t.id, "dropped", memberWaitsOn(t) ? OUTCOME_UNTOLD : OUTCOME_QUIET).catch(() => false);
     await recordDecision({ layer: 7, decision: "task.scope", userId: t.userId, outcome: "skip", action: r?.told ? "handed_back" : r && !r.closed ? "retry_tell" : r ? "closed" : memberWaitsOn(t) ? "retry_tell" : "closed", proposal: { taskId: t.id, kind: t.kind, why: sc.why } }).catch(() => {});
