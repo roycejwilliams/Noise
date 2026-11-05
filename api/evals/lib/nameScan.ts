@@ -22,6 +22,8 @@ export const ALLOWED: { file: string; text: string; why: string; exact?: true }[
   { file: "api/src/agent/loopTools.ts", text: "Co is looking:", why: "stored prefix of a search note" },
   { file: "api/src/routes/sendblue.ts", text: "Co is looking:", why: "stored prefix of a search note" },
   { file: "api/src/services/engagementRhythm.ts", text: "Co is looking:", why: "SQL reader of the stored search-note prefix" },
+  { file: "api/src/services/conversationRecall.ts", text: "Co is looking:", why: "SQL reader of the stored search-note prefix, left out of recall" },
+  { file: "api/src/services/conversationRecall.ts", text: "Co initiated call", why: "SQL reader of the stored call-attempt marker, left out of recall" },
   { file: "api/src/services/callTrigger.ts", text: "Co initiated call to ", why: "stored marker row of a call attempt, read by SQL elsewhere" },
   ...["api/src/harness/callGate.ts", "api/src/harness/proactive.ts", "api/src/jobs/index.ts", "api/src/services/claims.ts", "api/src/services/elevenLabsCalls.ts", "api/src/services/memoryCompaction.ts", "api/src/services/firstCall.ts"].map((file) => ({ file, text: "Co initiated call", why: "SQL reader of the stored call-attempt marker" })),
   ...["api/src/harness/callGate.ts", "api/src/routes/co.ts"].map((file) => ({ file, text: "Co called ", why: "stored call note and the gate's internal reason, parsed by SQL and services/callReasons.ts" })),
