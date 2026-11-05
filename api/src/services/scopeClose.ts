@@ -22,7 +22,8 @@ export function scopeOfTask(t: Pick<CoTask, "goal" | "steps" | "planNext" | "kin
 
 // Pure: whether the member asked for this (or was promised it), so they're owed one line instead of a quiet close.
 export function memberWaitsOn(t: Pick<CoTask, "kind" | "source" | "lookoutOrigin" | "followup">): boolean {
-  if (t.kind !== "work" || t.followup?.checkin || t.followup?.ownOffer) return false;
+  // A research brief is something they asked for too (services/researchBrief.ts); a follow-up, a goal check-in or a task from Cue's own offer is Cue's own.
+  if ((t.kind !== "work" && t.kind !== "research_brief") || t.followup?.checkin || t.followup?.ownOffer) return false;
   return t.source === "ask" || t.source === "promise" || (t.source === "lookout" && t.lookoutOrigin === "member");
 }
 
