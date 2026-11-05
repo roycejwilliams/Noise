@@ -63,6 +63,8 @@ export type CheckInDeps = {
   onGuestList?: (eventId: string, userId: string) => Promise<boolean>;
   // Whether a "test-" event id is ours. Only layer-1 stubs pass this; production never treats a "test-" id as ours for a check-in.
   allowTestEvents?: boolean;
+  // Noise's own events (default: services/eventPresence.ts presenceEvents).
+  knownEvents?: () => Promise<{ api_id: string }[]>;
 };
 export type CheckInResult = "arrived" | "already_arrived" | "duplicate" | "not_a_checkin" | "no_event" | "not_ours" | "not_a_member" | "identity_conflict" | "not_on_guest_list";
 
@@ -103,9 +105,9 @@ export async function handleGuestCheckIn(data: any, eventName: string | undefine
   const r = readGuestWebhook(data);
   if (!r.checkedIn) return "not_a_checkin";
   if (!r.eventId) return "no_event";
-  const ours = deps.ours ?? (async (id: string) => (deps.allowTestEvents && id.startsWith("test-")) || (await (await import("./eventPresence.js")).presenceEvents()).some((e) => e.api_id === id));
+  const ours = deps.ours ?? (async (id: string) => (deps.allowTestEvents && id.startsWith("test-")) || (await (deps.knownEvents ?? (await import("./eventPresence.js")).presenceEvents)()).some((e) => e.api_id === id));
   if (!(await ours(r.eventId))) return "not_ours";
-  // Once per guest per event, however many times it's delivered (Luma retries; guest.updated also fires for other edits).
+  // Once per guest per event, however many times it's delivered (a duplicate delivery, or guest.updated firing for other edits).
   const handle = `luma:checkin:${r.eventId}:${r.guestKey ?? r.email ?? r.phone ?? "unknown"}`;
   if (!(await claimOnce(handle))) return "duplicate";
   try {
@@ -134,7 +136,7 @@ export async function handleGuestCheckIn(data: any, eventName: string | undefine
     rescore(r.eventId, eventName);
     return "arrived";
   } catch (err) {
-    // Not done: let Luma's retry (or the next edit) try again.
+    // Not done: the route acked 200 first, so Luma doesn't retry; the claim is released so a later edit of the same guest can try again.
     await pool.query(`DELETE FROM inbound_webhook_handles WHERE handle = $1`, [handle]).catch(() => {});
     throw err;
   }

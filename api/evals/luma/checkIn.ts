@@ -78,7 +78,7 @@ const guest = (over: any = {}) => ({ id: "gst-1", event_api_id: ev, user_email: 
   check("another host's event: nothing (we'd never be sent it, and it isn't ours)", (await L.handleGuestCheckIn(guest({ event_api_id: "evt-someone-else" }), undefined, deps)) === "not_ours" && !world.arrivals.length);
   check("a guest who isn't a member: nothing", (await L.handleGuestCheckIn(guest({ user_email: "stranger@example.com", id: "gst-2" }), undefined, deps)) === "not_a_member" && !world.arrivals.length && !rescored.length);
   check("no event id: nothing", (await L.handleGuestCheckIn(guest({ event_api_id: undefined }), undefined, deps)) === "no_event");
-  // a failure lets Luma's retry try again
+  // a failure releases the claim; the route acks first, so only a later edit of the guest tries again
   const failing = { ...deps, arrive: async () => { throw new Error("db down"); } };
   let threw = false; try { await L.handleGuestCheckIn(guest({ id: "gst-3" }), undefined, failing); } catch { threw = true; }
   check("a failed arrival releases the claim so a retry is processed", threw && (await L.handleGuestCheckIn(guest({ id: "gst-3" }), undefined, deps)) === "arrived");
@@ -125,6 +125,30 @@ const guest = (over: any = {}) => ({ id: "gst-1", event_api_id: ev, user_email: 
   await L.handleGuestCheckIn(guest(), "Noise Dinner", deps);
   const after: any = await registry.debrief.draft(cand, person);
   check("checked in at the door: the morning-after debrief ('how was it')", after.text === "How was Noise Dinner? Who did you meet?" && /Ask how "Noise Dinner" was/.test(prompts[0] ?? ""), { after, p: (prompts[0] ?? "").slice(-300) });
+}
+
+// 4b. signed check-ins only, and "test-" ids are never ours outside stubs
+{
+  const { createHmac } = await import("node:crypto");
+  const { lumaWebhookStanding } = await import("../../src/routes/luma.js");
+  const body = JSON.stringify({ type: "guest.updated", data: guest() });
+  const t = String(Math.floor(Date.now() / 1000));
+  const sig = createHmac("sha256", "whsec_test").update(`${t}.${body}`).digest("hex");
+  const std = (o: any) => lumaWebhookStanding({ rawBody: body, ...o });
+  check("signed with the secret: signed", std({ secret: "whsec_test", header: `t=${t},v1=${sig}` }) === "signed");
+  check("a wrong signature is rejected", std({ secret: "whsec_test", header: `t=${t},v1=${sig.replace(/.$/, sig.endsWith("0") ? "1" : "0")}` }) === "rejected");
+  check("no signature header with a secret set is rejected", std({ secret: "whsec_test", header: undefined }) === "rejected");
+  check("a stale timestamp is rejected", std({ secret: "whsec_test", header: `t=${Number(t) - 3600},v1=${createHmac("sha256", "whsec_test").update(`${Number(t) - 3600}.${body}`).digest("hex")}` }) === "rejected");
+  check("no secret: never 'signed' (dev still passes other types, production rejects)", std({ secret: undefined, header: `t=${t},v1=${sig}`, nodeEnv: "development" }) === "unsigned_dev" && std({ secret: undefined, header: undefined, nodeEnv: "production" }) === "rejected");
+  const route = src("routes/luma.ts");
+  check("the route handles a check-in only when the delivery is signed", /type === "guest\.updated" && standing !== "signed"/.test(route) && /else if \(type === "guest\.updated"\) \{\s*handleGuestCheckIn/.test(route));
+  check("the retry comment says the route acks first", /acks 200 before any handling, so Luma never retries|The 200 goes out before any handling, so Luma never retries/.test(route) && !/Luma's retry/.test(src("services/lumaCheckIn.ts")));
+  world.handles.clear(); world.arrivals.length = 0;
+  const viaTest = await L.handleGuestCheckIn(guest({ event_api_id: "test-evt-1" }), undefined, { rescore: () => {}, onGuestList: async () => true, knownEvents: async () => [{ api_id: ev }] });
+  check("a 'test-' event id is not ours by default", viaTest === "not_ours" && !world.arrivals.length, viaTest);
+  const stub = await L.handleGuestCheckIn(guest({ event_api_id: "test-evt-1", id: "gst-t" }), undefined, { rescore: () => {}, onGuestList: async () => true, allowTestEvents: true, knownEvents: async () => [] });
+  check("...only a layer-1 stub that opts in", stub === "arrived", stub);
+  world.handles.clear(); world.arrivals.length = 0; world.arrived = false;
 }
 
 // 5. wiring

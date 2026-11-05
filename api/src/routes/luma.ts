@@ -66,29 +66,41 @@ export function lumaTimestampInWindow(timestampSeconds: string, now: Date = new 
 // forever. Now: missing secret fails CLOSED in production; the timestamp is
 // checked whenever a signature is checked, valid or not, so a replay past
 // the window is rejected before the signature is even compared.
-function validateLumaWebhook(req: Request): boolean {
-  const secret = process.env.LUMA_WEBHOOK_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production"; // dev-only fallback; production fails closed
+//
+// 2026-11-04: a door check-in marks a member as having GONE, which the rest of the system treats as firm evidence, so it is held to
+// a stricter bar than every other type: it is handled only when the delivery was verified against a configured secret, in every
+// environment (an unsigned or unverifiable delivery never counts, even where other types still pass without a secret in dev).
+export type LumaWebhookStanding = "signed" | "unsigned_dev" | "rejected";
 
-  const header = req.headers["webhook-signature"] as string | undefined;
-  if (!header) return false;
+// Pure: what a delivery's headers, raw body and the configured secret add up to.
+export function lumaWebhookStanding(i: { secret: string | undefined; header: string | undefined; rawBody: string; nodeEnv?: string; now?: Date }): LumaWebhookStanding {
+  if (!i.secret) return i.nodeEnv !== "production" ? "unsigned_dev" : "rejected"; // dev-only fallback; production fails closed
+  if (!i.header) return "rejected";
 
   const parts = Object.fromEntries(
-    header.split(",").map((kv) => kv.split("=") as [string, string]),
+    i.header.split(",").map((kv) => kv.split("=") as [string, string]),
   );
   const timestamp = parts["t"];
   const signature = parts["v1"];
-  if (!timestamp || !signature) return false;
-  if (!lumaTimestampInWindow(timestamp)) return false;
+  if (!timestamp || !signature) return "rejected";
+  if (!lumaTimestampInWindow(timestamp, i.now)) return "rejected";
 
-  const rawBody = (req.body as Buffer).toString("utf-8");
-  const expected = createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex");
+  const expected = createHmac("sha256", i.secret).update(`${timestamp}.${i.rawBody}`).digest("hex");
 
   try {
-    return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(expected)) ? "signed" : "rejected";
   } catch {
-    return false;
+    return "rejected";
   }
+}
+
+function lumaStanding(req: Request): LumaWebhookStanding {
+  return lumaWebhookStanding({
+    secret: process.env.LUMA_WEBHOOK_SECRET,
+    header: req.headers["webhook-signature"] as string | undefined,
+    rawBody: (req.body as Buffer).toString("utf-8"),
+    nodeEnv: process.env.NODE_ENV,
+  });
 }
 
 // event.created must only ever trigger scoring/the Co event announcement
@@ -159,7 +171,8 @@ function runScoringPass(eventId: string, eventName: string | undefined, triggere
 // the check-in fix: gives up specifically excluding a no-show, in exchange
 // for a signal that actually exists and fires reliably.
 router.post("/webhook", (req: Request, res: Response) => {
-  if (!validateLumaWebhook(req)) {
+  const standing = lumaStanding(req);
+  if (standing === "rejected") {
     return res.status(401).send("Invalid Luma signature.");
   }
 
@@ -173,6 +186,8 @@ router.post("/webhook", (req: Request, res: Response) => {
 
   // Ack immediately — webhook handlers should respond fast, not block on
   // downstream work. Everything below is fire-and-forget logging/routing.
+  // The 200 goes out before any handling, so Luma never retries: a handler that fails is not redelivered. A failed check-in releases
+  // its claim (services/lumaCheckIn.ts), so only a later edit of the same guest (another guest.updated) can try it again.
   res.sendStatus(200);
 
   const { type, data } = payload ?? {};
@@ -220,7 +235,10 @@ router.post("/webhook", (req: Request, res: Response) => {
       // (services/lumaCheckIn.ts), which starts the in-room matching and, the morning after, earns the debrief. Other hosts'
       // events never send us a webhook.
       runScoringPass(eventId, undefined, type);
-      if (type === "guest.updated") {
+      if (type === "guest.updated" && standing !== "signed") {
+        // Fail closed: an unsigned delivery (no secret configured) never counts as a door check-in.
+        console.log(`luma/webhook: guest.updated (${eventId}) — check-in ignored: the delivery was not signature-verified`);
+      } else if (type === "guest.updated") {
         handleGuestCheckIn({ ...data, event_api_id: eventId }, undefined)
           .then((r) => r !== "not_a_checkin" && console.log(`luma/webhook: guest.updated (${eventId}) — check-in: ${r}`))
           .catch((err: any) => console.error(`luma/webhook: guest.updated (${eventId}) — check-in failed:`, err?.message ?? err));
