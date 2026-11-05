@@ -1993,7 +1993,7 @@ export function sendblueRouter(io: Server): Router {
         }
         replyFacts.turnScope = turnRead?.scope ?? null;
         // The reply gets the verdict: work judged outside connections is declined in its own words, and nothing is promised for it.
-        if (turnRead?.scope?.scope === "out") addInstruction(replyFacts, (await import("../harness/scope.js")).OUT_OF_SCOPE_GUIDANCE);
+        { const g = (await import("../harness/scope.js")).replyScopeGuidance(turnRead?.scope); if (g) addInstruction(replyFacts, g); }
         if (exchangeBase) {
           const X = await import("../services/exchangeRecord.js");
           const read0 = turnRead?.exchange ?? null;
