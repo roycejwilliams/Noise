@@ -524,7 +524,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
 
   // ---- asks: every open one; find asks in all three places
   const { rows: asks } = await pool.query(
-    `SELECT ac.id, ac.ask_text, ac.kind, ac.split_read, ac.created_at
+    `SELECT ac.id, ac.ask_text, ac.kind, ac.scope_connection, ac.split_read, ac.created_at
        FROM ask_checkins ac WHERE ac.user_id = $1 AND ac.resolved_at IS NULL ORDER BY COALESCE(ac.last_mentioned_at, ac.created_at) DESC`,
     [userId],
   );
@@ -557,7 +557,9 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
       }
     }
     // A mixed ask (a connection ask with an errand in it) is searched for its connection part only (harness/scope.ts connectionPart).
-    askText = searchPartOf(askText);
+    const part = searchPartOf(askText, a);
+    if (part === null) { items.push({ ...b, status: "skipped", why: "a mixed ask with no clean connection part: nothing searched" }); continue; }
+    askText = part;
     const searchB = askText === String(a.ask_text ?? "") ? b : { ...b, searchedPart: askText.slice(0, 160) };
     await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `ask:${a.id}`, text: String(a.ask_text ?? ""), createdAt: a.created_at ? new Date(a.created_at) : null } });
   }

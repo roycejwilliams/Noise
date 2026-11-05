@@ -15,12 +15,19 @@ import { withTraceUser } from "./llmTraceText.js";
 // search of events and pages (Royce, 2026-10-09: that ask came back empty five mornings running). Routed to intros, not swept.
 // "outside": remembered, never worked on (the purpose boundary, harness/scope.ts, Royce 2026-11-04): an errand, shopping, travel, a general
 // research project, a job-board watch, a funding or investor search. The row stays so Cue still knows what they said (and shows it back);
-// it is never swept, checked in on, turned into a task or a look-out. Decided in code, no model call.
+// it is never swept, checked in on, turned into a task or a look-out. Judged by the model in the one read that already classifies every ask
+// (classifyAsk), with the narrow backstop (harness/scope.ts) in front of it for the unmistakable cases.
 export type AskKind = "find" | "help" | "person" | "outside";
 import { classifyScope, connectionPart } from "../harness/scope.js";
+// The backstop alone: an unmistakable out (a dentist, a phone plan, a job-listings watch), never anything ambiguous or about meeting people.
 export const outsideAsk = (text: string): boolean => classifyScope(text).scope === "out";
-// What a sweep searches for an ask: a mixed ask ("founder dinners and a dentist") is searched for its connection part only.
-export const searchPartOf = (text: string): string => connectionPart(text) ?? text;
+// What a sweep searches for an ask, given its stored row: the model's connection phrase when the ask was read as mixed (scope_connection),
+// else the backstop's clean clauses. Never the whole text of an outside or mixed ask: null means nothing is searched.
+export const searchPartOf = (text: string, row: { kind?: string | null; scope_connection?: string | null } | null = null): string | null => {
+  if (row?.kind === "outside") return null;
+  return connectionPart(text, row?.scope_connection ? { scope: "mixed", connection: row.scope_connection } : null);
+};
+export type AskScopeRead = { kind: AskKind; connection: string | null };
 
 // Co's own deliverables and promises are not asks (2026-10-08): "plan will be
 // delivered once ready" and "I'll send the outline tonight" were saved as
@@ -56,59 +63,68 @@ Answer "help" too when it asks Cue to take an action for them (email, call, text
 
 Answer "person" if it's asking for one particular kind of person to meet or talk to one on one (an advisor, a founder who has done something, a mentor, someone to introduce them to). People in general (a community, friends, a crowd to be around) are "find".
 
-Answer with one word: find, help or person.`;
+Answer "outside" when it asks Cue for errands, shopping or lookups that are not about meeting anyone: a consumer service (a dentist, a therapist, a gym, a lawyer, an apartment), comparing products or phone plans, travel, general research, drafting their documents, watching job boards or listings, funding or investor searches, tracking application deadlines. Being about a person, or helping a goal, does not make something connection work; finding people, events, rooms or communities they would attend (including through people they know for a career change) is never "outside".
+
+If it bundles a connection ask with something outside, answer with the kind of the connection part, then " | mixed: " and only the connection part in a short phrase.
+
+Answer with one word: find, help, person or outside (or the mixed form).`;
 }
 
-export async function classifyAsk(text: string): Promise<AskKind> {
-  // Outside the purpose boundary: remembered, never searched or checked in on. First, so nothing else spends on it.
-  if (outsideAsk(text)) return "outside";
+// The model's read of an ask: its kind, and for a mixed ask just the connection part (a sweep searches that, never the whole text).
+export async function classifyAskRead(text: string): Promise<AskScopeRead> {
+  // Unmistakably outside (the backstop): remembered, never searched or checked in on. First, so nothing else spends on it.
+  if (outsideAsk(text)) return { kind: "outside", connection: null };
   // Co's own promise or deliverable: never searched, no model call needed.
-  if (isCoCommitment(text)) return "help";
+  if (isCoCommitment(text)) return { kind: "help", connection: null };
   try {
     const { text: out } = await Promise.race([
       generateText({
         model: anthropic(MODELS.haiku),
-        maxOutputTokens: 10,
+        maxOutputTokens: 80,
         experimental_telemetry: { isEnabled: true, functionId: "askKind.classify" },
         prompt: askKindPrompt(text),
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 4000)),
     ]);
     const w = out.trim().toLowerCase();
-    return w.startsWith("help") ? "help" : w.startsWith("person") ? "person" : "find";
+    const kind: AskKind = w.startsWith("outside") ? "outside" : w.startsWith("help") ? "help" : w.startsWith("person") ? "person" : "find";
+    const m = out.match(/\|\s*mixed\s*:\s*(.+)$/i);
+    const connection = m ? m[1].replace(/\s+/g, " ").trim().slice(0, 200) : null;
+    return { kind, connection: kind === "outside" ? null : connection && connection.length >= 4 ? connection : null };
   } catch {
     // When unsure, keep searching it, as before.
-    return "find";
+    return { kind: "find", connection: null };
   }
+}
+export async function classifyAsk(text: string): Promise<AskKind> {
+  return (await classifyAskRead(text)).kind;
 }
 
 // Marks open asks that haven't been classified yet (older asks, or one whose
 // check timed out). Run before each morning sweep.
-// ASK_KIND_VERSION: open find asks classified under an older prompt are read again once (2026-10-09: person asks and action requests
-// were saved as find asks and searched every morning).
-// A lookout's kind is never changed here (Royce, 2026-10-13, lane moves): every kind write goes through laneMoves.ts setAskKind.
+// ASK_KIND_VERSION: open asks classified under an older prompt are read again once (2026-10-09: person asks and action requests were saved
+// as find asks and searched every morning; version 3, the purpose boundary: every stored ask, whatever its kind, is read once for scope,
+// so help and person asks that are outside connections stop spawning check-ins too). Only the scope can change a kind here: an ask that
+// is outside moves to "outside"; the rest keep the kind they have.
+// A lookout's kind is never changed here except to "outside" (Royce, 2026-10-13, lane moves): every kind write goes through laneMoves.ts setAskKind.
 export const ASK_KIND_VERSION = 3;
 type KindDb = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
-export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify?: (text: string) => Promise<AskKind> } = {}): Promise<number> {
+export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify?: (text: string) => Promise<AskKind>; read?: (text: string) => Promise<AskScopeRead> } = {}): Promise<number> {
   const db = deps.db ?? pool;
-  const classify = deps.classify ?? classifyAsk;
+  const read = deps.read ?? (deps.classify ? async (t: string): Promise<AskScopeRead> => ({ kind: await deps.classify!(t), connection: null }) : classifyAskRead);
   const { setAskKind } = await import("./laneMoves.js");
   const { rows } = await db.query(
-    `SELECT id, user_id, ask_text, kind, intent, kind_checked_at FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR (kind = 'find' AND COALESCE(kind_version, 1) < $2)) LIMIT $1`,
+    `SELECT id, user_id, ask_text, kind, intent, kind_checked_at FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR COALESCE(kind_version, 1) < $2) LIMIT $1`,
     [limit, ASK_KIND_VERSION],
   );
   for (const r of rows) {
-    // A lookout keeps its kind; it's only marked checked (or given find, if it never had one), so it isn't read again every run.
-    // Version 3 (the purpose boundary): an open find ask read under an older version is checked once in code, with no model call; only
-    // an ask that is outside moves (to "outside"), the rest keep the kind they were given.
-    const kind: AskKind = outsideAsk(r.ask_text)
-      ? "outside"
-      : r.kind_checked_at && r.kind === "find" && r.intent !== "lookout"
-        ? "find"
-        : r.intent === "lookout"
-          ? ((r.kind as AskKind | null) ?? "find")
-          : await withTraceUser(r.user_id, () => withMember(r.user_id, () => classify(r.ask_text))); // under the ask's member, its cost theirs
-    await setAskKind(db, { id: r.id, read: { kind: r.kind ?? null, intent: r.intent ?? null }, kind, version: ASK_KIND_VERSION }).catch(() => {});
+    // An unmistakable out (the backstop) is decided with no model call; every other ask is read for scope by the model.
+    const got: AskScopeRead = outsideAsk(r.ask_text) ? { kind: "outside", connection: null } : await withTraceUser(r.user_id, () => withMember(r.user_id, () => read(r.ask_text))); // under the ask's member, its cost theirs
+    // Outside moves it (a lookout too). Otherwise an ask already read keeps its kind; a lookout keeps its kind (or find, if it never had
+    // one); a new one takes the read's.
+    const kind: AskKind = got.kind === "outside" ? "outside" : r.kind_checked_at && r.kind ? (r.kind as AskKind) : r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : got.kind;
+    // The connection part of a mixed ask is kept beside the ask (in the same guarded write), so every search runs on that part and never the whole text.
+    await setAskKind(db, { id: r.id, read: { kind: r.kind ?? null, intent: r.intent ?? null }, kind, version: ASK_KIND_VERSION, connection: kind === "outside" ? null : got.connection }).catch(() => {});
   }
   // Open "find" asks that read as Co's own promise or deliverable are NOT switched off here any more (Royce, 2026-10-13: a member
   // restating something Co is already doing is a status check, and "the search keeps running"; a silent stop is what the rules

@@ -628,7 +628,7 @@ export function registerJobs(io: Server) {
         .catch((err: any) => console.error("Working set: exits failed (non-fatal):", err?.message ?? err));
       await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(
-        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, ac.kind, ac.empty_runs, ac.split_read, u.id AS user_id, u.first_name, u.phone_number, cp.city,
+        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, ac.kind, ac.scope_connection, ac.empty_runs, ac.split_read, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.intent, cp.activity_preferences,
                 (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
@@ -736,7 +736,10 @@ export function registerJobs(io: Server) {
             if (sp) await AS.notePlan(sp.plan, row, { taskId: sp.taskId, day: localToday ?? "", sweep: "hourly" }).catch(() => {});
             if (sp && sp.plan.search === null) continue; // followed as its task, or Co's own promise with no task (noted above)
             if (sp?.plan.search && sp.plan.search !== askText) askText = sp.plan.search;
-            askText = (await import("../services/askKind.js")).searchPartOf(askText);
+            // A mixed ask is searched for its connection part only; with no clean part, nothing is searched.
+            const part = (await import("../services/askKind.js")).searchPartOf(askText, row);
+            if (part === null) continue;
+            askText = part;
           }
           if (searchedToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY) break;
           searchedToday++;

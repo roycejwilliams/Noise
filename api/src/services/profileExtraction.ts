@@ -4,7 +4,7 @@ import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
-import { classifyAsk, isCoCommitment, markIntentResolved, outsideAsk } from "./askKind.js";
+import { ASK_KIND_VERSION, classifyAskRead, isCoCommitment, markIntentResolved } from "./askKind.js";
 import { classifyEntryKind } from "./entryKind.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork, sweepStandingAsksForNewcomer } from "./relevance.js";
@@ -1689,9 +1689,13 @@ export async function persistCapturedIntent(
   }
 
   const ww = ask?.wantWords;
+  // A goal is read for scope once, by the same classifyAsk read that reads every ask, and the verdict is kept on the entry: an outside goal
+  // is remembered but gets no check-in, nudge or search (services/goalJourney.ts dueGoalCheckin, harness/proactiveRegistry.ts goal_checkin).
+  const goalScope = ask && kind === "goal" && !opts.keepSearchRow ? ((await classifyAskRead(ask.text)).kind === "outside" ? ("out" as const) : ("in" as const)) : null;
   const newIntent: ExtractedIntent = {
     id: intentId,
     ...(ask ? { text: ask.text, type: ask.type, kind: kind! } : {}),
+    ...(goalScope ? { scope: goalScope } : {}),
     ...(ww ? { quote: ww.quote, provenance: ww.provenance, via: ww.via, ...(ww.criteria.length ? { criteria: ww.criteria } : {}) } : {}),
     ...(kind === "goal" ? { confirmed_at: new Date().toISOString() } : {}),
     concrete_preferences,
@@ -1776,17 +1780,20 @@ export async function persistCapturedIntent(
   // Co's own promises and deliverables ("draft and text a plan", "will be delivered once ready") are tasks Co tracks
   // elsewhere, never a member's ask to check in on or search for (2026-10-08 sweep review, askKind.ts isCoCommitment).
   if (ask && !deduped && kind === "ask" && (opts.keepSearchRow || !isCoCommitment(ask.text))) {
-    const [expiresAt, askKind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), outsideAsk(ask.text) ? Promise.resolve("outside" as const) : opts.keepSearchRow ? Promise.resolve("find" as const) : classifyAsk(ask.text)]);
+    // The kind and the scope come from the one read that classifies every ask (askKind.ts classifyAskRead): the model judges whether it is
+    // connection work, and keeps the connection part of a mixed ask; the backstop catches the unmistakable outs first.
+    const [expiresAt, askRead] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), opts.keepSearchRow ? Promise.resolve({ kind: "find" as const, connection: null }) : classifyAskRead(ask.text)]);
+    const askKind = askRead.kind;
     await pool
       .query(
-        `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at)
-         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz, $5::text, NOW(), NOW()
+        `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at, scope_connection, kind_version)
+         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz, $5::text, NOW(), NOW(), $6::text, $7::int
          WHERE NOT EXISTS (
            SELECT 1 FROM ask_checkins
            WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
          )
          ON CONFLICT (user_id, ask_id) DO NOTHING`,
-        [user_id, intentId, ask.text, expiresAt, askKind],
+        [user_id, intentId, ask.text, expiresAt, askKind, askKind === "outside" ? null : askRead.connection, ASK_KIND_VERSION],
       )
       .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
   }
