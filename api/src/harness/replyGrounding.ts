@@ -33,7 +33,8 @@ import type { ReplySnapshot, SnapEntry } from "../services/memberSnapshot.js";
 import { voiceReadPrereqs } from "../services/voiceRead.js";
 import { kitLines } from "../services/memberKit.js";
 import { situationFor, type Situation } from "../services/capabilities.js";
-import { carryingBlock, sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
+import { answerFromRecordNote, carryingBlock, isSameFind, sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
+import { ASKS_ABOUT_FIND } from "../services/exchangeRecord.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { TEAM_BUILDER_LINE, isTeamMember } from "../services/extensions.js";
@@ -397,6 +398,10 @@ export async function gatherReplyFacts(
   // (services/turnContext.ts), before Co ever says it doesn't have them.
   if (opts.turn) {
     for (const line of sentDetailLines(opts.turn, 5, new Date(), { zone, also: opts.turn.referents ?? [] })) addFact(rf, "known", line);
+    // The find they ask about is resolved: its stored facts are the answer (the same note a call gets).
+    const asking = (opts.turn.referents ?? []).length && ASKS_ABOUT_FIND.test(opts.turn.message ?? "");
+    const note = asking ? answerFromRecordNote(opts.turn.referents ?? []) : null;
+    if (note) addInstruction(rf, note);
   }
   // A live question ("still spots?", "what time?", "how much?"): the Luma pages of what Co sent them lately, read now, so the answer
   // is today's (Phase B, B3, services/asOf.ts). Only this member's own sends. Everything else stored stays labelled as of its read.
@@ -520,8 +525,8 @@ export async function gatherReplyFacts(
   if (reveal.rows[0]) {
     try {
       const { match } = JSON.parse(reveal.rows[0].content) as { match: any };
-      // Offers stored before details existed get them on demand.
-      addEventFacts(rf, await enrichMatch(match), null, zone);
+      // Offers stored before details existed get them on demand. Not repeated when it is the find they asked about: its facts are above.
+      if (!(opts.turn?.referents ?? []).some((r) => isSameFind(r, match))) addEventFacts(rf, await enrichMatch(match), null, zone);
     } catch {
       // Malformed or pre-fix content shape; nothing reliable to add.
     }
