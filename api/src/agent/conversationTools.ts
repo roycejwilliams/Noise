@@ -127,7 +127,7 @@ export type ConversationToolContext = {
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
   // changed: a tool that changes a setting or a record went through (the reply check's backing for "I changed it").
-  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done" | "capability", text: string) => void; text: () => string; changed?: (tool: string) => void };
+  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done" | "capability" | "hint", text: string) => void; text: () => string; changed?: (tool: string) => void };
   // A first read this turn (services/theDoor.ts): held until the reply goes out, then counted as given only if a sent text says it back.
   onFirstRead?: (pending: import("../services/theDoor.js").FirstReadPending) => void;
   // Thread the next text under theirs too (routes/sendblue.ts): the first find
@@ -716,8 +716,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async (input) => {
         const R = await import("../services/conversationRecall.js");
-        if (ctx.dryRun) return { ok: true, history: true, results: [], note: R.HISTORY_NOTE };
-        const got = await R.recallConversation(ctx.userId, input, await R.realRecallDeps()).catch((err: any) => {
+        // A dry run reads nothing: it returns the miss guidance, so a test sees what the model would be told on an empty record.
+        if (ctx.dryRun) return { ok: true, history: true, results: [], note: R.recallNote({ ok: true, history: true, today: "", zone: "", window: null, topic: [], channel: "any", found: 0, total: 0, results: [], nextOffset: null, coverage: { texts: null, calls: null } }) };
+        // Dates read from when they asked (the turn's arrival), and a call's answer is kept short enough to come back whole.
+        const got = await R.recallConversation(ctx.userId, input, await R.realRecallDeps(), { ...(ctx.messageArrivedAt ? { asOf: new Date(ctx.messageArrivedAt) } : {}), ...(ctx.onCall ? { resultChars: R.RECALL.callResultChars } : {}) }).catch((err: any) => {
           console.error("lookBack: read failed (non-fatal):", err?.message ?? err);
           return null;
         });
@@ -725,9 +727,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("Their older conversation couldn't be read just now.");
           return { ok: false, note: R.recallNote({ ok: false, reason: "unavailable", today: "", zone: "" }) };
         }
-        // What the record said, as known history: the reply check may stand on these lines, and only as what they were then.
-        if (got.ok) for (const h of got.results.slice(0, 6)) ctx.facts?.add("known", `From their record (history, ${h.atLocal}, ${h.channel}, ${h.matched.prov}): ${h.matched.speaker === "member" ? "they said" : h.matched.speaker === "cue" ? "Cue said" : "Cue's note"}: "${h.matched.text.slice(0, 300)}"`);
-        return { ...got, note: R.recallNote(got) };
+        // What the record said enters the reply check as history only: their old words as what they said then (never a current state),
+        // and Cue's own old lines and call summaries as hints, so an old "I sent your intro" can never back "yes, I did" now.
+        if (got.ok) {
+          for (const h of got.results.slice(0, 6)) {
+            const m = h.matched;
+            const where = `${h.atLocal}, ${h.channel}`;
+            if (m.speaker === "member") ctx.facts?.add("known", `HISTORY, not now (${where}), what they said then: "${m.text.slice(0, 300)}"`);
+            else ctx.facts?.add("hint", `HISTORY, not now (${where}), ${m.speaker === "cue" ? "Cue's own earlier line" : "Cue's earlier note"}: "${m.text.slice(0, 300)}"`);
+          }
+        }
+        // The note first, so a cut anywhere downstream never takes the guidance off the front of the result.
+        return { note: R.recallNote(got), ...got };
       },
     }),
     correctWhatCoKnows: tool({
