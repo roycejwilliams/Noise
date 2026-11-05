@@ -97,10 +97,13 @@ const guest = (over: any = {}) => ({ id: "gst-1", event_api_id: ev, user_email: 
   check("email first: a phone that matches nobody doesn't block the email's member", emailWins === "arrived" && world.arrivals[0]?.user === u, { emailWins, a: world.arrivals });
   world.arrivals.length = 0;
   const phoneOnly = await L.handleGuestCheckIn(guest({ id: "gst-6", user_email: undefined, phone_number: "+14155550102" }), undefined, deps);
-  check("phone is used only when the guest has no email", phoneOnly === "arrived" && world.arrivals[0]?.user === u2, { phoneOnly, a: world.arrivals });
+  check("no email: the phone is used", phoneOnly === "arrived" && world.arrivals[0]?.user === u2, { phoneOnly, a: world.arrivals });
   world.arrivals.length = 0;
-  const phoneNotUsed = await L.handleGuestCheckIn(guest({ id: "gst-7", user_email: "stranger@example.com", phone_number: "+14155550101" }), undefined, deps);
-  check("an email that matches nobody is not rescued by the phone", phoneNotUsed === "not_a_member" && !world.arrivals.length, { phoneNotUsed });
+  const plus = await L.handleGuestCheckIn(guest({ id: "gst-7", user_email: "jordan+luma@example.com", phone_number: "+14155550101" }), undefined, deps);
+  check("a plus-address email that matches nobody falls back to the member's phone: arrived", plus === "arrived" && world.arrivals[0]?.user === u, { plus, a: world.arrivals });
+  world.arrivals.length = 0;
+  const nobody = await L.handleGuestCheckIn(guest({ id: "gst-9", user_email: "stranger@example.com", phone_number: "+14155550199" }), undefined, deps);
+  check("an email and a phone that match nobody: not a member", nobody === "not_a_member" && !world.arrivals.length, { nobody });
   listed = false;
   const off = await L.handleGuestCheckIn(guest({ id: "gst-8" }), undefined, deps);
   check("a member not on the event's guest list is refused, nobody arrives", off === "not_on_guest_list" && !world.arrivals.length, { off });
