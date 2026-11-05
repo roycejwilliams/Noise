@@ -259,6 +259,8 @@ check("startTask refusals for scope are never fallen back from in the call path"
   check("the backstop yields to any request in the text (the reviewer's probes)", withAsk.every((m) => !S.sharedNotAsked(m)) && S.sharedNotAsked(shareOnly) && S.isPureShare("both", shareOnly) === false && S.isPureShare("share", "Know anyone hiring?") === true);
   // passive capture: a pure share captures no ask; share plus ask captures it
   const PE = await import("../../src/services/profileExtraction.js");
+  (await import("../../src/services/askKind.js")).setAskReadForTests(async () => ({ kind: "find", connection: null }));
+  (await import("../../src/services/entryKind.js")).setEntryClassifierForTests(async () => "ask");
   const parsed = { asks: [{ text: "design meetups", type: "seeking" as const, quote: "Keep an eye out for design meetups for me" }], concrete_preferences: [], wants: [], availability: null };
   const msg = "I got laid off. Keep an eye out for design meetups for me";
   const tr = `user: ${msg}\nassistant: ok`;
