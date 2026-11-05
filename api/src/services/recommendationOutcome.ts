@@ -1,4 +1,3 @@
-import { formOf } from "./findForm.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";

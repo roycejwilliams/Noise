@@ -145,19 +145,15 @@ reset();
 check("job: its stated window is not an event's date", R.followUpDate(jobFind()) === null && R.followUpDate({ statedDates: { start: yesterday, end: null } }) === null);
 check("event: a real event's own date anchors it; a classified event's stated dates count", R.followUpDate(eventFind()) === yesterday && R.followUpDate({ form: "event", statedDates: { start: "2026-10-05", end: "2026-10-11" } }) === "2026-10-11");
 await R.scheduleOutcomeFollowUp(u, "fellowships", jobFind({ event_api_id: "evt-prog" }) as any);
-check("job: sent, no reply: parked, nothing queued", world.rof[0].harness_status === "awaiting_evidence" && (await dueRows()).length === 0);
+// The purpose boundary (Royce 2026-11-04, #392): a program or opening is surfaced once and never followed up, so it isn't even parked.
+check("job: never parked, nothing queued", world.rof.length === 0 && (await dueRows()).length === 0, world.rof);
 await O.recordSuggestionOutcome(u, "opportunity", "event:evt-prog", "Open Fellowship", "acted", "i'm applying", { provenance: "stated", quote: "i'm applying" });
-check("job: they said they're applying: armed on the fixed delay, not on its window", world.rof[0].harness_status === null && world.rof[0].send_at.getTime() > Date.now() + 4 * 86_400_000, world.rof[0]);
-world.rof[0].send_at = new Date(Date.now() - 1000);
+check("job: 'i'm applying' arms nothing", world.rof.length === 0 && (await dueRows()).length === 0, world.rof);
 {
-  const q = await dueRows();
-  check("job: queued as an opening with no event date", q.length === 1 && payloadFor(q[0]).form === "opening" && !payloadFor(q[0]).eventDate, q);
-  const d = await draft(payloadFor(q[0]));
-  check("job: asks whether they got to it, never 'how was it'", kind(d) === "opening" && !/Ask how "/.test(d.prompts[0]), d.prompts[0]?.slice(-400));
-  presumptuous = true;
-  const d2 = await draft(payloadFor(q[0]));
-  check("job: a 'how was it, who did you meet' draft is refused", kind(d2) === "skip" && /assumes they went/.test(d2.r.skip), d2.r);
-  presumptuous = false;
+  // An opening follow-up queued before the boundary still never asks "how was it".
+  const legacy = { eventApiId: "evt-prog", eventName: "Open Fellowship", form: "opening", eventDate: null, outcomeFollowupIds: [], checkinFollowupIds: [], walkinCheckinIds: [], askText: "fellowships" };
+  const d = await draft(legacy);
+  check("job (queued before the boundary): never 'how was it'", kind(d) !== "event" && !/Ask how "/.test(d.prompts[0] ?? ""), { k: kind(d), p: d.prompts[0]?.slice(-300) });
 }
 
 // ================================================================ 4. "I'm going" -> only the neutral question; "I went" -> the debrief
@@ -275,9 +271,10 @@ CF.setDoorDepsForTests({ ours: async () => false });
   check("pure: an opening expires at 30 days parked, not before", !R.parkedRowExpired({ match: jobFind(), created_at: day(-29) }) && R.parkedRowExpired({ match: jobFind(), created_at: day(-31) }));
   reset();
   await R.scheduleOutcomeFollowUp(u, "founder events", eventFind({ event_date: ymd(day(-6)) }) as any);
-  await R.scheduleOutcomeFollowUp(u, "fellowships", jobFind() as any);
-  await R.scheduleOutcomeFollowUp(u, "old fellowships", jobFind({ name: "Old Program", url: "https://example.com/old" }) as any);
-  world.rof[2].created_at = day(-40);
+  // Openings are no longer parked (#392); rows parked before that still expire, so they're placed directly.
+  const legacyOpening = (name: string, created: Date) => world.rof.push({ id: `rof-${world.nextId++}`, user_id: u, ask_text: "fellowships", tier: 3, match_name: name, match: jobFind({ name }), created_at: created, send_at: day(5), harness_status: "awaiting_evidence", drop_reason: null });
+  legacyOpening("Open Fellowship", new Date());
+  legacyOpening("Old Program", day(-40));
   await dueRows();
   check("expiry: the old event and the 40-day opening are dropped with a reason; the fresh opening stays parked", world.rof[0].harness_status === "dropped" && world.rof[2].harness_status === "dropped" && world.rof[1].harness_status === "awaiting_evidence" && /before it expired/.test(world.rof[0].drop_reason ?? ""), world.rof.map((r) => [r.harness_status, r.drop_reason]));
   // Expired rows beyond the first page are still reached
