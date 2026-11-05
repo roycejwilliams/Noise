@@ -22,6 +22,8 @@ export const ALLOWED: { file: string; text: string; why: string; exact?: true }[
   { file: "api/src/agent/loopTools.ts", text: "Co is looking:", why: "stored prefix of a search note" },
   { file: "api/src/routes/sendblue.ts", text: "Co is looking:", why: "stored prefix of a search note" },
   { file: "api/src/services/engagementRhythm.ts", text: "Co is looking:", why: "SQL reader of the stored search-note prefix" },
+  { file: "api/src/scripts/measureRecall.ts", text: "Co replied:", why: "the stored transcript prefix, counted by kind (no content) in the latency measurement" },
+  { file: "api/src/scripts/measureRecall.ts", text: "Co is looking:", why: "the stored search-note prefix, counted by kind (no content) in the latency measurement" },
   { file: "api/src/services/conversationRecall.ts", text: "Co is looking:", why: "SQL reader of the stored search-note prefix, left out of recall" },
   { file: "api/src/services/conversationRecall.ts", text: "Co initiated call", why: "SQL reader of the stored call-attempt marker, left out of recall" },
   { file: "api/src/services/callTrigger.ts", text: "Co initiated call to ", why: "stored marker row of a call attempt, read by SQL elsewhere" },
