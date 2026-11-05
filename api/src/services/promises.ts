@@ -111,7 +111,7 @@ export function promiseCovered(sentence: string, o: { startedThisTurn?: string[]
 
 export type TrackedPromise = { ok: true; task: CoTask; sentence: string } | { ok: false; why: string };
 
-export async function trackPromise(o: { userId: string; reply: string; theirMessage: string; privateNames?: string[]; discreet?: boolean; startedThisTurn?: string[] }): Promise<TrackedPromise> {
+export async function trackPromise(o: { userId: string; reply: string; theirMessage: string; privateNames?: string[]; discreet?: boolean; startedThisTurn?: string[]; scope?: import("../harness/scope.js").ScopeVerdict | null }): Promise<TrackedPromise> {
   if (o.discreet) return { ok: false, why: "a turn that kept a confidence" };
   const sentence = promiseSentence(o.reply);
   if (!sentence) return { ok: false, why: "no promise a task can keep" };
@@ -134,6 +134,7 @@ export async function trackPromise(o: { userId: string; reply: string; theirMess
     inHours: promiseHours(sentence, now, zone),
     source: "promise",
     window: commitmentWindow(sentence, now, zone),
+    scope: o.scope ?? null,
   });
   return r.ok ? { ok: true, task: r.task, sentence } : { ok: false, why: r.why };
 }

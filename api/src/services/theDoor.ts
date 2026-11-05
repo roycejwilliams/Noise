@@ -244,7 +244,7 @@ export const FIRST_LOOK_WITHDRAWN = "The first look's promise was not in the tex
 // instead of opening another.
 export async function giveFirstRead(
   i: FirstReadInput,
-  o: { userId: string; message: string; dryRun: boolean; now?: Date; paused: boolean },
+  o: { userId: string; message: string; dryRun: boolean; now?: Date; paused: boolean; scope?: import("../harness/scope.js").ScopeVerdict | null },
 ): Promise<FirstReadResult> {
   const now = o.now ?? new Date();
   const [{ wordsAreTheirs, startTask }, { memberZone, localStamp }] = await Promise.all([import("./coTasks.js"), import("./memberTime.js")]);
@@ -292,7 +292,7 @@ export async function giveFirstRead(
     look = l;
     if (!o.dryRun) {
       const plan = firstLookTask(i, l, now);
-      const r = await startTask({ userId: o.userId, goal: plan.goal, theirWords: plan.theirWords, steps: plan.steps, firstPlan: plan.firstPlan, inHours: plan.inHours, deadline: plan.deadline, source: "promise" });
+      const r = await startTask({ userId: o.userId, goal: plan.goal, theirWords: plan.theirWords, steps: plan.steps, firstPlan: plan.firstPlan, inHours: plan.inHours, deadline: plan.deadline, source: "promise", scope: o.scope ?? null });
       if (!r.ok) return { ok: false, error: `The first look couldn't be scheduled (${r.why}). Say back what you understood, but don't name a time or promise a later text.` };
       taskId = r.task.id;
     }

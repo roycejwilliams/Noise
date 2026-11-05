@@ -325,7 +325,7 @@ export function admissionFallback(unbound: { sentence: string; why: string }[]):
 }
 
 // The real dependencies, for one member.
-export async function realBindDeps(userId: string, theirMessage: string): Promise<BindDeps> {
+export async function realBindDeps(userId: string, theirMessage: string, scope: import("../harness/scope.js").ScopeVerdict | null = null): Promise<BindDeps> {
   const T = await import("./coTasks.js");
   const { memberZone } = await import("./memberTime.js");
   const zone = await memberZone(userId).catch(() => null);
@@ -350,7 +350,7 @@ export async function realBindDeps(userId: string, theirMessage: string): Promis
       return rows.map((r: any) => new Date(r.scheduled_for));
     },
     openPromise: async ({ sentence, inHours, window }) => {
-      const r = await T.startTask({ userId, goal: promiseGoal(sentence), theirWords: theirWordsFor(theirMessage), steps: [{ text: "Do what you said, or tell them plainly where it stands" }], firstPlan: "Do what you promised them; if there's nothing yet, say where it stands only if they'd want to hear it", inHours, source: "promise", window });
+      const r = await T.startTask({ userId, goal: promiseGoal(sentence), theirWords: theirWordsFor(theirMessage), steps: [{ text: "Do what you said, or tell them plainly where it stands" }], firstPlan: "Do what you promised them; if there's nothing yet, say where it stands only if they'd want to hear it", inHours, source: "promise", window, scope });
       return r.ok ? { ok: true, id: r.task.id } : { ok: false, why: r.why };
     },
     read: async (prompt) => (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 500, abortSignal: AbortSignal.timeout(BINDING_LIMITS.readMs), experimental_telemetry: { isEnabled: true, functionId: "reply.promiseBinding" }, prompt })).text,
