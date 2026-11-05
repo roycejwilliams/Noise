@@ -26,6 +26,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { mayText, openTasks, startTask, taskTextsToday, wordsAreTheirs, type CoTask } from "../services/coTasks.js";
 import { notToTeammate } from "../services/teamLines.js";
+import { parseVerdict, type ScopeVerdict } from "./scope.js";
 
 // Kinds whose question is by design one Co must ask, or whose text already is
 // the payload: an event offer carries the event itself; a network tease leads
@@ -50,11 +51,13 @@ export type OfferRead = {
   work: string | null;
   theirWords: string | null;
   sameAsTask: number | null;
+  // The offer's scope, judged by this same read (harness/scope.ts): Cue's own offer must be connection work before it is made.
+  scope?: ScopeVerdict | null;
 };
 
 export type PayloadDecision =
-  | { handOff: true; work: string; theirWords: string; taskId: number | null; why: string }
-  | { handOff: false; why: string };
+  | { handOff: true; work: string; theirWords: string; taskId: number | null; why: string; scope: ScopeVerdict | null }
+  | { handOff: false; why: string; outside?: true };
 
 const norm = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 
@@ -86,6 +89,8 @@ export async function theirLines(userId: string): Promise<string> {
 // Pure: what Co's read means, held to facts. "theirs" is only the member's own text.
 export function decidePayloadFirst(read: OfferRead | null, draft: string, theirs: string, tasks: Pick<CoTask, "id">[]): PayloadDecision {
   if (!read || !read.question) return { handOff: false, why: "no question offering work" };
+  // Cue's own offer must be inside the boundary before it is made: out or mixed, nothing is offered and nothing is handed off.
+  if (read.scope && read.scope.scope !== "in") return { handOff: false, why: "the offered work is outside connections", outside: true };
   if (!norm(draft).includes(norm(read.question))) return { handOff: false, why: "the question named isn't in the draft" };
   if (!(DOABLE as readonly string[]).includes(read.kind)) return { handOff: false, why: `stays a question: ${read.kind}` };
   const work = (read.work ?? "").trim();
@@ -93,7 +98,7 @@ export function decidePayloadFirst(read: OfferRead | null, draft: string, theirs
   const taskId = read.sameAsTask !== null && tasks.some((t) => t.id === read.sameAsTask) ? read.sameAsTask : null;
   // A new task needs what they actually asked for, in their words.
   if (taskId === null && !wordsAreTheirs(read.theirWords, theirs)) return { handOff: false, why: "no words of theirs this work is for" };
-  return { handOff: true, work: work.slice(0, 200), theirWords: (read.theirWords ?? "").trim(), taskId, why: `${read.kind}: do it instead of asking "${read.question}"` };
+  return { handOff: true, work: work.slice(0, 200), theirWords: (read.theirWords ?? "").trim(), taskId, why: `${read.kind}: do it instead of asking "${read.question}"`, scope: read.scope ?? null };
 }
 
 export function payloadFirstPrompt(o: { draft: string; recent: string; theirAsk?: string | null; tasks: Pick<CoTask, "id" | "goal">[] }): string {
@@ -118,7 +123,7 @@ Classify the work the question offers:
 - only_they_know: asking how they are, how something went, what they want
 - none: the text asks no question like this
 
-Return ONLY JSON: {"question": "the exact question from the text, or null", "kind": one of the kinds above, "work": "what Cue would do, as a short goal (e.g. find three caterers for 60 people by Friday), or null", "theirWords": "the member's own words this work is for, copied exactly from one of their texts (a "User said:" line), or null", "sameAsTask": the [id] of the matching thing Cue is already working on, or null}`;
+Return ONLY JSON: {"question": "the exact question from the text, or null", "kind": one of the kinds above, "work": "what Cue would do, as a short goal (e.g. find three caterers for 60 people by Friday), or null", "theirWords": "the member's own words this work is for, copied exactly from one of their texts (a "User said:" line), or null", "sameAsTask": the [id] of the matching thing Cue is already working on, or null, "scope": "in" if the offered work is about meeting people (who to meet, events, rooms or communities they would attend, preparing for a conversation, an introduction), "out" if it is errands, shopping or lookups (a consumer service, comparing products or plans, travel, general research, job boards, funding searches, venues or vendors for their own event), "mixed" if both, or null}`;
 }
 
 export async function readOffer(draft: string, recent: string, tasks: Pick<CoTask, "id" | "goal">[], theirAsk: string | null = null): Promise<OfferRead | null> {
@@ -139,6 +144,7 @@ export async function readOffer(draft: string, recent: string, tasks: Pick<CoTas
       work: typeof j.work === "string" ? j.work : null,
       theirWords: typeof j.theirWords === "string" ? j.theirWords : null,
       sameAsTask: typeof j.sameAsTask === "number" ? j.sameAsTask : null,
+      scope: parseVerdict({ scope: (j as any).scope }),
     };
   } catch (err: any) {
     console.error("payloadFirst read failed (non-fatal):", err?.message ?? err);
@@ -165,7 +171,8 @@ export async function handOffWork(userId: string, d: Extract<PayloadDecision, { 
       steps: [],
       firstPlan: `Do it now and send them the result, instead of asking whether they still want it: ${d.work}`,
       inHours: 1,
-      scope,
+      scope: scope ?? d.scope,
+      ownOffer: true,
     });
     if (!s.ok) {
       // Already on it under the same goal: wake that one.
@@ -212,6 +219,8 @@ export async function payloadFirst(o: { userId: string; kind: string; draft: str
   const tasks = await openTasks(o.userId).catch(() => [] as CoTask[]);
   const theirs = theirText(`${await theirLines(o.userId)}\n${o.recent}`);
   const d = decidePayloadFirst(await readOffer(o.draft, o.recent, tasks, o.theirAsk ?? null), o.draft, theirs, tasks);
+  // An offer outside connections is not made at all: the candidate is dropped (no question goes out, no task starts).
+  if (!d.handOff && d.outside) return { hold: d.why };
   if (!d.handOff) return { kept: d.why };
   if (o.dryRun) return { wouldHandOff: d.why };
   const h = await handOffWork(o.userId, d, o.scope ?? null);
