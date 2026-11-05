@@ -24,10 +24,10 @@ check("an event search needs only the city", Q.assembleQuery("event", "a talk on
 check("missing budget or date isn't load-bearing: searched around, shown as unknown", Q.assembleQuery("venue", "dinner", state({ budget: null, date: null })).ok);
 check("sources below the bar are skipped", Q.belowTheBar("https://sf.funcheap.com/free-zoo-day/") && Q.belowTheBar("https://www.groupon.com/deals/x") && !Q.belowTheBar("https://www.sfmoma.org/event/x/") && !Q.belowTheBar("https://www.eventbrite.com/e/portfolio-night-1"));
 const tool = src("agent/loopTools.ts");
-check("the brief tool asks first when a load-bearing fact is missing (nothing starts)", /const q = Q\.assembleQuery\("venue", input\.what, known\);\s*if \(!q\.ok\) return \{ ok: false, askThem: q\.question/.test(tool));
+check("the brief tool asks first when a load-bearing fact is missing (nothing starts)", /const q = Q\.assembleQuery\("event", input\.what, known\);\s*if \(!q\.ok\) return \{ ok: false, askThem: q\.question/.test(tool));
 check("the task backstops it: missing facts are asked, never searched on a guess", /if \(!q\.ok\) \{[\s\S]{0,200}await tellThenClose\(q\.question, "dropped"/.test(src("services/researchBrief.ts")));
-check("options are read only from their own page (never a listicle), up to six asked of the search", /k\.official \|\| PEERSPACE_LISTING/.test(src("services/researchBrief.ts")) && /max: BRIEF_LIMITS\.maxOptions/.test(src("services/researchBrief.ts")) && /Up to \$\{Math\.min\(6, Math\.max\(1, opts\.max \?\? 3\)\)\}/.test(src("services/taskWeb.ts")));
-check("the task's search is the assembled query, not the raw ask", /findVenueOptions\(task\.userId, q\.query,/.test(src("services/researchBrief.ts")));
+check("options are read only from their own page (never a listicle), up to six asked of the search", /const own = \(k: \{ url: string; official: boolean \}\) => k\.official;/.test(src("services/researchBrief.ts")) && /max: BRIEF_LIMITS\.maxOptions/.test(src("services/researchBrief.ts")) && /Up to \$\{Math\.min\(6, Math\.max\(1, opts\.max \?\? 3\)\)\}/.test(src("services/taskWeb.ts")));
+check("the task's search is the assembled query, not the raw ask", /findRoomOptions\(task\.userId, q\.query,/.test(src("services/researchBrief.ts")));
 
 // ---- 2. fixed fields; unknown stays unknown
 const at = "2026-10-07T21:00:00.000Z";
@@ -43,14 +43,14 @@ check("a hedge in the page's own words stands", Q.schemaFields("venue", { rate: 
   check("a group minimum isn't a capacity: it goes as unknown", ["16 people or more", "minimum 20 guests", "at least 10", "15+ guests", "Min. 12"].every((v) => cap(v) === null), ["16 people or more", "15+ guests"].map(cap));
   check("a real capacity stands, ranges and maximums included", cap("Maximum seated: 40, maximum standing: 70") === "Maximum seated: 40, maximum standing: 70" && cap("8 to 150 guests seated") !== null && cap("up to 250 guests for a standing reception") !== null && cap("Mastro's Terrace: 80 seated or 200 standing") !== null);
 }
-// ---- the find (services/researchBrief.ts findVenueOptions): more than one angle, one option per place, factless own pages
+// ---- the find (services/researchBrief.ts findRoomOptions): more than one angle, one option per place, factless own pages
 {
   const rb = src("services/researchBrief.ts");
-  const find = rb.slice(rb.indexOf("export async function findVenueOptions"), rb.indexOf("type BriefParams"));
+  const find = rb.slice(rb.indexOf("export async function findRoomOptions"), rb.indexOf("type BriefParams"));
   check("the find runs up to three passes, each later one naming what's already found", /const angles = \[/.test(find) && (find.match(/angles = \[([^\]]*)\]/)?.[1].split('", "').length ?? 0) === 3 && /already found/.test(find) && /\$\{seen \? ` \$\{seen\}\.` : ""\}/.test(find));
   check("the find stops early only once it has a full brief's worth of distinct places", /if \(i > 0 && ownPlaces\(\)\.length >= BRIEF_LIMITS\.maxOptions\) break;/.test(find));
   check("one option per place: a second page on the same site isn't another option", /placeKey\(x\) === placeKey\(k\)/.test(find) && /findIndex\(\(x\) => placeKey\(x\) === placeKey\(k\)\) === i/.test(find));
-  check("the find reads each own page itself, so a name-checked own page with no search details still counts", /readsPageItself: true/.test(find) && /ownPage: "private events or private dining page"/.test(find));
+  check("the find reads each own page itself, so a name-checked own page with no search details still counts", /readsPageItself: true/.test(find) && /ownPage: "event or community page"/.test(find));
   check("a brief heading is the place's core name, not a room the search named", /coreName\(k\.name\)\]/.test(find));
 }
 check("an estimate with no evidence is unknown", Q.schemaFields("event", { price: { value: "typically $30" } }, at).find((f) => f.key === "price")?.value === null);

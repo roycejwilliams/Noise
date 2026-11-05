@@ -186,23 +186,23 @@ try {
 
   // The research brief (a background venue brief): a find whose every search failed is a failure, never "no venues fit".
   exa = DOWN;
-  const ask = { what: "a private dining room for 12", city: "San Francisco", slot: null } as any;
-  const thrown = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then(() => null, (e) => e);
-  check("the venue find, Exa down: it throws SearchFailed (the search never ran), never returns 'no venues'", thrown instanceof RB.SearchFailed && /Web search failed: Exa 500/.test(thrown.message), String(thrown));
+  const ask = { what: "founder dinners and communities", city: "San Francisco" } as any;
+  const thrown = await RB.findRoomOptions("u1", "founder dinners and communities in San Francisco", ask, null).then(() => null, (e) => e);
+  check("the venue find, Exa down: it throws SearchFailed (the search never ran), never returns 'nothing fits'", thrown instanceof RB.SearchFailed && /Web search failed: Exa 500/.test(thrown.message), String(thrown));
   exa = () => ({ status: 200, body: { results: [] } });
-  const none = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then((f) => f, (e) => e);
+  const none = await RB.findRoomOptions("u1", "founder dinners and communities in San Francisco", ask, null).then((f) => f, (e) => e);
   check("... an empty search is no venues, not a failure", Array.isArray(none) && none.length === 0, String(none));
   // Every pass blocked by the web search budget: the search never ran, the same as a failure.
   budget = [FULL, FULL, FULL];
-  const blockedFind = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then(() => null, (e) => e);
-  check("the venue find, the budget blocked every pass: it throws SearchFailed, never returns 'no venues'", blockedFind instanceof RB.SearchFailed && /^No web search right now/.test(blockedFind.message), String(blockedFind));
+  const blockedFind = await RB.findRoomOptions("u1", "founder dinners and communities in San Francisco", ask, null).then(() => null, (e) => e);
+  check("the venue find, the budget blocked every pass: it throws SearchFailed, never returns 'nothing fits'", blockedFind instanceof RB.SearchFailed && /^No web search right now/.test(blockedFind.message), String(blockedFind));
   budget = [];
   // A brief is a member's ask: its searches draw from the direct-ask share. With 80 of the day's 150 used, the sweep's share (75) is
   // gone and the direct-ask share still has room (re-review of #235: the brief defaulted to the sweep's share and was blocked).
   sqlLog.length = 0;
   budget = [80, 80, 80];
   exa = () => ({ status: 200, body: { results: [] } });
-  const shared = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then((f) => f, (e) => e);
+  const shared = await RB.findRoomOptions("u1", "founder dinners and communities in San Francisco", ask, null).then((f) => f, (e) => e);
   const reserved = sqlLog.filter((l) => /INSERT INTO web_search_log/.test(l.sql));
   check("a venue brief with the sweep's share used up (80 of 150): its search is reserved from the direct-ask share and runs", Array.isArray(shared) && reserved.length > 0 && reserved.every((l) => l.p[1] === "request"), { shared: String(shared), reserved: reserved.map((l) => l.p[1]) });
   budget = [];
@@ -210,7 +210,7 @@ try {
   check("a find that didn't run is tried again at the next two wakes, and only the third run tells them", RB.BRIEF_SEARCH_RETRIES === 2 && RB.briefSearchNext(1) === "retry" && RB.briefSearchNext(2) === "retry" && RB.briefSearchNext(3) === "tell" && RB.briefSearchNext(4) === "tell");
   check("the retry is the claim's own lease to the next wake (no new machinery)", /UPDATE co_tasks SET next_check_at = NOW\(\) \+ INTERVAL '45 minutes', wakes = wakes \+ 1/.test(src("services/coTasks.ts")));
   // Approved by Royce, 2026-10-17, verbatim.
-  check("the line they get is the approved one, word for word", RB.SEARCH_FAILED_LINE === "My search didn't go through just now, so I couldn't look for venues yet. Want me to try again?", RB.SEARCH_FAILED_LINE);
+  check("the line they get is the approved one, word for word", RB.SEARCH_FAILED_LINE === "My search didn't go through just now, so I couldn't look for rooms yet. Want me to try again?", RB.SEARCH_FAILED_LINE);
 
   // The whole brief run (runResearchBriefTask), wake by wake, with the search down: the database, Exa, the model and the send are
   // stood in for, and the clock is pinned inside their hours (noon in San Francisco), so a text is a send, not a hold.
@@ -260,7 +260,7 @@ try {
   check("the brief, every search blocked by the budget, wake 1: nothing sent, nothing closed (a retry, the same as a failure)", b1.texts.length === 0 && b1.queued.length === 0 && b1.closes.length === 0, b1);
   budget = [];
   const ok2 = await runBrief(2);
-  check("a retry where the search works: the normal path (the find runs; with nothing found it's the brief's own 'no venues' line, never the failure line)", ok2.exaCalls > 0 && ok2.texts.length === 0 && ok2.queued.length === 1 && ok2.queued[0] !== RB.SEARCH_FAILED_LINE && /couldn't verify any venues that fit/.test(ok2.queued[0]) && ok2.closes.length === 0 && ok2.queuedClose[0]?.status === "done", ok2);
+  check("a retry where the search works: the normal path (the find runs; with nothing found it's the brief's own 'nothing fits' line, never the failure line)", ok2.exaCalls > 0 && ok2.texts.length === 0 && ok2.queued.length === 1 && ok2.queued[0] !== RB.SEARCH_FAILED_LINE && /couldn't verify any rooms that fit/.test(ok2.queued[0]) && ok2.closes.length === 0 && ok2.queuedClose[0]?.status === "done", ok2);
   rowsFor = () => [];
 } finally {
   globalThis.fetch = realFetch;

@@ -1,30 +1,33 @@
-// Venue research goes back as finds by text, never a document (Royce, 2026-11-04: the research pipeline stays, only the document
+// Research on rooms, events and communities goes back as finds by text, never a document (Royce, 2026-11-04: the research pipeline stays, only the document
 // wrapper goes). Zero tokens, no DB.
 //   npx tsx evals/research/findsNotDocument.ts
 import fs from "node:fs";
 const RB = await import("../../src/services/researchBrief.js");
+const { schemaFields } = await import("../../src/services/researchQuality.js");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? ` :: ${JSON.stringify(detail).slice(0, 300)}` : ""}`); } };
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 
 const at = "2026-10-07T21:13:00.000Z";
+// An event's fixed fields (the event schema: date, starts, price, where, sold out), as the general reader returns them.
+const roomFields = (v: Record<string, string | null>) => schemaFields("event", Object.fromEntries(Object.entries(v).map(([k, x]) => [k, { value: x }])), "2026-10-07T21:13:00.000Z");
 const find = (over: Partial<import("../../src/services/researchBrief.js").ResearchFind> = {}) => ({
   name: "Shaws San Francisco",
   url: "https://www.peerspace.com/pages/listings/636c4558d6990c0022346e9d",
   checkedAt: at,
   reader: "scripted" as const,
-  fields: RB.peerspaceFields({ hourlyPrice: 125, priceRange: null, minimumHours: 1, capacity: 50, available: "yes", evidence: "" }, { date: "2026-10-22", start: "6:00 pm" }),
+  fields: roomFields({ date: "2026-10-22", start: "6:00 pm", price: "Free", where: "The Battery, San Francisco" }),
   ...over,
 });
 
 // ---- the captions come through the shared find-caption path; link first, then one line
 const SAFE = (n: string) => `A fit for what you asked: ${n} holds the size you gave.`;
 const draftFor = (bad: string[] = []): import("../../src/services/researchBrief.js").CaptionDraft => async ({ items, fix }) => ({ captions: new Map(items.map((it) => [it.url, bad.includes(it.name) && !fix ? "Rate: $125 - best in the city" : SAFE(it.name)])) });
-const ctx = { firstName: "Jordan", ask: "a venue for 40", context: ["budget about 1500"] };
+const ctx = { firstName: "Jordan", ask: "founder dinners for climate people", context: ["budget about 1500"] };
 const four = ["Aa Hall", "Bb Loft", "Cc Room", "Dd Barn"].map((n, i) => find({ name: n, url: `https://www.peerspace.com/pages/listings/p${i}` }));
 const r1 = await RB.researchMessages(four.slice(0, 2), { ...ctx, draft: draftFor() });
 check("each find is its link, then one caption line", r1.messages.length === 4 && r1.messages[0] === four[0].url && r1.messages[2] === four[1].url && !/^https?:/.test(r1.messages[1]) && !/^https?:/.test(r1.messages[3]), r1.messages);
-check("the facts handed to the caption writer are the find's fixed fields and what wasn't confirmed", RB.findFacts(find({ fields: RB.peerspaceFields({ hourlyPrice: null, priceRange: null, minimumHours: 3, capacity: 50, available: "unknown", evidence: "" }, { date: "2026-10-22", start: "6:00 pm" }) })).some((f) => /^Capacity: 50/.test(f)) && RB.findFacts(find({ fields: RB.peerspaceFields({ hourlyPrice: null, priceRange: null, minimumHours: 3, capacity: 50, available: "unknown", evidence: "" }, null) })).some((f) => /not confirmed on its page: rate/.test(f)));
+check("the facts handed to the caption writer are the find's fixed fields and what wasn't confirmed", RB.findFacts(find({ fields: roomFields({ date: "2026-10-22", start: "6:00 pm", price: null, where: "The Battery, San Francisco" }) })).some((f) => /^Where: The Battery/.test(f)) && RB.findFacts(find({ fields: roomFields({ date: "2026-10-22", start: null, price: null, where: null }) })).some((f) => /not confirmed on its page: .*price/.test(f)));
 
 // ---- a caption that breaks the rules (a dash, a number its facts don't have) doesn't go; the valid fourth find fills the slot
 const r2 = await RB.researchMessages(four, { ...ctx, draft: async ({ items, fix }) => ({ captions: new Map(items.map((it) => [it.url, it.name === "Aa Hall" ? "Rate: $999 - best in the city" : SAFE(it.name)])) }) });
@@ -64,7 +67,7 @@ check("the research task sends its finds as texts (tellThenClose of researchMess
 check("the research task never builds, renders or delivers a document", !/documentSheet|documentDelivery|googleDocs|deliverBrief|deliverAndRecord|buildBrief|renderPdf|saveTo|wantsGoogle|pendingDoc|holdBriefDoc/.test(rb), rb.match(/documentSheet|documentDelivery|googleDocs|deliverBrief|deliverAndRecord|buildBrief|renderPdf|saveTo|wantsGoogle|pendingDoc|holdBriefDoc/)?.[0]);
 check("the finds are put on file (research finds, shown finds) only when the texts actually went out", /recordSentFinds/.test(run) && /next === "told" && r\.sent && record\?\.length\) await recordSentFinds/.test(run) && !/recordShownFinds\([^)]*\)\s*;\s*\n\s*const \{ recordDecision/.test(run));
 check("the reply tool starts the research task and promises finds by text, not a document", /It never comes as a document/.test(src("services/capabilities.ts")) && /finds by text/.test(src("agent/loopTools.ts")) && !/will come as a document|comes as a document/.test(src("agent/loopTools.ts").slice(src("agent/loopTools.ts").indexOf("researchBrief: tool({"), src("agent/loopTools.ts").indexOf("findReaction: tool({"))));
-check("the research pipeline stays: query from member state, fixed fields, freshness, ranking", /assembleQuery/.test(run) && /freshForShow/.test(run) && /rankFinds/.test(run) && /rankingSignal/.test(run) && /findVenueOptions/.test(run) && /readVenueSource/.test(rb));
+check("the research pipeline stays: query from member state, fixed fields, freshness, ranking", /assembleQuery/.test(run) && /freshForShow/.test(run) && /rankFinds/.test(run) && /rankingSignal/.test(run) && /findRoomOptions/.test(run) && /readRoomSource/.test(rb));
 
 console.log(`research finds, not a document: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
