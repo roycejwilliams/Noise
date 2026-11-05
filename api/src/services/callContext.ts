@@ -592,6 +592,7 @@ export function pairCalls(rows: { created_at: Date | string; memory_type: string
 // not the end of the build, so a long one can't take every later short one with it.
 // thread: the text thread (callThread), after the rest and before what was sent, outside max: it has its own budget (the reply's), and
 // a full summary never drops it, nor it anything else.
+export const SENT_HEADER = "What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n";
 export function assembleCallSummary(o: { haveIt?: string | null; now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number; thread?: string | null }): string {
   const max = o.max ?? CALL_CONTEXT_MAX;
   const sentMax = o.sentMax ?? CALL_SENT_MAX;
@@ -605,7 +606,7 @@ export function assembleCallSummary(o: { haveIt?: string | null; now?: string | 
   const older = o.threads.filter(isOld);
   const threads = current.length ? `What they're in the middle of:\n${current.slice(0, 5).map((t) => `- ${lineOf(t)}`).join("\n")}` : null;
   const olderThreads = older.length ? `Older threads, not current (ask whether one is still true before you bring it up):\n${older.slice(0, 5).map((t) => `- ${lineOf(t)}`).join("\n")}` : null;
-  const header = "What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n";
+  const header = SENT_HEADER;
   const kept: string[] = [];
   let used = header.length;
   for (const l of o.sentLines) {
@@ -822,8 +823,11 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     for (const x of await dropRemoved(userId, older.flat())) if (named.length < 3 && !named.some((f) => f.key === x.key && f.url === x.url)) named.push(x);
   }
   await withinWait(fillReferents(userId, named), "the referent read").catch(() => {});
-  const recordNote = answerFromRecordNote(named);
-  const sentLines = await strip([...(recordNote ? [recordNote] : []), ...sentDetailLines({ sent }, 7, new Date(), { also: named, zone, referentMax: CALL_SENT_MAX - 400 })]);
+  const recordNote = answerFromRecordNote(named, { asking: false });
+  // The referents' lines share what the section keeps after its header and the note, so none is ever the one that doesn't fit: each is
+  // cut to its share (description first, then the tail; the core stays), and the recent sends take what is left.
+  const share = Math.max(320, Math.floor((CALL_SENT_MAX - SENT_HEADER.length - (recordNote?.length ?? 0) - 12 * (named.length + 1)) / Math.max(1, named.length)));
+  const sentLines = await strip([...(recordNote ? [recordNote] : []), ...sentDetailLines({ sent }, 7, new Date(), { also: named, zone, referentMax: share })]);
   const thread = callThread(k.exchanges, { guardsUnread: !!k.guardsUnread });
   const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread });
 

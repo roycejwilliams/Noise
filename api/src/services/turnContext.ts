@@ -366,12 +366,34 @@ export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null
   return out;
 }
 
-// The plain instruction that goes with a resolved find: its stored facts (sentFindFacts) are the answer. For the reply, when the member
-// asks about it; for a call, whenever one is resolved (no question yet). It instructs the model and carries no wording of its own.
-export function answerFromRecordNote(referents: readonly Pick<SentItem, "name">[]): string | null {
+// Pure: which of a find's fields are stored (what a reply may state) and which aren't (said plainly, with the link).
+export function storedFields(s: SentItem): { have: string[]; missing: string[] } {
+  const d = s.details;
+  const f = (s.read as any)?.fields ?? {};
+  const has = (k: string) => !!f[k]?.value;
+  const have = ["the day Cue sent it"];
+  const missing: string[] = [];
+  (s.url ? have : missing).push("its link");
+  if (s.city || d?.city || has("city")) have.push("its city");
+  else missing.push("its city");
+  if (d?.startAt || has("start")) have.push("its date and time");
+  else missing.push("its date and time");
+  if (d?.venue || d?.address || has("venue") || has("address")) have.push("its venue or address");
+  else missing.push("its street address");
+  return { have, missing };
+}
+
+// The plain instruction that goes with a resolved find: its stored facts (sentFindFacts) are the answer. asking: they asked about it
+// (a text); false on a call, which has no question yet ("if they ask"). Lists only the fields actually stored and says which aren't. It
+// instructs the model and carries no wording of its own.
+export function answerFromRecordNote(referents: readonly SentItem[], o: { asking?: boolean } = {}): string | null {
   if (!referents.length) return null;
-  const names = referents.map((r) => `"${r.name}"`).join(" and ");
-  return `They are asking about ${names}, which Cue sent them. Answer from the stored facts listed for it (the day Cue sent it, its city, its link, its date and time). If a field isn't stored, say so and give the link. Never say you're not sure, or that you have nothing on file, about anything listed there.`;
+  const asking = o.asking ?? true;
+  const parts = referents.map((r) => {
+    const { have, missing } = storedFields(r);
+    return `"${r.name}" stored: ${have.join(", ")}${missing.length ? `; not stored: ${missing.join(", ")} (say so${r.url ? ", and give the link" : ""})` : ""}`;
+  });
+  return `${asking ? "They are asking about a find Cue sent them." : "If they ask about a find Cue sent them,"} Answer from its stored facts. ${parts.join(". ")}. Never say you're not sure, or that you have nothing on file, about what is stored.`;
 }
 
 // True when a stored match is this find: the same event id or the same link (Luma's two hosts count as one).
@@ -386,8 +408,14 @@ export function isSameFind(item: Pick<SentItem, "url" | "key">, m: { url?: strin
 function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number, now = new Date(), o: { zone?: string | null; also?: readonly SentItem[]; referentMax?: number } = {}): string[] {
   const first = [...(o.also ?? [])];
   const recent = ctx.sent.filter((s) => s.sentAt.getTime() > cutoff && !first.includes(s)).slice(0, 5);
-  const cut = (t: string, isFirst: boolean) => (isFirst && o.referentMax && t.length > o.referentMax ? `${t.slice(0, o.referentMax - 1).trimEnd()}…` : t);
-  return [...first, ...recent].map((s) => cut(sentFindFacts(s, now, o.zone ?? null).join(" "), first.includes(s)));
+  // Over its cap (a call's), the description goes first (the core stays: name, send date, link, city, date/time), then the tail.
+  const render = (s: SentItem) => {
+    const t = sentFindFacts(s, now, o.zone ?? null).join(" ");
+    if (!first.includes(s) || !o.referentMax || t.length <= o.referentMax) return t;
+    const lean = sentFindFacts({ ...s, details: s.details ? { ...s.details, description: null } : null }, now, o.zone ?? null).join(" ");
+    return lean.length <= o.referentMax ? lean : `${lean.slice(0, o.referentMax - 1).trimEnd()}…`;
+  };
+  return [...first, ...recent].map(render);
 }
 
 // Co's own reads of those pages and anything unconfirmed: hints for drafting,
@@ -421,18 +449,33 @@ export const POINTING = new RegExp(String.raw`\b(?:that|this|it|those)\b(?!\s+(?
 // referent the turn read resolved (meant, #368: its link, else its label); the finds they name (whole words); else, when they point
 // ("that", "that one") and name nothing, the find in the newest of Cue's recent texts that names one (coTexts, newest first), the one
 // mentioned last in that text. A thing they name that Cue never sent resolves to nothing: never the last find by default.
+// The words that place a find (its city, venue, address), for choosing between finds of one name.
+const placeWords = (x: SentItem): string[] => [x.city, x.details?.city, x.details?.venue, x.details?.address].filter((w): w is string => !!w && w.trim().length >= 3);
+// Same-name candidates narrowed by a place word in their message ("the one in Oakland"); unchanged when none or all match.
+function narrowByPlace(cands: SentItem[], message: string): SentItem[] {
+  const hit = cands.filter((x) => placeWords(x).some((w) => namedIn(message, w) >= 0 || new RegExp(`(?:^|[^a-z0-9])${reEsc(w.trim())}(?![a-z0-9])`, "i").test(message)));
+  return hit.length && hit.length < cands.length ? hit : cands;
+}
+// A text of Cue's that names a place (a street, or "at/on/in" and a capitalized name): not a find, so the walk back stops there.
+const NAMES_A_PLACE = /\b[A-Z][\w'’&-]*(?:\s+[A-Z][\w'’&-]*)*\s+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Lane|Way|Drive|Dr|Square|Plaza)\b|\b(?:at|on|in|to|near|by)\s+(?:the\s+)?[A-Z][\w'’&-]+(?:\s+[A-Z][\w'’&-]*)*/;
 export function referredSent(sent: readonly SentItem[], o: { message: string; meantLabel?: string | null; meantUrl?: string | null; coTexts?: readonly string[] }): SentItem[] {
   const out: SentItem[] = [];
   const put = (x: SentItem | undefined) => { if (x && !out.includes(x)) out.push(x); };
   const byUrl = (u: string) => sent.find((x) => x.url && normUrlOf(x.url) === normUrlOf(u));
   if (o.meantUrl) put(byUrl(o.meantUrl));
-  if (!out.length && o.meantLabel) for (const x of sent.filter((x) => norm(x.name) === norm(o.meantLabel!)).slice(0, 2)) put(x);
+  if (!out.length && o.meantLabel) for (const x of narrowByPlace(sent.filter((x) => norm(x.name) === norm(o.meantLabel!)), o.message).slice(0, 2)) put(x);
   for (const u of o.message.match(/https?:\/\/[^\s)>\]"']+/g) ?? []) put(byUrl(u));
-  for (const x of sent) if (namedIn(o.message, x.name) >= 0) put(x);
+  for (const x of narrowByPlace(sent.filter((x) => namedIn(o.message, x.name) >= 0), o.message)) put(x);
   if (!out.length && POINTING.test(o.message) && ASKS_ABOUT_FIND.test(o.message)) {
     for (const text of (o.coTexts ?? []).slice(0, 8)) {
       const hits = sent.map((x) => ({ x, at: Math.max(namedIn(text, x.name), x.url && text.includes(x.url) ? text.indexOf(x.url) : -1) })).filter((h) => h.at >= 0).sort((a, b) => b.at - a.at);
-      if (hits.length) { put(hits[0].x); break; }
+      if (hits.length) {
+        const same = hits.filter((h) => norm(h.x.name) === norm(hits[0].x.name)).map((h) => h.x);
+        put(narrowByPlace(same, o.message)[0]);
+        break;
+      }
+      // The newest text that names anything names a place that isn't a find: "that place" is that, never an older find behind it.
+      if (NAMES_A_PLACE.test(text)) break;
     }
   }
   return out.slice(0, 2);
