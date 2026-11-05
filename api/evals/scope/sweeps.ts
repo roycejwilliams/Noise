@@ -196,7 +196,7 @@ check("the saveAsk sheet says funding, job postings, errands and travel are kept
   check("…nor one that is unmistakably outside by its words (taxes)", GJ.dueGoalCheckin([g("g2", "File my taxes by the 15th")], null, now) === null);
   check("…while an in-scope goal is still checked in on", GJ.dueGoalCheckin([g("g3", "Meet climate founders", { scope: "in" })], null, now)?.id === "g3");
   check("the check-in is skipped again when it wakes (a candidate queued before the goal was read as outside)", /goalIsOutside\(entry\)\) return skip\(/.test(src("harness/proactiveRegistry.ts")));
-  check("a new goal is read for scope by the same classifyAsk read and the verdict is kept on the entry", /classifyAskRead\(ask\.text\)\)\.kind === "outside" \? \("out" as const\)/.test(src("services/profileExtraction.ts")) && /\.\.\.\(goalScope \? \{ scope: goalScope \} : \{\}\)/.test(src("services/profileExtraction.ts")));
+  check("a new goal is read for scope by the same classifyAsk read and the verdict is kept on the entry", /goalRead\.kind === "outside" \? \("out" as const\)/.test(src("services/profileExtraction.ts")) && /\.\.\.\(goalScope \? \{ scope: goalScope \} : \{\}\)/.test(src("services/profileExtraction.ts")));
 }
 
 // ---- 10. saveAsk: the model's scope decides; a mixed ask is saved as its connection part or not at all
@@ -236,6 +236,30 @@ for (const voice of [false, true]) {
   console.log = quiet;
   check("an unmistakable out is closed by the backstop alone, with no model read", reads === 0 && told.length === 1);
   check("a task with a stored verdict is not read again", /!t\.followup\?\.scope/.test(src("services/taskTurn.ts")));
+}
+
+// ---- 12. a failed read is not "in": nothing is stored, and the ask is read again next run
+{
+  reset();
+  const rows = [
+    { id: 41, user_id: "u1", ask_text: "Find me founders in climate", kind: null, intent: null, kind_checked_at: null },
+    { id: 42, user_id: "u1", ask_text: "Someone to talk to about a career change", kind: null, intent: null, kind_checked_at: null },
+  ];
+  answer = (sql) => (/SELECT id, user_id, ask_text, kind, intent/.test(sql) ? rows : null);
+  const n = await K.classifyOpenAsks(25, { db: pool, read: async (t) => (/climate/.test(t) ? null : { kind: "person" as const, connection: null }) });
+  const updates = log.filter((l) => /UPDATE ask_checkins SET kind/.test(l.sql));
+  check("a failed read writes nothing for that ask (no kind, no checked mark, no version), so the next run reads it again; the other ask is stored", n === 2 && !updates.some((u) => u.params[0] === 41) && updates.some((u) => u.params[0] === 42), updates.map((u) => u.params[0]));
+  const ak = src("services/askKind.ts");
+  check("classifyAskRead returns null on an error, a timeout or an empty answer, and the capture and goal paths store nothing then", /\} catch \{\s*return null;/.test(ak) && /if \(!w\) return null;/.test(ak) && /askRead \? ASK_KIND_VERSION : null/.test(src("services/profileExtraction.ts")) && /const goalScope = goalRead \?/.test(src("services/profileExtraction.ts")) && /if \(!got\) continue;/.test(ak));
+}
+
+// ---- 13. a mixed ask keeps its mixed flag even when the connection phrase is short or missing: it is never searched whole
+{
+  const row = (c: string | null) => ({ kind: "find", scope_connection: c });
+  check("flagged mixed with no usable phrase: not searched at all", K.searchPartOf("find me a therapist and some founder dinners", row("")) === null);
+  check("flagged mixed with a phrase: only the phrase", K.searchPartOf("find me a therapist and some founder dinners", row("founder dinners")) === "founder dinners");
+  check("the plain probe (an ask not flagged mixed) is the read's 'in': searched as written", K.searchPartOf("find me a therapist and some founder dinners", { kind: "find", scope_connection: null }) === "find me a therapist and some founder dinners");
+  check("the read keeps the flag for a short phrase (\"\"), and a not-mixed ask stays null", /phrase\.length >= 4 \? phrase : ""/.test(src("services/askKind.ts")));
 }
 
 if (failed) { console.log(`\n${failed} of ${total} checks failed.`); process.exit(1); }

@@ -1691,7 +1691,9 @@ export async function persistCapturedIntent(
   const ww = ask?.wantWords;
   // A goal is read for scope once, by the same classifyAsk read that reads every ask, and the verdict is kept on the entry: an outside goal
   // is remembered but gets no check-in, nudge or search (services/goalJourney.ts dueGoalCheckin, harness/proactiveRegistry.ts goal_checkin).
-  const goalScope = ask && kind === "goal" && !opts.keepSearchRow ? ((await classifyAskRead(ask.text)).kind === "outside" ? ("out" as const) : ("in" as const)) : null;
+  // A failed read stores nothing (null): it is never taken for "in".
+  const goalRead = ask && kind === "goal" && !opts.keepSearchRow ? await classifyAskRead(ask.text) : null;
+  const goalScope = goalRead ? (goalRead.kind === "outside" ? ("out" as const) : ("in" as const)) : null;
   const newIntent: ExtractedIntent = {
     id: intentId,
     ...(ask ? { text: ask.text, type: ask.type, kind: kind! } : {}),
@@ -1783,17 +1785,18 @@ export async function persistCapturedIntent(
     // The kind and the scope come from the one read that classifies every ask (askKind.ts classifyAskRead): the model judges whether it is
     // connection work, and keeps the connection part of a mixed ask; the backstop catches the unmistakable outs first.
     const [expiresAt, askRead] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), opts.keepSearchRow ? Promise.resolve({ kind: "find" as const, connection: null }) : classifyAskRead(ask.text)]);
-    const askKind = askRead.kind;
+    // A failed read keeps the ask as a find (as before) but stores no scope and no version, so the kind job reads it again.
+    const askKind = askRead?.kind ?? "find";
     await pool
       .query(
         `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at, scope_connection, kind_version)
-         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz, $5::text, NOW(), NOW(), $6::text, $7::int
+         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz, $5::text, CASE WHEN $7::int IS NULL THEN NULL ELSE NOW() END, NOW(), $6::text, $7::int
          WHERE NOT EXISTS (
            SELECT 1 FROM ask_checkins
            WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
          )
          ON CONFLICT (user_id, ask_id) DO NOTHING`,
-        [user_id, intentId, ask.text, expiresAt, askKind, askKind === "outside" ? null : askRead.connection, ASK_KIND_VERSION],
+        [user_id, intentId, ask.text, expiresAt, askKind, askKind === "outside" ? null : askRead?.connection ?? null, askRead ? ASK_KIND_VERSION : null],
       )
       .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
   }
