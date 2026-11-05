@@ -1,0 +1,102 @@
+{
+  "hash": "d1ae4c98ef95f370",
+  "case": "status-check",
+  "recorded_at": "2026-11-05T04:00:31.387Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you dr...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you draft the planning docs for Sequin?\".\n\nCue's text:\n\"\"\"Already on it. I outlined the launch timeline, venue walk-through Nov 3, invites out Nov 10.\n\nNext up is the partner section, I'll have that drafted and send you the whole thing.\"\"\"\n\nDoes the text tell them Cue is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"States already on it with timeline outlined, dates Nov 3/Nov 10, and partner section next, with no offer to start or pause/stop language.\"}",
+      "usage": {
+        "input_tokens": 367,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 268,
+        "output_tokens_details": {
+          "thinking_tokens": 204
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj7Xknnz4VBc1TWATZLm",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EooICsQCCBMYAipAp6gWpyo4/mJ2Y8VpNTA+dm2jsvF2N/SRjTnjtzprMJ8VWzOkVB3AKtGEXzxAwjConsDmaUP8v+OX7ldBfkAEQzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB3v6v1wbCAToIBBAAGgwC2ooDTzcFdHYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDkEwaQKGtj3O6+6/B0tIpNCFtdCaYElLZpilcROBTeRCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgy80q3nLTsT1L3LvWkaDKXsiw+uSraDZLm+1CIwKK3VUInXoCdZ9rURQcJ3JaCGFN3L5W8VT67yke+Rq8qCSwg8HcrcMrtZfWiU/hmQKvIEavyMtUwEeh9z1v6sGW3TMJmndiLgJeQR63PqbfUBcY/wSYJbe5GYHbxg8bJt/gIaplM6Xtl9Ic0OI8pvgQWL960LZ5OvOokW4jYVYbuGExgDBYIAnTxm64jZ4unGQH6Kq7ds2vwIl3oE7no7z3ginmMgHdV6YI+Kcv0jewe42YjITvMfyIcuAIhEM5EETupWRE6jsskRqpvIPEm1kRpDmnJ3CzRbNV+OXPGNDrrrO0YIQpq/JKunRccUWz7dxkl/lhpm2YtowsNMa+nKnF/yDB1uXeWaS9I0iA6E7+5q7XJn/zQr/nnCxDbBy61de4bcU3Kn9enILpcTlSzqvn/eFJXdpuZnWI7HUzvAQ4l7nUSHy+rK5YsYzG+KChOORG3kM9x+CkXq5zUxUz+a0KGyfSyQt0gE7my1dc91i+wIwODyO4W3/1hoxSYGHcrtMX8EOGZlUTUtDt6YnN5Kf2XtQtR3ITSfrWGCbdFtsJU+zjRX5ggJHiRUh4o0ZmsKNy2TJApX0chc84Pu/yHkeAnoPsdXxz8thPNRGwK/ZjDyKW0zEpIB/zhVNemkSyllxbwCNfsmahUiUB4dGgyRyu8EOWMFs7nWCORbFHHf5Zomqw+UgCmsdxkX2bCWr4mqG5UHhV/29DCs7BtgIf9qAcwipM/BTJ+9gf7lLAgDUeYdhDJkxJxuU34amKPRyPtFSV7JYYyn9gIgr82dgB3HvXrpKbwdcYuujkufUSGbRZLg4Gfidr3x2WrBBKJwKDuH0z9sZkg5dI0Wzu1McISUzg2PB7PyuMQx4gx0NqzkmX8FZUjY1XR2qFrRG1L9RGnTYN5owF4YAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"States already on it with timeline outlined, dates Nov 3/Nov 10, and partner section next, with no offer to start or pause/stop language.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 367,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 268,
+          "output_tokens_details": {
+            "thinking_tokens": 204
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "d1ae4c98ef95f370",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

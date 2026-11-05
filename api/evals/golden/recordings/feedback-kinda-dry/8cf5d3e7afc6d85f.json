@@ -1,0 +1,102 @@
+{
+  "hash": "8cf5d3e7afc6d85f",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-05T04:04:31.640Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That almost-walking-off moment and then nailing the whole thing, that's the part that gets me. Takes real nerve for a seven year old to sit back down after that.\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Starts with just 'Fair.' then adds original take: 'Takes real nerve for a seven year old to sit back down after that' — no tone-explaining, no apology, no quoting the old line.\"}",
+      "usage": {
+        "input_tokens": 327,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 421,
+        "output_tokens_details": {
+          "thinking_tokens": 341
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj7qLLsuHn4b6uHG2YeB",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EogLCsQCCBMYAipAkYmJDC6OHpqqVuNPS7AA0ldURIh0AKe66CdGfGE6CCNwRsVoegaeZUvFNzko8gTM/kHhtDy92UfdWmqS+SAWWzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBzoCw1wbCAToIBBAAGgwC2ooDTzcFirAEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCjthBOA47jxE3hBYfWm/FKZ+U+LHuxnkDUdJsb/+Wt1CIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzOhn7V0K+rt+A0LXQaDJE2TTLQxEwgNN2XDiIwqPn/FoxdfRGlLryvUrurXhQ+ONXnE+TwgmoI1jyAFx8Nhu46fANUUmj4thAcgt3+KvAHMLkFj8YVKjVB9j/IZjqF7XETUKC+5SkIMm7Rv3PeAJdm+Xm6RKuQcs6Q+JH1+MFU61NcUE83/dSGRFWBLdwRH+E4ukfF/c0gRxCAGaYnbhz6tnAKD1v0rR67h8uMyCiBOWYpKEZYhYsAV8sP2kqDyyx1K87pliXflZPz1nY6B2UeR7BV9oem3ytB1d2u3ZNiNHJawpv6vtXW+yTfKJ602pBQB/4mlz0euI8ySxNDmw7SiXqI7bC5vf6f4FW/Vh4mKrU+JGUwpdZNna92yRVK6XV+hL5ZeVW43Y07nU8TrrStk7pMKhY2hMvPiLyrJ4mfg7yeRokAW9Dbgskm5URBlKk/uBVZvs1kSh1hPqiMhcY+6c1GOFliwzZn+WykGrtF6z/KVfZGYyzePZuc3MoCeo2NzjqelefS46ePLWsZvvvzTT8dpC5IyJckO15mCMyfwbULLGNIoQy8jtiHgsybnUf4cWlPgj8dcvI7UXVqOTFr0JAqd5zPA/EmFk4b+h/6uwIGAfcWgReFC7wYDw64CaYdVEJYdcRr71WitdDYbFfuBZZrZXNLJqsGdIFbNDDYWc0w5ZAN148kQ6PwmDXrlOJxablKr8AODcNLS3yUkX1nuBCSh/UnjVVrhIp0ESPfVUuo5H7do6gn9WZcQI9PybSaLrH3juU68rR3z2cRu5FJ/tojKK0bQ6aHiGxrYalRKUewf6I5adON4lTyZq37qQC9fmavHdIpFBxhZ6Phi+6yvkG3P1zACKlqMoOrfqgnXV/xgA0iA3QdN+8cAiD3MAp6f+AXxfwU4pz4+JeI66h6kmI8rokrKEaqV1onb6RYrC5ofbCgdhJDWN44kmx1ZZCbPPrC/QsuxEEYpesDTSp5kHgUtSfaMJWUqub7bBvfKv2BN/6NqWbXLNS7TFDie7gOSbXUM/4RGHYg3dPflQI8bAP4Oe7etZu3+LZqzOeD3L34YUaIfSRN6/UlX7A/EKwtcy8IUwH3h9mBiBhClFtfnb4PyUhCikMAonKSY+GGtQdFXPadxXyo/cOGdkFiLrPGsZvtFCBLlanhltl0W4bwrc56QatrtSbiNlR95FlyaVMDEfs9fJrGLhr2TBTDBVao/4EkQk2zc8+mozrIKNqfV9Xy7adLLUZ2w0rrqN+Y8JYZzljVQ90cv1teYx06X2SrMu7Do0UJOYnXectskN3HtECQlT/r4qjt+xi5mhGNNXp2PgN+yujddH2dx3aiOqFOmP+zhdVCUyybDQ8i8BWvT7YT5p3XXaoJ/bPd0moU9s3mo39He8jdqkCa7K9zLSHuGm3+0k2UtO/PpoBeo+ohHP9Pn8UY5K4Q0WlbDNcXGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Starts with just 'Fair.' then adds original take: 'Takes real nerve for a seven year old to sit back down after that' — no tone-explaining, no apology, no quoting the old line.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 327,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 421,
+          "output_tokens_details": {
+            "thinking_tokens": 341
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "8cf5d3e7afc6d85f",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

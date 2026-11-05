@@ -1,0 +1,102 @@
+{
+  "hash": "e929c39a826b8372",
+  "case": "checkin-waiting-on-them",
+  "recorded_at": "2026-11-05T04:01:13.021Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop venue. The member texted \"Just checking in\".\n\nCue's text:\n\"\"\"Good to hear from you. No pressure on it, but that Harbor Light fellowship is still there if funding timing's on your mind.\"\"\"\n\nDoes the text give presence AND bring up the Harbor Light Fellowship as the one item, as something there for them to pick up if they want, WITHOUT implying they owe Cue an answer or that Cue is waiting on them (no \"still waiting to hear what you think\", no \"get back to me\"), and without a status report? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"No pressure on it, but that Harbor Light fellowship is still there if funding timing's on your mind\\\" offers the one item without demanding a reply.\"}",
+      "usage": {
+        "input_tokens": 381,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 223,
+        "output_tokens_details": {
+          "thinking_tokens": 156
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj7ar9M3C2wP4g1pRcwo",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EoAHCsQCCBMYAipA9V67aqLaytYIK1Ca81GcLFtBfJ84oj4LScDEZd6fIvkQBGGGA94iPMBxu9bxWQuta/aDJQolBtiY3qMaxMiO3DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBiP+v1wbCAToIBBAAGgwC2ooDTzcF224EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDuSTlj9d4X9RN+Fc/u3V1znB4czKfrfws7hDCBQsn5AiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxj67TD3lEKu7mdhucaDARGT483dDFeQOZYliIwdltJTrOGrSg5pG0N/t0YTKCxR86iYusmj9IiHqckTicXOed1olkSbCUPDMY8T+YEKugD36UM+Td/pFJh+przG7g/ZjGvO/KRLHHJVJbJDNSfUbwjYvM0yApGyIGqdQ647OS9vVwq4FVVc1JKqdEzjW4W4mHShmr+jbV5qazdZH+Xq4FjidjWWm5cf7QiXGS9TfYx63JfI35rg3hKIc7Jou8CzUy8bHgi/wf4BRDfhJIxXTvxSOK7nyWWZxD/PVWxuxpkb5o2e7kCnWmP2wRXA67GOAQksa4NlObdi0kI2Xlm5HSjIDYjw/VAxm7TbfqWjEnQPEVrTRkc3rETQRpA33ZHlQnU+zdB2CZz7Lkwa3+GCUabPmWqjCkd4/guPwRZtIOXHN66RIAGONtxaLd80RuQm6BXO4e9hTXaxrehqK6ST/tu8ftCdaLOno5amUQi8vL8ly/Lv7KLFOWG697V8i60yX07Y9dp7C/u25RAz6mdC0awRCKmdVm/i5rS/GoqAd8q03+Ak1ygqW95/TyRtXDhuaEpNoSv1aGT2AKYEuB9AmolfqEcHZsldHS9aWgA7NXnIIuQMH6+hVHpteXpQuN8L3kG2bik3/YPw6sGHI5z2sOH+rKr1NMOuYlcgHhce/FqX8MOK8A+gBmQVwWVJzX1U2lyliW6JGOhZbOZVC89Np1uHtj9d5SGdqrkHJhIDQqnVCH7fwLKhYwYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"No pressure on it, but that Harbor Light fellowship is still there if funding timing's on your mind\\\" offers the one item without demanding a reply.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 381,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 223,
+          "output_tokens_details": {
+            "thinking_tokens": 156
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "e929c39a826b8372",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
