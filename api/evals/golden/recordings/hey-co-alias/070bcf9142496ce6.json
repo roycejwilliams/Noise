@@ -1,7 +1,7 @@
 {
   "hash": "070bcf9142496ce6",
   "case": "hey-co-alias",
-  "recorded_at": "2026-11-05T03:24:24.176Z",
+  "recorded_at": "2026-11-05T04:02:22.654Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or lecture about the name, and doesn't misname itself.\"}",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or lecture about the name, and doesn't misname itself\"}",
       "usage": {
         "input_tokens": 233,
         "cache_creation_input_tokens": 0,
@@ -54,13 +54,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgj4n9Tbhgd4QJjNcj5cH",
+        "id": "msg_011Cgj7g6H3GiyMKYK1H8cdL",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or lecture about the name, and doesn't misname itself.\"}"
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. What's on your mind?\\\" responds warmly with no confusion or lecture about the name, and doesn't misname itself\"}"
           }
         ],
         "container": null,

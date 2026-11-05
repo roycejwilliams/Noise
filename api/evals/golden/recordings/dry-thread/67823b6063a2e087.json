@@ -1,0 +1,102 @@
+{
+  "hash": "67823b6063a2e087",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-05T04:05:49.708Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. You told me two real things, a birthday with no phone and a morning that actually recharged you, and I rushed past both.\n\nHappy birthday, truly. Walking the water with no phone after the stretch you've had sounds like exactly what you needed, not just a nice morning.\n\nAnd telling your team you need a real break, after running on empty for months, that's not a small thing to say out loud. Two weeks starting Monday. I hope you actually unplug for it.\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens with 'Fair. You told me two real things... and I rushed past both' — a lengthy explanation, not a few-word acknowledgment, and mostly recaps her words rather than adding Cue's own.\"}",
+      "usage": {
+        "input_tokens": 503,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 614,
+        "output_tokens_details": {
+          "thinking_tokens": 530
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj7vyebNCdshqnKPtqVa",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens with 'Fair. You told me two real things... and I rushed past both' — a lengthy explanation, not a few-word acknowledgment, and mostly recaps her words rather than adding Cue's own.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 503,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 614,
+          "output_tokens_details": {
+            "thinking_tokens": 530
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "67823b6063a2e087",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

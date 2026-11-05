@@ -1,0 +1,102 @@
+{
+  "hash": "64ee69e4bd4669e2",
+  "case": "share-good-news",
+  "recorded_at": "2026-11-05T04:04:04.134Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"Two years of no's and today it's closed. That's enormous, Mara.\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating her words ('Two years of no's and today it's closed') then only generic praise ('That's enormous'), with no reaction/question of Cue's own.\"}",
+      "usage": {
+        "input_tokens": 307,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 138,
+        "output_tokens_details": {
+          "thinking_tokens": 69
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj7oXu6haJwgCpLk5jbb",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvEECsQCCBMYAipAmr/HiNuXXRtAxedg+aP5wdrmNiwOLWXtMyiXEtTe9NWAbvkKDK7dy8vZAvch9zXKXUKIXSmH3cTIaWGQrtHLdTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBs4Cw1wbCAToIBBAAGgwC2ooDTzcFJv8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCfZK5rIAU1LYKhmJOojHLo9F6qVR9aLWgWFwISIbBG3SIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgw/HdFP+VKowuRLhgkaDNFV5zaZ21nW5cR+WyIwovQnTKySGUKCnoL9rwYtPMcSuguOiAHLDEWq1h7o5in3UiF0BLZepXg+GwRPzPZwKtkBUE88/F3rva9PzCyKLWdIz19gl6Cqe94A/MI6P5/W4iyf0BMBk73CkxecdsKbK76EdCQ4iofH35va1Ql9/IykaTwszO0c1H2/kFNv4zJ6YIYf5pCPPawFYKM4I3SvO5/3o6SF6LiTjpggY4zmpU9YqwzomwEnIO7/AxHynYJ4nRiV2Sm9rQOa4W9OLltDIFZxP/g0PdH65eGu4MymrhrRAdOjvgsqEq/A6hgJMMi9rHt6L/i0njqZwQGXYH1btWYt84W8ZxwkveUJAqvl5c674QNb067LyUOFihgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating her words ('Two years of no's and today it's closed') then only generic praise ('That's enormous'), with no reaction/question of Cue's own.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 307,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 138,
+          "output_tokens_details": {
+            "thinking_tokens": 69
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "64ee69e4bd4669e2",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

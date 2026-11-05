@@ -1,0 +1,102 @@
+{
+  "hash": "0c18a936d39bb02c",
+  "case": "planned-before-first-run",
+  "recorded_at": "2026-11-05T04:00:17.725Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: The member asked Cue this afternoon to watch for \"a quiet cocktail bar in Hayes Valley for a work drinks night\". Cue's daily search runs every morning from 9, so the first look is tomorrow morning. They asked \"Is that actually r...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: The member asked Cue this afternoon to watch for \"a quiet cocktail bar in Hayes Valley for a work drinks night\". Cue's daily search runs every morning from 9, so the first look is tomorrow morning. They asked \"Is that actually running yet?\"\n\nCue's text:\n\"\"\"Yep, it's live. Checking every morning for a quiet Hayes Valley spot.\"\"\"\n\nDoes the text convey that it will be looked at (or the search runs) tomorrow morning / the next morning, without saying nothing is running?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Yep, it's live\\\" implies it's already running, but doesn't mention the search starts tomorrow morning\"}",
+      "usage": {
+        "input_tokens": 256,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 178,
+        "output_tokens_details": {
+          "thinking_tokens": 124
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj7WnwW9ZivLbcbHmV6Q",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErEGCsQCCBMYAipABBdur3XFATC7NPyvD8Fzdk2v2ccFCFa0AOmSYVl8IoXgd+by4sxZAp/EInmvTvMzfR5x6WknYqfeDukKDx2QmzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB0f6v1wbCAToIBBAAGgwC2ooDTzcFpQEEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAGkaH73rlZpq/QPJ0+br+E+gdLAL5h0P0bo3OLHfoyPyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgw19IdvBrQu6A6F/xUaDNy6vSqgbBB78kPuISIwEGhMIlKIZjfTL//VVSv/2FPdsrzKX320AeMYxEa7sffiJpsXUIs2Sx9cxqbkqFAaKpkDuhW38Ya4j0h9k0YXkOtymOp9pE9EjdpNlek84/8rMBUwRBvwuM3age5+D4rAvd75cu5HJiMFkCthSqNEUKU6AJ3vqBmn5Cc+E4icYy37V1RbWn3FAn/TDzr4tXdw1jurZD8J9o+hBfSkW5lYf0UNacUIuflfrUIdOJuiJctugs11DULhLWmsUq6OMOm7ZfU8vq21fW7xmnZT/9y69aifKq1xOcxRq/QH8ldWTwQ1gIzZ9IZ/ZviRiWXa0ZDB143p4Lp8ovs70r7M4tqnYSqhYAQ+Y8hiHVYqtEMEGaPrBD21kw/dCa53YHNAWtDBQU2jYj1u4Ljk29eZehJpNewGQlSURqTqG3uFgfBUKbHdU5umFtpt51C+7Xhb2+Ts1PBNV/7OB4Uxh9/d2JgQM+o1axmFeYbE0ohP1Ucgheen7TfnQ6VsZBlla6q8MLq4o1rwQ3z7FgGVQKrzgc7P+Gd3g4BtKmem+CnQErwGDy+xFr+nQz+I6JbMH+TzHgGzhDx1xC/hauaLI4p/GXZvBUksIc5QX5tUfbrIVRgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Yep, it's live\\\" implies it's already running, but doesn't mention the search starts tomorrow morning\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 256,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 178,
+          "output_tokens_details": {
+            "thinking_tokens": 124
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "0c18a936d39bb02c",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
