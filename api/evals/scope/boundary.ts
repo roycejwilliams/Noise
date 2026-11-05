@@ -146,14 +146,38 @@ await quietly(() => TT.runDueTask(queued(504, "Compare laptops for Jordan", "ask
 check("a line that could not be sent keeps the task open for another try: no silent close", later === 1 && closed.length === c1b, { later, closed: closed.slice(c1b) });
 await quietly(() => TT.runDueTask(queued(505, "Compare laptops for Jordan", "ask", { wakes: 4 }), { handBack: failing }));
 check("after the last try it closes, and the record says they were never told, and that it was closed without being done", closed.length === c1b + 1 && /could not be sent after several tries/.test(closed[closed.length - 1].outcome), closed.slice(c1b));
+// The line went (the ledger key exists) but a later step threw: closed as told, not "never told".
+const c1c = closed.length;
+const sentThenThrew = async () => ({ firstName: "Jordan", draft: async () => "That one is not something I do.", send: async () => { throw new Error("db write after send"); }, close: async (outcome: string) => { closed.push({ id: -3, status: "dropped", outcome }); }, wasTold: async () => true, later: async () => { later++; } });
+await quietly(() => TT.runDueTask(queued(506, "Compare laptops for Jordan", "ask", { wakes: 4 }), { handBack: sentThenThrew }));
+check("a decline that already went (ledger key exists) closes as told, even though a later step threw", closed.length === c1c + 1 && /They were told so/.test(closed[closed.length - 1].outcome), closed.slice(c1c));
 const c2 = closed.length;
 await quietly(() => TT.runDueTask(queued(503, "Keep your word: text them the link to Laptop Swap & Coffee Meetup", "ask", { followup: { scope: { scope: "in", connection: null } } }), { handBack: handBack("never sent") }).catch(() => {}));
 check("a task whose stored verdict is in is not closed for scope, whatever its words say", closed.length === c2 || !closed.slice(c2).some((c) => /closed without being done/.test(c.outcome)), closed.slice(c2));
 
+// ---- the backstop's unmistakable cases are guarded by code even when the model says "in" (the model decides everything else)
+await both("'find me a dentist' with scope in on the tool call is still refused", "find me a dentist", { goal: "Find a dentist near Jordan" }, { scope: "in" }, (x) => refused(x) && /isn't something Cue does/.test(x.r.error));
+await both("'watch for PM jobs' with scope in is still refused", "watch for PM jobs", { goal: "Watch for PM jobs", lookout: true }, { scope: "in" }, refused);
+check("the mixed refusal no longer tells the model to say scope in again", !/scope \\?"in\\?"/.test(S.startRefusal({ scope: "mixed", kind: "model", why: "x", connection: "meet founders" })));
+await both("a mixed turn read with no scope on the call: the connection part the model writes starts (the backstop still guards the outs)", "plan my trip to Austin around meeting founders there", { goal: "Meet founders in Austin" }, undefined, made, { scope: "mixed", connection: "meet founders in Austin" });
+await both("…and a dentist written under that same mixed turn is still refused", "find a dentist and meet founders", { goal: "Find a dentist near the Mission" }, undefined, refused, { scope: "mixed", connection: "meet founders" });
+
+// ---- a promise Cue would make carries the turn's verdict: "can you find me a therapist", read as out, creates no promise task
+{
+  const PR = await import("../../src/services/promises.js");
+  const n0 = created.length;
+  const t = await quietly(() => PR.trackPromise({ userId: "u-jordan", reply: "I'll keep an eye out for a therapist who takes your insurance and text you when I find one.", theirMessage: "can you find me a therapist", scope: { scope: "out", connection: null } }));
+  check("a promise for work the turn read judged out opens no task", t.ok === false && created.length === n0, t);
+  const t2 = await quietly(() => PR.trackPromise({ userId: "u-jordan", reply: "I'll text you tonight with a couple of founder dinners in the Mission.", theirMessage: "any founder dinners?", scope: { scope: "in", connection: null } }));
+  check("…and a promise for in-scope work still opens as before", t2.ok === true && created.length === n0 + 1, t2);
+  check("the verdict reaches promise binding, the door and payload-first", /workVerdict\(rf\.turnScope\)/.test(src("harness/replyGrounding.ts")) && /scope: o\.scope \?\? null/.test(src("services/theDoor.ts")) && /handOffWork\(o\.userId, d, o\.scope/.test(src("harness/payloadFirst.ts")));
+  check("the reply is told to decline an out turn in its own words", /OUT_OF_SCOPE_GUIDANCE/.test(src("routes/sendblue.ts")));
+}
+
 // ---- the research brief only looks for rooms, events and communities
 const rb = src("services/researchBrief.ts");
 check("the research brief searches rooms and events: the event query and schema, no venue path", /assembleQuery\("event"/.test(rb) && /findRoomOptions\(/.test(rb) && !/findVenueOptions|readVenueSource|peerspace/i.test(rb.replace(/The scripted Peerspace venue reader[^\n]*/, "")) && !/assembleQuery\("venue"/.test(src("agent/loopTools.ts")));
-check("the research tool refuses outside work through the same guard", /scopeRefusal\(\{ goal: input\.what, scope: ctx\.turnScope/.test(src("agent/loopTools.ts")));
+check("the research tool refuses outside work through the same guard", /scopeRefusal\(\{ goal: input\.what, scope: workVerdict\(ctx\.turnScope/.test(src("agent/loopTools.ts")));
 
 // ---- the call promise for flights: no search, no 'Looked into', and an honest close
 const CG = await import("../../src/harness/callGrounding.js");
