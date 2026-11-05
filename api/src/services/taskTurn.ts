@@ -32,7 +32,7 @@ import { REMINDER_RETRY } from "./relay.js";
 import { goalBody, promiseKeptBy, reminderTiedTo, reminderPromise, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
-import { closeOutOfScope, handBackDepsFor, OUTCOME_QUIET, scopeOfTask } from "./scopeClose.js";
+import { closeOutOfScope, handBackDepsFor, memberWaitsOn, OUTCOME_QUIET, OUTCOME_UNTOLD, scopeOfTask, TELL_ATTEMPTS } from "./scopeClose.js";
 import { MAKER_DECLINE_RULE } from "./coVoice.js";
 import type { GateCheck } from "../harness/core.js";
 import { withMember } from "./llmUsage.js";
@@ -1154,8 +1154,9 @@ export async function runDueTask(t: CoTask, o: { handBack?: (t: CoTask) => Promi
   if (sc.scope === "out") {
     const deps = await (o.handBack ?? handBackDepsFor)(t).catch(() => null);
     const r = deps ? await closeOutOfScope(t, sc, deps).catch(() => null) : null;
-    if (!r) await closeTask(t.userId, t.id, "dropped", OUTCOME_QUIET).catch(() => false);
-    await recordDecision({ layer: 7, decision: "task.scope", userId: t.userId, outcome: "skip", action: r?.told ? "handed_back" : "closed", proposal: { taskId: t.id, kind: t.kind, why: sc.why } }).catch(() => {});
+    // No deps at all (the member could not be read): a member who asked for it is not silently closed either; a task of Cue's own is.
+    if (!r && (!memberWaitsOn(t) || (t.wakes ?? 0) >= TELL_ATTEMPTS)) await closeTask(t.userId, t.id, "dropped", memberWaitsOn(t) ? OUTCOME_UNTOLD : OUTCOME_QUIET).catch(() => false);
+    await recordDecision({ layer: 7, decision: "task.scope", userId: t.userId, outcome: "skip", action: r?.told ? "handed_back" : r && !r.closed ? "retry_tell" : r ? "closed" : memberWaitsOn(t) ? "retry_tell" : "closed", proposal: { taskId: t.id, kind: t.kind, why: sc.why } }).catch(() => {});
     return;
   }
   // A goal piece that was to be drafted and sent as a document (removed 2026-11-04): nothing writes it now, so it closes honestly as

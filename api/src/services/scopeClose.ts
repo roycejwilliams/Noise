@@ -3,7 +3,8 @@
 // claimed done:
 //   - a member asked for it (or was promised it): one natural line goes through the door, in words the model writes fresh each time
 //     (guidance for tone, never a stock line, no forced intro), then the task closes as dropped. If no line can be written or sent,
-//     it closes anyway, quietly, and nothing says it was done.
+//     the task stays open and tries again at its next wake (a few times); only after that is it closed, with the record saying they
+//     were never told. Nothing ever says it was done.
 //   - Cue's own look-out, a goal check-in or reminder, a follow-up check-in: it closes quietly at its natural end. Nothing is texted
 //     about work the member never asked for.
 // This is the existing wake with a different job: no new scheduled run, and at most the one draft a wake could already have made.
@@ -32,15 +33,20 @@ export type HandBackDeps = {
   // Sends through the door; reports whether it went or was queued.
   send: (text: string) => Promise<{ sent: boolean; queued: boolean; reason?: string }>;
   close: (outcome: string) => Promise<void>;
+  // Wakes again tomorrow (the line could not be written or sent); the task stays open meanwhile.
+  later?: () => Promise<void>;
 };
+// How many wakes a line to a member who asked for the work is tried before the task closes without it (the record says so).
+export const TELL_ATTEMPTS = 4;
 
+export const OUTCOME_UNTOLD = "Not something Cue does (outside connections), so it was closed without being done. The line telling them so could not be sent after several tries.";
 export const OUTCOME_QUIET = "Not something Cue does (outside connections), so it was closed without being done. Nothing was sent about it.";
 export const OUTCOME_TOLD = "Not something Cue does (outside connections), so it was closed without being done. They were told so in one line.";
 
-export async function closeOutOfScope(t: CoTask, sc: Scope, deps: HandBackDeps): Promise<{ told: boolean; queued: boolean; outcome: string }> {
+export async function closeOutOfScope(t: CoTask, sc: Scope, deps: HandBackDeps): Promise<{ told: boolean; queued: boolean; outcome: string; closed: boolean }> {
   if (!memberWaitsOn(t)) {
     await deps.close(OUTCOME_QUIET);
-    return { told: false, queued: false, outcome: OUTCOME_QUIET };
+    return { told: false, queued: false, outcome: OUTCOME_QUIET, closed: true };
   }
   const text = await deps
     .draft(
@@ -50,9 +56,15 @@ export async function closeOutOfScope(t: CoTask, sc: Scope, deps: HandBackDeps):
     .catch(() => null);
   const r = text ? await deps.send(text).catch(() => ({ sent: false, queued: false, reason: "send failed" })) : null;
   const went = !!r && (r.sent || r.queued);
-  const outcome = went ? OUTCOME_TOLD : OUTCOME_QUIET;
+  // They asked for it: never a silent close. No line went, so it stays open and the next wake tries again; after TELL_ATTEMPTS wakes it
+  // closes with the record saying they were never told (and it is never called done).
+  if (!went && deps.later && (t.wakes ?? 0) < TELL_ATTEMPTS) {
+    await deps.later();
+    return { told: false, queued: false, outcome: "retry", closed: false };
+  }
+  const outcome = went ? OUTCOME_TOLD : OUTCOME_UNTOLD;
   await deps.close(outcome);
-  return { told: went, queued: !!r?.queued && !r.sent, outcome };
+  return { told: went, queued: !!r?.queued && !r.sent, outcome, closed: true };
 }
 
 // The real deps for one task: the same draft and send paths a task text uses (harness/proactive.ts), and the same close.
@@ -84,6 +96,9 @@ export async function handBackDepsFor(t: CoTask): Promise<HandBackDeps | null> {
     },
     close: async (outcome) => {
       await T.closeTask(t.userId, t.id, "dropped", outcome);
+    },
+    later: async () => {
+      await T.scheduleTask(t.userId, t.id, 24, "Tell them plainly that this isn't something Cue does, then close it.");
     },
   };
 }

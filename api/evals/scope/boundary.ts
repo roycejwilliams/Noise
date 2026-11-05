@@ -138,6 +138,14 @@ check("an old queued 'compare laptops' task they asked for is told once, in one 
 const c1 = closed.length, s1 = sentLines.length;
 await quietly(() => TT.runDueTask(queued(502, "Find a dentist near the Mission", "lookout", { lookoutOrigin: "co" }), { handBack: handBack("never sent") }));
 check("Cue's own old out-of-scope look-out closes quietly: nothing is texted about work they never asked for", sentLines.length === s1 && closed.length === c1 + 1);
+// They asked for it and the line can't be written or sent: never a silent close. It stays open and tries again; only after several tries
+// does it close, with the record saying they were never told, and it is never called done.
+const c1b = closed.length; let later = 0;
+const failing = async () => ({ firstName: "Jordan", draft: async () => null, send: async () => ({ sent: false, queued: false }), close: async (outcome: string) => { closed.push({ id: -2, status: "dropped", outcome }); }, later: async () => { later++; } });
+await quietly(() => TT.runDueTask(queued(504, "Compare laptops for Jordan", "ask", { wakes: 1 }), { handBack: failing }));
+check("a line that could not be sent keeps the task open for another try: no silent close", later === 1 && closed.length === c1b, { later, closed: closed.slice(c1b) });
+await quietly(() => TT.runDueTask(queued(505, "Compare laptops for Jordan", "ask", { wakes: 4 }), { handBack: failing }));
+check("after the last try it closes, and the record says they were never told, and that it was closed without being done", closed.length === c1b + 1 && /could not be sent after several tries/.test(closed[closed.length - 1].outcome), closed.slice(c1b));
 const c2 = closed.length;
 await quietly(() => TT.runDueTask(queued(503, "Keep your word: text them the link to Laptop Swap & Coffee Meetup", "ask", { followup: { scope: { scope: "in", connection: null } } }), { handBack: handBack("never sent") }).catch(() => {}));
 check("a task whose stored verdict is in is not closed for scope, whatever its words say", closed.length === c2 || !closed.slice(c2).some((c) => /closed without being done/.test(c.outcome)), closed.slice(c2));
