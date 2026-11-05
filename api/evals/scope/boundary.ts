@@ -225,5 +225,47 @@ await quietly(() => CG.auditCall("u-jordan", "user: any founder dinners?\nassist
 check("a promise to find founder dinners is kept as before (a thread opens, no decline note)", created.some((c) => /founder dinners/i.test(c.goal)) && !memories.slice(m2).some((x) => x.type === "call_correction"), { created: created.map((c) => c.goal), mem: memories.slice(m2) });
 check("startTask refusals for scope are never fallen back from in the call path", /opened === "declined"/.test(src("harness/callGrounding.ts")) && /outOfScope\) return "declined"/.test(src("harness/callGrounding.ts")));
 
+// ---- a personal share is heard, nothing is created; a message that shares AND asks keeps its ask (the turn read decides; text and call)
+{
+  const SAVE = async (medium: "text" | "call", message: string, args: { what: string; scope?: "in" | "out" | "mixed" }, share?: "share" | "ask" | "both" | "chat") => {
+    const onCall = medium === "call";
+    const before = memories.length + created.length;
+    const t = T.createConversationTools({ userId: "u-jordan", phoneNumber: "+10000000000", resolvedContent: message, isVoice: onCall, onCall, callKey: onCall ? "CA-9" : null, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, isTeam: false, sendCoReply: async () => true, facts: { add: () => {}, text: () => "" }, turnShare: share ?? null } as any);
+    const r: any = await quietly(() => (t.tools as any).saveAsk.execute(args, {})).catch((e: unknown) => ({ ok: false, error: String(e) }));
+    return { r, made: memories.length + created.length - before };
+  };
+  const shareOnly = "My dad passed away last week and I've been really lonely";
+  const withAsk = [
+    "I got laid off. Keep an eye out for design meetups for me",
+    "I got laid off today. Know anyone hiring in design?",
+    "I'm so lonely since moving here. Are there any running clubs?",
+    "I'm anxious about the mixer, can you help me prep?",
+    "I'm exhausted but I'd still love a founder dinner next week",
+  ];
+  for (const medium of ["text", "call"] as const) {
+    // the turn read says share: heard, no ask, no task (a call carries no turn read: the words backstop does the same for a bare share)
+    const sv = medium === "text" ? "share" : undefined;
+    const pure = await SAVE(medium, shareOnly, { what: "to meet people" }, sv);
+    check(`(${medium}) a personal share is heard: no ask saved, nothing created`, pure.r.ok === false && /shared something/.test(pure.r.error ?? "") && pure.made === 0, pure);
+    const st = await start(medium, shareOnly, { goal: "Find people for Jordan to talk to" }, { scope: "in" }, undefined);
+    check(`(${medium}) …and no task starts from it either`, medium === "call" ? refused(st) : true, st.r);
+    for (const m of withAsk) {
+      const x = await SAVE(medium, m, { what: "design meetups", scope: "in" }, medium === "text" ? "both" : undefined);
+      check(`(${medium}) a share plus an ask keeps the ask: ${m.slice(0, 48)}`, x.r.ok === true, x.r);
+    }
+  }
+  const turn = (share: string) => RT.parseTurnRead({ ...base, message_kind: share }, []);
+  check("the turn read carries share / ask / both in the same JSON (no extra call), and an unknown value is none", turn("both").messageKind === "both" && turn("share").messageKind === "share" && turn("nonsense").messageKind === null && /"message_kind": "share" if they only tell Cue/.test(RT.turnReadAddendum(null, null)));
+  check("the backstop yields to any request in the text (the reviewer's probes)", withAsk.every((m) => !S.sharedNotAsked(m)) && S.sharedNotAsked(shareOnly) && S.isPureShare("both", shareOnly) === false && S.isPureShare("share", "Know anyone hiring?") === true);
+  // passive capture: a pure share captures no ask; share plus ask captures it
+  const PE = await import("../../src/services/profileExtraction.js");
+  const parsed = { asks: [{ text: "design meetups", type: "seeking" as const, quote: "Keep an eye out for design meetups for me" }], concrete_preferences: [], wants: [], availability: null };
+  const msg = "I got laid off. Keep an eye out for design meetups for me";
+  const tr = `user: ${msg}\nassistant: ok`;
+  const insertsFor = async (kind: "share" | "both" | null) => { const n0 = sqlSeen.length; await quietly(() => PE.persistIntentFrom("u-capture", parsed, tr, "last_user_message", msg, { via: "text", messageKind: kind })); return sqlSeen.slice(n0).filter((q) => /co_profiles|ask_checkins/.test(q) && /INSERT|UPDATE/.test(q)).length; };
+  check("passive capture: a pure share captures nothing", (await insertsFor("share")) === 0);
+  check("passive capture: a message that shares and asks captures the ask", (await insertsFor("both")) > 0);
+}
+
 console.log(`${total - failed}/${total} scope boundary checks passed`);
 process.exit(failed ? 1 : 0);

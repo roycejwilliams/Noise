@@ -86,7 +86,7 @@ for (const voice of [false, true]) {
   console.log = quiet;
   check(`7 (${how}): the same feeling with a real ask in it still starts the dinner search`, fine.ok === true, fine);
 }
-check("the post-call and text capture drop an ask whose own words are a personal share, and the prompts say a personal update is never an ask", /sharedNotAsked\(String\(a\.quote \?\? ""\)\)/.test(src("services/profileExtraction.ts")) && /a personal update \(a loss, an illness, a hard stretch, news about their week\) told without asking for anything/.test(src("services/turnLearning.ts")) && /a personal update \(a loss, an illness, a hard stretch, news about their week\) told without asking for anything/.test(src("services/profileExtraction.ts")));
+check("the post-call and text capture drop an ask whose own words are a personal share, and the prompts say a personal update is never an ask", /isPureShare\(wopts\.messageKind/.test(src("services/profileExtraction.ts")) && /a personal update \(a loss, an illness, a hard stretch, news about their week\) told without asking for anything/.test(src("services/turnLearning.ts")) && /a personal update \(a loss, an illness, a hard stretch, news about their week\) told without asking for anything/.test(src("services/profileExtraction.ts")));
 {
   const cap = await import("../../src/services/capabilities.js");
   const use = (id: string) => cap.ABILITIES.find((a) => a.id === id)?.use ?? "";
@@ -117,13 +117,13 @@ check("the post-call and text capture drop an ask whose own words are a personal
     { id: "f1", match: { tier: 3, name: "Harbor Climate Accelerator cohort", statedDates: { end: "2026-12-01" } } },
     { id: "f2", match: { tier: 2, name: "Founders Dinner", event_date: "2026-11-12" } },
   ];
-  const reads = (sql: string, params: any[] = []) => (/^\s*UPDATE/i.test(sql) ? (params[0] as unknown[]).map(() => ({})) : /FROM co_tasks WHERE status = 'open'/.test(sql) ? tasks : /FROM ask_checkins WHERE resolved_at IS NULL/.test(sql) ? asks : /FROM recommendation_outcome_followups/.test(sql) ? follow : null);
+  const reads = (sql: string, params: any[] = []) => (/^\s*UPDATE ask_checkins/i.test(sql) ? [{}] : /^\s*UPDATE/i.test(sql) ? (params[0] as unknown[]).map(() => ({})) : /FROM co_tasks WHERE status = 'open'/.test(sql) ? tasks : /FROM ask_checkins WHERE resolved_at IS NULL/.test(sql) ? asks : /FROM recommendation_outcome_followups/.test(sql) ? follow : null);
   reset(reads);
   const r = await SCR.scopeCommitmentCounts(pool);
   const c = r.counts;
-  check("dry run counts the open out-of-scope commitments by kind", c.tasks.work === 4 && c.tasks.followup === 1 && c.tasks.research_brief === 1 && c.asks.find === 1 && c.asks.lookout === 1 && c.asks.help === 1 && c.programFollowUps === 1, c);
-  check("dry run says which the member asked for (they get one line) and which close quietly", c.handBack === 3 && c.closeQuietly === 3, c);
-  check("in-scope tasks, asks and event follow-ups are not counted", !r.taskIds.includes(7) && !r.taskIds.includes(8) && !r.askIds.includes("a4") && !r.followUpIds.includes("f2"), r);
+  check("dry run counts the open out-of-scope commitments by kind", c.tasks.work === 4 && c.tasks.followup === 1 && c.tasks.research_brief === 0 && c.asks.find === 1 && c.asks.lookout === 1 && c.asks.help === 1 && c.programFollowUps === 1, c);
+  check("dry run says which the member asked for (they get one line) and which close quietly", c.handBack === 2 && c.closeQuietly === 3, c);
+  check("in-scope tasks, asks and event follow-ups are not counted", !r.taskIds.includes(7) && !r.taskIds.includes(8) && !r.askRows.some((a) => a.id === "a4") && !r.followUpIds.includes("f2"), r);
   check("a dry run only reads", log.every((l) => /^\s*SELECT/i.test(l.sql)), log.map((l) => l.sql.slice(0, 40)));
   const printed = JSON.stringify(c);
   check("the output is counts only: no text, id or name", !/dentist|laptop|phone plan|u1|Dana|Harbor/i.test(printed) && Object.values(c).every((v) => typeof v === "number" || (typeof v === "object" && Object.values(v as object).every((n) => typeof n === "number"))), printed);
@@ -131,9 +131,22 @@ check("the post-call and text capture drop an ask whose own words are a personal
   const done = await SCR.applyScopeCommitments(pool);
   const writes = log.filter((l) => !/^\s*SELECT/i.test(l.sql));
   check("apply makes tasks due so the next wake closes them honestly; it texts nothing and closes nothing itself", writes.some((w) => /UPDATE co_tasks SET next_check_at = NOW\(\)/.test(w.sql)) && !writes.some((w) => /status = '(?:done|dropped)'/.test(w.sql) && /co_tasks/.test(w.sql)) && done.tasksMadeDue === r.taskIds.length, { writes: writes.map((w) => w.sql.slice(0, 70)), done });
-  check("apply keeps the asks (only their kind moves), drops the program follow-up, and deletes nothing", writes.some((w) => /UPDATE ask_checkins SET kind = 'outside'/.test(w.sql) && !/resolved_at = /.test(w.sql)) && writes.some((w) => /harness_status = 'dropped'/.test(w.sql)) && !writes.some((w) => /DELETE/i.test(w.sql)));
+  check("apply keeps the asks (only their kind moves), drops the program follow-up, and deletes nothing", writes.some((w) => /UPDATE ask_checkins SET kind = COALESCE\(\$2, kind\)/.test(w.sql) && w.params[1] === "outside" && !/resolved_at = /.test(w.sql)) && done.asksMarkedOutside === 3 && writes.some((w) => /harness_status = 'dropped'/.test(w.sql)) && !writes.some((w) => /DELETE/i.test(w.sql)));
   const scr = src("scripts/scopeCommitments.ts");
   check("it runs only on the command line, defaults to the dry run, and never sends a text", /npx tsx src\/scripts\/scopeCommitments\.ts --dry-run/.test(scr) && /const dry = args\.includes\("--dry-run"\) \|\| !apply/.test(scr) && !/sendExempt|sendblue|sendMessage/i.test(scr));
+}
+
+// ---- 4b. a failed read is an error, never zero counts; the lookout origin is the runtime's; the kind change goes through laneMoves
+{
+  const SCR = await import("../../src/scripts/scopeCommitments.js");
+  const broken: any = { query: async (sql: string) => { if (/FROM ask_checkins/.test(sql)) throw Object.assign(new Error("connection reset: secret-host.internal"), { code: "ECONNRESET" }); return { rows: [] }; } };
+  const err: any = await SCR.scopeCommitmentCounts(broken).then(() => null, (e: unknown) => e);
+  check("a failed read throws an error that names the step and the code, never counts of zero", err instanceof SCR.ScopeStepError && /reading open asks failed \(ECONNRESET\)/.test(err.message), String(err));
+  check("…and the error carries no host, text or member", !/secret-host|u1/.test(String(err?.message)));
+  const scr = src("scripts/scopeCommitments.ts");
+  check("it uses the runtime's lookoutOriginOf, so the dry-run counts are what a wake does", /lookoutOrigin: lookoutOriginOf\(r\.source, r\.followup\)/.test(scr));
+  check("it never writes an ask's kind itself: the one writer is laneMoves.setAskKind", /setAskKind\(db,/.test(scr) && !/UPDATE ask_checkins SET kind/.test(scr));
+  check("it prints 'no counts reported' when it fails", /no counts reported/.test(scr));
 }
 
 if (failed) { console.log(`\n${failed} of ${total} checks failed.`); process.exit(1); }
