@@ -98,7 +98,7 @@ export function workText(w: { goal?: string | null; steps?: unknown; firstPlan?:
 
 // The ask that closes honestly, in words for the model (guidance, not a message): tone only, fresh words every time, never a forced intro.
 export const OUT_OF_SCOPE_GUIDANCE = "That isn't something Cue does. Say so briefly and naturally in your own words, fresh every time (never a stock line, never the same wording twice), only as much as the moment needs. Don't force an unrelated introduction as a redirect and don't apologise at length. Never say or imply you started, did, found or will do it. If the message also had a connection part (who to meet, an event, a community, preparing for a conversation), help with that part on its own.";
-export const MIXED_GUIDANCE = "This bundles a connection ask with something Cue doesn't do. Start work for ONLY the connection part (who to meet, an event, a community, preparing for a conversation), written as its own goal and steps, and tell them briefly, in your own fresh words, that the rest isn't something Cue does. Never say or imply you'll do the rest.";
+export const MIXED_GUIDANCE = "This bundles a connection ask with something Cue doesn't do. Start work for ONLY the connection part (who to meet, an event, a community, preparing for a conversation), written as its own goal and steps (a separate call with scope \"in\" and just that part), and tell them briefly, in your own fresh words, that the rest isn't something Cue does. Never say or imply you'll do the rest.";
 export const CLARIFY_GUIDANCE = "Part of this is something Cue doesn't do, and no clean connection part (who to meet, an event, a community, preparing for a conversation) could be pulled out of it. Start nothing. Ask ONE short question in your own words about the people or rooms they want, and nothing else. Never say or imply you started, did or will do the rest.";
 
 export function startRefusal(s: Scope): string {
@@ -117,6 +117,13 @@ export function connectionPart(text: string, verdict?: ScopeVerdict | null): str
   return t || null;
 }
 
-// The verdict a piece of work is held to: a turn read of "mixed" means the message held both, and the work the model then writes is the
-// connection part on its own (the backstop still guards the unmistakable outs), so it is held as "in".
-export const workVerdict = (v: ScopeVerdict | null | undefined): ScopeVerdict | null => (v && v.scope === "mixed" ? { scope: "in", connection: v.connection } : v ?? null);
+// The verdict a piece of work is held to. A mixed turn read stays mixed: nothing starts on it, whatever the work says. The model starts only
+// the connection part, as its own call with scope "in" and just that part; that call carries its own scope, so it is not held to the turn's.
+export const workVerdict = (v: ScopeVerdict | null | undefined): ScopeVerdict | null => v ?? null;
+
+// Model-facing guidance for the reply on a turn whose read is mixed: help with the connection part, set the rest aside briefly, promise
+// nothing for it. Null for an in-scope turn (no added guidance) and for out (the out-of-scope guidance applies).
+export const MIXED_REPLY_GUIDANCE = "This message bundles something Cue does (the connection part: who to meet, an event, a community, preparing for a conversation) with something it doesn't. Help with the connection part. Set the rest aside briefly, in fresh words of your own (never a stock line), and don't promise, offer or imply you'll do any of it.";
+export function replyScopeGuidance(v: ScopeVerdict | null | undefined): string | null {
+  return !v || v.scope === "in" ? null : v.scope === "out" ? OUT_OF_SCOPE_GUIDANCE : MIXED_REPLY_GUIDANCE;
+}

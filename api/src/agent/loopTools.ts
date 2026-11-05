@@ -1,4 +1,4 @@
-import { workVerdict } from "../harness/scope.js";
+import { parseVerdict, workVerdict } from "../harness/scope.js";
 // The tools of Co's own loop (agent/loop.ts). Co chooses and chains them; code
 // guards only facts: a link was really found, a fact is on its page, an email
 // address was really seen, the turn's budget, and nothing is sent to anyone
@@ -644,6 +644,7 @@ export function loopTools(
         budget: z.string().optional().describe("Their budget in their words (like \"$5k\" or \"under $200 an hour\"), if they gave one."),
         neighborhood: z.string().optional().describe("The neighborhood or area they named, if any."),
         city: z.string().optional().describe("The city, only if it's not the one they live in."),
+        scope: z.enum(["in", "out", "mixed"]).optional().describe("Your own judgment: \"in\" when this is research on rooms, events or communities they would attend. On a message that mixed that with something else, call this for the connection part alone with scope \"in\"."),
         again: z.boolean().optional().describe("True when they want the same brief again or updated; the options are re-checked before it goes."),
       }),
       execute: async (input) => {
@@ -652,7 +653,8 @@ export function loopTools(
         // The purpose boundary (harness/scope.ts): venue and vendor research for their OWN event is out for now. Only research on rooms,
         // events and communities they would attend goes ahead. The same check runs again in startResearchBrief and when a brief wakes.
         const { scopeRefusal } = await import("../services/coTasks.js");
-        const outside = scopeRefusal({ goal: input.what, scope: workVerdict(ctx.turnScope) });
+        const briefVerdict = input.scope ? parseVerdict({ scope: input.scope }) : workVerdict(ctx.turnScope);
+        const outside = scopeRefusal({ goal: input.what, scope: briefVerdict });
         if (outside) {
           notDone("The research wasn't started: that isn't something Cue does.");
           return { ok: false, error: outside.why };
@@ -671,7 +673,7 @@ export function loopTools(
           userId: ctx.userId,
           theirWords: theirWords(),
           goal: `Research: ${input.what}`.slice(0, 200),
-          scope: workVerdict(ctx.turnScope),
+          scope: briefVerdict,
           params: { what: input.what.slice(0, 200), date, start: date ? start : null, memberContext: (input.memberContext ?? []).map((x) => x.slice(0, 200)), city: input.city?.trim() || (ctx.turn?.profile?.city ?? null), headcount: input.headcount ?? null, budget: input.budget?.slice(0, 80) ?? null, neighborhood: input.neighborhood?.slice(0, 80) ?? null, again: !!input.again },
         });
         if (!r.ok) {
