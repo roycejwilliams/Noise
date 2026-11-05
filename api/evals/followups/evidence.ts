@@ -20,24 +20,29 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 
 // ---------------------------------------------------------------- the fake store
 const u = "00000000-0000-4000-8000-0000000000e1";
-type Row = { id: string; user_id: string; ask_text: string; tier: number; match_name: string; match: any; send_at: Date; harness_status: string | null; drop_reason: string | null };
+type Row = { id: string; user_id: string; ask_text: string; tier: number; match_name: string; match: any; created_at: Date; send_at: Date; harness_status: string | null; drop_reason: string | null };
 const world = { rof: [] as Row[], outcomes: [] as { item_key: string; result: string; provenance: string | null }[], reactions: [] as string[], queued: [] as any[], presence: false, walkin: false, nextId: 1 };
 const reset = () => Object.assign(world, { rof: [], outcomes: [], reactions: [], queued: [], presence: false, walkin: false, nextId: 1 });
 const keyOf = (r: Row) => [r.match.event_api_id ? `event:${r.match.event_api_id}` : null, `name:${r.match_name.toLowerCase()}`];
+// The arm's key rule (recommendationOutcome.ts armOutcomeFollowUp): a name arms a row with no event id, or the one row of that name that has one.
+const armKeys = (r: Row) => {
+  const sameName = world.rof.filter((x) => x.user_id === r.user_id && x.match_name.toLowerCase() === r.match_name.toLowerCase() && x.match.event_api_id).length;
+  return [r.match.event_api_id ? `event:${r.match.event_api_id}` : null, ...(!r.match.event_api_id || sameName === 1 ? [`name:${r.match_name.toLowerCase()}`] : [])];
+};
 const handle = async (sql: string, p: any[] = []) => {
   if (/INSERT INTO recommendation_outcome_followups/.test(sql)) {
     const m = JSON.parse(p[4]);
-    if (world.rof.some((r) => r.user_id === p[0] && ((m.event_api_id && r.match.event_api_id === m.event_api_id) || r.match_name.toLowerCase() === String(p[3]).toLowerCase()))) return { rows: [], rowCount: 0 };
+    if (world.rof.some((r) => r.user_id === p[0] && ((m.event_api_id && r.match.event_api_id === m.event_api_id) || (r.match_name.toLowerCase() === String(p[3]).toLowerCase() && (!r.match.event_api_id || !m.event_api_id))))) return { rows: [], rowCount: 0 };
     const sendAt = p[5] ? new Date(`${p[5]}T00:00:00Z`) : new Date(Date.now() + p[6] * 86_400_000);
-    world.rof.push({ id: `rof-${world.nextId++}`, user_id: p[0], ask_text: p[1], tier: p[2], match_name: p[3], match: m, send_at: p[5] ? new Date(sendAt.getTime() + 35 * 3_600_000) : sendAt, harness_status: "awaiting_evidence", drop_reason: null });
+    world.rof.push({ id: `rof-${world.nextId++}`, user_id: p[0], ask_text: p[1], tier: p[2], match_name: p[3], match: m, created_at: new Date(), send_at: p[5] ? new Date(sendAt.getTime() + 35 * 3_600_000) : sendAt, harness_status: "awaiting_evidence", drop_reason: null });
     return { rows: [], rowCount: 1 };
   }
   if (/UPDATE recommendation_outcome_followups SET ask_text/.test(sql)) return { rows: [], rowCount: 0 };
-  if (/UPDATE recommendation_outcome_followups\s+SET harness_status = NULL/.test(sql)) {
+  if (/UPDATE recommendation_outcome_followups\s+(?:rof\s+)?SET harness_status = NULL/.test(sql)) {
     let n = 0;
-    for (const r of world.rof) if (r.user_id === p[0] && r.harness_status === "awaiting_evidence" && keyOf(r).includes(p[1])) {
+    for (const r of world.rof) if (r.user_id === p[0] && r.harness_status === "awaiting_evidence" && armKeys(r).includes(p[1])) {
       r.harness_status = null; n++;
-      if (!(r.match.form === "event" || ["co_event", "public_event"].includes(r.match.kind) || r.match.event_date)) r.send_at = new Date(Date.now() + p[2] * 86_400_000);
+      if (!(r.match.form === "event" || ["co_event", "public_event"].includes(r.match.kind) || r.match.event_date || r.match.details?.startAt)) r.send_at = new Date(Date.now() + p[2] * 86_400_000);
     }
     return { rows: [], rowCount: n };
   }
@@ -50,6 +55,7 @@ const handle = async (sql: string, p: any[] = []) => {
     for (const r of world.rof) if ((p[0] as string[]).includes(r.id)) { r.harness_status = "dropped"; r.drop_reason = p[1]; }
     return { rows: [], rowCount: 1 };
   }
+  if (/SELECT id, match, created_at FROM recommendation_outcome_followups WHERE harness_status = 'awaiting_evidence'/.test(sql)) return { rows: world.rof.filter((r) => r.harness_status === "awaiting_evidence") };
   if (/UPDATE recommendation_outcome_followups SET harness_status = \$2 WHERE id = \$1/.test(sql)) { const r = world.rof.find((x) => x.id === p[0]); if (r) r.harness_status = p[1]; return { rows: [], rowCount: 1 }; }
   if (/FROM recommendation_outcome_followups rof\s+JOIN users/.test(sql)) return { rows: world.rof.filter((r) => r.harness_status === null && r.send_at.getTime() <= Date.now() + 2 * 86_400_000).map((r) => ({ ...r, city: null })) };
   if (/SELECT id, match FROM recommendation_outcome_followups WHERE id = ANY/.test(sql)) return { rows: world.rof.filter((r) => (p[0] as string[]).includes(r.id)) };
@@ -243,6 +249,33 @@ CF.setDoorDepsForTests({ ours: async () => false });
   check("call: a plan of theirs that just passed is a reason to ask whether it happened", r?.kind === "how_it_went" && /nothing says it happened/.test(r.text) && /ask whether it did/.test(r.text), res);
   const guide = CO.outboundOpeningGuide(r ?? { kind: "how_it_went", text: "x", key: "k", at: null } as any);
   check("call: the opening guide asks whether it happened, never takes for granted that they went", /whether it ended up happening, never taking for granted that they went/.test(guide) && !/\(how it went,/.test(guide), guide.slice(0, 300));
+}
+
+// ================================================================ 6b. parked rows expire; a recurring name never arms an old row
+{
+  const day = (n: number) => new Date(Date.now() + n * 86_400_000);
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  check("pure: an event is kept to 3 days past its date, then expires", !R.parkedRowExpired({ match: { form: "event", event_date: ymd(day(-2)) }, created_at: day(-10) }) && R.parkedRowExpired({ match: { form: "event", event_date: ymd(day(-5)) }, created_at: day(-10) }));
+  check("pure: an upcoming event never expires", !R.parkedRowExpired({ match: { form: "event", event_date: ymd(day(30)) }, created_at: day(-100) }));
+  check("pure: an opening expires at 30 days parked, not before", !R.parkedRowExpired({ match: jobFind(), created_at: day(-29) }) && R.parkedRowExpired({ match: jobFind(), created_at: day(-31) }));
+  reset();
+  await R.scheduleOutcomeFollowUp(u, "founder events", eventFind({ event_date: ymd(day(-6)) }) as any);
+  await R.scheduleOutcomeFollowUp(u, "fellowships", jobFind() as any);
+  await R.scheduleOutcomeFollowUp(u, "old fellowships", jobFind({ name: "Old Program", url: "https://example.com/old" }) as any);
+  world.rof[2].created_at = day(-40);
+  await dueRows();
+  check("expiry: the old event and the 40-day opening are dropped with a reason; the fresh opening stays parked", world.rof[0].harness_status === "dropped" && world.rof[2].harness_status === "dropped" && world.rof[1].harness_status === "awaiting_evidence" && /before it expired/.test(world.rof[0].drop_reason ?? ""), world.rof.map((r) => [r.harness_status, r.drop_reason]));
+  // A recurring same-name event: the new date is its own parked row, and "I'm going" under the new event id arms only that one
+  reset();
+  await R.scheduleOutcomeFollowUp(u, "founder events", eventFind({ event_api_id: "evt-old", event_date: ymd(day(-2)) }) as any);
+  await R.scheduleOutcomeFollowUp(u, "founder events", eventFind({ event_api_id: "evt-new", event_date: ymd(day(6)) }) as any);
+  check("recurring name: the new event id is its own parked row", world.rof.length === 2, world.rof.length);
+  await O.recordSuggestionOutcome(u, "event", "event:evt-new", "Founder Table", "acted", "going", { provenance: "stated", quote: "I'm going" });
+  check("recurring name: 'going' on the new event arms only the new row", world.rof.find((r) => r.match.event_api_id === "evt-new")!.harness_status === null && world.rof.find((r) => r.match.event_api_id === "evt-old")!.harness_status === "awaiting_evidence");
+  await O.recordSuggestionOutcome(u, "event", "name:founder table", "Founder Table", "acted", "going", { provenance: "stated", quote: "I'm going" });
+  check("recurring name: a bare name key is ambiguous, so it arms no old row", world.rof.find((r) => r.match.event_api_id === "evt-old")!.harness_status === "awaiting_evidence");
+  const src2 = (await import("node:fs")).readFileSync(new URL("../../src/services/recommendationOutcome.ts", import.meta.url), "utf8");
+  check("arm: its event test considers details.startAt like followUpDate", /match #>> '\{details,startAt\}' IS NOT NULL/.test(src2));
 }
 
 // ================================================================ 7. text: a dated plan of theirs is intent, not evidence

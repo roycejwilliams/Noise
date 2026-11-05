@@ -75,7 +75,9 @@ export async function scheduleOutcomeFollowUp(userId: string, askText: string, m
          SELECT 1 FROM recommendation_outcome_followups
          WHERE user_id = $1 AND (
            (match ->> 'event_api_id') = ($5::jsonb ->> 'event_api_id')
-           OR lower(match_name) = lower($4)
+           -- The same name is the same find only when either side has no event id: a recurring event (same name, a new event id)
+           -- is a new find, never folded into an old row.
+           OR (lower(match_name) = lower($4) AND ((match ->> 'event_api_id') IS NULL OR ($5::jsonb ->> 'event_api_id') IS NULL))
          )
        )`,
       [userId, askText, (match as any).tier ?? 3, match.name, JSON.stringify(match), eventDate, TIER3_FOLLOWUP_DELAY_DAYS],
@@ -94,18 +96,43 @@ export async function scheduleOutcomeFollowUp(userId: string, askText: string, m
 
 const KEY_MATCH = `(('event:' || (match ->> 'event_api_id')) = $2 OR ('name:' || lower(match_name)) = $2)`;
 
-// A sign that they meant to go (said they're going or signed up) or went: the parked follow-up becomes a real one. An event's is due
-// the morning after its own date; an opening has no such day, so it waits the fixed delay from now. Never for a declined find.
+// A sign that they meant to go (said they're going or signed up): the parked follow-up becomes a real one. An event's is due the
+// morning after its own date; an opening has no such day, so it waits the fixed delay from now. Never for a declined find.
+// By event id when the key carries one. A name key (the find had no event id) arms a row with no event id, or the one row of that name
+// that has one: a recurring same-name find (several event ids) is ambiguous by name alone, so a name never arms an old row of it.
 export async function armOutcomeFollowUp(userId: string, itemKey: string): Promise<number> {
   const { rowCount } = await pool.query(
-    `UPDATE recommendation_outcome_followups
+    `UPDATE recommendation_outcome_followups rof
      SET harness_status = NULL,
-         send_at = CASE WHEN match ->> 'form' = 'event' OR match ->> 'kind' IN ('co_event', 'public_event') OR match ->> 'event_date' IS NOT NULL
+         send_at = CASE WHEN match ->> 'form' = 'event' OR match ->> 'kind' IN ('co_event', 'public_event') OR match ->> 'event_date' IS NOT NULL OR match #>> '{details,startAt}' IS NOT NULL
                         THEN send_at ELSE NOW() + ($3 || ' days')::interval END
-     WHERE user_id = $1 AND harness_status = '${AWAITING_EVIDENCE}' AND ${KEY_MATCH}`,
+     WHERE user_id = $1 AND harness_status = '${AWAITING_EVIDENCE}' AND (
+       ('event:' || (match ->> 'event_api_id')) = $2
+       OR (('name:' || lower(match_name)) = $2 AND (
+         (match ->> 'event_api_id') IS NULL
+         OR (SELECT count(*) FROM recommendation_outcome_followups o WHERE o.user_id = rof.user_id AND lower(o.match_name) = lower(rof.match_name) AND (o.match ->> 'event_api_id') IS NOT NULL) = 1
+       ))
+     )`,
     [userId, itemKey, TIER3_FOLLOWUP_DELAY_DAYS],
   );
   return rowCount ?? 0;
+}
+
+// A parked find nobody confirmed is not kept forever: an event's expires 3 days after its date, an opening 30 days after it was
+// parked. Pure: whether one parked row is past that.
+export const PARKED_EVENT_GRACE_DAYS = 3;
+export const PARKED_OPENING_DAYS = 30;
+export function parkedRowExpired(row: { match: any; created_at: Date | string }, now: Date = new Date()): boolean {
+  const date = followUpDate(row.match);
+  if (date) return Date.parse(`${date}T00:00:00Z`) + (PARKED_EVENT_GRACE_DAYS + 1) * 86_400_000 <= now.getTime();
+  return new Date(row.created_at).getTime() + PARKED_OPENING_DAYS * 86_400_000 <= now.getTime();
+}
+export async function expireParkedFollowUps(now: Date = new Date()): Promise<number> {
+  const { rows } = await pool.query(`SELECT id, match, created_at FROM recommendation_outcome_followups WHERE harness_status = '${AWAITING_EVIDENCE}' AND sent_at IS NULL LIMIT 500`);
+  const ids = rows.filter((r: any) => parkedRowExpired(r, now)).map((r: any) => r.id);
+  if (!ids.length) return 0;
+  await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped', drop_reason = $2 WHERE id = ANY($1::uuid[])`, [ids, "no sign they went or meant to go before it expired"]);
+  return ids.length;
 }
 
 // They said no (or the record shows nothing): the parked or armed follow-up that hasn't gone is dropped, with the reason kept.
@@ -263,6 +290,7 @@ export async function recordClosestMissMentioned(userId: string, name: string, a
 // after at 10am their time. Live before this: three follow-ups all at 4am
 // Pacific, one a duplicate two seconds after the other.
 export async function enqueueDueOutcomeFollowUps(): Promise<void> {
+  await expireParkedFollowUps().catch((err: any) => console.error("recommendationOutcome: expiring parked finds failed (non-fatal):", err?.message ?? err));
   const { rows } = await pool.query(
     `SELECT rof.id, rof.user_id, rof.ask_text, rof.match_name, rof.match, rof.send_at, cp.city
      FROM recommendation_outcome_followups rof
