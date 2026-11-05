@@ -108,7 +108,7 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   await AS.splitAsks("u1", [{ text: "I can help with design for the launch, Cue will draft", type: "offering" as const }], o, { ...deps(mixedRead), read: async () => (offerReads++, mixedRead) });
   check("an offer of theirs is never read", offerReads === 0);
   const pe = src("services/profileExtraction.ts");
-  check("the find row is kept when not split cleanly: keepSearchRow overrides the Co-promise skip and writes kind find", /\(opts\.keepSearchRow \|\| !isCoCommitment\(ask\.text\)\)/.test(pe) && /opts\.keepSearchRow \? Promise\.resolve\("find" as const\)/.test(pe) && /opts\.kind \?\? \(await classifyEntryKind\(ask\.text\)\)/.test(pe) && /keepSearchRow: w\.keepSearchRow/.test(pe));
+  check("the find row is kept when not split cleanly: keepSearchRow overrides the Co-promise skip and writes kind find", /\(opts\.keepSearchRow \|\| !isCoCommitment\(ask\.text\)\)/.test(pe) && /opts\.keepSearchRow \? Promise\.resolve\(\{ kind: "find" as const, connection: null \}\)/.test(pe) && /opts\.kind \?\? \(await classifyEntryKind\(ask\.text\)\)/.test(pe) && /keepSearchRow: w\.keepSearchRow/.test(pe));
   check("if the split step itself fails, a Co-promise request still keeps its find row", /asks\.map\(\(ask\) => \(\{ ask, \.\.\.\(ask\.type === "seeking" && isCoCommitment\(ask\.text\) \? \{ keepSearchRow: true \} : \{\}\) \}\)\)/.test(pe));
   // That row has no kept read (split_read null), so the sweeps read it again and search its find part.
   let sweepReads = 0;

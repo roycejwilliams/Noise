@@ -278,7 +278,7 @@ check("any other ask still gets the kind it's read as", L.askKindAfter({ kind: "
   const db = {
     query: async (sql: string, args: any[] = []) => {
       sqls.push(sql);
-      if (/^\s*SELECT id, (?:user_id, )?ask_text, kind, intent(?:, kind_checked_at)? FROM ask_checkins WHERE resolved_at IS NULL AND \(kind_checked_at IS NULL/.test(sql)) return { rows: rows.filter((r) => !r.resolved_at && (r.kind_checked_at === null || (r.kind === "find" && r.kind_version < args[1]))) };
+      if (/^\s*SELECT id, (?:user_id, )?ask_text, kind, intent(?:, kind_checked_at)? FROM ask_checkins WHERE resolved_at IS NULL AND \(kind_checked_at IS NULL/.test(sql)) return { rows: rows.filter((r) => !r.resolved_at && (r.kind_checked_at === null || r.kind_version < args[1])) };
       if (/^\s*SELECT id, ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND kind = 'find' AND intent IS DISTINCT FROM 'lookout'/.test(sql)) return { rows: rows.filter((r) => !r.resolved_at && r.kind === "find" && r.intent !== "lookout") };
       if (/^\s*UPDATE ask_checkins SET kind = COALESCE\(\$2, kind\)/.test(sql)) {
         const [id, next, version, , readKind, readIntent] = args;
@@ -296,7 +296,7 @@ check("any other ask still gets the kind it's read as", L.askKindAfter({ kind: "
   console.log = quiet;
   const by = (id: number) => rows.find((r) => r.id === id)!;
   check("the kind job leaves a lookout's kind alone (and marks it checked, so it isn't read every run)", by(1).kind === "find" && by(1).kind_checked_at !== null, by(1));
-  check("…gives a never-read lookout find, without a model call", by(2).kind === "find" && !asked.includes(by(2).ask_text), { row: by(2), asked });
+  check("…gives a never-read lookout find (the read is for scope only: an outside lookout is the one kind change allowed)", by(2).kind === "find", { row: by(2), asked });
   check("…still classifies everything else", by(3).kind === "help");
   // Royce, 2026-10-13: an already-classified find ask that reads as Co's own work isn't switched off either (status-check lane).
   check("…and never moves a lookout that reads like Cue's own promise to help, nor an already-read ask (the search keeps running)", by(4).kind === "find" && by(5).kind === "find", [by(4), by(5)]);
