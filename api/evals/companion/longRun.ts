@@ -71,13 +71,20 @@ check("the pitch (day 9) is marked in its week", markedOn.some((m) => m.key === 
 check("the cofounder decision is marked", markedOn.some((m) => m.key === "thread:t2"));
 check("the events they went to are marked", markedOn.some((m) => m.key === "went:luma:founders-dinner") || store.get("went:luma:founders-dinner")?.markedAt);
 check("a thread with no closing words of theirs is never a moment", !store.has("thread:t3"));
-check("the 30, 90-day marks exist once they're reached, and 180 doesn't yet", store.has("days:30") && store.has("days:90") && !store.has("days:180"));
+check("no 'N days with Cue' moment is ever derived (Cue talking about itself, removed 2026-11-04), however long they have been here", ![...store.keys()].some((k) => k.startsWith("days:")) && !M.deriveMilestones({ joinedAt: at(0), now: at(400), went: [], closed: [] }).some((m) => (m.kind as string) === "with_co"));
+check("a stored 'days with Cue' row, or a thread_done row for an errand or a purchase, is skipped at pick time even though it was stored before", (() => {
+  const fresh = at(88);
+  const withCo = { key: "days:90", kind: "with_co", text: "They've been with Cue for 90 days.", then: null, now: null, happenedAt: fresh, markedAt: null } as unknown as M.Milestone;
+  const phone = { key: "thread:9", kind: "thread_done", text: "They were in the middle of: finding a cheaper phone plan. It came through.", then: "I need a cheaper phone plan", now: "got it", happenedAt: fresh, markedAt: null } as M.Milestone;
+  const real = { key: "thread:10", kind: "thread_done", text: "They were in the middle of: the pitch on Friday. It came through.", then: "nervous", now: "it went well", happenedAt: fresh, markedAt: null } as M.Milestone;
+  return M.pickToMark([withCo, phone], new Date(at(90))) === null && M.pickToMark([phone, real], new Date(at(90)))?.key === "thread:10";
+})());
 check("nothing is marked for a moment that's already old when found", (() => {
   const s = new Map<string, M.Milestone>();
   const old = M.deriveMilestones({ joinedAt: at(0), now: at(400), went: [], closed: [] });
   return old.every((m) => new Date(at(400)).getTime() - new Date(m.happenedAt).getTime() > M.ANNOUNCE_WITHIN_DAYS * DAY) && M.pickToMark(old.map((m) => ({ ...m, markedAt: null })), new Date(at(400))) === null && s.size === 0;
 })());
-check("the story Cue can tell only grows across the stretch", !storyShrank && storyLen >= 5);
+check("the story Cue can tell only grows across the stretch", !storyShrank && storyLen >= 4);
 check("the story carries their own words, not Cue's", M.storyLines([...store.values()], 20).some((l) => /the pitch went really well/.test(l) && /nervous/.test(l)));
 check("with several moments waiting, the newest fresh one goes first", (() => {
   const a: M.Milestone = { key: "a", kind: "went", text: "a", then: null, now: null, happenedAt: at(10), markedAt: null };
