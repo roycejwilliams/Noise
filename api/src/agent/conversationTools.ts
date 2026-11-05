@@ -2,7 +2,7 @@ import { notToTeammate } from "../services/teamLines.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
-import { situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
+import { NOT_ASSISTANT_ASK, situationFor, situationalTools, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
 import { guardRefusalTellsThem, guardTools, isGuardRefusal, withReason } from "./toolGuard.js";
 import { doorOpen } from "../services/theDoor.js";
 import { proactivePaused } from "../services/proactivePause.js";
@@ -55,20 +55,9 @@ async function memberDate(userId: string): Promise<(iso: string | Date | null | 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
 
 export type ConversationToolContext = {
-  // Set by loopTools for this turn: a page's, deck's or share link just went out, and that text is the turn's whole answer
-  // (rule 2). The page, deck and share tools call it after the link sends.
+  // Set by loopTools for this turn: a delivered text (what anythingForMe sent) is the turn's whole answer.
   onLinkDelivered?: () => void;
-  // Links made this turn whose text didn't send (agent/linkAnswer.ts unsentLink): resendLink sends one again, so a member is never
-  // left without a working link (founder's review, 2026-10-12: on a reset the old link is already off).
-  unsentLinks?: { url: string; text: string; what: string }[];
-  // On a call (services/callTools.ts): a page's, deck's or share link still goes to their texts while they talk (PR 6). Everything
-  // else on a call is spoken; only a text carrying one of their own /d/ links goes this way.
-  sendLinkText?: (text: string) => Promise<boolean>;
-  // The reply's own fact check and brand guard, for an answer that rides with a link (agent/linkAnswer.ts). Set per turn below.
-  checkAnswer?: (draft: string) => Promise<string>;
-  // An answer that rode with a link went out: it counts as part of this turn's reply (the call-offer check reads lastReplyText).
-  noteAnswerSent?: (answer: string) => void;
-  // An answer that was meant to ride with a link but didn't go (agent/linkAnswer.ts withAnswer): owed, so the one reply that
+  // An answer that was meant to ride with a link but didn't go (none are made now): owed, so the one reply tha
   // answers it may follow the link (sendReply), once.
   answerOwed?: string | null;
   // When their text arrived; the loop's time budget runs from here.
@@ -252,12 +241,12 @@ export const NEW_FOR_THEM = new Set([
   "sendContactCard", "whatCoKnows", "correctWhatCoKnows", "startTask", "updateTask", "closeTask", "takeOnGoal", "pickGoalItems", "moveLane",
   "answerShareAsks", "shareAskInIntros", "answerBriefName", "shareLocationYes", "flagSafetyConcern", "checkInvitesLeft", "markArrived",
   "sendProductUpdates", "sendInvite", "answerProposal", "listOpenAsks", "listSentOffers", "anythingForMe", "shareLink", "requestEventIntro", "followUp",
-  "firstRead", "makePage", "updatePage", "takeDownPage", "readInspo", "readReference", "makeDeck", "updateDeck", "openArtifact",
-  "shareArtifact", "deleteImages", "resetLink", "resendLink", "stopSharing", "searchEvents", "webSearch", "searchPosts", "readPage",
-  "shareFinds", "draftEmail", "emailPlan", "researchBrief", "writeDocument", "readDocument", "writeFromFile", "deleteMyFiles",
-  "offerDocument", "calendarConnection", "docsConnection", "googleConnection", "setSearchArea",
+  "firstRead", "deleteImages",
+  "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
+  "shareFinds", "researchBrief",
+  "calendarConnection", "setSearchArea",
   // Re-review of #310: each of these can return something to say (a link that moved, the next step on a yes, a playback of their time).
-  "keepArtifact", "findReaction", "noteFreeTime",
+  "findReaction", "noteFreeTime",
   // #304: a change to their voice-read consent is worth a line (its question itself rides as a lane note, owed once).
   "voiceRead",
 ]);
@@ -371,10 +360,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
       ctx.facts?.add("known", S.whereItStands(t, await memberZone(ctx.userId).catch(() => null), strip));
     }
     return { hold: S.looksLike(t, strip) };
-  };
-  ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent()) : draft, ctx.resolvedContent);
-  ctx.noteAnswerSent = (answer: string) => {
-    state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${answer}` : answer;
   };
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.
@@ -771,6 +756,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
       }),
       execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom }) => {
+        // Not something Cue does (drafting their email, a plan sheet, reading their email): no task, by text or on a call.
+        if (NOT_ASSISTANT_ASK.test(`${goal}\n${steps.join("\n")}\n${firstStep}`)) {
+          notDone("No task was started: that isn't something Cue does.");
+          return { ok: false, error: "That's not something you do. Say so briefly in your own words, fresh each time, without a canned line and without forcing an unrelated introduction. Never say you drafted, sent or planned it." };
+        }
         const T = await import("../services/coTasks.js");
         // On a call, the same need started again on the same call (a repeat, a retry) is the job already running: nothing new starts.
         const dispatchKey = ctx.onCall && ctx.callKey ? T.dispatchKeyFor(ctx.callKey, goal) : null;
@@ -923,7 +913,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         title: z.string().describe("The goal in a few words, in their terms."),
         theirWords: z.string().describe("A quote of their own words handing it over, copied exactly from their message."),
         items: z
-          .array(z.object({ text: z.string().describe("The piece, in a few words."), who: z.enum(["co", "member"]), how: z.enum(["research", "draft", "watch", "reminder"]).optional().describe("Only for who: co.") }))
+          .array(z.object({ text: z.string().describe("The piece, in a few words."), who: z.enum(["co", "member"]), how: z.enum(["research", "watch", "reminder"]).optional().describe("Only for who: co.") }))
           .max(10)
           .optional()
           .describe("The goal's pieces. Leave out only when the goal is in a file they sent (file): its pieces come from the file."),
@@ -1011,7 +1001,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             : `Open your reply with a plain, warm offer, in your own words and short, to remind them about ${reminderPiece?.text ?? "it"}, and ask what day suits them. Make it simply an offer, never framed against a limit (no "what I can do is", "all I can", "the most I can"). A line of real help can follow it. If they say yes, pickGoalItems with piece ${reminderPiece?.n ?? 1} and the day they give in checkIn.`
           : mayTake.length
             ? "Offer the split once, in your own words, naturally, in this reply: what you'd take and what stays with them. No list, no numbers, no form. Nothing starts until they pick."
-            : "Nothing here is yours to take on your own: every piece stays with them. Help in the moment, and offer to draft anything they'd send themselves.";
+            : "Nothing here is yours to take on your own: every piece stays with them. Help in the moment.";
         if (ctx.dryRun) {
           ctx.facts?.add("known", `Goal they handed you, "${title}": ${guidance}`);
           if (!read.clubWorld) return { ok: true, youMayOffer: reminderPiece ? [{ n: reminderPiece.n, text: reminderPiece.text, how: "reminder", suggestedDay: reminderPiece.suggest?.day ?? null }] : [], guidance };
@@ -1294,7 +1284,30 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: true };
         }
         ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${subject.name}".` : `Noted they can't make "${subject.name}"; Cue won't send them anything more about it.`);
+        // Where it serves matching: a calendar file for the Noise event they're going to, to their own email (services/eventCalendar.ts).
+        // Nothing else gets one.
+        if (going && !ctx.dryRun) {
+          const c = await import("../services/eventCalendar.js").then((m) => m.sendGoingCalendar(ctx.userId, subject.eventApiId)).catch(() => ({ sent: false }));
+          if (c.sent) ctx.facts?.add("did_this_turn", `Emailed them a calendar file for "${subject.name}", to their own email on file.`);
+        }
         return { ok: true };
+      },
+    }),
+
+    // "Delete the photos I sent you" (services/memberAssets.ts): their images' bytes, gone now. Never says it deleted anything that
+    // wasn't (the count comes back from the delete itself).
+    deleteImages: tool({
+      description: toolUse("deleteImages"),
+      inputSchema: z.object({ numbers: z.array(z.number().int().positive()).optional().describe("Their image numbers (#N) to delete; leave it out for all of them.") }),
+      execute: async ({ numbers }) => {
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing deleted." };
+        const n = await import("../services/memberAssets.js").then((m) => m.deleteAssets(ctx.userId, numbers?.length ? numbers : null)).catch(() => null);
+        if (n === null) {
+          notDone("Their photos weren't deleted: the delete failed.");
+          return { ok: false, error: "The delete didn't go through. Don't say it did; say it didn't work and to try again." };
+        }
+        ctx.facts?.add(n ? "did_this_turn" : "known", n ? `Deleted ${n} of the photos they'd sent${numbers?.length ? ` (${numbers.map((x) => `#${x}`).join(", ")})` : ""}.` : "They had no saved photos to delete (by those numbers).");
+        return { ok: true, deleted: n, note: n ? "Say in a few words they're deleted." : "Say plainly there was nothing to delete." };
       },
     }),
 
@@ -2198,8 +2211,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   turnLoop = newLoopState(ctx.turnStartedAt);
   Object.assign(tools, loopTools(ctx, state, turnLoop, notDone));
 
-  // The calendar and Docs grants, and the Gmail tester flow (services/googleTools.ts). The Gmail one is team only, so team-only tools
-  // are taken out again now that these are in (2026-10-15: no member-facing path to the old combined grant).
+  // The calendar and Docs grants (services/googleTools.ts). Team-only tools are taken out again now that these are in.
   Object.assign(tools, googleTools(ctx, notDone));
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 

@@ -729,7 +729,7 @@ async function coInitiatedHold(client: Queryable, o: { userId: string; timezone:
   return { failed, sends };
 }
 
-// A Co-initiated send that isn't a text through sendExempt (a look-out's document, PDF or Google Doc, services/documentDelivery.ts):
+// A Co-initiated send that isn't a text through sendExempt (formerly a look-out's document; kept for any claimed send):
 // the same gate and the same ledger row, claimed before it goes (Royce, 2026-10-09: "a Co lookout must not be able to send an
 // uncounted PDF"). The caller delivers, then releases the claim if nothing went out, so a send that failed never counts as let pass.
 // owed: a document they asked for (askedAt: when), claimed through the same lock and ledger so their own rule holds it and it counts.
@@ -2420,8 +2420,11 @@ export async function sendExempt(opts: {
   // A file attached to the first message (Sendblue media_url): Cue's contact card (services/cardReissue.ts). Public, ends in its
   // extension, as Sendblue requires.
   mediaUrl?: string;
+  // Work they asked for (a research result): the pause on unprompted outreach never holds it. Opt-out, safety, their hours and their
+  // own rule still apply below (services/proactivePause.ts: anything a member asked for is never paused).
+  requested?: boolean;
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date; queued?: boolean; door?: boolean }> {
-  if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
+  if (proactivePaused() && !opts.requested) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
   // all, so harness/monitor.ts had no signal that could ever see them.

@@ -8,13 +8,9 @@
 //
 // Every read here is scoped to one member (user_id = $1): nothing about
 // anyone else can enter a member's turn through it.
-import type { DocOfferContext } from "./documentOffer.js";
 import { stampOf } from "./factLabels.js";
 import { localStamp, memberZone, wordsZone } from "./memberTime.js";
 import { briefFactLines, openTasks as loadOpenTasks, recentBriefs as loadRecentBriefs, taskFactLines, type BriefView, type CoTask } from "./coTasks.js";
-import type { Receipt } from "./deliveryReceipts.js";
-import type { Doc } from "./documentSheet.js";
-import { receiptDrift, type Drift } from "./receiptDrift.js";
 import { adviceLines, loadAdvice } from "./advice.js";
 import { loadMilestones, storyLines } from "./milestones.js";
 import pool from "../db/db.js";
@@ -67,7 +63,7 @@ export type TurnContext = {
   inlineTarget: RepliedTo | null;
   ledger: { lines: string[]; named: string[] };
   capabilities: string[];
-  // Their own Google Calendar busy times and waiting emails, when connected (services/googleData.ts).
+  // Their own Google Calendar busy times, when connected (services/googleData.ts).
   google?: string[];
   // The details Co has for doing things on their behalf (services/memberKit.ts).
   kit?: Kit;
@@ -86,10 +82,6 @@ export type TurnContext = {
   // Goals they handed Co (services/goalOwnership.ts): offered (waiting on their pick) or active (what Co carries, what's theirs, the
   // check-in on the ledger). Tool references for Co, never member-facing text.
   goals?: { kind: "known" | "scheduled"; text: string }[];
-  // Whether Co may offer to write something up as a document, and any offer still waiting on an answer (services/documentOffer.ts).
-  docOffer?: DocOfferContext | null;
-  // Documents Co delivered them, newest version each, outstanding first (services/deliveryReceipts.ts receiptLines).
-  deliveries?: string[];
   // Goals Co set aside from context that they haven't heard about yet (services/goalEdges.ts untoldSetAsides), then the goal
   // recheck's (services/goalRecheck.ts recheckForTurn, marked by recheck).
   goalSetAsides?: import("./goalEdges.js").GoalStateRow[];
@@ -111,10 +103,6 @@ export type TurnContext = {
   todayEvent?: { eventApiId: string; name: string; startAt: string; timezone: string | null } | null;
   // Everything Co is carrying for them, one ordered view: due first, then outstanding, then done (carryingItems).
   carrying?: CarryItem[];
-  // The newest delivered documents, each artifact once, with their text: for "is this about doc #12?" (replyGrounding docHint).
-  recentDocs?: { id: number; version: number; title: string; doc: Doc; deliveredAt: Date }[];
-  // Delivered documents that no longer match what's true (services/receiptDrift.ts).
-  drift?: Drift[];
   // What Co knows about them from the one member-knowledge layer (services/memberKnowledge.ts), read once per reply with only the
   // sections a text reply reads (TEXT_KNOWLEDGE), already stripped of other members' details. null when it couldn't be read (the
   // name read failed: fails closed, so nothing from it goes in).
@@ -378,11 +366,10 @@ export async function assembleContext(
   const briefsOnce = once(() => loadRecentBriefs(userId));
   const openTasks = (_: string) => tasksOnce();
   const recentBriefs = (_: string) => briefsOnce();
-  const receiptsOnce = once(() => import("./deliveryReceipts.js").then((R) => R.pgReceipts.forUser(userId, 30)));
   // What Co knows about them, one read (services/memberKnowledge.ts): asks, lessons, goals with their state, claims, corrections,
-  // taste, restraint and everything Co is carrying, stripped inside. Tasks, briefs and receipts are read once and shared with the
+  // taste, restraint and everything Co is carrying, stripped inside. Tasks and briefs are read once and shared with the
   // fact lines below. It throws only when the names to strip can't be read: then none of it goes in (fails closed).
-  const shared: Partial<KnowledgeDeps> = { tasks: () => tasksOnce(), briefs: () => briefsOnce(), receipts: () => receiptsOnce() };
+  const shared: Partial<KnowledgeDeps> = { tasks: () => tasksOnce(), briefs: () => briefsOnce() };
   const knowledgeP = memberKnowledge(userId, { include: TEXT_KNOWLEDGE }, shared).catch((err: any) => {
     console.error("assembleContext: member knowledge unavailable (non-fatal, left out):", err?.message ?? err);
     return null;
@@ -440,7 +427,7 @@ export async function assembleContext(
   const lessons = (knowledge?.lessons ?? []).map((l) => l.text).filter((t) => t.trim());
   // Their Google, read from the cache in their own time zone (never fetched while they wait).
   const google = await loadGoogleFacts(userId, zone).catch(() => [] as string[]);
-  const [kit, story, advice, tasks, briefs, todayEvent, docOffer] = await Promise.all([
+  const [kit, story, advice, tasks, briefs, todayEvent] = await Promise.all([
     loadKit(userId).catch(() => ({}) as Kit),
     loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]),
     loadAdvice(userId).then((a) => adviceLines(a)).catch(() => [] as string[]),
@@ -449,26 +436,10 @@ export async function assembleContext(
     // Research briefs aren't work tasks (openTasks leaves them out) but are theirs to see: running, held, or sent lately.
     recentBriefs(userId).then((b) => briefFactLines(b, zone)).catch(() => [] as string[]),
     import("./eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null),
-    import("./documentOffer.js").then((m) => m.loadDocOfferContext(userId)).catch(() => null),
   ]);
-  const receipts = await receiptsOnce().catch(() => [] as Receipt[]);
-  const deliveries = await import("./deliveryReceipts.js").then(async (R) => R.receiptLines(receipts, zone)).catch(() => [] as string[]);
   // Open loops join what Co is carrying through member knowledge (read only; the text route syncs them).
-  const [rejected, notes] = await Promise.all([
-    // Options they passed on lately, for a delivered document that still lists one (services/receiptDrift.ts).
-    pool
-      .query(`SELECT name, outcome_at FROM research_finds WHERE user_id = $1 AND outcome = 'no' AND outcome_at > NOW() - INTERVAL '30 days' ORDER BY outcome_at DESC LIMIT 20`, [userId])
-      .then((r) => r.rows.map((x: any) => ({ name: String(x.name), at: new Date(x.outcome_at) })))
-      .catch(() => [] as { name: string; at: Date }[]),
-    pool
-      .query(`SELECT brief, updated_at FROM search_briefs WHERE user_id = $1`, [userId])
-      .then((r) => (r.rows[0]?.brief ? { headcount: typeof r.rows[0].brief.headcount === "number" ? r.rows[0].brief.headcount : null, when: r.rows[0].brief.when ?? null, updatedAt: r.rows[0].updated_at ? new Date(r.rows[0].updated_at) : null } : null))
-      .catch(() => null),
-  ]);
   // Their threads, stripped too (keep, above). What Co is carrying comes stripped from member knowledge, and goes through keep again.
   const safeThreads = threads.flatMap((t) => { const text = keep(t.text); const line = keep(t.line); return text && line ? [{ ...t, text, line }] : []; });
-  const recentDocs = newestDocs(receipts, 3);
-  const drift = recentDocs.map((d) => receiptDrift(d, { notes, rejected, eventStartsAt: todayEvent?.startAt ? new Date(todayEvent.startAt) : null })).filter((x): x is Drift => !!x);
   const rawTasks = await tasksOnce().catch(() => [] as CoTask[]);
   // A message that may be about something Co is already doing: a candidate the reply decides on (services/statusCheck.ts), from the
   // tasks already read, through their fence (the number and goal only when it can't be read).
@@ -479,12 +450,6 @@ export async function assembleContext(
   const windows = new Map(rawTasks.filter((t) => t.status === "open" && t.window && !t.window.closedAt).map((t) => [`task #${t.id}`, { words: t.window!.words, deadline: t.window!.deadline, zone: t.window!.zone ?? null }]));
   const carrying = carryFromKnowledge(knowledge?.carrying ?? [], zone, windows).flatMap((c) => { const label = keep(c.label); return label ? [{ ...c, label }] : []; });
   const openWork = keepAll([...rawTasks.filter((t) => t.status === "open").map((t) => t.goal), ...rawBriefs.filter((b) => b.status === "open").map((b) => `research brief: ${b.goal}`)]);
-  // The plan sheet, venue brief and stale-document offers decide per reply from these (services/documentOffer.ts docOfferLines).
-  if (docOffer) {
-    docOffer.signals = await import("./documentOffer.js")
-      .then((m) => m.loadArtifactSignals(userId, { drift, openWork, delivered: [...new Map(receipts.map((r) => [r.docKey, r])).values()].map((r) => ({ title: r.title, kind: r.kind, at: r.deliveredAt })) }))
-      .catch(() => null);
-  }
   // Without member knowledge, cold start reads their asks itself (never an empty list that would undercount their seeds).
   // No member knowledge (it failed closed): no cold-start steer either, since it would read their asks unstripped (re-review of #125).
   const coldStartP = knowledge ? import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null) : Promise.resolve(null);
@@ -519,7 +484,6 @@ export async function assembleContext(
   // Their world (services/memberWorld.ts), from the reads above plus the exchange: no model call, nothing read twice. Lines go through
   // keep; with the fence failed every line is withheld and counted.
   const [exchange, activity] = await Promise.all([exchangeP, activityP]);
-  const docOfferAt = docOffer?.pending ? docOffer.history?.find((h) => h.source === "offered" && h.status === "offered" && h.topic === docOffer.pending!.topic)?.at ?? null : null;
   const world = await import("./memberWorld.js")
     .then((M) =>
       M.buildMemberWorld({
@@ -531,7 +495,6 @@ export async function assembleContext(
         searching,
         ahead: rawAhead,
         offeredGoals: (rawGoals ?? []).filter((g) => g.status === "offered").map((g) => ({ title: g.title, offeredAt: g.offeredAt, momentOn: g.moment?.date ?? null })),
-        docOffer: docOffer?.pending ? { topic: docOffer.pending.topic, at: docOfferAt ? docOfferAt.toISOString() : null } : null,
         threads: safeThreads,
         exchange,
         sent: sent.map((x) => ({ name: x.name, sentAt: x.sentAt, endsOn: x.endsOn ?? null, reaction: x.reaction })),
@@ -543,27 +506,13 @@ export async function assembleContext(
       }),
     )
     .catch(() => null);
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, statusCheck, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead, world, ...(waiting.length ? { waiting } : {}) };
-}
-
-// Pure: the newest version of each delivered artifact, newest first.
-export function newestDocs(receipts: Receipt[], n: number): NonNullable<TurnContext["recentDocs"]> {
-  const seen = new Set<string>();
-  const out: NonNullable<TurnContext["recentDocs"]> = [];
-  for (const r of [...receipts].sort((a, b) => b.deliveredAt.getTime() - a.deliveredAt.getTime())) {
-    if (seen.has(r.docKey) || !r.doc?.sections) continue;
-    seen.add(r.docKey);
-    out.push({ id: r.id, version: r.version, title: r.title, doc: r.doc, deliveredAt: r.deliveredAt });
-    if (out.length >= n) break;
-  }
-  return out;
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, carrying, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, statusCheck, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead, world, ...(waiting.length ? { waiting } : {}) };
 }
 
 async function loadGoogleFacts(userId: string, zone: string | null): Promise<string[]> {
-  const { isConnected } = await import("./googleAuth.js");
   const { calendarConnected } = await import("./cueGrants.js");
-  // Busy times come from their calendar grant, waiting emails from the Gmail tester flow: either connection, only their own.
-  if (!(await isConnected(userId)).connected && !(await calendarConnected(userId).catch(() => null))) return [];
+  // Busy times come from their calendar grant, only their own.
+  if (!(await calendarConnected(userId).catch(() => null))) return [];
   const { googleFactsFor } = await import("./googleData.js");
   return googleFactsFor(userId, zone);
 }

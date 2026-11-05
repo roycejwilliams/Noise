@@ -71,7 +71,7 @@ check("their yes has to be in their message", yesIsTheirs("Yes please!", "yes pl
 {
   const { tools } = make("");
   const shape = (n: string) => Object.keys(tools[n].inputSchema.shape ?? {});
-  check("every guarded tool asks why", ["sendContactCard", "searchEvents", "webSearch", "readPage", "shareFinds", "draftEmail", "shareLink", "saveAsk", "steerAwayFrom", "listSentOffers", "listOpenAsks", "requestEventIntro"].every((n) => shape(n).includes("why")));
+  check("every guarded tool asks why", ["sendContactCard", "searchEvents", "webSearch", "readPage", "shareFinds", "shareLink", "saveAsk", "steerAwayFrom", "listSentOffers", "listOpenAsks", "requestEventIntro"].every((n) => shape(n).includes("why")));
   check("the intro tool needs their yes", shape("requestEventIntro").includes("theirYes"));
   check("the card can be resent when it didn't arrive", shape("sendContactCard").includes("resendBecauseMissing"));
   check("replies aren't wrapped", !shape("sendReply").includes("why"));

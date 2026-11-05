@@ -1,12 +1,12 @@
 // A direct ask is a yes (2026-11-02 helper audit, PR 1). On dev, 11-01, a member asked twice for a checklist document and
-// writeDocument was refused six times: the yes read said "If no offer of this action appears in the exchange, no", while the
+// researchBrief was refused six times: the yes read said "If no offer of this action appears in the exchange, no", while the
 // registry's their_yes has always been "they asked for it, or said yes to Co's offer" (services/capabilities.ts).
 // Zero tokens. The judge is NOT stubbed to always-yes: each case hands back a fixture of what the read returns (raw text, parsed by the
 // real parseYes), through the real guard (agent/toolGuard.ts) and the real confirmYes (services/theirYes.ts). What these prove is the
 // prompt and the plumbing; whether Haiku answers each fixture the same way is the optional live check (under $0.05, not run here).
 //   1. the prompt: a direct ask counts; a vague mention, a yes to something else and Cue's own words don't; for an intro it judges the
 //      asker's side only
-//   2. through the guard: a direct ask runs the tool (writeDocument, researchBrief, writeFromFile); a vague mention doesn't; Cue's own
+//   2. through the guard: a direct ask runs the tool (researchBrief); a vague mention doesn't; Cue's own
 //      suggestion with no reply doesn't, whether it's quoted as theirs (code, no read) or their unrelated words are (the read)
 //   3. an intro asked for directly: the asker's side goes, the other member is only asked (double opt-in), never introduced
 //   npx tsx evals/capabilities/directAsk.ts
@@ -53,12 +53,12 @@ Y.setYesJudgeForTests(async (r) => {
 // What the main model reads says the same as the registry (review of #349): they asked for it, or said yes to Cue's offer of it.
 check("the field Cue fills: their own words in this message asking for it or saying yes to Cue's offer", (() => {
   const t: any = { execute: async () => ({ ok: true }), inputSchema: z.object({ title: z.string() }) };
-  guardTools({ writeDocument: t }, { userId: "u", resolvedContent: "", dryRun: true, notDone: () => {} });
+  guardTools({ researchBrief: t }, { userId: "u", resolvedContent: "", dryRun: true, notDone: () => {} });
   const d = t.inputSchema.shape.theirYes?.description ?? "";
   return /^Their own words in THIS message asking you for it, or saying yes to your offer of it\./.test(d) && !/haven't said yes yet/.test(d);
 })());
 check("the limits line says the same: they ask for it, or say yes to Cue's offer of it", LIMITS.some((l) => /needs their clear yes first: they ask for it, or say yes to Cue's offer of it, then it happens\./.test(l)) && !LIMITS.some((l) => /Cue proposes it, they confirm/.test(l)));
-check("every tool this read gates needs their yes in the registry", ["writeDocument", "writeFromFile", "researchBrief", "requestEventIntro", "moveLane"].every((n) => !!ABILITIES.find((a) => a.tool === n)?.confirm));
+check("every tool this read gates needs their yes in the registry", ["researchBrief", "requestEventIntro", "moveLane"].every((n) => !!ABILITIES.find((a) => a.tool === n)?.confirm));
 
 // ------------------------------------------------------------ 2. through the guard
 // Stand-ins for the gated tools, so the case is the guard and the read only: each records that it ran.
@@ -66,7 +66,7 @@ const ran: string[] = [];
 const guarded = (message: string, recent: string) => {
   const notDone: string[] = [];
   const stub = (name: string) => ({ execute: async () => (ran.push(name), { ok: true, note: `${name} ran` }), inputSchema: z.object({ what: z.string().optional() }) });
-  const tools: any = guardTools({ writeDocument: stub("writeDocument"), researchBrief: stub("researchBrief"), writeFromFile: stub("writeFromFile") }, { userId: "u", resolvedContent: message, dryRun: true, notDone: (w) => notDone.push(w), recentExchange: recent });
+  const tools: any = guardTools({ researchBrief: stub("researchBrief") }, { userId: "u", resolvedContent: message, dryRun: true, notDone: (w) => notDone.push(w), recentExchange: recent });
   return { tools, notDone };
 };
 
@@ -77,8 +77,8 @@ const guarded = (message: string, recent: string) => {
   FIXTURES.set(msg, '{"yes": true, "why": "they asked for the checklist as a document"}');
   ran.length = 0; prompts.length = 0;
   const { tools, notDone } = guarded(msg, recent);
-  const r = await quiet(() => tools.writeDocument.execute({ what: "move checklist", theirYes: "Place that in a document for me", why: "they asked" }, {}));
-  check("a direct ask for a document, never offered: the document is written", r.ok === true && ran.join() === "writeDocument" && notDone.length === 0, { r, ran, notDone });
+  const r = await quiet(() => tools.researchBrief.execute({ what: "move checklist", theirYes: "Place that in a document for me", why: "they asked" }, {}));
+  check("a direct ask for a document, never offered: the document is written", r.ok === true && ran.join() === "researchBrief" && notDone.length === 0, { r, ran, notDone });
   check("…after one read that saw the exchange and their ask", prompts.length === 1 && prompts[0].includes("can you give me a checklist") && prompts[0].includes(msg));
 }
 {
@@ -89,14 +89,6 @@ const guarded = (message: string, recent: string) => {
   const r = await quiet(() => tools.researchBrief.execute({ what: "launch dinner for 40", theirYes: "Can you find venues for my launch dinner", why: "they asked" }, {}));
   check("a direct ask for venues, never offered: the brief starts", r.ok === true && ran.join() === "researchBrief", { r, ran });
 }
-{
-  const msg = "write me a one-pager from that PDF";
-  FIXTURES.set(msg, '{"yes": true, "why": "they asked for a document from their file"}');
-  ran.length = 0;
-  const { tools } = guarded(msg, "Member: [sent a PDF]\nCue: Got it, I have the deck.");
-  const r = await quiet(() => tools.writeFromFile.execute({ what: "one-pager", theirYes: "write me a one-pager from that PDF", why: "they asked" }, {}));
-  check("a direct ask for a document from their file: written", r.ok === true && ran.join() === "writeFromFile", { r, ran });
-}
 
 // A vague mention: their words, but no ask.
 {
@@ -104,7 +96,7 @@ const guarded = (message: string, recent: string) => {
   FIXTURES.set(msg, '{"yes": false, "why": "a passing thought, not asking Cue for a document"}');
   ran.length = 0;
   const { tools, notDone } = guarded(msg, "Cue: That's a lot to hold in your head before the move.");
-  const r = await quiet(() => tools.writeDocument.execute({ what: "notes", theirYes: "write all of this down", why: "seems useful" }, {}));
+  const r = await quiet(() => tools.researchBrief.execute({ what: "notes", theirYes: "write all of this down", why: "seems useful" }, {}));
   check("a vague mention: nothing is written", r.ok === false && ran.length === 0, { r, ran });
   check("…Cue reads that it isn't a yes, and is told not to ask again in this reply", /doesn't read as a yes/.test(r.error ?? "") && /don't ask again/.test(r.error ?? ""), r);
   check("…and the turn has a NOT DONE receipt", notDone.some((n) => /isn't a yes/.test(n)), notDone);
@@ -117,9 +109,9 @@ const guarded = (message: string, recent: string) => {
   FIXTURES.set(msg, '{"yes": false, "why": "their message doesn\'t answer Cue\'s offer"}');
   ran.length = 0; prompts.length = 0;
   const own = guarded(msg, recent);
-  const a = await quiet(() => own.tools.writeDocument.execute({ what: "doc", theirYes: "put this in a doc", why: "I offered" }, {}));
+  const a = await quiet(() => own.tools.researchBrief.execute({ what: "doc", theirYes: "put this in a doc", why: "I offered" }, {}));
   check("Cue's own offer quoted as their yes: refused in code, no read", a.ok === false && /Quote only the words in their message/.test(a.error ?? "") && prompts.length === 0 && ran.length === 0, { a, prompts: prompts.length });
-  const b = await quiet(() => own.tools.writeDocument.execute({ what: "doc", theirYes: "anyway", why: "I offered" }, {}));
+  const b = await quiet(() => own.tools.researchBrief.execute({ what: "doc", theirYes: "anyway", why: "I offered" }, {}));
   check("their unrelated words quoted instead: the read says no, nothing is written", b.ok === false && /doesn't read as a yes/.test(b.error ?? "") && prompts.length === 1 && ran.length === 0, { b, ran });
 }
 
@@ -129,7 +121,7 @@ const guarded = (message: string, recent: string) => {
   FIXTURES.set(msg, '{"yes": false, "why": "forwarded words from someone else, not their ask"}');
   ran.length = 0; prompts.length = 0;
   const { tools } = guarded(msg, "Cue: Here's the plan for the launch.");
-  const r = await quiet(() => tools.writeDocument.execute({ what: "doc", theirYes: "can you put that in a document for me", why: "they asked" }, {}));
+  const r = await quiet(() => tools.researchBrief.execute({ what: "doc", theirYes: "can you put that in a document for me", why: "they asked" }, {}));
   check("forwarded words asking for a document: the read is told they aren't their ask, and nothing is written", r.ok === false && ran.length === 0 && /forwarded from someone else .* aren't their ask/.test(prompts[0] ?? ""), { r, ran });
 }
 
@@ -139,7 +131,7 @@ const guarded = (message: string, recent: string) => {
   FIXTURES.set(msg, "Sure, sounds like a yes to me");
   ran.length = 0;
   const { tools } = guarded(msg, "");
-  const r = await quiet(() => tools.writeDocument.execute({ what: "doc", theirYes: "make that a doc please", why: "they asked" }, {}));
+  const r = await quiet(() => tools.researchBrief.execute({ what: "doc", theirYes: "make that a doc please", why: "they asked" }, {}));
   check("an unreadable read is not a yes, even on a direct ask", r.ok === false && /couldn't be checked/.test(r.error ?? "") && ran.length === 0, r);
 }
 

@@ -186,7 +186,7 @@ export async function browserPageText(url: string): Promise<string | null> {
   }
 }
 
-// A one-page PDF of HTML Co wrote itself (services/planSheet.ts), or null. No scripts run and the only
+// A one-page PDF of HTML Co wrote itself (a document), or null. No scripts run and the only
 // network it may reach is the font host the page names, so nothing in the page can send anything anywhere.
 // size: a fixed page size ("13.333in" x "7.5in" for a 16:9 deck, PR 4); without it, Letter as before.
 export async function renderPdf(html: string, size?: { width: string; height: string }): Promise<Buffer | null> {

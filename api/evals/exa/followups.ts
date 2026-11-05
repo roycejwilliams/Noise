@@ -27,6 +27,8 @@ const { default: sendblue } = await import("../../src/services/sendblue.js");
 const texts: string[] = [];
 const realSend = sendblue.messages.send;
 (sendblue.messages as any).send = async (body: any) => { texts.push(String(body?.content ?? "")); return { status: "QUEUED" }; };
+// The memory of a text sent embeds it: a fake client, no outside call.
+(await import("../../src/services/embeddings.js")).setEmbeddingsClientForTests({ embeddings: { create: async (o: any) => ({ data: (Array.isArray(o.input) ? o.input : [o.input]).map((_: unknown, index: number) => ({ index, embedding: new Array(1536).fill(0) })) }) } } as any);
 const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => {

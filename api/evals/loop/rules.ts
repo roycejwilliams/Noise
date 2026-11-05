@@ -24,7 +24,7 @@ check("no switch left behind", !/CO_LOOP|loopOn|loopMode/.test(src("agent/loop.t
 check("the capability sheet describes the loop's tools", C.capabilitySheet().some((l) => /looks up events/.test(l)) && !C.capabilitySheet().some((l) => /search right now for events/.test(l)));
 
 // Lab guidance in the tool descriptions: the why, no over-broad triggers.
-for (const t of ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes", "updateLoop"]) {
+for (const t of ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "updateNotes", "updateLoop"]) {
   const use = C.toolUse(t);
   check(`${t}: says why, no "whenever/however/if in doubt/MUST"`, /\b(because|so (they|the|you|what)|so that)\b/i.test(use) && !/\bwhenever\b|however it'?s worded|if in doubt|\bMUST\b|\bCRITICAL\b/.test(use), use.slice(0, 160));
 }
@@ -33,11 +33,7 @@ for (const t of ["searchEvents", "webSearch", "searchPosts", "readPage", "shareF
 check("a caption can't carry a number its facts don't have", LT.captionProblems("Holds 200 and costs $500.", "capacity: 120 standing; price: $180/hr", "").length === 2);
 check("a caption from its facts passes", LT.captionProblems("Holds 120 standing, $180/hr, Lower Haight.", "Wave. capacity: 120 standing; price: $180/hr; neighborhood: Lower Haight", "").length === 0);
 check("a caption can't claim availability its page doesn't state", LT.captionProblems("It's available on Oct 10.", "capacity: 120", "Oct 10").some((p) => /isn't something its page says/.test(p)));
-check("the email is a tap-to-send link, nothing sent", LT.mailtoLink("events@wave.sf", "Oct 10?", "Hi, is Oct 10 open?") === "mailto:events@wave.sf?subject=Oct%2010%3F&body=Hi%2C%20is%20Oct%2010%20open%3F");
 const lt = src("agent/loopTools.ts");
-check("a marketplace listing gets a draft without an address, to paste into its contact form", /if \(!to\?\.trim\(\)\) \{/.test(lt) && /the listing's contact form/.test(lt));
-check("the draft goes out as its own text (and the tap-to-send link), so they can always copy it", /const draftText = /.test(lt) && /await say\(draftText, /.test(lt) && /await say\(link, /.test(lt));
-check("an email address must have been seen (page, their texts, notes)", /that address wasn't on a page read this turn, in their texts, or in the notes/.test(lt));
 check("shareFinds only sends links the loop found or the notes hold", /not something you found this turn or have in your notes/.test(lt));
 check("sold out, over or already sent can't be shared (the gate's own reasons)", /if \(f\.blocked\)/.test(lt) && /(?:src\.gate|gateMatches)\(read, \{ userId: opts\.userId \?\? null, searchCity: city, checkRepeat: true/.test(src("services/tieredRecommendation.ts")) && /gate: gateMatches\b/.test(src("services/tieredRecommendation.ts")));
 check("event search covers Cue's events, the public feed, and openings the daily search already found", /alreadyFoundOpenings\(ctx\.userId\)/.test(lt) && /openingsFoundEarlier: openings/.test(lt) && /calendar: cachedCalendarEvents\b/.test(src("services/tieredRecommendation.ts").split("for Co's own loop")[1] ?? "") && /src\.calendar\(\)/.test(src("services/tieredRecommendation.ts")));

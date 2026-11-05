@@ -1,147 +1,76 @@
-// Research briefs (Royce, 2026-10-07): the document tool's second kind, fed by the research pipeline. A member asks for something
-// research-shaped ("find venues for my launch"); a background task runs the find and the result goes out as a document (PDF,
-// or a Google Doc link when the shared-artifact gates hold: services/documentDelivery.ts).
+// Venue research (Royce, 2026-10-07; the document wrapper removed 2026-11-04): a member asks for something research-shaped ("find venues
+// for my launch"); a background task runs the find and the result goes back as finds by text, the way every other find does: each
+// find's link, then one line under it (services/taskMessages.ts assembleMessages), inside the usual caps. It never becomes a document.
 //
 // Grounding, the part that matters:
-//   - Researched sections are exempt from the member-words rule (their source is verified research, not conversation), but
-//     every line in them comes from one find, and the section carries that find's link and the time it was checked. No source,
-//     no line. Code writes every researched line from the find's fixed fields: no model writes, infers or interpolates them.
-//   - "unknown" is an allowed answer and is shown as "unknown".
-//   - Sections are marked: what's researched (with sources) and what's from the member (held to their own words, as today).
+//   - Every caption is written by code from the find's fixed fields (no model writes, infers or interpolates them). A find with no
+//     source link or no check time isn't sent.
+//   - "unknown" is an allowed answer; a caption says what wasn't confirmed.
 // Search quality (services/researchQuality.ts) runs through it: the query is built from member state (a missing load-bearing
-// fact is a question back, asked by the tool before this starts), every read is the find type's fixed fields, a re-sent brief
+// fact is a question back, asked by the tool before this starts), every read is the find type's fixed fields, a re-sent run
 // re-reads anything past its freshness window, and the options are ordered by what this member (or everyone) said yes and no to.
 // Sources: the scripted Peerspace reader, and since round 2 passed (evals/browserPilot/round2.ts: 39 right, 11 unknown, 0
 // wrong on 12 sites with no script) the general reader (services/sdkGeneralReader.ts) for a venue's own pages.
-import { DateTime } from "luxon";
-import type { Doc, DocSection, ResearchSource } from "./documentSheet.js";
 import { regionFor } from "./areaCodes.js";
+import { proactivePaused } from "./proactivePause.js";
 import { schemaFields, type FieldValue, type FindField, type FindType, type StoredFind } from "./researchQuality.js";
+import { assembleMessages, captionOk, draftTaskMessages, type SendItem } from "./taskMessages.js";
 
 export const SDK_FINDS_ALLOWED = true;
-export const BRIEF_LIMITS = { maxOptions: 6, maxContext: 6, maxReads: 8 };
+// How many finds one run sends: the usual find cap (services/researchFinds.ts RESEARCH_FIND_SHOWN), so it reads like any other find text.
+export const BRIEF_LIMITS = { maxOptions: 3, maxReads: 8 };
 
 export type { FindField };
 export type ResearchFind = { name: string; url: string; checkedAt: string; reader: "scripted" | "sdk"; fields: FindField[] };
-// theirWords: their own words asking for it (the task's quote, checked at startTask). searched: what the search actually used.
-export type BriefSearched = { date?: string | null; start?: string | null; headcount?: number | null; budget?: string | null; neighborhood?: string | null; city?: string | null };
-export type BriefInput = { title: string; asked: string; finds: ResearchFind[]; memberContext: string[]; zone?: string | null; theirWords?: string | null; searched?: BriefSearched | null };
-
-// Pure: the brief's two opening lines (Royce, 2026-10-27: the result says what shaped it): their own words, and the criteria the search
-// used, only those it had. Null when there's neither.
-export function briefAskedLines(b: Pick<BriefInput, "theirWords" | "searched" | "zone">): string[] {
-  const out: string[] = [];
-  // The stored words are their message joined with the turn's copy of it (loopTools theirWords), the same text twice on a text turn:
-  // said once (review of #287).
-  const joined = (b.theirWords ?? "").replace(/\s+/g, " ").trim();
-  const words = joined.match(/^(.+?) \1$/)?.[1] ?? joined;
-  if (words) out.push(`What you asked: "${words.length > 200 ? `${words.slice(0, 197).replace(/\s+\S*$/, "")}..." ` : `${words}"`}`.trim());
-  const s = b.searched ?? {};
-  const zone = b.zone && DateTime.now().setZone(b.zone).isValid ? b.zone : "America/Los_Angeles";
-  const day = s.date ? DateTime.fromISO(s.date, { zone }) : null;
-  // The start as the brief stores it ("6:00 pm"), or a 24-hour "18:00".
-  const start = String(s.start ?? "").trim().toLowerCase();
-  const at = /^\d{1,2}:\d{2}\s*[ap]m$/.test(start)
-    ? DateTime.fromFormat(start.replace(/\s*([ap]m)$/, " $1").toUpperCase(), "h:mm a", { zone })
-    : /^\d{1,2}:\d{2}$/.test(start)
-      ? DateTime.fromFormat(start.padStart(5, "0"), "HH:mm", { zone })
-      : null;
-  const parts = [
-    day?.isValid ? `${day.toFormat("cccc, LLL d")}${at?.isValid ? ` at ${at.toFormat("h:mm a")}` : ""}` : null,
-    s.headcount ? `${s.headcount} ${s.headcount === 1 ? "person" : "people"}` : null,
-    s.budget?.trim() || null,
-    [s.neighborhood?.trim(), s.city?.trim()].filter(Boolean).join(", ") || null,
-  ].filter((x): x is string => !!x);
-  if (parts.length) out.push(`Searched for: ${parts.join(" · ")}`);
-  return out;
-}
 
 export const UNKNOWN = "unknown";
-const fmtChecked = (iso: string, zone?: string | null) => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString("en-US", { timeZone: zone || "America/Los_Angeles", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
-};
-// The oldest field's check time: the section says no more than its stalest line can back.
+// The oldest field's check time: the caption says no more than its stalest line can back.
 export const findCheckedAt = (fields: FindField[], fallback: string) => fields.map((x) => x.checkedAt).filter(Boolean).sort()[0] ?? fallback;
 
-// Pure: one find, one researched section. Each field is a line "Label: value" (or "Label: unknown"); the last line is the source.
-export function findSection(f: ResearchFind, zone?: string | null, n?: number): DocSection {
-  const bullets = f.fields.map((x) => `${x.label}: ${x.value && x.value.trim() ? x.value.trim() : UNKNOWN}`);
-  bullets.push(`Source: ${f.url} (checked ${fmtChecked(f.checkedAt, zone)})`);
-  return { heading: n ? `${n}. ${f.name}` : f.name, paragraphs: [], bullets, research: { url: f.url, checkedAt: f.checkedAt, reader: f.reader } };
+// Pure: finds that can be sent at all: an https source and a check time. Filtered before the cap, so a valid fourth find fills the
+// slot a dropped one leaves.
+export const sendable = (finds: ResearchFind[]): ResearchFind[] => finds.filter((f) => /^https:\/\//.test(f.url) && !Number.isNaN(new Date(f.checkedAt).getTime()));
+
+// Pure: what a find's page said, as the facts its caption may state: each fixed field with a value, and the fields it did not confirm.
+export function findFacts(f: ResearchFind): string[] {
+  const known = f.fields.filter((x) => x.value && x.value.trim()).map((x) => `${x.label}: ${x.value!.trim()}`);
+  const open = f.fields.filter((x) => !x.value || !x.value.trim()).map((x) => x.label.toLowerCase());
+  const d = new Date(findCheckedAt(f.fields, f.checkedAt));
+  return [...known, ...(open.length ? [`not confirmed on its page: ${open.join(", ")}`] : []), ...(Number.isNaN(d.getTime()) ? [] : [`checked ${d.toISOString().slice(0, 10)}`])];
 }
 
-// Pure: the brief. Researched options first (numbered, so they can say "the second one"), then what the member told Co.
-export function buildBrief(b: BriefInput): Doc {
-  const finds = b.finds.slice(0, BRIEF_LIMITS.maxOptions);
-  const asked = briefAskedLines(b);
-  const sections: DocSection[] = [...(asked.length ? [{ heading: null, paragraphs: asked, bullets: [] } as unknown as DocSection] : []), ...finds.map((f, i) => findSection(f, b.zone, i + 1))];
-  const context = b.memberContext.map((x) => x.trim()).filter(Boolean).slice(0, BRIEF_LIMITS.maxContext);
-  if (context.length) sections.push({ heading: "From what you told me", paragraphs: [], bullets: context });
-  const sources = finds.length ? `${finds.length} option${finds.length === 1 ? "" : "s"} researched, each with its source and when it was checked` : "nothing could be verified";
-  return {
-    title: b.title,
-    // Their own words lead when there are any (the opening lines above); Cue's paraphrase only stands in when there aren't.
-    note: `${asked.length ? "" : `For: ${b.asked}. `}Researched sections: ${sources}. "unknown" means the page didn't say.`,
-    sections,
-    suggestions: [],
-    kind: "venue_brief",
+// The captions come from the same path every task's finds use (services/taskMessages.ts draftTaskMessages, held by captionOk: the
+// draft rules, its own facts' numbers and places, no scarcity it can't back): one line each saying why it fits, in Cue's voice, stating
+// only the find's fixed fields. A caption that doesn't hold gets one redraft; what still doesn't hold is left out and its slot goes to
+// the next valid find. Returns the texts (link, then caption) for up to the usual cap, or [] when nothing held up.
+export type CaptionDraft = (o: { items: SendItem[]; fix?: string }) => Promise<{ captions: Map<string, string> } | null>;
+export async function researchMessages(finds: ResearchFind[], o: { firstName: string; ask: string; context: string[]; draft?: CaptionDraft }): Promise<{ messages: string[]; sent: ResearchFind[] }> {
+  const valid = sendable(finds);
+  if (!valid.length) return { messages: [], sent: [] };
+  const items: SendItem[] = valid.map((f) => ({ url: f.url, name: f.name, tier: 3, facts: findFacts(f) }));
+  const draft: CaptionDraft = o.draft ?? ((d) => draftTaskMessages({ firstName: o.firstName || "them", goal: o.ask, items: d.items, what: `why each fits what they asked for: ${o.ask}`, context: o.context.join(" | "), fix: d.fix }).catch(() => null));
+  const vet = (d: { captions: Map<string, string> }, pool: SendItem[]) => {
+    const good: { f: ResearchFind; caption: string }[] = [];
+    const dropped: string[] = [];
+    for (const it of pool) {
+      const cap = d.captions.get(it.url);
+      const v = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`) : { ok: false, why: "no caption" };
+      const f = valid.find((x) => x.url === it.url)!;
+      if (cap && v.ok) good.push({ f, caption: cap });
+      else dropped.push(`${it.name}: ${v.why}`);
+    }
+    return { good, dropped };
   };
-}
-
-// Pure: what's wrong with a brief's research. Empty when every researched line is sourced, dated and allowed.
-export function researchProblems(doc: Doc, opts: { sdkAllowed?: boolean } = {}): string[] {
-  const out: string[] = [];
-  const researched = doc.sections.filter((s) => s.research);
-  if (!researched.length) out.push("a research brief needs at least one researched option");
-  for (const s of researched) {
-    const r = s.research as ResearchSource;
-    let ok = false;
-    try {
-      ok = /^https:$/.test(new URL(r.url).protocol);
-    } catch {}
-    if (!ok) out.push(`"${s.heading}" has no source link`);
-    if (!r.checkedAt || Number.isNaN(new Date(r.checkedAt).getTime())) out.push(`"${s.heading}" has no time it was checked`);
-    if (r.reader === "sdk" && !(opts.sdkAllowed ?? SDK_FINDS_ALLOWED)) out.push(`"${s.heading}" came from the general reader, which isn't cleared for briefs yet`);
-    if (s.paragraphs.length) out.push(`"${s.heading}" has free text: researched sections carry only sourced fields`);
-    const last = s.bullets[s.bullets.length - 1] ?? "";
-    if (!last.startsWith(`Source: ${r.url} (checked `)) out.push(`"${s.heading}" doesn't show its source and check time`);
-    for (const b of s.bullets.slice(0, -1)) if (!/^[A-Z][A-Za-z ()/0-9,:.-]{1,50}?: \S/.test(b)) out.push(`"${b.slice(0, 60)}" in "${s.heading}" isn't a sourced field`);
+  const first = await draft({ items });
+  if (!first) return { messages: [], sent: [] };
+  let v = vet(first, items);
+  if (v.dropped.length) {
+    const again = await draft({ items, fix: v.dropped.join("; ") });
+    const w = again ? vet(again, items) : null;
+    if (w && w.good.length >= v.good.length) v = w;
   }
-  return out;
-}
-
-// Pure: why a brief was refused, as the kinds of problem and how many of each ("no brief: unbacked time (2), research sourcing
-// (1)"), never a problem's own text: the checks quote the brief's lines, and those are the member's words (forget by default,
-// 2026-10-18). Read from the checkers' own wording (documentSheet.ts documentProblems, documentClaims.ts, researchProblems above).
-export function problemKinds(problems: string[]): string {
-  const timeLike = (x: string) => /^\s*\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?\s*$/i.test(x);
-  const numberLike = (x: string) => /\d/.test(x);
-  // What a "names X, Y, which they never said" or "it has X, Y, which they never gave" lists: times, numbers, names, or a mix.
-  const facts = (list: string) => {
-    const items = list.split(/,\s*|\s+and\s+/).map((x) => x.trim()).filter(Boolean);
-    if (items.length && items.every(timeLike)) return "unbacked time";
-    if (items.length && items.every(numberLike)) return "unbacked number";
-    if (items.some((x) => timeLike(x) || numberLike(x))) return "name and number or time not in their words";
-    return "name not in their words";
-  };
-  const kindOf = (p: string): string => {
-    const listed = p.match(/it has (.+?), which they never gave/) ?? p.match(/\bnames (.+?), which they never said/);
-    if (listed) return facts(listed[1]);
-    if (/opens on .+, which they never said/.test(p)) return "opening word not in their words";
-    if (/isn't something they said/.test(p)) return "line not in their words";
-    if (/placeholder/.test(p)) return "placeholder";
-    if (/too thin|too long|needs a title|nothing in it|paragraph runs|no bullets|only repeat their headings/.test(p)) return "document shape";
-    if (/source link|time it was checked|general reader|free text|source and check time|isn't a sourced field|researched option/.test(p)) return "research sourcing";
-    return "other check";
-  };
-  const counts = new Map<string, number>();
-  for (const p of problems) {
-    const k = kindOf(String(p ?? ""));
-    counts.set(k, (counts.get(k) ?? 0) + 1);
-  }
-  return [...counts].map(([k, n]) => `${k} (${n})`).join(", ") || "no reason given";
+  const top = v.good.slice(0, BRIEF_LIMITS.maxOptions);
+  return { messages: assembleMessages(top.map((g) => ({ url: g.f.url, caption: g.caption })), null), sent: top.map((g) => g.f) };
 }
 
 // ---------------------------------------------------------------- reading a source as the venue schema
@@ -253,18 +182,9 @@ export async function findVenueOptions(userId: string, query: string, ask: Venue
   return finds;
 }
 
-// Pure: after trying to send a brief's closing line, what happens to the task. "told": it went (or already had, same target key),
+// Pure: after trying to send a run's closing texts, what happens to the task. "told": it went (or already had, same target key),
 // close as planned. "hold": it's outside their hours, so keep the task open and say it when their hours start (bounded by the
 // task's wake-ups, so a line that never fits can't loop). "untold": paused, opted out or failed: close as dropped and say so.
-// A brief whose document won't send: tried again this many times (DOC_RETRY_MINUTES apart), then the options go as a plain text.
-export const DOC_RETRIES = 2;
-export const DOC_RETRY_MINUTES = 30;
-// Pure: the options as a short text when the document itself won't go: what it is, then each option with its link. Never a status.
-export function briefOptionsText(title: string, options: { name: string; url: string }[]): string {
-  const lines = options.slice(0, BRIEF_LIMITS.maxOptions).map((o, i) => `${i + 1}. ${o.name}: ${o.url}`);
-  return `The ${title.replace(/^Venue options:\s*/i, "venue options for ").trim()} wouldn't come through as a PDF, so here they are:\n${lines.join("\n")}`;
-}
-
 export const BRIEF_HOLD_MAX_WAKES = 6;
 
 // What they're told when the find's search never ran, after its retries: it couldn't search, never that nothing fits. Wording
@@ -277,52 +197,6 @@ export const SEARCH_FAILED_LINE = "My search didn't go through just now, so I co
 export const BRIEF_SEARCH_RETRIES = 2;
 export const briefSearchNext = (wakes: number): "retry" | "tell" => (wakes <= BRIEF_SEARCH_RETRIES ? "retry" : "tell");
 
-// A brief's identity across sends: what it's for, not its "Venue options" title (services/deliveryReceipts.ts docKeyFor reads only
-// a title's head), so the same ask asked again is its next version and a different ask is its own document.
-export const briefDocKey = (what: string): string => `venue-brief-${what.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "options"}`;
-
-export type BriefDelivery = { sent: true; via: string; pdfPending: boolean; line: string | undefined } | { sent: false; why: string; quietUntil?: Date };
-export type BriefDeliverDeps = {
-  deliver?: typeof import("./documentDelivery.js").deliverDocument;
-  receipts?: import("./deliveryReceipts.js").ReceiptStore;
-  now?: () => Date;
-  blocked?: (userId: string, zone: string | null, now: Date, o: { immediate?: boolean; asked?: boolean }) => Promise<string | null>;
-  record?: typeof import("./documentDelivery.js").recordDocumentSent;
-  log?: (d: any) => Promise<unknown>;
-};
-
-// One brief, delivered the way every document is (services/documentDelivery.ts deliverAndRecord): a receipt, its version, one line
-// that says when they asked, the same artifact never twice unless they asked again. Inside their delivery hours (8am to 9pm their
-// time) unless they asked for it right away: outside them it waits (quietUntil) and the caller holds it to then.
-// One retry path each, never both: a PDF that failed to render went as text and its receipt retries the PDF (retryPendingPdfs);
-// only when nothing reached them at all does the caller keep the brief (pendingDoc) and try again.
-export async function deliverBrief(
-  doc: Doc,
-  o: { task: { id: number; userId: string; createdAt?: string | null; theirWords: string }; person: { firstName: string; phone: string }; zone: string | null; wantsGoogle: boolean; what: string; again: boolean; rechecked: number },
-  deps: BriefDeliverDeps = {},
-): Promise<BriefDelivery> {
-  const D = await import("./documentDelivery.js");
-  const { askedForImmediate, nextDeliveryTime } = await import("./memberTime.js");
-  const now = deps.now?.() ?? new Date();
-  const blocked = await (deps.blocked ?? D.documentSendBlocked)(o.task.userId, o.zone, now, { immediate: askedForImmediate(o.task.theirWords), asked: true }).catch(() => null);
-  if (blocked === D.QUIET_HOURS) return { sent: false, why: blocked, quietUntil: nextDeliveryTime(now, o.zone) };
-  if (blocked) return { sent: false, why: blocked };
-  const askedAt = o.task.createdAt ? new Date(o.task.createdAt) : null;
-  const line = await D.captionFor({ title: doc.title, kind: doc.kind, askedAt, sendAt: now, zone: o.zone });
-  const to = { userId: o.task.userId, firstName: o.person.firstName, phone: o.person.phone, zone: o.zone, now, line };
-  const changed = o.again ? (o.rechecked ? `rechecked ${o.rechecked === 1 ? "one option" : `${o.rechecked} options`} against their own pages` : "rechecked every option") : null;
-  const rd = await D.deliverAndRecord(
-    doc,
-    to,
-    // Asked again ("send it again", "update it"): the same version goes again when nothing changed, the next one when a re-check did.
-    { saveTo: o.wantsGoogle ? "google_doc" : "pdf", askedForGoogle: o.wantsGoogle, source: `task:${o.task.id}`, taskId: o.task.id, resend: o.again, changed, docKey: briefDocKey(o.what) },
-    { deliver: deps.deliver, receipts: deps.receipts, now: () => now, log: deps.log },
-  );
-  if (!rd.sentOk.length) return { sent: false, why: rd.results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ") || "it didn't go out" };
-  const via = rd.sentOk.map((r) => r.via).join("+");
-  await (deps.record ?? D.recordDocumentSent)(o.task.userId, doc, via, `task:${o.task.id}`).catch(() => {});
-  return { sent: true, via, pdfPending: rd.sentOk.some((r) => r.pdfPending), line: rd.line };
-}
 // How long a brief whose line waits at the door goes before it looks again (only to hand the same line over again; the door's send closes it).
 export const BRIEF_DOOR_LOOK_HOURS = 12;
 export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boolean; queued?: boolean }, wakes: number): "told" | "hold" | "untold" | "queued" {
@@ -339,10 +213,18 @@ export function briefLineOutcome(r: { sent: boolean; reason?: string; door?: boo
   return "untold";
 }
 
-type BriefParams = { what?: string; city?: string | null; neighborhood?: string | null; date?: string | null; start?: string | null; headcount?: number | null; budget?: string | null; title?: string; memberContext?: string[]; wantsGoogle?: boolean; again?: boolean };
+type BriefParams = { what?: string; city?: string | null; neighborhood?: string | null; date?: string | null; start?: string | null; headcount?: number | null; budget?: string | null; memberContext?: string[]; again?: boolean };
 
-// The background run of one research-brief task (services/taskTurn.ts runDueTasks): find (or, for "send it again", re-check the
-// last brief's finds), rank, build, check, deliver, record what was shown, close.
+// On file as research finds (so "send it" has the link) and as shown finds (the ranking signal for the next run). Called only once the
+// texts went out: right after a direct send, or by the door's after-send step when the pick sent them (services/deferredSends.ts).
+export async function recordSentResearchFinds(userId: string, taskId: number, fs: ResearchFind[]): Promise<void> {
+  const [{ recordResearchFinds }, Q] = await Promise.all([import("./researchFinds.js"), import("./researchQuality.js")]);
+  await recordResearchFinds(userId, fs.map((f) => ({ name: f.name, url: f.url, facts: f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value}`).join("; ") }))).catch(() => 0);
+  await Q.recordShownFinds(userId, taskId, fs.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
+}
+
+// The background run of one research task (services/taskTurn.ts runDueTasks): find (or, for "send it again", re-check the
+// last run's finds), rank, text them as finds (link, then one line), record what was shown, close. Never a document.
 // The member asked (or said yes) before this task existed: the reply-loop tool that starts it carries that check, and asks
 // them first when a load-bearing fact is missing.
 export async function runResearchBriefTask(task: import("./coTasks.js").CoTask): Promise<void> {
@@ -363,17 +245,33 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // A line to them that ends the brief (what it came to, or the question it needs first). Outside their hours it used to be
   // dropped while the task closed as done, so they never heard (2026-10-07). Now: told, then closed; outside their hours, held
   // to their morning with the task kept open; never told for any other reason, closed as dropped and saying so.
-  const tellThenClose = async (text: string, status: "done" | "dropped", outcome: string) => {
-    // Through the door (harness/door.ts) unless it answers their latest message: it goes with Cue's next message, as a delivery they
-    // asked for, with no clock (requested work ends only when moot). The task stays open until the pick sends it: the door closes it
-    // then, with this status and outcome, or, if it never goes, closes it as not told and notes why (review of #361).
-    const door = { summary: `The research brief they asked for: ${String(p.what ?? "").slice(0, 120)}`, validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone), taskId: task.id, close: { status, outcome }, awaitingReply: false };
-    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, door }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; door?: boolean; queued?: boolean });
+  const recordSentFinds = (fs: ResearchFind[]) => recordSentResearchFinds(task.userId, task.id, fs);
+  const tellThenClose = async (what: string | string[], status: "done" | "dropped", outcome: string, record?: ResearchFind[]) => {
+    const messages = Array.isArray(what) ? what : [what];
+    const text = messages.join("\n");
+    // Work they asked for (requested): the pause on unprompted outreach never holds it. Unless the pause is on, it goes through the door
+    // (harness/door.ts) at its priority band, gathered with whatever else is ready and capped, unless it answers their latest message.
+    // The task stays open until the pick sends it: the door closes it then, and records the finds (after-send step), or, if it never
+    // goes, closes it as not told. Paused, the door isn't a way out (the dispatcher is stopped), so it goes directly. Opt-out, safety,
+    // their hours and their own rule still apply either way.
+    const door = proactivePaused()
+      ? undefined
+      : {
+          summary: `The venue research they asked for: ${String(p.what ?? "").slice(0, 120)}`,
+          validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone),
+          taskId: task.id,
+          close: { status, outcome },
+          awaitingReply: false,
+          ...(record?.length ? { after: { kind: "research_finds" as const, payload: { userId: task.userId, taskId: task.id, finds: record } } } : {}),
+        };
+    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages, timezone: zone, respectHours: true, requested: true, answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, ...(door ? { door } : {}) }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }) as { sent: boolean; reason?: string; retryAt?: Date; door?: boolean; queued?: boolean });
     const next = briefLineOutcome(r, task.wakes);
+    // Recorded only for what actually went out.
+    if (next === "told" && r.sent && record?.length) await recordSentFinds(record).catch(() => {});
     if (next === "queued") {
       // Waiting at the door: the task stays open, looking again later only to re-hand the same line (the same key, so never twice).
       const { holdBriefLine, unspendWake } = await import("./coTasks.js");
-      if (await holdBriefLine(task.userId, task.id, { text, status, outcome }, new Date(Date.now() + BRIEF_DOOR_LOOK_HOURS * 3_600_000))) await unspendWake(task.userId, task.id).catch(() => {});
+      if (await holdBriefLine(task.userId, task.id, { text, messages, status, outcome, ...(record?.length ? { record } : {}) }, new Date(Date.now() + BRIEF_DOOR_LOOK_HOURS * 3_600_000))) await unspendWake(task.userId, task.id).catch(() => {});
       return;
     }
     if (next === "hold") {
@@ -381,7 +279,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
       const { nextSendable } = await import("./memberTime.js");
       // Held by their rule or the spacing: it waits until it may go, and the wake comes back (a hold never uses up an owed delivery).
       const held = r.reason?.startsWith("held:") ? (r as { retryAt?: Date }).retryAt ?? null : null;
-      if (await holdBriefLine(task.userId, task.id, { text, status, outcome }, held ?? nextSendable(new Date(), zone))) {
+      if (await holdBriefLine(task.userId, task.id, { text, messages, status, outcome, ...(record?.length ? { record } : {}) }, held ?? nextSendable(new Date(), zone))) {
         if (held) await unspendWake(task.userId, task.id).catch(() => {});
         return;
       }
@@ -389,35 +287,11 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     await closeTask(task.userId, task.id, next === "told" ? status : "dropped", next === "told" ? outcome : `${outcome}; never told them (${r.reason ?? "not sent"})`);
   };
   // A line held from an earlier run: say it now (the find isn't run again).
-  const held = (task.followup as any)?.held as { text: string; status: "done" | "dropped"; outcome: string } | undefined;
+  const held = (task.followup as any)?.held as { text: string; messages?: string[]; status: "done" | "dropped"; outcome: string; record?: ResearchFind[] } | undefined;
   if (held?.text) {
-    await tellThenClose(held.text, held.status, held.outcome);
+    await tellThenClose(held.messages?.length ? held.messages : held.text, held.status, held.outcome, held.record);
     return;
   }
-  // A finished brief whose document didn't go out last time: send that same document again (no new find). After DOC_RETRIES it
-  // goes as a short text with the options, so it always reaches them.
-  const pendingDoc = (task.followup as any)?.pendingDoc as { doc: any; options: { name: string; url: string }[]; tries: number; title: string; list: string } | undefined;
-  const sendBrief = (doc: Doc, what: string) =>
-    deliverBrief(doc, { task, person: { firstName: String(person.first_name ?? ""), phone: person.phone_number }, zone, wantsGoogle: !!p.wantsGoogle, what, again: !!p.again, rechecked: 0 }).catch((err: any) => ({ sent: false as const, why: String(err?.message ?? err) }) as BriefDelivery);
-  if (pendingDoc?.doc) {
-    const r = await sendBrief(pendingDoc.doc, p.what ?? pendingDoc.title);
-    if (r.sent) {
-      await closeTask(task.userId, task.id, "done", `sent the brief${pendingDoc.tries ? ` on retry ${pendingDoc.tries}` : ""}${r.pdfPending ? " as text, the PDF to follow" : ""}: ${pendingDoc.list}`);
-      return;
-    }
-    // Their quiet hours: not a failed try, just later (their 8am).
-    if (!r.sent && r.quietUntil) {
-      const { holdBriefDoc } = await import("./coTasks.js");
-      if (await holdBriefDoc(task.userId, task.id, pendingDoc, r.quietUntil)) return;
-    }
-    if (pendingDoc.tries + 1 < DOC_RETRIES) {
-      const { holdBriefDoc } = await import("./coTasks.js");
-      if (await holdBriefDoc(task.userId, task.id, { ...pendingDoc, tries: pendingDoc.tries + 1 }, new Date(Date.now() + DOC_RETRY_MINUTES * 60_000))) return;
-    }
-    await tellThenClose(briefOptionsText(pendingDoc.title, pendingDoc.options), "done", `the PDF wouldn't send; sent the options as a text: ${pendingDoc.list}`);
-    return;
-  }
-
   let finds: ResearchFind[] = [];
   let rechecked = 0;
   if (p.again) {
@@ -461,43 +335,24 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const signal = await Q.rankingSignal(task.userId);
   finds = Q.rankFinds(finds.map((f) => ({ ...f, type: "venue" as FindType })), signal.member, signal.global).map(({ score: _s, type: _t, ...f }) => f);
 
-  const doc = buildBrief({
-    title: p.title || `Venue options: ${p.what}`.slice(0, 70),
-    asked: p.what,
-    finds,
-    memberContext: p.memberContext ?? [],
-    zone,
-    theirWords: task.theirWords,
-    searched: { date: p.date ?? null, start: p.start ?? null, headcount: p.headcount ?? null, budget: p.budget ?? null, neighborhood: p.neighborhood ?? null, city },
-  });
-  const { loadTheirWords } = await import("./documentDelivery.js");
-  const theirs = [await loadTheirWords(task.userId).catch(() => ""), task.theirWords].join("\n");
-  const problems = [...researchProblems(doc), ...(await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs }))];
-  if (problems.length) {
-    const line = finds.length ? "I looked, but I couldn't verify enough to put a brief together that I'd stand behind. I'll tell you what I can check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?";
-    // The note is read back to Cue (coTasks.ts briefFactLines): what it came to and why, as kinds, never the lines the checks quoted.
-    await tellThenClose(line, "done", `no brief: ${problemKinds(problems)}`);
+  // Only what has a source and a check time can go; the captions come from the shared find-caption path; the cap applies after the
+  // filter, so a valid fourth find fills a dropped slot.
+  const { messages, sent } = await researchMessages(finds, { firstName: String(person.first_name ?? ""), ask: p.what, context: [...(p.memberContext ?? []), `their budget: ${p.budget ?? "not given"}`].slice(0, 7) });
+  if (!sent.length) {
+    // Nothing held up. If the captions never came (the model call failed) the next wake tries again; otherwise there is nothing to send.
+    if (sendable(finds).length && task.wakes <= BRIEF_SEARCH_RETRIES) return;
+    if (sendable(finds).length) {
+      await closeTask(task.userId, task.id, "dropped", "no finds sent: no caption held up");
+      return;
+    }
+    await tellThenClose("I looked, but couldn't verify any venues that fit. Want me to widen the search?", "done", "no finds sent: none found");
     return;
   }
-  // Through the receipts (deliverAndRecord): its version, its one line, and a failed PDF that went as text retried from its receipt.
-  const delivered = await deliverBrief(doc, { task, person: { firstName: String(person.first_name ?? ""), phone: person.phone_number }, zone, wantsGoogle: !!p.wantsGoogle, what: p.what, again: !!p.again, rechecked }).catch((err: any) => ({ sent: false as const, why: String(err?.message ?? err) }) as BriefDelivery);
-  const sent = delivered.sent;
-  const shown = finds.slice(0, BRIEF_LIMITS.maxOptions);
-  if (sent) await Q.recordShownFinds(task.userId, task.id, shown.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
   const { recordDecision } = await import("../harness/core.js");
   // The kind of thing, never its title (the title is their ask in words).
-  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: sent ? "act" : "skip", action: sent ? "venue brief sent" : "venue brief not sent", proposal: { taskId: task.id, options: shown.length, again: !!p.again, rechecked, readers: [...new Set(shown.map((f) => f.reader))] } }).catch(() => {});
+  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: "act", action: "venue finds texted", proposal: { taskId: task.id, options: sent.length, again: !!p.again, rechecked, readers: [...new Set(sent.map((f) => f.reader))] } }).catch(() => {});
   // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched. The
-  // options are the places found, never their words; the brief's title isn't in it (what it was for is the task's own goal).
-  const list = shown.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
-  if (!delivered.sent) {
-    // The brief is done but its document didn't go: keep it and send it again shortly (or at their 8am when it's their quiet
-    // hours), never close silently. Nothing reached them, so there's no receipt retry for it: this is its one retry.
-    const { holdBriefDoc } = await import("./coTasks.js");
-    const options = shown.map((f) => ({ name: f.name, url: f.url }));
-    if (await holdBriefDoc(task.userId, task.id, { doc, options, tries: 0, title: doc.title, list }, delivered.quietUntil ?? new Date(Date.now() + DOC_RETRY_MINUTES * 60_000))) return;
-    await tellThenClose(briefOptionsText(doc.title, options), "done", `the PDF wouldn't send; sent the options as a text: ${list}`);
-    return;
-  }
-  await closeTask(task.userId, task.id, "done", `sent the brief${delivered.pdfPending ? " as text, the PDF to follow" : ""}: ${list}`);
+  // options are the places found, never their words.
+  const list = sent.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
+  await tellThenClose(messages, "done", `texted the finds: ${list}`, sent);
 }

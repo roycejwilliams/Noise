@@ -13,9 +13,7 @@
 //                      Rebuilt from the last 21 days of their words, at most every 10 minutes while they talk.
 //   member_threads     what's going on in their life (harness/memberThreads.ts), rebuilt with the snapshot.
 //   member_kit         company, role, LinkedIn, from their own words (services/memberKit.ts saveKitFact).
-//   member_design_signals  their design system (services/designSystem.ts): every look signal, folded per context on read. Shown
-//                      as the look and the fonts of their decks and pages per context, and each confirmed reference read.
-//   co_memories        room_taste (services/roomTaste.ts) and design_taste (services/designTaste.ts, decks and pages); also the raw
+//   co_memories        room_taste (services/roomTaste.ts); also the raw
 //                      conversation (text_exchange, call_transcript, recap) and Co's own notes (co_lesson: team-internal, never shown).
 //   ask_checkins       their open asks (with the intent entries they mirror).
 //   their files        PDFs they sent, by number, read only through services/memberFiles.ts (contents never enter the conversation).
@@ -31,7 +29,7 @@
 //   sweeps      services/sweepFind.ts, services/sweepSelectContext.ts, services/goalSweep.ts (member knowledge: goals, person model,
 //               preferences, limits, corrections), services/goalEdges.ts (goal corrections retire goals).
 //   tasks       services/taskTurn.ts, services/followUps.ts, harness/proactive.ts, jobs/postCallFollowUp.ts (member knowledge).
-//   decks/pages services/designTaste.ts loadDesignTaste, room taste through member knowledge preferences.
+//   room taste through member knowledge preferences.
 //   matching    co_profiles.goal_embeddings (services/relevance.ts) and the people graph (co_facts wants/offers).
 //
 // Every one of those reads its source fresh on each turn, call, sweep or task: nothing caches member knowledge between them. So a
@@ -80,12 +78,11 @@ import { createHash } from "node:crypto";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { safetySignal } from "./safetyText.js";
-import * as designPure from "./designSystem.js";
 import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -171,9 +168,11 @@ export type RawKnown = {
   snapshot: { work: string | null; place: string | null; wantsNow: string[]; weighingOn: string[]; valuesInPeople: string[] } | null;
   threads: { id: string; text: string; quote: string | null }[];
   kit: { key: string; value: string }[];
-  tastes: { id: string; type: "room_taste" | "design_taste"; text: string; quote: string | null; inspo?: string | null }[];
+  tastes: { id: string; type: "room_taste"; text: string; quote: string | null }[];
   asks: { id: string; text: string }[];
   files: { n: number; sentOn: string }[];
+  // Photos they texted (services/memberAssets.ts): kept for them alone, listed so each can be removed here.
+  photos?: { n: number; sentOn: string }[];
   // Where Co looks for each of their wants (services/wantPlace.ts): the want's own place, or none (their home city stands in).
   // searching: where on the map Cue searches it (services/placeResolve.ts), when that's said differently from their place.
   places?: { key: string; want: string; place: string | null; source?: string | null; until?: string | null; searching?: string | null }[];
@@ -183,17 +182,11 @@ export type RawKnown = {
   freeTimes?: { id: string; text: string; quote: string }[];
   // Their calendar grant (services/cueGrants.ts): free/busy only; removing it disconnects.
   calendar?: { since: string } | null;
-  // Their Docs grant (services/cueGrants.ts): Drive files Co makes only; removing it disconnects.
-  docs?: { since: string } | null;
   // Their yes to the voice read on calls (services/voiceReadConsent.ts), while it's on; removing it is taking it back.
   voiceRead?: { since: string } | null;
   // The rules they set for how Cue treats them (services/memberPreferences.ts), in force now: what each does, in plain words, and
   // their latest words for it. Removing one withdraws it; a new one is said in conversation.
   prefs?: { id: string; text: string; quote: string | null }[];
-  // Their design system (member_design_signals), the way decks and pages read it: per context with signals of its own, the look
-  // and the fonts in plain words; and each confirmed reference read Co took the look from.
-  design?: { context: "professional" | "personal"; look: string | null; fonts: string | null }[];
-  designRefs?: { id: string; ref: string }[];
   // How an introduction Cue made went, as THEY told it (services/roomMatching.ts, the outcome record): their side of the pair only,
   // never the other person's answers, never a name (ruling 10-14: your side only). Removable; removing it clears their side.
   pairOutcomes?: { id: string; side: "a" | "b"; eventName: string | null; evidence: Record<string, { value: string; how: string }>; note: string | null }[];
@@ -204,46 +197,6 @@ export type RawKnown = {
   // nothing but the item itself. Removing one means it is never sent.
   waiting?: { id: string; label: string; held: boolean }[];
 };
-
-const CONTEXT_WORDS = { professional: "work", personal: "personal" } as const;
-
-// Pure: their design signals, as decks and pages read them (designSystem.ts foldSignals), in plain words. Only a context with signals
-// of its own; a reference read not yet confirmed is not part of it (and isn't shown).
-export function designKnown(rows: any[], now: Date = new Date()): { design: NonNullable<RawKnown["design"]>; designRefs: NonNullable<RawKnown["designRefs"]> } {
-  const D = designPure;
-  const signals = rows.map((r) => ({
-    id: Number(r.id),
-    context: (r.context === "personal" ? "personal" : "professional") as "professional" | "personal",
-    source: String(r.source) as any,
-    values: D.cleanTokens(typeof r.vals === "string" ? JSON.parse(r.vals) : r.vals),
-    quote: r.quote ? String(r.quote) : null,
-    ref: r.ref ? String(r.ref) : null,
-    confirmed: !!r.confirmed,
-    askedAt: null,
-    at: new Date(r.created_at),
-    fontNotes: Array.isArray(r.font_notes) ? r.font_notes.map(String) : [],
-  }));
-  const design: NonNullable<RawKnown["design"]> = [];
-  for (const context of ["professional", "personal"] as const) {
-    const own = signals.filter((x) => x.context === context && (x.source !== "reference" || x.confirmed) && Object.keys(x.values).some((k) => k !== "cleared"));
-    if (!own.length) continue;
-    const f = D.foldSignals(own, context, now);
-    const where = `your ${CONTEXT_WORDS[context]} decks and pages`;
-    const t = f.tokens;
-    const lookParts = [D.colorWords(t), t.mood ? `a ${t.mood} feel` : "", !t.display && t.type ? `${t.type} type` : "", t.density ? ({ airy: "lots of air", balanced: "balanced spacing", dense: "tight and full" } as const)[t.density] : ""].filter(Boolean);
-    const look = f.dontCare ? `for ${where}, you'd rather I choose the look` : lookParts.length ? `the look of ${where}: ${lookParts.join(", ")}` : null;
-    const fam = (x: { family: string } | undefined) => x?.family ?? null;
-    const [hd, bd] = [fam(t.display), fam(t.body)];
-    const fontLine = hd && bd ? (hd === bd ? `${hd} throughout` : `${hd} for headlines, ${bd} for text`) : hd ? `${hd} for headlines` : bd ? `${bd} for text` : "";
-    const fonts = fontLine ? `the fonts in ${where}: ${fontLine}${f.fontNotes.length ? ` (${f.fontNotes.join(" ")})` : ""}` : null;
-    if (look || fonts) design.push({ context, look, fonts });
-  }
-  const designRefs = signals
-    .filter((x) => x.source === "reference" && x.confirmed && x.ref && Object.keys(x.values).length)
-    .slice(0, 6)
-    .map((x) => ({ id: String(x.id), ref: x.ref! }));
-  return { design, designRefs };
-}
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
 
@@ -280,16 +233,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const k of r.kit) add(`kit:${k.key}`, "kit", "work", `${k.key === "linkedin" ? "LinkedIn" : k.key}: ${k.value}`);
   for (const t of r.tastes) {
     add(`taste:${t.id}`, "taste", "likes", t.text, t.quote, false);
-    // What their decks and pages take their look from (a Pinterest board, sites, brands): its own line, so "don't use that board
-    // anymore" can take just that out, or point it somewhere else.
-    if (t.type === "design_taste" && t.inspo) add(`inspo:${t.id}`, "inspo", "likes", `what your decks and pages take their look from: ${t.inspo}`);
   }
-  // The design system decks and pages read: removal only (a new look or font is noted when they say it, with the deck tools).
-  for (const d of r.design ?? []) {
-    if (d.look) add(`design:${d.context}`, "design", "likes", d.look, null, false);
-    if (d.fonts) add(`designfont:${d.context}`, "designfont", "likes", d.fonts, null, false);
-  }
-  for (const x of r.designRefs ?? []) add(`designref:${x.id}`, "designref", "likes", `a look I took from ${x.ref}, for your decks and pages`, null, false);
   // Each want with their own words beside it (only a quote checked as theirs), and each condition they put on it as its own line,
   // in their words, removable on its own (services/wantCriteria.ts: visible knowledge is all of it).
   const entryOf = (id: string) => (p?.intent ?? []).find((e: any) => e?.id === id);
@@ -314,10 +258,10 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}${searchingNote(x.place, x.searching)}` : `where I look for "${x.want.slice(0, 120)}": ${noPlace}`);
   // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
   if (r.calendar) add("grant:calendar", "grant", "where", `your calendar, connected ${r.calendar.since}: I see only when you're busy or free, never what, where or with whom, and it's never shared`, null, false);
-  if (r.docs) add("grant:docs", "grant", "where", `Google Docs, connected ${r.docs.since}: I save documents I make for you to your Drive and see only those, nothing else there`, null, false);
   if (r.voiceRead) add("grant:voice_read", "grant", "mind", voiceReadKnownLine(r.voiceRead.since), null, false);
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
+  for (const f of r.photos ?? []) add(`photo:${f.n}`, "photo", "files", `photo ${f.n}, sent ${f.sentOn}`, null, false);
   for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.held ? `${w.label} (held for now)` : w.label, null, false);
   for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
   for (const x of r.pairOutcomes ?? []) {
@@ -434,8 +378,8 @@ const GUARDED_BY: Record<Guarded, string[]> = {
   // The raw exchanges and memories that say a removed thing (memberKnowledge exchanges, the reply's memory search): only specific removals.
   their_words: [],
 };
-const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:"];
-const plainOf = (t: string) => t.replace(/^(my read|looking out for|not for you|what your decks and pages take their look from): /, "");
+const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:", "photo:"];
+const plainOf = (t: string) => t.replace(/^(my read|looking out for|not for you): /, "");
 
 // Pure: the row that says this text is gone (or changed), if any. rows: live guards (forgottenRows / liveGuards).
 export function forgets(text: string, rows: ForgottenRow[], what: Guarded, opts: { ownOnly?: boolean } = {}): ForgottenRow | null {
@@ -609,22 +553,18 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     chain = p.catch(() => undefined);
     return p;
   };
-  const [prof, claims, snap, threads, kit, tastes, asks, files, zone, signals, places] = await Promise.all([
+  const [prof, claims, snap, threads, kit, tastes, asks, files, photos, zone, places] = await Promise.all([
     q(`SELECT city, long_term_direction, availability_pattern, goals, life_chapters, blockers, activity_preferences, avoid, intent FROM co_profiles WHERE user_id = $1`, [userId]),
     q(`SELECT id, text, provenance, kind, quote, expires_on FROM member_claims WHERE user_id = $1 ORDER BY said_on DESC LIMIT 40`, [userId]),
     q(`SELECT snapshot FROM person_snapshots WHERE user_id = $1`, [userId]),
     q(`SELECT id, text, opened_quote FROM member_threads WHERE user_id = $1 AND status IN ('open', 'waiting') ORDER BY last_touched_at DESC NULLS LAST LIMIT 8`, [userId]),
     q(`SELECT key, value FROM member_kit WHERE user_id = $1 AND key IN ('company', 'role', 'linkedin')`, [userId]),
-    // The tastes their readers read: room taste's last 5 inside 180 days (roomTaste.ts loadRoomTaste), design taste's newest.
-    Promise.all([
-      q(`SELECT id, memory_type, content FROM co_memories WHERE user_id = $1 AND memory_type = 'room_taste' AND created_at > NOW() - INTERVAL '180 days' ORDER BY created_at DESC LIMIT 5`, [userId]),
-      q(`SELECT id, memory_type, content FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste' ORDER BY created_at DESC LIMIT 1`, [userId]),
-    ]).then(([a, b]) => [...a, ...b]),
+    // The tastes their readers read: room taste's last 5 inside 180 days (roomTaste.ts loadRoomTaste).
+    q(`SELECT id, memory_type, content FROM co_memories WHERE user_id = $1 AND memory_type = 'room_taste' AND created_at > NOW() - INTERVAL '180 days' ORDER BY created_at DESC LIMIT 5`, [userId]),
     q(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY last_mentioned_at DESC NULLS LAST, created_at DESC LIMIT 12`, [userId]),
     import("./memberFiles.js").then((m) => m.filesOnFile(userId)).catch(() => [] as { n: number; sentOn: string }[]),
+    import("./memberAssets.js").then((m) => m.listAssets(userId)).then((a) => a.map((x) => ({ n: x.n, sentOn: x.at.toISOString().slice(0, 10) }))).catch(() => [] as { n: number; sentOn: string }[]),
     import("./memberTime.js").then((m) => m.memberZone(userId)).catch(() => null),
-    // Their design system's signals, as decks and pages read them (designSystem.ts loadSignals: the same owner key and limit).
-    q(`SELECT id, context, source, vals, quote, ref, confirmed, created_at, font_notes FROM member_design_signals WHERE owner_user_id = $1 ORDER BY created_at DESC LIMIT 80`, [userId]),
     // Where Co looks for each want they have open: an open ask's row, or a goal's (kept only if it's still one of their goals, below).
     // A removed place is shown as "near home" (still correctable: "actually SF" lands on it). Goal rows are read wide and filtered to
     // goals still theirs before the 20 shown (livePlaces), so a dropped goal's row never crowds a live one out.
@@ -653,7 +593,6 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
   const F = await import("./factLabels.js");
   const { wordsZone } = await import("./memberTime.js");
   const R = await import("./roomTaste.js");
-  const D = await import("./designTaste.js");
   const arr = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()) : []);
   const p = prof[0];
   const s = snap[0]?.snapshot ?? null;
@@ -665,13 +604,8 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     threads: threads.map((t) => ({ id: String(t.id), text: String(t.text), quote: t.opened_quote ?? null })),
     kit: kit.map((k) => ({ key: String(k.key), value: String(k.value) })),
     tastes: tastes.flatMap((t): RawKnown["tastes"] => {
-      if (t.memory_type === "room_taste") {
-        const x = R.parseRoomTaste(String(t.content ?? ""));
-        return x ? [{ id: String(t.id), type: "room_taste" as const, text: R.roomTasteLine(x), quote: x.quote ?? null }] : [];
-      }
-      const x = D.parseDesignTaste(String(t.content ?? ""));
-      // Colors in words, never codes ("navy", not "#1F2A44"): this is what the member reads.
-      return x ? [{ id: String(t.id), type: "design_taste" as const, text: D.designTasteLine({ ...x, inspo: null }).replace(/ \(their words: .*\)$/, "").replace(/#[0-9a-f]{6}\b/gi, (h) => designPure.colorName(h) || h), quote: x.quote || null, inspo: x.inspo }] : [];
+      const x = R.parseRoomTaste(String(t.content ?? ""));
+      return x ? [{ id: String(t.id), type: "room_taste" as const, text: R.roomTasteLine(x), quote: x.quote ?? null }] : [];
     }),
     asks: asks.map((a) => ({ id: String(a.ask_id), text: String(a.ask_text ?? "") })).filter((a) => a.text.trim()),
     places: await livePlaces(places, p),
@@ -679,7 +613,6 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     area: await import("./searchArea.js").then((A) => A.searchAreaOf(userId, db as any)).then((a) => (a ? { place: a.place, searching: a.label } : null)),
     freeTimes: freeRows,
     calendar: await import("./cueGrants.js").then((C) => C.calendarConnected(userId, db as any)).catch(() => null),
-    docs: await import("./cueGrants.js").then((C) => C.docsConnected(userId, db as any)).catch(() => null),
     voiceRead: await import("./voiceReadConsent.js").then((V) => V.voiceReadOnSince(userId, db as any)).catch(() => null),
     // Never guessed: a read that fails fails the view, so a rule they set is never shown as gone.
     // Applied or "noted, not applied yet" by what a path really does (PR C): a where-to-search rule is applied only while their area is its place.
@@ -689,7 +622,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
       return live.map((x) => ({ id: x.id, text: P.describePreference(x, { applied: P.ruleApplied(x, ctx) }), quote: x.words[x.words.length - 1] ?? null }));
     }),
     files,
-    ...designKnown(signals),
+    photos,
     // The same list a pull and a reply read; a read that fails fails the view (never "nothing is waiting" on a guess).
     // Held ones are shown as held; one under a safety hold is not shown at all. A read that fails leaves this group out, not the view.
     waiting: await import("../harness/waiting.js").then(async (W) => {
@@ -870,67 +803,8 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     case "taste": {
       const t = raw.tastes.find((x) => x.id === a);
       if (!t) return { why: "it's no longer on file" };
-      // Design taste is one thing (its reader takes the newest), so all of it goes: an older one must not come back in its place.
-      // The deck tools write the same words as a signal in their design system (agent/deckTools.ts knownTaste, the same quote), which
-      // decks and pages read first: that signal goes too, on this transaction, or the look would stay. Only the signals saved from
-      // this taste's own words: anything else they said about the look is its own line (design:<context>) and stays.
-      if (t.type === "design_taste") {
-        await must(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
-        // Compared as both stores keep it: the older taste's quote is whitespace-folded and cut at 200, the signal's cut at 300.
-        if (t.quote) await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND source <> 'reference' AND LEFT(regexp_replace(btrim(quote), '\\s+', ' ', 'g'), 200) = LEFT($2, 200)`, [userId, t.quote]);
-      } else await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
+      await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
       return { ref: item.ref, source: "taste", was: t.text, now: null };
-    }
-    case "inspo": {
-      // Only the inspiration changes; the rest of their look stays. A board's colors came from the board (deckTools.ts readInspo),
-      // so taking a Pinterest board out takes its colors with it: decks and pages stop reading it altogether.
-      const { rows } = await db.query(`SELECT content FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'design_taste'`, [a, userId]);
-      let j: any = null;
-      try {
-        j = JSON.parse(String(rows[0]?.content ?? ""));
-      } catch {}
-      if (!j?.inspo) return { why: "it's no longer on file" };
-      const old = String(j.inspo);
-      const next = { ...j, inspo: v ?? null, ...(/pinterest/i.test(old) ? { colors: { background: null, text: null, accent: null } } : {}) };
-      await must(`UPDATE co_memories SET content = $3 WHERE id = $1 AND user_id = $2 AND memory_type = 'design_taste'`, [a, userId, JSON.stringify(next)]);
-      // The board's read lives in their design system too (a reference signal, ref_kind 'board'): it stops counting with it.
-      if (/pinterest/i.test(old)) await db.query(`UPDATE member_design_signals SET vals = '{}'::jsonb, ref = NULL, confirmed = true WHERE owner_user_id = $1 AND source = 'reference' AND ref_kind = 'board'`, [userId]);
-      return { ref: item.ref, source: "inspo", was: old, now: v };
-    }
-    // Their design system (member_design_signals) and the older saved taste, both on this transaction. A reference read is emptied,
-    // never deleted (as designSystem.ts dismissRead): the row keeps the record that its image's words are not theirs.
-    case "design": {
-      if (a !== "professional" && a !== "personal") return { why: "it's no longer on file" };
-      const gone = await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND source <> 'reference'`, [userId, a]);
-      const refs = await db.query(`UPDATE member_design_signals SET vals = '{}'::jsonb, ref = NULL, confirmed = true WHERE owner_user_id = $1 AND context = $2 AND source = 'reference' AND vals <> '{}'::jsonb`, [userId, a]);
-      // The older taste is read only while no signal of theirs says anything (designSystem.ts loadDesignSystem): with these gone it
-      // would come back in their place.
-      const legacy = await db.query(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
-      // The clear itself, recorded: decks for this context don't fill the look in from the other context (designSystem.ts foldSignals).
-      await db.query(`INSERT INTO member_design_signals (owner_user_id, context, source, vals, confirmed) VALUES ($1, $2, 'stated', $3, true)`, [userId, a, JSON.stringify({ cleared: designPure.TOKEN_FIELDS })]);
-      // Nothing changed here is still done only when nothing of it is left (an earlier line in this same change, the older taste's,
-      // took it): checked, never assumed.
-      if (!gone.rowCount && !refs.rowCount && !legacy.rowCount) {
-        const { rows } = await db.query(`SELECT 1 FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND vals <> '{}'::jsonb AND NOT (vals ? 'cleared') AND (source <> 'reference' OR confirmed) LIMIT 1`, [userId, a]);
-        if (rows.length) throw new NotApplied();
-      }
-      return { ref: item.ref, source: "design", was, now: null };
-    }
-    case "designfont": {
-      if (a !== "professional" && a !== "personal") return { why: "it's no longer on file" };
-      const r = await db.query(`UPDATE member_design_signals SET vals = vals - 'display' - 'body', font_notes = '[]'::jsonb WHERE owner_user_id = $1 AND context = $2 AND (vals ? 'display' OR vals ? 'body')`, [userId, a]);
-      // Recorded as a clear of the fonts here, so the other context's fonts don't fill in (designSystem.ts foldSignals).
-      await db.query(`INSERT INTO member_design_signals (owner_user_id, context, source, vals, confirmed) VALUES ($1, $2, 'stated', $3, true)`, [userId, a, JSON.stringify({ cleared: ["display", "body"] })]);
-      // As above: an earlier line in this change (the whole look) may have taken the fonts with it; only that counts as done.
-      if (!r.rowCount) {
-        const { rows } = await db.query(`SELECT 1 FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND (vals ? 'display' OR vals ? 'body') LIMIT 1`, [userId, a]);
-        if (rows.length) throw new NotApplied();
-      }
-      return { ref: item.ref, source: "designfont", was, now: null };
-    }
-    case "designref": {
-      await must(`UPDATE member_design_signals SET vals = '{}'::jsonb, ref = NULL, confirmed = true WHERE id = $1 AND owner_user_id = $2 AND source = 'reference'`, [a, userId]);
-      return { ref: item.ref, source: "designref", was, now: null };
     }
     case "ask": {
       const old = raw.asks.find((x) => x.id === a)?.text ?? was;
@@ -980,7 +854,7 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     case "grant": {
       // Their calendar or Docs grant: disconnected (revoked with Google, deleted). Docs already made stay in their Drive.
       const { disconnectGrant } = await import("./cueGrants.js");
-      if (a !== "calendar" && a !== "docs") return a === "voice_read" ? removeVoiceRead(userId, item.ref, was) : { why: "not something Cue can change" };
+      if (a !== "calendar") return a === "voice_read" ? removeVoiceRead(userId, item.ref, was) : { why: "not something Cue can change" };
       if (!(await disconnectGrant(a, userId))) throw new NotApplied();
       return { ref: item.ref, source: "grant", was, now: null };
     }
@@ -1066,8 +940,8 @@ export function fieldFor(ref: string): string {
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
   if (kind === "pref") return "a rule they set for how Cue treats them";
-  if (kind === "grant") return a === "docs" ? "their Google Docs connection" : a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;
+  if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -1099,6 +973,7 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   }
   // Files go after the transaction (only memberFiles.ts touches their table), and only once everything else held.
   const fileRemovals: { item: KnownItem }[] = [];
+  const photoRemovals: { item: KnownItem }[] = [];
   const decisions: Parameters<typeof recordDecision>[0][] = [];
   const client = await pool.connect();
   try {
@@ -1135,6 +1010,11 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
         }
         if (c.action === "remove" && !removalYes.has(ref)) {
           refused.push({ ref, why: "their message doesn't ask to remove this line, so it stays" });
+          continue;
+        }
+        if (item.source === "photo") {
+          if (c.action === "remove") photoRemovals.push({ item });
+          else refused.push({ ref, why: "a photo can only be removed" });
           continue;
         }
         if (item.source === "file") {
@@ -1198,6 +1078,17 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     changedRefs.add(item.ref);
     decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { kind: "file", on: new Date().toISOString().slice(0, 10), id: n }, checks: [{ name: "removal_asked", pass: true }] });
   }
+  for (const { item } of photoRemovals) {
+    const { deleteAssets } = await import("./memberAssets.js");
+    const n = Number(item.ref.split(":")[1]);
+    if (!Number.isFinite(n) || !(await deleteAssets(userId, [n]).catch(() => 0))) {
+      refused.push({ ref: item.ref, why: "that photo isn't on file" });
+      continue;
+    }
+    applied.push({ ref: item.ref, source: "photo", was: `photo ${n}`, now: null });
+    changedRefs.add(item.ref);
+    decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "photo", proposal: { kind: "photo", on: new Date().toISOString().slice(0, 10), id: n }, checks: [{ name: "removal_asked", pass: true }] });
+  }
   for (const d of decisions) await recordDecision(d).catch(() => {});
   // Their search area corrected (searchArea.ts): resolved now, not at the next sweep, so where it searches is settled (or asked about)
   // in this same reply (review of #336).
@@ -1246,7 +1137,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file", "pair", "knows", "cond", "waiting"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";

@@ -97,9 +97,7 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
     }
     // Another send from the same call, on anything: one call's sends are one delivery, one message (Royce, 2026-10-08: "Done,
     // I'll send that over now" and "for this weekend, I'll send what I've got" opened two tasks, and two "nothing yet" texts).
-    // A document and a text don't share a delivery (a PDF goes with its own one line): those stay apart.
-    const isDoc = wantsDocument(candidate.goal, candidate.theirWords);
-    const callSend = open.find((t) => recent(t) && t.source === "promise" && String(t.goal ?? "").startsWith(COMMIT_PREFIX) && wantsDocument(String(t.goal ?? ""), t.theirWords ?? "") === isDoc);
+    const callSend = open.find((t) => recent(t) && t.source === "promise" && String(t.goal ?? "").startsWith(COMMIT_PREFIX));
     if (callSend) {
       await deps.note(o.userId, callSend.id!, `Also said on the call: "${o.sentence.slice(0, 200)}"${o.theirLine ? ` (after they said: "${o.theirLine.slice(0, 160)}")` : ""}. Send it in the same message as the rest of this task.`).catch(() => null);
       return { ok: false, why: `sent with task #${callSend.id}, the same call's delivery` };
@@ -110,16 +108,14 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
     const at = o.now ?? new Date();
     const zone = deps.zone ? await deps.zone(o.userId).catch(() => null) : null;
     const window = commitmentWindow(o.sentence, at, zone, deliveryWords(at, zone));
-    // A plan or a doc Co said it would write goes as a document (writeDocument in the task's turn), never a wall of text.
-    const doc = wantsDocument(candidate.goal, candidate.theirWords);
+    // A plan or a doc Co said it would write is not kept: Cue no longer makes documents (2026-11-04), so no promise task is opened for it.
+    if (wantsDocument(candidate.goal, candidate.theirWords)) return { ok: false, why: "Cue no longer makes documents, so there is nothing to keep" };
     const r = await deps.start({
       userId: o.userId,
       goal: candidate.goal,
       theirWords: theirWordsFor(o.theirLine ?? "(said on a call)"),
-      steps: [{ text: doc ? "Write the document with writeDocument and send it (a PDF), never as a long text" : "Send what you said you would, in a text, with the links or the document itself" }],
-      firstPlan: doc
-        ? "You told them this on a call: write it now as a document with writeDocument (their points from their words, your plan in suggestions). If you can't, tell them plainly where it stands."
-        : "You told them this on a call: send it now by text, with what they were looking at (the links, the summary). If you can't, tell them plainly where it stands.",
+      steps: [{ text: "Send what you said you would, in a text, with the links" }],
+      firstPlan: "You told them this on a call: send it now by text, with what they were looking at (the links, the summary). If you can't, tell them plainly where it stands.",
       inHours: 1,
       source: "promise",
       window,
@@ -231,8 +227,8 @@ export async function checkCallCommitments(now: Date = new Date(), deps: CheckDe
 // when that tool did that same thing this turn: a send that texted them that item, or, for a write-up, the page, deck, document or
 // task started for it. Any other tool that came back done (a note, a save) keeps nothing, and the promise opens as before.
 const WRITES_UP = /\b(?:put together|pull together|write up|draft)\b/i;
-const MAKES = new Set(["makePage", "updatePage", "makeDeck", "updateDeck", "writeDocument", "researchBrief", "startTask"]);
-const SENDS = new Set(["shareLink", "resendLink", "resetLink", "shareArtifact", "calendarConnection"]);
+const MAKES = new Set(["researchBrief", "startTask"]);
+const SENDS = new Set(["shareLink", "calendarConnection"]);
 const COMMIT_COMMON = new Set(significant("text send sent share link links that this those them with your after right over call hang just will together draft write pull also then soon later tonight away both thing things stuff option options one ones going gonna make sure real quick okay alright too have want need know here there good great nice look check before about more from into some been well kind got get"));
 const distinct = (s: string) => new Set(significant(s).filter((w) => !COMMIT_COMMON.has(w)));
 // Pure: what a done tool was about, as words: its input and what it delivered.

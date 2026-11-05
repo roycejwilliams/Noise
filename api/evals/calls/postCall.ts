@@ -132,8 +132,6 @@ user: Thanks.`;
   const fresh = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you those venue links right after we hang up.", theirLine: "can you send the venue links", now: new Date("2026-10-08T00:29:30Z") }, cdeps);
   // Royce, 2026-10-08 (his real call: two sends opened two tasks and two "nothing yet" texts): one call's sends are one delivery.
   check("a different send on the same call rides the same task, noted to go in the same message", !fresh.ok && started.length === 0 && cnotes.some((n) => n.id === 112 && /Also said on the call: "I'll text you those venue links/.test(n.t) && /same message/.test(n.t)), { fresh, cnotes });
-  const docCall = await C.trackCallCommitment({ userId: "u1", sentence: "I'll send you a PDF write-up of the plan tonight.", theirLine: "can you write it up", now: new Date("2026-10-08T00:29:30Z") }, { ...cdeps, open: async () => [{ id: 300, goal: 'Keep your word from the call: "I\'ll text you the venue links."', theirWords: "send the links", source: "promise", createdAt: "2026-10-08T00:28:49Z" }] });
-  check("a document and a text from one call stay apart (a PDF goes with its own one line)", docCall.ok, docCall);
   const startedBefore = started.length;
   const nextDay = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you those venue links right after we hang up.", theirLine: "can you send the venue links", now: new Date("2026-10-09T09:00:00Z") }, cdeps);
   check("a send on a later call still opens its own task", nextDay.ok && started.length === startedBefore + 1, nextDay);
@@ -220,12 +218,11 @@ user: Thanks.`;
   const P = await import("../../src/harness/proactive.js");
   let prompt = "";
   P.setProactiveModelForTests(async (p) => { prompt = p; return "SKIP"; });
-  await PC.draftPostCallText("Jordan", "assistant: hi\nuser: The dinner is the hard part.", "", [], { theySaid: [], coInferred: [] }, null, false, k);
+  await PC.draftPostCallText("Jordan", "assistant: hi\nuser: The dinner is the hard part.", "", [], { theySaid: [], coInferred: [] }, null, k);
   P.setProactiveModelForTests(null);
   const factsBlock = prompt.slice(prompt.indexOf("CONFIRMED_FACTS"), prompt.indexOf("TASK"));
   check("the layer reaches the draft's task, never its facts", /WORK CO IS CARRYING/.test(prompt) && !/Find venues|Post-event presence plan|can you find venues/.test(factsBlock) && /what_co_said_it_would_look_into/.test(src("jobs/postCallFollowUp.ts")));
   const pc = src("jobs/postCallFollowUp.ts");
-  check("the recap gate reads zone, care and deliveries from the layer (no second zone or receipts read)", /k\.restraint \? k\.restraint\.needsCare/.test(pc) && /d\.via\.includes\("receipt"\)/.test(pc) && !/pgReceipts\.forUser/.test(pc) && !/memberZone\(userId\)/.test(pc));
   check("a rejected layer read is caught and never replaced by un-stripped claims", /memberKnowledge\(userId, \{ include: POST_CALL_SECTIONS[^)]*\}\)\.catch\(\(\) => null\)/.test(pc) && !/liveClaimsRendered/.test(pc));
   check("the call's audit is handed the layer's knowledge with the call picture", /memberKnowledge\(user_id, \{ include: AUDIT_SECTIONS \}\)/.test(src("routes/co.ts")) && /knownBeforeFrom\(auditKnowledge, callPicture\)/.test(src("routes/co.ts")));
 }

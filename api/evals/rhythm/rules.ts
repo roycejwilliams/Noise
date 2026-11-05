@@ -75,7 +75,7 @@ check("one busy search turn (a looking line, three links, two replies of five) s
 check("the old names become Noise in anything Cue says", brandSafe("CoPatible LLC owns it, formerly BR3W.") === "Noise LLC owns it, formerly Noise.");
 check("whole words only, any case", brandSafe("copatible and BR3w") === "Noise and Noise" && brandSafe("compatible with the plan") === "compatible with the plan");
 check("real history the member brings up can be said back", brandSafe("Back when it was BR3W, yes.", "I remember when it was BR3W") === "Back when it was BR3W, yes." && brandSafe("CoPatible too", "I remember when it was BR3W") === "Noise too");
-check("it runs on every reply and every proactive draft", /brandSafe\(ctx\.gate \? await ctx\.gate\(draft, \[\.\.\.state\.sentMessages\], answeredSent\(\)\) : draft, ctx\.resolvedContent\)/.test(read("src/agent/conversationTools.ts")) && /brandSafe\(cleanCoMessage\(trimmed\)\)/.test(read("src/harness/proactive.ts")));
+check("it runs on every reply and every proactive draft", /brandSafe\(ctx\.gate \? await ctx\.gate\(draft, \[\.\.\.state\.sentMessages\], answeredSent\(\), findsWaitingNow\) : draft, ctx\.resolvedContent\)/.test(read("src/agent/conversationTools.ts")) && /brandSafe\(cleanCoMessage\(trimmed\)\)/.test(read("src/harness/proactive.ts")));
 check("Cue's voice says the company is Noise, and never names the retired word", /The company is Noise, in any talk, legal or about IP included/.test(CO_VOICE) && !/BR3W|CoPatible/.test(CO_VOICE + R.BRAND + R.MESSAGE_RHYTHM + R.COACHING + R.CALL_COACHING));
 
 console.log(`rhythm rules: ${total - failed}/${total} passed`);

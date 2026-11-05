@@ -56,8 +56,6 @@ check("a hedge in the page's own words stands", Q.schemaFields("venue", { rate: 
 check("an estimate with no evidence is unknown", Q.schemaFields("event", { price: { value: "typically $30" } }, at).find((f) => f.key === "price")?.value === null);
 check("a long prose answer is replaced by the page's own short words", Q.schemaFields("venue", { capacity: { value: "x".repeat(200), evidence: "Up to 75 guests" } }, at).find((f) => f.key === "capacity")?.value === "Up to 75 guests");
 check("a long answer with no short quote is unknown", Q.schemaFields("venue", { capacity: { value: "x".repeat(200), evidence: "y".repeat(200) } }, at).find((f) => f.key === "capacity")?.value === null);
-const doc = RB.buildBrief({ title: "t", asked: "a", memberContext: [], finds: [{ name: "The Interval", url: "https://longnow.org/interval/book/", checkedAt: at, reader: "sdk", fields: v }] });
-check("unknowns render as unknown in the brief", doc.sections[0].bullets.includes("Minimum: unknown") && doc.sections[0].bullets.includes("Open 2026-10-22 from 6:00 pm: unknown"));
 check("a value that repeats its own label loses it", Q.schemaFields("venue", { capacity: { value: "Capacity: 80 seated or 200 standing" } }, at).find((f) => f.key === "capacity")?.value === "80 seated or 200 standing");
 check("size is read from the largest number stated", Q.findFeatures({ type: "venue", url: "https://www.perbaccosf.com/dining/", fields: [{ key: "capacity", label: "Capacity", value: "Groups ranging from 8 to 150 guests seated and up to 250 guests", checkedAt: at }] }).includes("size:large"));
 check("every field carries its check time", v.every((f) => f.checkedAt === at));
@@ -101,7 +99,7 @@ check("ranking orders, never drops", Q.rankFinds([A, B, A], { stats: likedHigh, 
 const qsrc = src("services/researchQuality.ts");
 check("an outcome is recorded only on a find shown to that member", /WHERE user_id = \$1 AND id = \$2 AND shown_at IS NOT NULL AND \(outcome IS NULL OR outcome = 'ignored'\)/.test(qsrc));
 check("unreacted finds become 'ignored' after 72 hours, on the task cron", Q.IGNORED_AFTER_HOURS === 72 && /markIgnoredFinds\(\)/.test(src("jobs/index.ts")));
-check("every find shown is recorded when the brief goes, and ranked before it's built", /if \(sent\) await Q\.recordShownFinds\(/.test(src("services/researchBrief.ts")) && /Q\.rankFinds\(/.test(src("services/researchBrief.ts")));
+check("every find shown is recorded when the finds go, and ranked before they're sent", /await Q\.recordShownFinds\(/.test(src("services/researchBrief.ts")) && /Q\.rankFinds\(/.test(src("services/researchBrief.ts")));
 check("Cue records reactions through its own tool, matched to an option it actually sent", /findReaction: tool\(/.test(tool) && /recentShownFinds\(ctx\.userId\)/.test(tool) && /doesn't match an option you showed them/.test(tool));
 const caps = src("services/capabilities.ts");
 check("the reaction tool is in Cue's registry", /id: "find_reaction"[\s\S]{0,400}tool: "findReaction"/.test(caps));
@@ -110,7 +108,7 @@ check("their passes and likes go into their next query", /outcome IN \('yes','no
 // ---- point A to point B: a yes moves toward the booking, on sourced facts only
 const picked = { name: "The Interval", url: "https://longnow.org/interval/book/", fields: [{ key: "capacity", label: "Capacity", value: "Up to 75 guests", checkedAt: at }, { key: "rate", label: "Rate", value: null, checkedAt: at }] };
 const yes = Q.nextStepAfterReaction("yes", picked);
-check("a yes points Cue at the inquiry and following it to an answer", /draft the inquiry/.test(yes) && /draftEmail/.test(yes) && /task/.test(yes) && /their date, headcount and budget/.test(yes));
+check("a yes points Cue at the venue's contact and following it to an answer, without drafting their email", /contact/.test(yes) && !/draftEmail/.test(yes) && /task/.test(yes) && /don't draft their emails/.test(yes));
 check("a yes rests only on the option's sourced fields (an unknown isn't passed on as a fact)", /Capacity: Up to 75 guests \(checked 2026-10-07\)/.test(yes) && !/Rate:/.test(yes) && /Nothing else about price or availability/.test(yes));
 check("'not like that' widens the search, never argues", /look again/.test(Q.nextStepAfterReaction("not_like_that", picked)) && /Don't argue/.test(Q.nextStepAfterReaction("not_like_that", picked)));
 check("the reaction tool hands Cue the option and its next step", /next: Q\.nextStepAfterReaction\(input\.reaction, hit\)/.test(tool));

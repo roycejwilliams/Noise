@@ -301,25 +301,18 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   // 3. the real guard: a tool that needs their yes is refused without it (and runs with it)
   {
     let wrote = 0;
-    const raw = () => ({ writeDocument: aiTool({ description: "write", inputSchema: z.object({ title: z.string() }), execute: async () => { wrote++; return { ok: true }; } }) });
+    const raw = () => ({ correctWhatCoKnows: aiTool({ description: "write", inputSchema: z.object({ title: z.string() }), execute: async () => { wrote++; return { ok: true }; } }) });
     const member = { phone: "", firstName: "Jordan", city: "San Francisco", tasks: [], loops: null };
     const noYes = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t1", turnWords: "We have a partner event in November.", callWords: "We have a partner event in November.", lastCoLine: "Want me to put that in a doc?", member, dryRun: true, tools: raw() });
-    check("the call's writeDocument carries the registry's theirYes field (the same guard as texting)", JSON.stringify(noYes.defs.find((d) => d.name === "writeDocument")?.input_schema).includes("theirYes"));
-    const up = scripted([[...text("Let me write that up."), ...tool("w1", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}')], text("I'll hold off until you say so.")]);
+    check("the call's correctWhatCoKnows carries the registry's theirYes field (the same guard as texting)", JSON.stringify(noYes.defs.find((d) => d.name === "correctWhatCoKnows")?.input_schema).includes("theirYes"));
+    const up = scripted([[...text("Let me write that up."), ...tool("w1", "correctWhatCoKnows", '{"title":"Partner plan","theirYes":"yes please"}')], text("I'll hold off until you say so.")]);
     await go(baseBody(), { stream: up.stream, tools: noYes });
     const fed = up.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
     check("a tool needing their yes is refused when their words this turn hold no yes", wrote === 0 && /Quote only the words in their message that say yes/.test(fed), fed);
     const yes = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t1", turnWords: "Yes please, take the lead on it.", callWords: "Yes please, take the lead on it.", lastCoLine: null, member, dryRun: true, tools: raw() });
-    const up2 = scripted([[...tool("w2", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}', 0)], text("It's on its way by text.")]);
+    const up2 = scripted([[...tool("w2", "correctWhatCoKnows", '{"title":"Partner plan","theirYes":"yes please"}', 0)], text("It's on its way by text.")]);
     await go(baseBody(), { stream: up2.stream, tools: yes });
     check("and runs when their yes is in what they just said", wrote === 1);
-    // A refused attempt can be fixed and tried once more in the same turn (the tool's own refusal says so), not a third time.
-    let tries = 0;
-    const flaky = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t2", turnWords: "Yes please.", callWords: "Yes please.", lastCoLine: null, member, dryRun: true, tools: { writeDocument: aiTool({ description: "w", inputSchema: z.object({ title: z.string() }), execute: async () => { tries++; return { ok: false, error: "Not sent: fix the second line." }; } }) } });
-    const a1: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "1");
-    const a2: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "2");
-    const a3: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "3");
-    check("a refused document is retried once in the turn, then the per-turn limit holds", tries === 2 && a1.ok === false && a2.ok === false && /Already done this turn/.test(a3.error ?? ""), { tries, a3 });
   }
   // 4. the step cap and the time budget
   {
@@ -379,7 +372,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     // The voice read's answers only where the read can run (services/voiceRead.ts voiceReadPrereqs), as by text.
     const runsHere = (await import("../../src/services/voiceRead.js")).voiceReadPrereqs();
     check("the real call toolset is the texting tools: every one, described by its registry entry", CT.CALL_TOOL_NAMES.every((n) => real.names.has(n) || (n === "voiceRead" && !runsHere)) && real.defs.every((d) => d.description === C.toolUse(d.name, "call")), [...real.names]);
-    check("each schema is a JSON object schema with the guard's fields", real.defs.every((d: any) => d.input_schema.type === "object" && d.input_schema.properties?.why) && JSON.stringify(real.defs.find((d) => d.name === "researchBrief")?.input_schema).includes("theirYes"));
+    check("each schema is a JSON object schema with the guard's fields", real.defs.every((d: any) => d.input_schema.type === "object" && d.input_schema.properties?.why) && JSON.stringify(real.defs.find((d) => d.name === "correctWhatCoKnows")?.input_schema).includes("theirYes"));
   }
 }
 

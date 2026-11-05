@@ -10,8 +10,6 @@ process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 process.env.DATABASE_URL = "postgres://ci:ci@127.0.0.1:1/ci";
 process.env.DOTENV_CONFIG_PATH = "/dev/null";
 process.env.GOOGLE_TOKEN_KEY = Buffer.alloc(32, 7).toString("base64");
-process.env.GOOGLE_CLIENT_ID = "test-client";
-process.env.GOOGLE_CLIENT_SECRET = "test-secret";
 process.env.GOOGLE_CUE_CLIENT_ID = "test-cue-client";
 process.env.GOOGLE_CUE_CLIENT_SECRET = "test-cue-secret";
 process.env.API_URL = "https://api.example.test";
@@ -37,11 +35,11 @@ check("the grant is exactly free/busy: anything wider or else is refused", C.cal
   check("Google's consent screen asks for free/busy and nothing else, never merged with an earlier grant", u.searchParams.get("scope") === FB && u.searchParams.get("include_granted_scopes") === "false");
   check("... on the calendar's own OAuth client (its own Google project), never the Gmail/Drive one", u.searchParams.get("client_id") === "test-cue-client");
   const only = { ...process.env, GOOGLE_CUE_CLIENT_ID: "", GOOGLE_CUE_CLIENT_SECRET: "" };
-  check("without its own client the calendar grant is off: no fallback to the combined grant's client", !C.calendarConfigured(only) && C.calendarConfigured() && G.googleConfigured(only));
+  check("without its own client the calendar grant is off: no fallback to the combined grant's client", !C.calendarConfigured(only) && C.calendarConfigured());
 }
 {
   const ga = src("services/googleAuth.ts");
-  check("the combined Google grant never serves a calendar link (never reused to save time)", (ga.match(/grant_kind = 'google'/g) ?? []).length === 2);
+  check("the combined Google grant never serves a calendar link (never reused to save time)", (ga.match(/grant_kind = 'google'/g) ?? []).length === 0 && /\? \(rows\[0\]\.grant_kind as GrantKind\) : null/.test(src("services/cueGrants.ts")));
   check("the calendar link is its own kind, with its own token table", /grant_kind\) VALUES \(\$1, \$2, \$3, NOW\(\) \+ make_interval\(secs => \$4\), \$5\)/.test(src("services/cueGrants.ts")) && /calendar: \{ scope: CALENDAR_SCOPES\[0\], table: "calendar_grants"/.test(src("services/cueGrants.ts")) && /CREATE TABLE IF NOT EXISTS calendar_grants/.test(src("db/migrations.ts")));
 }
 
@@ -116,7 +114,7 @@ check("the grant is exactly free/busy: anything wider or else is refused", C.cal
   const line = items.find((i) => i.ref === "grant:calendar");
   check("the grant shows in what Cue knows, in plain words, and can be removed (that disconnects)", !!line && /only when you're busy or free/.test(line.text) && /never shared/.test(line.text) && /case "grant":[\s\S]{0,400}disconnectGrant\(a, userId\)/.test(src("services/whatCoKnows.ts")));
   const tools = src("services/googleTools.ts");
-  check("Cue's calendar tool sends the calendar link (never the combined Google one)", /calendarConnection: tool/.test(tools) && /createCalendarLink\(ctx\.userId\)/.test(tools.slice(tools.indexOf("calendarConnection"), tools.indexOf("googleConnection: tool"))));
+  check("Cue's calendar tool sends the calendar link (never the combined Google one)", /calendarConnection: tool/.test(tools) && /createCalendarLink\(ctx\.userId\)/.test(tools.slice(tools.indexOf("calendarConnection"), tools.length)));
   const caps = src("services/capabilities.ts");
   const cal = caps.slice(caps.indexOf('id: "calendar"'), caps.indexOf('\n    id: "', caps.indexOf('id: "calendar"') + 10));
   check("what Cue says it can do: busy or free only, never shared, and it never holds a time", /never what an event is, where, or with whom/.test(cal) && /never shared with anyone, including other members/.test(cal) && /Cue never holds, books or reserves a time/.test(cal));
@@ -160,7 +158,7 @@ check("the grant is exactly free/busy: anything wider or else is refused", C.cal
     }
   }
   const routes = readFileSync(new URL("../../src/routes/google.ts", import.meta.url), "utf8");
-  check("an expired or used link shows Cue's page, never the old one that says 'Text Co'", /if \(!kind\) return res\.status\(410\)\.send\(calPage\("This link has expired", "<p>Text Cue and ask for a new one\.<\/p>"\)\);/.test(routes) && routes.indexOf("if (!kind) return res.status(410)") < routes.indexOf("consentUrlFor(String(req.params.state))"));
+  check("an expired or used link shows Cue's page, never the old one that says 'Text Co'", /return res\.status\(410\)\.send\(calPage\("This link has expired", "<p>Text Cue and ask for a new one\.<\/p>"\)\);/.test(routes) && !/consentUrlFor|Text Co\b/.test(routes));
 }
 
 console.log(`bounce calendar: ${total - failed}/${total} passed`);

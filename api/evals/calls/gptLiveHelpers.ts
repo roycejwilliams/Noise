@@ -172,10 +172,10 @@ const decisions = (d: string) => db.decisions.filter((x) => x.decision === d);
 // ---------------------------------------------------------------- 0. the GPT-Live allow-list
 {
   const live = CAP.liveCallToolNames();
-  check("0. GPT-Live's list is the call allow-list's quick tools: the event feed, starting a task or a brief, saving, correcting, a link on file", ["searchEvents", "startTask", "researchBrief", "saveAsk", "updateTask", "closeTask", "shareLink", "correctWhatCoKnows"].every((t) => live.includes(t)), live);
+  check("0. GPT-Live's list is the call allow-list's quick tools: the event feed, starting a task or a brief, saving, correcting, a link on file", ["searchEvents", "startTask", "saveAsk", "updateTask", "closeTask", "shareLink", "correctWhatCoKnows"].every((t) => live.includes(t)), live);
   check("0. never: a page, deck or document made in this process (not durable), a public share, a link reset, a calendar grant, a permanent delete", ["makePage", "updatePage", "makeDeck", "updateDeck", "writeDocument", "shareArtifact", "resetLink", "calendarConnection", "takeDownPage", "deleteImages"].every((t) => !live.includes(t)), live);
   check("0. never: web search, page reads, intros, invites or anything that costs money (never on the call list at all)", ["webSearch", "readPage", "requestEventIntro", "sendInvite", "shareFinds", "draftEmail"].every((t) => !live.includes(t)) && live.every((t) => CT.CALL_TOOL_NAMES.includes(t)));
-  check("0. a job is what startTask, researchBrief and saveAsk start; a send or a save isn't", ["startTask", "researchBrief", "saveAsk"].every(CAP.startsWork) && !["shareLink", "updateNotes", "searchEvents"].some(CAP.startsWork));
+  check("0. a job is what startTask and saveAsk start; a send or a save isn't", ["startTask", "saveAsk"].every(CAP.startsWork) && !["shareLink", "updateNotes", "searchEvents"].some(CAP.startsWork));
 }
 
 // ---------------------------------------------------------------- 1. a verified quick lookup, used live
@@ -365,20 +365,6 @@ let jobRow: any = null;
 }
 
 // ---------------------------------------------------------------- 6. missing permissions
-{
-  // No yes: a venue brief needs their yes (the registry's confirm), and the read says this isn't one.
-  yes = false;
-  const b = bridge([
-    [...text("One sec."), ...tool("r1", "researchBrief", { what: "a launch venue for 40", headcount: 40, city: "San Francisco", theirYes: "venues are a pain" })],
-    text("I've started the venue brief, it'll come as a document."),
-    text("I can put a venue brief together if you want one."),
-  ]);
-  await b.start();
-  const a = await b.turn("Ugh, venues are a pain.", "d1", 1);
-  yes = true;
-  check("6. no yes: no brief starts, and 'I've started the venue brief' is never said", db.tasks.length === 0 && !/I've started the venue brief/.test(a) && decisions("tool.researchBrief").some((d) => d.action === "needs_yes"), { a, d: decisions("tool.researchBrief") });
-  b.tw.close();
-}
 {
   // Texts off: nothing is texted, now or later, and no line says it went or will.
   const b = bridge([

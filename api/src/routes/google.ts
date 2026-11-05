@@ -1,8 +1,7 @@
-// Google connect pages (services/googleAuth.ts). /google/connect/:state is the
-// one-time link Co texts; it opens Google's consent screen. /google/callback
+// Google connect pages for the calendar and Docs grants (services/cueGrants.ts). /google/connect/:state is the
+// one-time link Cue texts; it shows what Cue sees, then opens Google's consent screen. /google/callback
 // is where Google sends them back. Nothing here shows anyone's data.
 import { Router } from "express";
-import { consentUrlFor, finishConnect, googleConfigured } from "../services/googleAuth.js";
 import { cueGrantsConfigured, disconnectByToken, finishGrantConnect, grantConsentUrlFor, grantKindOf, type GrantKind } from "../services/cueGrants.js";
 
 const page = (title: string, body: string) =>
@@ -32,25 +31,7 @@ export const CALENDAR_GRANT_COPY = {
   notConnected: "There's no calendar connected on this link anymore.",
   off: "Connecting your calendar isn't turned on yet.",
 } as const;
-// The Docs grant (Royce, 2026-10-15: "drive.file gets its own grant in the published project, same pattern as the calendar split").
-// COPY: every line here is in the PR's Copy section for Royce.
-export const DOCS_GRANT_COPY = {
-  title: "Connect Google Docs",
-  sees: "Cue will save documents it makes for you into your Google Drive, and see only those.",
-  never: ["Never anything else in your Drive: no other files, folders or Docs.", "Cue never shares a Doc. It's yours alone until you share it.", "Cue never changes or deletes your own files."],
-  undo: "You can undo it any time: text Cue \"disconnect Google Docs\", or tap Disconnect on the next page.",
-  go: "Continue to Google",
-  doneTitle: "Google Docs connected",
-  done: "Cue can save documents it makes for you to your Drive, and sees only those.",
-  disconnect: "Disconnect",
-  sureTitle: "Disconnect Google Docs?",
-  sure: "Cue will stop saving documents to your Drive. Docs it already made stay yours.",
-  goneTitle: "Disconnected",
-  gone: "Cue can no longer reach your Drive. Docs it already made stay in it, yours to keep or delete.",
-  notConnected: "There's no Google Docs connection on this link anymore.",
-  off: "Connecting Google Docs isn't turned on yet.",
-} as const;
-const GRANT_COPY: Record<GrantKind, typeof CALENDAR_GRANT_COPY | typeof DOCS_GRANT_COPY> = { calendar: CALENDAR_GRANT_COPY, docs: DOCS_GRANT_COPY };
+const GRANT_COPY: Record<GrantKind, typeof CALENDAR_GRANT_COPY> = { calendar: CALENDAR_GRANT_COPY };
 const GRANT_KINDS = Object.keys(GRANT_COPY) as GrantKind[];
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -60,22 +41,18 @@ export function createGoogleRouter(): Router {
   router.get("/connect/:state", async (req, res) => {
     // A calendar or Docs link shows its grant screen first; Google's screen only after they choose to go on.
     const kind = await grantKindOf(String(req.params.state)).catch(() => null);
-    if (kind && kind !== "google") {
+    if (kind) {
       const C = GRANT_COPY[kind];
       if (!cueGrantsConfigured()) return res.status(404).send(calPage("Not available yet", `<p>${esc(C.off)}</p>`));
       return res.send(calPage(C.title, `<p>${esc(C.sees)}</p><ul>${C.never.map((n) => `<li>${esc(n)}</li>`).join("")}</ul><p class="small">${esc(C.undo)}</p><a class="btn go" href="/google/connect/${encodeURIComponent(String(req.params.state))}/go">${esc(C.go)}</a>`));
     }
-    // An expired or used link reads as nothing: Cue's own page, never the old one (review of the grants work: it said "Text Co").
-    if (!kind) return res.status(410).send(calPage("This link has expired", "<p>Text Cue and ask for a new one.</p>"));
-    if (!googleConfigured()) return res.status(404).send(page("Not available yet", "Connecting Google isn't turned on yet."));
-    const url = await consentUrlFor(String(req.params.state)).catch(() => null);
-    if (!url) return res.status(410).send(page("This link has expired", "Text Cue and ask for a new one."));
-    res.redirect(302, url);
+    // An expired, used or unknown link (including any old combined-grant link) reads as nothing: Cue's own page.
+    return res.status(410).send(calPage("This link has expired", "<p>Text Cue and ask for a new one.</p>"));
   });
 
   router.get("/connect/:state/go", async (req, res) => {
     const kind = await grantKindOf(String(req.params.state)).catch(() => null);
-    if (!kind || kind === "google") return res.status(410).send(calPage("This link has expired", "<p>Text Cue and ask for a new one.</p>"));
+    if (!kind) return res.status(410).send(calPage("This link has expired", "<p>Text Cue and ask for a new one.</p>"));
     if (!cueGrantsConfigured()) return res.status(404).send(calPage("Not available yet", `<p>${esc(GRANT_COPY[kind].off)}</p>`));
     const url = await grantConsentUrlFor(kind, String(req.params.state)).catch(() => null);
     if (!url) return res.status(410).send(calPage("This link has expired", "<p>Text Cue and ask for a new one.</p>"));
@@ -102,15 +79,13 @@ export function createGoogleRouter(): Router {
     }
     // A calendar or Docs grant goes its own way (services/cueGrants.ts): its own scope and token, and its page has the one-tap disconnect.
     const kind = await grantKindOf(state).catch(() => null);
-    if (kind && kind !== "google") {
+    if (kind) {
       const c = await finishGrantConnect(kind, state, code).catch(() => ({ ok: false }) as { ok: boolean; revoke?: string });
       if (!c.ok || !c.revoke) return res.status(400).send(calPage("Not connected", "<p>That didn't work, so nothing was connected. Text Cue for a new link.</p>"));
       const C = GRANT_COPY[kind];
       return res.send(calPage(C.doneTitle, `<p>${esc(C.done)}</p><p class="small">${esc(C.undo.replace(", or tap Disconnect on the next page", ""))}</p><a class="btn quiet" href="/google/${kind}/disconnect/${encodeURIComponent(c.revoke)}">${esc(C.disconnect)}</a>`));
     }
-    const r = await finishConnect(state, code).catch(() => ({ ok: false }));
-    if (!r.ok) return res.status(400).send(page("Not connected", "That didn't work, so nothing was connected. Text Cue for a new link."));
-    res.send(page("Connected", "Cue can now see which emails you sent are still waiting on a reply (who, subject and date, never the message). It never sends email. Text Cue \"disconnect Google\" any time."));
+    return res.status(400).send(page("Not connected", "That link has expired, so nothing was connected. Text Cue for a new link."));
   });
 
   return router;

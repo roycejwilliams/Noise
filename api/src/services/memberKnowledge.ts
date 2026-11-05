@@ -49,7 +49,6 @@ import type { EmotionalContext } from "../harness/emotion.js";
 import { CO_GROUNDING, CO_MEMBER_SAFETY } from "./coCore.js";
 import { collapseCarried, promiseFacts, type CarriedLine, type CorrectionRow } from "./callContext.js";
 import { isDoorLook, type BriefView, type CoTask } from "./coTasks.js";
-import type { Receipt } from "./deliveryReceipts.js";
 import type { Claim, Kind as ClaimKind, Provenance } from "./factLabels.js";
 import type { GoalState, GoalStateRow } from "./goalEdges.js";
 import { goalHash, restates } from "./goalEdges.js";
@@ -207,7 +206,6 @@ export type KnowledgeDeps = {
   linkedNames: (userId: string) => Promise<string[]>;
   goalStates: (userId: string) => Promise<GoalStateRow[]>;
   asks: (userId: string) => Promise<RawAsk[]>;
-  receipts: (userId: string) => Promise<Receipt[]>;
   ledgerSent: (userId: string) => Promise<RawSent[]>;
   offers: (userId: string) => Promise<SentItem[]>;
   tasks: (userId: string) => Promise<CoTask[]>;
@@ -219,8 +217,6 @@ export type KnowledgeDeps = {
   limits: (userId: string) => Promise<Limits & { at: Date | null }>;
   taste: (userId: string) => Promise<{ text: string; at: Date } | null>;
   roomTaste: (userId: string) => Promise<{ text: string; at: Date }[]>;
-  // Their design taste (services/designTaste.ts), read with room taste as what they told Co. Optional, so stubs without it still work.
-  designTaste?: (userId: string) => Promise<{ text: string; at: Date }[]>;
   claims: (userId: string, now: Date, zone: string | null) => Promise<Claim[]>;
   restraint: (userId: string, now: Date) => Promise<RawRestraint>;
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
@@ -251,7 +247,6 @@ export const realKnowledgeDeps: KnowledgeDeps = {
       createdAt: new Date(r.created_at),
       lastMentionedAt: dateOrNull(r.last_mentioned_at),
     })),
-  receipts: async (userId) => (await import("./deliveryReceipts.js")).pgReceipts.forUser(userId, 30),
   ledgerSent: async (userId) =>
     (
       await rows(
@@ -302,11 +297,6 @@ export const realKnowledgeDeps: KnowledgeDeps = {
   roomTaste: async (userId) => {
     const R = await import("./roomTaste.js");
     return (await R.loadRoomTaste(userId)).map((r) => ({ text: R.roomTasteLine(r.taste), at: r.at }));
-  },
-  designTaste: async (userId) => {
-    const D = await import("./designTaste.js");
-    const t = await D.loadDesignTaste(userId);
-    return t ? [{ text: D.designTasteLine(t.taste), at: t.at }] : [];
   },
   taste: async (userId) => {
     const text = await (await import("./outcomes.js")).tasteSummary(userId);
@@ -472,7 +462,7 @@ export function settleGoalCorrections<C extends Correction>(corrections: C[], go
 }
 
 // Pure: everything Co sent them, one entry per thing (a URL or a name), from all three records. at is the newest send of it.
-export function mergeDelivered(o: { receipts: Receipt[]; ledger: RawSent[]; offers: SentItem[] }): Fact<Delivered>[] {
+export function mergeDelivered(o: { ledger: RawSent[]; offers: SentItem[] }): Fact<Delivered>[] {
   const items: Fact<Delivered>[] = [];
   const find = (what: string, url: string | null) => {
     const u = urlKey(url), n = norm(what);
@@ -492,10 +482,6 @@ export function mergeDelivered(o: { receipts: Receipt[]; ledger: RawSent[]; offe
     if (had.kind === "item" && x.kind !== "item") had.kind = x.kind;
     if (at > had.at) had.at = had.verifiedAt = at;
   };
-  // One entry per document across versions: the newest.
-  const newest = new Map<string, Receipt>();
-  for (const r of [...o.receipts].sort((a, b) => b.deliveredAt.getTime() - a.deliveredAt.getTime())) if (!newest.has(r.docKey)) newest.set(r.docKey, r);
-  for (const r of newest.values()) add({ what: r.title, kind: "document", at: r.deliveredAt, via: "receipt", url: r.link });
   for (const r of o.ledger) {
     const doc = DOC_LABEL.test(r.label);
     add({ what: doc ? docTitle(r.label) : r.label, kind: doc ? "document" : r.kind ?? "item", at: r.at, via: "ledger", url: r.url });
@@ -507,7 +493,7 @@ export function mergeDelivered(o: { receipts: Receipt[]; ledger: RawSent[]; offe
 // Pure: the one carrying builder. turnContext.ts carryingItems (tasks, briefs, receipts, loops, with told) and callContext.ts
 // collapseCarried (a call's promises against what was delivered: "they have it") in one list, each item once: due first, then
 // outstanding, then done; within a state, soonest due first.
-export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: Receipt[]; ledger: RawSent[]; loops: RawLoop[]; promises: { at: Date; content: string }[]; now: Date; zone: string | null }): Fact<CarryItem>[] {
+export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; ledger: RawSent[]; loops: RawLoop[]; promises: { at: Date; content: string }[]; now: Date; zone: string | null }): Fact<CarryItem>[] {
   const now = o.now.getTime();
   const tomorrow = localDay(new Date(now + DAY), o.zone);
   const items: Fact<CarryItem>[] = [];
@@ -532,14 +518,7 @@ export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: 
     else if (b.status === "open") items.push(item({ what: b.goal, kind: "brief", state: "outstanding", told: true, theyHaveIt: false, dueAt: null, ref: `brief #${b.id}`, detail: "running", verifiedAt: at }));
     else if (b.status === "done") items.push(item({ what: b.goal, kind: "brief", state: "done", told: true, theyHaveIt: true, dueAt: null, ref: `brief #${b.id}`, detail: "finished", verifiedAt: at }));
   }
-  // Documents they have: the newest version of each (receipts), then Co's older ledger record of documents (which predates receipts).
-  const newest = new Map<string, Receipt>();
-  for (const r of [...o.receipts].sort((a, b) => b.deliveredAt.getTime() - a.deliveredAt.getTime())) if (!newest.has(r.docKey)) newest.set(r.docKey, r);
-  const docs = [...newest.values()].slice(0, 5);
-  for (const r of docs) {
-    const pending = r.status === "pdf_pending";
-    items.push(item({ what: r.title, kind: "document", state: pending ? "outstanding" : "done", told: true, theyHaveIt: true, dueAt: null, ref: `doc #${r.id}`, detail: pending ? "the text went; the PDF still follows" : `version ${r.version}, delivered`, verifiedAt: r.deliveredAt.toISOString() }));
-  }
+  // Documents Co delivered before the document layer was removed stay as history, from Co's ledger record.
   const ledgerDocs = o.ledger.filter((r) => DOC_LABEL.test(r.label) && now - r.at.getTime() <= 30 * DAY);
   for (const r of ledgerDocs) {
     const title = docTitle(r.label);
@@ -554,7 +533,7 @@ export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: 
   // What Co said on a call it would do (promise_result), collapsed against what was delivered (callContext.ts collapseCarried):
   // a promise that went, or that names a document they have, is theirs ("they have it"); the rest is outstanding, and told (they
   // heard it on the call). A promise that is also a task above shows once, as the task.
-  const delivered = [...docs.map((r) => ({ title: r.title, at: r.deliveredAt })), ...ledgerDocs.map((r) => ({ title: docTitle(r.label), at: r.at }))];
+  const delivered = [...ledgerDocs.map((r) => ({ title: docTitle(r.label), at: r.at }))];
   // The same "Oct 8: " day prefix callContext gives each line: collapseCarried reads the day from it and strips "Promised on the
   // call:" after it; without it every promise naming a deliverable matched any sent one and dropped (review of #119).
   const zoneDay = (d: Date | string) => DateTime.fromJSDate(d instanceof Date ? d : new Date(d)).setZone(wordsZone(o.zone)).toFormat("LLL d");
@@ -674,12 +653,11 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
-  const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, limits] = await Promise.all([
+  const [states, asks, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, limits] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
     skip("asks", "asks", () => d.asks(userId), [] as RawAsk[]),
-    skip(["delivered", "carrying"], "receipts", () => d.receipts(userId), [] as Receipt[]),
-    skip(["delivered", "carrying"], "ledger", () => d.ledgerSent(userId), [] as RawSent[]),
+        skip(["delivered", "carrying"], "ledger", () => d.ledgerSent(userId), [] as RawSent[]),
     skip("delivered", "offers", () => d.offers(userId), [] as SentItem[]),
     skip("carrying", "tasks", () => d.tasks(userId), [] as CoTask[]),
     skip("carrying", "briefs", () => d.briefs(userId), [] as BriefView[]),
@@ -688,7 +666,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     skip("lessons", "lessons", () => d.lessons(userId), [] as { text: string; at: Date }[]),
     skip("corrections", "corrections", () => d.corrections(userId, opts.corrections ?? CORRECTION_DEFAULTS), [] as CorrectionRow[]),
     skip("preferences", "taste", () => d.taste(userId), null),
-    skip("preferences", "room taste", async () => [...(await d.roomTaste(userId)), ...(d.designTaste ? await d.designTaste(userId).catch(() => []) : [])], [] as { text: string; at: Date }[]),
+    skip("preferences", "room taste", async () => [...(await d.roomTaste(userId))], [] as { text: string; at: Date }[]),
     skip("claims", "claims", () => d.claims(userId, now, zone), [] as Claim[]),
     skip("restraint", "restraint", () => d.restraint(userId, now), null as RawRestraint | null),
     skip("exchanges", "exchanges", () => d.exchanges(userId, { limit: Math.max(1, opts.exchanges ?? EXCHANGE_DEFAULTS.limit), days: Math.max(1, opts.exchangeDays ?? EXCHANGE_DEFAULTS.days) }), [] as { content: string; at: Date }[]),
@@ -712,14 +690,13 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const keptLoops = loops.flatMap((l) => { const title = g(l.title); return title === null ? [] : [{ ...l, title, detail: l.detail ? g(l.detail) : l.detail }]; });
   const keptPromises = promises.flatMap((p) => { const content = g(p.content); return content === null ? [] : [{ ...p, content }]; });
   const keptLedger = ledger.flatMap((s) => { const label = g(s.label); return label === null ? [] : [{ ...s, label }]; });
-  // What they have (document receipts) and what Cue sent first (offers): a document or a find named by the removed thing is left out.
-  const keptReceipts = W && removed.length ? receipts.filter((r) => g(String(r.title ?? "")) === String(r.title ?? "")) : receipts;
+  // What they have and what Cue sent first (offers): a document or a find named by the removed thing is left out.
   const keptOffers = W && removed.length ? withoutRemovedSent(offers, removed, W) : offers;
 
   if (on("goals")) k.goals = goalsOf(profile, states);
   if (on("asks")) k.asks = asks.filter((a) => a.text.trim()).map((a) => ({ id: a.id, text: a.text.trim(), kind: a.kind === "help" ? "help" : "find", verifiedAt: latest(a.createdAt, a.lastMentionedAt) }));
-  if (on("delivered")) k.delivered = mergeDelivered({ receipts: keptReceipts, ledger: keptLedger, offers: keptOffers });
-  if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, receipts: keptReceipts, ledger: keptLedger, loops: keptLoops, promises: keptPromises, now, zone });
+  if (on("delivered")) k.delivered = mergeDelivered({ ledger: keptLedger, offers: keptOffers });
+  if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, ledger: keptLedger, loops: keptLoops, promises: keptPromises, now, zone });
   if (on("lessons")) k.lessons = keptLessons.filter((l) => l.text.trim()).map((l) => ({ text: l.text.trim(), verifiedAt: l.at.toISOString() }));
   if (on("corrections")) k.corrections = settleGoalCorrections(corrections.map((c) => ({ field: String(c.field), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), verifiedAt: latest(c.corrected_at) })), goalsOf(profile, states));
   if (on("preferences")) k.preferences = [

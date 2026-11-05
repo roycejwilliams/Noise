@@ -85,7 +85,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   check("paused, opted out or failed = untold", ["proactive outreach is paused", "opted out", "boom"].every((reason) => RB.briefLineOutcome({ sent: false, reason }, 1) === "untold"));
   const rb = src("services/researchBrief.ts");
   check("no closing line goes through a fire-and-forget say() any more", !/await say\(/.test(rb) && (rb.match(/await tellThenClose\(/g) ?? []).length >= 3);
-  check("told: closed as planned; held: the task stays open with the line and wakes in their hours; untold: dropped, saying so", /if \(next === "hold"\)[\s\S]{0,700}holdBriefLine\(task\.userId, task\.id, \{ text, status, outcome \}, (?:held \?\? )?nextSendable\(new Date\(\), zone\)\)/.test(rb) && /closeTask\(task\.userId, task\.id, next === "told" \? status : "dropped", next === "told" \? outcome : `\$\{outcome\}; never told them/.test(rb));
+  check("told: closed as planned; held: the task stays open with the line and wakes in their hours; untold: dropped, saying so", /if \(next === "hold"\)[\s\S]{0,700}holdBriefLine\(task\.userId, task\.id, \{ text, messages, status, outcome, \.\.\.\(record\?\.length \? \{ record \} : \{\}\) \}, (?:held \?\? )?nextSendable\(new Date\(\), zone\)\)/.test(rb) && /closeTask\(task\.userId, task\.id, next === "told" \? status : "dropped", next === "told" \? outcome : `\$\{outcome\}; never told them/.test(rb));
   check("a held line is said on the next wake without running the find again", rb.indexOf("if (held?.text)") > 0 && rb.indexOf("if (held?.text)") < rb.indexOf("findVenueOptions(task.userId"));
   check("a brief that found nothing is closed as done only through tellThenClose (never before they're told)", !/closeTask\(task\.userId, task\.id, "done", `no brief/.test(rb));
   check("holdBriefLine only touches an open brief", /WHERE user_id = \$1 AND id = \$2 AND status = 'open' AND kind = 'research_brief'/.test(ct));
@@ -138,16 +138,12 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   check("the last look offers only now or skip", tools2 === "checkInNow,skip" && r2.action === "skip" && did === "skip");
 }
 
-// ---- 2026-10-08 follow-on: a brief whose PDF won't send still reaches them; "asked for space" is skip
+// ---- 2026-10-08 follow-on: "asked for space" is skip (a brief whose PDF won't send is gone with the document wrapper, 2026-11-04)
 {
-  const RB = await import("../../src/services/researchBrief.js");
   const { narratesInternalState } = await import("../../src/services/speakable.js");
-  const t = RB.briefOptionsText("Venue options: a launch dinner for 40", [{ name: "Perbacco", url: "https://www.perbaccosf.com/dining/" }, { name: "Mastro's", url: "https://www.mastrosrestaurants.com/private-events-san-francisco/" }]);
-  check("the fallback names what it is and lists each option with its link", /^The venue options for a launch dinner for 40 wouldn't come through as a PDF, so here they are:/.test(t) && /1\. Perbacco: https:\/\/www\.perbaccosf\.com\/dining\//.test(t) && /2\. Mastro's: https:/.test(t));
-  check("the fallback never narrates Cue's state", narratesInternalState(t) === null);
-  const rb = src("services/researchBrief.ts");
-  check("a brief whose document didn't go is kept and re-sent, never closed silently", /if \(!delivered\.sent\) \{[\s\S]{0,500}holdBriefDoc\(/.test(rb) && !/"the brief couldn't be sent"/.test(rb));
-  check("the retry re-sends the same document (no new find), through the receipts, then texts the options", /pendingDoc\?\.doc[\s\S]{0,300}sendBrief\(pendingDoc\.doc/.test(rb) && /briefOptionsText\(pendingDoc\.title, pendingDoc\.options\)/.test(rb) && RB.DOC_RETRIES >= 1 && !/deliverDocument\(/.test(rb.slice(rb.indexOf("export async function runResearchBriefTask"))));
+  const RB = await import("../../src/services/researchBrief.js");
+  const t = (await RB.researchMessages([{ name: "Perbacco", url: "https://www.perbaccosf.com/dining/", checkedAt: "2026-10-08T17:00:00.000Z", reader: "scripted", fields: [] }], { firstName: "Jordan", ask: "a venue", context: [], draft: async ({ items }) => ({ captions: new Map(items.map((it) => [it.url, "A private dining room that fits the size you gave."])) }) })).messages.join("\n");
+  check("a research result never narrates Cue's state", narratesInternalState(t) === null);
   const fu = src("services/followUps.ts");
   check("asking for space is skip, never later", /that is skip, never later/.test(fu) && /Never "later" because they asked for space/.test(fu));
 }

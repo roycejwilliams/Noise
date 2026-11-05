@@ -389,8 +389,8 @@ const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partn
   const row = db.candidates.find((c) => c.target_key === "research_brief:77");
   check("brief: a requested brief waits at the door (queued, not sent this minute)", r.sent === false && r.door === true && r.queued === true && db.outbox.length === 0);
   check("brief: as a candidate under its own type and key, requested, with its words as written", !!row && row.type === "task_update" && row.payload.door === true && row.payload.cls === "requested" && row.payload.messages[0].startsWith("The venue brief"));
-  check("brief: a queued line is not told: the task stays open until the pick sends it", RB.briefLineOutcome({ sent: false, door: true, queued: true }, 0) === "queued" && /if \(next === "queued"\) \{[\s\S]{0,400}holdBriefLine\([\s\S]{0,200}return;/.test(src("services/researchBrief.ts")));
-  check("brief: the line carries its task and how to close it when it goes", /taskId: task\.id, close: \{ status, outcome \}/.test(src("services/researchBrief.ts")));
+  check("brief: a queued line is not told: the task stays open until the pick sends it", RB.briefLineOutcome({ sent: false, door: true, queued: true }, 0) === "queued" && /if \(next === "queued"\) \{[\s\S]{0,400}holdBriefLine\([\s\S]{0,400}return;/.test(src("services/researchBrief.ts")));
+  check("brief: the line carries its task and how to close it when it goes", /taskId: task\.id,\s*close: \{ status, outcome \}/.test(src("services/researchBrief.ts")));
   const asCand: Candidate = { id: "b", userId: ELI, type: "task_update", targetKey: row.target_key, topicKey: row.target_key, summary: row.summary, priority: row.priority, dueAt: new Date(row.due_at), expiresAt: row.expires_at ? new Date(row.expires_at) : null, payload: row.payload, attempts: 0, createdAt: new Date(row.due_at) };
   const draft = await proactiveRegistry.task_update.draft(asCand, { userId: ELI, firstName: "Eli", phoneNumber: PHONE, city: "San Francisco", timezone: ZONE });
   check("brief: the pick sends it exactly as written (no second draft, no model)", "messages" in draft && draft.messages.join("|") === row.payload.messages.join("|"));
@@ -400,7 +400,7 @@ const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partn
   check("brief: it arrives, first, through the pick", s.sends.length === 1 && s.sends[0].lead.id === "b");
   check("brief: a requested door text skips the lanes' quota like any answer (never starved by caps), and keeps the spacing", PR.isAnswering(asCand) && PR.sendIsExempt(asCand, []));
   check("brief: the event brief (the day before a Co event) is a requested candidate in the pick", G.candidateClass("event_brief", false) === "requested" && PR.bandOfCandidate(cand("event_brief", { expiresAt: pt("2026-11-10T18:00:00") }), pt("2026-11-09T10:00:00")) === DR.BAND.requested);
-  check("brief: the research brief's lines pass a door spec", /type: "task_update", targetKey: `research_brief:\$\{task\.id\}`[\s\S]{0,200}door \}\)/.test(src("services/researchBrief.ts")));
+  check("brief: the research brief's lines pass a door spec", /type: "task_update", targetKey: `research_brief:\$\{task\.id\}`[\s\S]{0,400}\.\.\.\(door \? \{ door \} : \{\}\) \}\)/.test(src("services/researchBrief.ts")));
 }
 
 // ================================================================ 6. a notice within a few hours still goes immediately; a reply is never delayed

@@ -195,7 +195,6 @@ export type WorldInput = {
   searching: SearchCoverage;
   ahead: Ahead | null;
   offeredGoals: { title: string; offeredAt: string | null; momentOn?: string | null }[];
-  docOffer: { topic: string; at?: string | null } | null;
   threads: { text: string; line: string }[];
   // null: the read failed, so what waits on them isn't known (counted as withheld, never as nothing).
   exchange: ExchangeLine[] | null;
@@ -239,10 +238,6 @@ export function buildMemberWorld(o: WorldInput): MemberWorld {
     for (const g of o.offeredGoals) {
       const title = keep(g.title);
       if (title && !provenPast(g.momentOn, clock) && !coSince(g.offeredAt, title)) waiting.push({ kind: "goal_split", name: title, at: g.offeredAt, endsOn: g.momentOn ?? null, fact: `the split Cue offered for their goal "${title}", waiting on their pick` });
-    }
-    if (o.docOffer) {
-      const topic = keep(o.docOffer.topic);
-      if (topic && !coSince(o.docOffer.at, topic)) waiting.push({ kind: "doc_offer", name: topic, at: o.docOffer.at ?? null, fact: `Cue's offer to write up "${topic}", waiting on their yes` });
     }
   }
   // Running: the turn's own items, already stripped by the turn; counted again here only if the strip blanks them now.

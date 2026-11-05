@@ -29,7 +29,7 @@ import { datesOnPage, dayIn, eventDateOf, exitKey, formOf, lifeEndOf } from "./f
 import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
 import { START_LEAD_MINUTES, eventStartProblem, matchStartProblem } from "./eventStart.js";
 
-// A read this recent counts as now: the plan/email tool's own window for a Luma page (agent/loopTools.ts emailPlan).
+// A read this recent counts as now: the old plan tool's window for a Luma page.
 export const RECHECK_FRESH_MS = 30 * 60 * 1000;
 // Anything uncertain is read again after this long (and never later than the row's own expiry, harness/proactive.ts).
 export const RECHECK_RETRY_HOURS = 3;

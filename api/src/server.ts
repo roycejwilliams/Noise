@@ -1,5 +1,4 @@
 import "dotenv/config";
-import { servePlanFile } from "./services/planFile.js";
 import { initTelemetry } from "./telemetry.js";
 initTelemetry();
 
@@ -40,7 +39,8 @@ import { serveCoVCard, serveVersionedVCard } from "./routes/contactCard.js";
 import { createEmailOptOutRouter } from "./routes/emailOptOut.js";
 import { createGoogleRouter } from "./routes/google.js";
 import { createReadoutRouter } from "./routes/readout.js";
-import { createCoPageRouter } from "./routes/coPage.js";
+
+const GONE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>No longer available</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:20vh auto;padding:0 1rem;color:#222"><p>This page is no longer available.</p></body></html>`;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -142,8 +142,9 @@ app.use("/mo", createEmailOptOutRouter());
 app.use("/google", createGoogleRouter());
 // The host's read-only partner readout, by an approved link only (services/partnerReadoutSend.ts).
 app.use("/readout", createReadoutRouter());
-// A Co page, by its unguessable link only; never listed (routes/coPage.ts). Behind the global limiter above.
-app.use("/d", createCoPageRouter());
+// Pages and decks are gone (2026-11-04). Every old page and artifact link answers 410 with one plain line; nothing is read or served,
+// and the stored rows stay untouched until Royce OKs expiring them. Behind the global limiter above.
+app.use("/d", (_req, res) => res.status(410).set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex" }).type("html").send(GONE_PAGE));
 
 // Serve Co's vCard so Sendblue can attach it to the circle_placement iMessage.
 // Sendblue fetches media_url before sending — this endpoint must be publicly reachable
@@ -166,9 +167,6 @@ app.get("/audio/:id", (req, res) => {
   return res.send(entry.buffer);
 });
 
-// A plan's PDF for Sendblue to attach to a text: random id, short-lived, never listed (services/planFile.ts).
-app.get("/plan-file/:id.pdf", servePlanFile);
-app.get("/plan-file/:id/:name", servePlanFile);
 
 app.use(errorHandler);
 

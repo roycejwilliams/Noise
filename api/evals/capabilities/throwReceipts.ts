@@ -46,15 +46,15 @@ const boom = new Error("Resend 502: upstream unavailable");
 
 // ------------------------------------------------------------ 1. a thrown tool leaves its receipt
 decisions.length = 0; ledger.length = 0;
-const t1 = turn({ draftEmail: async () => { throw boom; } });
+const t1 = turn({ steerAwayFrom: async () => { throw boom; } });
 let thrown: unknown = null;
-await quietly(() => t1.tools.draftEmail.execute({ to: "events@venue.example", subject: "Dinner for 12", why: "they asked" }, {}).catch((e: unknown) => { thrown = e; }));
+await quietly(() => t1.tools.steerAwayFrom.execute({ to: "events@venue.example", subject: "Dinner for 12", why: "they asked" }, {}).catch((e: unknown) => { thrown = e; }));
 await settle(1);
 check("the error is thrown on unchanged, so the model reads the same tool error it always did", thrown === boom);
 const nd = t1.rf.facts.filter((f) => f.kind === "not_done");
-check("the reply has a NOT DONE receipt for it", nd.length === 1 && /^draftEmail didn't go through: it failed with an error\.$/.test(nd[0].text), t1.rf.facts);
+check("the reply has a NOT DONE receipt for it", nd.length === 1 && /^steerAwayFrom didn't go through: it failed with an error\.$/.test(nd[0].text), t1.rf.facts);
 check("…and nothing says it was done", !t1.rf.facts.some((f) => f.kind === "did_this_turn"));
-check("the decision row says not_done, with what was thrown", decisions.length === 1 && decisions[0].decision === "tool.draftEmail" && decisions[0].outcome === "skip" && decisions[0].action === "not_done" && decisions[0].proposal?.threw === true && /^threw: Resend 502/.test(decisions[0].proposal?.error ?? ""), decisions);
+check("the decision row says not_done, with what was thrown", decisions.length === 1 && decisions[0].decision === "tool.steerAwayFrom" && decisions[0].outcome === "skip" && decisions[0].action === "not_done" && decisions[0].proposal?.threw === true && /^threw: Resend 502/.test(decisions[0].proposal?.error ?? ""), decisions);
 await settle(1);
 check("…and the action ledger has a not_done row for it", ledger.length === 1 && ledger[0].relation === "not_done" && ledger[0].receipt === "not_done", ledger);
 
@@ -67,24 +67,24 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   check("a 'done' claim after a throw, citing nothing: cut", citesNothing.pass === false && /has to come from a fact/.test(citesNothing.reason), citesNothing);
   check("…citing the NOT DONE receipt: cut as tried and not done", citesReceipt.pass === false && /did NOT happen/.test(citesReceipt.reason), citesReceipt);
   // The control: the same claim when the tool went through and left its receipt.
-  const ok = turn({ draftEmail: async () => ({ ok: true }) });
-  await quietly(() => ok.tools.draftEmail.execute({ to: "events@venue.example", subject: "Dinner for 12" }, {}));
+  const ok = turn({ steerAwayFrom: async () => ({ ok: true }) });
+  await quietly(() => ok.tools.steerAwayFrom.execute({ to: "events@venue.example", subject: "Dinner for 12" }, {}));
   G.addFact(ok.rf, "did_this_turn", 'Sent them a draft to the venue: "Dinner for 12"');
   const [backed] = G.claimChecks([claim(ok.rf.facts.find((f) => f.kind === "did_this_turn")!.id)], ok.rf, src);
   check("control: with a real receipt the same claim stands", backed.pass === true, backed);
-  check("the receipts the claim check reads as done never include the throw", !G.receiptsForCheck(t1.rf).includes("draftEmail"));
+  check("the receipts the claim check reads as done never include the throw", !G.receiptsForCheck(t1.rf).includes("steerAwayFrom"));
 }
 
 // ------------------------------------------------------------ 3. the same request after a throw is recorded once
 {
   decisions.length = 0; ledger.length = 0;
-  const t = turn({ draftEmail: async () => { throw boom; } });
+  const t = turn({ steerAwayFrom: async () => { throw boom; } });
   const input = { to: "events@venue.example", subject: "Dinner for 12" };
   const errs: unknown[] = [];
   await quietly(async () => {
-    await t.tools.draftEmail.execute({ ...input, why: "they asked" }, {}).catch((e: unknown) => errs.push(e));
+    await t.tools.steerAwayFrom.execute({ ...input, why: "they asked" }, {}).catch((e: unknown) => errs.push(e));
     // The same request, with a different why and its keys in another order.
-    await t.tools.draftEmail.execute({ subject: "Dinner for 12", to: "events@venue.example", why: "trying again" }, {}).catch((e: unknown) => errs.push(e));
+    await t.tools.steerAwayFrom.execute({ subject: "Dinner for 12", to: "events@venue.example", why: "trying again" }, {}).catch((e: unknown) => errs.push(e));
   });
   await settle(1);
   check("the same request again isn't run again", t.runs.length === 1, t.runs);
@@ -93,7 +93,7 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   check("request keys ignore Cue's why and key order, and nothing else", requestKey("x", { a: 1, b: { d: 2, c: 3 }, why: "p" }) === requestKey("x", { b: { c: 3, d: 2 }, a: 1, why: "q" }) && requestKey("x", { a: 1 }) !== requestKey("x", { a: 2 }) && requestKey("x", { a: 1 }) !== requestKey("y", { a: 1 }));
   // Something different is a new request: it runs (the refusal's one free retry), and leaves its own receipt.
   let second: any = null;
-  await quietly(async () => { second = await t.tools.draftEmail.execute({ to: "hello@other.example", subject: "Dinner for 12" }, {}).catch((e: unknown) => e); });
+  await quietly(async () => { second = await t.tools.steerAwayFrom.execute({ to: "hello@other.example", subject: "Dinner for 12" }, {}).catch((e: unknown) => e); });
   await settle(2);
   check("a different request still runs, once, with its own receipt", t.runs.length === 2 && second === boom && decisions.length === 2, { runs: t.runs, decisions: decisions.length });
 }
@@ -101,10 +101,10 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   // A throw that comes back as done on a different request: done is done, recorded as done.
   decisions.length = 0;
   let n = 0;
-  const t = turn({ draftEmail: async () => { if (n++ === 0) throw boom; return { ok: true }; } });
+  const t = turn({ steerAwayFrom: async () => { if (n++ === 0) throw boom; return { ok: true }; } });
   await quietly(async () => {
-    await t.tools.draftEmail.execute({ to: "a@venue.example", subject: "x" }, {}).catch(() => {});
-    await t.tools.draftEmail.execute({ to: "b@venue.example", subject: "x" }, {});
+    await t.tools.steerAwayFrom.execute({ to: "a@venue.example", subject: "x" }, {}).catch(() => {});
+    await t.tools.steerAwayFrom.execute({ to: "b@venue.example", subject: "x" }, {});
   });
   await settle(2);
   check("after a throw, a different request that goes through is recorded as done", decisions.map((d) => d.action).join() === "not_done,done", decisions.map((d) => d.action));
@@ -112,13 +112,13 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
 
 // ------------------------------------------------------------ 3b. no free retry after a throw for a tool that sends or changes (review of #350)
 {
-  // draftEmail sends (perTurn 2): a throw uses its turn. One more, different request may run; then the limit, which never says
+  // steerAwayFrom sends (perTurn 2): a throw uses its turn. One more, different request may run; then the limit, which never says
   // nothing went.
   decisions.length = 0;
-  const t = turn({ draftEmail: async () => { throw boom; } });
+  const t = turn({ steerAwayFrom: async () => { throw boom; } });
   const out: any[] = [];
   await quietly(async () => {
-    for (const to of ["a@venue.example", "b@venue.example", "c@venue.example"]) out.push(await t.tools.draftEmail.execute({ to, subject: "x" }, {}).catch((e: unknown) => e));
+    for (const to of ["a@venue.example", "b@venue.example", "c@venue.example"]) out.push(await t.tools.steerAwayFrom.execute({ to, subject: "x" }, {}).catch((e: unknown) => e));
   });
   await settle(3);
   check("a tool that sends: a throw doesn't free up a retry (two runs of its two a turn, then the limit)", t.runs.length === 2 && out[0] === boom && out[1] === boom && out[2]?.ok === false, { runs: t.runs, out });
@@ -128,11 +128,11 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   const r = turn({ webSearch: async () => { throw boom; } });
   await quietly(async () => { for (const q of ["a", "b", "c", "d", "e"]) await r.tools.webSearch.execute({ what: q }, {}).catch(() => {}); });
   check("a tool that only reads keeps its one free retry after a throw", r.runs.length === 4, r.runs);
-  check("the read-only list holds reads only: nothing that sends or changes", (["draftEmail", "shareFinds", "shareLink", "sendContactCard", "saveAsk", "writeDocument", "correctWhatCoKnows"] as const).every((n) => !READS_ONLY.has(n)) && READS_ONLY.has("webSearch") && READS_ONLY.has("readPage"));
+  check("the read-only list holds reads only: nothing that sends or changes", (["steerAwayFrom", "shareFinds", "shareLink", "sendContactCard", "saveAsk", "correctWhatCoKnows"] as const).every((n) => !READS_ONLY.has(n)) && READS_ONLY.has("webSearch") && READS_ONLY.has("readPage"));
   // A refusal with no throw keeps its old words: nothing came of it.
-  const plain = turn({ draftEmail: async () => ({ ok: false, error: "Read the place's page first." }) });
+  const plain = turn({ steerAwayFrom: async () => ({ ok: false, error: "Read the place's page first." }) });
   const p: any[] = [];
-  await quietly(async () => { for (const to of ["a@x.example", "b@x.example", "c@x.example", "d@x.example"]) p.push(await plain.tools.draftEmail.execute({ to, subject: "x" }, {})); });
+  await quietly(async () => { for (const to of ["a@x.example", "b@x.example", "c@x.example", "d@x.example"]) p.push(await plain.tools.steerAwayFrom.execute({ to, subject: "x" }, {})); });
   check("control: refusals without a throw still end on 'nothing from it exists or was sent'", /nothing from it exists or was sent/i.test(p[3]?.error ?? ""), p[3]);
 }
 {
@@ -141,10 +141,10 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   let yesReads = 0;
   (await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => (yesReads++, { yes: true, why: "fixture: they asked", read: true }));
   const rf = G.createReplyFacts();
-  const tools: any = guardTools({ writeDocument: { execute: async () => { throw boom; }, inputSchema: z.object({ what: z.string().optional() }) } }, { userId: "u-1", resolvedContent: "put that in a doc for me", dryRun: false, notDone: (w) => G.addFact(rf, "not_done", w) });
+  const tools: any = guardTools({ correctWhatCoKnows: { execute: async () => { throw boom; }, inputSchema: z.object({ what: z.string().optional() }) } }, { userId: "u-1", resolvedContent: "yes, correct that", dryRun: false, notDone: (w) => G.addFact(rf, "not_done", w) });
   await quietly(async () => {
-    await tools.writeDocument.execute({ what: "plan", theirYes: "put that in a doc for me" }, {}).catch(() => {});
-    await tools.writeDocument.execute({ what: "plan", theirYes: "put that in a doc for me", why: "again" }, {}).catch(() => {});
+    await tools.correctWhatCoKnows.execute({ what: "plan", theirYes: "yes, correct that" }, {}).catch(() => {});
+    await tools.correctWhatCoKnows.execute({ what: "plan", theirYes: "yes, correct that", why: "again" }, {}).catch(() => {});
   });
   await settle(1);
   check("a repeat after a throw makes no second yes read and logs no second row", yesReads === 1 && decisions.length === 1 && decisions[0].action === "not_done" && !decisions.some((d) => d.action === "needs_yes"), { yesReads, decisions: decisions.map((d) => d.action) });
@@ -156,17 +156,17 @@ check("…and the action ledger has a not_done row for it", ledger.length === 1 
   const t = turn({
     shareFinds: async () => ({ ok: false, sent: [], refused: ["Jazz at Linden: sold out", "Bar Nine: caption says more than its facts"], note: "Nothing sent." }),
     saveAsk: async () => withReason({ ok: false, error: "couldn't save that as something to look for" }, "couldn't save that as something to look for: the read of the ask timed out (6s)"),
-    draftEmail: async () => ({ ok: false, error: "Read the place's page first." }),
+    steerAwayFrom: async () => ({ ok: false, error: "Read the place's page first." }),
   });
   const shared = await quietly(() => t.tools.shareFinds.execute({ what: "jazz" }, {}));
   const saved = await quietly(() => t.tools.saveAsk.execute({ what: "jazz nights" }, {}));
-  await quietly(() => t.tools.draftEmail.execute({ to: "x@venue.example", subject: "y" }, {}));
+  await quietly(() => t.tools.steerAwayFrom.execute({ to: "x@venue.example", subject: "y" }, {}));
   await settle(3);
   const by = (n: string) => decisions.find((d) => d.decision === `tool.${n}`)?.proposal?.error;
   check("shareFinds' refusal is logged with its refused items, not an empty error", by("shareFinds") === "Jazz at Linden: sold out | Bar Nine: caption says more than its facts", by("shareFinds"));
   check("saveAsk's refusal is logged with its kept reason", by("saveAsk") === "couldn't save that as something to look for: the read of the ask timed out (6s)", by("saveAsk"));
   check("…while the model reads exactly what it did before", saved.error === "couldn't save that as something to look for" && !("reason" in saved) && Array.isArray(shared.refused) && shared.note === "Nothing sent.");
-  check("an error is logged as the error, as before", by("draftEmail") === "Read the place's page first.");
+  check("an error is logged as the error, as before", by("steerAwayFrom") === "Read the place's page first.");
   check("refusalReason reads nothing into a result without a failure", refusalReason(null) === "" && refusalReason({ ok: false }) === "");
 }
 {

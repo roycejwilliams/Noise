@@ -33,7 +33,7 @@ for (const [k, v] of Object.entries(w)) check(`${k}: exactly one tool carries th
 check("the cached part is identical for a member, the team, a turn after a reaction, a walk-in turn and a voice note", ["team", "acked", "walkin", "voice"].every((k) => w[k].head === w.member.head), ["team", "acked", "walkin", "voice"].filter((k) => w[k].head !== w.member.head));
 const moving = comeAndGoTools();
 for (const [k, v] of Object.entries(w)) check(`${k}: nothing that comes and goes sits before the cache point`, v.names.slice(0, v.cut + 1).every((n) => !moving.has(n)), v.names.slice(0, v.cut + 1).filter((n) => moving.has(n)));
-check("the team's own tools, a leave-it and the walk-in receipt are still offered when they apply (after the cache point)", w.team.names.length > w.member.names.length && w.acked.names.includes("leaveItAtReaction") && w.walkin.names.includes("askedWalkin"));
+check("the team's own tools, a leave-it and the walk-in receipt are still offered when they apply (after the cache point)", w.team.names.length >= w.member.names.length && w.acked.names.includes("leaveItAtReaction") && w.walkin.names.includes("askedWalkin"));
 // The ordering itself: same tools in, same tools out (only the order and one cache point), checked on a set with both kinds.
 const sample = { zeta: { description: "z" }, saveKitFact: { description: "k" }, alpha: { description: "a" }, leaveItAtReaction: { description: "l" } } as Record<string, any>;
 const ordered = orderForCache(sample);

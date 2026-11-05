@@ -32,7 +32,7 @@ import { REMINDER_RETRY } from "./relay.js";
 import { goalBody, promiseKeptBy, reminderTiedTo, reminderPromise, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
-import { WRITE_DOCUMENT_INPUT, type WriteDocumentInput } from "./documentSheet.js";
+import { MAKER_DECLINE_RULE } from "./coVoice.js";
 import type { GateCheck } from "../harness/core.js";
 import { withMember } from "./llmUsage.js";
 
@@ -72,8 +72,6 @@ export type TaskTurnDeps = {
   now: () => Date;
   // What Co sent them since a time (texts, links, documents): a promise closes as done only on a matching send after it.
   sentSince?: (since: Date) => Promise<Sent[]>;
-  // The document tool, texting's own (services/documentDelivery.ts sendDocumentForTask): grounded, inside their hours, recorded.
-  writeDocument?: (input: WriteDocumentInput, o: { read: string }) => Promise<{ ok: true; title: string; via: string } | { ok: false; why: string; nextAt?: Date }>;
   // A commitment's window (services/memberTime.ts): the miss warning, sent once per window through the send path with quiet hours,
   // the window moved to the new time, and the next check set to when the deliverable can go out.
   warn?: (text: string, key: string) => Promise<{ sent: boolean; reason?: string }>;
@@ -137,10 +135,11 @@ export async function promiseCloseCheck(task: Pick<CoTask, "goal" | "theirWords"
   return { ok: true, why: v.why };
 }
 
-// The promised thing is a document (a doc, PDF, write-up, or a plan Co is writing): it goes through writeDocument, never a text.
+// The promised thing is a document (a doc, PDF, write-up, or a plan Co is writing): Cue no longer makes those (2026-11-04). The task says
+// so once, plainly, and closes; it never claims a file was made or sent.
 export function documentPromiseLine(t: Pick<CoTask, "source" | "goal" | "theirWords">): string {
   if (t.source !== "promise" || !wantsDocument(t.goal, t.theirWords)) return "";
-  return `\nWHAT YOU PROMISED IS A DOCUMENT. Send it with writeDocument (it arrives as a PDF), never as a text or a run of texts. Their points (the sections) only in their own words: what they want, their event, their constraints. Your plan, ideas and recommendations go in suggestions: that's most of a planning doc, and it's fine. Don't name a place, person, number or date they never said or you never read. Once it's sent, finish the task as done.`;
+  return `\nWHAT YOU PROMISED IS A DOCUMENT, AND CUE DOESN'T MAKE DOCUMENTS ANY MORE. ${MAKER_DECLINE_RULE} Tell them once, inside your window, then finish the task as dropped. Never say a document was made or sent.`;
 }
 
 // Pure: the reminder they asked for that keeps this bring-up promise (review of #352): due from the promise to the end of the window Cue
@@ -244,7 +243,7 @@ This is wake-up ${t.wakes} of at most ${TASK_LIMITS.maxWakes}. Now, their time: 
 ${o.person ? `What you know about them (who they are, what's going on, what you've done, everything you're carrying for them):\n${o.person}\n\n` : ""}${o.knowledge ? `${o.knowledge}\n\n` : ""}${o.rules ? `Rules for them:\n${o.rules}\n\n` : ""}Your recent texts with them (oldest first, each stamped with its time, theirs; read their newest messages first, they may have answered you or changed their mind):
 ${o.recent || "(none)"}
 
-Do the next real step with your tools (search for events and opportunities, webSearch for anything else such as venues, vendors, people or prices, readPage, writeDocument for a document you promised), and write down what you learned with note. When you finish a step, call note with stepDone set to that step's exact text. Only mark a step done when you actually did it; closing a task doesn't finish its steps.
+Do the next real step with your tools (search for events and opportunities, webSearch for anything else such as venues, vendors, people or prices, readPage), and write down what you learned with note. When you finish a step, call note with stepDone set to that step's exact text. Only mark a step done when you actually did it; closing a task doesn't finish its steps.
 Then decide:
 - If they've said they don't need it anymore, found it themselves, or it's done: finish it (and tellThem only if a short close-out helps).
 - Text only about this goal. Their other goals have their own tasks, so never start, promise or report work on another goal here.
@@ -613,36 +612,6 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         return { ok: true };
       },
     }),
-    // Texting's own document tool (the same input and registry entry, agent/loopTools.ts writeDocument; the same pipeline,
-    // services/documentDelivery.ts), so a promised plan or doc arrives as a document, never a wall of text.
-    writeDocument: tool({
-      description: toolUse("writeDocument"),
-      inputSchema: WRITE_DOCUMENT_INPUT,
-      execute: async (input) => {
-        if (!deps.writeDocument) return { ok: false, error: "Documents can't be sent from here. Note it and schedule the next look." };
-        if (docsSent.length) return { ok: false, error: "You already sent the document this wake-up." };
-        // What Co read this wake-up can back a place or event in its own suggestions; never a claim about them.
-        const read = [verifiedFactLines(verified).join("\n"), events.map((e) => `${e.name} ${e.facts.join(" ")}`).join("\n"), pageFacts.join("\n")].join("\n");
-        const r = await deps.writeDocument(input, { read }).catch((err: any) => ({ ok: false as const, why: `it didn't go out (${String(err?.message ?? err).slice(0, 80)})` }));
-        if (!r.ok) {
-          did.push(`document not sent: ${r.why.slice(0, 140)}`);
-          // Their quiet hours (9pm to 8am): the next look is their 8am, set here, not left to the model's arithmetic.
-          const quietUntil = "nextAt" in r ? r.nextAt : undefined;
-          // Held for pacing (a Co look-out's document): the same hold as a held text, and the wake given back.
-          if (quietUntil && /^Not sent: held:/.test(r.why) && (!heldUntil || quietUntil > heldUntil)) heldUntil = quietUntil;
-          if (quietUntil && deps.scheduleAt) {
-            await deps.scheduleAt(quietUntil, /^Not sent: held:/.test(r.why) ? "Send the document now if it still holds: it was held for pacing." : "Send the document you promised: it was ready during their quiet hours.");
-            nextAt = quietUntil;
-            decided = "scheduled";
-          }
-          return { ok: false, error: r.why };
-        }
-        docsSent.push(r.title);
-        did.push(`sent a document: ${r.title} (${r.via})`);
-        await deps.note(`Sent them the document "${r.title}" (${r.via === "pdf_text" ? "a PDF in their thread" : r.via}).`, null);
-        return { ok: true, note: "It's sent, with its one line. If it's what you promised, finish the task as done. Don't text about it or its contents: the delivery is complete." };
-      },
-    }),
   };
 
   try {
@@ -931,10 +900,9 @@ export function warningChecks(text: string, o: { thing: string; when: string; al
 }
 
 // Pure: the line in plain words when no draft holds up. Better than going quiet on a window.
-export function fallbackWarning(thing: string, when: string, doc: boolean): string {
+export function fallbackWarning(thing: string, when: string): string {
   const plural = /s$/i.test(thing) && !/\b(?:this|plan|brief|analysis)$/i.test(thing);
   const pron = thing === "it" ? "it" : plural ? "them" : "it";
-  if (doc) return `${thing === "it" ? "The document" : thing[0].toUpperCase() + thing.slice(1)} isn't finished yet, I'll have it to you ${when}.`;
   return thing === "it" ? `No luck yet, I'll have it for you ${when}.` : `No luck on ${thing} yet, I'll have ${pron} for you ${when}.`;
 }
 
@@ -964,7 +932,6 @@ export async function warnIfWindowMissed(task: CoTask, w: CommitWindow, nextAt: 
   }
   const re = rescheduledWindow(nextAt, now, deps.zone, w);
   const thing = promisedThing(task.goal);
-  const doc = wantsDocument(task.goal, task.theirWords);
   const facts = { what_you_promised: task.goal.replace(/^(?:Keep your word from the call|Keep your promise):\s*/i, ""), window_words: w.words, what_isnt_there_yet: thing, new_time: re.when, their_local_time: localStamp(now, deps.zone) };
   const bad = (t: string) => warningChecks(t, { thing, when: re.when, alsoNames: task.theirWords }).filter((c) => !c.pass);
   let text: string | null = null;
@@ -975,7 +942,7 @@ export async function warnIfWindowMissed(task: CoTask, w: CommitWindow, nextAt: 
     const second = await draft(facts, { draft: first, failed: bad(first).map((c) => c.reason ?? c.name).join("; ") }).catch(() => null);
     if (second && !bad(second).length) text = second;
   }
-  text ??= fallbackWarning(thing, re.when, doc);
+  text ??= fallbackWarning(thing, re.when);
   const r = deps.warn ? await deps.warn(text, `task:${task.id}:window:${w.deadline}`).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) })) : { sent: false, reason: "no send path" };
   if (!r.sent && r.reason !== "already sent") return { sent: false, what: `window: warning not sent (${r.reason ?? "unknown"})` };
   await deps.setWindow?.(re.window);
@@ -1096,14 +1063,6 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
       const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock(), answers: { askedAt: task.createdAt ? new Date(task.createdAt) : null }, queueIfHeld: true });
       return { sent: r.sent, reason: r.reason };
     },
-    writeDocument: async (input, { read }) => {
-      const { sendDocumentForTask, realTaskDocDeps } = await import("./documentDelivery.js");
-      // A Co look-out's document, PDF or Google Doc, is a Co-initiated find like its texts; a member look-out's is owed (Royce, 2026-10-09).
-      const kind = lookoutKind(task);
-      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null, ...(kind ? { coInitiated: { kind } } : {}) }, { ...realTaskDocDeps, now: clock });
-      await recordDecision({ layer: 7, decision: "task.writeDocument", userId, outcome: r.ok ? "act" : "skip", action: r.ok ? r.title : "not_sent", reason: r.ok ? null : r.why.slice(0, 300), proposal: { taskId: task.id, via: r.ok ? r.via : null } }).catch(() => {});
-      return r;
-    },
     textsToday: () => taskTextsToday(userId),
     send: async (messages, o) => {
       // Only a text they're owed goes exempt. A look-out from Co's own promise sends finds, counted and held like sweep finds
@@ -1187,6 +1146,12 @@ async function runDueTask(t: CoTask): Promise<void> {
   const L = await import("./commitmentLog.js");
   // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
   if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
+  // A goal piece that was to be drafted and sent as a document (removed 2026-11-04): nothing writes it now, so it closes honestly as
+  // dropped, no text, and is never promised again.
+  if (t.kind === "work" && t.followup?.goalId != null && !t.followup?.checkin && /^Draft:/i.test(t.goal)) {
+    await closeTask(t.userId, t.id, "dropped", "drafting a piece as a document was removed; nothing was written or sent").catch(() => false);
+    return;
+  }
   // A goal's check-in or reminder (services/goalOwnership.ts): real state first, then one text through the task-update path.
   if (t.kind === "work" && t.followup?.checkin) await import("./goalOwnership.js").then((g) => g.runGoalCheckin(t)).catch((err: any) => console.error("goal check-in failed (non-fatal):", err?.message ?? err));
   else if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));

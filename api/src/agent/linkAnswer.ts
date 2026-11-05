@@ -1,83 +1,11 @@
-// A page, deck or share link and the answer to anything else they asked, in ONE text (Royce, 2026-10-11: "Never drop it silently:
-// deliver the link AND answer the question in one text"). The link's tools take alsoAnswer; it goes after the link in the same
-// message, through the same fact check and brand guard as any reply (ctx.checkAnswer, set by conversationTools.ts).
-//
-// And the net under it (afterLinkAnswers): when Co still drafts a separate reply after a link, a small model check reads whether
+// The net under a delivered text that is the turn's whole answer (anythingForMe): when Co still drafts a separate reply after it, a small model check reads whether
 // that reply answers something else in their message. An answer goes; commentary on the link ("Done, the deck's built around the
 // navy and gold") doesn't, since the link's text is the whole delivery. If the check can't run, the reply goes: a second text is
 // better than a dropped answer.
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
-import { z } from "zod";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
-import type { ConversationToolContext } from "./conversationTools.js";
-
-// A link that was made but whose text didn't send: registered for resendLink (agent/artifactTools.ts) and put in the turn's facts with
-// its URL, so the link can go again by the tool or in Co's reply. The tool's result carries made and url (agent/toolGuard.ts).
-export function unsentLink(ctx: ConversationToolContext, u: { url: string; text: string; what: string }): { ok: false; made: string; url: string; error: string } {
-  (ctx.unsentLinks ??= []).push(u);
-  ctx.facts?.add("did_this_turn", `Made ${u.what}, at ${u.url}, but the text with the link didn't send. It exists; send it again with resendLink, or give the link in your reply.`);
-  return { ok: false, made: `${u.what} (${u.url})`, url: u.url, error: `${u.what[0].toUpperCase()}${u.what.slice(1)} is made, but the text with its link didn't send. Send it again now with resendLink, or give the link in your reply: ${u.url}` };
-}
-
-export const ALSO_ANSWER = z
-  .string()
-  .nullable()
-  .optional()
-  .describe("Only if their message also asked or said something else that needs an answer: your answer to it, in a sentence or two. It goes in the same text, after the link. Never about the page or deck itself.");
-
-// The text with the answer after the link, checked like any reply; the bare text when there's no answer, no check to run it through,
-// or nothing survives the check. confirm() is called only once the text actually sent: then, and only then, Co's record says it
-// answered (review of PR 1: a receipt written before a failed send would let Co claim an answer that never went).
-export async function withAnswer(ctx: ConversationToolContext, text: string, answer: string | null | undefined): Promise<{ text: string; confirm: () => void }> {
-  const a = answer?.trim();
-  const checked = a && ctx.checkAnswer ? (await ctx.checkAnswer(a).catch(() => "")).trim() : "";
-  // An answer the check cut down to a fragment is dropped whole, never sent (live, 2026-10-11: "On the builder community." went out
-  // after a deck's link). So is one the check emptied, or couldn't run on. Never silently: it's a not_done fact, it's owed (the one
-  // reply that answers it may follow the link, conversationTools.ts sendReply), and the link tool's note says so (owedAnswerNote).
-  if (a && (!checked || isFragment(a, checked))) {
-    ctx.facts?.add("not_done", `Your answer to the other thing they asked didn't pass the check and wasn't sent with the link: "${a.slice(0, 120)}"`);
-    ctx.answerOwed = a;
-    return { text, confirm: () => {} };
-  }
-  if (!checked) return { text, confirm: () => {} };
-  return {
-    text: `${text}\n\n${checked}`,
-    confirm: () => {
-      ctx.facts?.add("did_this_turn", `Answered the other thing they asked in the same text as the link: "${checked.slice(0, 160)}"`);
-      ctx.noteAnswerSent?.(checked);
-    },
-  };
-}
-
-// The link tools' own notes say the link's text is the whole delivery and to stop. When the answer meant to ride with it didn't go,
-// that's not true any more: the note says so instead, so Co answers it in one reply (the one sendReply lets through).
-export const OWED_NOTE =
-  "The link went as one text, but your answer to the other thing they asked didn't pass the check and wasn't sent with it. Answer that one thing now in a single reply, plainly and only from what you know, with nothing about the link. Don't say it went with the link.";
-// Wraps each tool's execute in place (the tool objects stay the ones the caller holds) and returns the same set.
-export function owedAnswerNote<T extends Record<string, any>>(ctx: ConversationToolContext, tools: T): T {
-  for (const t of Object.values(tools)) {
-    if (typeof t?.execute !== "function") continue;
-    const run = t.execute;
-    t.execute = async (...args: any[]) => {
-      const before = ctx.answerOwed ?? null;
-      const r = await run(...args);
-      // Only an answer this call left owed, with its link sent (ok): the reply after it is the answer's only way out.
-      return ctx.answerOwed && ctx.answerOwed !== before && r && typeof r === "object" && r.ok ? { ...r, note: OWED_NOTE } : r;
-    };
-  }
-  return tools;
-}
-
-// Pure: whether the check cut the answer down to a piece of itself: four words or fewer, under half its words, or no longer ending as a sentence when it
-// did before. An answer the check left as it was is never a fragment, however short ("Yes, book it.", "Friday at 8 works").
-export function isFragment(original: string, checked: string): boolean {
-  if (checked.trim() === original.trim()) return false;
-  const words = (x: string) => (x.match(/\S+/g) ?? []).length;
-  const ends = (x: string) => /[.?!"')]$/.test(x.trim());
-  return words(checked) <= 4 || words(checked) < words(original) * 0.5 || (ends(original) && !ends(checked));
-}
 
 export type Judge = (prompt: string) => Promise<string>;
 const haiku: Judge = async (prompt) =>

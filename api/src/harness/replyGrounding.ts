@@ -24,10 +24,6 @@ import { dateSpan, KINDS, renderLive, type Kind } from "../services/factLabels.j
 import { arcLine, LENS_RULE } from "../services/goalJourney.js";
 import { isNewMember, steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
 import { doorDecision, doorInstruction, doorOpen, type DoorView } from "../services/theDoor.js";
-import { docOfferLines, type OfferKind } from "../services/documentOffer.js";
-import { findSection } from "../services/deliveryReceipts.js";
-import { driftLine } from "../services/receiptDrift.js";
-import type { Doc } from "../services/documentSheet.js";
 import type { EmotionalContext } from "./emotion.js";
 import { GENTLE_AFTER_HARD, MOOD_HOLD_CAP_HOURS, OKAY_AFTER_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
@@ -53,7 +49,7 @@ import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { isInviteRequest } from "../services/invites.js";
 import { cleanCoMessage } from "../services/sendblue.js";
-import { CO_TEXT_CHANNEL, CO_VOICE } from "../services/coVoice.js";
+import { CO_TEXT_CHANNEL, CO_VOICE, MAKER_DECLINE_RULE } from "../services/coVoice.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
@@ -122,8 +118,6 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "
 
 // privateNames: the other member(s) a blocked turn is about, so a reply can't name them
 // (harness/discretion.ts).
-// artifactOffer: the one offer (a plan sheet, a venue brief, a stale document's fix) this reply was told it may make; recorded only
-// if a text Co sends makes it (services/documentOffer.ts).
 // goalSetAside: a goal Co set aside from context that they haven't heard about yet (services/goalEdges.ts); the reply may raise it.
 // coldStart: set for a member with fewer than two findable interests on file (services/coldStart.ts): whether this reply was offered
 // a steering question, and why or why not; recorded after the reply goes out (agent/conversationReply.ts).
@@ -138,7 +132,7 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "
 // cached block (judgeSystem) and list "Since then" after it.
 // prefRules: how they asked Cue to reply and what not to bring up (services/memberPreferences.ts, applied rules only), for the reply
 // check's rule read (services/prefTopics.ts judgeReplyRules).
-export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; prefRules?: import("../services/memberPreferences.js").ReplyRules | null; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads; exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null };
+export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; prefRules?: import("../services/memberPreferences.js").ReplyRules | null; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads; exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -257,9 +251,10 @@ export function baseReplyFacts(situation?: Situation, snapshot?: Pick<ReplySnaps
 // Gathers the facts that don't depend on what happened earlier in this turn.
 // Branch-specific facts (a link just sent, a call that failed) are added by
 // routes/sendblue.ts as it acts.
-// They're asking for a deck, slides or a presentation: a request word before the noun, so "my presentation went badly" or "she
-// slides into DMs" isn't an ask.
-export const DECK_ASK = /\b(make|build|put together|throw together|draft|design|create|need (a|some|new)|need(?= (slides|decks?|pitch deck)\b)|want (a|some)|would love (a|some)|would like (a|some)|can you|could you|help me with)\b[^.?!\n]{0,40}\b(pitch deck|deck|slides|presentation|slideshow)\b/i;
+// They're asking for a deck, slides, a document, a page or a PDF: a request word before the noun, so "my presentation went badly" or
+// "she slides into DMs" isn't an ask. Cue doesn't make these (the maker layer was removed): MAKER_DECLINE_RULE tells it so.
+export const MAKER_ASK = /\b(make|build|put together|throw together|write|draft|design|create|need (a|some|new)|need(?= (slides|decks?|pitch deck)\b)|want (a|some)|would love (a|some)|would like (a|some)|can you|could you|help me with|send me)\b[^.?!\n]{0,40}\b(pitch deck|deck|slides|presentation|slideshow|document|doc|pdf|one-?pager|write-?up|web ?page|landing page|private page|google doc)\b/i;
+
 // They asked Co to research, look up or look into someone or something.
 export const RESEARCH_ASK = /\b(do (some )?research|research (on|into)|look (up|into)|dig (into|up)|find out (about|who|what)|check out who)\b/i;
 export const RESEARCH_RULE =
@@ -289,40 +284,11 @@ export async function gatherReplyFacts(
   // it's the context's first line, which is their message.
   const theirMessage = String(opts.turn?.message ?? (opts.context ?? "").split("\n")[0]);
   if (RESEARCH_ASK.test(theirMessage)) addInstruction(rf, RESEARCH_RULE);
-  // One question at most before a deck (Royce, 2026-10-11): once Co asked its one question about a deck they want, and no deck has
-  // gone since, this reply builds it (replay: Co asked a second "what's the pitch about?" instead).
-  const deckAsked = await import("../db/db.js")
-    .then(({ default: pool }) =>
-      pool.query(
-        `SELECT 1 FROM co_memories m WHERE m.user_id = $1 AND m.memory_type = 'design_taste_asked' AND m.created_at > NOW() - INTERVAL '6 hours'
-           AND NOT EXISTS (SELECT 1 FROM co_pages p WHERE p.owner_user_id = $1 AND COALESCE(p.data->>'kind', 'page') = 'deck' AND p.created_at > m.created_at)
-         LIMIT 1`,
-        [userId],
-      ),
-    )
-    .then((r) => r.rows.length > 0)
-    .catch(() => false);
-  // The confirm-the-read line (services/designSystem.ts): Co read the look of an image of theirs and asked them to confirm it. Their
-  // answer settles it, and the deck is built from it now.
-  const readAsked = deckAsked
-    ? await import("../services/designSystem.js").then((m) => m.loadDesignSystem(userId, "professional")).then((ds) => ds.pending.filter((p) => p.askedAt)).catch(() => [])
-    : [];
-  if (readAsked.length) {
-    const { confirmLine, foldSignals } = await import("../services/designSystem.js");
-    const line = confirmLine(foldSignals(readAsked.map((p) => ({ ...p, confirmed: true })), readAsked[0].context).tokens);
-    addInstruction(rf, `You checked the look you read from their image with them ("${line}"). This message answers it: build the deck now with makeDeck, readConfirmed true if they agreed (false if they didn't, with taste for what they want), and a brief from everything they told you about the deck. No more questions first; anything you asked about the content that they didn't answer, write the deck without.`);
-  } else if (deckAsked) addInstruction(rf, "You already asked your one question about the deck they want. If this message answers it or still wants the deck, build it now with makeDeck from what you have (pass a brief if you don't have slides): no more questions first. If they haven't said anything about the look, it's clean and minimal.");
-  // They're asking for a deck and Co hasn't asked its one question yet: the deck tool decides whether a question is needed and asks
-  // it, so Co doesn't stack its own first (replay: "what's it for?", then "what's it about?", then the look).
-  else if (DECK_ASK.test(theirMessage)) addInstruction(rf, "If they're asking you to make a deck (not just talking about one), call makeDeck in this turn with what you have (pass a brief if you don't have slides); don't ask them anything yourself first. If something is missing, makeDeck asks the one question, covering the look and the content together.");
+  // They ask for a deck, doc, page or PDF: Cue doesn't make those; the decline is guidance in its own words (services/coVoice.ts).
+  if (MAKER_ASK.test(theirMessage)) addInstruction(rf, MAKER_DECLINE_RULE);
   // How they've told Co they like to be texted (services/textingStyle.ts).
   const style = await textingStyleFor(userId).catch(() => [] as string[]);
   if (style.length) addInstruction(rf, `How they've told you they like to be texted, follow it: ${style.join("; ")}.`);
-  // The pages and decks Co made them that are still live (services/coPages/store.ts), so "reset my link" or "keep it" works on a
-  // turn where the deck isn't in the recent texts (live run, 2026-10-11: Co said it had no deck on file while one was live).
-  // Titles only, never links (a link goes out only through the tools).
-  const live = await import("../services/coPages/store.js").then((m) => m.livePagesFor(userId)).catch(() => [] as { title: string; kind: string }[]);
-  if (live.length) addFact(rf, "known", `Pages and decks you made them that are still live: ${live.slice(0, 8).map((p) => `the ${p.kind} "${p.title}"`).join("; ")}. When they ask to change one ("tighten the traction slide", "move dinner to 8"), open it (openArtifact) and change it from what's there; never ask them to paste or resend it.`);
   // The team only: that they build Co (their team-only abilities are in the sheet). Everyone else gets nothing about them.
   if (team) addInstruction(rf, TEAM_BUILDER_LINE);
   // Abilities switched off right now (services/abilitySwitches.ts).
@@ -451,30 +417,11 @@ export async function gatherReplyFacts(
     addFact(rf, "known", `They're registered for Noise's event "${today.name}" today, starting ${today.startAt}.`);
     addInstruction(rf, `If they say they're running late, can't make it, or aren't sure about "${today.name}", answer them normally and warmly, record it with updateGoing, never pressure them to come, and never offer to contact the host.`);
   }
-  // Writing something up as a document (services/documentOffer.ts): an offer still waiting on its answer, or a moment Co may offer, once.
-  // The same notice covers a plan sheet, a venue brief and a stale delivered document, at most one offer a reply, never in a heavy
-  // moment (this message's feeling, recorded before the reply drafts).
-  let docQuestion: string | null = null;
-  let docOffered = false;
-  {
-    if (opts.turn?.docOffer) opts.turn.docOffer.moment = { heavyNow: heavyHold(opts.turn.emotional, new Date()).hold, coLines: coLinesIn(opts.context) };
-    const doc = docOfferLines(opts.turn?.docOffer, opts.turn?.message ?? "");
-    if (doc.ask || doc.hint) { docQuestion = "a document offer"; docOffered = true; }
-    if (doc.ask) addInstruction(rf, doc.ask);
-    if (doc.pending) addFact(rf, "pending", doc.pending);
-    if (doc.hint) addInstruction(rf, doc.hint);
-    // Recorded once Co's text actually makes it (agent/conversationReply.ts), so it's never offered twice.
-    if (doc.offer) rf.artifactOffer = doc.offer;
-  }
-  // A delivered document that no longer matches what's true (services/receiptDrift.ts): a fact, whether or not Co raises it.
-  for (const d of opts.turn?.drift ?? []) addFact(rf, "known", driftLine(d));
   // One ordered view of everything Co is carrying for them (memberKnowledge.ts carryingOf, labelled by turnContext.ts carryFromKnowledge), and, when this message shares
   // words with a section of a document Co just delivered, a pointer to read it first. Both guidance, never a gate.
   {
     const carrying = carryingBlock(opts.turn?.carrying);
     if (carrying) addInstruction(rf, carrying);
-    const docHint = docQuestionHint(opts.turn?.message ?? "", opts.turn?.recentDocs ?? []);
-    if (docHint) addHint(rf, docHint);
   }
   // Co's own open tasks: real scheduled work, so saying when it'll get back to them is true.
   for (const line of opts.turn?.tasks ?? []) addFact(rf, "scheduled", line);
@@ -497,9 +444,6 @@ export async function gatherReplyFacts(
   }
   // What's ahead from Co, as scheduled (services/whatsAhead.ts): check-ins, follow-ups, tasks, the daily search and queued finds.
   if (opts.turn?.ahead) addFact(rf, "scheduled", opts.turn.ahead);
-  // Documents Co delivered (services/deliveryReceipts.ts): "Documents you've delivered", by doc number, what's outstanding first.
-  // A PDF still to follow a text fallback is scheduled; everything else is what Co did. readDocument quotes from them.
-  for (const line of opts.turn?.deliveries ?? []) addFact(rf, /^Outstanding:/.test(line) ? "scheduled" : "did_before", `Documents you've delivered: ${line}`);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   // A goal Co set aside from context (its date passed, or newer words replaced it) is told, never silent (Royce, 2026-10-08): the
   // oldest one, as a hint the reply may take when it fits. Never in a hard moment, never as a list or an announcement.
@@ -535,7 +479,7 @@ export async function gatherReplyFacts(
   }
   // Cold start (services/coldStart.ts): fewer than two findable interests on file, so a reply may ask one easy question that lets them
   // name something Co could find. New members and existing ones alike, only in a natural exchange, never as outreach.
-  if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
+  if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : null });
   // Where they live, when nothing on file says (2026-10-12, the door rerun: "moved here" plus the club being in San Francisco
   // became "around SF" in a reply and "in SF" in a task). The drafter and the claim read both see it as unknown, never assumed.
   {
@@ -543,19 +487,18 @@ export async function gatherReplyFacts(
     if (opts.turn && cityLine) addFact(rf, "unknown", cityLine);
   }
   // The door (services/theDoor.ts): a new member's first read, once, when Co has heard enough to say it back.
-  if (opts.turn?.door) addDoorMoment(rf, opts.turn.door, { firstName: opts.turn.knowledge?.identity.firstName ?? null, emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
+  if (opts.turn?.door) addDoorMoment(rf, opts.turn.door, { firstName: opts.turn.knowledge?.identity.firstName ?? null, emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : null });
   // A heavy moment holds these back for a later reply, never cancels them (heavyHold): each hold and release logged once, rule and kind.
   if (opts.turn) {
     const heavy = heavyHold(opts.turn.emotional, new Date());
     if (rf.door) noteMoodHold("heavy_offer_hold", "door", `${userId}:door`, heavy);
     if (rf.coldStart) noteMoodHold("heavy_offer_hold", "cold_start", `${userId}:cold_start`, heavy);
-    if (opts.turn.docOffer) noteMoodHold("heavy_offer_hold", "document_offer", `${userId}:document_offer`, heavy);
     // Frustration with Cue holds the door and the question the same way (frustrationHold): logged once, rule and kind.
     const now = new Date();
     if (rf.door && opts.turn.door) noteMoodHold("frustration_hold", "door", `${userId}:door`, frustrationHold(opts.turn.emotional, opts.turn.door.joinedAt, now));
     if (rf.coldStart && opts.turn.coldStart) noteMoodHold("frustration_hold", "cold_start", `${userId}:cold_start`, frustrationHold(opts.turn.emotional, steerOwedSince(opts.turn.coldStart), now));
     // Released (they're okay again, or the cap): what waited goes gently (model-facing tone guidance, never a line of its own).
-    if ((heavy.state === "released_okay" || heavy.state === "released_cap") && (rf.door?.offered || rf.coldStart?.offered || docOffered)) addInstruction(rf, GENTLE_AFTER_HARD);
+    if ((heavy.state === "released_okay" || heavy.state === "released_cap") && (rf.door?.offered || rf.coldStart?.offered)) addInstruction(rf, GENTLE_AFTER_HARD);
   }
   // They're asking about something the record shows Co sent: the record
   // answers, whatever earlier messages said (2026-09-27: after two earlier
@@ -741,25 +684,6 @@ export function steerOwedSince(cs: Pick<ColdStartView, "history" | "joinedAt">):
 // Pure: Co's recent lines from the reply's context (their message, then Co's last few "Co replied:" lines).
 export function coLinesIn(context: string | undefined): string[] {
   return String(context ?? "").split("\n").filter((l) => l.startsWith("Co replied:")).map((l) => l.replace(/^Co replied:\s*/, "").trim()).filter(Boolean);
-}
-
-// Pure: when their message shares words with a section of one of the last three documents Co delivered, a pointer to read it first
-// (2026-10-08 review B6). A hint only: Co decides whether the message is about it.
-const DOC_HINT_STOP = new Set("the and for with what about this that your you can does how why part section bit doc document plan pdf just like into from have has was were are is it's its there their they them when where which who will would could should also than then thanks thank okay ok yes yeah sure got".split(" "));
-const hintWords = (t: string) => (t.toLowerCase().replace(/[’']/g, "'").match(/[a-z0-9][a-z0-9']*/g) ?? []).filter((w) => w.length > 2 && !DOC_HINT_STOP.has(w));
-export function docQuestionHint(message: string, docs: { id: number; title: string; doc: Doc }[]): string | null {
-  const q = new Set(hintWords(message));
-  if (!q.size) return null;
-  let best: { id: number; heading: string; score: number } | null = null;
-  for (const d of docs.slice(0, 3)) {
-    const sec = findSection(d.doc, message);
-    if (!sec) continue;
-    const head = new Set(hintWords(sec.heading).filter((w) => q.has(w))).size;
-    const body = new Set(hintWords(sec.text).filter((w) => q.has(w))).size;
-    const score = head * 3 + body;
-    if ((head >= 1 || body >= 2) && (!best || score > best.score)) best = { id: d.id, heading: sec.heading, score };
-  }
-  return best ? `This may be about doc #${best.id} (${best.heading} section): readDocument before answering.` : null;
 }
 
 // What a search did, written down so the next message can still say it

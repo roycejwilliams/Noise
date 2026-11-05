@@ -2,7 +2,7 @@
 // "Add a lead-time check wherever Cue offers an event ... An event that has started, or starts too soon to act on, is dropped, not
 // offered. The day check isn't enough."). Pure, no database: the reply search's gate (harness/matchGate.ts checkTiming), a find as
 // it's shared (agent/loopTools.ts shareFinds), a waiting offer at send (services/sendCheck.ts), the queue's own window
-// (services/eventSurfacingSweep.ts offerExpiresAt), a tease's yes (routes/sendblue.ts) and a plan's event steps (services/planSheet.ts).
+// (services/eventSurfacingSweep.ts offerExpiresAt), a tease's yes (routes/sendblue.ts).
 import { DateTime } from "luxon";
 import type { TierMatch } from "./tieredRecommendation.js";
 

@@ -1,7 +1,7 @@
 {
   "hash": "a2d37eed101ac7c3",
   "case": "exchange-got-the-venue",
-  "recorded_at": "2026-11-03T20:14:18.772Z",
+  "recorded_at": "2026-11-05T03:28:44.289Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "```json\n{\"reason\": \"They found and booked their own venue, closing the open venue search.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"venue booked for event\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": {\"emotion\": \"excited\", \"intensity\": \"low\", \"valence\": \"positive\", \"about\": \"booking the back room at Fern for their event\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"], \"move\": \"close\", \"refers_to\": null, \"answered\": [], \"closes\": [{\"item\": \"U1\", \"how\": \"solved\"}], \"reopens\": [], \"asks_again\": null}\n```",
+      "text": "{\"reason\":\"They're sharing that they found and booked their own venue, closing the room search\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"sharing\",\"topic\":\"booked a venue for their event\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":{\"emotion\":\"excited\",\"intensity\":\"medium\",\"valence\":\"positive\",\"about\":\"booking the back room at Fern for their event\",\"target\":\"life\"},\"seeking\":\"none\",\"feedback\":[],\"ack\":\"🥂\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"close\",\"refers_to\":null,\"answered\":[],\"closes\":[{\"item\":\"U1\",\"how\":\"solved\"}],\"reopens\":[],\"asks_again\":null}",
       "usage": {
         "input_tokens": 5408,
         "cache_creation_input_tokens": 0,
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 602,
+        "output_tokens": 403,
         "output_tokens_details": {
-          "thinking_tokens": 219
+          "thinking_tokens": 43
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,18 +57,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CggcAdt6UjvrP9dZrfsHG",
+        "id": "msg_011Cgj577quJQioSyUoi1U5X",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "ErQICsQCCBMYAipAmdNwaEUtAGQrnI3WqG7OnwrdIx78N48ho5d83qUOF0tYNWdaxtO9cqno5A0mtZu01ewskXZVuKUMzBH+aI0kzzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBmIGp1wbCAToIBBAAGgwC2ooDTzcFCGkEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDnBCoQ0HE3f4+pMgRvvh9ZW9z/Pl7XnNUFGC/WazMQLiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyX8ZU5cgecOcZvxU0aDHG/sjpSbWZ5ahuq0yIwQqeS/02KfACpqHC2YmZ4+WxHgPN+mo8RZdQTKil1bqBXAjw2LXVTUh+RqCen2Sz9KpwFeLOT7DRkFjpCpWFUzW4yQUhG5JBwg5Ui4NdT1rZJKqX91ATR1kmp0+k7iP2R4R3ytB6a83WtVv1T4H5IDABT658xFXRpT6vYLRdRnP8WzOQg+Mxs22pKu2MoXY+g8Ct+Cp2lbwvDddNoWZmxCWp0Hb+iZeoa3anCBfwupe0VciViDez8EsKn9BdUe0quvLvDz89Arms9LLiDDStv12b/a31oSPpVq/xRnwMph6gSF1GykNOAN9WftG9QZdouUALbNQ+WdDvz9gv9KGfaBdIcvgoHKSi6LmgOi7maX4oXDAUnp0vIBFYZFrV9RoRdYqXXV/oSQxdsZ1CFhfH/1U3/1Y+FD1ViEIspfX7xRd/OmZxp5V9kU7BDks5qJc3xEz7kUS4wi7Fs3ohR6sXpDfwgyCKLy3FbF6O0PNR1O4fPWm5FJ9hvw8/hdpWEO8WYa46U2NLM7lVWNflwcUK1DD6fhLMeelZWS6uz/+wcREEN6mOXW1G8aidx0QhN+mKCj4LQkWEn83CDYjI5d8y7BjYxnU1/SX6qdwjVtDoYnWctBcPkeX7HmX3jV9gGgpow207GE23saChlIGgBabjCLk9WMS1P0Mi3yYkp11cInY/bIdjQ5UJZskEwzI42GyO7F0Rj/MQN9j+0eedSChT/SOBHnMUWCu0HgTaUYdqz4onaeeFaFZREXI4BYEfTEUOw1j2U7pDoGSvfslppndOyWJNAmHpAm5CLEnA+bIeel+Mik7/L/QakfsC7bXbc3fYA6HkuPHWKgwgeyzwmAX/FtFk7bhWRkrYK21Hsc1beSl02rmK+j4aMRcWoHlRw0jTJ1ThYbIMxIyotnIAbn0Fn05K+aMZwj8pupCw1qY2ufSGF965lAnzidS9/bKOm9UQYAQ=="
+            "signature": "ErEECsQCCBMYAipAdq89HouCi8lwDXMKNYE67Ou85i5JJvZpbdUsyVjHV2We3YQAPdVqg+SPgAbzZr34g5V9/xBx5F0vHo5T2A0hkDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB6e+v1wbCAToIBBAAGgwC2ooDTzcFCGkEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDnBCoQ0HE3f4+pMgRvvh9ZW9z/Pl7XnNUFGC/WazMQLiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwHL5xoMM3p6OReRaAaDP5PbV+fOh5yvACCoCIwfgrd/Q/ecHWKkmKoT1MWTuT04BEQNc0e0+IsEqh9kIld3AGMFWGd5ocaJLkSM+lvKpkB698l+Kuj8eggLU0rMkMfezqRczgHFypDbeLydTtjCj7fgrKbPL9I/twtBwlNdO53b+zZNKD2NX1k3R3TyLjQmmbGyvx0ZwToxa6YDKHTRzttmJTC3xnT37lC31WmIAQBbYUj6AW/5xjZodZL+3NBHbsw3AKbKERATu8bDgf7t6kgata4JpS50vkfdrpVsuVv3BufzHhcHrreGAE="
           },
           {
             "type": "text",
-            "text": "```json\n{\"reason\": \"They found and booked their own venue, closing the open venue search.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"venue booked for event\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": {\"emotion\": \"excited\", \"intensity\": \"low\", \"valence\": \"positive\", \"about\": \"booking the back room at Fern for their event\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"], \"move\": \"close\", \"refers_to\": null, \"answered\": [], \"closes\": [{\"item\": \"U1\", \"how\": \"solved\"}], \"reopens\": [], \"asks_again\": null}\n```"
+            "text": "{\"reason\":\"They're sharing that they found and booked their own venue, closing the room search\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"sharing\",\"topic\":\"booked a venue for their event\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":{\"emotion\":\"excited\",\"intensity\":\"medium\",\"valence\":\"positive\",\"about\":\"booking the back room at Fern for their event\",\"target\":\"life\"},\"seeking\":\"none\",\"feedback\":[],\"ack\":\"🥂\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"close\",\"refers_to\":null,\"answered\":[],\"closes\":[{\"item\":\"U1\",\"how\":\"solved\"}],\"reopens\":[],\"asks_again\":null}"
           }
         ],
         "container": null,
@@ -83,9 +83,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 602,
+          "output_tokens": 403,
           "output_tokens_details": {
-            "thinking_tokens": 219
+            "thinking_tokens": 43
           },
           "service_tier": "standard",
           "inference_geo": "global",

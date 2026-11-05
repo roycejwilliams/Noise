@@ -197,7 +197,7 @@ export function recommendationSegmentRow(o: { userId: string; memoryId: string; 
   };
 }
 
-// The words a document is recorded under, the same as the tool's own (services/coFacts.ts toolAction writeDocument / emailPlan), so
+// The words a document is recorded under, the same as the tool's own (services/coFacts.ts toolAction writeDocument), so
 // a document sent by a tool call is one act.
 export const documentLabel = (title: string, channel: string) => (channel === "email" ? `a one-page plan sheet: ${title}` : `a document (PDF): ${title}`);
 // A document Cue delivered (services/deliveryReceipts.ts), anchored on its document_deliveries row.

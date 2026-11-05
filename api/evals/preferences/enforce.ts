@@ -151,7 +151,6 @@ check("the close follows their rule too (R3)", !closeOk);
 check("a failed in-room send takes its claim back", /await releaseInRoomClaim\(person\.user_id, `in_room:close:\$\{eventId\}`\)/.test(src("services/eventUnmatchedFollowUp.ts")) && (src("services/eventScoring.ts").match(/releaseInRoomClaim\(/g) ?? []).length === 2);
 // The missed-call follow-up and the PDF retry: claimed (counted) under the lock.
 check("the missed-call text is claimed with its class before it goes, and released if it fails", /claimCoInitiatedSend\(\{ userId: user\.id, type: "missed_call"[^\n]*ruleOnly: true, cls: "unsolicited" \}\)/.test(src("routes/co.ts")) && src("routes/co.ts").indexOf("claimCoInitiatedSend({ userId: user.id") < src("routes/co.ts").indexOf("await sendblue.messages.send({\n      number: user.phone_number") && /releaseCoInitiatedClaim\(user\.id, claim\.ledgerId\)/.test(src("routes/co.ts")));
-check("a PDF retry is claimed as requested, deferred when held, released when it fails", /ruleOnly: true, cls: "requested"/.test(src("services/documentDelivery.ts")) && /waiting: their own rule/.test(src("services/documentDelivery.ts")) && /await unclaim\(\);\n      const last = rec\.attempts/.test(src("services/documentDelivery.ts")));
 reset();
 rule(A, { rule: { max_per_day: 1 } });
 await exempt(A, { type: "event_change", targetKey: "event_change:one" });
@@ -285,7 +284,6 @@ const SITES: Record<string, { n: number; gate: string; proof: RegExp }> = {
   "services/eventScoring.ts": { n: 2, gate: "in-room: inRoomSendAllowed (rule + claim under the lock)", proof: /inRoomSendAllowed\(person\.user_id, eventId, \{ claim: \{ targetKey: `in_room:match:[\s\S]*inRoomSendAllowed\(person\.user_id, eventId, \{ claim: \{ targetKey: additiveKey/ },
   "services/eventUnmatchedFollowUp.ts": { n: 1, gate: "in-room close: inRoomSendAllowed (rule + claim under the lock)", proof: /inRoomSendAllowed\(person\.user_id, eventId, \{ close: true, claim:[\s\S]{0,400}await sendblue\.messages\.send/ },
   "services/networkIntroNudge.ts": { n: 1, gate: "reply: the reveal answers their yes", proof: /resolveNetworkTeaseReply|reveal send failed/ },
-  "services/documentDelivery.ts": { n: 1, gate: "deps.send after claimCoInitiatedSend (owed or Cue's own); PDF retry claimed", proof: /^(?=[\s\S]*owed: \{ askedAt: o\.askedAt \?\? null \})(?=[\s\S]*ruleOnly: true, cls: "requested")/ },
   "services/callTools.ts": { n: 1, gate: "reply: a text they asked for on the call they're on", proof: /sendblue\.messages/ },
   "agent/conversationTools.ts": { n: 1, gate: "reply: the contact card in the turn", proof: /sendContactCard: tool\(/ },
   "harness/failureCount.ts": { n: 1, gate: "team: ops alert to the team phone, never a member", proof: /TEAM_ALERT_PHONE[\s\S]{0,800}sender: "ops"/ },

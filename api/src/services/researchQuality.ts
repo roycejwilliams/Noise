@@ -290,7 +290,7 @@ export async function recentShownFinds(userId: string, days = 14): Promise<{ id:
 export function nextStepAfterReaction(reaction: Exclude<FindOutcome, "ignored">, f: { name: string; url: string; fields: FindField[] }): string {
   const known = f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value} (checked ${x.checkedAt.slice(0, 10)})`).join("; ");
   if (reaction === "yes")
-    return `They want ${f.name}. Take it from here and carry it to the booking: offer in one line to draft the inquiry to the venue (draftEmail, to the contact in its fields or its page ${f.url}, with their date, headcount and budget), and if the answer will take days, take it on as a task so you follow it to a yes or no. What you may say about it: ${known || "only its name and link"}. Nothing else about price or availability.`;
+    return `They want ${f.name}. Take it from here and carry it to the booking: give them the contact from its fields or its page ${f.url} (you don't draft their emails), and if the answer will take days, take it on as a task so you follow it to a yes or no. What you may say about it: ${known || "only its name and link"}. Nothing else about price or availability.`;
   if (reaction === "not_like_that") return `Not that kind of place for them. Don't argue it. If they want more options, offer to look again with what they said, and it shapes the next search.`;
   return `Not this one. If the others don't fit either, offer to look again.`;
 }

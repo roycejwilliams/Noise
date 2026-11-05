@@ -29,7 +29,6 @@ function harness(o: { answerOwed?: boolean } = {}) {
     markTopicAsked: { execute: async () => ({ ok: true }) },
     noteReaction: { execute: async () => ({ ok: true }) },
     noteFreeTime: { execute: async () => ({ ok: true, note: "Saved: free Thursday evenings." }) },
-    keepArtifact: { execute: async () => ({ ok: true, link: "https://example.com/d/v/moved" }) },
     findReaction: { execute: async () => ({ ok: true, next: "They said yes: offer the intro." }) },
     // Made, but its text didn't send: the guard's refusal says to give it in the reply.
     makePage: { execute: async () => G.markGuardRefusal({ ok: false, error: "Already done this turn: the page exists, but the text with it didn't send. Don't make it again; give it in your reply." }) },
@@ -87,7 +86,7 @@ const PRIYA_2 = "Congratulations. That it's the first one in years you actually 
 }
 {
   // Re-review of #310: a moved link, the next step on a yes, a playback of their time each carry something to say.
-  for (const name of ["keepArtifact", "findReaction", "noteFreeTime"]) {
+  for (const name of ["findReaction", "noteFreeTime"]) {
     const h = harness();
     await h.tools.sendReply.execute({ message: PRIYA_1 });
     await h.tools[name].execute({});

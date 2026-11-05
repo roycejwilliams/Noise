@@ -4,7 +4,6 @@
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const G = await import("../../src/services/identityGuard.js");
-const X = await import("../../src/services/documentDelivery.js");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
 const known = "Jordan, San Francisco, founder of a fintech startup";
@@ -20,9 +19,5 @@ check("a describing word or a sideways form doesn't hide the claim", claims.ever
 check("saying who an event is for, or a role they gave, is never a claim about them", fine.every((t) => !G.ungroundedIdentityClaims(t, known).length), fine.filter((t) => G.ungroundedIdentityClaims(t, known).length));
 check("what they told Cue keeps it", !G.ungroundedIdentityClaims("As a new dad, you might like this.", "Jordan just became a dad").length);
 check("the sentence with the claim is dropped, the rest kept", G.stripUngroundedIdentity("As a new dad, you might like this. It starts at 7.", known) === "It starts at 7.");
-// Review of #144: a revision that had to go as a PDF already says so in its text; Co isn't handed a reason to repeat.
-const src = (await import("node:fs")).readFileSync(new URL("../../src/services/documentDelivery.ts", import.meta.url), "utf8");
-check("review of #144: once the text said it's a PDF, Cue isn't handed the reason again", /const r = inPlace && \(!o\.askedForGoogle \|\| docBecamePdf\) \? \{ \.\.\.r0, googleRefused: null, googleMissing: false \} : r0;/.test(src));
-void X;
 console.log(`identity described claims: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
