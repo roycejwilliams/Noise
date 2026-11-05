@@ -55,7 +55,7 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   check("F1 dedupe: a different promise still gets its own task", P.promiseCovered("I'll check back on the caterer quote tomorrow.", { open }) === null);
   check("F1 dedupe: a closed or non-promise task doesn't count", P.promiseCovered("I'll text you the rooftop venue options by Friday.", { open: [{ ...open[0], status: "done" as const }, { ...open[0], source: "ask" as const }] }) === null);
   const g = src("harness/replyGrounding.ts");
-  check("F1: groundReply hands this turn's receipts to trackPromise", /startedThisTurn = rf\.facts\.filter\(\(f\) => f\.kind === "did_this_turn"\)/.test(g) && /discreet: isDiscreetTurn\(rf\.instructions\), startedThisTurn \}\)/.test(g));
+  check("F1: groundReply hands this turn's receipts to trackPromise", /startedThisTurn = rf\.facts\.filter\(\(f\) => f\.kind === "did_this_turn"\)/.test(g) && /discreet: isDiscreetTurn\(rf\.instructions\), startedThisTurn, scope: workVerdict\(rf\.turnScope\) \}\)/.test(g));
   check("F1: trackPromise checks coverage before opening a task", /promiseCovered\(sentence, \{ startedThisTurn: o\.startedThisTurn \}\)/.test(src("services/promises.ts")) && /promiseCovered\(sentence, \{ open \}\)/.test(src("services/promises.ts")));
 }
 

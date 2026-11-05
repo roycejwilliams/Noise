@@ -375,7 +375,7 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
   const promised = D.settleFromJudgment(p, { playedBack: true, promisedFollowUp: true, when: "by 6pm", latestBy: "2026-10-14T01:00:00.000Z" }, 0, now);
   const sooner = D.settleFromJudgment(p, { playedBack: true, promisedFollowUp: true, when: "tonight", latestBy: "2026-10-13T23:00:00.000Z" }, 0, now);
   check("a first read that carried a promise stays Cue's promise (kept, or moved to the time it said)", promised.task.kind === "keep" && sooner.task.kind === "move", [promised, sooner]);
-  check("…the look starts as a promise task, never a lookout", /startTask\(\{[^}]*source: "promise" \}\)/.test(dr.slice(dr.indexOf("export async function giveFirstRead"), dr.indexOf("export type FirstLookRow"))));
+  check("…the look starts as a promise task, never a lookout", /startTask\(\{[^}]*source: "promise", scope: o\.scope \?\? null \}\)/.test(dr.slice(dr.indexOf("export async function giveFirstRead"), dr.indexOf("export type FirstLookRow"))));
   // Their own "keep an eye out for X" in that first message: a lookout the same way as any ask, by the intent split from their words.
   const writes: any[][] = [];
   const db = { query: async (_sql: string, args: unknown[] = []) => (writes.push(args), { rows: [], rowCount: 1 }) };
