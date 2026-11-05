@@ -51,6 +51,15 @@ const onFile = [
 ] as any[];
 const g6 = MT.gateThreadChanges([], [{ id: "t1", status: "changed", quote: "I'm going to go solo after this", newText: "going solo instead of moving" }], onFile, lines, null);
 check("a change closes the earlier one with their words and opens the later one as a transition too", g6.closed.length === 1 && g6.opened.length === 1 && g6.opened[0].transition === "said");
+const gi = MT.gateThreadChanges([], [{ id: "t1", status: "changed", quote: "I'm going to go solo after this", newText: "going solo instead of moving" }], [{ ...onFile[0], transition: "inferred" }] as any[], lines, null);
+check("an inferred transition stays inferred on a changed close", gi.opened[0]?.transition === "inferred");
+const go = MT.gateThreadChanges([], [{ id: "t1", status: "changed", quote: "I'm going to go solo after this", newText: "going solo instead of moving", transition: "said" }], [{ ...onFile[0], transition: null }] as any[], lines, null);
+check("a life change arriving through a changed close of an ordinary thread can be marked", go.opened[0]?.transition === "said" && go.opened[0]?.transitionChannel === "call");
+const gn = MT.gateThreadChanges([], [{ id: "t1", status: "changed", quote: "I'm going to go solo after this", newText: "going solo instead of moving" }], [{ ...onFile[0], transition: null, transitionChannel: null }] as any[], lines, null);
+check("an ordinary thread's changed close stays ordinary", gn.opened[0]?.transition === null);
+const pr = MT.threadsPrompt("Jordan", [], lines);
+check("the prompt's transition note sits after the open rule and says it changes nothing about whether to open", pr.indexOf('Note on "transition"') > pr.indexOf("2. Open a thread") && pr.indexOf('Note on "transition"') < pr.indexOf("3. ") && /changes nothing about whether to open a thread/.test(pr) && !/commitment": true only when[^\n]*transition/.test(pr.split("\n").filter((l) => l.startsWith("2. "))[0]));
+check("an insert without the transition columns still opens the thread (42703 retry)", /42703/.test(src("harness/memberThreads.ts")) && /INSERT INTO member_threads \(user_id, text, opened_quote, opened_at, feeling, due_date, next_step, kind\)/.test(src("harness/memberThreads.ts")));
 const threadsSrc = src("harness/memberThreads.ts");
 check("the writer never rewrites a thread's text or opening quote (only closes it or touches it)", !/UPDATE member_threads SET (?:[^`]*\b)?(?:text|opened_quote|opened_at|transition_source)\s*=/.test(threadsSrc));
 
@@ -100,9 +109,22 @@ const many = Array.from({ length: 40 }, (_, i) => row({ id: `o${i}`, text: `thin
 const small = MK.transitionsOf(many, 1500);
 check("the budget bounds the section", JSON.stringify(small.items).length <= 1500 + JSON.stringify(small.items[0]).length && small.items.length < many.length);
 check("what the budget leaves out is counted, never silent", small.omitted === many.length - small.items.length && small.omitted > 0);
-check("rank holds under the budget: open before closed, newest touched first", small.items.every((x) => x.status === "open") && small.items.every((x, i, a) => i === 0 || a[i - 1].verifiedAt >= x.verifiedAt));
+check("rank holds under the budget: open before closed, newest touched first", small.items.every((x, i, a) => i === 0 || (a[i - 1].status === "open" || a[i - 1].status === "waiting" ? true : x.status !== "open") && (a[i - 1].status !== x.status || a[i - 1].verifiedAt >= x.verifiedAt)));
+// a heavy item
+const heavyCorr = Array.from({ length: 40 }, (_, i) => ({ at: d(`2026-10-${String(1 + (i % 28)).padStart(2, "0")}T${String(i % 24).padStart(2, "0")}:00:00Z`), was: "w".repeat(2000), now: "n".repeat(2000), quote: "q".repeat(2000) }));
+const heavy = row({ id: "h", corrections: heavyCorr, text: "t".repeat(5000), quote: "u".repeat(5000), lastTouchedAt: d("2026-10-30T00:00:00Z") });
+const light1 = row({ id: "l1", lastTouchedAt: d("2026-10-29T00:00:00Z") });
+const light2 = row({ id: "l2", lastTouchedAt: d("2026-10-28T00:00:00Z") });
+const hv = MK.transitionsOf([heavy, light1, light2]);
+check("a heavy item can't blow the budget: the section stays within it", JSON.stringify(hv.items).length <= MK.TRANSITIONS_BUDGET_CHARS);
+check("corrections are capped per open item (newest 3, the rest counted)", (hv.items.find((x) => x.id === "h")?.corrections.length ?? 3) <= 3 && (hv.items.find((x) => x.id === "h")?.correctionsOmitted ?? 37) >= 37);
+const over = MK.transitionsOf([row({ id: "big", corrections: heavyCorr, text: "t".repeat(5000), quote: "u".repeat(5000), lastTouchedAt: d("2026-10-30T00:00:00Z") }), light1, light2], 900);
+check("an item that doesn't fit is skipped and lighter ones still fill the room, skipped counted", over.items.map((x) => x.id).join() === "l1,l2" && over.omitted === 1);
+const cl = row({ id: "cc", status: "changed", closedAt: d("2026-10-27T00:00:00Z"), closedQuote: "not moving after all", corrections: [{ at: d("2026-10-22T00:00:00Z"), was: "a", now: "b", quote: "x" }, { at: d("2026-10-23T00:00:00Z"), was: "b", now: "c", quote: "y" }] });
+const clo = MK.transitionsOf([cl]).items[0];
+check("a closed transition keeps only its latest correction (the close), counts the rest", clo.corrections.length === 1 && clo.corrections[0].quote === "not moving after all" && clo.correctionsOmitted === 2 && clo.quote === null);
 const tiny = MK.transitionsOf([open1, closed], 10);
-check("a budget smaller than one item still returns the top item", tiny.items.length === 1 && tiny.items[0].id === "a" && tiny.omitted === 1);
+check("a budget smaller than any item returns none and counts them all", tiny.items.length === 0 && tiny.omitted === 2);
 const full = MK.transitionsOf(many, 1_000_000);
 check("no fixed count or age cutoff when the budget allows", full.items.length === many.length && full.omitted === 0);
 check("the budget is a character budget in code, not a count", /TRANSITIONS_BUDGET_CHARS = \d+/.test(src("services/memberKnowledge.ts")) && !/slice\(0, (?:5|6|8|10|12)\)[^\n]*transition/i.test(src("services/memberKnowledge.ts")));
@@ -119,6 +141,49 @@ check("fails closed when there is no guard read at all", noGuard.transitions!.le
 const strip = await read([row({ id: "m", text: "moving in with Maya's friend Maya Chen", quote: "moving in with Maya next month" })]);
 check("the name strip applies to what Cue writes, and their own words are kept", !/friend/.test(strip.transitions![0].text) && /their details aren't kept/.test(strip.transitions![0].text) && strip.transitions![0].quote === "moving in with Maya next month");
 check("the loader's failure gives an empty section, not a throw", (await read([], [], { transitions: async () => { throw new Error("x"); } })).transitions!.length === 0);
+
+// ---------------------------------------------------------------- loadTransitions with real rows (a fake database that applies the SQL's filters)
+type DbThread = { id: string; user_id: string; text: string; opened_quote: string; opened_at: string; status: string; closed_quote: string | null; closed_at: string | null; last_touched_at: string; transition_source: string | null; transition_channel: string | null };
+type DbCorr = { user_id: string; item_ref: string; old_value: string; new_value: string | null; quote: string | null; corrected_at: string; removed: boolean };
+const th = (o: Partial<DbThread> & { id: string; user_id: string }): DbThread => ({ text: "moving to Austin", opened_quote: "I'm moving to Austin", opened_at: "2026-10-20T15:00:00Z", status: "open", closed_quote: null, closed_at: null, last_touched_at: "2026-10-25T12:00:00Z", transition_source: "said", transition_channel: "text", ...o });
+const fakeDb = (threads: DbThread[], corrs: DbCorr[]) => ({
+  query: async (sql: string, args: unknown[]) => {
+    const uid = args[0];
+    if (/^\s*SELECT id, text/.test(sql)) {
+      const rows = threads.filter((t) => t.user_id === uid && t.transition_source !== null);
+      // the removal exclusion in the SQL
+      const guard = /NOT EXISTS \(SELECT 1 FROM profile_corrections pc WHERE pc\.user_id = \$1 AND to_jsonb\(pc\)->>'item_ref' = 'thread:' \|\| member_threads\.id AND \(to_jsonb\(pc\)->>'removed'\) = 'true'\)/.test(sql);
+      return { rows: rows.filter((t) => !guard || !corrs.some((c) => c.user_id === uid && c.item_ref === `thread:${t.id}` && c.removed)).sort((a, b) => b.last_touched_at.localeCompare(a.last_touched_at)) };
+    }
+    return { rows: corrs.filter((c) => c.user_id === uid && c.item_ref.startsWith("thread:") && !c.removed).map((c) => ({ ...c })).sort((a, b) => a.corrected_at.localeCompare(b.corrected_at)) };
+  },
+});
+const mine = "user-aaa", theirs = "user-bbb";
+const db = fakeDb(
+  [th({ id: "T1", user_id: mine }), th({ id: "T2", user_id: mine, status: "changed", closed_quote: "not moving", closed_at: "2026-10-26T00:00:00Z", last_touched_at: "2026-10-26T00:00:00Z", text: "moving to Boston" }), th({ id: "T3", user_id: mine, transition_source: null, text: "ordinary" }), th({ id: "X1", user_id: theirs, text: "THEIR move to Paris" })],
+  [
+    { user_id: mine, item_ref: "thread:T1", old_value: "moving to Austin", new_value: "moving to Austin in March", quote: "March", corrected_at: "2026-10-27T00:00:00Z", removed: false },
+    { user_id: mine, item_ref: "thread:T2", old_value: "x", new_value: "y", quote: null, corrected_at: "2026-10-21T00:00:00Z", removed: false },
+    { user_id: theirs, item_ref: "thread:T1", old_value: "THEIRS", new_value: "THEIRS2", quote: "z", corrected_at: "2026-10-27T00:00:00Z", removed: false },
+  ],
+);
+const loaded = await MK.loadTransitions(mine, db);
+check("loadTransitions: only this member's transition rows (not ordinary threads, not another member's)", loaded.map((x) => x.id).sort().join() === "T1,T2" && !JSON.stringify(loaded).includes("Paris"));
+check("loadTransitions: corrections match by item_ref to their own thread, and only this member's", loaded.find((x) => x.id === "T1")?.corrections.length === 1 && loaded.find((x) => x.id === "T1")?.corrections[0].now === "moving to Austin in March" && !JSON.stringify(loaded).includes("THEIRS"));
+const theirSection = await MK.memberKnowledge(theirs, { include: ["transitions"] }, { ...base([]), transitions: (u: string) => MK.loadTransitions(u, db) });
+check("end to end: another member's section holds only their own row", theirSection.transitions!.length === 1 && /Paris/.test(theirSection.transitions![0].text));
+const sectionMine = await MK.memberKnowledge(mine, { include: ["transitions"] }, { ...base([]), transitions: (u: string) => MK.loadTransitions(u, db) });
+check("end to end: mine has my two, closed trimmed to one dated line", sectionMine.transitions!.map((x) => x.id).join() === "T1,T2" && sectionMine.transitions![1].quote === null && sectionMine.transitions![1].closedOn === "2026-10-26" && !JSON.stringify(sectionMine).includes("Paris"));
+// removal at the SQL level: survives a corrections list longer than 300 with a newer correction, because the guards' LIMIT 300 is not the only layer
+const manyCorrs: DbCorr[] = Array.from({ length: 350 }, (_, i) => ({ user_id: mine, item_ref: `snapshot:other${i}`, old_value: `v${i}`, new_value: `w${i}`, quote: null, corrected_at: `2026-10-28T00:${String(i % 60).padStart(2, "0")}:00Z`, removed: false }));
+const dbRemoved = fakeDb(
+  [th({ id: "R1", user_id: mine, text: "leaving my marriage", opened_quote: "I'm leaving my marriage", status: "changed", closed_quote: "forget the marriage thing", closed_at: "2026-10-27T00:00:00Z" }), th({ id: "R2", user_id: mine, text: "moving to Austin" })],
+  [{ user_id: mine, item_ref: "thread:R1", old_value: "leaving my marriage", new_value: null, quote: "forget it", corrected_at: "2026-10-27T00:00:00Z", removed: true }, ...manyCorrs, { user_id: mine, item_ref: "thread:R1", old_value: "leaving my marriage", new_value: "leaving my marriage", quote: "put it back", corrected_at: "2026-10-29T00:00:00Z", removed: false }],
+);
+// the guards read as the 300 newest rows only (the removal is older than 300 newer rows), and a newer correction releases the old value
+const lateGuards: Partial<Deps> = { forgotten: async () => manyCorrs.slice(0, 300).map((c) => ({ field: "x", old: c.old_value, now: c.new_value, ref: c.item_ref, removed: false })) };
+const rr = await MK.memberKnowledge(mine, { include: ["transitions"] }, { ...base([]), ...lateGuards, transitions: (u: string) => MK.loadTransitions(u, dbRemoved) });
+check("a removed transition never appears, even with 300+ newer corrections and a newer correction (the SQL excludes it)", rr.transitions!.map((x) => x.id).join() === "R2" && !JSON.stringify(rr).includes("marriage"));
 
 // ---------------------------------------------------------------- isolation: asserted on the SQL
 const seen: { sql: string; args: unknown[] }[] = [];

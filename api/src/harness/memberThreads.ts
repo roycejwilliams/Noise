@@ -136,7 +136,7 @@ export function findQuote(quote: string, lines: OwnLine[]): OwnLine | null {
 }
 
 export type ProposedOpen = { text: string; quote: string; when?: string | null; nextStep?: string; commitment?: boolean; transition?: unknown };
-export type ProposedClose = { id: string; status: "resolved" | "changed"; quote: string; newText?: string | null };
+export type ProposedClose = { id: string; status: "resolved" | "changed"; quote: string; newText?: string | null; transition?: unknown };
 
 export type AcceptedOpen = { text: string; quote: string; quotedAt: string; dueDate: string | null; dueLabel: string | null; nextStep: NextStep; kind: "thread" | "commitment"; transition: TransitionSource | null; transitionChannel: LineVia | null };
 
@@ -167,7 +167,7 @@ export function gateThreadChanges(
     if (!reason && hit && !closed.some((x) => x.id === c.id)) closed.push({ ...c, quotedAt: hit.at });
   }
 
-  for (const o of [...opens, ...closed.filter((c) => c.status === "changed" && c.newText).map((c) => ({ text: c.newText!, quote: c.quote, transition: live.find((x) => x.id === c.id)?.transition ? "said" : undefined }) as ProposedOpen)]) {
+  for (const o of [...opens, ...closed.filter((c) => c.status === "changed" && c.newText).map((c) => ({ text: c.newText!, quote: c.quote, transition: c.transition ?? live.find((x) => x.id === c.id)?.transition ?? undefined }) as ProposedOpen)]) {
     const text = typeof o.text === "string" ? o.text.trim().slice(0, 200) : "";
     const hit = findQuote(o.quote, lines);
     let reason: string | null = null;
@@ -214,11 +214,12 @@ What ${firstName} said recently, oldest first (their exact words):
 ${lines.map((l) => `- [${localStamp(`${l.at}:00Z`, zone)}] ${l.text}`).join("\n")}
 
 1. Close a thread only when their words say how it landed or that it changed ("the pitch went great", "we moved it to November"). "quote" must be copied exactly from their words above, at least a few words. Being quiet about it is not a close.
-2. Open a thread for each thing that matters to them right now and isn't on the list yet (usually one to four): something coming up with an outcome, a decision they're weighing, something they're working toward or worried about. Name it in their own terms (a short line, plain words, "they" for them, and the date if they gave one). "quote" is copied exactly from their words. If the quote names when ("Friday", "October 10th", "next week"), copy that phrase exactly as "when". Mark "commitment": true only when they said they themselves will do something by then ("I'll send the deck Friday"). If it's a life change (a move, a new role or company, going solo, starting over, a breakup, a new city, a career pivot), set "transition": "said" if they said it outright or "inferred" if you're reading it from what they said; otherwise null.
+2. Open a thread for each thing that matters to them right now and isn't on the list yet (usually one to four): something coming up with an outcome, a decision they're weighing, something they're working toward or worried about. Name it in their own terms (a short line, plain words, "they" for them, and the date if they gave one). "quote" is copied exactly from their words. If the quote names when ("Friday", "October 10th", "next week"), copy that phrase exactly as "when". Mark "commitment": true only when they said they themselves will do something by then ("I'll send the deck Friday").
+Note on "transition": it changes nothing about whether to open a thread. For a thread you are already opening (or the new line of a "changed" close), if it's about a life change (a move, a new role or company, going solo, starting over, a breakup, a new city, a career pivot), set "transition": "said" if they said it outright or "inferred" if you're reading it from what they said; otherwise null.
 3. "nextStep": "check_in" (the default: there'll be news a friend would ask about), "look_up" (they asked for something to be found), "suggest_someone" (they want to meet a kind of person), or "remember" (only a background fact with nothing to ask about later).
 Most of the time nothing changes; return empty lists then.
 
-Return ONLY JSON: {"close": [{"id": "...", "status": "resolved" | "changed", "quote": "...", "newText": "what it changed to, or null"}], "open": [{"text": "...", "quote": "...", "when": null, "nextStep": "check_in", "commitment": false, "transition": null}]}`;
+Return ONLY JSON: {"close": [{"id": "...", "status": "resolved" | "changed", "quote": "...", "newText": "what it changed to, or null", "transition": null}], "open": [{"text": "...", "quote": "...", "when": null, "nextStep": "check_in", "commitment": false, "transition": null}]}`;
 }
 
 function rowToThread(r: any): MemberThread {
@@ -373,12 +374,21 @@ export async function applyThreadProposal(
       const feeling = await feelingAt(userId, o.quotedAt);
       // The same thread from the same words is open once (a unique index, db/migrations.ts concurrencyMigrations, concurrency audit 2026-10-12): two
       // rebuilds applying one proposal used to open it twice and queue two check-ins. The second insert is refused and skipped.
+      // If the transition columns aren't there (the migration failed or hasn't run), the thread still opens, as an ordinary one (42703 = undefined column).
       const { rows } = await pool
         .query(
           `INSERT INTO member_threads (user_id, text, opened_quote, opened_at, feeling, due_date, next_step, kind, transition_source, transition_channel)
            VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9, $10) RETURNING id`,
           [userId, o.text, o.quote, o.quotedAt + ":00Z", feeling, o.dueDate, o.nextStep, o.kind, o.transition, o.transitionChannel],
         )
+        .catch((err: any) => {
+          if (err?.code !== "42703") throw err;
+          return pool.query(
+            `INSERT INTO member_threads (user_id, text, opened_quote, opened_at, feeling, due_date, next_step, kind)
+             VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8) RETURNING id`,
+            [userId, o.text, o.quote, o.quotedAt + ":00Z", feeling, o.dueDate, o.nextStep, o.kind],
+          );
+        })
         .catch((err: any) => {
           if (err?.code === "23505") return { rows: [] as any[] };
           throw err;
