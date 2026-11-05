@@ -48,7 +48,9 @@ export type RecallLine = {
   outside?: Outside[];
   cut?: true;
 };
-export type RecallHit = { at: string; atLocal: string; channel: "text" | "call"; matched: RecallLine; before: RecallLine[]; after: RecallLine[]; newest?: true };
+// via "meaning": found by the closeness of its meaning to the topic, not its words (services/embeddings.ts vectors); the words returned are
+// still the row's own stored words. part: for a call matched by meaning with no topic word in it, which part of the transcript is shown.
+export type RecallHit = { at: string; atLocal: string; channel: "text" | "call"; matched: RecallLine; before: RecallLine[]; after: RecallLine[]; newest?: true; via?: "meaning"; part?: string };
 
 export const RECALL = {
   topicPageSize: 6,
@@ -57,6 +59,12 @@ export const RECALL = {
   lineChars: 700,
   resultChars: 7000,
   callLinesNoTopic: 8,
+  // Meaning search: the closest rows by cosine distance (text-embedding-3-small). Added to the keyword hits on the first page, at most
+  // meaningExtra beside a full keyword page, or a whole page of them when the words found nothing. maxDistance is a first guess, not
+  // validated against real lookups (it needs a recorded run to tune).
+  meaningCandidates: 8,
+  meaningExtra: 3,
+  maxDistance: 0.6,
   maxTerms: 6,
 } as const;
 
@@ -233,7 +241,13 @@ export type RecallDeps = {
   // Other members' names and details stripped from every line (services/memberSafeMemories.ts, through services/sourceFence.ts):
   // retrieved is not disclosable, so a line that names another member is cleaned or dropped here. failed: the names could not be read.
   fence: (userId: string) => Promise<{ strip: (s: string) => string | null; failed?: boolean }>;
+  // The query's vector, from the same model the stored rows were embedded with (text-embedding-3-small). One call per lookup that has a
+  // topic. Absent or failing: the lookup is keyword and date only, never an error.
+  embed?: (text: string) => Promise<number[] | null>;
+  // Timing and row counts of one lookup, numbers and kinds only (never text, names or the query's words).
+  onTiming?: (t: RecallTiming) => void;
 };
+export type RecallTiming = { totalMs: number; queries: { kind: "keyword" | "date" | "newest" | "cover" | "context" | "meaning" | "embed"; ms: number; rows: number }[] };
 export type Coverage = { texts: string | null; calls: string | null };
 export type RecallResult =
   | { ok: false; reason: "unreadable_when" | "unavailable" | "empty_ask"; today: string; zone: string }
@@ -269,6 +283,30 @@ function kindFilter(channel: RecallChannel, alias = ""): string {
 export type RecallOptions = { asOf?: Date; resultChars?: number };
 
 export async function recallConversation(userId: string, input: RecallInput, deps: RecallDeps, opts: RecallOptions = {}): Promise<RecallResult> {
+  const t0 = Date.now();
+  const timing: RecallTiming = { totalMs: 0, queries: [] };
+  const timed: Timed = async (kind, run) => {
+    const t = Date.now();
+    try {
+      const r = await run();
+      timing.queries.push({ kind, ms: Date.now() - t, rows: r.rows.length });
+      return r;
+    } catch (e) {
+      timing.queries.push({ kind, ms: Date.now() - t, rows: -1 });
+      throw e;
+    }
+  };
+  try {
+    return await recallInner(userId, input, deps, opts, timed);
+  } finally {
+    timing.totalMs = Date.now() - t0;
+    try { deps.onTiming?.(timing); } catch { /* timing never breaks a lookup */ }
+  }
+}
+
+type Timed = <T extends { rows: unknown[] }>(kind: RecallTiming["queries"][number]["kind"], run: () => Promise<T>) => Promise<T>;
+
+async function recallInner(userId: string, input: RecallInput, deps: RecallDeps, opts: RecallOptions, timed: Timed): Promise<RecallResult> {
   // From the moment they asked (the turn's arrival), not from when this ran.
   const now = opts.asOf ?? deps.now();
   const budget = opts.resultChars ?? RECALL.resultChars;
@@ -313,6 +351,9 @@ export async function recallConversation(userId: string, input: RecallInput, dep
     args.push(win.from, win.to);
     where.push(`created_at >= $${args.length - 1} AND created_at <= $${args.length}`);
   }
+  // Meaning search's own filters: the same member, kinds and dates, only rows that have a stored vector (no backfill, no re-embedding).
+  const meaningWhere = where.join(" AND ");
+  const meaningArgs = [...args];
   let scoreSql = "0";
   if (terms.length) {
     args.push(terms.map(termPattern));
@@ -323,13 +364,26 @@ export async function recallConversation(userId: string, input: RecallInput, dep
   const base = `FROM co_memories WHERE ${where.join(" AND ")}`;
   const order = terms.length ? `ORDER BY score DESC, created_at DESC, id DESC` : `ORDER BY created_at ASC, id ASC`;
 
-  const [page, newestRow, cover] = await Promise.all([
-    deps.db.query(`SELECT id::text AS id, memory_type, content, created_at, ${scoreSql} AS score, count(*) OVER()::int AS total ${base} ${order} LIMIT ${pageSize} OFFSET ${offset}`, args),
-    terms.length && offset === 0 ? deps.db.query(`SELECT id::text AS id, memory_type, content, created_at ${base} ORDER BY created_at DESC, id DESC LIMIT 1`, args) : Promise.resolve({ rows: [] as Row[] }),
-    deps.db.query(
+  const vecP: Promise<number[] | null> =
+    terms.length && offset === 0 && deps.embed
+      ? timed("embed", async () => ({ rows: [await deps.embed!(String(input.topic ?? "").slice(0, 300))] }))
+          .then((r) => (r.rows[0] as number[] | null))
+          .catch(() => null)
+      : Promise.resolve(null);
+  const [page, newestRow, cover, meaningRows] = await Promise.all([
+    timed(terms.length ? "keyword" : "date", () => deps.db.query(`SELECT id::text AS id, memory_type, content, created_at, ${scoreSql} AS score, count(*) OVER()::int AS total ${base} ${order} LIMIT ${pageSize} OFFSET ${offset}`, args)),
+    terms.length && offset === 0 ? timed("newest", () => deps.db.query(`SELECT id::text AS id, memory_type, content, created_at ${base} ORDER BY created_at DESC, id DESC LIMIT 1`, args)) : Promise.resolve({ rows: [] as Row[] }),
+    timed("cover", () => deps.db.query(
       `SELECT MIN(created_at) FILTER (WHERE memory_type = 'text_exchange') AS texts, MIN(created_at) FILTER (WHERE memory_type = 'call_transcript' AND content NOT LIKE 'Co initiated call%') AS calls FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
       [userId],
-    ),
+    )),
+    vecP.then(async (vec) => {
+      if (!vec) return [] as Row[];
+      const a2 = [...meaningArgs, `[${vec.join(",")}]`];
+      const v = `$${a2.length}::vector`;
+      const r = await timed("meaning", () => deps.db.query(`SELECT id::text AS id, memory_type, content, created_at, (content_embedding <=> ${v}) AS dist FROM co_memories WHERE ${meaningWhere} AND content_embedding IS NOT NULL ORDER BY content_embedding <=> ${v} LIMIT ${RECALL.meaningCandidates}`, a2)).catch(() => ({ rows: [] as Row[] }));
+      return (r.rows as (Row & { dist: number })[]).filter((x) => Number(x.dist) <= RECALL.maxDistance);
+    }),
   ]);
   const rows: Row[] = page.rows as Row[];
   const total: number = rows[0]?.total ?? 0;
@@ -340,13 +394,13 @@ export async function recallConversation(userId: string, input: RecallInput, dep
 
   // All the context for the page's text hits in one read: the lines either side of each hit, compared against the hit's own stored row
   // (never a rounded timestamp), the same member, the same fences.
-  const textRows = [...rows, ...(top ? [top] : [])].filter((r) => r.memory_type === "text_exchange");
+  const textRows = [...rows, ...(top ? [top] : []), ...meaningRows].filter((r) => r.memory_type === "text_exchange");
   const ctxById = new Map<string, { before: Row[]; after: Row[] }>();
   if (terms.length && textRows.length) {
     const ids = [...new Set(textRows.map((r) => r.id))];
     const side = (dir: "<" | ">", tag: string) =>
       `SELECT h.id AS hit_id, '${tag}' AS side, c.id::text AS id, c.memory_type, c.content, c.created_at FROM (SELECT m.id::text AS id, m.created_at, m.id AS rid FROM co_memories m WHERE m.user_id = $1 AND m.id::text = ANY($2::text[])) h CROSS JOIN LATERAL (SELECT c.id, c.memory_type, c.content, c.created_at FROM co_memories c WHERE c.user_id = $1 AND ${kindFilter("any", "c")} AND c.memory_type = 'text_exchange' AND (c.created_at, c.id) ${dir} (h.created_at, h.rid) ORDER BY c.created_at ${dir === "<" ? "DESC" : "ASC"}, c.id ${dir === "<" ? "DESC" : "ASC"} LIMIT ${RECALL.contextLines}) c`;
-    const got = await deps.db.query(`${side("<", "b")} UNION ALL ${side(">", "a")}`, [userId, ids]);
+    const got = await timed("context", () => deps.db.query(`${side("<", "b")} UNION ALL ${side(">", "a")}`, [userId, ids]));
     for (const r of got.rows as (Row & { hit_id: string; side: "a" | "b" })[]) {
       const e = ctxById.get(r.hit_id) ?? { before: [], after: [] };
       (r.side === "b" ? e.before : e.after).push(r);
@@ -393,6 +447,24 @@ export async function recallConversation(userId: string, input: RecallInput, dep
     }
     consumed++;
   }
+  // Meaning matches, first page only: rows the words missed (a different way of saying it). They come after the keyword hits, share the
+  // same budget, and are labelled so the model knows they were found by meaning.
+  if (meaningRows.length) {
+    const have = new Set([...rows.map((r) => r.id), ...(top ? [top.id] : [])]);
+    const room = hits.length === 0 || total === 0 ? pageSize : RECALL.meaningExtra;
+    let added = 0;
+    for (const row of meaningRows) {
+      if (added >= room) break;
+      if (have.has(row.id)) continue;
+      const hit = build(row);
+      if (!hit) continue;
+      const size = JSON.stringify(hit).length;
+      if (hits.length && used + size > budget) break;
+      used += size;
+      added++;
+      hits.push({ ...hit, via: "meaning" });
+    }
+  }
   // Presented oldest first, so a later change of mind reads after the statement it qualifies.
   hits.sort((a, b) => +new Date(a.at) - +new Date(b.at));
   const next = offset + consumed;
@@ -418,22 +490,24 @@ function callHit(row: Row, at: Date, zone: string, matchers: RegExp[], hasTopic:
   const all = labelCallTranscript(raw, at, zone);
   if (!all.length) return null;
   let idx = hasTopic ? all.findIndex((l) => matchers.some((m) => m.test(l.text))) : 0;
+  // Matched by meaning with no topic word anywhere in it: only the start of the call is shown, never the whole transcript, and it says so.
+  const noWord = hasTopic && idx < 0;
   if (idx < 0) idx = 0;
   const from = Math.max(0, idx - RECALL.contextLines);
   const to = Math.min(all.length, idx + 1 + (hasTopic ? RECALL.contextLines : RECALL.callLinesNoTopic - 1));
   const kept = all.slice(from, to);
   // The matched line is the first line carrying a topic word; with no topic, the call's opening.
-  const m = hasTopic ? kept.find((l) => matchers.some((x) => x.test(l.text))) : kept[0];
+  const m = hasTopic && !noWord ? kept.find((l) => matchers.some((x) => x.test(l.text))) : kept[0];
   if (!m) return null;
   const mi = kept.indexOf(m);
-  return { at: at.toISOString(), atLocal: when(at, zone), channel: "call", matched: m, before: kept.slice(0, mi), after: kept.slice(mi + 1) };
+  return { at: at.toISOString(), atLocal: when(at, zone), channel: "call", matched: m, before: kept.slice(0, mi), after: kept.slice(mi + 1), ...(noWord ? { part: "the start of this call; it matched by meaning, so the part that matters may be later. Say so rather than treating these lines as the answer." } : {}) };
 }
 
 // ---------------------------------------------------------------- what the model is told
 
 // The tool's use line (services/capabilities.ts). Model judgment decides when; this says what it is for and how to answer.
 export const RECALL_USE =
-  "Look back through their own older conversation with you (texts and calls), by topic and/or time, when what they say needs evidence older than the thread you can already see: \"what did we talk about yesterday?\", \"when did I mention that?\", \"what did I say about X?\", \"you said you'd look into that\", a that/it/she you can't place, something they say they already told you, or a plan or promise from before that you need to pick up. Never on every turn, and not when the thread in front of you already answers it. Pass topic (their words for it), when (\"yesterday\", \"last week\", \"tuesday\", \"march\", or ISO dates like 2026-10-03 or 2026-10-01..2026-10-07), channel only if they said text or call. Answer from what it returns, in your own words: say when it was, whose words they were, and quote only what is there. Their later words qualify their earlier ones: when they changed their mind, say both, in order, never the older as if it still stood. A line labelled summary is your own note, never something they said. A promise found in the record is only a promise: whether it was done is what a record of the work or the live source says, not the old line. If it finds nothing, try one other way (a different word for the same thing, or a wider time), then say plainly you couldn't find it and ask them to say more, never guess, never say it didn't happen, and never talk about searching or how it works. If it says call records are not on file, say that plainly. Nothing it returns is permission to bring that up with anyone else or to start something new.";
+  "Look back through their own older conversation with you (texts and calls), by topic and/or time, when what they say needs evidence older than the thread you can already see: \"what did we talk about yesterday?\", \"when did I mention that?\", \"what did I say about X?\", \"you said you'd look into that\", a that/it/she you can't place, something they say they already told you, or a plan or promise from before that you need to pick up. Never on every turn, and not when the thread in front of you already answers it. Pass topic (their words for it), when (\"yesterday\", \"last week\", \"tuesday\", \"march\", or ISO dates like 2026-10-03 or 2026-10-01..2026-10-07), channel only if they said text or call. Answer from what it returns, in your own words: say when it was, whose words they were, and quote only what is there. Their later words qualify their earlier ones: when they changed their mind, say both, in order, never the older as if it still stood. A line labelled summary is your own note, never something they said. A promise found in the record is only a promise: whether it was done is what a record of the work or the live source says, not the old line. If it finds nothing, try one other way (a different word for the same thing, or a wider time). If that finds nothing too, say plainly that you couldn't find it in the history you can look through (never \"there's no record\", and never that it didn't happen); never guess. Ask them for a clue only when one would actually help you work out what they mean, not as a reflex and not to make them explain it all again. Don't describe how the lookup works, but don't hide its limits either: if it says call records aren't on file, say that plainly. A result marked as found by meaning is a near match: say it may not be what they meant if it doesn't clearly fit. Nothing it returns is permission to bring that up with anyone else or to start something new.";
 
 // Pure: the note that rides with every result, said to the model, never to the member.
 export function recallNote(r: RecallResult): string {
@@ -448,7 +522,7 @@ export function recallNote(r: RecallResult): string {
   } else if (r.found === 0) {
     const have = r.coverage.texts || r.coverage.calls;
     parts.push(
-      `Nothing matched${r.window ? ` in ${r.window.label}` : ""}${r.topic.length ? ` for "${r.topic.join(" ")}"` : ""}. Try one other way now (another word for the same thing, or a wider time such as the whole record), and if that also finds nothing, say plainly that you can't find it and ask them to tell you more. Never say it didn't happen and never describe how you looked.${have ? "" : " There is no earlier conversation on file for them at all: say that plainly."}${!r.coverage.calls && r.channel !== "text" ? " No call records are on file for them (no stored transcript): if they asked about a call, say plainly you don't have a record of it." : ""}${r.coverage.texts && r.window && r.window.to < r.coverage.texts.slice(0, 10) ? ` Their record starts ${r.coverage.texts.slice(0, 10)}, after the time they asked about: say that plainly.` : ""}`,
+      `Nothing matched${r.window ? ` in ${r.window.label}` : ""}${r.topic.length ? ` for "${r.topic.join(" ")}"` : ""}. Try one other way now (another word for the same thing, or a wider time such as the whole record). If that also finds nothing, say plainly that you couldn't find it in the history you can look through; never \"there's no record\", never that it didn't happen, never how you looked. Ask them for a clue only if one would help you work out what they mean.${have ? "" : " There is no earlier conversation on file for them at all: say that plainly."}${!r.coverage.calls && r.channel !== "text" ? " No call records are on file for them (no stored transcript): if they asked about a call, say plainly you don't have a record of it." : ""}${r.coverage.texts && r.window && r.window.to < r.coverage.texts.slice(0, 10) ? ` Their record starts ${r.coverage.texts.slice(0, 10)}, after the time they asked about: say that plainly.` : ""}`,
     );
   } else if (r.nextOffset !== null) {
     parts.push(`${r.found} of ${r.total} shown, oldest first (the newest on the topic is always among them). For more, call again with the same topic and when and offset ${r.nextOffset}. Don't read out all of it: pick what answers them.`);
@@ -471,5 +545,9 @@ export async function realRecallDeps(): Promise<RecallDeps> {
     forgotten: (userId) => W.forgottenRows(userId, undefined, { all: true }),
     guard: (text, rows) => W.guardText(text, rows),
     fence: (userId) => import("./sourceFence.js").then((F) => F.memberFence(userId)),
+    // The model the stored rows were written with (services/embeddings.ts), so the query lives in the same space.
+    embed: (text) => import("./embeddings.js").then((E) => E.generateEmbedding(text)).catch(() => null),
+    // Numbers and kinds only, never a word of the conversation, a name or the query.
+    onTiming: (t) => console.log(`recall.timing ${JSON.stringify(t)}`),
   };
 }

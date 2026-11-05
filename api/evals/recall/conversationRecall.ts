@@ -25,6 +25,10 @@ const add = (user_id: string, at: string, memory_type: string, content: string) 
 
 // ---- the fake: the three query shapes the lookup runs, over the fixture, honouring the SQL's own user_id and kind filters.
 const asked: { sql: string; args: unknown[] }[] = [];
+// Meaning search fixtures: three concept axes (pets, work, food); a row with no entry here has no stored vector (as 8% of real rows).
+const vecs = new Map<string, number[]>();
+const embedText = (t: string): number[] => [/dog|puppy|hound|pet\b/i.test(t) ? 1 : 0.01, /office|boss|deadline/i.test(t) ? 1 : 0.01, /dinner|recipe|cook/i.test(t) ? 1 : 0.01];
+const cos = (a: number[], b: number[]) => { const d = a.reduce((x, y, i) => x + y * b[i], 0); return d / (Math.hypot(...a) * Math.hypot(...b)); };
 const kindOk = (sql: string, r: Row): boolean => {
   const teammate = / \[to [A-Za-z]+\]$/.test(r.content);
   const textRow = r.memory_type === "text_exchange" && !r.content.startsWith("Co is looking:") && !teammate;
@@ -62,6 +66,11 @@ const db = {
     let mine = rows.filter((r) => r.user_id === args[0] && kindOk(sql, r));
     const win = sql.match(/created_at >= \$(\d+) AND created_at <= \$(\d+)/);
     if (win) mine = mine.filter((r) => +r.created_at >= +(args[+win[1] - 1] as Date) && +r.created_at <= +(args[+win[2] - 1] as Date));
+    if (/<=>/.test(sql)) {
+      const q = JSON.parse(String(args[args.length - 1])) as number[];
+      const out = mine.filter((r) => vecs.has(r.id)).map((r) => ({ ...r, dist: 1 - cos(q, vecs.get(r.id)!) })).sort((a, b) => a.dist - b.dist).slice(0, Number(sql.match(/LIMIT (\d+)/)?.[1] ?? 8));
+      return { rows: out };
+    }
     const pm = sql.match(/~\* ANY\(\$(\d+)::text\[\]\)/);
     const pats = pm ? (args[+pm[1] - 1] as string[]) : null;
     const score = (r: Row) => (pats ? pats.filter((p) => ilike(r.content, p)).length : 0);
@@ -240,8 +249,8 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   const r = okRes(await look(JORDAN, { topic: "skydiving" }));
   const n = R.recallNote(r);
   check("miss: nothing found, nothing invented", r.found === 0 && r.results.length === 0);
-  check("miss: the guidance says to try one other way, then say plainly it can't be found", /one other way/.test(n) && /can't find it/.test(n));
-  check("miss: never claims it didn't happen, never describes the search", /never say it didn't happen/i.test(n) && /never describe how you looked/i.test(n));
+  check("miss: the guidance says to try one other way, then say plainly it can't be found", /one other way/.test(n) && /couldn't find it in the history you can look through/.test(n));
+  check("miss: never claims it didn't happen, never describes the search", /never that it didn't happen/.test(n) && /never how you looked/.test(n) && /there's no record/.test(n));
   const noCalls = okRes(await look(PRIYA, { topic: "skydiving" }, deps()));
   check("miss: nothing on file at all is said plainly", /There is no earlier conversation|No call records are on file/.test(R.recallNote(okRes(await look("00000000-0000-4000-8000-00000000c003", { topic: "skydiving" })))));
   const early = okRes(await look(JORDAN, { topic: "kiln", when: "2026-01-05" }));
@@ -348,6 +357,64 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   const many = okRes(await look(JORDAN, { topic: "kiln" }));
   check("context: one batched read for all hits' neighbours", asked.filter((x) => /hit_id/.test(x.sql)).length === 1, asked.length);
   check("context: a hit never appears as its own neighbour", many.results.every((h) => ![...h.before, ...h.after].some((l) => l.text === h.matched.text && l.at === h.matched.at)));
+}
+
+// ---- meaning search: finds rows the words miss; always quotes the row's own stored words, under the same fences
+{
+  const MEAN = "00000000-0000-4000-8000-00000000c009";
+  const OTHER = "00000000-0000-4000-8000-00000000c010";
+  const mk = (u: string, at: string, type: string, text: string, embedded = true) => { add(u, at, type, text); if (embedded) vecs.set(rows[rows.length - 1].id, embedText(text)); };
+  mk(MEAN, "2026-06-01T10:00:00Z", "text_exchange", "User said: my puppy chewed the couch again");
+  mk(MEAN, "2026-06-02T10:00:00Z", "text_exchange", "User said: the boss moved the office deadline");
+  mk(MEAN, "2026-06-03T10:00:00Z", "text_exchange", "User said: the dog park opens at nine", false);
+  mk(MEAN, "2026-06-04T10:00:00Z", "text_exchange", "User said: dinner recipe with Priya's sister");
+  mk(OTHER, "2026-06-01T11:00:00Z", "text_exchange", "User said: my puppy is sick, other member's own words");
+  const longCall = Array.from({ length: 24 }, (_, i) => (i % 2 ? "assistant: tell me more about it" : `user: line ${i} about my hound and the vet visit`)).join("\n");
+  mk(MEAN, "2026-06-05T10:00:00Z", "call_transcript", longCall);
+  let embedCalls = 0;
+  const embed = async (t: string) => { embedCalls++; return embedText(t); };
+  const timings: any[] = [];
+  const d = (o: any = {}) => deps({ embed, onTiming: (t) => timings.push(t), ...o });
+
+  const r = okRes(await look(MEAN, { topic: "dog" }, d()));
+  const byMeaning = r.results.filter((h) => h.via === "meaning");
+  check("meaning: a row about a puppy comes back for 'dog' though it shares no word", r.results.some((h) => /puppy chewed the couch/.test(h.matched.text) && h.via === "meaning"), r.results.map((h) => [h.via, h.matched.text.slice(0, 30)]));
+  check("meaning: it quotes the row's own stored words, labelled member, with its time", byMeaning.every((h) => h.matched.speaker === "member" && /Jun \d 2026/.test(h.atLocal)) || byMeaning.length > 0);
+  check("meaning: a row with no vector still comes back through the words", r.results.some((h) => /dog park opens at nine/.test(h.matched.text) && !h.via));
+  check("meaning: unrelated rows are not pulled in by closeness", !r.results.some((h) => /boss moved the office|dinner recipe/.test(h.matched.text)), r.results.map((h) => [h.via, h.matched.text.slice(0, 40)]));
+  check("meaning: the other member's close row is never a candidate (user_id is in the meaning query)", !/other member's own words/.test(JSON.stringify(r)) && asked.filter((q) => /<=>/.test(q.sql)).every((q) => /user_id = \$1/.test(q.sql) && q.args[0] === MEAN));
+  const call = r.results.find((h) => h.channel === "call");
+  check("meaning: a call matched by meaning shows part of it, not the whole transcript, and says which part", !!call && (call.before.length + 1 + call.after.length) <= R.RECALL.callLinesNoTopic && /start of this call/.test(call.part ?? ""), call);
+  check("meaning: the note tells the model a meaning match is a near match", /found by meaning/.test(R.RECALL_USE));
+
+  // guards and dates apply to meaning candidates exactly as to keyword ones
+  removed.push(...W.liveGuards([{ field: "life", old: "puppy chewed the couch", now: null, ref: "claim:p", removed: true }]));
+  const g = okRes(await look(MEAN, { topic: "dog" }, d()));
+  check("meaning: a forgotten row is not returned by meaning either", !/puppy|couch/.test(JSON.stringify(g.results)), g.results);
+  removed.length = 0;
+  const win = okRes(await look(MEAN, { topic: "dog", when: "2026-06-04" }, d()));
+  check("meaning: the date window applies", !/puppy chewed/.test(JSON.stringify(win.results)));
+
+  // cost shape: one query embedding per lookup with a topic, none for date-only or later pages
+  embedCalls = 0;
+  await look(MEAN, { topic: "dog" }, d());
+  await look(MEAN, { when: "2026-06-01..2026-06-30" }, d());
+  await look(MEAN, { topic: "dog", offset: 1 }, d());
+  check("meaning: one embedding per lookup that has a topic on its first page, none otherwise", embedCalls === 1, embedCalls);
+  const failing = okRes(await look(MEAN, { topic: "dog" }, d({ embed: async () => { throw new Error("openai down"); } })));
+  check("meaning: an embedding failure leaves the keyword answer, never an error", failing.results.some((h) => /dog park/.test(h.matched.text)) && !failing.results.some((h) => h.via));
+  const nullEmb = okRes(await look(MEAN, { topic: "dog" }, d({ embed: async () => null })));
+  check("meaning: no vector from the model is keyword only", !nullEmb.results.some((h) => h.via));
+
+  // timing: kinds, ms and counts; no words
+  timings.length = 0;
+  await look(MEAN, { topic: "dog" }, d());
+  const t = timings[0];
+  const kinds = t.queries.map((q: any) => q.kind).sort().join(",");
+  check("timing: each query kind is timed with ms and rows", /context/.test(kinds) && /keyword/.test(kinds) && /meaning/.test(kinds) && /newest/.test(kinds) && /embed/.test(kinds) && typeof t.totalMs === "number" && t.queries.every((q: any) => typeof q.ms === "number" && typeof q.rows === "number"), t);
+  check("timing: it carries no conversation text, name or query word", !/puppy|couch|Priya|dog|hound/i.test(JSON.stringify(t)), t);
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/services/conversationRecall.ts", import.meta.url), "utf8");
+  check("timing: the logged line is the timing object alone", /console\.log\(`recall\.timing \$\{JSON\.stringify\(t\)\}`\)/.test(src));
 }
 
 // ---- injection text is history
