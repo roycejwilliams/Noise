@@ -739,8 +739,10 @@ export const proactiveRegistry: ProactiveRegistry = {
   goal_checkin: {
     async draft(c, person) {
       const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [c.userId]);
-      const still = (Array.isArray(rows[0]?.intent) ? rows[0].intent : []).some((e: any) => e?.id === c.payload.goalId && e?.kind === "goal" && e?.status === "active");
-      if (!still) return skip("that goal is not open any more");
+      const entry = (Array.isArray(rows[0]?.intent) ? rows[0].intent : []).find((e: any) => e?.id === c.payload.goalId && e?.kind === "goal" && e?.status === "active");
+      if (!entry) return skip("that goal is not open any more");
+      // The purpose boundary, asked again when the check-in wakes (it may have been queued before the goal was read as outside).
+      if ((await import("../services/goalJourney.js")).goalIsOutside(entry)) return skip("that goal is outside what Cue checks in on");
       // Its state in what Co knows about them (the dispatch's one read): a goal closed since is history, not a question.
       const known = draftKnowledge();
       if (known) {
