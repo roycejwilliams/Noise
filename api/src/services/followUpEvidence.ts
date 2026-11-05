@@ -25,3 +25,6 @@ export function followUpEvidence(i: {
   if (rows.some((r) => r.result === "acted") || i.registered) return { level: "intent", declined: false, why: i.registered && !rows.some((r) => r.result === "acted") ? "registered" : "said they're going" };
   return { level: "none", declined: false, why: "no sign they meant to go" };
 }
+
+// A line that takes for granted they went ("How was…", "anyone stood out", "who did you meet").
+export const PRESUMES_THEY_WENT = /\bhow (?:was|did|'d|’d)\b|\bhow['’]d\b|\b(?:anyone|anything|who) stood out\b|\bwho did you (?:meet|talk|end up)\b|\bdid you (?:meet|enjoy|have fun)\b|\bmeet anyone\b|\bwhat did you think of\b/i;

@@ -6,6 +6,7 @@
 import { draftProactive } from "../harness/proactive.js";
 import type { OutputRules } from "../harness/proactive.js";
 import { mentionsUnknownDay } from "../services/askWindow.js";
+import { PRESUMES_THEY_WENT } from "../services/followUpEvidence.js";
 
 export type WindowFollowUpPayload = {
   // "commitment" (2026-09-22): something they said they'd do by a date, from
@@ -41,15 +42,18 @@ export async function draftWindowFollowUp(firstName: string, p: WindowFollowUpPa
 }
 
 // Their own words, their own date: "I'll send the deck Friday" → the morning
-// after, how it went. About them, never a pitch (Royce, 2026-09-22).
-function draftCommitment(firstName: string, p: WindowFollowUpPayload): Promise<string | null> {
-  return draftProactive({
+// after, whether it happened. About them, never a pitch (Royce, 2026-09-22). A plan they named is intent, not evidence it happened
+// (Royce, 2026-11-04, permanent: never assume): it asks whether it did, never "how'd it go".
+async function draftCommitment(firstName: string, p: WindowFollowUpPayload): Promise<string | null> {
+  const text = await draftProactive({
     functionId: "agent.commitmentFollowUp",
     firstName,
     facts: {
       what_they_said_they_would_do: p.asked,
       the_day_they_named: p.dates ?? p.label,
     },
-    task: `They told Cue they'd do this by that day, and the day has passed. Write a short, warm text asking how it went, like a friend who remembered ("How'd sending the deck go on Friday?"). Name the thing in a few words and the day, using only the_day_they_named and never any other date or day number. No advice, no suggestions, no events, no offer to help, nothing Cue will do. Start with the question itself, not a greeting like "Hey".`,
+    task: `They told Cue they'd do this by that day, and the day has passed. Nothing says it happened, so write a short, warm text asking whether it did, like a friend who remembered ("Did the deck get sent on Friday?"). Never ask how it went and never take for granted that it happened. Name the thing in a few words and the day, using only the_day_they_named and never any other date or day number. No advice, no suggestions, no events, no offer to help, nothing Cue will do. Start with the question itself, not a greeting like "Hey".`,
   });
+  // Code backstop: a line that takes for granted it happened is never sent.
+  return text && PRESUMES_THEY_WENT.test(text) ? null : text;
 }

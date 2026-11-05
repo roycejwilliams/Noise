@@ -81,6 +81,8 @@ P.setProactiveModelForTests(async (prompt: string) => {
   prompts.push(prompt);
   if (/Ask how "/.test(prompt)) return "How was Founder Table? Who did you meet?";
   if (/whether they ended up making it/.test(prompt)) return presumptuous ? "How was Founder Table last night?" : "Did you end up going to Founder Table?";
+  if (/asking whether it did/.test(prompt)) return presumptuous ? "How'd sending the deck go on Friday?" : "Did the deck get sent on Friday?";
+  if (/ask how it's going or where it landed/.test(prompt)) return presumptuous ? "How was the pitch?" : /whether it happened/.test(prompt) ? "Did the pitch happen?" : "How's the pitch coming along?";
   if (/look into or apply/.test(prompt)) return presumptuous ? "How was it, who did you meet?" : "Did you get a chance to look at the Fellowship?";
   return "SKIP";
 });
@@ -242,6 +244,29 @@ CF.setDoorDepsForTests({ ours: async () => false });
   check("call: a plan of theirs that just passed is a reason to ask whether it happened", r?.kind === "how_it_went" && /nothing says it happened/.test(r.text) && /ask whether it did/.test(r.text), res);
   const guide = CO.outboundOpeningGuide(r ?? { kind: "how_it_went", text: "x", key: "k", at: null } as any);
   check("call: the opening guide asks whether it happened, never takes for granted that they went", /whether it ended up happening, never taking for granted that they went/.test(guide) && !/\(how it went,/.test(guide), guide.slice(0, 300));
+}
+
+// ================================================================ 7. text: a dated plan of theirs is intent, not evidence
+{
+  const W = await import("../../src/agent/windowFollowUp.js");
+  const CC = await import("../../src/agent/companionCheckin.js");
+  const plan: any = { kind: "commitment", label: "Friday", asked: "send the deck", sent: [], dates: "Friday, October 30" };
+  prompts = []; presumptuous = false;
+  const a: any = await W.draftWindowFollowUp("Jordan", plan);
+  check("text dated plan, intent only: the neutral question, asked as such", a?.text === "Did the deck get sent on Friday?" && /asking whether it did/.test(prompts[0] ?? "") && !/asking how it went/.test(prompts[0] ?? ""), { a, p: (prompts[0] ?? "").slice(-300) });
+  presumptuous = true;
+  const b: any = await W.draftWindowFollowUp("Jordan", plan);
+  check("text dated plan: a 'how'd it go' draft is refused", b === null, b);
+  const thread = { text: "pitching at Friday's demo day", quote: "I pitch on Friday", dueDate: "2026-10-30", feeling: null };
+  presumptuous = false;
+  const c: any = await CC.draftCompanionCheckin("Jordan", "", thread, null);
+  check("companion thread with a date: asks whether it happened", /whether it happened/.test(prompts[prompts.length - 1] ?? "") && c?.text === "Did the pitch happen?", { c, p: (prompts[prompts.length - 1] ?? "").slice(-500) });
+  presumptuous = true;
+  const d: any = await CC.draftCompanionCheckin("Jordan", "", thread, null);
+  check("companion thread with a date: a 'how was it' draft is refused", d === null, d);
+  presumptuous = false;
+  const e: any = await CC.draftCompanionCheckin("Jordan", "", { ...thread, dueDate: null }, null);
+  check("companion thread with no date: unchanged (how it's going)", e?.text === "How's the pitch coming along?", e);
 }
 
 console.log(`${total - failed}/${total} passed`);
