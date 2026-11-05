@@ -104,9 +104,9 @@ export function resolveWhen(when: string, now: Date, zone: string | null | undef
   if (phrase === "this month") return dayWindow(t0.startOf("month"), t0, "this month");
   if (phrase === "last month") return dayWindow(t0.startOf("month").minus({ months: 1 }), t0.startOf("month").minus({ days: 1 }), "last month");
   const lastN = phrase.match(/^(?:the )?(?:last|past) (\d{1,3}) days?$/);
-  if (lastN) return dayWindow(t0.minus({ days: Number(lastN[1]) }), t0, `the last ${lastN[1]} days`);
+  if (lastN) return dayWindow(t0.minus({ days: Math.max(0, Number(lastN[1]) - 1) }), t0, `the last ${lastN[1]} days`);
   const lastNWeeks = phrase.match(/^(?:the )?(?:last|past) (\d{1,2}) weeks?$/);
-  if (lastNWeeks) return dayWindow(t0.minus({ weeks: Number(lastNWeeks[1]) }), t0, `the last ${lastNWeeks[1]} weeks`);
+  if (lastNWeeks) return dayWindow(t0.minus({ days: Number(lastNWeeks[1]) * 7 - 1 }), t0, `the last ${lastNWeeks[1]} weeks`);
   const wd = phrase.match(/^(last |this |past )?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
   if (wd) {
     const want = WEEKDAYS.indexOf(wd[2]) + 1;
@@ -122,7 +122,8 @@ export function resolveWhen(when: string, now: Date, zone: string | null | undef
   if (mo) {
     const m = MONTHS.indexOf(mo[1]) + 1;
     let y = mo[2] ? Number(mo[2]) : t0.year;
-    if (!mo[2] && (m > t0.month)) y -= 1;
+    // "last november" in November is the one before; a bare month is the latest one up to now; "this november" is this year's.
+    if (!mo[2]) { const kind = phrase.split(" ")[0]; if (kind === "last" ? m >= t0.month : kind === "this" ? false : m > t0.month) y -= 1; }
     const start = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: z });
     return start.isValid ? dayWindow(start, start.endOf("month"), `${MONTHS[m - 1]} ${y}`) : null;
   }
@@ -137,19 +138,23 @@ const STOP = new Set(
 // Pure: the words of a topic worth matching, lowercased, a light suffix trim so "moving" finds "moved" and "dogs" finds "dog".
 export function topicTerms(topic: string | undefined | null): string[] {
   const out: string[] = [];
-  for (const w of String(topic ?? "").toLowerCase().split(/[^a-z0-9'À-ɏ]+/)) {
-    const word = w.replace(/'s$/, "").replace(/^'+|'+$/g, "");
-    if (word.length < 3 || STOP.has(word)) continue;
+  for (const orig of String(topic ?? "").split(/[^A-Za-z0-9'\u00c0-\u024f]+/)) {
+    const word = orig.toLowerCase().replace(/'s$/, "").replace(/^'+|'+$/g, "");
+    // Two-letter words count only when written as a name or an acronym (LA, AI), never as "to" or "in".
+    if (word.length < 2 || STOP.has(word) || (word.length === 2 && !/^[A-Z]/.test(orig))) continue;
     let stem = word;
     if (stem.length > 5 && stem.endsWith("ing")) stem = stem.slice(0, -3);
     else if (stem.length > 4 && stem.endsWith("ed")) stem = stem.slice(0, -2);
     else if (stem.length > 4 && stem.endsWith("es")) stem = stem.slice(0, -2);
     else if (stem.length > 3 && stem.endsWith("s") && !stem.endsWith("ss")) stem = stem.slice(0, -1);
-    if (stem.length >= 3 && !out.includes(stem)) out.push(stem);
+    if (stem.length >= 2 && !out.includes(stem)) out.push(stem);
   }
   return out.slice(0, RECALL.maxTerms);
 }
-const likePattern = (t: string) => `%${t.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+// Word-start matching, never a substring ("art" is not in "party"): a term opens a word; one of three letters or fewer is a whole word.
+const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const termPattern = (t: string): string => (t.length <= 3 ? `\\m${reEscape(t)}\\M` : `\\m${reEscape(t)}`);
+export const termRegex = (t: string): RegExp => new RegExp(t.length <= 3 ? `\\b${reEscape(t)}\\b` : `\\b${reEscape(t)}`, "i");
 
 // ---------------------------------------------------------------- labelling
 
@@ -248,19 +253,25 @@ export type RecallResult =
     };
 
 type Row = { id: string; memory_type: string; content: string; created_at: Date | string; total?: number };
+type Strip = (s: string) => string | null;
 
-// The shared member-and-kind filter. user_id is $1: the boundary is in the query, never applied afterwards.
-function kindFilter(channel: RecallChannel): string {
-  const textRows = `(memory_type = 'text_exchange' AND content NOT LIKE 'Co is looking:%' AND ${notToTeammate()})`;
-  const callSummaries = `(memory_type = 'text_exchange' AND content LIKE '[Call]%')`;
-  const transcripts = `(memory_type = 'call_transcript' AND content NOT LIKE 'Co initiated call%')`;
-  if (channel === "text") return `(${textRows} AND content NOT LIKE '[Call]%')`;
+// The shared member-and-kind filter. user_id is $1: the boundary is in the query, never applied afterwards. alias: the table alias.
+function kindFilter(channel: RecallChannel, alias = ""): string {
+  const c = (col: string) => (alias ? `${alias}.${col}` : col);
+  const textRows = `(${c("memory_type")} = 'text_exchange' AND ${c("content")} NOT LIKE 'Co is looking:%' AND ${notToTeammate(alias)})`;
+  const callSummaries = `(${c("memory_type")} = 'text_exchange' AND ${c("content")} LIKE '[Call]%')`;
+  const transcripts = `(${c("memory_type")} = 'call_transcript' AND ${c("content")} NOT LIKE 'Co initiated call%')`;
+  if (channel === "text") return `(${textRows} AND ${c("content")} NOT LIKE '[Call]%')`;
   if (channel === "call") return `(${transcripts} OR ${callSummaries})`;
   return `(${textRows} OR ${transcripts})`;
 }
 
-export async function recallConversation(userId: string, input: RecallInput, deps: RecallDeps): Promise<RecallResult> {
-  const now = deps.now();
+export type RecallOptions = { asOf?: Date; resultChars?: number };
+
+export async function recallConversation(userId: string, input: RecallInput, deps: RecallDeps, opts: RecallOptions = {}): Promise<RecallResult> {
+  // From the moment they asked (the turn's arrival), not from when this ran.
+  const now = opts.asOf ?? deps.now();
+  const budget = opts.resultChars ?? RECALL.resultChars;
   const zone = wordsZone(await deps.zone(userId).catch(() => null));
   const today = DateTime.fromJSDate(now).setZone(zone).toISODate()!;
   const channel: RecallChannel = input.channel === "text" || input.channel === "call" ? input.channel : "any";
@@ -279,13 +290,19 @@ export async function recallConversation(userId: string, input: RecallInput, dep
   }
   const fence = await deps.fence(userId).catch(() => ({ strip: () => null, failed: true }) as { strip: (s: string) => string | null; failed?: boolean });
   if (fence.failed) return { ok: false, reason: "unavailable", today, zone };
-  const guardLine = (l: RecallLine): RecallLine | null => {
-    const g = deps.guard(l.text, guards as any[]);
+  // The guard reads the stored line whole, prefix included ("User said: please forget the divorce stuff" is rewritten only when it
+  // still has its prefix), and runs before anything is parsed or clipped. Then the name fence. null: the line is gone.
+  const clean: Strip = (raw) => {
+    const g = deps.guard(raw, guards as any[]);
     if (g === null) return null;
-    const clean = fence.strip(g);
-    if (clean === null || !clean.trim()) return null;
-    const outside = l.outside?.flatMap((o) => { const t = fence.strip(o.text); return t === null ? [] : [{ ...o, text: t }]; });
-    return { ...l, text: clean, ...(outside ? { outside } : {}) };
+    const f = fence.strip(g);
+    return f === null || !f.trim() ? null : f;
+  };
+  // Quoted material that rode with a line goes through the same guard on its own: a reply-to quote can say what was removed.
+  const guardOutside = (l: RecallLine): RecallLine => {
+    if (!l.outside) return l;
+    const outside = l.outside.flatMap((o) => { const t = clean(o.text); return t === null ? [] : [{ ...o, text: t }]; });
+    return { ...l, outside };
   };
 
   const pageSize = terms.length ? RECALL.topicPageSize : RECALL.datePageSize;
@@ -298,10 +315,10 @@ export async function recallConversation(userId: string, input: RecallInput, dep
   }
   let scoreSql = "0";
   if (terms.length) {
-    args.push(terms.map(likePattern));
+    args.push(terms.map(termPattern));
     const p = `$${args.length}::text[]`;
-    where.push(`content ILIKE ANY(${p})`);
-    scoreSql = `(SELECT count(*)::int FROM unnest(${p}) AS pat WHERE content ILIKE pat)`;
+    where.push(`content ~* ANY(${p})`);
+    scoreSql = `(SELECT count(*)::int FROM unnest(${p}) AS pat WHERE content ~* pat)`;
   }
   const base = `FROM co_memories WHERE ${where.join(" AND ")}`;
   const order = terms.length ? `ORDER BY score DESC, created_at DESC, id DESC` : `ORDER BY created_at ASC, id ASC`;
@@ -318,26 +335,63 @@ export async function recallConversation(userId: string, input: RecallInput, dep
   const total: number = rows[0]?.total ?? 0;
   const iso = (v: unknown) => (v ? new Date(v as any).toISOString() : null);
   const coverage: Coverage = { texts: iso(cover.rows[0]?.texts), calls: iso(cover.rows[0]?.calls) };
-
-  const picked: { row: Row; newest?: true }[] = rows.map((row) => ({ row }));
   const top = (newestRow.rows as Row[])[0];
-  if (top && !rows.some((r) => r.id === top.id)) picked.push({ row: top, newest: true });
+  const matchers = terms.map(termRegex);
 
+  // All the context for the page's text hits in one read: the lines either side of each hit, compared against the hit's own stored row
+  // (never a rounded timestamp), the same member, the same fences.
+  const textRows = [...rows, ...(top ? [top] : [])].filter((r) => r.memory_type === "text_exchange");
+  const ctxById = new Map<string, { before: Row[]; after: Row[] }>();
+  if (terms.length && textRows.length) {
+    const ids = [...new Set(textRows.map((r) => r.id))];
+    const side = (dir: "<" | ">", tag: string) =>
+      `SELECT h.id AS hit_id, '${tag}' AS side, c.id::text AS id, c.memory_type, c.content, c.created_at FROM (SELECT m.id::text AS id, m.created_at, m.id AS rid FROM co_memories m WHERE m.user_id = $1 AND m.id::text = ANY($2::text[])) h CROSS JOIN LATERAL (SELECT c.id, c.memory_type, c.content, c.created_at FROM co_memories c WHERE c.user_id = $1 AND ${kindFilter("any", "c")} AND c.memory_type = 'text_exchange' AND (c.created_at, c.id) ${dir} (h.created_at, h.rid) ORDER BY c.created_at ${dir === "<" ? "DESC" : "ASC"}, c.id ${dir === "<" ? "DESC" : "ASC"} LIMIT ${RECALL.contextLines}) c`;
+    const got = await deps.db.query(`${side("<", "b")} UNION ALL ${side(">", "a")}`, [userId, ids]);
+    for (const r of got.rows as (Row & { hit_id: string; side: "a" | "b" })[]) {
+      const e = ctxById.get(r.hit_id) ?? { before: [], after: [] };
+      (r.side === "b" ? e.before : e.after).push(r);
+      ctxById.set(r.hit_id, e);
+    }
+  }
+  const lineOf = (r: Row): RecallLine | null => {
+    const raw = clean(r.content);
+    const l = raw === null ? null : labelTextRow(raw, new Date(r.created_at), zone);
+    return l ? guardOutside(l) : null;
+  };
+  const build = (r: Row): RecallHit | null => {
+    const at = new Date(r.created_at);
+    if (r.memory_type === "call_transcript") return callHit(r, at, zone, matchers, terms.length > 0, clean);
+    const matched = lineOf(r);
+    if (!matched) return null;
+    const c = ctxById.get(r.id);
+    const sorted = (xs: Row[], dir: 1 | -1) => [...xs].sort((x, y) => dir * (+new Date(x.created_at) - +new Date(y.created_at)));
+    const before = c ? sorted(c.before, 1).flatMap((x) => { const l = lineOf(x); return l ? [l] : []; }) : [];
+    const after = c ? sorted(c.after, 1).flatMap((x) => { const l = lineOf(x); return l ? [l] : []; }) : [];
+    return { at: matched.at, atLocal: matched.atLocal, channel: matched.channel, matched, before, after };
+  };
+
+  // The newest match on the topic is built first and its size reserved, so a later change of mind is always on the first page; then the
+  // page fills the rest of the budget.
   const hits: RecallHit[] = [];
   let used = 0;
+  const newestHit = top ? build(top) : null;
+  if (top && newestHit) {
+    hits.push({ ...newestHit, newest: true });
+    used += JSON.stringify(newestHit).length;
+  }
   let consumed = 0;
-  for (const { row, newest } of picked) {
-    const at = new Date(row.created_at);
-    const hit = row.memory_type === "call_transcript" ? callHit(row, at, zone, terms, guardLine) : await textHit(userId, row, at, zone, terms.length > 0, deps.db, guardLine);
-    if (!newest) consumed++;
-    if (!hit) continue;
-    const size = JSON.stringify(hit).length;
-    if (hits.length && used + size > RECALL.resultChars) {
-      if (!newest) consumed--;
-      break;
+  let pageHits = 0;
+  for (const row of rows) {
+    if (top && row.id === top.id) { consumed++; continue; }
+    const hit = build(row);
+    if (hit) {
+      const size = JSON.stringify(hit).length;
+      if ((hits.length || pageHits) && used + size > budget) break;
+      used += size;
+      pageHits++;
+      hits.push(hit);
     }
-    used += size;
-    hits.push(newest ? { ...hit, newest: true } : hit);
+    consumed++;
   }
   // Presented oldest first, so a later change of mind reads after the statement it qualifies.
   hits.sort((a, b) => +new Date(a.at) - +new Date(b.at));
@@ -358,39 +412,18 @@ export async function recallConversation(userId: string, input: RecallInput, dep
   };
 }
 
-async function textHit(userId: string, row: Row, at: Date, zone: string, withContext: boolean, db: RecallDb, guard: (l: RecallLine) => RecallLine | null): Promise<RecallHit | null> {
-  const matched0 = labelTextRow(row.content, at, zone);
-  if (!matched0) return null;
-  const matched = guard(matched0);
-  if (!matched) return null;
-  let before: RecallLine[] = [];
-  let after: RecallLine[] = [];
-  if (withContext) {
-    // Context rows: the same member, the same fences, the same guards.
-    const ctx = (dir: "<" | ">") =>
-      db.query(
-        `SELECT id::text AS id, memory_type, content, created_at FROM co_memories WHERE user_id = $1 AND ${kindFilter("any")} AND memory_type = 'text_exchange' AND (created_at, id) ${dir} ($2::timestamptz, $3) ORDER BY created_at ${dir === "<" ? "DESC" : "ASC"}, id ${dir === "<" ? "DESC" : "ASC"} LIMIT ${RECALL.contextLines}`,
-        [userId, at, row.id],
-      );
-    const [b, a] = await Promise.all([ctx("<"), ctx(">")]);
-    const lines = (rs: Row[]) => rs.flatMap((r) => { const l = labelTextRow(r.content, new Date(r.created_at), zone); const g = l ? guard(l) : null; return g ? [g] : []; });
-    before = lines(b.rows as Row[]).reverse();
-    after = lines(a.rows as Row[]);
-  }
-  return { at: matched.at, atLocal: matched.atLocal, channel: matched.channel, matched, before, after };
-}
-
-function callHit(row: Row, at: Date, zone: string, terms: string[], guard: (l: RecallLine) => RecallLine | null): RecallHit | null {
-  const all = labelCallTranscript(row.content, at, zone);
+function callHit(row: Row, at: Date, zone: string, matchers: RegExp[], hasTopic: boolean, clean: Strip): RecallHit | null {
+  // Each stored line through the guard whole ("user: ..." with its prefix) before it is read as a line.
+  const raw = String(row.content ?? "").split("\n").flatMap((l) => { const g = clean(l); return g === null ? [] : [g]; }).join("\n");
+  const all = labelCallTranscript(raw, at, zone);
   if (!all.length) return null;
-  const lowered = all.map((l) => l.text.toLowerCase());
-  let idx = terms.length ? lowered.findIndex((t) => terms.some((w) => t.includes(w))) : 0;
+  let idx = hasTopic ? all.findIndex((l) => matchers.some((m) => m.test(l.text))) : 0;
   if (idx < 0) idx = 0;
   const from = Math.max(0, idx - RECALL.contextLines);
-  const to = Math.min(all.length, idx + 1 + (terms.length ? RECALL.contextLines : RECALL.callLinesNoTopic - 1));
-  const kept = all.slice(from, to).flatMap((l) => { const g = guard(l); return g ? [g] : []; });
+  const to = Math.min(all.length, idx + 1 + (hasTopic ? RECALL.contextLines : RECALL.callLinesNoTopic - 1));
+  const kept = all.slice(from, to);
   // The matched line is the first line carrying a topic word; with no topic, the call's opening.
-  const m = terms.length ? kept.find((l) => terms.some((w) => l.text.toLowerCase().includes(w))) : kept[0];
+  const m = hasTopic ? kept.find((l) => matchers.some((x) => x.test(l.text))) : kept[0];
   if (!m) return null;
   const mi = kept.indexOf(m);
   return { at: at.toISOString(), atLocal: when(at, zone), channel: "call", matched: m, before: kept.slice(0, mi), after: kept.slice(mi + 1) };
@@ -410,7 +443,9 @@ export function recallNote(r: RecallResult): string {
     return "Their older conversation couldn't be read just now. Don't guess what was said: tell them plainly you can't pull that up right now and offer to try again in a bit.";
   }
   const parts: string[] = [HISTORY_NOTE];
-  if (r.found === 0) {
+  if (r.found === 0 && r.nextOffset !== null) {
+    parts.push(`Nothing usable on this page, but there is more after it: call again with the same topic and when and offset ${r.nextOffset}. Don't say you found nothing until you have looked at the rest.`);
+  } else if (r.found === 0) {
     const have = r.coverage.texts || r.coverage.calls;
     parts.push(
       `Nothing matched${r.window ? ` in ${r.window.label}` : ""}${r.topic.length ? ` for "${r.topic.join(" ")}"` : ""}. Try one other way now (another word for the same thing, or a wider time such as the whole record), and if that also finds nothing, say plainly that you can't find it and ask them to tell you more. Never say it didn't happen and never describe how you looked.${have ? "" : " There is no earlier conversation on file for them at all: say that plainly."}${!r.coverage.calls && r.channel !== "text" ? " No call records are on file for them (no stored transcript): if they asked about a call, say plainly you don't have a record of it." : ""}${r.coverage.texts && r.window && r.window.to < r.coverage.texts.slice(0, 10) ? ` Their record starts ${r.coverage.texts.slice(0, 10)}, after the time they asked about: say that plainly.` : ""}`,
@@ -432,7 +467,8 @@ export async function realRecallDeps(): Promise<RecallDeps> {
     db: { query: (sql, args) => pool.query(sql, args as any[]) as any },
     now: () => new Date(),
     zone: (userId) => T.memberZone(userId),
-    forgotten: (userId) => W.forgottenRows(userId),
+    // Every removal, not the newest 300: recall reaches the whole history, so the guard must too.
+    forgotten: (userId) => W.forgottenRows(userId, undefined, { all: true }),
     guard: (text, rows) => W.guardText(text, rows),
     fence: (userId) => import("./sourceFence.js").then((F) => F.memberFence(userId)),
   };
