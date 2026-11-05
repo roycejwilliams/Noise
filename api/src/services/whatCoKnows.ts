@@ -342,8 +342,8 @@ export function stillSaying(view: KnownView, applied: Applied[], changedRefs: Se
 export type ForgottenRow = { field: string; old: string; now: string | null; ref: string; removed: boolean };
 
 // Newest first. Every correction is read (the turn learning's too), so a value they put back later is seen as back.
-export async function forgottenRows(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<ForgottenRow[]> {
-  const { rows } = await q.query(`SELECT pc.field, pc.old_value, pc.new_value, to_jsonb(pc)->>'item_ref' AS item_ref, to_jsonb(pc)->>'removed' AS removed FROM profile_corrections pc WHERE pc.user_id = $1 ORDER BY pc.corrected_at DESC, pc.id DESC LIMIT 300`, [userId]);
+export async function forgottenRows(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool, o: { all?: boolean } = {}): Promise<ForgottenRow[]> {
+  const { rows } = await q.query(`SELECT pc.field, pc.old_value, pc.new_value, to_jsonb(pc)->>'item_ref' AS item_ref, to_jsonb(pc)->>'removed' AS removed FROM profile_corrections pc WHERE pc.user_id = $1 ORDER BY pc.corrected_at DESC, pc.id DESC${o.all ? "" : " LIMIT 300"}`, [userId]);
   return liveGuards(rows.map((r: any) => ({ field: String(r.field), old: String(r.old_value ?? ""), now: r.new_value == null ? null : String(r.new_value), ref: r.item_ref ? String(r.item_ref) : "", removed: r.removed === "true" || r.removed === true })));
 }
 
