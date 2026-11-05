@@ -359,7 +359,13 @@ async function oweAfterCall(i: CallToolsInput, items: OnFile[], why: "failed" | 
     firstPlan: "On the call the text with these links didn't go through, and you told them you'd text it right after. Send each link as its own text, then its name, and nothing else about it.",
     inHours: 1,
     source: "promise",
-  }).catch(() => null);
+    // Cue's own connection delivery (the link it told them it would text): in scope by construction, never refused for its words.
+    scope: { scope: "in", connection: null },
+    trusted: true,
+  }).catch((err: any) => {
+    console.error("callTools: owed-link task could not start (the ledger row still keeps the debt):", err?.message ?? err);
+    return null;
+  });
   if (r?.ok) await pool.query(`UPDATE co_tasks SET next_check_at = $3 WHERE user_id = $1 AND id = $2`, [i.userId, r.task.id, new Date(Date.now() + DUE_AFTER_MINUTES * 60_000)]).catch(() => {});
   // The ledger row names its task, so the after-call step closes exactly that task once the link has landed.
   await (await import("./callLedger.js")).recordOwedAfterCall(i.userId, { tool, items: items.map((x) => ({ name: x.caption || x.name, url: x.url })), why, taskId: r?.ok ? r.task.id : null });

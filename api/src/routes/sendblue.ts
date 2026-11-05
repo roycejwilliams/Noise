@@ -1991,6 +1991,7 @@ export function sendblueRouter(io: Server): Router {
             console.error("sendblue: reading their reaction failed (non-fatal):", err?.message ?? err);
           }
         }
+        replyFacts.turnScope = turnRead?.scope ?? null;
         if (exchangeBase) {
           const X = await import("../services/exchangeRecord.js");
           const read0 = turnRead?.exchange ?? null;

@@ -6,107 +6,81 @@
 // OUT: concierge work (a dentist, a laptop, travel), generic research projects, broad job-board monitoring, funding and investor
 // searches, venue and vendor research for the member's OWN event, research on a named person that isn't preparing a conversation.
 //
-// The pass is deterministic. "ambiguous" means neither side is clear: the caller's own model read (the turn that chose to start the
-// work, or the wake that is about to run it) already judged it, so ambiguous work goes ahead. No new model call is made here.
-// Mixed ("hard out" and a connection ask in the same text): the connection part starts, the rest is declined; a caller that is about
-// to start ONE piece of work is told to start only the connection part.
+// Model judgment decides, code guards (Royce's standing rule). The verdict comes from a model read that already runs (the turn read, the
+// model's own start-task call, classifyAsk) and is stored on the item. This file holds the narrow regex backstop for unmistakable cases
+// (phone plans, a job-listings watch, a dentist, travel booking, shopping for a product) and never vetoes anything ambiguous or anything
+// about meeting people: ambiguous means the model's verdict, and with none, going ahead. No model call is made here.
+// Mixed (a connection ask and an outside one in one text): only the connection part starts or is searched. With no clean part, one short
+// question and nothing runs on the whole text.
 //
 // Used at the single place every task starts (services/coTasks.ts startTask), when queued work resumes (services/taskTurn.ts
 // runDueTask, followups, goal check-ins), and by the sweeps that read an ask or a goal (services/dailySweep.ts, goalEdges.ts).
 
-export type OutKind = "errand" | "shopping" | "travel" | "admin" | "generic_research" | "job_board" | "funding" | "host_vendor" | "person_research" | "document";
-export type Scope = { scope: "in" | "out" | "mixed" | "ambiguous"; kind: OutKind | null; why: string };
+export type OutKind = "errand" | "shopping" | "travel" | "job_board" | "model";
+export type Scope = { scope: "in" | "out" | "mixed" | "ambiguous"; kind: OutKind | null; why: string; connection?: string | null };
 
-// Clear connection work: people, rooms, communities, conversations, intros.
-const IN = new RegExp(
+// The model's verdict on a piece of work, from a read that was already running: the turn read (services/readTurn.ts "scope"), the
+// start-task call the reply or the call's model made (its own "scope" field), or classifyAsk's read of a captured ask. Code does not
+// re-judge it. in = about people, rooms, communities, a conversation to prepare for; out = concierge work; mixed = both, and then
+// "connection" is the connection part as a short phrase.
+export type ScopeVerdict = { scope: "in" | "out" | "mixed"; connection: string | null };
+export function parseVerdict(v: unknown, connection?: unknown): ScopeVerdict | null {
+  const o: any = v && typeof v === "object" ? v : { scope: v, connection };
+  const s = typeof o.scope === "string" ? o.scope : typeof o.verdict === "string" ? o.verdict : "";
+  const w = s.trim().toLowerCase();
+  const scope = w === "in" || w === "out" || w === "mixed" ? w : null;
+  if (!scope) return null;
+  const c = typeof (o.connection ?? connection) === "string" ? String(o.connection ?? connection).replace(/\s+/g, " ").trim().slice(0, 200) : "";
+  return { scope, connection: scope === "out" ? null : c.length >= 4 ? c : null };
+}
+
+// What makes a text about meeting people, going to a room or joining a community. When this is in the text, the backstop below never
+// calls it out: a text about people is the model's call, always. Deliberately wide.
+const CONNECTION = new RegExp(
   [
-    "\\bintro(?:s|duc\\w*)?\\b",
-    "\\bmeet(?:ing)? (?:people|someone|a few|other|new|founders?|investors?|operators?|builders?|folks)\\b",
-    "\\bmeet\\b",
-    "\\bpeople (?:to|who|in|working|building)\\b",
-    "\\b(?:events?|dinners?|mixers?|meet-?ups?|conferences?|summits?|panels?|workshops?|hackathons?|salons?|socials?|happy hours?|demo days?|fairs?|expos?|gatherings?|rooms? (?:of|full of|with)|the room)\\b",
-    "\\bcommunit(?:y|ies)\\b",
-    "\\b(?:cohorts?|fellowships?|accelerators?|incubators?)\\b",
-    "\\bnetwork(?:ing)?\\b",
-    "\\bprep(?:are|aring)?\\b[^.?!]{0,40}\\b(?:call|conversation|coffee|chat|meeting|talk|intro|dinner|event)\\b",
-    "\\b(?:before|ahead of) (?:i|we) (?:meet|talk|speak|chat|get coffee|call)\\b",
-    "\\b(?:coffee|call|chat|conversation|lunch) with\\b",
-    "\\btalking points\\b",
-    "\\bfollow(?:ing)?[- ]up with\\b",
+    "\\bintro(?:s|duc\\w*)?\\b", "\\bmeet(?:s|ing)?\\b", "\\bpeople\\b", "\\bpersons?\\b", "\\bsomeone\\b", "\\banyone\\b", "\\bwho\\b", "\\bfriends?\\b", "\\bcontacts?\\b", "\\bnetwork\\w*",
+    "\\bcommunit(?:y|ies)\\b", "\\b(?:events?|dinners?|mixers?|meet-?ups?|conferences?|summits?|panels?|workshops?|hackathons?|salons?|socials?|happy hours?|demo days?|fairs?|expos?|gatherings?|rooms?|collectives?|clubs?|groups?|circles?)\\b",
+    "\\b(?:founders?|investors?|mentors?|advisors?|operators?|builders?|folks|peers|cofounders?|colleagues|cohorts?)\\b",
+    "\\b(?:coffee|call|chat|conversation|lunch|dinner) with\\b", "\\btalk(?:ing)? to\\b", "\\bconnect(?:ed|ing)? with\\b", "\\btalking points\\b", "\\bfollow(?:ing)?[- ]up with\\b", "\\bprep(?:are|aring)?\\b",
   ].join("|"),
   "i",
 );
 
-// Out, by kind. "hard" kinds never ride on a connection ask in the same text (mixed); "soft" kinds yield to it because a room or a
-// community is what the connection ask is about ("investor dinners" is a room; "find me investors" is a funding search).
-const OUT: { kind: OutKind; hard: boolean; own?: boolean; re: RegExp }[] = [
-  {
-    kind: "errand",
-    hard: true,
-    re: /\b(?:dentists?|dental|orthodontist|dermatologist|pediatrician|optometrist|chiropractor|plumber|electrician|handyman|locksmith|mechanic|dry[- ]clean\w*|barber|hair (?:salon|stylist|appointment)|massage|nail salon|veterinarian|movers?|cleaners?|house ?cleaning|landscaper|contractor|babysitter|nanny|pharmacy|doctor'?s? (?:appointment|visit)|(?:book|schedule|make|find|get)\b[^.?!]{0,30}\b(?:appointment|reservation|table|haircut|checkup))\b/i,
-  },
-  {
-    kind: "shopping",
-    hard: true,
-    re: /\b(?:laptops?|macbook|headphones?|mattress|phone plans?|cell(?:ular)? plans?|wireless plans?|data plans?|internet plans?|(?:get|buy|find|compare|switch|shop(?:ping)? for|apply for)\b[^.?!]{0,20}\b(?:insurance|credit cards?|mortgage|loan)|(?:best|cheapest|compare|which)\b[^.?!]{0,30}\b(?:phones?|cars?|tvs?|vacuums?|blenders?|printers?|routers?|bikes?|cameras?|tablets?|ipad|couch|sofa|desk chairs?)\b|(?:buy|purchase|shop(?:ping)? for|price compar\w*|compare prices)\b[^.?!]{0,40}\b(?:for me|a new|the best|under \$|on sale|deals?))\b/i,
-  },
-  {
-    kind: "travel",
-    hard: true,
-    re: /\b(?:itinerar(?:y|ies)|plan(?:ning)?\s+(?:a|my|the|our|this|next|his|her)?\s*(?:\w+\s+){0,2}(?:trip|vacation|holiday|honeymoon|getaway|road ?trip)|(?:book|find|compare|search(?: for)?|look up|get)\b[^.?!]{0,30}\b(?:flights?|hotels?|airbnbs?|rental cars?|train tickets?|cruises?)|(?:cheap\w*|best|lowest|low-cost) (?:flights?|airfare|fares?)|visa (?:requirements?|application)|travel (?:plans?|planning|arrangements?|insurance))\b/i,
-  },
-  {
-    kind: "admin",
-    hard: true,
-    re: /\b(?:taxes|tax (?:return|filing|prep)|expense reports?|(?:clean|sort|organi[sz]e|triage|go through|summari[sz]e|read)\b[^.?!]{0,20}\b(?:my )?(?:inbox|e-?mails?|gmail)|reimbursements?|invoices?|bookkeeping|payroll|file (?:my|a) (?:taxes|return)|renew (?:my )?(?:passport|license|registration))\b/i,
-  },
-  {
-    kind: "generic_research",
-    hard: true,
-    re: /\b(?:(?:research|compare|investigate|look into|dig into|deep[- ]dive on|write up|report on|summari[sz]e)\b[^.?!]{0,50}\b(?:tools?|software|apps?|crm|products?|vendors?|providers?|prices?|pricing|reviews?|options for|the best|alternatives|market size|competitors?|industry|trends?|studies|papers?|statistics)\b|(?:best|top|recommend\w*)\b[^.?!]{0,20}\b(?:crm|software|saas|tools?|apps?|platforms?)\b|(?:pros and cons|price comparison|comparison) of\b|(?:literature|market|competitive) (?:review|analysis|research)|research (?:project|report|paper))\b/i,
-  },
-  {
-    kind: "document",
-    hard: true,
-    re: /\b(?:(?:draft|write|compose)\b[^.?!]{0,40}\b(?:e-?mails?|inquir(?:y|ies)|cold outreach|cover letters?|resumes?|essays?|blog posts?|memos?|one-?pagers?)|(?:update|rewrite|tailor|polish|improve)\b[^.?!]{0,20}\b(?:my )?(?:resume|cv|cover letter|linkedin)|plan sheet|one-?page(?:r)? (?:plan|sheet|itinerary))\b/i,
-  },
-  {
-    kind: "job_board",
-    hard: false,
-    re: /\b(?:(?:watch|monitor|track|scan|scrape|alert|notify|keep (?:an )?eye|keep checking|look out|search|check)\b[^.?!]{0,50}\b(?:job (?:listings?|postings?|boards?|openings?|ads?)|job-?boards?|openings for|roles? (?:at|for|in)|open (?:roles|positions)|hiring (?:posts?|pages?)|careers? pages?|recruiting season|hiring season)|job (?:listings?|postings?|boards?)\b[^.?!]{0,30}\b(?:watch|monitor|track|scan|alert)|apply (?:to|for) (?:jobs|roles|positions)|(?:find|get) (?:me )?(?:a )?(?:new )?jobs?\b(?! fairs?))\b/i,
-  },
-  {
-    kind: "funding",
-    hard: false,
-    re: /\b(?:(?:find|search(?: for)?|look(?:ing)? for|research|list|hunt for|source|identify|track|monitor|watch|scan)\b[^.?!]{0,40}\b(?:investors?|vcs?|venture (?:capital|funds?)|angels?|funders?|funding (?:rounds?|sources?|opportunit\w+)|grants? (?:deadlines?|cycles?|to apply)|sponsors?|term sheets?|lps?)|(?:application|funding|grant) (?:cycle|deadline|window)s?\b[^.?!]{0,30}\b(?:watch|monitor|track|alert|open)|(?:watch|monitor|track) (?:the )?(?:application|funding|grant)\b)\b/i,
-  },
-  {
-    kind: "host_vendor",
-    hard: false,
-    own: true,
-    re: /\b(?:venue research|(?:find|book|research|look for|look up|search for|compare|scout|recommend|get quotes? (?:for|from)|price)\b[^.?!]{0,45}\b(?:venues?|event spaces?|caterers?|catering|djs?|photograph(?:er|ers)|videograph\w+|florists?|bartenders?|decor(?:ators?)?|av (?:rental|equipment)|rental (?:company|companies)|vendors?|a space for|a room for|a restaurant for)|\b(?:venues?|event spaces?|caterers?|catering|djs?|photograph\w+|florists?|bartenders?)\b[^.?!]{0,40}\bfor (?:my|our|a|an|the|\d{2,4})\b|(?:dinner|party|launch|event|gathering|mixer|offsite|retreat) for \d{2,4}\b[^.?!]{0,30}\b(?:venue|space|room|restaurant|spots?)|options? for (?:a|my) (?:dinner|party|launch|event|gathering|offsite)|(?:host|throw|organi[sz]e|plan)\b[^.?!]{0,20}\b(?:my|our) (?:own )?(?:launch|party|dinner|event|gathering|offsite)\b[^.?!]{0,50}\b(?:venues?|space|catering|vendors?))\b/i,
-  },
+// The backstop: unmistakable out cases only, found by words, for a caller that has no model read in hand (an old queued row, a sweep over a
+// captured ask, a code-started task). It never decides anything ambiguous and never anything about meeting people: ambiguous means the
+// model's verdict (or, with none, going ahead). Phone and carrier plans; a watch on job listings; a consumer service (a dentist and the
+// like); booking travel; shopping for a product.
+const BACKSTOP: { kind: OutKind; re: RegExp }[] = [
+  { kind: "errand", re: /\b(?:dentists?|dental|orthodontist|dermatologist|pediatrician|optometrist|chiropractor|plumber|electrician|handyman|locksmith|mechanic|dry[- ]clean\w*|barber|hair (?:salon|stylist|appointment)|massage therapist|nail salon|veterinarian|house ?cleaning|landscaper|doctor'?s? (?:appointment|visit)|(?:book|schedule|make)\b[^.?!]{0,30}\b(?:appointment|reservation|a table|haircut|checkup))\b/i },
+  { kind: "shopping", re: /\b(?:(?:phone|cell(?:ular)?|wireless|mobile|data|internet|cable) (?:plans?|carriers?|providers?)|(?:verizon|t-?mobile|at&t|comcast|xfinity|spectrum|sprint|cricket|mint mobile)\b[^.?!]{0,30}\b(?:plans?|bills?|deals?)|(?:switch|change)\w*\s+(?:my\s+)?(?:phone\s+)?carrier|(?:compare|buy|purchase|shop(?:ping)? for|find|get|best|cheapest|which)\b[^.?!]{0,30}\b(?:laptops?|macbooks?|headphones?|mattress(?:es)?|tvs?|vacuums?|blenders?|printers?|routers?|ipad|couch|sofa)\b)\b/i },
+  { kind: "travel", re: /\b(?:itinerar(?:y|ies)|plan(?:ning)?\s+(?:a|my|the|our|this|next)?\s*(?:[\w']+\s+){0,2}(?:trip|vacation|holiday|honeymoon|getaway|road ?trip)|(?:book|find|compare|search(?: for)?|look up|get)\b[^.?!]{0,30}\b(?:flights?|hotels?|airbnbs?|rental cars?|train tickets?|cruises?)|(?:cheap\w*|best|lowest) (?:flights?|airfare|fares?)|visa (?:requirements?|application))\b/i },
+  { kind: "job_board", re: /\b(?:(?:watch|monitor|track|scan|scrape|alert|notify)\w*|keep (?:an )?eye|keep checking|send\s+\w+|text\s+\w+|email\s+\w+|ping\s+\w+)\b[^.?!]{0,50}\b(?:job (?:listings?|postings?|boards?|openings?|ads?)|jobs\b|job-?boards?|open (?:roles|positions)|hiring (?:posts?|pages?)|careers? pages?|recruiting season|hiring season)|\bjob[- ](?:boards?|listings?|postings?)\b/i },
 ];
-
-// Researching a named person: only to prepare for a planned conversation or an intro. Case-sensitive on the name, so it's tested apart.
-const PERSON = /\b(?:[Rr]esearch|[Ll]ook up|[Dd]ig up|[Dd]ig into|[Ff]ind out about|[Bb]ackground (?:check )?on|[Dd]ossier on|[Ee]verything (?:you can find )?(?:on|about)|[Ll]earn about)\s+(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/;
-const PREP = /\b(?:prep(?:are|aring)?|before (?:i|we) (?:meet|talk|speak|chat|call|get coffee|have)|ahead of|intro(?:duc\w*)?|conversation|coffee|call with|meeting with|talking points|going to meet|about to meet|meeting (?:them|him|her)|dinner with|lunch with|connect(?:ing)? with)\b/i;
+const backstopKind = (t: string): OutKind | null => BACKSTOP.find((b) => b.re.test(t))?.kind ?? null;
 
 export function classifyScope(text: string): Scope {
   const t = String(text ?? "");
   if (!t.trim()) return { scope: "ambiguous", kind: null, why: "nothing to read" };
-  const inHit = IN.test(t) || (PERSON.test(t) && PREP.test(t));
-  const outs = OUT.filter((o) => o.re.test(t));
-  if (PERSON.test(t) && !PREP.test(t)) outs.push({ kind: "person_research", hard: false, re: PERSON });
-  if (!outs.length) return inHit ? { scope: "in", kind: null, why: "about people, rooms or communities" } : { scope: "ambiguous", kind: null, why: "neither clearly connection work nor clearly outside it" };
-  // Venue and vendor research for their OWN event is out whatever else the text says ("a venue for my dinner" mentions a dinner).
-  const own = outs.find((o) => o.own);
-  if (own) return { scope: "out", kind: own.kind, why: "venue or vendor research for their own event" };
-  const hard = outs.find((o) => o.hard);
-  if (hard) return inHit ? { scope: "mixed", kind: hard.kind, why: `a connection ask together with ${hard.kind} work` } : { scope: "out", kind: hard.kind, why: `${hard.kind} work` };
-  // Soft kinds: a room, an event or a community in the same text is what the ask is about (investor dinners, a job fair).
-  const soft = outs[0];
-  return inHit ? { scope: "in", kind: null, why: `a room or community ask (not ${soft.kind.replace("_", " ")} work)` } : { scope: "out", kind: soft.kind, why: `${soft.kind.replace("_", " ")} work` };
+  const kind = backstopKind(t);
+  const people = CONNECTION.test(t);
+  if (!kind) return people ? { scope: "in", kind: null, why: "about people, rooms or communities" } : { scope: "ambiguous", kind: null, why: "neither clearly connection work nor clearly outside it" };
+  if (!people) return { scope: "out", kind, why: `${kind.replace("_", " ")} work` };
+  // Both in one text: mixed only when the text splits into a clean connection clause and an unmistakable outside one. Otherwise it is
+  // ambiguous, and the model's read decides; the backstop does not.
+  const clauses = splitClauses(t);
+  const outside = clauses.filter((c) => backstopKind(c) && !CONNECTION.test(c));
+  const clean = clauses.filter((c) => !backstopKind(c) && CONNECTION.test(c));
+  if (outside.length && clean.length) return { scope: "mixed", kind: backstopKind(outside[0]), why: `a connection ask together with ${backstopKind(outside[0])} work`, connection: clean.join(" and ") };
+  return { scope: "ambiguous", kind: null, why: "mentions people and an errand together; the model's read decides" };
+}
+const splitClauses = (t: string) => t.split(/\s*(?:[,;]|\band\b|\balso\b|\bplus\b|\bthen\b|\bbut\b|\.\s+)\s*/i).map((c) => c.trim()).filter(Boolean);
+
+// The scope of a piece of work: the model's verdict when there is one (it wins, including over the backstop), else the backstop.
+export function judgeScope(text: string, verdict?: ScopeVerdict | null): Scope {
+  if (!verdict) return classifyScope(text);
+  if (verdict.scope === "out") return { scope: "out", kind: "model", why: "judged outside connections by the read that chose the work" };
+  if (verdict.scope === "mixed") return { scope: "mixed", kind: "model", why: "judged as a connection ask bundled with something outside", connection: verdict.connection };
+  return { scope: "in", kind: null, why: "judged connection work by the read that chose it" };
 }
 
 // The text the check reads for a piece of work Cue would do: what it is (its goal and steps), never the whole message it came from,
@@ -118,8 +92,21 @@ export function workText(w: { goal?: string | null; steps?: unknown; firstPlan?:
 
 // The ask that closes honestly, in words for the model (guidance, not a message): tone only, fresh words every time, never a forced intro.
 export const OUT_OF_SCOPE_GUIDANCE = "That isn't something Cue does. Say so briefly and naturally in your own words, fresh every time (never a stock line, never the same wording twice), only as much as the moment needs. Don't force an unrelated introduction as a redirect and don't apologise at length. Never say or imply you started, did, found or will do it. If the message also had a connection part (who to meet, an event, a community, preparing for a conversation), help with that part on its own.";
-export const MIXED_GUIDANCE = "This bundles a connection ask with something Cue doesn't do. Start work for ONLY the connection part (who to meet, an event, a community, preparing for a conversation), written as its own goal, and tell them briefly, in your own fresh words, that the rest isn't something Cue does. Never say or imply you'll do the rest.";
+export const MIXED_GUIDANCE = "This bundles a connection ask with something Cue doesn't do. Start work for ONLY the connection part (who to meet, an event, a community, preparing for a conversation), written as its own goal and steps (start it again with scope \"in\"), and tell them briefly, in your own fresh words, that the rest isn't something Cue does. Never say or imply you'll do the rest.";
+export const CLARIFY_GUIDANCE = "Part of this is something Cue doesn't do, and no clean connection part (who to meet, an event, a community, preparing for a conversation) could be pulled out of it. Start nothing. Ask ONE short question in your own words about the people or rooms they want, and nothing else. Never say or imply you started, did or will do the rest.";
 
 export function startRefusal(s: Scope): string {
-  return s.scope === "mixed" ? MIXED_GUIDANCE : OUT_OF_SCOPE_GUIDANCE;
+  if (s.scope !== "mixed") return OUT_OF_SCOPE_GUIDANCE;
+  return s.connection ? `${MIXED_GUIDANCE} The connection part is: "${s.connection}".` : CLARIFY_GUIDANCE;
+}
+
+// The connection part of a mixed ask ("founder dinners in the Mission, and a dentist"): what a search or a task may run on. The model's
+// own phrase when its verdict is mixed; else the clean clauses the backstop split out. Never the whole text of a mixed or an outside ask:
+// when there is no clean part, null, and the caller asks one short question or searches nothing.
+export function connectionPart(text: string, verdict?: ScopeVerdict | null): string | null {
+  const t = String(text ?? "").trim();
+  const sc = judgeScope(t, verdict);
+  if (sc.scope === "out") return null;
+  if (sc.scope === "mixed") return sc.connection && sc.connection.trim().length >= 4 ? sc.connection.trim() : null;
+  return t || null;
 }

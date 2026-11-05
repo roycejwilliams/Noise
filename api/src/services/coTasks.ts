@@ -22,7 +22,7 @@ import { DateTime } from "luxon";
 import { parseAskWindow } from "./askWindow.js";
 import pool from "../db/db.js";
 import { localStamp, windowLine, type CommitWindow } from "./memberTime.js";
-import { classifyScope, startRefusal, workText, type Scope } from "../harness/scope.js";
+import { judgeScope, startRefusal, workText, type Scope, type ScopeVerdict } from "../harness/scope.js";
 
 export type TaskStep = { text: string; done: boolean };
 export type TaskNote = { at: string; text: string };
@@ -290,8 +290,10 @@ export async function getTask(userId: string, id: number): Promise<CoTask | null
 export type GoalLink = { goalId: number; goalTitle: string; item?: number; checkin?: "checkin" | "reminder"; at?: string; reminders?: string[]; moment?: GoalMoment | null };
 // The dated moment a goal is for, in their words ("the show is Nov 8"): YYYY-MM-DD, their day.
 export type GoalMoment = { date: string; words: string };
-export function followupJson(input: { source?: string; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null }): string | null {
+export function followupJson(input: { source?: string; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; scope?: ScopeVerdict | null }): string | null {
   const f: Record<string, unknown> = {};
+  // The model's scope verdict on this work, kept so a wake judges it by that and not by words (services/scopeClose.ts scopeOfTask).
+  if (input.scope) f.scope = { scope: input.scope.scope, connection: input.scope.connection };
   if (input.window) f.window = input.window;
   if (input.source === "lookout") f.lookoutOrigin = input.lookoutOrigin ?? "co";
   if (input.goalLink) Object.assign(f, { goalId: input.goalLink.goalId, goalTitle: input.goalLink.goalTitle.slice(0, 200), ...(input.goalLink.item != null ? { goalItem: input.goalLink.item } : {}), ...(input.goalLink.moment ? { goalMoment: input.goalLink.moment } : {}), ...(input.goalLink.checkin ? { checkin: input.goalLink.checkin, checkinAt: input.goalLink.at ?? null, reminders: input.goalLink.reminders ?? [] } : {}) });
@@ -337,12 +339,16 @@ export async function openCallJob(userId: string, dispatchKey: string, db: TaskD
 // The purpose boundary (harness/scope.ts, Royce 2026-11-04): every task starts here, from a reply, a call, a promise, a goal piece, a
 // look-out or the door, so this is the one place it is checked. A refusal carries the guidance for the caller's own words.
 export type StartRefusal = { ok: false; why: string; outOfScope?: Scope };
-export function scopeRefusal(work: { goal?: string | null; steps?: unknown; firstPlan?: string | null }): StartRefusal | null {
-  const sc = classifyScope(workText(work));
+// verdict: the model's read of this work (the turn read, or the start-task call's own scope), which decides; with none, only the narrow
+// backstop (harness/scope.ts) can say out, and never on anything ambiguous or about meeting people. trusted: Cue's own connection
+// deliveries (an owed link, a follow-up it wrote itself), in scope by construction and never refused.
+export function scopeRefusal(work: { goal?: string | null; steps?: unknown; firstPlan?: string | null; scope?: ScopeVerdict | null; trusted?: boolean }): StartRefusal | null {
+  if (work.trusted) return null;
+  const sc = judgeScope(workText(work), work.scope ?? null);
   return sc.scope === "out" || sc.scope === "mixed" ? { ok: false, why: startRefusal(sc), outOfScope: sc } : null;
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null; dispatchKey?: string | null }): Promise<{ ok: true; task: CoTask; existing?: boolean } | StartRefusal> {
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null; dispatchKey?: string | null; scope?: ScopeVerdict | null; trusted?: boolean }): Promise<{ ok: true; task: CoTask; existing?: boolean } | StartRefusal> {
   const refused = scopeRefusal(input);
   if (refused) return refused;
   const r = await underTaskLock(input.userId, (db) => startTaskLocked(input, db));
@@ -498,9 +504,9 @@ export async function markTexted(userId: string, id: number): Promise<void> {
 }
 
 // A research brief the member asked for (agent/loopTools.ts researchBrief): due now, run once in the background.
-export async function startResearchBrief(input: { userId: string; theirWords: string; goal: string; params: Record<string, unknown> }): Promise<{ ok: true; task: CoTask } | StartRefusal> {
+export async function startResearchBrief(input: { userId: string; theirWords: string; goal: string; params: Record<string, unknown>; scope?: ScopeVerdict | null }): Promise<{ ok: true; task: CoTask } | StartRefusal> {
   // Venue and vendor research for the member's own event is out for now; research on rooms, events and communities they'd attend stays.
-  const refused = scopeRefusal({ goal: `${input.goal}\n${String(input.params?.what ?? "")}` });
+  const refused = scopeRefusal({ goal: `${input.goal}\n${String(input.params?.what ?? "")}`, scope: input.scope ?? null });
   if (refused) return refused;
   // The same lock as startTask: the cap counts both, and the open-brief check below is a read then an insert. (The brief read goes
   // through the pool: it runs after the lock is held, so it sees any brief a start before this one committed.)

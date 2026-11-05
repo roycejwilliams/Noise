@@ -7,13 +7,16 @@
 //   - Cue's own look-out, a goal check-in or reminder, a follow-up check-in: it closes quietly at its natural end. Nothing is texted
 //     about work the member never asked for.
 // This is the existing wake with a different job: no new scheduled run, and at most the one draft a wake could already have made.
-import { classifyScope, OUT_OF_SCOPE_GUIDANCE, workText, type Scope } from "../harness/scope.js";
+import { judgeScope, OUT_OF_SCOPE_GUIDANCE, parseVerdict, workText, type Scope } from "../harness/scope.js";
 import type { CoTask } from "./coTasks.js";
 
-// What a task is, for the check: its goal, steps and next plan; a follow-up's summary; a goal check-in or reminder's own goal line.
+// What a task is, for the check: the model's verdict stored on it when it started (followup.scope), else its goal, steps and next plan
+// read by the narrow backstop; a follow-up's summary; a goal check-in or reminder's own goal line. A task with a stored "in" is in whatever
+// its words say (Cue's own deliveries carry one), and a stored "mixed" never reaches here (it is refused at the start).
 export function scopeOfTask(t: Pick<CoTask, "goal" | "steps" | "planNext" | "kind" | "followup">): Scope {
-  if (t.kind === "followup") return classifyScope(`${t.goal}\n${t.followup?.summary ?? ""}`);
-  return classifyScope(workText({ goal: t.goal, steps: t.steps, planNext: t.planNext }));
+  const v = parseVerdict(t.followup?.scope);
+  const text = t.kind === "followup" ? `${t.goal}\n${t.followup?.summary ?? ""}` : workText({ goal: t.goal, steps: t.steps, planNext: t.planNext });
+  return judgeScope(text, v && v.scope !== "mixed" ? v : null);
 }
 
 // Pure: whether the member asked for this (or was promised it), so they're owed one line instead of a quiet close.
