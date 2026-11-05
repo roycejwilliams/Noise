@@ -25,8 +25,11 @@ export const outsideAsk = (text: string): boolean => classifyScope(text).scope =
 // else the backstop's clean clauses. Never the whole text of an outside or mixed ask: null means nothing is searched.
 export const searchPartOf = (text: string, row: { kind?: string | null; scope_connection?: string | null } | null = null): string | null => {
   if (row?.kind === "outside") return null;
-  return connectionPart(text, row?.scope_connection ? { scope: "mixed", connection: row.scope_connection } : null);
+  // A stored connection (even "") means the ask was read as mixed: only that part is searched, and with none it is not searched at all.
+  return connectionPart(text, row?.scope_connection != null ? { scope: "mixed", connection: row.scope_connection } : null);
 };
+// connection: null = not mixed. A string = the ask was read as mixed: the connection part, or "" when the read gave no usable part (too short
+// or missing). The mixed flag is kept either way, so a mixed ask is never searched whole.
 export type AskScopeRead = { kind: AskKind; connection: string | null };
 
 // Co's own deliverables and promises are not asks (2026-10-08): "plan will be
@@ -71,7 +74,8 @@ Answer with one word: find, help, person or outside (or the mixed form).`;
 }
 
 // The model's read of an ask: its kind, and for a mixed ask just the connection part (a sweep searches that, never the whole text).
-export async function classifyAskRead(text: string): Promise<AskScopeRead> {
+// Null when the model read failed (an error, a timeout, an empty answer): the caller stores NOTHING, so a failed read is never taken for "in".
+export async function classifyAskRead(text: string): Promise<AskScopeRead | null> {
   // Unmistakably outside (the backstop): remembered, never searched or checked in on. First, so nothing else spends on it.
   if (outsideAsk(text)) return { kind: "outside", connection: null };
   // Co's own promise or deliverable: never searched, no model call needed.
@@ -87,17 +91,18 @@ export async function classifyAskRead(text: string): Promise<AskScopeRead> {
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 4000)),
     ]);
     const w = out.trim().toLowerCase();
+    if (!w) return null;
     const kind: AskKind = w.startsWith("outside") ? "outside" : w.startsWith("help") ? "help" : w.startsWith("person") ? "person" : "find";
     const m = out.match(/\|\s*mixed\s*:\s*(.+)$/i);
-    const connection = m ? m[1].replace(/\s+/g, " ").trim().slice(0, 200) : null;
-    return { kind, connection: kind === "outside" ? null : connection && connection.length >= 4 ? connection : null };
+    const phrase = m ? m[1].replace(/\s+/g, " ").trim().slice(0, 200) : null;
+    return { kind, connection: kind === "outside" || phrase === null ? null : phrase.length >= 4 ? phrase : "" };
   } catch {
-    // When unsure, keep searching it, as before.
-    return { kind: "find", connection: null };
+    return null;
   }
 }
 export async function classifyAsk(text: string): Promise<AskKind> {
-  return (await classifyAskRead(text)).kind;
+  // Unsure (the read failed): keep searching it, as before. Nothing that stores a scope reads this wrapper.
+  return (await classifyAskRead(text))?.kind ?? "find";
 }
 
 // Marks open asks that haven't been classified yet (older asks, or one whose
@@ -109,9 +114,9 @@ export async function classifyAsk(text: string): Promise<AskKind> {
 // A lookout's kind is never changed here except to "outside" (Royce, 2026-10-13, lane moves): every kind write goes through laneMoves.ts setAskKind.
 export const ASK_KIND_VERSION = 3;
 type KindDb = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
-export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify?: (text: string) => Promise<AskKind>; read?: (text: string) => Promise<AskScopeRead> } = {}): Promise<number> {
+export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify?: (text: string) => Promise<AskKind>; read?: (text: string) => Promise<AskScopeRead | null> } = {}): Promise<number> {
   const db = deps.db ?? pool;
-  const read = deps.read ?? (deps.classify ? async (t: string): Promise<AskScopeRead> => ({ kind: await deps.classify!(t), connection: null }) : classifyAskRead);
+  const read = deps.read ?? (deps.classify ? async (t: string): Promise<AskScopeRead | null> => ({ kind: await deps.classify!(t), connection: null }) : classifyAskRead);
   const { setAskKind } = await import("./laneMoves.js");
   const { rows } = await db.query(
     `SELECT id, user_id, ask_text, kind, intent, kind_checked_at FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR COALESCE(kind_version, 1) < $2) LIMIT $1`,
@@ -119,7 +124,9 @@ export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify
   );
   for (const r of rows) {
     // An unmistakable out (the backstop) is decided with no model call; every other ask is read for scope by the model.
-    const got: AskScopeRead = outsideAsk(r.ask_text) ? { kind: "outside", connection: null } : await withTraceUser(r.user_id, () => withMember(r.user_id, () => read(r.ask_text))); // under the ask's member, its cost theirs
+    const got: AskScopeRead | null = outsideAsk(r.ask_text) ? { kind: "outside", connection: null } : await withTraceUser(r.user_id, () => withMember(r.user_id, () => read(r.ask_text))); // under the ask's member, its cost theirs
+    // The read failed: store nothing, and do not mark the version as read, so the next run tries this ask again.
+    if (!got) continue;
     // Outside moves it (a lookout too). Otherwise an ask already read keeps its kind; a lookout keeps its kind (or find, if it never had
     // one); a new one takes the read's.
     const kind: AskKind = got.kind === "outside" ? "outside" : r.kind_checked_at && r.kind ? (r.kind as AskKind) : r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : got.kind;
