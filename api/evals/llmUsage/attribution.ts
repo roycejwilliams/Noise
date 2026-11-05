@@ -180,7 +180,7 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   // compaction, the ask's kind.
   check("jobs/scheduledCall.ts: the call reminder's draft is the member's", /withTraceUser\(row\.user_id, \(\) => withMember\(row\.user_id, \(\) =>\n\s+generateText\(/.test(src("jobs/scheduledCall.ts")));
   check("jobs/index.ts: each member's memory compaction is theirs", /withTraceUser\(userId, \(\) => withMember\(userId, \(\) => buildRecap\(userId\)\)\)/.test(src("jobs/index.ts")));
-  check("services/askKind.ts: classifying an ask is its member's", /withTraceUser\(r\.user_id, \(\) => withMember\(r\.user_id, \(\) => classify\(r\.ask_text\)\)\)/.test(src("services/askKind.ts")));
+  check("services/askKind.ts: classifying an ask is its member's", /withTraceUser\(r\.user_id, \(\) => withMember\(r\.user_id, \(\) => read\(r\.ask_text\)\)\)/.test(src("services/askKind.ts")));
   // Langfuse gets no new member ids: the only telemetry metadata ids are the five that were there before.
   {
     const { execSync } = await import("node:child_process");

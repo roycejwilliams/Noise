@@ -20,7 +20,7 @@ import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from 
 import { doorValidUntil, earliestDated } from "../harness/door.js";
 import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
-import { capToFinal, isDoorLook, unspendWake } from "./coTasks.js";
+import { capToFinal, isDoorLook, setTaskScope, unspendWake } from "./coTasks.js";
 import { closedOnTheirWord, closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
 import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type MemberRules, type Restraint } from "./memberKnowledge.js";
@@ -1143,14 +1143,25 @@ export async function runDueTasks(deps: { claim?: () => Promise<CoTask[]>; runOn
   for (const t of await claim()) await withTraceUser(t.userId, () => withMember(t.userId, () => runOne(t)));
 }
 
-export async function runDueTask(t: CoTask, o: { handBack?: (t: CoTask) => Promise<import("./scopeClose.js").HandBackDeps | null> } = {}): Promise<void> {
+export async function runDueTask(t: CoTask, o: { handBack?: (t: CoTask) => Promise<import("./scopeClose.js").HandBackDeps | null>; scopeRead?: (text: string) => Promise<{ kind: string } | null> } = {}): Promise<void> {
   const L = await import("./commitmentLog.js");
   // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
   if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
   // The purpose boundary (harness/scope.ts), asked again because queued work may predate it or have drifted: out-of-scope work is
   // handed back with one natural line (when they asked for it) or closed quietly, never worked on and never called done
   // (services/scopeClose.ts). Ambiguous work goes ahead: the wake's own model read judges it.
-  const sc = scopeOfTask(t);
+  let sc = scopeOfTask(t);
+  // A task from before the boundary has no stored verdict: the model reads it once, here, with the one read that classifies every ask
+  // (services/askKind.ts classifyAskRead), and the verdict is kept on the task so it is not read at every wake. Cue's own goal pieces and
+  // check-ins are not asks and are not read.
+  if (sc.scope !== "out" && !t.followup?.scope && (t.kind === "work" || t.kind === "research_brief") && !t.followup?.checkin && t.followup?.goalId == null) {
+    const readIt = o.scopeRead ?? (async (x: string) => (await import("./askKind.js")).classifyAskRead(x));
+    const read = await readIt(`${t.goal}\n${t.theirWords ?? ""}`.slice(0, 300)).catch(() => null);
+    if (read) {
+      if (read.kind === "outside") sc = { scope: "out", kind: "model", why: "judged outside connections by the model when it woke" };
+      await setTaskScope(t.userId, t.id, { scope: read.kind === "outside" ? "out" : "in", connection: null }).catch(() => {});
+    }
+  }
   if (sc.scope === "out") {
     const deps = await (o.handBack ?? handBackDepsFor)(t).catch(() => null);
     const r = deps ? await closeOutOfScope(t, sc, deps).catch(() => null) : null;

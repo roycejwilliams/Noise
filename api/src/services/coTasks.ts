@@ -350,6 +350,11 @@ export function scopeRefusal(work: { goal?: string | null; steps?: unknown; firs
   return sc.scope === "out" || sc.scope === "mixed" ? { ok: false, why: startRefusal(sc), outOfScope: sc } : null;
 }
 
+// The model's scope verdict, kept on a task that started without one (a row from before the boundary), so it is read once and not at every wake.
+export async function setTaskScope(userId: string, id: number, verdict: ScopeVerdict): Promise<void> {
+  await pool.query(`UPDATE co_tasks SET followup = COALESCE(followup, '{}'::jsonb) || $3::jsonb WHERE user_id = $1 AND id = $2`, [userId, id, JSON.stringify({ scope: { scope: verdict.scope, connection: verdict.connection } })]);
+}
+
 export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null; dispatchKey?: string | null; scope?: ScopeVerdict | null; trusted?: boolean; ownOffer?: boolean }): Promise<{ ok: true; task: CoTask; existing?: boolean } | StartRefusal> {
   const refused = scopeRefusal(input);
   if (refused) return refused;

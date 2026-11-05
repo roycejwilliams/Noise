@@ -219,6 +219,25 @@ for (const voice of [false, true]) {
   check(`(${how}) a mixed ask with no clean part asks one short question and saves nothing`, noPart.r.ok === false && /ONE short question/.test(noPart.r.error), noPart);
 }
 
+// ---- 11. queued work from before the boundary has no verdict: the model reads it once when it wakes (the same classifyAsk read), the verdict is kept
+{
+  const TT = await import("../../src/services/taskTurn.js");
+  const legacy = (id: number, goal: string, extra: any = {}) => ({ id, userId: "u1", goal, theirWords: goal, steps: [], planNext: null, nextCheckAt: null, status: "open", wakes: 1, notes: [], textsSent: 0, lastTextedAt: null, createdAt: new Date().toISOString(), deadline: null, finalCheckAt: null, finalTold: false, awaitingReply: false, theirReplyAt: null, kind: "research_brief", followup: null, source: "ask", ...extra }) as any;
+  reset();
+  let reads = 0; const told: string[] = [];
+  const deps = async () => ({ firstName: "Jordan", draft: async () => "Not something I take on.", send: async (t: string) => (told.push(t), { sent: true, queued: false }), close: async () => {} });
+  console.log = () => {};
+  await TT.runDueTask(legacy(31, "Research: a venue for my launch dinner for 40"), { handBack: deps, scopeRead: async () => (reads++, { kind: "outside" }) });
+  console.log = quiet;
+  check("a queued venue brief from before the boundary: no word catches it, the model's read does, and the member who asked is told once", reads === 1 && told.length === 1 && log.some((l) => /UPDATE co_tasks SET followup = COALESCE\(followup/.test(l.sql) && /"out"/.test(String(l.params[2]))), { reads, told, sql: log.map((l) => l.sql.slice(0, 50)) });
+  reads = 0; told.length = 0;
+  console.log = () => {};
+  await TT.runDueTask(legacy(32, "Find a dentist near the Mission", { kind: "work" }), { handBack: deps, scopeRead: async () => (reads++, { kind: "find" }) });
+  console.log = quiet;
+  check("an unmistakable out is closed by the backstop alone, with no model read", reads === 0 && told.length === 1);
+  check("a task with a stored verdict is not read again", /!t\.followup\?\.scope/.test(src("services/taskTurn.ts")));
+}
+
 if (failed) { console.log(`\n${failed} of ${total} checks failed.`); process.exit(1); }
 console.log(`scope boundary (B): ${total} checks passed.`);
 process.exit(0);
