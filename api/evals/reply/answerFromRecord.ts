@@ -183,6 +183,14 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
   check("8. 'where is that place?' after a text naming Bix on Gold Street resolves nothing (no walk back to Founder Table)", stop.length === 0, stop.map((x) => x.name));
   const still = T.referredSent(list, { message: "where is that place?", coTexts: ["Sounds good.", lastCo] });
   check("8. ...but past a text that names nothing it still finds the find", still.map((x) => x.name).join() === "Founder Table");
+  // Texts sent before the find (newer in coTexts) that name days, months and people are not places: the walk goes on to the find.
+  const findText = "Founder Table looks like a fit: https://lu.ma/ft";
+  const ftl = item("Founder Table", "https://lu.ma/ft", 3, { city: "San Francisco" });
+  for (const t of ["Have a good time on Friday!", "Say hi to Jordan for me", "Good luck in March", "Talk soon", "See you at Founder Table, bring Jordan"]) {
+    const got = T.referredSent([ftl], { message: "where is that place?", coTexts: [t, findText] }).map((x) => x.name).join();
+    check(`8. after "${t}" the walk back still reaches Founder Table`, got === "Founder Table", got);
+  }
+  check("8. 'at Bix' (a capitalized name after 'at') stops the walk; 'at Friday' (a day) does not", T.referredSent([ftl], { message: "where is that place?", coTexts: ["Meet me at Bix", findText] }).length === 0 && T.referredSent([ftl], { message: "where is that place?", coTexts: ["Free at Friday?", findText] }).length === 1);
   const sf = item("Founder Table", FT_URL, 9, { city: "San Francisco" }), oak = item("Founder Table", "https://lu.ma/founder-table-oak", 4, { city: "Oakland" });
   const both = [oak, sf];
   const pick = (m: string, co: string[] = [lastCo]) => T.referredSent(both, { message: m, coTexts: co }).map((x) => x.city).join();

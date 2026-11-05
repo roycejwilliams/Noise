@@ -456,8 +456,11 @@ function narrowByPlace(cands: SentItem[], message: string): SentItem[] {
   const hit = cands.filter((x) => placeWords(x).some((w) => namedIn(message, w) >= 0 || new RegExp(`(?:^|[^a-z0-9])${reEsc(w.trim())}(?![a-z0-9])`, "i").test(message)));
   return hit.length && hit.length < cands.length ? hit : cands;
 }
-// A text of Cue's that names a place (a street, or "at/on/in" and a capitalized name): not a find, so the walk back stops there.
-const NAMES_A_PLACE = /\b[A-Z][\w'’&-]*(?:\s+[A-Z][\w'’&-]*)*\s+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Lane|Way|Drive|Dr|Square|Plaza)\b|\b(?:at|on|in|to|near|by)\s+(?:the\s+)?[A-Z][\w'’&-]+(?:\s+[A-Z][\w'’&-]*)*/;
+// A text of Cue's that names a place that isn't a find, by a clear form only: a street ("Gold Street", "Bix on Gold Street") or "at" and a
+// capitalized name that isn't a day, a month or "The". Never "in/on/to/by" and a capitalized word: Cue's texts are full of days, months
+// and people's names ("on Friday", "in March", "to Jordan"), and those must not stop the walk back to the find.
+const NOT_A_PLACE = "The|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec";
+const NAMES_A_PLACE = new RegExp(String.raw`\b[A-Z][\w'’&-]*(?:\s+[A-Z][\w'’&-]*)*\s+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Lane|Square|Plaza)\b|\bat\s+(?!(?:${NOT_A_PLACE})\b)[A-Z][\w'’&-]+`);
 export function referredSent(sent: readonly SentItem[], o: { message: string; meantLabel?: string | null; meantUrl?: string | null; coTexts?: readonly string[] }): SentItem[] {
   const out: SentItem[] = [];
   const put = (x: SentItem | undefined) => { if (x && !out.includes(x)) out.push(x); };
