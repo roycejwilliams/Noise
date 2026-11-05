@@ -1,0 +1,102 @@
+{
+  "hash": "901b1c3c01eef07d",
+  "case": "share-good-news",
+  "recorded_at": "2026-11-05T03:26:16.921Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"This is it. Two years of no's and now it's done, today.\n\nWhat finally made this one say yes?\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their news: \\\"This is it. Two years of no's and now it's done, today.\\\"\"}",
+      "usage": {
+        "input_tokens": 314,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 127,
+        "output_tokens_details": {
+          "thinking_tokens": 79
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj4vRiNzmSioci1DrDUY",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErwFCsQCCBMYAipA0y5Y57baGSeQ52mPGs5e+A/d9A983KogcGt4usPKhFwJDFUTOV8fsFDwEyYyLCgKtpiV3RsmYDr3lvs8y9aIczIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB2O6v1wbCAToIBBAAGgwC2ooDTzcFrXQEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCXjHI4sOihiqjnehc7X6gZ+QvOszcisjKr8x98ns7Y6SIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgz/yQcrdqL1zv7M958aDMsdLGNVPfJtayDAOSIw9jzsQ/osmgE6f/7AsGybGM5ZKKo0Gp5TMEVuTxXM3grC9QXuEtbs6ei17PvzDM8+KqQCuCh99h+SYPAJXzV44WbuDDwdSVT0uqXXZUAhPbBq83f/wbaJcj3Sw48XjUL2bendbdOUP8wX6G1E4S+9CoDI94v3+FIm3qRgVYrYyRJzHcBgX/coCaHouU+WP3IzSylqft59/KND29qYS8KW4O/EmgXexqagYojvxyO2vzSPgV97nXd504IZvkXX2AOc7GU4yr1jU7wnMG2iEHGFpPlHTzvrizJDYajwAmMKI4eRbQELEYkNUgs2ppp4PkCtPhPgsCW+2MBOzh8Lc+SqtPsQrXLBJTliH3zYgmEo+F6CMwurt/S9Q40ZzfMn+64v3n2zhJJdcZ3VjOQHm8OGe1KRSB8Px8ggVmFdaOgo99wddIxBXT3s8i2tpZ3dqn+4893bpl+fsBgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their news: \\\"This is it. Two years of no's and now it's done, today.\\\"\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 314,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 127,
+          "output_tokens_details": {
+            "thinking_tokens": 79
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "901b1c3c01eef07d",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

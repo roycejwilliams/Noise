@@ -1,7 +1,7 @@
 {
   "hash": "ef3b3e039e83ff00",
   "case": "whats-ahead",
-  "recorded_at": "2026-11-02T19:14:19.219Z",
+  "recorded_at": "2026-11-05T03:22:08.087Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"yes\", \"reason\": \"'Thursday morning, I'll check in on how the branding work went' names the scheduled check-in\"}",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Thursday morning, I'll check in on how the branding work went\\\" names the scheduled check-in.\"}",
       "usage": {
         "input_tokens": 237,
         "cache_creation_input_tokens": 0,
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 48,
+        "output_tokens": 117,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 66
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,13 +54,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgednmGTVjStgvfZDfeui",
+        "id": "msg_011Cgj4c5UxYKn4R9VYnsFWB",
         "type": "message",
         "role": "assistant",
         "content": [
           {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvMECsQCCBMYAipAcqxYeUpE+ghnPSL92897v3t2RoyYr3YKGoykzbbhJLQVpF2cCbJNifLevoNxfERbD9Ry/s2a/s3OIZazVAKg6jIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB3+yv1wbCAToIBBAAGgwC2ooDTzcFA2YEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCzpqhAE3mhbTN68Nm9hf3PDaCK8Ursm9TiUyriTlJzhiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzsB+70uKhHF4Oc0ikaDMYtPDgcpb33vfENHyIwJopfIZ/QBZMxzWGKOfOMo0X1BoieSsZuonMRN3Ka0vv0DyZz6XrRBcoWi20GpPTnKtsBzILpb6/dySsBEyDKYWLokd7lncpQABad6VQxBFv8i1Gfcq8Wo+MW58A0qrN8bFfVJzZUvLCxgBn/94M5qib/KWmCiSjFi6x2SRk19SUhpQEVmIOOSR98LYLnLZ3slSEyy8HZEG1uvgOkS94aRsdCPjqtKdY3kNoFeCL+cw0WwceJAO+iqgMejGau7X2/pBtTqoS+9eiWnOTbF5aZSvze5Pj//zPVpuwxJF2AkXlW8pEhgSKuZlCv8P1qHaIRRoqf6Qm7GBoLf/ewzGmDuJyQ5Fv+mdfVuFTGuSUvGAE="
+          },
+          {
             "type": "text",
-            "text": "{\"answer\": \"yes\", \"reason\": \"'Thursday morning, I'll check in on how the branding work went' names the scheduled check-in\"}"
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Thursday morning, I'll check in on how the branding work went\\\" names the scheduled check-in.\"}"
           }
         ],
         "container": null,
@@ -75,9 +80,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 48,
+          "output_tokens": 117,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 66
           },
           "service_tier": "standard",
           "inference_geo": "global",

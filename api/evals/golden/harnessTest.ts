@@ -251,7 +251,8 @@ const api = new URL("../../", import.meta.url).pathname;
   // Found by content, not by file name: a re-record renames the file (its name is the request's hash).
   const recDir = join(api, "evals/golden/recordings/checkin-nothing");
   const rec = readdirSync(recDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(readFileSync(join(recDir, f), "utf8")))
-    .find((x) => x.request?.grader === false && JSON.stringify(x.request?.body ?? "").includes("call or text 988"));
+    // The reply request itself (it offers sendReply): the snapshot read carries the 988 line too, and a re-record can list it first.
+    .find((x) => x.request?.grader === false && (x.request?.body?.tools ?? []).some((t: any) => t?.name === "sendReply") && JSON.stringify(x.request?.body ?? "").includes("call or text 988"));
   if (!rec) throw new Error("checkin-nothing: no recorded reply request carrying the 988 line");
   // As replay sees a source edit: the request carries the new text, and the registry (read from the edited source) does too.
   const real = (edit: (s: string) => string) => { const body = JSON.parse(edit(JSON.stringify(rec.request.body))); return skeletonOf({ path: "api.anthropic.com/v1/messages", grader: false, beta: rec.request.beta ?? null, body }, r.chunks.map((c) => ({ ...c, text: edit(JSON.stringify(c.text)).slice(1, -1).replace(/\\n/g, "\n").replace(/\\"/g, '"') }))); };

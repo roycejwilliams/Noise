@@ -1,0 +1,102 @@
+{
+  "hash": "02dc830578cec313",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-11-05T03:26:26.856Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"This isn't something to carry alone in a waiting room.\n\nHow's he doing right now, is he stable, or are you still waiting on the doctor to tell you anything?\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"asks 'is he stable, or are you still waiting on the doctor' after they already said they're waiting for the doctor\"}",
+      "usage": {
+        "input_tokens": 305,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 194,
+        "output_tokens_details": {
+          "thinking_tokens": 140
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj4w6NKWNYCk8MZc8eoE",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvYGCsQCCBMYAipA8aUdc+R9c5pMlC5s4Zc5t1N4pbxwfp1gjL5thj5UgT9ud+6a0cPPkgpMJBYoHCx/Z/PXeglh5rIp2srOEfHHozIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB4u6v1wbCAToIBBAAGgwC2ooDTzcFIjMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAb7sr6OOFD1FYEi1V1b/8inX+GtOv8+sgm80TS8J6u3CIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgx/7dLSzISC7z5XRc8aDJKxyoBBmonPFpPj8SIwU0R7E0zGEgLu257e/UE/drxzzpDbhlfo5D5F8N4z60ItmEKiRRx2MMjP5J8eQA/6Kt4DS053K1lhQn+PZXKueNT6kJVVUDSEU3woG8ERSHPh9DV2hTL8OxU4kxI4vIeJ7qRCYI/CD6tor+Ha09zUEp8C3h6dpva25+SvZvwowVHN0bhGymYqDULY39ZXfIL4paiAD0/dRngYfCeRf6i6eheqj9bj2RszNZx0MxT6eBhbKZcnMtnBhU2uixqO4XGxGTB3KIB+06dLmPvvNtRE1siCZiF9jOQUWHTX2wEKweQC2Qhf8FgK3s1jvBh/fpvoMBJEEBMqUGZryRznpzAHyp0Y2+NoGjdyceFCkabuH7yEAKb/0tUK/lUUkn6g6XjnC2zfZUOyoTwFIM2bSxGkSFGAzdBmaOV3UZYMh6jaARseZH6HCNHntRUv+ohoiqDUMowNOf3w5NFQZTN9Xp9o/8fzSHug4emtq+vtOGZvkw8dGesXQzye1SwFWm/sTdTPP6HPj6BLVV7cYJUqhKtmaoGhpanQHvneuBHi8dVHptgNmPcerH4balvVjyCHPa36GQFm/yRj3Ce3nbEB0W1JbZAM/mujLMhoDg1+cPQBKkPRnG+7BO1hIrLYyBrIEAntiZR9ipRBYc53jhFRID+5Za72BJ4pBguXelXeSWyIE0gxDzj8q/8NFLY0UhcxmgxZphgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"asks 'is he stable, or are you still waiting on the doctor' after they already said they're waiting for the doctor\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 305,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 194,
+          "output_tokens_details": {
+            "thinking_tokens": 140
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "02dc830578cec313",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

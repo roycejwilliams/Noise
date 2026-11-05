@@ -39,6 +39,9 @@ export const CASES: GoldenCase[] = [
     from: "11-02/11-03: the problem-statement correction; the next reply still didn't do it",
     run: async () => {
       const exchange: Line[] = [
+        // The conversation the 11-02 correction came from had Theo in it: without him there's nothing to summarise but a made-up problem.
+        { at: at(45), from: "member", text: "Theo keeps saying yes to the cofounder dinner and then bailing the day of. Third time now and I don't know if I should keep inviting him" },
+        { at: at(44), from: "co", text: "Three last-minute bails is a pattern, not bad luck. Worth asking him straight whether the dinner is something he actually wants." },
         { at: at(20), from: "member", text: "Give me my problem statement" },
         { at: at(19), from: "co", text: "The core tension: you need to prove the matching works without exposing how it's built." },
       ];

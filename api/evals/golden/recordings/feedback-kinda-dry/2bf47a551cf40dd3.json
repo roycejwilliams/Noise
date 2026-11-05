@@ -1,0 +1,102 @@
+{
+  "hash": "2bf47a551cf40dd3",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-05T03:26:47.063Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That almost-walked-off moment is the whole story, honestly, not the clean run after it. Seven years old and she talked herself back onto the bench.\n\nThat's a good one to remember next time she's nervous about something.\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Opens with just \\\"Fair.\\\" then adds own take: \\\"That almost-walked-off moment is the whole story... she talked herself back onto the bench\\\" — no tone explanation, no apology, no self-quote.\"}",
+      "usage": {
+        "input_tokens": 341,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 480,
+        "output_tokens_details": {
+          "thinking_tokens": 394
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgj4xNaRWmgQgAZacJoGC",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Opens with just \\\"Fair.\\\" then adds own take: \\\"That almost-walked-off moment is the whole story... she talked herself back onto the bench\\\" — no tone explanation, no apology, no self-quote.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 341,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 480,
+          "output_tokens_details": {
+            "thinking_tokens": 394
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "2bf47a551cf40dd3",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
