@@ -1,5 +1,5 @@
-// Venue research (Royce, 2026-10-07; the document wrapper removed 2026-11-04): a member asks for something research-shaped ("find venues
-// for my launch"); a background task runs the find and the result goes back as finds by text, the way every other find does: each
+// Research on rooms, events and communities they would attend (Royce, 2026-10-07; the document wrapper and the venue and vendor path
+// removed 2026-11-04): a member asks for something research-shaped ("find founder dinners and communities for climate people"); a background task runs the find and the result goes back as finds by text, the way every other find does: each
 // find's link, then one line under it (services/taskMessages.ts assembleMessages), inside the usual caps. It never becomes a document.
 //
 // Grounding, the part that matters:
@@ -9,8 +9,8 @@
 // Search quality (services/researchQuality.ts) runs through it: the query is built from member state (a missing load-bearing
 // fact is a question back, asked by the tool before this starts), every read is the find type's fixed fields, a re-sent run
 // re-reads anything past its freshness window, and the options are ordered by what this member (or everyone) said yes and no to.
-// Sources: the scripted Peerspace reader, and since round 2 passed (evals/browserPilot/round2.ts: 39 right, 11 unknown, 0
-// wrong on 12 sites with no script) the general reader (services/sdkGeneralReader.ts) for a venue's own pages.
+// Sources: the general reader (services/sdkGeneralReader.ts, evals/browserPilot/round2.ts: 39 right, 11 unknown, 0 wrong on 12 sites)
+// for an event's or community's own page. The scripted Peerspace venue reader is no longer used here.
 import { regionFor } from "./areaCodes.js";
 import { proactivePaused } from "./proactivePause.js";
 import { schemaFields, type FieldValue, type FindField, type FindType, type StoredFind } from "./researchQuality.js";
@@ -73,47 +73,22 @@ export async function researchMessages(finds: ResearchFind[], o: { firstName: st
   return { messages: assembleMessages(top.map((g) => ({ url: g.f.url, caption: g.caption })), null), sent: top.map((g) => g.f) };
 }
 
-// ---------------------------------------------------------------- reading a source as the venue schema
+// ---------------------------------------------------------------- reading a source as the event schema
 
-export type VenueAsk = { what: string; city: string | null; slot: { date: string; start: string } | null };
-const slotLabel = (slot: VenueAsk["slot"]) => (slot ? `${slot.date} from ${slot.start}` : null);
+// A room, event or community they would attend (the purpose boundary, Royce 2026-11-04): never a venue or a vendor for their own event.
+export type RoomAsk = { what: string; city: string | null };
 
-// Pure: a scripted Peerspace read as the venue fields. Prices exactly as the listing shows them (a range stays a range);
-// availability only when a date and start were asked; never a value the reader didn't return.
-export function peerspaceFields(facts: import("./peerspaceSlot.js").SlotFacts, slot: VenueAsk["slot"], checkedAt = new Date().toISOString()): FindField[] {
-  const money = (n: number) => `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-  const rate = facts.priceRange ? `${money(facts.priceRange[0])} to ${money(facts.priceRange[1])} an hour, depending on the day` : facts.hourlyPrice !== null ? `${money(facts.hourlyPrice)} an hour` : null;
-  const read: Record<string, FieldValue> = {
-    rate: { value: rate },
-    minimum: { value: facts.minimumHours !== null ? `${facts.minimumHours} hour${facts.minimumHours === 1 ? "" : "s"}` : null },
-    capacity: { value: facts.capacity !== null ? `${facts.capacity} people` : null },
-    open: { value: facts.available === "unknown" ? null : facts.available },
-    inquire: { value: null }, // Peerspace books through its own panel; the source link is the way in
-  };
-  return schemaFields("venue", read, checkedAt, { slotLabel: slotLabel(slot) }).filter((f) => f.key !== "inquire");
-}
-
-const PEERSPACE_LISTING = /^https:\/\/www\.peerspace\.com\/pages\/listings\/[a-f0-9]{24}$/;
-
-// One source, read as the venue schema: the scripted reader for a Peerspace listing, the general reader for anything else.
-// Null when the page couldn't be read or said nothing the schema asks.
-export async function readVenueSource(url: string, slot: VenueAsk["slot"]): Promise<{ reader: "scripted" | "sdk"; fields: FindField[]; title: string; gone?: boolean } | null> {
+// One source, read as the event schema (date, start, price, where, sold out) by the general reader. Null when the page couldn't be
+// read or said nothing the schema asks.
+export async function readRoomSource(url: string): Promise<{ reader: "scripted" | "sdk"; fields: FindField[]; title: string; gone?: boolean } | null> {
   const now = () => new Date().toISOString();
-  if (PEERSPACE_LISTING.test(url)) {
-    const { readPeerspaceSlot } = await import("./peerspaceSlot.js");
-    const read = await readPeerspaceSlot(url, slot).catch(() => null);
-    if (!read) return null;
-    const { goneFor } = await import("./taskWeb.js");
-    const title = (read.text.match(/^([^\n|]{3,80})/)?.[1] ?? "").trim();
-    return { reader: "scripted", fields: peerspaceFields(read.facts, slot, now()), title, gone: !!goneFor(title, read.text) };
-  }
   if (!SDK_FINDS_ALLOWED) return null;
   const { FIND_SCHEMAS } = await import("./researchQuality.js");
   const { readWithSdk } = await import("./sdkGeneralReader.js");
-  const asks = FIND_SCHEMAS.venue.filter((f) => f.key !== "open").map((f) => ({ key: f.key, ask: f.ask }));
+  const asks = FIND_SCHEMAS.event.map((f) => ({ key: f.key, ask: f.ask }));
   const r = await readWithSdk(url, asks).catch(() => null);
   if (!r || r.stopped === "blocked site") return null;
-  const fields = schemaFields("venue", r.answers, now(), { slotLabel: slotLabel(slot) });
+  const fields = schemaFields("event", r.answers, now());
   if (!fields.some((f) => f.value)) return null;
   const title = (r.pageText.match(/^([^\n|]{3,80})/)?.[1] ?? "").trim();
   return { reader: "sdk", fields, title };
@@ -123,52 +98,43 @@ export async function readVenueSource(url: string, slot: VenueAsk["slot"]): Prom
 // couldn't search, never that nothing fits.
 export class SearchFailed extends Error {}
 
-// The find, in a background task only. The assembled query (researchQuality.assembleQuery) goes to the verified web search;
-// each result below Co's bar is skipped; each other result is read as the venue schema.
-export async function findVenueOptions(userId: string, query: string, ask: VenueAsk, zone: string | null): Promise<ResearchFind[]> {
-  const { taskWebSearch } = await import("./taskWeb.js");
+// The find, in a background task only. The assembled query (researchQuality.assembleQuery("event", ...)) goes to the verified web
+// search; each result below Co's bar is skipped; each other result is read as the event schema from the room's or community's own page.
+export async function findRoomOptions(userId: string, query: string, ask: RoomAsk, zone: string | null): Promise<ResearchFind[]> {
+  const { taskWebSearch, coreName } = await import("./taskWeb.js");
   const { belowTheBar } = await import("./researchQuality.js");
-  // Each option is read from its own page: a Peerspace listing, or the venue's own site. A listicle or directory about many
-  // places is never read for one of them (taskWeb marks official pages). Too few of those from the first pass: one more pass
-  // asking only for venues' own private-events pages.
-  const { coreName } = await import("./taskWeb.js");
-  const own = (k: { url: string; official: boolean }) => k.official || PEERSPACE_LISTING.test(k.url.split("?")[0]);
-  // One option per place: a second page on the same site (Copra's reservations page and its private-events page) or the
-  // same name again isn't another option. Peerspace listings are each their own place.
-  const placeKey = (k: { url: string; name: string }) => (PEERSPACE_LISTING.test(k.url.split("?")[0]) ? k.url.split("?")[0] : (() => { try { return new URL(k.url).hostname.replace(/^www\./, ""); } catch { return k.url; } })());
+  // Each option is read from its own page (taskWeb marks official pages): a roundup or directory about many events is never read for
+  // one of them. Too few of those from the first pass: another pass asking only for own pages.
+  const own = (k: { url: string; official: boolean }) => k.official;
+  const placeKey = (k: { url: string }) => { try { return new URL(k.url).hostname.replace(/^www\./, "") + new URL(k.url).pathname.replace(/\/$/, ""); } catch { return k.url; } };
   const sameName = (a: string, b: string) => coreName(a).toLowerCase() === coreName(b).toLowerCase();
-  const ownPage = "For each, give the venue's OWN website page for private events or private dining, never a guide, list, review or directory.";
-  // Each pass after the first names what's already found and looks somewhere else (2026-10-07 live brief: two passes that
-  // returned 3 results each, mostly the same restaurants, came to 2 options).
-  const angles = ["", "Look further: different venues from these, already found:", "This time look at a different kind of place at the same standard: a top hotel's private dining room or salon, a gallery or museum event space, or a private members' club that hosts dinners. Not these, already found:"];
+  const ownPage = "For each, give the event's or community's OWN page (when it is, where, how to join), never a roundup, list, review or directory.";
+  const angles = ["", "Look further: different events and communities from these, already found:", "This time look at a different kind of room at the same standard: a talk series, a salon, a members' community, a recurring dinner, which these are not:"];
   const kept: import("./taskWeb.js").VerifiedResult[] = [];
   const ownPlaces = () => kept.filter(own).filter((k, i, a) => a.findIndex((x) => placeKey(x) === placeKey(k)) === i);
   const log: { pass: number; kept: number; own: number; listicles: string[] }[] = [];
   // A search that failed (Exa down or timed out) or that the budget blocked never ran: when no pass ran, that's a failure, never
-  // "no venues fit" (review of #225).
+  // "nothing fits" (review of #225).
   const failures: string[] = [];
   for (const [i, angle] of angles.entries()) {
     if (i > 0 && ownPlaces().length >= BRIEF_LIMITS.maxOptions) break;
     const seen = [...new Set(kept.map((k) => coreName(k.name)))].slice(0, 12).join("; ");
     const q = i === 0 ? `${query} ${ownPage}` : `${query} ${ownPage} ${angle}${seen ? ` ${seen}.` : ""}`;
     // A brief is always one the member asked for (or said yes to), so its searches draw from the direct-ask share of the day's web
-    // search budget, never the sweep's (re-review of #235: it defaulted to "sweep", so a used-up sweep share blocked a member's brief
-    // while the direct-ask share sat unused).
-    const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4, ownPage: "private events or private dining page", readsPageItself: true, source: "request" });
+    // search budget, never the sweep's (re-review of #235).
+    const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4, ownPage: "event or community page", readsPageItself: true, source: "request" });
     if (/^(?:Web search failed|No web search right now)/.test(r.note)) failures.push(r.note);
     for (const k of r.kept) if (!kept.some((x) => x.url === k.url || (own(x) && own(k) && (placeKey(x) === placeKey(k) || sameName(x.name, k.name))))) kept.push(k);
     log.push({ pass: i + 1, kept: r.kept.length, own: r.kept.filter(own).length, listicles: r.kept.filter((k) => !own(k)).map((k) => k.url).slice(0, 4) });
   }
   if (failures.length === log.length && !kept.length) throw new SearchFailed(failures[0]);
-  const urls = [...new Set(ownPlaces().map((k) => (PEERSPACE_LISTING.test(k.url.split("?")[0]) ? k.url.split("?")[0] : k.url)).filter((u) => u.startsWith("https://") && !belowTheBar(u)))].slice(0, BRIEF_LIMITS.maxReads);
-  // The place's name, without the room the search named: the fields read below are the venue's, and may be another room's
-  // (2026-10-07 live brief: "Scoma's Restaurant – The Scalia Room" over the Bayside Patio's capacity).
+  const urls = [...new Set(ownPlaces().map((k) => k.url).filter((u) => u.startsWith("https://") && !belowTheBar(u)))].slice(0, BRIEF_LIMITS.maxReads);
   const names = new Map(kept.map((k) => [k.url.split("?")[0], coreName(k.name)]));
   const finds: ResearchFind[] = [];
   const reads: { url: string; got: string }[] = [];
   for (const url of urls) {
     if (finds.length >= BRIEF_LIMITS.maxOptions) break;
-    const read = await readVenueSource(url, ask.slot).catch((err: any) => {
+    const read = await readRoomSource(url).catch((err: any) => {
       console.error(`research brief read failed for ${url} (non-fatal):`, err?.message ?? err);
       return null;
     });
@@ -189,7 +155,7 @@ export const BRIEF_HOLD_MAX_WAKES = 6;
 
 // What they're told when the find's search never ran, after its retries: it couldn't search, never that nothing fits. Wording
 // pending Royce's approval (PR #235).
-export const SEARCH_FAILED_LINE = "My search didn't go through just now, so I couldn't look for venues yet. Want me to try again?";
+export const SEARCH_FAILED_LINE = "My search didn't go through just now, so I couldn't look for rooms yet. Want me to try again?";
 // A find whose search never ran (Exa down or timed out, or the web search budget blocked it) is tried again at the task's next wake
 // this many times before they're told (Royce, 2026-10-17: "retry once or twice ... Only tell the member if those fail"). No new
 // machinery: the task is left open, and coTasks.claimDueTasks already leased it to its next wake 45 minutes on, when the whole run
@@ -220,7 +186,7 @@ type BriefParams = { what?: string; city?: string | null; neighborhood?: string 
 export async function recordSentResearchFinds(userId: string, taskId: number, fs: ResearchFind[]): Promise<void> {
   const [{ recordResearchFinds }, Q] = await Promise.all([import("./researchFinds.js"), import("./researchQuality.js")]);
   await recordResearchFinds(userId, fs.map((f) => ({ name: f.name, url: f.url, facts: f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value}`).join("; ") }))).catch(() => 0);
-  await Q.recordShownFinds(userId, taskId, fs.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
+  await Q.recordShownFinds(userId, taskId, fs.map((f) => ({ type: "event", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
 }
 
 // The background run of one research task (services/taskTurn.ts runDueTasks): find (or, for "send it again", re-check the
@@ -240,7 +206,6 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   }
   const city = p.city ?? person.city ?? null;
   const zone = city ? await import("./geocoding.js").then((g) => g.getTimezoneForCity(city, { region: regionFor({ city, phone: person?.phone_number }) })).catch(() => null) : null;
-  const slot = p.date && p.start ? { date: p.date, start: p.start } : null;
   const { sendExempt } = await import("../harness/proactive.js");
   // A line to them that ends the brief (what it came to, or the question it needs first). Outside their hours it used to be
   // dropped while the task closed as done, so they never heard (2026-10-07). Now: told, then closed; outside their hours, held
@@ -257,7 +222,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     const door = proactivePaused()
       ? undefined
       : {
-          summary: `The venue research they asked for: ${String(p.what ?? "").slice(0, 120)}`,
+          summary: `The research on rooms and events they asked for: ${String(p.what ?? "").slice(0, 120)}`,
           validUntil: (await import("../harness/door.js")).doorValidUntil("requested", new Date(), zone),
           taskId: task.id,
           close: { status, outcome },
@@ -296,10 +261,10 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   let rechecked = 0;
   if (p.again) {
     // The same brief again: its own finds, each re-read where a field is past its window, before it goes.
-    const last = await Q.lastBriefFinds(task.userId, "venue");
+    const last = await Q.lastBriefFinds(task.userId, "event");
     for (const f of last.finds) {
       const r = await Q.freshForShow(f, async (old) => {
-        const read = await readVenueSource(old.url, slot);
+        const read = await readRoomSource(old.url);
         return read ? { gone: !!read.gone, fields: read.fields } : null;
       });
       rechecked += r.rechecked.length ? 1 : 0;
@@ -307,20 +272,20 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     }
   } else {
     const state = await Q.loadMemberSearchState(task.userId, { city, neighborhood: p.neighborhood ?? null, budget: p.budget ?? null, date: p.date ?? null, start: p.start ?? null, headcount: p.headcount ?? null });
-    const q = Q.assembleQuery("venue", p.what, state);
+    const q = Q.assembleQuery("event", p.what, state);
     if (!q.ok) {
       // The tool asks first; this is the backstop. Never search on a guess.
       await tellThenClose(q.question, "dropped", `asked them first: missing ${q.missing.join(", ")}`);
       return;
     }
     const find = { failed: null as string | null };
-    finds = await findVenueOptions(task.userId, q.query, { what: p.what, city, slot }, zone).catch((err: any) => {
+    finds = await findRoomOptions(task.userId, q.query, { what: p.what, city }, zone).catch((err: any) => {
       console.error("research brief find failed (non-fatal):", err?.message ?? err);
       find.failed = err instanceof SearchFailed ? err.message : "the find threw an error";
       return [] as ResearchFind[];
     });
     // The find never ran (the search failed or was blocked): tried again at the next wake, then they're told it couldn't search,
-    // never that no venues fit (review of #225).
+    // never that nothing fits (review of #225).
     if (find.failed) {
       if (briefSearchNext(task.wakes) === "retry") {
         const { recordDecision } = await import("../harness/core.js");
@@ -333,7 +298,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   }
   // Ordered by what they (or everyone) said yes and no to before.
   const signal = await Q.rankingSignal(task.userId);
-  finds = Q.rankFinds(finds.map((f) => ({ ...f, type: "venue" as FindType })), signal.member, signal.global).map(({ score: _s, type: _t, ...f }) => f);
+  finds = Q.rankFinds(finds.map((f) => ({ ...f, type: "event" as FindType })), signal.member, signal.global).map(({ score: _s, type: _t, ...f }) => f);
 
   // Only what has a source and a check time can go; the captions come from the shared find-caption path; the cap applies after the
   // filter, so a valid fourth find fills a dropped slot.
@@ -345,12 +310,12 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
       await closeTask(task.userId, task.id, "dropped", "no finds sent: no caption held up");
       return;
     }
-    await tellThenClose("I looked, but couldn't verify any venues that fit. Want me to widen the search?", "done", "no finds sent: none found");
+    await tellThenClose("I looked, but couldn't verify any rooms that fit. Want me to widen the search?", "done", "no finds sent: none found");
     return;
   }
   const { recordDecision } = await import("../harness/core.js");
   // The kind of thing, never its title (the title is their ask in words).
-  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: "act", action: "venue finds texted", proposal: { taskId: task.id, options: sent.length, again: !!p.again, rechecked, readers: [...new Set(sent.map((f) => f.reader))] } }).catch(() => {});
+  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: "act", action: "room finds texted", proposal: { taskId: task.id, options: sent.length, again: !!p.again, rechecked, readers: [...new Set(sent.map((f) => f.reader))] } }).catch(() => {});
   // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched. The
   // options are the places found, never their words.
   const list = sent.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
