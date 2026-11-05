@@ -717,7 +717,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async (input) => {
         const R = await import("../services/conversationRecall.js");
         // A dry run reads nothing: it returns the miss guidance, so a test sees what the model would be told on an empty record.
-        if (ctx.dryRun) return { ok: true, history: true, results: [], note: R.recallNote({ ok: true, history: true, today: "", zone: "", window: null, topic: [], channel: "any", found: 0, total: 0, results: [], nextOffset: null, coverage: { texts: null, calls: null } }) };
+        if (ctx.dryRun) return { ok: true, history: true, results: [], note: R.recallNote({ ok: true, history: true, today: "", zone: "", window: null, topic: [], channel: "any", found: 0, total: 0, results: [], nextOffset: null, coverage: { texts: "1970-01-01T00:00:00.000Z", calls: "1970-01-01T00:00:00.000Z" } }) };
         // Dates read from when they asked (the turn's arrival), and a call's answer is kept short enough to come back whole.
         const got = await R.recallConversation(ctx.userId, input, await R.realRecallDeps(), { ...(ctx.messageArrivedAt ? { asOf: new Date(ctx.messageArrivedAt) } : {}), ...(ctx.onCall ? { resultChars: R.RECALL.callResultChars } : {}) }).catch((err: any) => {
           console.error("lookBack: read failed (non-fatal):", err?.message ?? err);
