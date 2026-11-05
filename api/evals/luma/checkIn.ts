@@ -156,6 +156,18 @@ const guest = (over: any = {}) => ({ id: "gst-1", event_api_id: ev, user_email: 
   const route = src("routes/luma.ts");
   check("the route hands guest.updated to the check-in handler and logs each type's first delivery", /handleGuestCheckIn\(\{ \.\.\.data, event_api_id: eventId \}/.test(route) && /logFirstDelivery\(String\(type\), payload\)/.test(route) && /type === "guest\.updated"/.test(route));
   check("arrived_via accepts 'door' in code and in the migration", /via: "location" \| "text" \| "door"/.test(src("services/eventPresence.ts")) && /IN \('location', 'text', 'door'\)/.test(src("db/migrations.ts")));
+  const M = await import("../../src/db/migrations.js");
+  const ran: string[] = [];
+  const fakeDb = (def: string | null, failOn?: RegExp) => ({ query: async (sql: string) => { ran.push(sql); if (failOn?.test(sql)) throw new Error("boom"); return { rows: def ? [{ def }] : [] }; } });
+  check("migration: a no-op (one read, no ALTER, no lock) when 'door' is already allowed", (await M.ensureDoorArrivals(fakeDb("CHECK ((arrived_via = ANY (ARRAY['location'::text, 'text'::text, 'door'::text])))"))) === "noop" && ran.length === 1 && !/ALTER|DO \$\$/.test(ran[0]), ran);
+  ran.length = 0;
+  check("migration: changes the constraint when 'door' is missing", (await M.ensureDoorArrivals(fakeDb("CHECK ((arrived_via = ANY (ARRAY['location'::text, 'text'::text])))"))) === "changed" && ran.length === 2 && /ADD CONSTRAINT/.test(ran[1]), ran);
+  const realErr = console.error; console.error = () => {};
+  const failed = await M.ensureDoorArrivals(fakeDb(null, /DO \$\$/));
+  console.error = realErr;
+  check("migration: a failure is caught inside (never throws into the rest of the chain)", failed === "failed");
+  const mig = src("db/migrations.ts");
+  check("migration: the chain calls it as its own step", /\.then\(\(\) => ensureDoorArrivals\(\)\)/.test(mig));
   check("dedupe goes through inbound_webhook_handles", /INSERT INTO inbound_webhook_handles/.test(src("services/lumaCheckIn.ts")));
 }
 
