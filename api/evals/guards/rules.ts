@@ -70,6 +70,7 @@ const ACTIVITY_ONLY: Record<string, string> = {
   "harness/memberReflection.ts": "counts replies in the week for the reflection",
   "harness/callGate.ts": "recency of any activity, for call timing",
   // Its content reads are held to notToTeammate by section 5; readActivityTimes returns timestamps only, any channel.
+  "scripts/measureRecall.ts": "counts rows by line kind for the latency measurement; no content is read or printed",
   "services/sourceFence.ts": "readActivityTimes: when they were active, timestamps only (the member-world read)",
 };
 let unguarded: string[] = [];
