@@ -16,6 +16,7 @@
 import pool from "../db/db.js";
 import { goalEntries, isActiveGoal, type IntentEntry } from "../harness/profileWrite.js";
 import { notToTeammate } from "./teamLines.js";
+import { outsideAsk } from "./askKind.js";
 
 export const GOAL_CHECKIN = {
   // A goal is asked about only after it has gone this long without being confirmed (set, restated, or last checked in on).
@@ -33,6 +34,8 @@ export function goalTexts(intent: unknown, profileGoals: string[] | null | undef
 }
 
 const DAY = 86_400_000;
+// The model's scope verdict kept on the goal entry (services/profileExtraction.ts), else the narrow backstop on its words (services/askKind.ts).
+export const goalIsOutside = (g: { scope?: unknown; text?: unknown }): boolean => g.scope === "out" || outsideAsk(String(g.text ?? ""));
 const confirmedAt = (g: IntentEntry & { confirmed_at?: string | null }): number => new Date((g.confirmed_at ?? g.created_at ?? 0) as string).getTime();
 
 // Pure: the one goal worth a seasonal check-in, or null. Oldest-unconfirmed first.
@@ -42,6 +45,8 @@ export function dueGoalCheckin(intent: unknown, lastGoalCheckinAt: Date | string
     .filter((g) => confirmedAt(g) > 0 && now.getTime() - confirmedAt(g) >= GOAL_CHECKIN.minAgeDays * DAY)
     // Dropped because its state is done (goalCheckinState): never queued again, unless they confirm it again after that.
     .filter((g) => !g.checkin_done_at || confirmedAt(g) > new Date(g.checkin_done_at).getTime())
+    // The purpose boundary: a goal read as outside connections (or unmistakably so by words) is remembered and never checked in on.
+    .filter((g) => !goalIsOutside(g))
     .sort((a, b) => confirmedAt(a) - confirmedAt(b));
   return old[0] ?? null;
 }
