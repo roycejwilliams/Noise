@@ -79,16 +79,13 @@ async function memberIdBy(column: "email" | "phone", value: string | null): Prom
   return rows.length === 1 ? String(rows[0].id) : null;
 }
 
-// Pure-ish: who the guest is. Email first; phone only when the guest has no email. A guest whose email and phone name different
-// members is refused (a mixed-up identity must never mark the wrong person arrived).
+// Who the guest is. Email first; the phone when the email matches no member (a plus-address or a different email on the guest list).
+// A guest whose email matches one member and phone another is refused: a mixed-up identity must never mark the wrong person arrived.
 export async function resolveCheckInMember(r: Pick<CheckInRead, "email" | "phone">): Promise<{ userId: string | null; conflict: boolean }> {
   const byEmail = await memberIdBy("email", r.email);
-  if (r.email) {
-    const byPhone = await memberIdBy("phone", r.phone);
-    if (byEmail && byPhone && byEmail !== byPhone) return { userId: null, conflict: true };
-    return { userId: byEmail, conflict: false };
-  }
-  return { userId: await memberIdBy("phone", r.phone), conflict: false };
+  const byPhone = await memberIdBy("phone", r.phone);
+  if (byEmail && byPhone && byEmail !== byPhone) return { userId: null, conflict: true };
+  return { userId: byEmail ?? byPhone, conflict: false };
 }
 
 async function onEventGuestList(eventId: string, userId: string): Promise<boolean> {

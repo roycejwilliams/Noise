@@ -128,8 +128,18 @@ export function parkedRowExpired(row: { match: any; created_at: Date | string },
   return new Date(row.created_at).getTime() + PARKED_OPENING_DAYS * 86_400_000 <= now.getTime();
 }
 export async function expireParkedFollowUps(now: Date = new Date()): Promise<number> {
-  const { rows } = await pool.query(`SELECT id, match, created_at FROM recommendation_outcome_followups WHERE harness_status = '${AWAITING_EVIDENCE}' AND sent_at IS NULL LIMIT 500`);
-  const ids = rows.filter((r: any) => parkedRowExpired(r, now)).map((r: any) => r.id);
+  // Every parked row is read, a page at a time by id, so expired rows past the first page are still reached.
+  let after = "00000000-0000-0000-0000-000000000000";
+  const ids: string[] = [];
+  for (let page = 0; page < 200; page++) {
+    const { rows } = await pool.query(
+      `SELECT id, match, created_at FROM recommendation_outcome_followups WHERE harness_status = '${AWAITING_EVIDENCE}' AND sent_at IS NULL AND id > $1::uuid ORDER BY id LIMIT 500`,
+      [after],
+    );
+    for (const r of rows) if (parkedRowExpired(r, now)) ids.push(r.id);
+    if (rows.length < 500) break;
+    after = rows[rows.length - 1].id;
+  }
   if (!ids.length) return 0;
   await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped', drop_reason = $2 WHERE id = ANY($1::uuid[])`, [ids, "no sign they went or meant to go before it expired"]);
   return ids.length;

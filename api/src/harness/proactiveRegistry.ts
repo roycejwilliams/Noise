@@ -1,3 +1,4 @@
+import { DateTime } from "luxon";
 // Per-type drafting and follow-through for the Layer 7 proactive harness
 // (src/harness/proactive.ts). Each type says how to draft its text (always
 // under PROACTIVE_RULES + CONFIRMED_FACTS, with code-checked output rules)
@@ -161,9 +162,12 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     doorMissed = !!(door && !door.came && door.tracked && !(p.walkinCheckinIds ?? []).length);
   }
   const keys = await debriefItemKeys(p);
+  // A stated "went" counts only if it was said after this event started (or, with no date, after this find was sent): an old "I went"
+  // to a same-name event (a recurring dinner) is not evidence they went to this one.
+  const startedAt = date ? DateTime.fromISO(date, { zone: tz ?? "America/Los_Angeles" }).startOf("day").toJSDate() : new Date(c.createdAt.getTime() - 3 * 86_400_000);
   const rows = await pool
-    .query(`SELECT item_key, result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [c.userId, keys])
-    .then((r) => r.rows as { item_key: string; result: string; provenance: string | null }[])
+    .query(`SELECT item_key, result, provenance, created_at FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [c.userId, keys])
+    .then((r) => (r.rows as { item_key: string; result: string; provenance: string | null; created_at?: Date | string }[]).filter((x) => !((x.result === "helped" || x.result === "didnt_help") && x.created_at && new Date(x.created_at) < startedAt)))
     .catch(() => []);
   const reactions = await pool
     .query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [c.userId, keys])
@@ -196,14 +200,14 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
 // The outcome keys one debrief is about: the event's own key, each recommendation it follows up (its event or name key, and the
 // "followup:<id>" key its answer is stored under), and its name.
 async function debriefItemKeys(p: DebriefPayload): Promise<string[]> {
-  const keys = new Set<string>([`name:${p.eventName.toLowerCase()}`]);
-  if (p.eventApiId) keys.add(`event:${p.eventApiId}`);
+  // With an event id, the name is never a key: a same-name event (a recurring dinner) is another event.
+  const keys = new Set<string>(p.eventApiId ? [`event:${p.eventApiId}`] : [`name:${p.eventName.toLowerCase()}`]);
   if (p.outcomeFollowupIds?.length) {
     const { rows } = await pool.query(`SELECT id, match FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]).catch(() => ({ rows: [] as any[] }));
     for (const r of rows) {
       keys.add(`followup:${r.id}`);
       if (r.match?.event_api_id) keys.add(`event:${r.match.event_api_id}`);
-      if (r.match?.name) keys.add(`name:${String(r.match.name).toLowerCase()}`);
+      if (r.match?.name && !p.eventApiId && !r.match?.event_api_id) keys.add(`name:${String(r.match.name).toLowerCase()}`);
     }
   }
   return [...keys];
