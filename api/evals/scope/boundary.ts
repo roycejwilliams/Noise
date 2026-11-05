@@ -104,7 +104,7 @@ check("…and an ask with nothing outside it comes back unchanged", S.connection
 
 // ---- the backstop never vetoes anything about meeting people (the reviewer's probes)
 for (const m of ["Find a photographer meetup", "find a DJ collective community I could join", "Prep for coffee with Dana", "help me find a job through people I know", "find me investors to meet at a dinner", "keep an eye out for roles at climate startups I could get intros into", "find a hotel near the founders dinner"]) check(`the backstop does not call '${m}' out`, S.classifyScope(m).scope !== "out", S.classifyScope(m));
-check("…and does call the unmistakable ones out", ["find me a dentist", "find me a cheaper Verizon plan", "compare laptops", "book me a flight to NYC", "watch for PM jobs"].every((m) => S.classifyScope(m).scope === "out"));
+check("…and does call the unmistakable ones out", ["buying a new laptop", "which laptop to buy", "get my taxes done", "find me a dentist", "find me a cheaper Verizon plan", "compare laptops", "book me a flight to NYC", "watch for PM jobs"].every((m) => S.classifyScope(m).scope === "out"));
 
 // ---- the turn read carries the verdict (no new model call), and a quick fact carries none
 const base = { reason: "r", answers: null, ambiguousBetween: [], call: "none", wantsRecommendation: false, confidence: "high", mode: "asking", topic: "x" };
