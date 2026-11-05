@@ -291,5 +291,5 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   check("history: the use line says never on every turn and to answer from what it returns", /Never on every turn/.test(R.RECALL_USE) && /Answer from what it returns/.test(R.RECALL_USE));
 }
 
-console.log(`recall: ${total - failed}/${total} checks passed`);
+console.log(`recall: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
