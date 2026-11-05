@@ -31,7 +31,7 @@ check("restating an ask marks it mentioned again", /expires_at = COALESCE\(\$4::
 check("an ask resolved from what they said closes in the profile too", /markIntentResolved\(userId, asks\)/.test(pe));
 const ak = src("src/services/askKind.ts");
 check("closing an ask updates both places and retires its matches", /UPDATE ask_checkins SET resolved_at[\s\S]{0,500}markIntentResolved\(userId, \[askId\]\)[\s\S]{0,300}UPDATE relevance_edges SET status = 'retired'/.test(ak));
-check("unsure asks keep being searched", /return \{ kind: "find", connection: null \};\s*\}\s*\}/.test(ak));
+check("unsure asks keep being searched", /\?\.kind \?\? "find";/.test(ak));
 check("instant searches of a new ask only for find asks", /ac\.last_attempted_at IS NULL AND ac\.kind = 'find'/.test(src("src/services/eventSurfacingSweep.ts")));
 const tools = src("src/agent/conversationTools.ts");
 check("Cue can close an ask, matched to exactly one open ask, with a receipt", /closeAsk: tool\(\{[\s\S]{0,1600}hits\.length !== 1[\s\S]{0,200}notDone\(/.test(tools));
