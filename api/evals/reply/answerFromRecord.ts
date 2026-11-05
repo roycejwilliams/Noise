@@ -140,7 +140,7 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
 // 5. The reply gets the plain instruction with the facts; no code veto exists.
 {
   const note = T.answerFromRecordNote([founder]) ?? "";
-  check("5. the note names the find and says answer from the stored facts, say a missing field and give the link, never 'not sure'", /Founder Table/.test(note) && /Answer from the stored facts/.test(note) && /give the link/.test(note) && /Never say/.test(note), note);
+  check("5. the note names the find and says answer from the stored facts, say a missing field and give the link, never 'not sure'", /Founder Table/.test(note) && /Answer from its stored facts/.test(note) && /give the link/.test(note) && /Never say/.test(note), note);
   check("5. nothing resolved means no note", T.answerFromRecordNote([]) === null);
   check("5. the reveal read isn't repeated for the same find (link or event id, either Luma host)", T.isSameFind(founder, { url: "https://luma.com/founder-table/" }) && T.isSameFind({ url: null, key: "event:abc" }, { event_api_id: "abc" }) && !T.isSameFind(founder, { url: "https://lu.ma/other" }));
   const ms = fs.readFileSync(new URL("../../src/harness/moveCheck.ts", import.meta.url), "utf8");
@@ -149,7 +149,7 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
   const rg = fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
   check("5. the reply facts carry the note when they ask about a resolved find, and skip the reveal repeat", /answerFromRecordNote\(opts\.turn\.referents/.test(rg) && /isSameFind\(r, match\)/.test(rg));
   const cc = fs.readFileSync(new URL("../../src/services/callContext.ts", import.meta.url), "utf8");
-  check("5. a call gets the same note, first, with the same fill (loadStoredMatch through fillReferents)", /answerFromRecordNote\(named\)/.test(cc) && /fillReferents\(userId, named\)/.test(cc) && /loadSentNamed\(userId/.test(cc));
+  check("5. a call gets the same note, first, with the same fill (loadStoredMatch through fillReferents)", /answerFromRecordNote\(named, \{ asking: false \}\)/.test(cc) && /fillReferents\(userId, named\)/.test(cc) && /loadSentNamed\(userId/.test(cc));
 }
 // 6. Luma links under either host are one find.
 {
@@ -157,6 +157,48 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
   check("6. lu.ma and luma.com (trailing slash, query) merge into one find with the details", m.length === 1 && !!m[0].details, m.length);
   const two = T.mergeSent([{ item_key: "name:a", item_name: "A", kind: "event", url: "https://lu.ma/one", sent_at: NOW, reaction: null }, { item_key: "name:a", item_name: "A", kind: "event", url: "https://luma.com/two", sent_at: NOW, reaction: null }], [], []);
   check("6. different Luma events stay two", two.length === 2);
+}
+// 7. Calls: the note and the core facts line always fit (900-char description, three recent finds).
+{
+  const big = "x".repeat(900);
+  const ft = item("Founder Table", FT_URL, 9, { details: { ...details, description: big }, city: "San Francisco" });
+  const recent = [1, 2, 3].map((n) => item(`Recent ${n}`, `https://lu.ma/r${n}`, n * 0.5, { details: { ...details, description: big } }));
+  const note = T.answerFromRecordNote([ft], { asking: false }) ?? "";
+  check("7. the call note is short and says 'if they ask', not 'they are asking'", note.length < 420 && /^If they ask/.test(note) && !/They are asking/.test(note), note);
+  for (const n of [1, 2, 3]) {
+    const named = [ft, ...[1, 2].slice(0, n - 1).map((k) => item(`Other ${k}`, `https://lu.ma/o${k}`, 8 + k, { details: { ...details, description: big }, city: "Oakland" }))];
+    const nt = T.answerFromRecordNote(named, { asking: false });
+    const share = Math.max(320, Math.floor((C.CALL_SENT_MAX - C.SENT_HEADER.length - (nt?.length ?? 0) - 12 * (named.length + 1)) / named.length));
+    const lines = [nt!, ...T.sentDetailLines({ sent: [...recent, ...named] }, 7, NOW, { also: named, zone: ZONE, referentMax: share })];
+    const summary = C.assembleCallSummary({ lessons: [], sentLines: lines, threads: [], base: "Base.", sentMax: C.CALL_SENT_MAX });
+    const ftLine = summary.split("\n").find((l) => /Founder Table" on/.test(l)) ?? "";
+    check(`7. with ${n} referent(s), a 900-char description and 3 recent finds, Founder Table keeps its city, send date, start and link`, /San Francisco/.test(ftLine) && /Oct 26/.test(ftLine) && ftLine.includes(FT_URL) && /Tuesday|November 3/.test(ftLine), ftLine.slice(0, 400));
+  }
+}
+// 8. A place that isn't a find stops the walk back; a place word picks between same-name finds.
+{
+  const ft = item("Founder Table", FT_URL, 9, { details, city: "San Francisco" });
+  const list = [item("Salon Night", "https://lu.ma/salon", 2), ft];
+  const stop = T.referredSent(list, { message: "where is that place?", coTexts: ["Want to grab dinner? Bix on Gold Street is great.", lastCo] });
+  check("8. 'where is that place?' after a text naming Bix on Gold Street resolves nothing (no walk back to Founder Table)", stop.length === 0, stop.map((x) => x.name));
+  const still = T.referredSent(list, { message: "where is that place?", coTexts: ["Sounds good.", lastCo] });
+  check("8. ...but past a text that names nothing it still finds the find", still.map((x) => x.name).join() === "Founder Table");
+  const sf = item("Founder Table", FT_URL, 9, { city: "San Francisco" }), oak = item("Founder Table", "https://lu.ma/founder-table-oak", 4, { city: "Oakland" });
+  const both = [oak, sf];
+  const pick = (m: string, co: string[] = [lastCo]) => T.referredSent(both, { message: m, coTexts: co }).map((x) => x.city).join();
+  check("8. 'the one in Oakland' with two same-name finds picks Oakland", pick("where is the one in Oakland?") === "Oakland", pick("where is the one in Oakland?"));
+  check("8. 'Founder Table in San Francisco' picks San Francisco", pick("where is the Founder Table in San Francisco?") === "San Francisco");
+  check("8. no place word: both stay candidates (nothing guessed)", T.referredSent(both, { message: "where is Founder Table?" }).length === 2);
+}
+// 9. The note lists only stored fields and says which are not.
+{
+  const bare = item("Bare", "https://lu.ma/bare", 3);
+  const n = T.answerFromRecordNote([bare]) ?? "";
+  check("9. a find whose page hasn't been read: city and date/time are listed as not stored, the link as stored", /not stored: its city, its date and time/.test(n) && /stored: the day Cue sent it, its link;/.test(n) && /give the link/.test(n), n);
+  const full = T.answerFromRecordNote([founder]) ?? "";
+  check("9. a read find lists its city and date/time as stored", /stored: the day Cue sent it, its link, its city, its date and time/.test(full) && /not stored: its street address/.test(full), full);
+  const noUrl = T.answerFromRecordNote([item("NoLink", null as any, 3)]) ?? "";
+  check("9. a find with no link doesn't promise one", /its link/.test(noUrl.split("not stored")[1] ?? "") && !/give the link/.test(noUrl), noUrl);
 }
 // 5 + 9. Source checks for what can't run without a database.
 {
@@ -168,7 +210,7 @@ const lastCo = "Hey, did you end up making it into Founder Table?";
   check("2. the referent is resolved once, before the facts are gathered (not after them)", sb.indexOf("T.resolveReferents(") > 0 && sb.indexOf("T.resolveReferents(") < sb.indexOf("await gatherReplyFacts(user.id") && (sb.match(/resolveReferents\(/g) ?? []).length === 1);
   const rg = fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
   check("2. the reply facts read the one result (turn.referents) and never resolve again", /also: opts\.turn\.referents/.test(rg) && !/referredSent\(/.test(rg) && !/addStoredOfferFacts/.test(rg));
-  check("10. the call builds with the member's zone", /sentDetailLines\(\{ sent \}, 7, new Date\(\), \{ also: named, zone, referentMax: CALL_SENT_MAX - 400 \}\)/.test(cc));
+  check("10. the call builds with the member's zone", /sentDetailLines\(\{ sent \}, 7, new Date\(\), \{ also: named, zone, referentMax: share \}\)/.test(cc));
 }
 console.log(`answer from record: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
