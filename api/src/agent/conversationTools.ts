@@ -24,7 +24,7 @@ import { findSent, type TurnContext } from "../services/turnContext.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
-import { SHARED_NOT_ASKED_GUIDANCE, sharedNotAsked } from "../harness/scope.js";
+import { isPureShare, SHARED_NOT_ASKED_GUIDANCE } from "../harness/scope.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
@@ -100,6 +100,8 @@ export type ConversationToolContext = {
   exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null;
   // The turn read's scope verdict on what they asked for (services/readTurn.ts), used by the start-task guard when the tool call carries none.
   turnScope?: import("../harness/scope.js").ScopeVerdict | null;
+  // The turn read's verdict on whether this message only shares, asks, or both (services/readTurn.ts): a pure share is never worked.
+  turnShare?: import("../harness/scope.js").MessageKind | null;
   // The reaction already put on their text this turn (routes/sendblue.ts ack),
   // so Co can leave it at that (leaveItAtReaction).
   ackSent?: string | null;
@@ -765,8 +767,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         connection: z.string().optional().describe("Only when scope is mixed: just the connection part, as a short phrase. Then start the task for that part alone."),
       }),
       execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom, scope: scopeIn, connection }) => {
-        // A personal share is heard, not worked (harness/scope.ts sharedNotAsked): no task or look-out comes out of it.
-        if (sharedNotAsked(ctx.resolvedContent)) {
+        // A pure personal share is heard, not worked (harness/scope.ts isPureShare, the turn read's verdict): no task or look-out comes out of it. A message that shares AND asks is an ask.
+        if (isPureShare(ctx.turnShare, ctx.resolvedContent)) {
           notDone("No task was started: they shared something, they didn't ask for anything.");
           return { ok: false, error: SHARED_NOT_ASKED_GUIDANCE };
         }
@@ -1589,11 +1591,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (c) return { ok: false, error: c.hold };
         // The purpose boundary (harness/scope.ts): an errand, shopping, travel, a general research project, a job-board watch, a funding
         // search is still remembered (saved below, as kind "outside"), but never searched, checked in on or promised.
-        if (sharedNotAsked(ctx.resolvedContent)) {
+        if (isPureShare(ctx.turnShare, ctx.resolvedContent)) {
           notDone("No ask was saved: they shared something, they didn't ask for anything.");
           return { ok: false, error: SHARED_NOT_ASKED_GUIDANCE };
         }
-                // The verdict is the model's: this call's own scope, else the turn read's; code only backs it with the narrow backstop. A mixed ask is
+        // The verdict is the model's: this call's own scope, else the turn read's; code only backs it with the narrow backstop. A mixed ask is
         // saved as its connection part alone, or (no clean part) not at all and Cue asks one short question.
         const verdict = scopeIn ? parseVerdict({ scope: scopeIn, connection }) : workVerdict(ctx.turnScope);
         const sc = judgeScope(what, verdict);
