@@ -35,6 +35,8 @@ export type HandBackDeps = {
   close: (outcome: string) => Promise<void>;
   // Wakes again tomorrow (the line could not be written or sent); the task stays open meanwhile.
   later?: () => Promise<void>;
+  // Whether the line already went (the ledger key scope:<id> exists), asked after a draft or a send that threw: a line that went is never "never told".
+  wasTold?: () => Promise<boolean>;
 };
 // How many wakes a line to a member who asked for the work is tried before the task closes without it (the record says so).
 export const TELL_ATTEMPTS = 4;
@@ -55,7 +57,7 @@ export async function closeOutOfScope(t: CoTask, sc: Scope, deps: HandBackDeps):
     )
     .catch(() => null);
   const r = text ? await deps.send(text).catch(() => ({ sent: false, queued: false, reason: "send failed" })) : null;
-  const went = !!r && (r.sent || r.queued);
+  const went = (!!r && (r.sent || r.queued)) || (await deps.wasTold?.().catch(() => false)) === true;
   // They asked for it: never a silent close. No line went, so it stays open and the next wake tries again; after TELL_ATTEMPTS wakes it
   // closes with the record saying they were never told (and it is never called done).
   if (!went && deps.later && (t.wakes ?? 0) < TELL_ATTEMPTS) {
@@ -97,6 +99,7 @@ export async function handBackDepsFor(t: CoTask): Promise<HandBackDeps | null> {
     close: async (outcome) => {
       await T.closeTask(t.userId, t.id, "dropped", outcome);
     },
+    wasTold: async () => (await pool.query(`SELECT 1 FROM proactive_sends WHERE user_id = $1 AND target_key = $2`, [t.userId, `scope:${t.id}`])).rows.length > 0,
     later: async () => {
       await T.scheduleTask(t.userId, t.id, 24, "Tell them plainly that this isn't something Cue does, then close it.");
     },
