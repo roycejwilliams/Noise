@@ -20,6 +20,8 @@ const W = await import("../../src/services/whatCoKnows.js");
 const Q = await import("../../src/services/researchQuality.js");
 const M = await import("../../src/harness/matchGate.js");
 const AE = await import("../../src/services/askExpiry.js");
+const NN = await import("../../src/services/networkIntroNudge.js");
+const { default: pool } = await import("../../src/db/db.js");
 
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 500)}` : ""}`); } };
@@ -86,7 +88,7 @@ const ago = (d: number) => new Date(NOW.getTime() - d * DAY);
   check("activity counts calls as well as texts", /LIKE '\[Call\]%'/.test(g) && /LIKE 'User %'/.test(g));
   check("reachability no longer reads their last message", !/EXISTS \(\s*SELECT 1 FROM co_memories m WHERE m.user_id = u.id/.test(g));
   check("a declined, introduced or both-yes pair blocks for good", /status IN \('declined', 'introduced', 'both_interested'\)/.test(M.PAIR_BLOCKED_SQL));
-  check("an unanswered or one-sided suggestion blocks only while recent", new RegExp(`GREATEST\\(created_at, a_interested_at, b_interested_at\\) > NOW\\(\\) - INTERVAL '${M.PAIR_RETRY_DAYS} days'`).test(M.PAIR_BLOCKED_SQL));
+  check("an unanswered or one-sided suggestion blocks only while recent", M.PAIR_BLOCKED_SQL.includes(`> NOW() - INTERVAL '${M.PAIR_RETRY_DAYS} days'`));
   check("the intro nudge reads the same rule", /PAIR_BLOCKED_SQL/.test(src("services/networkIntroNudge.ts")));
   check("passing on a teased intro still declines the pair even over an unanswered row", /DO UPDATE SET status = 'declined' WHERE network_introductions.status IN \('suggested'/.test(src("services/networkIntroNudge.ts")));
 }
@@ -100,6 +102,92 @@ const ago = (d: number) => new Date(NOW.getTime() - d * DAY);
   check("the 30-day lifespan is gone", !("ASK_LIFESPAN_DAYS" in AE));
   const e = src("services/askExpiry.ts").replace(/\/\/.*$/gm, "");
   check("the expiry job closes only asks whose named time passed", /if \(!named\)/.test(e) && !/memberSilence/.test(e) && !/INTERVAL '1 day'/.test(e));
+}
+
+// ---- review fixes
+// 1. quiet members rank after active ones
+{
+  const cands = [{ id: "quietB", score: 0.9 }, { id: "activeB", score: 0.8 }, { id: "activeC", score: 0.7 }];
+  const quiet = new Set(["quietB"]);
+  const ordered = M.activeFirst(cands, (c) => quiet.has(c.id));
+  check("active B is chosen over quiet B for the same slot", ordered[0].id === "activeB" && ordered[1].id === "activeC" && ordered[2].id === "quietB", ordered);
+  check("nobody quiet is dropped", ordered.length === 3);
+  check("with nobody quiet the score order stands", M.activeFirst(cands, () => false).map((c) => c.id).join() === "quietB,activeB,activeC");
+  check("both the intro nudge and the no-show pick order by it", /activeFirst\(rows/.test(src("services/networkIntroNudge.ts")) && /activeFirst\(ranked/.test(src("services/eventNoShow.ts")));
+  let asked = "";
+  (pool as any).query = async (sql: string) => { asked = sql; return { rows: [{ id: "activeB" }] }; };
+  const q = await M.quietAmong(["activeB", "quietB"]);
+  check("quietAmong: no text or call in 90 days is quiet; a call counts", q.has("quietB") && !q.has("activeB") && /LIKE '\[Call\]%'/.test(asked), [...q]);
+}
+
+// 2. the pair window runs from the last tease
+{
+  const created = new Date("2026-01-01T00:00:00Z");
+  const day = (n: number) => new Date(created.getTime() + n * 86_400_000);
+  const row = (lastSuggestedAt: Date | null) => ({ status: "suggested", createdAt: created, aInterestedAt: day(1), lastSuggestedAt });
+  check("a first tease blocks for 60 days, then not", M.pairBlocked(row(created), day(59)) && !M.pairBlocked(row(created), day(61)));
+  check("a re-tease at day 61 blocks again until day 121", M.pairBlocked(row(day(61)), day(62)) && M.pairBlocked(row(day(61)), day(120)) && !M.pairBlocked(row(day(61)), day(122)));
+  check("a repeat yes keeping its old stamp does not reopen the window", M.pairBlocked(row(day(61)), day(100)));
+  check("declined, introduced and both-yes stay closed whatever the date", ["declined", "introduced", "both_interested"].every((st) => M.pairBlocked({ ...row(null), status: st }, day(900))));
+  check("the SQL reads the same stamp", /COALESCE\(last_suggested_at, GREATEST\(/.test(M.PAIR_BLOCKED_SQL));
+  const writes: { sql: string; args: any[] }[] = [];
+  (pool as any).query = async (sql: string, args: any[]) => { writes.push({ sql: sql.replace(/\s+/g, " "), args }); return { rows: [], rowCount: 1 }; };
+  await NN.recordTease("b-user", "a-user", "reason", "ask1");
+  check("each tease stamps last_suggested_at, writes the pair canonically, and leaves a decided pair alone", writes.length === 1 && /last_suggested_at = NOW\(\) WHERE network_introductions.status IN \('suggested', 'a_interested', 'b_interested'\)/.test(writes[0].sql) && writes[0].args[0] === "a-user", writes);
+  check("the tease send hook calls it", /recordTease\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
+  check("the column is added", /ADD COLUMN IF NOT EXISTS last_suggested_at/.test(src("db/migrations.ts")));
+}
+
+// 3. an unanswered ask question stops being carried
+{
+  const GOAL = "find a running club in the Marina";
+  const mk = (askedDays: number) => ({ id: "a1", text: "find a running club", kind: "find", intent: null, dueAt: ago(40), goals: [G.goalHash(GOAL)], askedAt: ago(askedDays), hints: 0, holdUntil: null, retiredAt: null, toldAt: null, withGoal: null, note: null }) as any;
+  const run = (askedDays: number) => A.retireDecide({ asks: [mk(askedDays)], goals: [{ goalHash: G.goalHash(GOAL), goal: GOAL, state: "active", reason: "", source: "context", toldAt: null, changedAt: ago(60), recheckAskedAt: null, lastSignalAt: ago(30) } as any], goalSteps: [], now: NOW, signals: [], lastAskAt: null, lastExchangeAt: ago(1), held: [], pendingText: [] });
+  check("inside the window the question is carried (asked)", run(3)[0].action === "asked");
+  check("past the window it is not carried (none), and the ask is not retired", run(8)[0].action === "none" && run(30)[0].action === "none");
+  const steps = run(8);
+  check("the reply's asked list (steps that are asked) is empty then", steps.filter((s) => s.action === "asked").length === 0);
+}
+
+// 4. spend: an unanswered recheck drops the goal to weekly search, never off
+{
+  const GOAL = "find a running club in the Marina";
+  const h = G.goalHash(GOAL);
+  const rowAsked = (d: number | null) => ({ recheckAskedAt: d === null ? null : ago(d) });
+  const days = Array.from({ length: 14 }, (_, i) => new Date(NOW.getTime() + i * DAY));
+  const searchedDays = (d: number | null) => days.filter((t) => !G.restingToday(rowAsked(d), h, t)).length;
+  check("a goal with no unanswered recheck is searched every day", searchedDays(null) === 14);
+  check("inside the answer window it is still searched daily", days.slice(0, 4).every((t) => !G.restingToday(rowAsked(3), h, t)));
+  check("after an unanswered recheck it is searched weekly (2 of 14 days), never dropped", searchedDays(30) === 2, searchedDays(30));
+  check("a reply or new signal clears the ask and the daily search is back", searchedDays(null) === 14 && /recheck_asked_at = CASE WHEN \$4::boolean THEN NULL/.test(src("services/goalRecheck.ts")));
+  check("the plan still records it active and searches the on-turn goals", /const onTurn = resting\.length/.test(src("services/goalEdges.ts")) && /edgeSearchText\(onTurn/.test(src("services/goalEdges.ts")));
+}
+
+// 5. copy placement
+{
+  check("the pause sits in its own section, 'How often I reach out'", W.GROUP_TITLES.reach === "How often I reach out");
+  const items = W.knownItems({ profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], paces: [{ kind: "find", line: "I'm holding off on sending you finds for a bit" }] } as any);
+  const view = W.groupKnown(items);
+  const g = view.groups.find((x: any) => x.group === "reach");
+  check("it renders under that title, not under 'What I'm holding for you'", !!g && g.title === "How often I reach out" && g.lines.length === 1 && !view.groups.some((x: any) => x.group === "waiting"), view.groups.map((x: any) => x.title));
+}
+
+// 6. the ask expiry backfill runs once
+{
+  const asks = [{ id: "u1", user_id: "m1", ask_text: "anyone doing climate meetups", created_at: "2026-11-01T10:00:00Z", expires_at: null as any, checked: false }, { id: "u2", user_id: "m1", ask_text: "a founders dinner this Friday", created_at: "2026-11-01T10:00:00Z", expires_at: null as any, checked: false }];
+  let backfillReads = 0;
+  (pool as any).query = async (sql: string, args: any[] = []) => {
+    const t = sql.replace(/\s+/g, " ");
+    if (/FROM ask_checkins WHERE resolved_at IS NULL AND expires_at IS NULL AND expiry_checked_at IS NULL/.test(t)) { backfillReads++; return { rows: asks.filter((a) => !a.checked && !a.expires_at) }; }
+    if (/^UPDATE ask_checkins SET expires_at = \$2, expiry_checked_at = NOW\(\)/.test(t)) { const a = asks.find((x) => x.id === args[0])!; a.expires_at = args[1]; a.checked = true; return { rows: [], rowCount: 1 }; }
+    return { rows: [], rowCount: 0 };
+  };
+  await AE.expireStaleAsks();
+  const firstReads = asks.filter((a) => a.checked).length;
+  await AE.expireStaleAsks();
+  check("every ask read is marked checked, named or not", firstReads === 2 && asks[0].expires_at === null && asks[1].expires_at instanceof Date, asks);
+  check("the second run reads no ask again", backfillReads === 2, backfillReads);
+  check("the column is added", /ADD COLUMN IF NOT EXISTS expiry_checked_at/.test(src("db/migrations.ts")));
 }
 
 console.log(`${total - failed}/${total} passed`);
