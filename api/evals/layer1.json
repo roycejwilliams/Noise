@@ -64,6 +64,7 @@
     "evals/llmUsage/keyAlert.ts",
     "evals/deadCode/phase1a.ts",
     "evals/silence/rules.ts",
+    "evals/silence/silenceNotAFact.ts",
     "evals/corrections/rules.ts",
     "evals/member/knowledge.ts",
     "evals/member/transitions.ts",
