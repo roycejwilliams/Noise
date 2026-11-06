@@ -50,6 +50,9 @@ const metAfter = build(raw({ info: [info("e7", "Mixer", "2026-10-25T18:00:00Z")]
 check("a met-someone note with no arrival is not attendance, even after the start", metAfter.items.length === 1 && metAfter.items[0].attendance === null && metAfter.items[0].met?.quote === "met a great designer at the gym");
 const metGym = build(raw({ presence: [pres("e8", { metAt: d("2026-10-25T21:00:00Z"), metQuote: "met a great designer at the gym" })] }));
 check("a met note on an event with no start time is not attendance either", metGym.items.every((x) => x.attendance === null));
+const metDayBefore = build(raw({ info: [info("e7c", "Mixer", "2026-10-25T18:00:00Z")], presence: [pres("e7c", { metAt: d("2026-10-24T20:00:00Z"), metQuote: "met a designer at the gym" })], offers: [{ eventId: "e7c", name: "Mixer", date: "2026-10-25", at: d("2026-10-20T10:00:00Z") }] }));
+check("a met note from the day before the event does not attach to it (no arrival)", metDayBefore.items.every((x) => x.met === null && x.attendance === null) && !/gym/.test(JSON.stringify(metDayBefore)));
+check("a met note on an event with no known start and no arrival does not attach", metGym.items.every((x) => x.met === null));
 const metArrived = build(raw({ info: [info("e7b", "Mixer", "2026-10-25T18:00:00Z")], presence: [pres("e7b", { arrivedAt: d("2026-10-25T18:05:00Z"), arrivedVia: "door", metAt: d("2026-10-25T21:00:00Z"), metQuote: "met a founder" })] })).items[0];
 check("met stays beside a real arrival; attendance comes from the arrival", metArrived.met !== null && metArrived.attendance?.via === "door");
 const nogo = build(raw({ info: [info("e9", "Panel", "2026-11-20T18:00:00Z")], presence: [pres("e9", { notGoingAt: d("2026-11-02T10:00:00Z") })] })).items[0];
@@ -150,6 +153,17 @@ const WK = await import("../../src/services/whatCoKnows.js");
 const known = WK.knownItems({ profile: null, claims: [], files: [], asks: [], kit: [], snapshot: null, tastes: [], threads: [], events: [{ kind: "plan", id: "p77", name: "Pier Night", on: "2026-11-20" }, { kind: "event", id: "e77", name: "Salon", on: "2026-10-22" }] } as any);
 check("whatCoKnows lists a plan and an event with refs plan:<id> and event:<id>, removable only", known.map((i: any) => i.ref).sort().join() === "event:e77,plan:p77" && known.every((i: any) => i.canCorrect === false));
 check("neutral labels, no fixed member-facing sentence", WK.eventLabel({ kind: "plan", name: "Pier Night", on: "2026-11-20" }) === "a plan to go to Pier Night, 2026-11-20" && WK.eventLabel({ kind: "event", name: "Salon", on: "2026-10-22", via: "door" }) === "went to Salon, 2026-10-22 (door check-in)" && known.find((i: any) => i.ref === "plan:p77")!.text === "a plan to go to Pier Night, 2026-11-20");
+// the removal list offers every event the section can show
+const wsrc = src("services/whatCoKnows.ts");
+const evSql = wsrc.slice(wsrc.indexOf("const eventRows = await q("), wsrc.indexOf("const freeRows"));
+check("the removal list reads arrivals, a no, met-only, no-show outcomes, outcome-only and sent offers", /FROM event_presence/.test(evSql) && /not_going_at IS NOT NULL/.test(evSql) && /met_someone_at IS NOT NULL/.test(evSql) && /noshow_outcome IS NOT NULL/.test(evSql) && /FROM suggestion_outcomes WHERE user_id = \$1 AND kind = 'event'/.test(evSql) && /type = 'event_offer' AND status = 'sent'/.test(evSql) && /FROM planned_event_mentions/.test(evSql));
+check("every source in that list is bound to the member", (evSql.match(/user_id = \$1/g) ?? []).length === 4 && !/user_id = '/.test(evSql));
+const mixed = WK.knownItems({ profile: null, claims: [], files: [], asks: [], kit: [], snapshot: null, tastes: [], threads: [], events: [
+  { kind: "event", id: "k1", name: "Door Night", on: "2026-10-22", via: "door", attended: true },
+  { kind: "event", id: "k2", name: "Said No Night", on: null, attended: false },
+  { kind: "event", id: "k3", name: "Outcome Only Night", on: null, attended: false },
+] } as any);
+check("each of them is offered as a removable event ref, and only an attended one says went", mixed.map((i: any) => i.ref).join() === "event:k1,event:k2,event:k3" && mixed.every((i: any) => i.canCorrect === false) && mixed[0].text.startsWith("went to Door Night") && !/went to/.test(mixed[1].text + mixed[2].text));
 const calls: { sql: string; args: unknown[] }[] = [];
 const fdb = { query: async (sql: string, args: unknown[]) => (calls.push({ sql, args }), { rows: [], rowCount: 1 }) };
 const appliedPlan = await WK.applyOne(fdb as any, "u1", {} as any, known.find((i: any) => i.ref === "plan:p77")!, "remove", null, "forget that");
