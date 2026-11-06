@@ -105,6 +105,8 @@ export function nameSpanFinder(linkedNames: string[]): (s: string) => { at: numb
   };
 }
 
+// What historyLine writes (whole, or its first part when split on "; "): never rewritten again.
+const OWN_HISTORY = /^(?:Cue introduced them to [^,;]+, another member\.?|Cue suggested [^,;]+, another member, as someone to meet\.?|[^,;]+, another member, came up here(?:; their details aren't kept for this conversation\.?)?)$/;
 // Pure: what one history sentence about a member says, from the sentence that named them.
 export function historyLine(sentence: string, name: string): string {
   const kind = historyKind(sentence);
@@ -158,6 +160,8 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
       const strip = (s: string) => {
         const name = find(s);
         if (!name) return s;
+        // Its own output is left alone, so a second pass is a no-op (a section stripped early to be measured, then again at the end).
+        if (OWN_HISTORY.test(s.trim())) return s;
         const h = historyLine(s, name);
         if (seen.has(h)) return "";
         seen.add(h);
