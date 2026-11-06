@@ -81,7 +81,8 @@ const writes = () => sql.filter((q) => /^(INSERT|UPDATE|DELETE)/i.test(q.text));
 {
   const said = "no thanks, I'm not interested in that anymore";
   check("a task closed on their word is released, not missed", L.outcomeOf("dropped", `They said so: "${said}"`, [], { theirWord: said, sentAnything: true }) === "released");
-  check("a close with no word of theirs and no stated decline is not released", L.outcomeOf("dropped", "Member opted out or archived.", [], {}) !== "released" || /opted/i.test("Member opted out or archived."));
+  check("a close with no word of theirs is not released", L.outcomeOf("dropped", "Cue stopped working on it.", [], {}) === "missed");
+  check("an opt-out close is released (their act, not silence)", L.outcomeOf("dropped", "Member opted out or archived.", [], {}) === "released");
   sql.length = 0;
   rowSource = "promise";
   await CT.closeTask("u-jordan", 7, "dropped", `They said so: "${said}"`, { theirWord: said });
@@ -100,10 +101,11 @@ const writes = () => sql.filter((q) => /^(INSERT|UPDATE|DELETE)/i.test(q.text));
     kind: "work", source: "ask", followup: { found: [{ name: "Clay Room Beginner Wheel", url: "https://example.com/clay" }] }, ...over,
   });
   const out = CP.renderTaskProgress([task()], "America/Los_Angeles")!;
-  check("an open task shows its goal, last step, what was found, what was sent and the next look", /pottery classes/.test(out) && /Read three studio calendars/.test(out) && /Clay Room Beginner Wheel/.test(out) && /Sent them 1 text/.test(out) && /Next look around/.test(out) && /Steps 1 of 2/.test(out), out);
+  check("an open task shows its goal, last step, what was found, what was sent and the next look", /pottery classes/.test(out) && /Read three studio calendars/.test(out) && /Sent them 1 text/.test(out) && /Next look around/.test(out) && /Steps 1 of 2/.test(out), out);
+  check("results the task merely saw are never shown as found", !/Clay Room|Found so far/.test(out), out);
   check("the section tells the call to answer from it and never imply a result", /answer from these lines/.test(out) && /never suggest a result you don't have/.test(out));
   const bare = CP.renderTaskProgress([task({ notes: [], steps: [], followup: {}, textsSent: 0, lastTextedAt: null, nextCheckAt: null })], "America/Los_Angeles")!;
-  check("a task with nothing yet says so and names no result", /Nothing found yet/.test(bare) && /Nothing sent them yet/.test(bare) && /No progress noted yet/.test(bare) && !/Found so far/.test(bare), bare);
+  check("a task with nothing yet says so and names no result", /Nothing sent them yet/.test(bare) && /No progress noted yet/.test(bare) && !/found/i.test(bare.split("\n").slice(1).join(" ")), bare);
   check("a closed task is never shown", CP.renderTaskProgress([task({ status: "done" }), task({ status: "expired" }), task({ status: "dropped" })], null) === null);
   check("a follow-up or brief is not 'working on'", CP.renderTaskProgress([task({ kind: "followup" }), task({ kind: "research_brief" })], null) === null);
   check("a look-out Cue started itself is not shown; one they asked for is", CP.renderTaskProgress([task({ source: "lookout", lookoutOrigin: "co" })], null) === null && !!CP.renderTaskProgress([task({ source: "lookout", lookoutOrigin: "member" })], null));

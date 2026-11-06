@@ -1,4 +1,5 @@
-// Restraint with memory (Royce, 2026-10-08: "silence is data"). Every proactive message Co starts is tracked by what KIND of message it
+// Restraint with memory (Royce, 2026-10-08). Unanswered sends pace contact: they make Cue send less of a kind, and are never read as
+// taste, interest or whether something helped. Every proactive message Co starts is tracked by what KIND of message it
 // is (a find, an intro follow-up, a deadline, a goal nudge, something they said they'd do). Two of the same kind in a row that the
 // member let pass, with no reply and no reaction, means Co stops sending that kind to them and records the learned preference
 // (member_kind_preferences, plus a decision row). A member answering one (a reply in its window, a positive tapback on it, or a
