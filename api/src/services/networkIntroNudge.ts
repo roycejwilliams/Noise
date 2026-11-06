@@ -10,7 +10,7 @@ import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
-import { gateNetworkCandidate, PAIR_BLOCKED_SQL } from "../harness/matchGate.js";
+import { activeFirst, gateNetworkCandidate, PAIR_BLOCKED_SQL, quietAmong } from "../harness/matchGate.js";
 import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from "../harness/introConsent.js";
 import { shareableAsks } from "./matching.js";
 import { MODELS } from "../models.js";
@@ -106,6 +106,19 @@ async function alreadySuggested(personId: string, candidateId: string): Promise<
   return rows.length > 0;
 }
 
+// A tease went out: the pair's unanswered-suggestion window runs from now (matchGate.ts PAIR_BLOCKED_SQL). A pair with an answer on
+// file keeps its status; only the stamp moves.
+export async function recordTease(userId: string, candidateId: string, matchReason: string, askId: string | null): Promise<void> {
+  const [a, b] = canonicalPair(userId, candidateId);
+  await pool
+    .query(
+      `INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id, last_suggested_at) VALUES ($1, $2, 'suggested', $3, $4, NOW())
+       ON CONFLICT (person_a_id, person_b_id) DO UPDATE SET last_suggested_at = NOW() WHERE network_introductions.status IN ('suggested', 'a_interested', 'b_interested')`,
+      [a, b, matchReason, askId],
+    )
+    .catch((err: any) => console.error("recordTease failed (non-fatal):", err?.message ?? err));
+}
+
 async function dropStaleFront(userId: string, items: BacklogItem[]): Promise<BacklogItem[]> {
   let rest = items;
   while (rest.length && (await alreadySuggested(userId, rest[0].candidate.candidate_id))) {
@@ -132,7 +145,9 @@ async function findFreshCandidates(userId: string, askId: string): Promise<Backl
     [userId, askId, NETWORK_NUDGE_MIN_SCORE],
   );
   const fresh: BacklogItem[] = [];
-  for (const row of rows) {
+  // Quiet members after active ones (the same slot goes to the active one first); nobody is left out.
+  const quiet = await quietAmong(rows.map((r: any) => String(r.candidate_id)));
+  for (const row of activeFirst(rows, (r: any) => quiet.has(String(r.candidate_id)))) {
     if (await alreadySuggested(userId, row.candidate_id)) continue;
     // Layer 5 match gate: shareable reason is really from their stated ask,
     // pair not already suggested/declined, both people active.
