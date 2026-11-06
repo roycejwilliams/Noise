@@ -69,6 +69,7 @@
     "evals/member/knowledge.ts",
     "evals/member/transitions.ts",
     "evals/member/lessons.ts",
+    "evals/member/events.ts",
     "evals/member/doneGoalCorrections.ts",
     "evals/presence/rules.ts",
     "evals/outsideEvents/rules.ts",
