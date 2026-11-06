@@ -28,14 +28,15 @@ async function reset(): Promise<void> {
     const taken = (await client.query(`SELECT email, username FROM users WHERE email LIKE 'jordan.test%@example.test' OR username LIKE 'jordan_test_%'`)).rows;
     const slot = freeTestSlot(phones, taken.map((r: any) => r.email), taken.map((r: any) => r.username));
     if (!slot) throw new Error("all 100 test numbers are used; clear archived test members first");
+    const { tag, phone } = slot;
     const { rows } = await client.query(
       `INSERT INTO users (first_name, last_name, email, phone_number, username, contact_verified, identity_captured, intake_asked, invite_verified, invite_asked)
        VALUES ('Jordan', 'Test', $1, $2, $3, true, true, true, true, true) RETURNING id`,
-      [liveTestEmail(slot.tag), slot.phone, `jordan_test_${slot.tag}`],
+      [liveTestEmail(tag), phone, `jordan_test_${tag}`],
     );
     await client.query(`INSERT INTO co_profiles (user_id, city, updated_at) VALUES ($1, 'San Francisco', NOW()) ON CONFLICT (user_id) DO UPDATE SET city = EXCLUDED.city`, [rows[0].id]);
     await client.query("COMMIT");
-    console.log(JSON.stringify({ archived: archived.rows.map((r: any) => r.phone_number), created: { id: rows[0].id, phone: slot.phone, name: "Jordan Test", city: "San Francisco" } }));
+    console.log(JSON.stringify({ archived: archived.rows.map((r: any) => r.phone_number), created: { id: rows[0].id, phone, name: "Jordan Test", city: "San Francisco" } }));
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;
