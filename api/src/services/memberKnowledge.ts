@@ -56,7 +56,7 @@ import { goalHash, restates } from "./goalEdges.js";
 import { RESTRAINT, type ProactiveKind } from "./kindRestraint.js";
 import { REASONABLE_HOUR_END, REASONABLE_HOUR_START } from "./localHours.js";
 import type { Limits } from "./memberLimits.js";
-import { memberNamesStrict, safeMemory } from "./memberSafeMemories.js";
+import { memberNamesStrict, nameFinder, safeMemory } from "./memberSafeMemories.js";
 import { localDay, localStamp, memberZone, sendableAt, wordsZone } from "./memberTime.js";
 import { DELIVERY_SHAPE_RULE } from "./speakable.js";
 import { eventsOf, guardEvents, loadEvents, type EventItem, type RawEvents } from "./knowledge/events.js";
@@ -911,7 +911,8 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     // Fails closed, like transitions: without the guards read nothing is returned.
     if (guardsUnread || !d.forgotten || !eventsRaw) k.events = [];
     else {
-      const built = eventsOf(guardEvents(eventsRaw, { g, gone: (ref) => removed.some((r) => r.ref === ref) }), { now });
+      const find = nameFinder(names);
+      const built = eventsOf(guardEvents(eventsRaw, { g, gone: (ref) => removed.some((r) => r.ref === ref), named: (t) => find(t) !== null }), { now });
       k.events = built.items;
       if (built.omitted) k.eventsOmitted = built.omitted;
     }

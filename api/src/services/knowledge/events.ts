@@ -96,13 +96,19 @@ export async function loadEvents(userId: string, q: Q): Promise<RawEvents> {
 
 // ---------------------------------------------------------------- the guard (pure; the live guards come from memberKnowledge)
 
-export type EventGuards = { g: (text: string) => string | null; gone: (ref: string) => boolean };
+// named: true when the text names another member (memberKnowledge hands in the linked-name finder). The shared strip keeps a name and
+// drops its details; this section must carry no other member's name at all, so words that name one are not carried (the fact that they
+// met someone stays), and an event whose own name names one is left out.
+export type EventGuards = { g: (text: string) => string | null; gone: (ref: string) => boolean; named?: (text: string) => boolean };
 
 // Drops what they removed and cuts what they forgot, on the raw rows, before anything is built. A removed event goes whole: by its ref,
 // or because its name says the removed thing.
 export function guardEvents(raw: RawEvents, G: EventGuards): RawEvents {
-  const nameOk = (n: string) => !!n.trim() && G.g(n) === n;
-  const words = (t: string | null) => (t ? G.g(t) : null);
+  const nameOk = (n: string) => !!n.trim() && G.g(n) === n && !G.named?.(n);
+  const words = (t: string | null) => {
+    const w = t ? G.g(t) : null;
+    return w && !G.named?.(w) ? w : null;
+  };
   const goneId = (id: string) => G.gone(`event:${id}`);
   const names = new Map(raw.info.map((i) => [i.eventId, i.name]));
   const eventOk = (id: string) => !goneId(id) && (!names.get(id) || nameOk(names.get(id)!));
