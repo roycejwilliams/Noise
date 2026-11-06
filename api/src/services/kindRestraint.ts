@@ -125,7 +125,7 @@ export function quotes(send: Pick<KindSend, "message">, quoted: string): boolean
 // Sends of one kind this close together went out as one text.
 export const SAME_TEXT_MINUTES = 10;
 
-type Outcome = { sendId: string; kind: ProactiveKind; at: Date; answered: boolean };
+type Outcome = { sendId: string; kind: ProactiveKind; at: Date; answered: boolean; sentAt: Date };
 
 // Pure: what happened to each send, then the streak per kind. `stored` keeps a suppression older than the history alive until
 // they answer something of that kind after it.
@@ -159,21 +159,23 @@ export function evaluateKindRestraint(o: { sends: KindSend[]; inbound: InboundLi
     const own = lines.filter((l) => quotedTo.get(l) === s.id && l.at.getTime() > s.sentAt.getTime());
     const firstOwn = own[0];
     if (firstOwn) {
-      outcomes.push({ sendId: s.id, kind: s.kind, at: firstOwn.at, answered: firstOwn.signal !== "negative" });
+      outcomes.push({ sendId: s.id, kind: s.kind, sentAt: s.sentAt, at: firstOwn.at, answered: firstOwn.signal !== "negative" });
       continue;
     }
     // Anything else they sent in the window (not a reaction to a different send of Co's).
     const inWindow = lines.find((l) => l.at.getTime() > s.sentAt.getTime() && l.at.getTime() <= end && !quotedTo.has(l));
     if (inWindow) {
-      outcomes.push({ sendId: s.id, kind: s.kind, at: inWindow.at, answered: inWindow.signal !== "negative" });
+      outcomes.push({ sendId: s.id, kind: s.kind, sentAt: s.sentAt, at: inWindow.at, answered: inWindow.signal !== "negative" });
       continue;
     }
-    if (end <= o.now.getTime() && !s.neutralSilence) outcomes.push({ sendId: s.id, kind: s.kind, at: new Date(end), answered: false });
+    if (end <= o.now.getTime() && !s.neutralSilence) outcomes.push({ sendId: s.id, kind: s.kind, sentAt: s.sentAt, at: new Date(end), answered: false });
     // else: still waiting, neither.
   }
   const out = new Map<ProactiveKind, KindVerdict>();
   for (const kind of PROACTIVE_KINDS) {
-    const evs = outcomes.filter((x) => x.kind === kind).sort((a, b) => a.at.getTime() - b.at.getTime());
+    // A pause they removed (what-Cue-knows, removePace) is lifted: a send before that, let pass, no longer counts toward a new one.
+    const liftedAt = o.stored?.find((p) => p.kind === kind)?.enabledAt ?? null;
+    const evs = outcomes.filter((x) => x.kind === kind && !(!x.answered && liftedAt && x.sentAt.getTime() <= liftedAt.getTime())).sort((a, b) => a.at.getTime() - b.at.getTime());
     let streak: Outcome[] = [];
     let suppressedAt: Date | null = null;
     let suppressedBy: string[] = [];
@@ -324,4 +326,31 @@ export async function runKindRestraintSync(now = new Date()): Promise<number> {
     }
   }
   return changed;
+}
+
+// ---------------------------------------------------------------- the member's own view of a pause (services/whatCoKnows.ts)
+
+// A paused kind is pacing, never taste (Royce, 2026-11-04/05): said in what-Cue-knows as "I'm holding off on X for a bit", and removable.
+export const PACE_LABELS: Record<ProactiveKind, string> = {
+  find: "sending you finds",
+  intro_followup: "following up on introductions",
+  deadline: "deadline reminders",
+  goal_nudge: "check-ins about your goals",
+  member_commitment: "reminders of what you said you'd do",
+};
+
+// The kinds paused for this member now, from the stored preference.
+export async function pausedKinds(db: Queryable, userId: string): Promise<{ kind: ProactiveKind; since: Date | null }[]> {
+  return (await loadStoredPrefs(db, userId)).filter((p) => p.state === "suppressed").map((p) => ({ kind: p.kind, since: p.suppressedAt }));
+}
+
+// Their removal of a pause: the kind goes back on now, and what was let pass before this moment no longer counts (evaluateKindRestraint
+// reads enabled_at as the lift). Returns whether a pause was lifted.
+export async function removePace(db: Queryable, userId: string, kind: string): Promise<boolean> {
+  if (!(PROACTIVE_KINDS as readonly string[]).includes(kind)) return false;
+  const r: any = await db.query(
+    `UPDATE member_kind_preferences SET state = 'enabled', enabled_at = NOW(), reason = 'the member removed the pause', updated_at = NOW() WHERE user_id = $1 AND kind = $2 AND state = 'suppressed' RETURNING kind`,
+    [userId, kind],
+  );
+  return (r.rowCount ?? r.rows?.length ?? 0) > 0;
 }

@@ -82,7 +82,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -196,12 +196,14 @@ export type RawKnown = {
   // What the pick is holding for them (harness/waiting.ts, notification grouping item 9), best first, unexpired, as labels that name
   // nothing but the item itself. Removing one means it is never sent.
   waiting?: { id: string; label: string; held: boolean }[];
+  // Kinds of message Cue is pacing for them (services/kindRestraint.ts): their own setting, shown and removable. Removing one lifts the pause.
+  paces?: { kind: string; line: string }[];
 };
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
 
 // Pure: every item from the raw reads. The member's own name, phone and email (account details) aren't listed: they're the account,
-// not something Co learned. Co's lessons, restraint, feelings and the action record never are (team-internal).
+// not something Co learned. Co's lessons, feelings and the action record never are (team-internal); a paused kind is shown, as pacing, removable (kindRestraint.ts).
 export function knownItems(r: RawKnown): KnownItem[] {
   const out: KnownItem[] = [];
   const add = (ref: string, source: KnownSource, group: KnownGroup, text: string | null | undefined, theirWords: string | null = null, canCorrect = true) => {
@@ -262,6 +264,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   for (const f of r.photos ?? []) add(`photo:${f.n}`, "photo", "files", `photo ${f.n}, sent ${f.sentOn}`, null, false);
+  for (const x of r.paces ?? []) add(`pace:${x.kind}`, "pace", "waiting", x.line, null, false);
   for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.held ? `${w.label} (held for now)` : w.label, null, false);
   for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
   for (const x of r.pairOutcomes ?? []) {
@@ -629,6 +632,8 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
       const items = await W.waitingOrNull(userId);
       return W.visibleHeld(items ?? []).map((i) => ({ id: i.id, label: i.label, held: i.held.length > 0 }));
     }).catch(() => [] as { id: string; label: string; held: boolean }[]),
+    // Read in the same view: a read that fails fails it (a pause is never shown as lifted on a guess).
+    paces: await import("./kindRestraint.js").then(async (K) => (await K.pausedKinds(db as any, userId)).map((x) => ({ kind: x.kind, line: `I'm holding off on ${K.PACE_LABELS[x.kind]} for a bit` }))),
     alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
@@ -858,6 +863,12 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       if (!(await disconnectGrant(a, userId))) throw new NotApplied();
       return { ref: item.ref, source: "grant", was, now: null };
     }
+    case "pace": {
+      // A pause on a kind of message, lifted: the kind goes back on, and what was let pass before no longer counts.
+      const { removePace } = await import("./kindRestraint.js");
+      if (!(await removePace(db, userId, a))) throw new NotApplied();
+      return { ref: item.ref, source: "pace", was, now: null };
+    }
     case "pref": {
       // A rule they set: withdrawn (retired with its state, so nothing rebuilds it). A new one is said in conversation.
       const { withdrawPreference } = await import("./memberPreferences.js");
@@ -939,6 +950,7 @@ export function fieldFor(ref: string): string {
   if (kind === "place") return "where Cue looks for one of their wants";
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
+  if (kind === "pace") return "a kind of message Cue was holding off on";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
   return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;
@@ -1137,7 +1149,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting", "pace"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";
