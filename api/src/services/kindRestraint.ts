@@ -72,7 +72,10 @@ export function kindOf(type: string, payload: unknown = null): ProactiveKind | n
   }
 }
 
-export type KindSend = { id: string; kind: ProactiveKind; sentAt: Date; message: string | null };
+// neutralSilence: a text from the task engine (a look-out's find). An answer to it still counts as an answer, but no answer is not a
+// let-pass: silence on a task's text never counts toward a kind being turned off or written as a learned preference (Royce, 2026-11-06:
+// silence is not rejection). The unanswered pause and the task's own spacing still send less.
+export type KindSend = { id: string; kind: ProactiveKind; sentAt: Date; message: string | null; neutralSilence?: boolean };
 export type InboundLine = { at: Date; text: string };
 export type StoredPref = { kind: ProactiveKind; state: "suppressed" | "enabled"; suppressedAt: Date | null; enabledAt: Date | null; evidence: string[] };
 export type KindVerdict = {
@@ -133,6 +136,7 @@ export function evaluateKindRestraint(o: { sends: KindSend[]; inbound: InboundLi
     const prev = [...sends].reverse().find((x) => x.kind === s.kind);
     if (prev && s.sentAt.getTime() - prev.sentAt.getTime() <= SAME_TEXT_MINUTES * 60_000) {
       prev.message = [prev.message, s.message].filter(Boolean).join("\n\n") || null;
+      prev.neutralSilence = !!prev.neutralSilence && !!s.neutralSilence;
       continue;
     }
     sends.push({ ...s });
@@ -163,7 +167,7 @@ export function evaluateKindRestraint(o: { sends: KindSend[]; inbound: InboundLi
       outcomes.push({ sendId: s.id, kind: s.kind, at: inWindow.at, answered: inWindow.signal !== "negative" });
       continue;
     }
-    if (end <= o.now.getTime()) outcomes.push({ sendId: s.id, kind: s.kind, at: new Date(end), answered: false });
+    if (end <= o.now.getTime() && !s.neutralSilence) outcomes.push({ sendId: s.id, kind: s.kind, at: new Date(end), answered: false });
     // else: still waiting, neither.
   }
   const out = new Map<ProactiveKind, KindVerdict>();
@@ -197,7 +201,7 @@ export function evaluateKindRestraint(o: { sends: KindSend[]; inbound: InboundLi
     if (offAt) {
       const OFF = RESTRAINT.offDays * 86_400_000;
       // A trial already went and is still waiting for its answer: no second one.
-      const trialOut = sends.some((x) => x.kind === kind && x.sentAt.getTime() > offAt.getTime() && !outcomes.some((oc) => oc.sendId === x.id));
+      const trialOut = sends.some((x) => x.kind === kind && !x.neutralSilence && x.sentAt.getTime() > offAt.getTime() && !outcomes.some((oc) => oc.sendId === x.id));
       const up = o.now.getTime() - offAt.getTime() >= OFF && !trialOut;
       const why = suppressedAt ? `they let ${RESTRAINT.ignoredToSuppress} ${kind} texts in a row pass with no reply or reaction` : `turned off earlier (${RESTRAINT.ignoredToSuppress} ${kind} texts let pass) and nothing of that kind answered since`;
       out.set(kind, up
@@ -262,7 +266,7 @@ export async function loadKindHistory(db: Queryable, userId: string): Promise<{ 
   const sends: KindSend[] = [];
   for (const r of rows) {
     const kind = ((PROACTIVE_KINDS as readonly string[]).includes(r.kind) ? r.kind : kindOf(String(r.type), r.payload)) as ProactiveKind | null;
-    if (kind) sends.push({ id: String(r.id), kind, sentAt: new Date(r.sent_at), message: r.message ?? null });
+    if (kind) sends.push({ id: String(r.id), kind, sentAt: new Date(r.sent_at), message: r.message ?? null, ...(String(r.type) === "task_update" ? { neutralSilence: true } : {}) });
   }
   if (!sends.length) return { sends, inbound: [] };
   const { rows: lines } = await db.query(

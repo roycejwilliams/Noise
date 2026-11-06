@@ -21,7 +21,7 @@ import { doorValidUntil, earliestDated } from "../harness/door.js";
 import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { capToFinal, isDoorLook, setTaskScope, unspendWake } from "./coTasks.js";
-import { closedOnTheirWord, closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
+import { closedOnTheirWord, closeRanOut, closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
 import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type MemberRules, type Restraint } from "./memberKnowledge.js";
 import { exchangeText } from "./followUps.js";
@@ -1016,7 +1016,7 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
   const userId = task.userId;
   const clock = opts.now ?? (() => new Date());
   if (isExhausted(task, clock())) {
-    await closeTask(userId, task.id, "expired", "Ran out of wake-ups or days.");
+    await closeRanOut(userId, task.id);
     await recordDecision({ layer: 7, decision: "task.wake", userId, outcome: "skip", action: "expired", proposal: { taskId: task.id } }).catch(() => {});
     return { action: "expired" };
   }
