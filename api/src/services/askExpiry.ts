@@ -25,23 +25,19 @@ export async function askExpiresAtForUser(userId: string, askText: string, saidA
 // so an ask for a day that is over is never searched. An ask with no named time is never closed here, and an old 30-day clock on one
 // is taken off (the clock was never evidence).
 export async function expireStaleAsks(): Promise<{ backfilled: number; expired: number }> {
-  // One pass over the asks with no limit yet, a page at a time in id order, so a row with no named time (it stays null) is read once.
+  // Once per ask: each row read here is marked (expiry_checked_at), whether or not it names a time, so a row with no named time (it
+  // stays null) is never read again.
   let backfilled = 0;
-  let after = "00000000-0000-0000-0000-000000000000";
   for (;;) {
     const { rows: missing } = await pool.query(
-      `SELECT id, user_id, ask_text, created_at FROM ask_checkins WHERE resolved_at IS NULL AND expires_at IS NULL AND id::text > $1 ORDER BY id::text LIMIT 500`,
-      [after],
+      `SELECT id, user_id, ask_text, created_at FROM ask_checkins WHERE resolved_at IS NULL AND expires_at IS NULL AND expiry_checked_at IS NULL LIMIT 500`,
     );
     for (const row of missing) {
       const expiresAt = await askExpiresAtForUser(row.user_id, row.ask_text, new Date(row.created_at));
-      if (expiresAt) {
-        await pool.query(`UPDATE ask_checkins SET expires_at = $2 WHERE id = $1`, [row.id, expiresAt]);
-        backfilled++;
-      }
+      await pool.query(`UPDATE ask_checkins SET expires_at = $2, expiry_checked_at = NOW() WHERE id = $1`, [row.id, expiresAt]);
+      if (expiresAt) backfilled++;
     }
     if (missing.length < 500) break;
-    after = String(missing[missing.length - 1].id);
   }
   // Each one leaves the working set with its fact in their record first (services/workingSet.ts): the date it was tied to passed.
   const { rows: due } = await pool.query(

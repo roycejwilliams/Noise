@@ -83,7 +83,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 // ---------------------------------------------------------------- types
 
 export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace";
-export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting";
+export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting" | "reach";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
   work: "Your work",
@@ -93,8 +93,9 @@ export const GROUP_TITLES: Record<KnownGroup, string> = {
   likes: "What you like and don't",
   files: "Files you sent",
   waiting: "What I'm holding for you",
+  reach: "How often I reach out",
 };
-const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "files"];
+const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "reach", "files"];
 
 // One thing Co holds, from one source row. ref is stable across turns (an id, a field, or a hash of the text).
 export type KnownItem = { ref: string; source: KnownSource; group: KnownGroup; text: string; theirWords: string | null; canCorrect: boolean };
@@ -264,7 +265,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   for (const f of r.photos ?? []) add(`photo:${f.n}`, "photo", "files", `photo ${f.n}, sent ${f.sentOn}`, null, false);
-  for (const x of r.paces ?? []) add(`pace:${x.kind}`, "pace", "waiting", x.line, null, false);
+  for (const x of r.paces ?? []) add(`pace:${x.kind}`, "pace", "reach", x.line, null, false);
   for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.held ? `${w.label} (held for now)` : w.label, null, false);
   for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
   for (const x of r.pairOutcomes ?? []) {
@@ -297,7 +298,7 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
     const lines: KnownLine[] = [];
     for (const i of items.filter((x) => x.group === g)) {
       const plain = i.text.replace(/^(my read|looking out for|not for you): /, "");
-      const same = g !== "files" && g !== "waiting" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
+      const same = g !== "files" && g !== "waiting" && g !== "reach" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
       if (same) {
         same.refs.push(i.ref);
         same.theirWords ??= i.theirWords;
