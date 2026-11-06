@@ -181,6 +181,13 @@ export function registerJobs(io: Server) {
       .then((t) => { const n = Object.values(t).reduce((a, b) => a + b, 0); if (n) console.log(`exchange count: ${n} miss(es)`); })
       .catch((err: any) => console.error("exchange count failed:", err?.name ?? "Error"));
   }, { timezone: "America/Los_Angeles" });
+  // Member assets unused for 90 days lose their bytes (services/memberAssets.ts).
+  cron.schedule("25 4 * * *", () => {
+    import("../services/memberAssets.js")
+      .then((m) => m.wipeUnusedAssets())
+      .then((n) => { if (n) console.log(`member assets: wiped ${n} unused`); })
+      .catch((err: any) => console.error("member assets: wipe failed:", err?.message ?? err));
+  });
   // The hourly auto-intake call job is PARKED (Royce, 2026-10-17): runAutoIntakeCalls, above registerJobs, says why and how to turn
   // it back on. Scheduled calls, check-in cadence calls and calls a member asks for are untouched.
 

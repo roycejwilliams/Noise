@@ -1,15 +1,18 @@
-// Member assets (Royce, 2026-10-11; photos kept until deleted, 2026-11-06): the pictures a member texts Cue are kept here as "their
-// image #N" (routes/sendblue.ts), already in a format a browser shows (HEIC is converted to JPEG by services/imageRead.ts
-// readableImage). Files (PDF, PowerPoint, Word) stay in memberFiles.ts. The rules:
-//   - kept until the member deletes them, like their texts: there is no automatic wipe (agent/conversationTools.ts deleteImages,
-//     and the removal on what Cue knows, services/whatCoKnows.ts, both go through deleteAssets);
-//   - one member's only: every read and delete is scoped to the owner;
-//   - never served on their own: there is no route that serves a photo, and the id (18 random bytes) is never listed.
+// Member assets (Royce, 2026-10-11). What is true now (2026-11-06):
+//   - texted photos are NO LONGER stored: since 27d627d0 (the maker layer removal) nothing calls keepAsset, which stays exported but
+//     unused (Royce's choice: descriptions only, no image storage without a current use; removing it is a follow-up);
+//   - only photos stored before then remain here, as "their image #N", and each is wiped (bytes gone) after 90 days unused unless a
+//     live page or deck places it (wipeUnusedAssets, nightly from jobs/index.ts);
+//   - Cue still reads each new photo and keeps only its description in the conversation record (routes/sendblue.ts describeImage ->
+//     text_exchange), never the image;
+//   - a member can delete their own photos any time (deleteAssets: agent/conversationTools.ts deleteImages, and the removal on what
+//     Cue knows, services/whatCoKnows.ts); every read and delete is scoped to the owner, and no route serves a photo on its own.
+// Files (PDF, PowerPoint, Word) stay in memberFiles.ts.
 import { createHash, randomBytes } from "crypto";
 import pool from "../db/db.js";
 
 export const ASSET_ID = /^[A-Za-z0-9_-]{24}$/;
-export const ASSET_LIMITS = { bytes: 6 * 1024 * 1024, list: 20 } as const;
+export const ASSET_LIMITS = { bytes: 6 * 1024 * 1024, list: 20, unusedDays: 90 } as const;
 const TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 export type AssetDb = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
@@ -78,12 +81,29 @@ export async function ownedAssetIds(userId: string, ids: string[]): Promise<Set<
   return new Set(rows.map((r) => String(r.id)));
 }
 
-// The bytes, when the asset is this owner's.
+// Placed in an artifact just now: counts as use, so it isn't wiped while it's in use.
+export async function touchAssets(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  await db.query(`UPDATE member_assets SET last_used_at = NOW() WHERE id = ANY($1::text[])`, [ids]);
+}
+
+// For the artifact route only: the bytes, when the asset is this owner's.
 export async function loadAssetFor(ownerUserId: string, id: string): Promise<{ data: Buffer; mediaType: string } | null> {
   if (!ASSET_ID.test(id)) return null;
   const { rows } = await db.query(`SELECT bytes, media_type FROM member_assets WHERE id = $1 AND owner_user_id = $2 AND wiped_at IS NULL AND bytes IS NOT NULL`, [id, ownerUserId]);
   const r = rows[0];
   return r && TYPES.has(String(r.media_type)) ? { data: Buffer.from(r.bytes), mediaType: String(r.media_type) } : null;
+}
+
+// Never an image a live page or deck of theirs places (review of the decks PR: a kept deck's logo would have gone at 90 days).
+export async function wipeUnusedAssets(): Promise<number> {
+  const { rowCount } = await db.query(
+    `UPDATE member_assets a SET bytes = NULL, wiped_at = NOW()
+     WHERE a.wiped_at IS NULL AND a.last_used_at < NOW() - make_interval(days => $1)
+       AND NOT EXISTS (SELECT 1 FROM co_pages p WHERE p.owner_user_id = a.owner_user_id AND p.taken_down_at IS NULL AND p.expires_at > NOW() AND p.data::text LIKE '%' || a.id || '%')`,
+    [ASSET_LIMITS.unusedDays],
+  );
+  return rowCount ?? 0;
 }
 
 // "Delete the photos I sent you": their own images, the bytes gone now (the number stays retired). numbers null = all of them. A
