@@ -33,7 +33,7 @@ export type Found = { name: string; url: string; facts: string; match: TierMatch
 // The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, saying what it's looking for
 // in their terms, never a status message. Never praise or a recap either (2026-11-06 live test: "founder dinners before an investor
 // meeting, good instinct").
-export const WHILE_LOOKING = "Only on your first search, if it'll take a moment: a few plain words to them saying what you're looking for, in the terms of what they asked (its subject, their timing). Only that: no compliment or praise of the ask, no recap of what they told you, no word about tools, searches or how it works. Never a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
+export const WHILE_LOOKING = "Only on your first search, if it'll take a moment: a few plain words naming the thing itself, in the terms of what they asked (\"founder dinners in SF this week\"), with no verb or status phrasing in front (no \"looking at\", \"searching for\"). Only that: no compliment or praise of the ask, no recap of what they told you, no word about tools, searches or how it works. Never a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
 // Tests only (golden cases): a fixed set of real events a stubbed search returns, the way a live one would.
 export type StubEvent = { name: string; url: string; tier?: 1 | 2; lines: string[] };
 export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; holdAsked?: boolean };
@@ -176,7 +176,7 @@ export function loopTools(
     // On a call the line is never sent (services/callTools.ts), so asking again only spends one of the call's few rounds.
     if (ctx.onCall || !line?.trim() || loop.holdSent || state.sent || !stockLine(line, theirWords()) || loop.holdAsked) return null;
     loop.holdAsked = true;
-    return { ok: false, error: `Not searched yet: "${line.trim().slice(0, 80)}" is a stock line. Call this again with a whileLooking that says plainly what you're looking for, in the terms of what they asked (its subject, their timing), or leave whileLooking out.` };
+    return { ok: false, error: `Not searched yet: "${line.trim().slice(0, 80)}" is a stock line. Call this again with a whileLooking that names the thing itself in the terms of what they asked (\"founder dinners in SF this week\"), with no verb in front, or leave whileLooking out.` };
   };
   const hold = async (line?: string) => {
     if (!line?.trim() || loop.holdSent || state.sent || stockLine(line, theirWords())) return;

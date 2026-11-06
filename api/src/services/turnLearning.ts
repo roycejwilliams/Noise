@@ -51,6 +51,8 @@ export type TurnLearningInput = {
   ownWords?: string;
   // The turn read's verdict on whether the message only shares, asks, or both (harness/scope.ts): a pure share captures no ask.
   messageKind?: import("../harness/scope.js").MessageKind | null;
+  // The turn read's scope verdict (harness/scope.ts): an ask from a turn declined as outside connections is never saved.
+  scope?: import("../harness/scope.js").ScopeVerdict | null;
 };
 
 type OnFileProfile = {
@@ -269,7 +271,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
     // The ask first, so the profile write knows what kind of ask this turn carried (lane moves, Royce 2026-10-13): a one-off ask
     // (research, a document, advice, a single search) never becomes a goal or an interest: the extraction's rule (profile, goals) and,
     // for its exact restatement, code (laneMoves.ts turnAskLane, profileExtraction.ts heldAsOneOff).
-    const written = await persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message", input.message, { via: "text", openItems: openAsks, messageKind: input.messageKind ?? null }).catch((err: any) => {
+    const written = await persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message", input.message, { via: "text", openItems: openAsks, messageKind: input.messageKind ?? null, scope: input.scope ?? null }).catch((err: any) => {
       console.error("turnLearning: intent write failed (non-fatal):", err?.message ?? err);
       return null;
     });
