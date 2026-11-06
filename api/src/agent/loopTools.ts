@@ -30,9 +30,10 @@ import pool from "../db/db.js";
 // nothing until its page is read again.
 // viaPost: a link an X post pointed to (checked for a private event page again before it's shared, batched review of #299).
 export type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null; stored?: boolean; checkedAt?: string | null; freshUntil?: number | null; viaPost?: boolean };
-// The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, so it sounds like Cue
-// reacting to what they asked, never a status message.
-export const WHILE_LOOKING = "Only on your first search, if it'll take a moment: a few words to them in your own voice that react to what they actually asked (its subject, their timing, their mood), the way a friend who's into it would. Never a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
+// The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, saying what it's looking for
+// in their terms, never a status message. Never praise or a recap either (2026-11-06 live test: "founder dinners before an investor
+// meeting, good instinct").
+export const WHILE_LOOKING = "Only on your first search, if it'll take a moment: a few plain words to them saying what you're looking for, in the terms of what they asked (its subject, their timing). Only that: no compliment or praise of the ask, no recap of what they told you, no word about tools, searches or how it works. Never a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
 // Tests only (golden cases): a fixed set of real events a stubbed search returns, the way a live one would.
 export type StubEvent = { name: string; url: string; tier?: 1 | 2; lines: string[] };
 export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; holdAsked?: boolean };
@@ -175,7 +176,7 @@ export function loopTools(
     // On a call the line is never sent (services/callTools.ts), so asking again only spends one of the call's few rounds.
     if (ctx.onCall || !line?.trim() || loop.holdSent || state.sent || !stockLine(line, theirWords()) || loop.holdAsked) return null;
     loop.holdAsked = true;
-    return { ok: false, error: `Not searched yet: "${line.trim().slice(0, 80)}" is a stock line. Call this again with a whileLooking that reacts to what they actually asked (its subject, their timing, their mood) in your own words, or leave whileLooking out.` };
+    return { ok: false, error: `Not searched yet: "${line.trim().slice(0, 80)}" is a stock line. Call this again with a whileLooking that says plainly what you're looking for, in the terms of what they asked (its subject, their timing), or leave whileLooking out.` };
   };
   const hold = async (line?: string) => {
     if (!line?.trim() || loop.holdSent || state.sent || stockLine(line, theirWords())) return;

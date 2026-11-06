@@ -123,7 +123,7 @@ export const workVerdict = (v: ScopeVerdict | null | undefined): ScopeVerdict | 
 
 // Model-facing guidance for the reply on a turn whose read is mixed: help with the connection part, set the rest aside briefly, promise
 // nothing for it. Null for an in-scope turn (no added guidance) and for out (the out-of-scope guidance applies).
-export const MIXED_REPLY_GUIDANCE = "This message bundles something Cue does (the connection part: who to meet, an event, a community, preparing for a conversation) with something it doesn't. Help with the connection part. Set the rest aside briefly, in fresh words of your own (never a stock line), and don't promise, offer or imply you'll do any of it.";
+export const MIXED_REPLY_GUIDANCE = "This message bundles something Cue does (the connection part: who to meet, an event, a community, preparing for a conversation) with something it doesn't. Help with the connection part. Set the rest aside briefly, in fresh words of your own (never a stock line), and don't promise, offer or imply you'll do any of it. This holds when finds answer the connection part too: the finds go with shareFinds, and the set-aside still goes to them with sendReply, never left unsaid.";
 export function replyScopeGuidance(v: ScopeVerdict | null | undefined): string | null {
   return !v || v.scope === "in" ? null : v.scope === "out" ? OUT_OF_SCOPE_GUIDANCE : MIXED_REPLY_GUIDANCE;
 }

@@ -52,6 +52,11 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
   ].join("\n");
 }
 
+// Pure: the run ended with plain text on a turn the read judged mixed or out, after only finds went and no reply did, so
+// the set-aside the model wrote is still owed. A voice note, a link delivery (its text is the whole answer) or held sends never are.
+export function plainSetAsideOwed(o: { isVoice: boolean; scope: { scope: string } | null; sent: boolean; replies: number; linkDelivered: boolean; sendStopped: boolean; text: string }): boolean {
+  return !o.isVoice && !!o.scope && o.scope.scope !== "in" && o.sent && o.replies === 0 && !o.linkDelivered && !o.sendStopped && o.text.trim().split(/\s+/).length >= 4;
+}
 // Pure: when their message first arrived. A replay (a held or crashed turn run again) keeps the original time; a live turn uses when
 // the webhook got it (routes/sendblue.ts).
 export function firstArrival(replay: { receivedAt: Date } | null | undefined, arrivedAt: Date): Date {
@@ -591,6 +596,14 @@ ${TOOL_TURN_RULES(input.isVoice)}
   if (state.sendStopped && !state.sendsHeld) state.sendStopped = false;
   if (!state.sent && state.sendStopped) {
     console.error(`conversationReply: sends to ${input.userId} are held; stopped without retrying`);
+  }
+  // A mixed (or out) turn whose connection part went as finds, with the set-aside left in plain text and no reply sent: that text
+  // still goes, through sendReply (2026-11-06 live test: "a dentist near the mission, and any founder dinners this week?" got the
+  // two finds, and "The dentist's not something I handle" was written but never sent, because the finds had marked the turn sent).
+  if (plainSetAsideOwed({ isVoice: input.isVoice, scope: input.facts.turnScope ?? null, sent: state.sent, replies: state.replyCount, linkDelivered: state.linkDelivered, sendStopped: state.sendStopped, text: agentRun?.text ?? "" }) && !looksLikeMetaReply((agentRun?.text ?? "").trim())) {
+    await (tools.sendReply as any).execute({ message: (agentRun?.text ?? "").trim() }, { toolCallId: "plain-text-reply", messages: [] }).catch((err: any) =>
+      console.error("conversationReply: sending the plain-text set-aside failed:", err?.message ?? err),
+    );
   }
   if (!state.sent && !state.sendStopped) {
     // What the agent did instead, so a fallback can be traced (2026-09-22).
