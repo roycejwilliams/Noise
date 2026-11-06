@@ -43,6 +43,7 @@
 // does for every reader).
 import { ASK_ON_FILE } from "./openLoops.js";
 import { DateTime } from "luxon";
+import { datedLimits, emptyPicture, guardPicture, loadPictureRaw, pictureOf, type Picture, type PictureOptions, type RawPicture } from "./knowledge/lessons.js";
 import pool from "../db/db.js";
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import type { EmotionalContext } from "../harness/emotion.js";
@@ -200,6 +201,9 @@ export type MemberKnowledge = {
   transitions?: Fact<Transition>[];
   // How many transitions the character budget left out (never silently).
   transitionsOmitted?: number;
+  // Opt-in (include: ["picture"]): lessons, corrections and limits by relevance, each dated and linked to its source (knowledge/lessons.ts).
+  // The default lessons, corrections and limits above are unchanged, so the prompts that render them are too.
+  picture?: Picture;
   // How many things they asked Co to remove (services/whatCoKnows.ts), never what they were: read with exchanges or corrections.
   removedCount?: number;
   // The live guards' read (their removals and corrections) failed, so exchanges and the rest came back unguarded. Said, never silent
@@ -209,12 +213,12 @@ export type MemberKnowledge = {
 
 export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"] as const;
 // Sections read only when a caller asks for them in include: the default read is unchanged for its ~25 callers.
-export const OPT_IN_SECTIONS = ["transitions"] as const;
+export const OPT_IN_SECTIONS = ["transitions", "picture"] as const;
 export type KnowledgeSection = (typeof KNOWLEDGE_SECTIONS)[number] | (typeof OPT_IN_SECTIONS)[number];
 export const EXCHANGE_DEFAULTS = { limit: 20, days: 14 } as const;
 // Corrections: the recent ones by default; goal planning reads them all (a goal retired by an old correction must stay retired).
 export const CORRECTION_DEFAULTS = { limit: 8, days: 90 as number | null } as const;
-export type KnowledgeOptions = { now?: Date; exchanges?: number; exchangeDays?: number; include?: readonly KnowledgeSection[]; corrections?: { limit: number; days: number | null } };
+export type KnowledgeOptions = { now?: Date; exchanges?: number; exchangeDays?: number; include?: readonly KnowledgeSection[]; corrections?: { limit: number; days: number | null }; picture?: PictureOptions };
 
 export type MemberRules = {
   discretion: string;
@@ -270,6 +274,7 @@ export type KnowledgeDeps = {
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
   person: (userId: string) => Promise<string>;
   transitions?: (userId: string) => Promise<RawTransition[]>;
+  picture?: (userId: string) => Promise<RawPicture>;
   // What they corrected or removed through Co (services/whatCoKnows.ts, the live guards): exchanges that say a removed thing are left
   // out, and ones that still say a corrected-away value carry the correction inline. Optional, so stubs without it work.
   forgotten?: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
@@ -316,6 +321,7 @@ export async function loadTransitions(userId: string, q: { query: (sql: string, 
 
 export const realKnowledgeDeps: KnowledgeDeps = {
   transitions: (userId) => loadTransitions(userId),
+  picture: (userId) => loadPictureRaw(userId),
   profile: async (userId) => {
     const r = (await rows(`SELECT u.first_name, cp.city, cp.goals, cp.intent, cp.updated_at FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]))[0];
     return r ? { firstName: r.first_name ?? null, city: r.city ?? null, goals: Array.isArray(r.goals) ? r.goals.map(String) : null, intent: r.intent ?? null, updatedAt: dateOrNull(r.updated_at) } : null;
@@ -815,7 +821,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   // loops, promise results) and its record of what it sent: each is written from their words, so a thing they had Cue forget
   // can't come back through one of them. A part that says it goes; a line that is only it goes.
   let guardsUnread = false;
-  const guards = ((["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) || on("transitions")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
+  const guards = ((["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) || on("transitions") || on("picture")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
   const removed = guards.filter((r) => r.removed);
   const W = guards.length ? await import("./whatCoKnows.js") : null;
   const g = (t: string): string | null => (W && removed.length ? W.guardText(t, removed) : t);
@@ -862,6 +868,19 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
       const built = transitionsOf(guarded);
       k.transitions = built.items;
       if (built.omitted) k.transitionsOmitted = built.omitted;
+    }
+  }
+  if (on("picture")) {
+    // Fails closed like transitions: without the guards read, nothing is returned.
+    if (guardsUnread || !d.forgotten || !d.picture) k.picture = emptyPicture();
+    else {
+      const [raw, lim] = await Promise.all([safe("picture", () => d.picture!(userId), null as RawPicture | null), safe("picture limits", () => d.limits(userId), null as (Limits & { at: Date | null }) | null)]);
+      const forgets = (t: string) => !W || (W.guardText(t, removed) === t && !removed.some((r) => r.ref.startsWith("avoid:") && W.covers(r.old, t)));
+      const guarded = raw && W ? guardPicture(raw, guards, W) : raw;
+      k.picture = {
+        ...pictureOf({ raw: guarded ?? { lessons: [], lessonsTotal: 0, corrections: [], correctionsTotal: 0 }, limits: datedLimits(lim ?? { avoid: [], availability: null }, forgets), opts: opts.picture }),
+        ...(!raw || !lim ? { unread: true as const } : {}),
+      };
     }
   }
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
