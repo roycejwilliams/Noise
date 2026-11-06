@@ -541,6 +541,10 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
       return m && !m.sms_opted_out && m.phone_number;
     }).map((id) => ({ id })));
   }
+  // Recent activity (a text or a call, 90 days): used only to mark a member quiet, never to leave them out. Members here all count as recent.
+  if (has("SELECT DISTINCT m.user_id AS id FROM co_memories m WHERE m.user_id = ANY($1::uuid[]) AND m.memory_type = 'text_exchange'")) {
+    return R((p[0] as string[]).filter((id) => W.members.has(id)).map((id) => ({ id })));
+  }
   if (has("FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2")) {
     return R(W.networkIntros.filter((n) => n.a === p[0] && n.b === p[1]).map(() => ({ x: 1 })));
   }
