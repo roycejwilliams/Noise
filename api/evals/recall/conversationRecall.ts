@@ -249,7 +249,7 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   const r = okRes(await look(JORDAN, { topic: "skydiving" }));
   const n = R.recallNote(r);
   check("miss: nothing found, nothing invented", r.found === 0 && r.results.length === 0);
-  check("miss: the guidance says to try one other way, then say plainly it can't be found", /one other way/.test(n) && /couldn't find it in the history you can look through/.test(n));
+  check("miss: the guidance says to try one other way, then say plainly it can't be found", /one other way/.test(n) && /couldn't find it in the history you can access/.test(n));
   check("miss: never claims it didn't happen, never describes the search", /never that it didn't happen/.test(n) && /never how you looked/.test(n) && /there's no record/.test(n));
   const noCalls = okRes(await look(PRIYA, { topic: "skydiving" }, deps()));
   check("miss: nothing on file at all is said plainly", /There is no earlier conversation|No call records are on file/.test(R.recallNote(okRes(await look("00000000-0000-4000-8000-00000000c003", { topic: "skydiving" })))));
