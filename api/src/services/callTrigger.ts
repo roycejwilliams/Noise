@@ -13,7 +13,7 @@ import { recordDecision, recordDecisionLanded } from "../harness/core.js";
 import { dialFailureError, failureDetail, GPT_LIVE_CANT_PLACE, GPT_LIVE_MINUTES_USED, type DialFailure } from "./callReasons.js";
 import { amdDialOptions, outboundPreflight, type Preflight } from "./gptLive.js";
 import { noteModelFailure } from "./modelKeyAlert.js";
-import { decideCall, gatherCallState, LIVE_CALL_RECLAIM_MINUTES, LIVE_CALL_STATUSES, type CallAuthorization } from "../harness/callGate.js";
+import { CALL_CLASS, CUE_STARTED_CALLS, decideCall, gatherCallState, LIVE_CALL_RECLAIM_MINUTES, LIVE_CALL_STATUSES, type CallAuthorization } from "../harness/callGate.js";
 
 // Extracted from co.ts's POST /call/:user_id so a second call site (Co
 // triggering a call from within a texting conversation, see sendblue.ts's
@@ -81,6 +81,13 @@ export async function triggerCallForUser(
     // Held only by the member's own rule: when it may go (a booked call is moved there, never failed: jobs/scheduledCall.ts).
     const onlyRule = gateResult.checks.filter((c) => !c.pass).every((c) => c.name === "member_rule") && callState.memberRule?.retryAt;
     return { success: false, error: gateResult.error ?? "Call blocked.", ...(onlyRule ? { heldUntil: callState.memberRule!.retryAt } : {}) };
+  }
+
+  // A call Cue starts itself (check-in cadence, intake) takes the same send-time recheck as a text (harness/sendTimeRecheck.ts): a safety
+  // hold or a hard stretch holds it, and nothing is dialed. A call they asked for or booked never waits on it.
+  if (gateResult.authorization && CUE_STARTED_CALLS.has(gateResult.authorization)) {
+    const re = await (await import("../harness/sendTimeRecheck.js")).sendTimeRecheck(userId, { kind: `call:${gateResult.authorization}`, cls: CALL_CLASS[gateResult.authorization], targetKey: null, changedMind: false });
+    if (!re.go) return { success: false, error: `Call held: ${re.reason}`, ...(re.held ? { heldUntil: re.retryAt } : {}) };
   }
 
   // Every call runs on GPT-Live and never on ElevenLabs (Royce, 2026-10-31; routes/co.ts gptLiveAnswer answers when they pick up).
