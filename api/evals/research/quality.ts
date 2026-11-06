@@ -94,7 +94,7 @@ check("their yeses and 'not like that's reorder the next finds", Q.rankFinds([B,
 const globalLikesB = Q.featureStats(Array.from({ length: 20 }, () => ({ features: Q.findFeatures(B), outcome: "yes" as const })));
 check("a new member (little signal) ranks by everyone's", Q.rankFinds([A, B], { stats: Q.featureStats([{ features: Q.findFeatures(A), outcome: "yes" }]), reactions: 1 }, globalLikesB)[0].url === B.url);
 check("enough of their own signal outweighs everyone's", Q.rankFinds([B, A], { stats: likedHigh, reactions: 12 }, globalLikesB)[0].url === A.url);
-check("'not like that' counts against harder than 'no', and 'ignored' only lightly", Q.OUTCOME_WEIGHT.not_like_that < Q.OUTCOME_WEIGHT.no && Q.OUTCOME_WEIGHT.no < Q.OUTCOME_WEIGHT.ignored && Q.OUTCOME_WEIGHT.ignored < 0 && Q.OUTCOME_WEIGHT.yes > 0);
+check("'not like that' counts against harder than 'no', and 'ignored' not at all (weight 0)", Q.OUTCOME_WEIGHT.not_like_that < Q.OUTCOME_WEIGHT.no && Q.OUTCOME_WEIGHT.no < Q.OUTCOME_WEIGHT.ignored && Q.OUTCOME_WEIGHT.ignored === 0 && Q.OUTCOME_WEIGHT.yes > 0);
 check("ranking orders, never drops", Q.rankFinds([A, B, A], { stats: likedHigh, reactions: 12 }, {}).length === 3);
 const qsrc = src("services/researchQuality.ts");
 check("an outcome is recorded only on a find shown to that member", /WHERE user_id = \$1 AND id = \$2 AND shown_at IS NOT NULL AND \(outcome IS NULL OR outcome = 'ignored'\)/.test(qsrc));
