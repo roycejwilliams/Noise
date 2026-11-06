@@ -6,12 +6,16 @@
 //   - Attendance only with evidence (never assume attendance, 11-04): a door check-in, an arrival Cue saw, or their own words after the
 //     event started. A plan, an offer Cue sent, an "interested" or an "acted" is never attendance.
 //   - A plan whose date has passed with no evidence is dropped, never read as attended. Attended events are kept with no window.
-//   - Their side only: a quote of theirs, the fact that they met someone, never another member's name. Their words go under `words`,
-//     not `quote`, so memberKnowledge's final strip (which keeps a key named quote) still runs over them.
+//   - Their side only: a quote of theirs, the fact that they met someone, never another member's name. Their words go under `quote`
+//     (the picture's one convention); a quote that names a linked member is not carried at all (guardEvents `named`), and the shared
+//     name strip runs over it too wherever that strip covers quotes.
+//   - A met-someone note is kept as `met` and is never attendance: recordMetSomeone writes to the latest-touched event of the last 48
+//     hours, whatever the evidence.
 //   - Every value carries its source (table), its date and its provenance (said, seen, did, inferred: services/memberSnapshot.ts Prov).
 //   - Rows are guarded like transitions (services/whatCoKnows.ts): a removed event is not returned, forgotten words are cut, and a
 //     failed guard read leaves the section empty (decided in memberKnowledge).
 //   - Read only, every query bound to $1 = the member. No model call.
+import { DateTime } from "luxon";
 import type { Fact } from "../memberKnowledge.js";
 
 export const EVENTS_BUDGET_CHARS = 3000;
@@ -38,12 +42,12 @@ export type EventItem = {
   name: string | null;
   date: string | null;
   when: "upcoming" | "passed" | "undated";
-  plan: { source: string; on: string; prov: "said" | "inferred"; words: string | null } | null;
+  plan: { source: string; on: string; prov: "said" | "inferred"; quote: string | null } | null;
   offered: { source: string; on: string; prov: "did" } | null;
-  attendance: { source: string; on: string; state: "attended" | "not_going"; via: "door" | "location" | "text" | "said" | null; prov: "said" | "seen"; words: string | null } | null;
-  outcomes: { source: string; on: string; result: string; prov: "said" | "inferred"; words: string | null }[];
+  attendance: { source: string; on: string; state: "attended" | "not_going"; via: "door" | "location" | "text" | "said" | null; prov: "said" | "seen"; quote: string | null } | null;
+  outcomes: { source: string; on: string; result: string; prov: "said" | "inferred"; quote: string | null }[];
   outcomesOmitted: number;
-  met: { source: string; on: string; prov: "said"; words: string | null } | null;
+  met: { source: string; on: string; prov: "said"; quote: string | null } | null;
   followedUp: { source: string; on: string; prov: "did"; people: number } | null;
 };
 
@@ -51,6 +55,13 @@ const day = (d: Date | string | null | undefined): string | null => {
   if (!d) return null;
   const t = new Date(d);
   return Number.isNaN(t.getTime()) ? null : t.toISOString().slice(0, 10);
+};
+const localDay = (t: Date, tz?: string | null): string => {
+  try {
+    return DateTime.fromJSDate(t).setZone(tz || "UTC").toISODate() ?? t.toISOString().slice(0, 10);
+  } catch {
+    return t.toISOString().slice(0, 10);
+  }
 };
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 const clip = (s: string | null | undefined) => (s && s.trim() ? s.trim().slice(0, CLIP) : null);
@@ -126,7 +137,7 @@ export function guardEvents(raw: RawEvents, G: EventGuards): RawEvents {
 
 type Draft = { item: Fact<EventItem>; startAt: Date | null; attendedOn: string | null; hasSaid: boolean };
 
-export function eventsOf(raw: RawEvents, o: { now: Date; budget?: number }): { items: Fact<EventItem>[]; omitted: number } {
+export function eventsOf(raw: RawEvents, o: { now: Date; budget?: number; timeZone?: string | null }): { items: Fact<EventItem>[]; omitted: number } {
   const budget = o.budget ?? EVENTS_BUDGET_CHARS;
   const today = o.now.toISOString().slice(0, 10);
   const info = new Map(raw.info.map((i) => [i.eventId, i]));
@@ -156,28 +167,28 @@ export function eventsOf(raw: RawEvents, o: { now: Date; budget?: number }): { i
   // Door, location and text arrivals, a "no", and a met-someone note in their own words (only when it came after the event started).
   for (const p of raw.presence) {
     const d = get(p.eventId);
-    const startOk = (t: Date | null) => !!t && !!d.startAt && t.getTime() >= d.startAt.getTime();
     const via = p.arrivedVia === "door" || p.arrivedVia === "location" || p.arrivedVia === "text" ? p.arrivedVia : null;
     if (p.arrivedAt) {
-      d.item.attendance = { source: "event_presence", on: p.arrivedAt.toISOString(), state: "attended", via, prov: via === "text" ? "said" : "seen", words: null };
+      d.item.attendance = { source: "event_presence", on: p.arrivedAt.toISOString(), state: "attended", via, prov: via === "text" ? "said" : "seen", quote: null };
       d.attendedOn = p.arrivedAt.toISOString();
       touch(d, p.arrivedAt);
     } else if (/^came\b/.test(p.noshowOutcome ?? "")) {
       // The no-show flow settles "came" only on evidence (services/eventNoShow.ts verdict).
-      d.item.attendance = { source: "event_presence", on: (p.metAt ?? p.notGoingAt ?? o.now).toISOString(), state: "attended", via: null, prov: "seen", words: null };
-      d.attendedOn = d.item.attendance.on;
+      // Dated by the event itself (its start, else its day): never by when this was read.
+      const when = d.startAt ?? (d.item.date ? new Date(`${d.item.date}T00:00:00Z`) : null);
+      if (when) {
+        d.item.attendance = { source: "event_presence", on: when.toISOString(), state: "attended", via: null, prov: "seen", quote: null };
+        d.attendedOn = d.item.attendance.on;
+        touch(d, when);
+      }
     } else if (p.notGoingAt) {
-      d.item.attendance = { source: "event_presence", on: p.notGoingAt.toISOString(), state: "not_going", via: null, prov: "said", words: null };
+      d.item.attendance = { source: "event_presence", on: p.notGoingAt.toISOString(), state: "not_going", via: null, prov: "said", quote: null };
       touch(d, p.notGoingAt);
     }
-    if (p.metAt && startOk(p.metAt)) {
-      d.item.met = { source: "event_presence", on: p.metAt.toISOString(), prov: "said", words: clip(p.metQuote) };
+    if (p.metAt) {
+      d.item.met = { source: "event_presence", on: p.metAt.toISOString(), prov: "said", quote: clip(p.metQuote) };
       d.hasSaid = true;
       touch(d, p.metAt);
-      if (!d.attendedOn) {
-        d.item.attendance = { source: "event_presence", on: p.metAt.toISOString(), state: "attended", via: "said", prov: "said", words: clip(p.metQuote) };
-        d.attendedOn = p.metAt.toISOString();
-      }
     }
   }
   for (const f of raw.followThroughs) {
@@ -196,12 +207,14 @@ export function eventsOf(raw: RawEvents, o: { now: Date; budget?: number }): { i
     const id = r.key.startsWith("event:") ? r.key.slice(6) : null;
     const d = id ? get(id, r.name) : (() => { const x = blank(r.key, r.name, null, null); standalone.push(x); return x; })();
     const stated = r.provenance === "stated";
-    d.item.outcomes.push({ source: "suggestion_outcomes", on: r.at.toISOString(), result: r.result, prov: stated ? "said" : "inferred", words: clip(r.quote) });
+    d.item.outcomes.push({ source: "suggestion_outcomes", on: r.at.toISOString(), result: r.result, prov: stated ? "said" : "inferred", quote: clip(r.quote) });
     touch(d, r.at);
     if (stated) d.hasSaid = true;
-    const after = d.startAt ? r.at.getTime() >= d.startAt.getTime() : d.item.date ? day(r.at)! >= d.item.date : false;
+    // After the event started: against a real start time, else only on a strictly later day in the member's own zone (a statement on the
+    // evening before reads as the next UTC day for someone in Pacific time).
+    const after = d.startAt ? r.at.getTime() >= d.startAt.getTime() : d.item.date ? localDay(r.at, o.timeZone) > d.item.date : false;
     if (stated && DID_RESULT.has(r.result) && after && !d.attendedOn) {
-      d.item.attendance = { source: "suggestion_outcomes", on: r.at.toISOString(), state: "attended", via: "said", prov: "said", words: clip(r.quote) };
+      d.item.attendance = { source: "suggestion_outcomes", on: r.at.toISOString(), state: "attended", via: "said", prov: "said", quote: clip(r.quote) };
       d.attendedOn = r.at.toISOString();
     }
   }
@@ -214,7 +227,7 @@ export function eventsOf(raw: RawEvents, o: { now: Date; budget?: number }): { i
     const d = same ?? (() => { const x = blank(`plan:${p.id}`, p.name.trim(), p.date, null); standalone.push(x); return x; })();
     if (same && !d.item.date && p.date) d.item.date = p.date;
     const stated = p.provenance === "stated";
-    d.item.plan = { source: "planned_event_mentions", on: p.at.toISOString(), prov: stated ? "said" : "inferred", words: clip(p.quote) };
+    d.item.plan = { source: "planned_event_mentions", on: p.at.toISOString(), prov: stated ? "said" : "inferred", quote: clip(p.quote) };
     if (stated) d.hasSaid = true;
     touch(d, p.at);
   }
