@@ -142,6 +142,13 @@ export type AcceptedOpen = { text: string; quote: string; quotedAt: string; dueD
 
 // Pure: what goes through. `zone` is their time zone (or null → UTC), used to
 // read "Friday" relative to the day they said it.
+// The kind of the new line of a "changed" close. An inference stays tentative: if the thread on file is inferred, its replacement is inferred
+// whatever the model returns (a junk value included). Otherwise a valid proposal stands, else the earlier thread's kind carries over.
+export function changedCloseKind(proposed: unknown, prior: TransitionSource | null): unknown {
+  if (prior === "inferred") return "inferred";
+  return proposed === "said" || proposed === "inferred" || proposed === true ? proposed : prior ?? undefined;
+}
+
 export function gateThreadChanges(
   opens: ProposedOpen[],
   closes: ProposedClose[],
@@ -167,7 +174,7 @@ export function gateThreadChanges(
     if (!reason && hit && !closed.some((x) => x.id === c.id)) closed.push({ ...c, quotedAt: hit.at });
   }
 
-  for (const o of [...opens, ...closed.filter((c) => c.status === "changed" && c.newText).map((c) => ({ text: c.newText!, quote: c.quote, transition: c.transition ?? live.find((x) => x.id === c.id)?.transition ?? undefined }) as ProposedOpen)]) {
+  for (const o of [...opens, ...closed.filter((c) => c.status === "changed" && c.newText).map((c) => ({ text: c.newText!, quote: c.quote, transition: changedCloseKind(c.transition, live.find((x) => x.id === c.id)?.transition ?? null) }) as ProposedOpen)]) {
     const text = typeof o.text === "string" ? o.text.trim().slice(0, 200) : "";
     const hit = findQuote(o.quote, lines);
     let reason: string | null = null;
@@ -198,7 +205,7 @@ export function gateThreadChanges(
     const nextStep = NEXT_STEPS.includes(o.nextStep as NextStep) ? (o.nextStep as NextStep) : "check_in";
     // The model proposes the kind; the source is "said" unless it says it read it between their words. A transition is always
     // opened from a quote of theirs (the gate above), so there is no transition without their own words.
-    const transition: TransitionSource | null = o.transition === "inferred" ? "inferred" : o.transition === "said" || o.transition === true ? "said" : null;
+    const transition: TransitionSource | null = o.transition === "said" ? "said" : o.transition === "inferred" || o.transition === true ? "inferred" : null;
     opened.push({ text, quote: o.quote.trim(), quotedAt: hit.at, dueDate, dueLabel, nextStep, kind: o.commitment && dueDate ? "commitment" : "thread", transition, transitionChannel: transition ? hit.via ?? null : null });
   }
   return { opened, closed, checks };
@@ -215,7 +222,7 @@ ${lines.map((l) => `- [${localStamp(`${l.at}:00Z`, zone)}] ${l.text}`).join("\n"
 
 1. Close a thread only when their words say how it landed or that it changed ("the pitch went great", "we moved it to November"). "quote" must be copied exactly from their words above, at least a few words. Being quiet about it is not a close.
 2. Open a thread for each thing that matters to them right now and isn't on the list yet (usually one to four): something coming up with an outcome, a decision they're weighing, something they're working toward or worried about. Name it in their own terms (a short line, plain words, "they" for them, and the date if they gave one). "quote" is copied exactly from their words. If the quote names when ("Friday", "October 10th", "next week"), copy that phrase exactly as "when". Mark "commitment": true only when they said they themselves will do something by then ("I'll send the deck Friday").
-Note on "transition": it changes nothing about whether to open a thread. For a thread you are already opening (or the new line of a "changed" close), if it's about a life change (a move, a new role or company, going solo, starting over, a breakup, a new city, a career pivot), set "transition": "said" if they said it outright or "inferred" if you're reading it from what they said; otherwise null.
+Note on "transition": it changes nothing about whether to open a thread. For a thread you are already opening (or the new line of a "changed" close), mark it only if a life change (a move, a new role or company, going solo, starting over, a breakup, a new city, a career pivot) is happening now, about to happen, or just happened and they are still in the middle of it: "said" if they said the change outright, "inferred" if you are reading it from what they said. A change that is settled and behind them ("I moved here last year", "since I left banking") is background, not a transition, even if it still colours how they feel now: null. Otherwise null.
 3. "nextStep": "check_in" (the default: there'll be news a friend would ask about), "look_up" (they asked for something to be found), "suggest_someone" (they want to meet a kind of person), or "remember" (only a background fact with nothing to ask about later).
 Most of the time nothing changes; return empty lists then.
 
