@@ -98,7 +98,7 @@ const turn = (gate: (d: string, findsWaiting?: () => boolean) => string = (d) =>
 }
 {
   const L = await import("../../src/agent/loopTools.js");
-  check("the line while a search runs says what Cue is looking for in their terms, never a generic status line ('let me look')", /saying what you're looking for, in the terms of what they asked/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
+  check("the line while a search runs names the thing itself in their terms, no verb in front, never a generic status line ('let me look')", /naming the thing itself, in the terms of what they asked/.test(L.WHILE_LOOKING) && /no verb or status phrasing in front/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
 }
 {
   // 2026-11-06 live test: "Co is looking: founder dinners before an investor meeting, good instinct".

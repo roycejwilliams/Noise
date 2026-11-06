@@ -114,7 +114,7 @@ export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from ".
 import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { understandingGaps, type Gap } from "./understanding.js";
 import { withMember } from "./llmUsage.js";
-import { isPureShare } from "../harness/scope.js";
+import { askDeclinedForScope, isPureShare } from "../harness/scope.js";
 import { ASK_JSON, conditionsOnFileBlock, CRITERIA_FOR_JSON, CRITERIA_FOR_RULE, WANT_WORDS_RULE } from "./wantCriteria.js";
 
 export type CoverageAssessment = {
@@ -1479,7 +1479,7 @@ export async function persistIntentFrom(
   scope: IntentScope = "last_user_message",
   message?: string | null,
   // via: where they said it; openItems: the numbered list the read was shown (criteria_for indexes into it).
-  wopts: { via?: WantWords["via"]; openItems?: OpenItem[]; ownWords?: string | null; messageKind?: import("../harness/scope.js").MessageKind | null } = {},
+  wopts: { via?: WantWords["via"]; openItems?: OpenItem[]; ownWords?: string | null; messageKind?: import("../harness/scope.js").MessageKind | null; scope?: import("../harness/scope.js").ScopeVerdict | null } = {},
 ): Promise<ExtractedIntent | null> {
   try {
     // Only what THEY said: an item that's Co's own line echoed back is
@@ -1498,6 +1498,12 @@ export async function persistIntentFrom(
       // A pure personal share is not an ask (harness/scope.ts isPureShare): remembered in the profile reads, never an ask to search for. The
       // turn read's verdict decides when there is one ("both" keeps the ask); else the word backstop, on the whole message and not the ask's quote.
       .filter((a) => !isPureShare(wopts.messageKind, ownWords || String(a.quote ?? "")))
+      // A request Cue declined as outside connections is never an open ask (harness/scope.ts askDeclinedForScope).
+      .filter((a) => {
+        const declined = askDeclinedForScope(wopts.scope, a.text);
+        if (declined) recordDecision({ layer: 4, decision: "profile.write", userId: user_id, outcome: "skip", action: "declined_out_of_scope", reason: wopts.scope?.scope === "out" ? "the turn read judged it outside connections" : "unmistakably outside connections", proposal: { ask: a.text.slice(0, 200) } }).catch(() => {});
+        return !declined;
+      })
       .map((a) => ({ ...a, wantWords: { ...WC.groundWant(a.quote, ownWords), via, criteria: WC.groundCriteria(a.criteria, ownWords, undefined, onReject) } }));
     // Conditions said about something already open (criteria_for): each lands on its own want only, written before the asks below so
     // a deduped restatement in the same turn merges on top of it.

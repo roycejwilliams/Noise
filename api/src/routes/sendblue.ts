@@ -2856,6 +2856,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           ...prefs,
           coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
           messageKind: turnRead?.messageKind ?? null,
+          scope: turnRead?.scope ?? null,
         }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err))
           // Then, with the turn's learning writes landed, the member snapshot's next version (services/memberSnapshot.ts), so the next
           // reply reads it without a rebuild. Code only, no model call; it never throws.

@@ -279,6 +279,18 @@ check("startTask refusals for scope are never fallen back from in the call path"
   const insertsFor = async (kind: "share" | "both" | null) => { const n0 = sqlSeen.length; await quietly(() => PE.persistIntentFrom("u-capture", parsed, tr, "last_user_message", msg, { via: "text", messageKind: kind })); return sqlSeen.slice(n0).filter((q) => /co_profiles|ask_checkins/.test(q) && /INSERT|UPDATE/.test(q)).length; };
   check("passive capture: a pure share captures nothing", (await insertsFor("share")) === 0);
   check("passive capture: a message that shares and asks captures the ask", (await insertsFor("both")) > 0);
+  // 2026-11-06 live test: "make me a pitch deck" was declined as outside, then captured as "seeking: a pitch deck for their startup".
+  const deck = { asks: [{ text: "a pitch deck for their startup", type: "seeking" as const, quote: "can you make me a pitch deck for my startup?" }], concrete_preferences: [], wants: [], availability: null };
+  const deckMsg = "hey can you make me a pitch deck for my startup? investor meeting next week";
+  const capture = async (p: any, m: string, scope: any) => { const n0 = sqlSeen.length; await quietly(() => PE.persistIntentFrom("u-capture", p, `user: ${m}\nassistant: ok`, "last_user_message", m, { via: "text", messageKind: "ask", scope })); return sqlSeen.slice(n0).filter((q) => /co_profiles|ask_checkins/.test(q) && /INSERT|UPDATE/.test(q)).length; };
+  check("a request the turn read declined as out of scope is never saved as an open ask", (await capture(deck, deckMsg, S.parseVerdict({ scope: "out" }))) === 0);
+  check("…the same ask with no out verdict is saved as before (the model's read decides, nothing ambiguous is vetoed)", (await capture(deck, deckMsg, null)) > 0 && (await capture(deck, deckMsg, S.parseVerdict({ scope: "in" }))) > 0);
+  const dentist = { asks: [{ text: "a dentist near the Mission", type: "seeking" as const, quote: "find me a dentist near the mission" }], concrete_preferences: [], wants: [], availability: null };
+  const dinners = { asks: [{ text: "founder dinners this week", type: "seeking" as const, quote: "any founder dinners this week?" }], concrete_preferences: [], wants: [], availability: null };
+  const mixedMsg = "also can you find me a dentist near the mission, and any founder dinners this week?";
+  const mixedV = S.parseVerdict({ scope: "mixed", connection: "founder dinners this week" });
+  check("a mixed turn saves its connection part, never its out part", (await capture(dinners, mixedMsg, mixedV)) > 0 && (await capture(dentist, mixedMsg, mixedV)) === 0);
+  check("askDeclinedForScope: out turn or an unmistakable-out ask only", S.askDeclinedForScope({ scope: "out", connection: null }, "anything") && S.askDeclinedForScope(null, "a dentist near the Mission") && !S.askDeclinedForScope(mixedV, "founder dinners this week") && !S.askDeclinedForScope(null, "a pitch deck for their startup") && /scope: turnRead\?\.scope \?\? null/.test(src("routes/sendblue.ts")) && /scope: input\.scope \?\? null/.test(src("services/turnLearning.ts")));
 }
 
 console.log(`${total - failed}/${total} scope boundary checks passed`);

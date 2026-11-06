@@ -121,6 +121,14 @@ export function connectionPart(text: string, verdict?: ScopeVerdict | null): str
 // the connection part, as its own call with scope "in" and just that part; that call carries its own scope, so it is not held to the turn's.
 export const workVerdict = (v: ScopeVerdict | null | undefined): ScopeVerdict | null => v ?? null;
 
+// An ask the turn declined is never saved as an open ask (2026-11-06 live test: "make me a pitch deck", declined as outside, was
+// captured as "seeking: a pitch deck for their startup"). The turn read's "out" skips every ask from that turn; under any read, an ask
+// whose own words are an unmistakable out (the backstop: a dentist, travel booking) is skipped too. A mixed turn keeps the ask for its
+// connection part (services/askKind.ts stores that part beside it, and only that part is ever searched).
+export function askDeclinedForScope(turn: ScopeVerdict | null | undefined, askText: string): boolean {
+  return turn?.scope === "out" || classifyScope(askText).scope === "out";
+}
+
 // Model-facing guidance for the reply on a turn whose read is mixed: help with the connection part, set the rest aside briefly, promise
 // nothing for it. Null for an in-scope turn (no added guidance) and for out (the out-of-scope guidance applies).
 export const MIXED_REPLY_GUIDANCE = "This message bundles something Cue does (the connection part: who to meet, an event, a community, preparing for a conversation) with something it doesn't. Help with the connection part. Set the rest aside briefly, in fresh words of your own (never a stock line), and don't promise, offer or imply you'll do any of it. This holds when finds answer the connection part too: the finds go with shareFinds, and the set-aside still goes to them with sendReply, never left unsaid.";
