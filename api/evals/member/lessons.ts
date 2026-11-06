@@ -136,6 +136,16 @@ check("a rule whose setAt is invalid becomes undated", badDate.learnedLimits!.ru
 const longField = await read(raw([], [corr("lf", { field: "f".repeat(500), itemRef: "i".repeat(500) })]));
 check("field and item are clipped", longField.learnedCorrections![0].field.length <= 300 && longField.learnedCorrections![0].item!.length <= 300);
 
+const { safeMemory } = await import("../../src/services/memberSafeMemories.js");
+const SUFFIX = "their details aren't kept for this conversation";
+const once = await read(raw([lesson("w", "Maya is a close friend and works at Stripe, so go easy on that", "2026-10-01T10:00:00Z")]));
+check("a lesson naming a linked member carries the suffix exactly once after the final strip", once.learnedLessons![0].text.split(SUFFIX).length === 2);
+const forty = Array.from({ length: 40 }, (_, i) => lesson(`n${i}`, `Maya mentioned thing number ${i} about her new Stripe team`, `2026-09-${String(1 + (i % 28)).padStart(2, "0")}T10:00:00Z`));
+const fortyRead = await read(raw(forty), [], {}, { budget: 2000 });
+check("40 lessons naming a linked member with a 2,000 budget stay within 2,000 after the final strip", JSON.stringify(fortyRead.learnedLessons).length <= 2000 + 2 * fortyRead.learnedLessons!.length && fortyRead.learnedLessons!.length > 0);
+const inputs = ["Maya works at Stripe; keep it light", "Cue introduced them to Maya yesterday. Maya liked it.", "She told me Maya moved. Then more text.", "plain line with no names", "Cue suggested Maya as a match"];
+check("the strip is idempotent: strip(strip(x)) === strip(x)", inputs.every((x) => { const a = safeMemory("member_knowledge", x, ["Maya"]) ?? ""; return (safeMemory("member_knowledge", a, ["Maya"]) ?? "") === a; }));
+
 const seen: { sql: string; args: unknown[] }[] = [];
 await L.loadPictureRaw("user-aaa", { query: async (sql, args) => (seen.push({ sql, args }), { rows: [] }) });
 check("two queries, both bound to the member's id as $1, never in the SQL text", seen.length === 2 && seen.every((s) => s.args[0] === "user-aaa" && /user_id = \$1/.test(s.sql) && !s.sql.includes("user-aaa")));
