@@ -247,7 +247,7 @@ export function retireDecide(input: RetireInput): RetireStep[] {
     if (a.askedAt) {
       // Silence is not rejection (Royce, 2026-11-04): an unanswered question never retires the ask. It stays open and searched; only
       // their word or other evidence (the goal it serves closing on their word) ends it.
-      if (now.getTime() - a.askedAt.getTime() >= RECHECK_ANSWER_DAYS * DAY) return { ...base, action: "asked", why: `no answer in ${RECHECK_ANSWER_DAYS} days since it was asked: less contact, the ask stays open` };
+      if (now.getTime() - a.askedAt.getTime() >= RECHECK_ANSWER_DAYS * DAY) return { ...base, action: "none", why: `no answer in ${RECHECK_ANSWER_DAYS} days since it was asked: less contact, the ask stays open (and the reply stops carrying the question)` };
       return { ...base, action: "asked", why: "asked; waiting on them" };
     }
     return { ...base, action: "due", dueAt: a.dueAt, why: "marked: it restates a plan of theirs, not something to find" };
