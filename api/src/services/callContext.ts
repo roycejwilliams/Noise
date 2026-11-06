@@ -757,8 +757,18 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
       return `You're already working on ${openTasks.length} things for them, the most you carry at once${goals.length ? ` (${goals.join("; ")})` : ""}. On this call, don't promise new work or say you'll keep an eye out for something new: nothing new can open. If they want something new, offer to drop one of these for it.`;
     })
     .catch(() => null);
+  // Where each open task stands, from its own row (services/callTaskProgress.ts): owner only, open only, each line through the same strip.
+  const taskProgress = await import("./callTaskProgress.js")
+    .then(async (P) => {
+      const section = await P.callTaskProgress(userId, zone);
+      if (!section) return null;
+      const body = (await strip(section.split("\n").slice(1))).filter(Boolean);
+      return body.length ? `${P.CALL_TASK_PROGRESS_HEAD}\n${body.join("\n")}` : null;
+    })
+    .catch(() => null);
   const loops = [
     capacity,
+    taskProgress,
     promised.length ? `What you said on a call you'd do, still open:\n${promised.join("\n")}` : null,
     loopLines.length ? `What you're carrying for them and where each stands (say where one stands when they ask what you're doing or when it changes what they should do next; what you already told them on a call isn't news, and it never opens a call):\n${loopLines.join("\n")}` : null,
   ].filter(Boolean).join("\n");
