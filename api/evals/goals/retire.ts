@@ -116,7 +116,7 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
 // ---- 3. a standalone ask: one question, idle, one note; their answer; pick it back up
 {
   check("marked, its goal quiet: due, asked in the next natural reply", one(ask()).action === "due");
-  check("asked 6 days ago, nothing: waiting; 7 days: idle, its note owed", one(ask({ askedAt: ago(6) })).action === "asked" && one(ask({ askedAt: ago(7) })).action === "idle");
+  check("asked 6 days ago, nothing: waiting; 7 days and 30 days: still asked, never retired for silence", one(ask({ askedAt: ago(6) })).action === "asked" && one(ask({ askedAt: ago(7) })).action === "asked" && one(ask({ askedAt: ago(30) })).action !== "idle");
   const n = A.notesFrom([], [{ id: UUID, text: ASK, retiredAt: ago(0.1), toldAt: null, note: "I've set aside the Sequin AI venue search; say the word and I'll pick it back up" }]);
   check("the idled ask leaves one note: its stored line", n.length === 1 && n[0].kind === "ask" && n[0].line.startsWith("I've set aside the Sequin AI venue search"), n);
   check("...told, never owed again", A.notesFrom([], [{ id: UUID, text: ASK, retiredAt: ago(0.1), toldAt: ago(0.05) }]).length === 0);
@@ -266,13 +266,13 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
   steps = await A.runAskRetire("u1", [], at(5), deps(at(5)));
   check("run 3 (day 5): naming it after the question is not a keep", steps[0]?.action === "asked");
   steps = await A.runAskRetire("u1", [], at(7.3), deps(at(7.3)));
-  check("run 4 (day 7): no answer: idle, kind help, its note owed", steps[0]?.action === "idle" && mem.ask.kind === "help" && !!mem.ask.retiredAt && mem.logs.includes("ask.retired:no_answer"));
+  check("run 4 (day 7): no answer: the ask stays open and searched (not retired, kind unchanged, no note)", steps[0]?.action === "asked" && mem.ask.kind === "find" && !mem.ask.retiredAt && !mem.logs.includes("ask.retired:no_answer"));
   const owed = A.notesFrom([], [{ id: mem.ask.id, text: mem.ask.text, retiredAt: mem.ask.retiredAt, toldAt: mem.ask.toldAt, withGoal: mem.ask.withGoal, note: mem.ask.note }]);
-  check("...one note owed", owed.length === 1 && owed[0].line === A.fallbackNote(ASK));
+  check("...no stopped-looking note owed for silence", owed.length === 0);
   mem.ask = { ...mem.ask, toldAt: at(7.5) };
   const after = A.notesFrom([], [{ id: mem.ask.id, text: mem.ask.text, retiredAt: mem.ask.retiredAt, toldAt: mem.ask.toldAt }]);
   steps = await A.runAskRetire("u1", [], at(9), deps(at(9)));
-  check("...told once, never again; later runs leave it alone", after.length === 0 && steps.length === 0);
+  check("...later runs leave it open, with nothing said", after.length === 0 && steps[0]?.action === "asked" && !mem.ask.retiredAt);
   // The goal path: marked, the goal's recheck goes out and idles it, the ask goes with it.
   mem.ask = ask({ dueAt: at(10) });
   mem.goal = goal({ recheckAskedAt: at(10.5), lastSignalAt: at(-20) });

@@ -154,8 +154,8 @@ const NOW = at("2026-10-30");
 // ---------------------------------------------------------------- the other exit paths
 {
   const ax = src("services/askExpiry.ts");
-  check("ask expiry: while quiet an ask with no time frame of its own isn't expired on its 30 days (pushed a day, said once a day)", /if \(quiet && !named\) \{[\s\S]{0,200}expires_at = NOW\(\) \+ INTERVAL '1 day'[\s\S]{0,300}decision: "ask\.expiry_held"/.test(ax));
-  check("ask expiry: one whose named time passed expires, said 'while quiet' (only when they really are quiet)", /the time it was for passed \(\$\{new Date\(r\.expires_at\)\.toISOString\(\)\.slice\(0, 10\)\}\)\$\{silence === "quiet" \? " while quiet" : ""\}/.test(ax) && /action: silence === "quiet" \? "tapered" : "silence_unread"/.test(ax));
+  check("ask expiry: an ask with no time frame has no clock; an old one comes off, said once in the log, never closed on silence", /if \(!named\) \{[\s\S]{0,200}expires_at = NULL[\s\S]{0,300}decision: "ask\.expiry_held"/.test(ax) && !/memberSilence/.test(ax));
+  check("ask expiry: one whose named time passed expires (that is evidence, not silence)", /the time it was for passed \(\$\{new Date\(r\.expires_at\)\.toISOString\(\)\.slice\(0, 10\)\}\)`/.test(ax));
   const es = src("services/eventSurfacingSweep.ts");
   check("a queued find whose send window ended while quiet goes back to the backlog (unless its date passed), said", /const silence = status === "expired" && !isPastEvent\(payload\.match, await memberZone\(userId\)\) \? await import\("\.\/dailySweep\.js"\)\.then\(\(D\) => D\.memberSilence\(userId\)\)/.test(es) && /if \(silence !== "engaged"\) \{/.test(es) && /action: "expired_offer_kept"/.test(es));
 }

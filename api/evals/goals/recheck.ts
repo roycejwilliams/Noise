@@ -95,7 +95,7 @@ const one = (r: any, o: any = {}) => decide([r], o)[0];
 {
   check("asked 6 days ago, nothing: still waiting", one(row(RUN, { lastSignalAt: ago(25), recheckAskedAt: ago(6) })).action === "asked");
   const idle = one(row(RUN, { lastSignalAt: ago(25), recheckAskedAt: ago(7) }));
-  check("asked 7 days ago, nothing: idle", idle.action === "idle", idle);
+  check("asked 7 days ago, nothing: no idle (silence is not rejection): the goal stays active", idle.action !== "idle", idle);
   const after = row(RUN, { state: "stale", reason: R.RECHECK_IDLE_REASON, changedAt: ago(10), lastSignalAt: ago(30), recheckAskedAt: ago(17) });
   check("an idle goal is never asked again, however long it stays quiet", R.isRecheckIdle(after) && one(after).action === "none" && one({ ...after, lastSignalAt: ago(90) }, { lastExchangeAt: null }).action === "none");
   check("idle is stale from context with the reason, its note owed (told_at NULL), and never raised again as a set-aside question", /setGoalState\(userId, goal, "stale", RECHECK_IDLE_REASON, "context", \{ told: false \}\)/.test(src("services/goalRecheck.ts")) && /told_at IS NULL AND reason IS DISTINCT FROM \$2 ORDER BY changed_at`, \[userId, "no answer to the recheck"\]/.test(src("services/goalEdges.ts")) && /COALESCE\(CASE WHEN \$7::boolean THEN NOW\(\) END, CASE WHEN \$6 = 'context' AND \$4 <> 'active' THEN NULL ELSE NOW\(\) END\)/.test(src("services/goalEdges.ts")));
@@ -171,7 +171,7 @@ const searching = (...goals: string[]) => goals.map((g) => ({ goalHash: G.goalHa
   });
   await R.runGoalRecheck("u1", [RUN, POT, SEED, "find a book club in Noe Valley"], NOW, all.deps);
   const names = all.logs().map((d: any) => `${d.decision}:${d.action}`);
-  check("idle, revive and the text are applied and logged (goal.idle, goal.revived, goal.recheck_due); the other due goal waits its turn", all.calls.some((c) => c.kind === "idle" && c.args[1] === RUN) && all.calls.some((c) => c.kind === "revive" && c.args[1] === SEED) && all.calls.filter((c) => c.kind === "text").length === 1 && names.includes("goal.idle:stale") && names.includes("goal.revived:active") && names.includes("goal.recheck_due:text_queued") && !names.includes("goal.recheck_due:ask_in_reply"), names);
+  check("revive and the text are applied and logged (goal.revived, goal.recheck_due), nothing is idled for silence; the other due goal waits its turn", !all.calls.some((c) => c.kind === "idle") && all.calls.some((c) => c.kind === "revive" && c.args[1] === SEED) && all.calls.filter((c) => c.kind === "text").length === 1 && !names.includes("goal.idle:stale") && names.includes("goal.revived:active") && names.includes("goal.recheck_due:text_queued") && !names.includes("goal.recheck_due:ask_in_reply"), names);
   check("the text goes to the goal due longest", all.calls.find((c) => c.kind === "text")?.args[1].goal === POT);
   const heldRun = stubDeps({ rows: [stateRow(POT, { lastSignalAt: ago(20) })], texts: [], plans: searching(POT), held: ["unanswered_pause"] });
   await R.runGoalRecheck("u1", [POT], NOW, heldRun.deps);
@@ -183,7 +183,7 @@ const searching = (...goals: string[]) => goals.map((g) => ({ goalHash: G.goalHa
   const routeRows = [row(RUN, { lastSignalAt: ago(30), recheckAskedAt: ago(9) }), row(POT, { lastSignalAt: ago(20) })];
   const routeSteps = decide(routeRows, { lastExchangeAt: null });
   await R.applySteps("u1", routeSteps, routeRows, route.deps, new Set(["signal", "revive"]));
-  check("the text route never idles or asks", routeSteps.some((s) => s.action === "idle") && routeSteps.some((s) => s.action === "text") && !route.calls.some((c) => c.kind === "idle" || c.kind === "text" || c.kind === "log"));
+  check("the text route never idles or asks (and the decision no longer idles)", !routeSteps.some((s) => s.action === "idle") && routeSteps.some((s) => s.action === "text") && !route.calls.some((c) => c.kind === "idle" || c.kind === "text" || c.kind === "log"));
 }
 
 // ---- the reply's recheck
@@ -286,7 +286,7 @@ check("the goal nudge carries its goal's hash, and sending it counts as the rech
   const BOOK = "find a book club in Noe Valley";
   const fence = { userId: "u1", strip: (t: string) => t };
   // 1. An asked goal no longer searched never goes idle.
-  check("an asked goal the sweep stopped searching is left alone, never idled", one(row(RUN, { lastSignalAt: ago(30), recheckAskedAt: ago(9), searched: false })).action === "none" && one(row(RUN, { lastSignalAt: ago(30), recheckAskedAt: ago(9) })).action === "idle");
+  check("an asked goal the sweep stopped searching is left alone, never idled", one(row(RUN, { lastSignalAt: ago(30), recheckAskedAt: ago(9), searched: false })).action === "none" && one(row(RUN, { lastSignalAt: ago(30), recheckAskedAt: ago(9) })).action !== "idle");
   // 2. The spacing survives an answer: the last logged ask holds the next goal.
   const answeredA = row(RUN, { lastSignalAt: ago(1 / 24), recheckAskedAt: null });
   const dueB = row(POT, { lastSignalAt: ago(16) });
