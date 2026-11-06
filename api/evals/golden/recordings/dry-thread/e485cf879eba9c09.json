@@ -1,7 +1,7 @@
 {
   "hash": "e485cf879eba9c09",
   "case": "dry-thread",
-  "recorded_at": "2026-11-06T19:02:19.137Z",
+  "recorded_at": "2026-11-06T19:25:29.410Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\":\"They're sharing a reflective, hopeful birthday moment with no request attached\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"sharing\",\"topic\":\"birthday reflection and feeling recharged\",\"pushback\":null,\"lesson\":null,\"dots\":[{\"kind\":\"shape\",\"link\":\"They're feeling hopeful and recharged, a good moment to meet their energy warmly rather than transactionally\",\"why\":\"general wellbeing check-in\"}],\"emotion\":{\"emotion\":\"hopeful\",\"intensity\":\"medium\",\"valence\":\"positive\",\"about\":\"a recharging birthday morning walk\",\"target\":\"life\"},\"seeking\":\"none\",\"feedback\":[],\"ack\":\"❤️\",\"scope\":null,\"message_kind\":\"share\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\",\"personality\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}",
+      "text": "{\"reason\": \"They're sharing a hopeful, reflective birthday moment with no request attached\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"birthday reflection and feeling recharged\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"they're in a hopeful, open headspace today\", \"why\": \"general wellbeing, good moment to be warm and light\"}], \"emotion\": {\"emotion\": \"hopeful\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"birthday walk and feeling recharged\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"❤️\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"personality\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 4938,
         "cache_creation_input_tokens": 0,
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 389,
+        "output_tokens": 426,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 24
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,13 +57,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgnC77siKkLVES841p2vM",
+        "id": "msg_011CgnDsbcujapBZfwbn9mxH",
         "type": "message",
         "role": "assistant",
         "content": [
           {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EuEDCsQCCBMYAipA03ut2+FvNR+lYW1YbTsux9i37e5SsuNkbneZV24bS95cgzLwtsi7u9HH7LbWBpABt63Ipy8GcqfVAaep5AwbITIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBptO41wbCAToIBBAAGgwC2ooDTzcFIT8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCyJUh9H06ffXZHVAphmUNX0JnqfLN9MvOIeqJKbVgcnyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzGd0nqWuFDRSgmfwUaDNg+qmIiTk8X0d2EMiIwRjOd2uMpiYyHRhFTI+5Znf4XWs7wbgk11acA6rsfE/W9S7P26Q8JsHZnSgQQAoAQKkqESKgD+/Bmb3gK2m4HAgZGQTAeje8PEJTXiYQqgfSdICSrRAtHMylCkjOmK6Gwt+YTR4L8QwuratOkLVpbmoCmSpEJL9VVk3F7YxgB"
+          },
+          {
             "type": "text",
-            "text": "{\"reason\":\"They're sharing a reflective, hopeful birthday moment with no request attached\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"sharing\",\"topic\":\"birthday reflection and feeling recharged\",\"pushback\":null,\"lesson\":null,\"dots\":[{\"kind\":\"shape\",\"link\":\"They're feeling hopeful and recharged, a good moment to meet their energy warmly rather than transactionally\",\"why\":\"general wellbeing check-in\"}],\"emotion\":{\"emotion\":\"hopeful\",\"intensity\":\"medium\",\"valence\":\"positive\",\"about\":\"a recharging birthday morning walk\",\"target\":\"life\"},\"seeking\":\"none\",\"feedback\":[],\"ack\":\"❤️\",\"scope\":null,\"message_kind\":\"share\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\",\"personality\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}"
+            "text": "{\"reason\": \"They're sharing a hopeful, reflective birthday moment with no request attached\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"birthday reflection and feeling recharged\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"they're in a hopeful, open headspace today\", \"why\": \"general wellbeing, good moment to be warm and light\"}], \"emotion\": {\"emotion\": \"hopeful\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"birthday walk and feeling recharged\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"❤️\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"personality\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -78,9 +83,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 389,
+          "output_tokens": 426,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 24
           },
           "service_tier": "standard",
           "inference_geo": "global",

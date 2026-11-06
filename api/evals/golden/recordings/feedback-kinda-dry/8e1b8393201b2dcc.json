@@ -1,0 +1,102 @@
+{
+  "hash": "8e1b8393201b2dcc",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-06T19:24:29.651Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That deserved more than a one-liner.\n\nAlmost walking off and then sitting down and nailing it, that's the whole thing right there. First year of piano and she already knows what it feels like to push through nerves and come out the other side. That sticks with a kid.\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Fair. That deserved more than a one-liner.' owns it briefly, then adds original insight ('she already knows what it feels like to push through nerves') without apology or self-reference.\"}",
+      "usage": {
+        "input_tokens": 354,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 241,
+        "output_tokens_details": {
+          "thinking_tokens": 165
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgnDoGdnTGsvejLtirqcm",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqAHCsQCCBMYAipAf04iCdMSmEO+r64NLlLJgHGLs4nqRBJpfrskW30N20OoccBixld1byMSJWGEJui1pvJIS/vpGbYLjKAwhX3GLzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB7NK41wbCAToIBBAAGgwC2ooDTzcFuXUEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCLvf9TVM2KtAwgMnqN20H3s9ExQLfUZsneuJvCbPp2XSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwzZe075kCfP39qYtwaDMVYkF+rLT94aoR+KyIwX2NbmC02jBXp4BxNersVWRbC7bj2kl0c42ahqQViJofe9Xs2f0oLZwPiFg65baBoKogEZ9iUsPZEvGzXKo3whFtYeClNr7E0Arq3H5YLAmJWoPOBN1H21WvqLYOXul1SPsjNUGXV13kJf2ytQBzbIP02KtJycAGBQvKml1f0fJSPYEN1kWnr3DBrcK1s0Xsj3YHf/yrqTp7pT0jFRXH1mnOkrvRmpmtHHaRXlf6whdK9SJyeALT0/WZida9zn1ItHZ+jTOLdDrTI0H2zGg4KvQJQ9m5RJdZRXtNoaCjnjtEcBxKIGlyj/f92kWx5MRBhcXapBpWf0KOZP1BAuxavBKRc7MKwVH55Zht80Vfb/7uaLzbvqttsYzRHsiJsWt+Gv1kPT4zkhaQu6PFzdyoXBMmkA+JGSSAfCDAF8wbdNnHcaTtLsgBBuhi4zKbH3+VCbQiq0etYEtDVZuBhAFzB99fMdlt80zxWr/GzyQT7uSjYIe3jTgM7jyJMEJVhp7l9of6vJu5m9DO1G1fvnlPgHgDmsiOsZIxNxEFrlLT9hA4Ys9p3oaw+jJrKUqdRLxEsfBnlE1bwJr+3Ucp7RcPyplJSL+RVFqlC5rs6gIgqhbeEN5QaWSblLi3F1ChCeloiP+fxQCXoxWdF6fQL6WBObulB67H2BXMpki4AODGiZcwM0MvmFmSZhJX1l0yoluRpksFm5XOExGbFW443/hNtiRsV17+JV4/iNScZZYhbNcIvZg/JuagGzF6RRhgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Fair. That deserved more than a one-liner.' owns it briefly, then adds original insight ('she already knows what it feels like to push through nerves') without apology or self-reference.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 354,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 241,
+          "output_tokens_details": {
+            "thinking_tokens": 165
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "8e1b8393201b2dcc",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
