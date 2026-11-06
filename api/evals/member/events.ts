@@ -149,6 +149,7 @@ check("omitted events are counted on the knowledge object", (omit.eventsOmitted 
 const WK = await import("../../src/services/whatCoKnows.js");
 const known = WK.knownItems({ profile: null, claims: [], files: [], asks: [], kit: [], snapshot: null, tastes: [], threads: [], events: [{ kind: "plan", id: "p77", name: "Pier Night", on: "2026-11-20" }, { kind: "event", id: "e77", name: "Salon", on: "2026-10-22" }] } as any);
 check("whatCoKnows lists a plan and an event with refs plan:<id> and event:<id>, removable only", known.map((i: any) => i.ref).sort().join() === "event:e77,plan:p77" && known.every((i: any) => i.canCorrect === false));
+check("neutral labels, no fixed member-facing sentence", WK.eventLabel({ kind: "plan", name: "Pier Night", on: "2026-11-20" }) === "a plan to go to Pier Night, 2026-11-20" && WK.eventLabel({ kind: "event", name: "Salon", on: "2026-10-22", via: "door" }) === "went to Salon, 2026-10-22 (door check-in)" && known.find((i: any) => i.ref === "plan:p77")!.text === "a plan to go to Pier Night, 2026-11-20");
 const calls: { sql: string; args: unknown[] }[] = [];
 const fdb = { query: async (sql: string, args: unknown[]) => (calls.push({ sql, args }), { rows: [], rowCount: 1 }) };
 const appliedPlan = await WK.applyOne(fdb as any, "u1", {} as any, known.find((i: any) => i.ref === "plan:p77")!, "remove", null, "forget that");
