@@ -173,7 +173,9 @@ export async function freshForShow(f: StoredFind, reread: (f: StoredFind) => Pro
 // ---------------------------------------------------------------- 4. member reaction ranks the next finds
 
 export type FindOutcome = "yes" | "no" | "ignored" | "not_like_that";
-export const OUTCOME_WEIGHT: Record<FindOutcome, number> = { yes: 1, ignored: -0.15, no: -0.6, not_like_that: -1 };
+export const OUTCOME_WEIGHT: Record<FindOutcome, number> = { yes: 1, ignored: 0, no: -0.6, not_like_that: -1 };
+// Silence is not rejection (Royce, 2026-11-04): an unanswered find is neutral, weight 0 and not even counted as a reaction, for this
+// member and for everyone's signal. It is still recorded ("ignored"), and an answer later (recordFindOutcome) still replaces it.
 export const IGNORED_AFTER_HOURS = 72;
 // A member's own signal leads once they have this many reactions; until then everyone's does. Blended in between.
 export const MEMBER_SIGNAL_FULL = 8;
@@ -211,6 +213,7 @@ export type FeatureStats = Record<string, { n: number; sum: number }>;
 export function featureStats(rows: { features: string[]; outcome: FindOutcome }[]): FeatureStats {
   const s: FeatureStats = {};
   for (const r of rows) for (const f of r.features) {
+    if (r.outcome === "ignored") continue;
     s[f] ??= { n: 0, sum: 0 };
     s[f].n++;
     s[f].sum += OUTCOME_WEIGHT[r.outcome];
@@ -231,7 +234,7 @@ export function rankFinds<T extends Pick<StoredFind, "type" | "url" | "fields">>
 
 export async function rankingSignal(userId: string): Promise<{ member: { stats: FeatureStats; reactions: number }; global: FeatureStats }> {
   const q = (where: string, args: unknown[]) =>
-    pool.query(`SELECT features, outcome FROM research_finds WHERE outcome IS NOT NULL ${where} ORDER BY outcome_at DESC LIMIT 2000`, args).then((r) => r.rows as { features: string[]; outcome: FindOutcome }[]).catch(() => []);
+    pool.query(`SELECT features, outcome FROM research_finds WHERE outcome IS NOT NULL AND outcome <> 'ignored' ${where} ORDER BY outcome_at DESC LIMIT 2000`, args).then((r) => r.rows as { features: string[]; outcome: FindOutcome }[]).catch(() => []);
   const mine = await q("AND user_id = $1", [userId]);
   const all = await q("", []);
   return { member: { stats: featureStats(mine), reactions: mine.length }, global: featureStats(all) };
