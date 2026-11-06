@@ -40,7 +40,8 @@ export type PersonStage =
   | "met"
   | "already_knew";
 export type PersonOutcome = {
-  on: string;
+  // The day of THEIR latest word (their own evidence times); null when none carries a time. Never the pair's shared timestamps.
+  on: string | null;
   // Their own words about it (co_pairs <side>_outcome_note), or null.
   quote: string | null;
   met: "yes" | "no" | null;
@@ -92,8 +93,8 @@ export type RawPerson = {
   evidence: Side;
   outcome: string | null;
   note: string | null;
-  outcomeAt: Date | null;
-  metAt: Date | null;
+  // The network intro's pair record (co_pairs event_id 'network'): shown as a network intro, and it replaces the network_introductions row.
+  viaNetwork: boolean;
   // knows: the words that said it.
   quote: string | null;
 };
@@ -101,7 +102,7 @@ export type RawPerson = {
 const rows = (q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> }, sql: string, userId: string) => q.query(sql, [userId]).then((r) => r.rows as any[]);
 const hash = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 12);
 const dateOrNull = (x: unknown) => (x ? new Date(x as string) : null);
-const empty = (): Omit<RawPerson, "id" | "kind" | "at" | "eventName" | "firstName" | "doubleYes" | "otherKey"> => ({ mine: null, reached: false, memberAsked: false, introduced: false, ended: null, evidence: {}, outcome: null, note: null, outcomeAt: null, metAt: null, quote: null });
+const empty = (): Omit<RawPerson, "id" | "kind" | "at" | "eventName" | "firstName" | "doubleYes" | "otherKey"> => ({ mine: null, reached: false, memberAsked: false, introduced: false, ended: null, evidence: {}, outcome: null, note: null, viaNetwork: false, quote: null });
 
 // One member's people: every query takes the member's id as the bound $1, never in the text, and picks only THEIR side of a record.
 // The other person's first name is selected only where the double yes is already true in the SQL itself.
@@ -113,6 +114,9 @@ export async function loadPeople(userId: string, q: { query: (sql: string, args:
       `WITH mine AS (
          SELECT p.*, CASE WHEN p.a_id = $1 THEN 'a' ELSE 'b' END AS side, CASE WHEN p.a_id = $1 THEN p.b_id ELSE p.a_id END AS other_id,
                 CASE WHEN p.a_id = $1 THEN p.a_answer ELSE p.b_answer END AS my_answer,
+                CASE WHEN p.a_id = $1 THEN p.a_answered_at ELSE p.b_answered_at END AS my_answered_at,
+                -- Their own request for this person (never read off the pair's origin: the other side may be the one who asked).
+                (SELECT MAX(r.asked_at) FROM intro_requests r WHERE r.user_id = $1 AND r.target_id = CASE WHEN p.a_id = $1 THEN p.b_id ELSE p.a_id END) AS my_request_at,
                 CASE WHEN p.a_id = $1 THEN p.asked_a_at ELSE p.asked_b_at END AS my_asked_at,
                 CASE WHEN p.a_id = $1 THEN p.a_evidence ELSE p.b_evidence END AS my_evidence,
                 CASE WHEN p.a_id = $1 THEN p.a_outcome ELSE p.b_outcome END AS my_outcome,
@@ -120,12 +124,12 @@ export async function loadPeople(userId: string, q: { query: (sql: string, args:
                 (p.intro_sent_at IS NOT NULL OR p.both_yes_at IS NOT NULL OR (p.a_answer = 'yes' AND p.b_answer = 'yes') OR p.state IN ('both_yes', 'intro_sent', 'met')) AS double_yes
          FROM co_pairs p WHERE p.a_id = $1 OR p.b_id = $1
        )
-       SELECT m.id, m.side, m.other_id, m.origin, m.state, m.my_answer, m.my_asked_at, m.my_evidence, m.my_outcome, m.my_note, m.double_yes,
-              m.intro_sent_at, m.declined_at, m.expired_at, m.met_at, m.outcome_at, m.updated_at, c.event_name,
+       SELECT m.id, m.side, m.other_id, m.origin, m.state, m.my_answer, m.my_answered_at, m.my_request_at, m.event_id, m.both_yes_at, m.my_asked_at, m.my_evidence, m.my_outcome, m.my_note, m.double_yes,
+              m.intro_sent_at, m.declined_at, m.expired_at, m.created_at, c.event_name,
               CASE WHEN m.double_yes THEN u.first_name END AS first_name
        FROM mine m LEFT JOIN event_room_closures c ON c.event_id = m.event_id LEFT JOIN users u ON u.id = m.other_id
-       WHERE m.my_asked_at IS NOT NULL OR m.origin = 'member' OR m.double_yes
-       ORDER BY m.updated_at DESC`,
+       WHERE m.my_asked_at IS NOT NULL OR m.my_request_at IS NOT NULL OR m.double_yes
+       ORDER BY m.created_at DESC`,
       userId,
     ),
     // network_introductions: their own interest time only. A row they never answered and that is not made yet isn't one they know of.
@@ -179,41 +183,52 @@ export async function loadPeople(userId: string, q: { query: (sql: string, args:
        WHERE r.user_id = $1
          AND (r.target_id IS NULL OR (
            NOT EXISTS (SELECT 1 FROM co_pairs p WHERE (p.a_id = $1 AND p.b_id = r.target_id) OR (p.a_id = r.target_id AND p.b_id = $1))
-           AND NOT EXISTS (SELECT 1 FROM network_introductions n WHERE (n.person_a_id = $1 AND n.person_b_id = r.target_id) OR (n.person_a_id = r.target_id AND n.person_b_id = $1))))
+           AND NOT EXISTS (SELECT 1 FROM network_introductions n WHERE n.status IN ('introduced', 'both_interested') AND ((n.person_a_id = $1 AND n.person_b_id = r.target_id) OR (n.person_a_id = r.target_id AND n.person_b_id = $1)))))
        ORDER BY r.asked_at DESC`,
       userId,
     ),
   ]);
   const out: RawPerson[] = [];
   for (const r of pairs) {
+    const evidence: Side = r.my_evidence && typeof r.my_evidence === "object" ? r.my_evidence : {};
+    const asked = !!r.my_request_at;
+    const doubleYes = !!r.double_yes;
+    // Only THEIR side's times (their ask, their answer, their request, their own evidence) until both agreed; the pair's updated_at, met_at
+    // and outcome_at are shared and move when the other side acts.
+    const own = [r.my_asked_at, r.my_answered_at, r.my_request_at, ...Object.values(evidence).map((e) => e?.at), ...(doubleYes ? [r.both_yes_at, r.intro_sent_at] : [])].map(dateOrNull).filter((d): d is Date => !!d && !Number.isNaN(d.getTime()));
+    const at = own.length ? new Date(Math.max(...own.map((d) => d.getTime()))) : new Date(r.created_at);
+    const hidden = asked && !doubleYes;
     out.push({
       ...empty(),
-      id: `pair:${r.id}:${r.side === "a" ? "a" : "b"}`,
+      // An asker's request keeps one id shape whether the person was found, asked or not (ruling #294): "ask:" for both this and a bare request.
+      id: hidden ? `ask:${hash(`${userId}:${r.other_id}`)}` : `pair:${r.id}:${r.side === "a" ? "a" : "b"}`,
       kind: "pair",
-      at: new Date(r.updated_at),
-      eventName: r.event_name ?? null,
-      firstName: r.double_yes ? (r.first_name ?? null) : null,
-      doubleYes: !!r.double_yes,
+      at: hidden && r.my_request_at ? new Date(r.my_request_at) : at,
+      eventName: hidden || r.event_id === "network" ? null : r.event_name ?? null,
+      firstName: doubleYes ? (r.first_name ?? null) : null,
+      doubleYes,
       otherKey: r.other_id ? String(r.other_id) : null,
-      mine: r.my_answer === "yes" || r.my_answer === "no" ? r.my_answer : null,
+      mine: hidden ? null : r.my_answer === "yes" || r.my_answer === "no" ? r.my_answer : null,
       reached: !!r.my_asked_at,
-      memberAsked: r.origin === "member",
-      introduced: !!r.intro_sent_at,
-      ended: r.declined_at || r.state === "declined" || r.state === "blocked" ? "declined" : r.state === "expired" || r.expired_at ? "expired" : null,
-      evidence: r.my_evidence && typeof r.my_evidence === "object" ? r.my_evidence : {},
-      outcome: r.my_outcome ?? null,
-      note: r.my_note ?? null,
-      outcomeAt: dateOrNull(r.outcome_at),
-      metAt: dateOrNull(r.met_at),
+      memberAsked: asked,
+      introduced: doubleYes && !!r.intro_sent_at,
+      ended: hidden ? null : r.declined_at || r.state === "declined" || r.state === "blocked" ? "declined" : r.state === "expired" || r.expired_at ? "expired" : null,
+      evidence: hidden ? {} : evidence,
+      outcome: hidden ? null : r.my_outcome ?? null,
+      note: hidden ? null : r.my_note ?? null,
+      viaNetwork: r.event_id === "network",
     });
   }
+  // A network intro made also has a co_pairs row (event_id 'network'): one person, one entry (the pair's, which carries the outcome).
+  const viaPair = new Set(out.filter((p) => p.kind === "pair" && p.viaNetwork && p.otherKey).map((p) => p.otherKey!));
   for (const r of nets) {
     const other = String(r.other_id);
+    if (viaPair.has(other)) continue;
     out.push({
       ...empty(),
       id: `net:${hash(`${userId}:${other}`)}`,
       kind: "network",
-      at: new Date(r.introduced_at ?? r.my_interested_at ?? r.created_at),
+      at: new Date(r.double_yes ? (r.introduced_at ?? r.my_interested_at ?? r.created_at) : r.my_interested_at),
       eventName: null,
       firstName: r.double_yes ? (r.first_name ?? null) : null,
       doubleYes: !!r.double_yes,
@@ -247,7 +262,7 @@ export async function loadPeople(userId: string, q: { query: (sql: string, args:
     out.push({ ...empty(), id: `knows:${r.id}`, kind: "knows", at: new Date(r.happened_at), eventName: null, firstName: null, doubleYes: false, otherKey: r.other_id ? String(r.other_id) : null, quote: r.quote ? String(r.quote) : null });
   }
   for (const r of reqs) {
-    out.push({ ...empty(), id: `req:${hash(String(r.id))}`, kind: "request", at: new Date(r.asked_at), eventName: r.event_name ?? null, firstName: null, doubleYes: false, otherKey: null, memberAsked: true, reached: true });
+    out.push({ ...empty(), id: `ask:${hash(String(r.id))}`, kind: "request", at: new Date(r.asked_at), eventName: null, firstName: null, doubleYes: false, otherKey: null, memberAsked: true, reached: true });
   }
   return out;
 }
@@ -261,8 +276,11 @@ const clip = (x: string) => (x.length > CLIP ? x.slice(0, CLIP) : x);
 export function stageOf(r: RawPerson): PersonStage {
   if (r.kind === "knows") return "already_knew";
   if (r.kind === "request") return "asked_for_intro";
+  // Their own by-name request stays "asked" until both said yes, whether the person was found, asked, or said no (ruling #294).
+  if (r.memberAsked && !r.doubleYes) return "asked_for_intro";
   if (r.mine === "no") return "declined_by_you";
-  const metYes = r.evidence.met?.value === "yes" || (r.kind === "pair" && !!r.metAt && r.evidence.met?.value !== "no");
+  // Only THEIR own word that they met (the pair's met_at is set by either side's report).
+  const metYes = r.evidence.met?.value === "yes";
   if (r.introduced) return metYes ? "met" : "introduced";
   if (r.doubleYes) return "both_yes";
   if (r.ended === "declined") return "closed";
@@ -273,7 +291,8 @@ export function stageOf(r: RawPerson): PersonStage {
 }
 
 function howOf(r: RawPerson): PersonHow {
-  if (r.kind === "pair" || r.kind === "optin") return r.memberAsked ? "asked_for_intro" : "matched_at_event";
+  if (r.kind === "pair" && r.viaNetwork) return r.memberAsked && !r.doubleYes ? "asked_for_intro" : "intro_via_network";
+  if (r.kind === "pair" || r.kind === "optin") return r.memberAsked && !r.doubleYes ? "asked_for_intro" : "matched_at_event";
   if (r.kind === "network") return "intro_via_network";
   if (r.kind === "knows") return "already_knew";
   if (r.kind === "request") return "asked_for_intro";
@@ -298,12 +317,11 @@ function outcomeOf(r: RawPerson, note: string | null): { outcome: PersonOutcome 
   const useful = oneOf(ev.useful?.value, ["yes", "somewhat", "no"] as const);
   const kept = oneOf(ev.kept_talking?.value, ["yes", "not_yet", "no"] as const);
   const times = [ev.met?.at, ev.useful?.at, ev.kept_talking?.at].flatMap((t) => (t && !Number.isNaN(new Date(t).getTime()) ? [new Date(t)] : []));
-  if (r.outcomeAt) times.push(r.outcomeAt);
   const on = times.length ? new Date(Math.max(...times.map((t) => t.getTime()))) : null;
   if (!met && !useful && !kept && !note) return { outcome: null, more: null };
   const usefulStated = ev.useful?.how === "stated" ? useful : r.outcome === "met_good" ? "yes" : r.outcome === "met_not_a_fit" ? "no" : null;
   return {
-    outcome: { on: day(on ?? r.at), quote: note, met, useful, keptTalking: kept },
+    outcome: { on: on ? day(on) : null, quote: note, met, useful, keptTalking: kept },
     more: usefulStated === "yes" ? "yes" : usefulStated === "no" ? "no" : null,
   };
 }
@@ -357,7 +375,7 @@ export function buildPeople(raw: RawPerson[], guards: PeopleGuards, budget: numb
     .filter((r) => !(r.kind === "knows" && gone(r.id)) && !Number.isNaN(r.at.getTime()))
     .flatMap((r0): { p: Fact<Person>; live: boolean; rank: number }[] => {
       const outcomeRemoved = gone(r0.id);
-      const r: RawPerson = outcomeRemoved ? { ...r0, evidence: {}, metAt: null, note: null, outcome: null, outcomeAt: null } : r0;
+      const r: RawPerson = outcomeRemoved ? { ...r0, evidence: {}, note: null, outcome: null } : r0;
       const name = r.doubleYes && r.firstName?.trim() ? r.firstName.trim() : r.kind === "knows" && r.otherKey ? (named.get(r.otherKey) ?? null) : null;
       // A person they asked Cue to forget by name is gone whole.
       if (name && guards.g(name) !== name) return [];
