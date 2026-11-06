@@ -318,7 +318,7 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
     const anchor: Date | null = eventDate ? null : row.send_at instanceof Date ? row.send_at : row.send_at ? new Date(row.send_at) : null;
     // One queued before the boundary for a program or a thing with no event day: closed without a text (nothing asks "how was it").
     if (!isRealEventForFollowUp(match)) {
-      await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
+      await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped', drop_reason = $2 WHERE id = ANY($1::uuid[])`, [[row.id], "not a real event: openings and programs aren't followed up"]);
       continue;
     }
     if (!eventDate && !anchor) {
