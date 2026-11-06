@@ -1,0 +1,102 @@
+{
+  "hash": "4dd5e6574cc8cc7e",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-06T19:02:53.131Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. Let me actually say what I mean.\n\nA birthday morning with no phone, by the water, feeling hopeful again after a stretch like you've had, that's worth sitting with for a second. Good for you.\n\nAnd telling your team you need two weeks, for real, after running on empty for months, that's not small. Go be unreachable for a while.\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"'Let me actually say what I mean' explains its tone/approach instead of just owning it briefly.\"}",
+      "usage": {
+        "input_tokens": 466,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 596,
+        "output_tokens_details": {
+          "thinking_tokens": 548
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgnC9QsDE6HuF28U51Pu8",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"'Let me actually say what I mean' explains its tone/approach instead of just owning it briefly.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 466,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 596,
+          "output_tokens_details": {
+            "thinking_tokens": 548
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "4dd5e6574cc8cc7e",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
