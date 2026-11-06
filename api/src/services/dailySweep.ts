@@ -318,9 +318,9 @@ export function floorGoalDecision(g: { search: string | null; why: string | null
   if (o.gateError) return { status: "error", why: o.gateError };
   const st = o.states.get(o.goalId);
   if (st && st.state !== "active") return { status: "skipped", why: `set aside since its plan (${st.state}: ${st.reason.slice(0, 120)})` };
-  // A goal whose one recheck went unanswered is searched weekly, on its own day, not daily: less spend, never dropped (goalEdges.ts
+  // A goal whose one recheck got no answer is searched weekly, on its own day, not daily: less spend, never dropped (goalEdges.ts
   // restingToday; a signal from them clears the ask and the daily search is back).
-  if (o.now && st && restingToday(st, o.goalId, o.now)) return { status: "skipped", why: "weekly: its recheck went unanswered, so it is searched once a week (less contact, not dropped)" };
+  if (o.now && st && restingToday(st, o.goalId, o.now)) return { status: "skipped", why: "weekly: no answer to its recheck yet, so it is searched once a week (less contact, not dropped)" };
   const otherHolds = o.hold.filter((h) => h !== "away_hold");
   if (otherHolds.length) return { status: "skipped", why: `held: ${otherHolds.join(", ")}` };
   if (o.hold.includes("away_hold") && g.placeBound === true) return { status: "skipped", why: "away: place-bound" };
