@@ -108,7 +108,7 @@ check("the env pause list still adds to it", PP.heldTypes({ PROACTIVE_PAUSED_TYP
   const one = (r: ReturnType<typeof row>, o: Record<string, unknown> = {}) => R.recheckDecide({ rows: [r], now: NOW, signals: [], lastExchangeAt: null, held: [], pendingText: [], ...o } as any)[0];
   check("covered (a): a quiet goal (14+3 days, nothing from them) gets one text", one(row({ lastSignalAt: ago(17) })).action === "text");
   check("covered (b): once asked, it is never asked again in the same quiet stretch (waiting, not due)", one(row({ lastSignalAt: ago(25), recheckAskedAt: ago(3) })).action === "asked");
-  check("covered (c): ignored for 7 days, the goal is let go (idle, no longer searched)", one(row({ lastSignalAt: ago(30), recheckAskedAt: ago(7) })).action === "idle");
+  check("covered (c): ignored for 7 days, the goal stays active (silence is not rejection)", one(row({ lastSignalAt: ago(30), recheckAskedAt: ago(7) })).action !== "idle");
   const idle = row({ state: "stale", reason: R.RECHECK_IDLE_REASON, source: "context", changedAt: ago(1), lastSignalAt: ago(90), recheckAskedAt: ago(8) });
   check("covered (c): an idle goal is never asked again, however long it stays quiet", one(idle).action === "none");
   check("NOT covered: a goal the sweep isn't searching (a work plan) is never rechecked; the parked nudge did surface it", one(row({ lastSignalAt: ago(40), searched: false })).action === "none" && N.detectGoalNudge(base(pt("2026-10-06T11:00:00"), { goals: [{ id: "g1", text: GOAL, confirmedAt: new Date(pt("2026-10-06T11:00:00").getTime() - 30 * DAY), state: "active", coTask: false }] })).length === 1);

@@ -245,7 +245,9 @@ export function retireDecide(input: RetireInput): RetireStep[] {
     if (tied.length && tied.every((g) => stoppedAfter(g, a.dueAt!))) return { ...base, action: "idle_with_goal", why: "its goal stopped being searched after it was marked; that note covers it" };
     if (!a.askedAt && tied.some((g) => g.state === "active" && g.lastSignalAt && g.lastSignalAt > a.dueAt!)) return { ...base, action: "unflag", why: "its goal came back since it was marked; the next plan decides again" };
     if (a.askedAt) {
-      if (now.getTime() - a.askedAt.getTime() >= RECHECK_ANSWER_DAYS * DAY) return { ...base, action: "idle", why: `no answer in ${RECHECK_ANSWER_DAYS} days since it was asked` };
+      // Silence is not rejection (Royce, 2026-11-04): an unanswered question never retires the ask. It stays open and searched; only
+      // their word or other evidence (the goal it serves closing on their word) ends it.
+      if (now.getTime() - a.askedAt.getTime() >= RECHECK_ANSWER_DAYS * DAY) return { ...base, action: "asked", why: `no answer in ${RECHECK_ANSWER_DAYS} days since it was asked: less contact, the ask stays open` };
       return { ...base, action: "asked", why: "asked; waiting on them" };
     }
     return { ...base, action: "due", dueAt: a.dueAt, why: "marked: it restates a plan of theirs, not something to find" };

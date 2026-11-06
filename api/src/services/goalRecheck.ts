@@ -1,6 +1,6 @@
 // The goal recheck (Royce, 2026-10-13: "Lookouts end on a date, inferred interests lapse, but goals only end as done, replaced or
 // dropped, so a quiet goal gets searched every morning forever. Give goals a recheck: no new signal inside a set window, Co asks me
-// once, no answer moves the goal to idle and it stops being searched. Any reply brings it back."):
+// once, no answer moves the goal to idle and it stops being searched. Any reply brings it back." SUPERSEDED 2026-11-05: silence never idles a goal, see 3):
 //   1. A signal is their own text naming the goal (read only through services/sourceFence.ts: never their talk with a teammate,
 //      never another member's data), a reaction to a find served for that goal, or a goal action (markGoal, pickGoalItems). It
 //      moves goal_states.last_signal_at. A goal on file with no row gets one (active) the first time the goal sweep sees it.
@@ -8,8 +8,9 @@
 //      next natural reply (the set-aside hint, harness/replyGrounding.ts); with no exchange for RECHECK_TEXT_AFTER_DAYS after it came
 //      due, one short text (goal_recheck, harness/proactiveRegistry.ts), under every send gate. Asked means sent: recheck_asked_at is
 //      set only when a text that went out raised the goal.
-//   3. RECHECK_ANSWER_DAYS after the ask with no signal: idle (stale, RECHECK_IDLE_REASON, already told, so never asked again). The
-//      sweeps stop searching it (goalEdges.ts planGoalSweep reads active goals only); it stays on file.
+//   3. RECHECK_ANSWER_DAYS after the ask with no signal: nothing changes. Silence is not rejection (Royce, 2026-11-04): the goal stays
+//      active and searched, its asks stay open, the question is not asked again, and nothing is said about stopping. Only their word
+//      (markGoal) or other evidence closes a goal. (Goals idled by the old rule come back on any mention: step 4.)
 //   4. Any text of theirs naming an idle goal brings it back (active, the ask cleared); markGoal still works.
 // Every decision (due, ask, idle, revive) is made in one pure function, recheckDecide. Every read and write is one member's own.
 import pool from "../db/db.js";
@@ -219,7 +220,7 @@ export async function forgetUnsureQuotes(userId: string, says: (text: string) =>
 
 // Pure: every recheck decision for one member's goals. At most one text per member per run (the goal due longest), none while held
 // or while one is already waiting. A recheck asked once is never asked again for the same quiet stretch: a signal after it clears it
-// (answered), no signal for RECHECK_ANSWER_DAYS idles the goal for good unless they bring it up.
+// (answered), no signal for RECHECK_ANSWER_DAYS changes nothing (no idle).
 export function recheckDecide(input: RecheckInput): RecheckStep[] {
   const { now } = input;
   const latest = new Map<string, Date>();
@@ -243,7 +244,10 @@ export function recheckDecide(input: RecheckInput): RecheckStep[] {
       if (last > r.recheckAskedAt) return { ...base, signalAt: last, action: "signal", clearAsk: true, why: "answered: a signal since the recheck" };
       // No longer searched (it became a work plan, or has no findable side): nothing to idle, it costs no search.
       if (!r.searched) return { ...base, action: newer ? "signal" : "none", why: "asked, but no longer searched" };
-      if (now.getTime() - r.recheckAskedAt.getTime() >= RECHECK_ANSWER_DAYS * DAY) return { ...base, action: "idle", why: `no signal in ${RECHECK_ANSWER_DAYS} days since the recheck` };
+      // Silence is not rejection (Royce, 2026-11-04/05): no answer means less contact, never a closed goal. The one question stays on
+      // record (so it is not asked again), the goal stays active and searched, and its asks stay open. Only their word or other
+      // evidence (markGoal, a find that came true) closes it.
+      if (now.getTime() - r.recheckAskedAt.getTime() >= RECHECK_ANSWER_DAYS * DAY) return { ...base, action: "none", why: `no signal in ${RECHECK_ANSWER_DAYS} days since the recheck: less contact, the goal stays active` };
       return { ...base, action: "asked", why: "asked; waiting on them" };
     }
     // Unsure whether it went with something they dropped: due now, searched or not. They named it or acted on it since: it stays.
