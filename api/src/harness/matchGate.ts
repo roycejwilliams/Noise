@@ -658,7 +658,36 @@ const ACTIVE_WITHIN_DAYS = 90;
 // closed; one with no answer, or one side's yes, blocks only while it is recent. Shared with services/networkIntroNudge.ts.
 export const PAIR_RETRY_DAYS = 60;
 export const PAIR_BLOCKED_SQL = `SELECT 1 FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2
-  AND (status IN ('declined', 'introduced', 'both_interested') OR GREATEST(created_at, a_interested_at, b_interested_at) > NOW() - INTERVAL '${PAIR_RETRY_DAYS} days')`;
+  AND (status IN ('declined', 'introduced', 'both_interested') OR COALESCE(last_suggested_at, GREATEST(created_at, a_interested_at, b_interested_at)) > NOW() - INTERVAL '${PAIR_RETRY_DAYS} days')`;
+
+// Pure mirror of the rule above, for the tests and for anything that already holds the row. last_suggested_at is set on every tease
+// (networkIntroNudge.ts recordTease), so a re-tease after the window blocks again for another window.
+export function pairBlocked(row: { status: string; createdAt: Date; aInterestedAt?: Date | null; bInterestedAt?: Date | null; lastSuggestedAt?: Date | null }, now: Date): boolean {
+  if (["declined", "introduced", "both_interested"].includes(row.status)) return true;
+  const stamps = [row.createdAt, row.aInterestedAt, row.bInterestedAt].filter((d): d is Date => !!d).map(Number);
+  const from = row.lastSuggestedAt ? +row.lastSuggestedAt : Math.max(...stamps);
+  return from > now.getTime() - PAIR_RETRY_DAYS * 86_400_000;
+}
+
+// Quiet members rank after active ones (Royce, 2026-11-04: the 90-day cutoff means less contact, never removal). Stable: scores keep
+// their order inside each group.
+export function activeFirst<T>(items: T[], isQuiet: (t: T) => boolean): T[] {
+  return [...items.filter((t) => !isQuiet(t)), ...items.filter(isQuiet)];
+}
+
+// Who among these had no text or call of theirs in ACTIVE_WITHIN_DAYS. A read that fails reads no one as quiet.
+export async function quietAmong(ids: string[]): Promise<Set<string>> {
+  if (!ids.length) return new Set();
+  const { rows } = await pool
+    .query(
+      `SELECT DISTINCT user_id AS id FROM co_memories WHERE user_id = ANY($1::uuid[]) AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%') AND created_at > NOW() - ($2 || ' days')::interval`,
+      [ids, ACTIVE_WITHIN_DAYS],
+    )
+    .catch(() => ({ rows: null as any[] | null }));
+  if (!rows) return new Set();
+  const recent = new Set(rows.map((r: any) => String(r.id)));
+  return new Set(ids.filter((i) => !recent.has(i)));
+}
 
 export async function gatherNetworkFacts(
   askerId: string,

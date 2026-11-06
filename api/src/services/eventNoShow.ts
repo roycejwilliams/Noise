@@ -298,11 +298,15 @@ export async function strongConsentingFit(eventId: string, userId: string, lumaI
   const ranked = (Array.isArray(rows[0]?.ranked_candidates) ? rows[0].ranked_candidates : []).filter((r: any) => typeof r?.score === "number" && r.score >= NOSHOW_STRONG_SCORE && typeof r.shareReason === "string" && r.shareReason.trim() && r.candidate_id !== userId);
   ranked.sort((a: any, b: any) => b.score - a.score);
   if (!ranked.length) return null;
+  // Quiet members (nothing from them in 90 days) after active ones, never left out (matchGate.ts activeFirst).
+  const { activeFirst, quietAmong } = await import("../harness/matchGate.js");
+  const quiet = await quietAmong(ranked.map((r: any) => String(r.candidate_id)));
+  const order = activeFirst(ranked, (r: any) => quiet.has(String(r.candidate_id)));
   const who = await people(ranked.map((r: any) => String(r.candidate_id)));
   const { gateNetworkCandidate } = await import("../harness/matchGate.js");
   const paired = async (a: string, b: string) => (await pool.query(`SELECT 1 FROM event_guest_match_nudges WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3`, [eventId, a, b]).catch(() => ({ rows: [] as any[] }))).rows.length > 0;
   const askId = await newestAskId(userId);
-  for (const r of ranked) {
+  for (const r of order) {
     const c = who.get(String(r.candidate_id));
     if (!c?.phone_number) continue;
     if (!(await cameTonight(eventId, c, lumaIn))) continue;

@@ -24,7 +24,7 @@ import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/re
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 import { memberZone } from "../services/memberTime.js";
-import { prepareReveal } from "../services/networkIntroNudge.js";
+import { prepareReveal, recordTease } from "../services/networkIntroNudge.js";
 import { draftStateNudge, onStateNudgeDropped, onStateNudgeSent } from "../services/memberStateNudges.js";
 
 function skip(reason: string): DraftResult {
@@ -471,6 +471,7 @@ export const proactiveRegistry: ProactiveRegistry = {
     async onSent(c) {
       const { askId, candidate, preparedReveal, preparedRevealOptedIn } = c.payload;
       await removeNetworkBacklogItem(c.userId, askId, candidate.candidate_id);
+      await recordTease(c.userId, candidate.candidate_id, String(candidate.match_reason ?? ""), askId ?? null);
       await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)`, [
         c.userId,
         JSON.stringify({ askId, candidate, ...(preparedReveal ? { reveal: preparedReveal, revealOptedIn: preparedRevealOptedIn === true } : {}) }),

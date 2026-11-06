@@ -3058,6 +3058,14 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_claimed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_outcome TEXT`)
     .catch((err: Error) => console.error("network_introductions email claim column failed:", err));
+  // When a pair was last teased (services/networkIntroNudge.ts recordTease): the unanswered-suggestion window runs from it (matchGate.ts
+  // PAIR_BLOCKED_SQL). And the ask expiry's named-time backfill runs once per ask (services/askExpiry.ts).
+  await pool
+    .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS last_suggested_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("network_introductions last_suggested_at failed:", err));
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expiry_checked_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins expiry_checked_at failed:", err));
   // Network intros already made get their outcome record (services/roomMatching.ts NETWORK_PAIR_EVENT, 2026-11-03): the ones whose
   // intro went (email_sent_at, or made before the claim existed: the same "went" test as harness/northStar.ts NETWORK_SQL), as the send
   // now writes it. Idempotent (ON CONFLICT DO NOTHING); nothing existing changes.
