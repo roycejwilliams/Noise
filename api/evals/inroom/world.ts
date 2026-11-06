@@ -949,6 +949,10 @@ const { default: pool } = await import("../../src/db/db.js");
   };
 };
 
+// The send-time recheck's read of the member (harness/sendTimeRecheck.ts) is calm in this world: it holds no safety, mood or away state
+// (those holds are proved in evals/proactive/sendTimeRecheck.ts), so the night's in-room sends are read as they were before it.
+(await import("../../src/harness/sendTimeRecheck.js")).setSendHoldReaderForTests(async () => ({ safetyHold: false, mood: { state: "none", hold: false, heldHours: null }, away: null }));
+
 const { default: sendblue } = await import("../../src/services/sendblue.js");
 (sendblue as any).messages.send = async (body: any) => {
   W.sent.push({ to: body.number, content: body.content });

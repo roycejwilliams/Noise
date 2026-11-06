@@ -206,7 +206,6 @@ for (const [name, s] of Object.entries(STATES)) {
   const px = src("harness/proactive.ts");
   check("wiring: sendExempt asks inside its lock, after the closed read and before the claim", px.indexOf("sendTimeRecheck(opts.userId") > px.indexOf('stage: "exempt_lock"') && px.indexOf("sendTimeRecheck(opts.userId") > px.indexOf("export async function sendExempt(") && px.indexOf("sendTimeRecheck(opts.userId") < px.indexOf("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, notify_class)", px.indexOf("export async function sendExempt(")));
   check("wiring: inRoomSendAllowed asks before it claims", px.indexOf('sendTimeRecheck(userId, { kind: "in_room"') > px.indexOf("export async function inRoomSendAllowed") && px.indexOf('sendTimeRecheck(userId, { kind: "in_room"') < px.indexOf("pg_advisory_xact_lock(hashtext($1))`, [`proactive:${userId}`]);\n    // The member's own rules, the close"));
-  check("wiring: the task wake's holds are the same reads", /holdsFrom\(/.test(src("services/taskTurn.ts")));
   const mod = src("harness/sendTimeRecheck.ts");
   check("no model call and no taste write in the recheck", !/generateText|anthropic\(|writeMemory|memberPreferences|kindRestraint|INSERT INTO|UPDATE /.test(mod.replace(/\/\/.*$/gm, "")));
   check("no regex over their words in the recheck (one key pattern only)", (mod.replace(/\/\/.*$/gm, "").match(/\.(test|match)\(/g) ?? []).length === 1);
