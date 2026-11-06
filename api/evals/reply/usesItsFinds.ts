@@ -98,7 +98,15 @@ const turn = (gate: (d: string, findsWaiting?: () => boolean) => string = (d) =>
 }
 {
   const L = await import("../../src/agent/loopTools.js");
-  check("the line while a search runs reacts to what they asked, never a generic status line ('let me look')", /react to what they actually asked/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
+  check("the line while a search runs says what Cue is looking for in their terms, never a generic status line ('let me look')", /saying what you're looking for, in the terms of what they asked/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
+}
+{
+  // 2026-11-06 live test: "Co is looking: founder dinners before an investor meeting, good instinct".
+  const L = await import("../../src/agent/loopTools.js");
+  check("the progress-line guidance forbids praise, a recap and machinery", /no compliment or praise/.test(L.WHILE_LOOKING) && /no recap of what they told you/.test(L.WHILE_LOOKING) && /no word about tools, searches or how it works/.test(L.WHILE_LOOKING) && !/friend who's into it/.test(L.WHILE_LOOKING));
+  const C = await import("../../src/services/capabilities.js");
+  const use = C.toolUse("shareFinds");
+  check("the caption guidance covers a find that isn't the form they asked for ('not a dinner, but...')", /isn't the form they asked for/.test(use) && /not a dinner, but/.test(use));
 }
 // ---------------------------------------------------------------- the holding line: never a stock opener (golden 55, 2026-10-17)
 {

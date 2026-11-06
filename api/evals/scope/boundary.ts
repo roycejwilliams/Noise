@@ -168,6 +168,18 @@ for (const [msg, goal] of [["find a therapist near the Mission and founder dinne
 await both("…then 'founder dinners this week' as its own call with scope in starts", "find a therapist and founder dinners this week", { goal: "Find founder dinners this week" }, { scope: "in" }, made, mixedTurn);
 check("a promise, the door and the brief under a mixed read open nothing: they go through the same guard", CT.scopeRefusal({ goal: "Do what you said: find a therapist", scope: mixedTurn }) !== null && /briefVerdict/.test(src("agent/loopTools.ts")) && /scope: o\.scope \?\? null/.test(src("services/theDoor.ts")));
 check("the reply gets guidance on a mixed turn (help with the connection part, set the rest aside, promise nothing), none on an in-scope turn, the decline guidance on out", S.replyScopeGuidance({ scope: "in", connection: null }) === null && S.replyScopeGuidance(null) === null && /connection part/.test(S.replyScopeGuidance(mixedTurn) ?? "") && /don't promise/.test(S.replyScopeGuidance(mixedTurn) ?? "") && S.replyScopeGuidance({ scope: "out", connection: null }) === S.OUT_OF_SCOPE_GUIDANCE && /replyScopeGuidance\(turnRead\?\.scope\)/.test(src("routes/sendblue.ts")));
+// 2026-11-06 live test: "a dentist near the mission, and any founder dinners this week?" was read mixed, the dinners went as finds, and
+// the dentist set-aside was written as plain text and dropped. The guidance covers a finds answer; the plain text is owed and sent.
+{
+  const R = await import("../../src/agent/conversationReply.js");
+  const g = S.replyScopeGuidance(mixedTurn) ?? "";
+  check("a mixed turn answered with finds still gets the set-aside guidance: finds with shareFinds, the set-aside with sendReply", /finds answer the connection part/.test(g) && /shareFinds/.test(g) && /sendReply/.test(g) && /never left unsaid/.test(g));
+  const base = { isVoice: false, scope: mixedTurn, sent: true, replies: 0, linkDelivered: false, sendStopped: false, text: "The dentist's not something I handle, that's outside what I do here." };
+  check("plain text left after finds on a mixed turn is owed (and on out)", R.plainSetAsideOwed(base) && R.plainSetAsideOwed({ ...base, scope: { scope: "out" } }));
+  check("…never on an in-scope or unread turn, after a reply went, after a link delivery, on a voice note, when sends are held, or when nothing went", !R.plainSetAsideOwed({ ...base, scope: { scope: "in" } }) && !R.plainSetAsideOwed({ ...base, scope: null }) && !R.plainSetAsideOwed({ ...base, replies: 1 }) && !R.plainSetAsideOwed({ ...base, linkDelivered: true }) && !R.plainSetAsideOwed({ ...base, isVoice: true }) && !R.plainSetAsideOwed({ ...base, sendStopped: true }) && !R.plainSetAsideOwed({ ...base, sent: false }) && !R.plainSetAsideOwed({ ...base, text: "ok" }));
+  check("the owed set-aside goes through sendReply (its fact check), as the plain-text reply", /plainSetAsideOwed\(\{[^]*?tools\.sendReply as any\)\.execute\(\{ message: \(agentRun\?\.text \?\? ""\)\.trim\(\) \}, \{ toolCallId: "plain-text-reply"/.test(src("agent/conversationReply.ts")));
+  check("on a call, the mixed set-aside holds even when what was found answers the connection part", /say the rest isn't yours, even when what you found answers the connection part/.test(src("services/callBriefing.ts")));
+}
 check("calls have no turn read: their model's own tool call carries the scope, and a refusal returns the same guidance (nothing extra is added to a call's reply)", /scope: z\s*\.enum/.test(src("agent/conversationTools.ts")));
 
 // ---- Cue's own offers (payloadFirst) must be inside the boundary before they are made; a task from one that reads out closes quietly
