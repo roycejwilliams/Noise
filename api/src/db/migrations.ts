@@ -2729,9 +2729,8 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE co_pages ADD COLUMN IF NOT EXISTS preview BYTEA NULL, ADD COLUMN IF NOT EXISTS preview_version INT NULL`)
     .catch((err: Error) => console.error("co_pages.preview init failed:", err));
-  // Member assets (services/memberAssets.ts, 2026-10-11): the pictures, logos and inspiration images a member texts Co, kept for
-  // their own artifacts (a deck now). One member's only; viewable only through a live artifact of theirs that places it
-  // (routes/coPage.ts /d/<page>/a/<asset>). Unused for 90 days, the bytes are wiped.
+  // Member assets (services/memberAssets.ts, 2026-10-11): photos stored before the maker layer was removed
+  // (27d627d0); texted photos are no longer stored (keepAsset has no caller). One member's only; unused for 90 days, the bytes are wiped.
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS member_assets (
@@ -3292,7 +3291,7 @@ export async function concurrencyMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("contact_card tables init failed:", err));
-  // One live copy of a photo per member (services/memberAssets.ts keepAsset). Numbered images only: a cleaned-up copy is kept as -N
+  // One live copy of a photo per member (services/memberAssets.ts keepAsset, now unused). Numbered images only: a cleaned-up copy is kept as -N
   // and may share its original's bytes. If copies already exist this fails and is logged; keepAsset works either way.
   await pool
     .query(`CREATE UNIQUE INDEX IF NOT EXISTS member_assets_one_live_copy ON member_assets (owner_user_id, sha256) WHERE wiped_at IS NULL AND n > 0`)
