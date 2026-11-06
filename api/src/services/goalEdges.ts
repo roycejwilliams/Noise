@@ -68,15 +68,8 @@ export function restates(edge: string, goal: string): boolean {
   return e.filter((w) => g.has(w)).length / e.length >= 0.75 || edge.trim().toLowerCase() === goal.trim().toLowerCase();
 }
 
-// A goal whose one recheck went unanswered for this long is searched weekly, not daily: less contact and less spend, never dropped
-// (Royce, 2026-11-04). It keeps its own day of the week, so the searches spread out; any signal clears recheck_asked_at and the daily
-// search is back (services/goalRecheck.ts).
-export const QUIET_GOAL_DAYS = 7;
-export function restingToday(row: Pick<GoalStateRow, "recheckAskedAt"> | null | undefined, hash: string, now: Date): boolean {
-  const asked = row?.recheckAskedAt;
-  if (!asked || now.getTime() - asked.getTime() < QUIET_GOAL_DAYS * 86_400_000) return false;
-  return (Math.floor(now.getTime() / 86_400_000) + parseInt(hash.slice(0, 6), 16)) % 7 !== 0;
-}
+export { QUIET_GOAL_DAYS, restingToday } from "./goalCadence.js";
+import { restingToday } from "./goalCadence.js";
 
 export function goalHash(goal: string): string {
   return createHash("sha1").update(goal.trim().toLowerCase()).digest("hex").slice(0, 20);

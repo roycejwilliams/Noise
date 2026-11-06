@@ -20,6 +20,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { hoursZone, REASONABLE_HOUR_END } from "./localHours.js";
 import { memberZone } from "./memberTime.js";
+import { restingToday } from "./goalCadence.js";
 import { outsideAsk, searchPartOf } from "./askKind.js";
 import { emptyTierCounts, type TierCounts } from "./tierCounts.js";
 
@@ -311,12 +312,15 @@ export function withoutPassedWindows(plan: any, now: Date, zone: string | null):
 // states, the floor's own gate (proactive.ts SWEEP_BLOCKERS.floor_goal: never a send timer) and whether either read failed: no cooldown,
 // no sweep schedule, no plan age (pinned in evals/goals/planCurrent.ts). An unreadable read is an error, retried, never a quiet skip.
 // Away pauses only place-bound goals: portable ones (funding, jobs, programs) keep being searched (Royce, 2026-10-14); unknown is portable.
-export function floorGoalDecision(g: { search: string | null; why: string | null; placeBound?: boolean }, o: { states: Map<string, { state: string; reason: string }> | null; statesError: string | null; gateError: string | null; hold: string[]; goalId: string }): { status: "skipped" | "error"; why: string } | null {
+export function floorGoalDecision(g: { search: string | null; why: string | null; placeBound?: boolean }, o: { states: Map<string, { state: string; reason: string; recheckAskedAt?: Date | null }> | null; statesError: string | null; gateError: string | null; hold: string[]; goalId: string; now?: Date }): { status: "skipped" | "error"; why: string } | null {
   if (!g.search) return { status: "skipped", why: g.why ?? "nothing to search" };
   if (!o.states) return { status: "error", why: `its state couldn't be read${o.statesError ? `: ${o.statesError}` : ""}` };
   if (o.gateError) return { status: "error", why: o.gateError };
   const st = o.states.get(o.goalId);
   if (st && st.state !== "active") return { status: "skipped", why: `set aside since its plan (${st.state}: ${st.reason.slice(0, 120)})` };
+  // A goal whose one recheck went unanswered is searched weekly, on its own day, not daily: less spend, never dropped (goalEdges.ts
+  // restingToday; a signal from them clears the ask and the daily search is back).
+  if (o.now && st && restingToday(st, o.goalId, o.now)) return { status: "skipped", why: "weekly: its recheck went unanswered, so it is searched once a week (less contact, not dropped)" };
   const otherHolds = o.hold.filter((h) => h !== "away_hold");
   if (otherHolds.length) return { status: "skipped", why: `held: ${otherHolds.join(", ")}` };
   if (o.hold.includes("away_hold") && g.placeBound === true) return { status: "skipped", why: "away: place-bound" };
@@ -589,7 +593,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     const b = { kind: "goal" as const, id: goalHash(g.goal), text: g.goal.slice(0, 160) };
     const prior = done.get(`goal:${b.id}`);
     if (prior) { items.push(prior); continue; }
-    const decide = floorGoalDecision(g, { states, statesError, gateError, hold: goalHold, goalId: b.id });
+    const decide = floorGoalDecision(g, { states, statesError, gateError, hold: goalHold, goalId: b.id, now });
     if (decide) { items.push({ ...b, ...decide }); continue; }
     // cooldownCleared is only logged by the search; the floor never reads the goal cooldown, so it's always clear here.
     await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search ?? "", fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `goal:${b.id}`, text: g.goal, createdAt: goalRecordedAt(row.intent, g.goal) }, ...(typeof g.placeBound === "boolean" ? { placeBound: g.placeBound } : {}) });
