@@ -954,7 +954,7 @@ async function scoreMatchedGroupInScope(
       // Down the ranking (2026-10-07): when the strongest match can't be described (no shareable ask, or the share gate
       // says no), the next strong one is tried, up to five. Only while a live send is actually possible right now; otherwise
       // the top one alone goes through the usual path (and its window/queue rules).
-      const live = !!eventTiming && checkEventWindow(eventTiming, new Date()).pass && (await inRoomSendAllowed(person.user_id, eventId));
+      const live = !!eventTiming && checkEventWindow(eventTiming, new Date()).pass && (await inRoomSendAllowed(person.user_id, eventId, { peek: true }));
       const tries = live ? ranked.filter((r) => r.score >= MATCH_NUDGE_MIN_SCORE).slice(0, 5) : [top];
       for (const r of tries) {
         const cand = others.find((o) => o.user_id === r.candidate_id);

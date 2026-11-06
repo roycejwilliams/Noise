@@ -69,6 +69,17 @@ const STATES = { safety: state({ safetyHold: true }), mood: state({ mood: hard }
   check("event key: a direct event ask reads as event-bound, a relay does not", R.eventBoundSend("direct_ask", "direct_ask:ev1:cand:asker") && !R.eventBoundSend("direct_ask", "relay:5") && !R.eventBoundSend("direct_ask", "reminder:9") && R.eventBoundSend("event_offer", null));
 }
 
+// ---------------------------------------------------------------- 1b. arriving ends an away hold for that event
+{
+  const ask = { kind: "direct_ask", cls: "unsolicited" as const, targetKey: "direct_ask:ev1:rowan:sam", eventBound: true, eventId: "ev1" };
+  const here = state({ away, arrived: true });
+  check("arrival: an away claim plus arrival at that event lets the event ask through", R.recheckVerdict(ask, here, null, NOW).go);
+  check("arrival: away with no arrival still holds", !R.recheckVerdict(ask, state({ away, arrived: false }), null, NOW).go);
+  check("arrival: arrival at another event means nothing (no event named, no pass)", !R.recheckVerdict({ ...ask, eventId: null }, here, null, NOW).go);
+  check("arrival does not lift a safety or mood hold", !R.recheckVerdict(ask, state({ away, arrived: true, safetyHold: true }), null, NOW).go && !R.recheckVerdict(ask, state({ away, arrived: true, mood: hard }), null, NOW).go);
+  check("arrival: the event comes from the key only when the candidate is the member", R.directAskEvent("direct_ask:ev1:rowan:sam", "rowan") === "ev1" && R.directAskEvent("direct_ask:ev1:sam:rowan", "rowan") === null && R.directAskEvent("relay:5", "rowan") === null);
+}
+
 // ---------------------------------------------------------------- 2. a changed mind
 {
   const rows = (o: Partial<Parameters<typeof CS.closedSetFrom>[0]>) => CS.closedSetFrom({ asks: [], tasks: [], askTasks: [], intent: [], threads: [], loops: [], ...o });
@@ -87,13 +98,19 @@ const STATES = { safety: state({ safetyHold: true }), mood: state({ mood: hard }
   const logged: any[] = [];
   const rec = async (d: any) => void logged.push(d);
   const a = await R.sendTimeRecheck(ROWAN, task, { now: NOW, closed: async () => dropped, record: rec as any });
-  check("changed mind: sendTimeRecheck drops it and logs it (ids only)", !a.go && logged.length === 1 && logged[0].decision === R.SEND_RECHECK && logged[0].action === "dropped_changed_mind" && logged[0].proposal.held === false, logged);
+  check("changed mind: sendTimeRecheck drops it and logs the shared proactive.dropped_closed row (ids only)", !a.go && logged.length === 1 && logged[0].decision === CS.DROPPED_CLOSED && logged[0].action === "send_recheck:task_update" && logged[0].proposal.ref === "task:41" && logged[0].proposal.theirWord === true, logged);
+  check("changed mind: a narrowed ask (still open) or a thread changed without their words drops nothing", R.recheckVerdict({ kind: "ask_checkin", cls: "checkin", payload: { askCheckinId: "9" } }, calm, rows({}), NOW).go && R.recheckVerdict({ kind: "companion", cls: "unsolicited", payload: { threadId: "th1" } }, calm, rows({ threads: [{ id: "th1", status: "changed", closed_quote: null }] }), NOW).go);
   const b = await R.sendTimeRecheck(ROWAN, task, { now: NOW, closed: async () => { throw new Error("down"); }, record: rec as any });
   check("changed mind: a failed closed read holds nothing back", b.go);
   let readClosed = 0;
   R.setSendHoldReaderForTests(async () => STATES.safety);
-  await R.sendTimeRecheck(ROWAN, { ...task, cls: "unsolicited" }, { now: NOW, closed: async () => (readClosed++, dropped), record: rec as any });
-  check("changed mind: a held send never reads the closed set", readClosed === 0);
+  const c2 = await R.sendTimeRecheck(ROWAN, { ...task, cls: "unsolicited" }, { now: NOW, closed: async () => (readClosed++, dropped), record: rec as any });
+  check("changed mind: what they closed is dropped, not held, even under a safety hold", readClosed === 1 && !c2.go && !c2.held);
+  readClosed = 0;
+  await R.sendTimeRecheck(ROWAN, { kind: "in_room", cls: "unsolicited", targetKey: "in_room:match:ev1" }, { now: NOW, closed: async () => (readClosed++, dropped), record: rec as any });
+  check("changed mind: a send that names no subject reads no closed set", readClosed === 0);
+  const rp = await R.sendTimeRecheck(ROWAN, { ...task, cls: "unsolicited", reply: true }, { now: NOW, closed: async () => dropped, record: rec as any });
+  check("changed mind: an answer to their latest message skips the holds, never the close", !rp.go && !rp.held);
   R.setSendHoldReaderForTests(null);
 }
 
@@ -165,6 +182,31 @@ for (const [name, s] of Object.entries(STATES)) {
   } finally { h.restore(); R.setSendHoldReaderForTests(null); }
 }
 
+// Arrival at that event, through the real send code: the reader is asked about this event only.
+{
+  const asked: (string | null | undefined)[] = [];
+  R.setSendHoldReaderForTests(async (_u, _n, ev) => (asked.push(ev), state({ away, arrived: ev === "ev1" })));
+  const h = harness();
+  try {
+    const ok = await P.sendExempt({ ...ask(), targetKey: "direct_ask:ev1:" + ROWAN + ":sam" });
+    check("arrival: away plus arrival at ev1, the direct ask goes", ok.sent && h.ledger.outbox.length === 1 && asked.includes("ev1"), { ok, asked });
+    const other = await P.sendExempt({ ...ask(), targetKey: "direct_ask:ev2:" + ROWAN + ":sam" });
+    check("arrival: arrived at ev1 only, a direct ask for ev2 still holds", !other.sent && /^held: /.test(String(other.reason)) && asked.includes("ev2"), other);
+    check("arrival: away plus arrival, the in-room nudge for ev1 goes", (await P.inRoomSendAllowed(ROWAN, "ev1", { claim: { targetKey: "in_room:match:ev1", message: "x" } })) === true);
+    check("arrival: the in-room nudge for ev2 holds", (await P.inRoomSendAllowed(ROWAN, "ev2")) === false);
+  } finally { h.restore(); R.setSendHoldReaderForTests(null); }
+  // The pre-check ahead of a real attempt (eventScoring) writes no decision row; the real attempt does.
+  R.setSendHoldReaderForTests(async () => STATES.mood);
+  const q = harness();
+  try {
+    await P.inRoomSendAllowed(ROWAN, "ev1", { peek: true });
+    const peeked = q.decisions.filter((d) => d.decision === R.SEND_RECHECK).length;
+    await P.inRoomSendAllowed(ROWAN, "ev1", { claim: { targetKey: "in_room:match:ev1", message: "x" } });
+    check("noise: a peek writes no decision row, the real attempt writes one", peeked === 0 && q.decisions.filter((d) => d.decision === R.SEND_RECHECK).length === 1, q.decisions);
+    check("noise: the scoring pre-check peeks", /inRoomSendAllowed\(person\.user_id, eventId, \{ peek: true \}\)/.test(src("services/eventScoring.ts")));
+  } finally { q.restore(); R.setSendHoldReaderForTests(null); }
+}
+
 // ---------------------------------------------------------------- 4. deferred sends: the row waits, rechecked at the minute it comes due
 const row = (over: Record<string, unknown> = {}) => ({ id: 1, user_id: ROWAN, phone_number: "+15035550177", type: "direct_ask", target_key: KEY, messages: ["Sam would like to meet you. Open to it?"], timezone: zone, after_kind: null, after_payload: null, due_at: new Date(NOW.getTime() - 60_000), status: "queued", attempts: 0, created_at: new Date(NOW.getTime() - 6 * 3_600_000), error: null, archived: false, ...over });
 for (const [name, s] of Object.entries(STATES)) {
@@ -197,6 +239,37 @@ for (const [name, s] of Object.entries(STATES)) {
   } finally { g.restore(); R.setSendHoldReaderForTests(null); }
 }
 
+// A hold is not a send attempt; a held Cue-started row has a window.
+{
+  const over = async (e: string) => e === "ev-over";
+  const old = (h: number) => new Date(NOW.getTime() - h * 3_600_000);
+  const cue = { type: "direct_ask" as const, target_key: "direct_ask:ev1:cand1:rowan", after_kind: null, after_payload: null, created_at: old(10) };
+  check("window: a fresh held Cue-started row has none", (await D.heldPastWindow(cue, NOW, over)) === null);
+  check("window: past 72h since it was queued, it is past", /^past its window: held more than 72h/.test((await D.heldPastWindow({ ...cue, created_at: old(73) }, NOW, over)) ?? ""));
+  check("window: 71h is still inside it", (await D.heldPastWindow({ ...cue, created_at: old(71) }, NOW, over)) === null);
+  check("window: its event being over ends it, from the key or the after step", /event is over/.test((await D.heldPastWindow({ ...cue, target_key: "direct_ask:ev-over:cand1:rowan" }, NOW, over)) ?? "") && /event is over/.test((await D.heldPastWindow({ ...cue, target_key: "x", after_kind: "event_direct_ask", after_payload: { eventId: "ev-over" } }, NOW, over)) ?? ""));
+  check("window: a relay, a reminder or a call reminder is not Cue-started, so it has none", (await Promise.all(["relay:5", "reminder:9", "call_reminder:3"].map((k) => D.heldPastWindow({ ...cue, target_key: k, created_at: old(200) }, NOW, over)))).every((x) => x === null));
+  check("window: the drop is skipped, never retried", D.outcomeOf({ sent: false, reason: `${D.PAST_WINDOW}: its event is over` }, true) === "skipped");
+  // Through the runner: a safety hold on a row 80h old drops it with its reason (and its after step hears it); a fresh one is requeued without spending an attempt.
+  R.setSendHoldReaderForTests(async () => STATES.safety);
+  const h = harness();
+  const heard: any[] = [];
+  const handlers = { ...D.afterHandlers, event_direct_ask: async (_p: any, o: string, r?: string) => void heard.push([o, r]) } as any;
+  h.setRow(row({ created_at: old(80) }));
+  try {
+    const out = await D.runDueDeferredSends(new Date(), { send: P.sendExempt, handlers });
+    check("window: a held Cue-started row past its window is skipped, not sent and not requeued", out.skipped === 1 && out.requeued === 0 && h.ledger.outbox.length === 0 && h.decisions.some((d) => d.decision === "proactive.deferredSend" && d.action === "skipped" && /past its window/.test(String(d.reason))), { out, d: h.decisions.map((d) => d.action) });
+  } finally { h.restore(); }
+  const g = harness();
+  g.setRow(row({ created_at: old(2) }));
+  try {
+    const out = await D.runDueDeferredSends(new Date(), { send: P.sendExempt, handlers: D.afterHandlers });
+    check("attempts: a held row is requeued and gives its attempt back", out.requeued === 1 && g.deferred.some((d) => /attempts = attempts - 1/.test(d.sql)), g.deferred.map((d) => d.sql));
+  } finally { g.restore(); R.setSendHoldReaderForTests(null); }
+  void heard;
+  check("attempts: only a hold gives it back (a real failure still counts)", /attempts = attempts - \$\{unspend \? 1 : 0\}/.test(src("services/deferredSends.ts")) && !/requeue\(new Date\(now\.getTime\(\) \+ DEFERRED_LIMITS\.retryAfterMs\), result\.reason \?\? "send failed"\s*,\s*true\)/.test(src("services/deferredSends.ts")));
+}
+
 // ---------------------------------------------------------------- 5. a call Cue starts itself, and the wiring
 {
   const t = src("services/callTrigger.ts");
@@ -204,11 +277,11 @@ for (const [name, s] of Object.entries(STATES)) {
   check("call: a Cue-started call (check-in cadence, intake) takes the recheck after the gate and before the dial", at > t.indexOf("decideCall(callState") && at < t.indexOf("claimDial(userId)") && /CUE_STARTED_CALLS\.has\(gateResult\.authorization\)/.test(t));
   check("call: one they asked for or booked is not in the set the recheck reads", (await import("../../src/harness/callGate.js")).CUE_STARTED_CALLS.size === 2 && !["user_initiated", "scheduled_call", "router_decision"].some((k) => (CG as any).CUE_STARTED_CALLS.has(k)));
   const px = src("harness/proactive.ts");
-  check("wiring: sendExempt asks inside its lock, after the closed read and before the claim", px.indexOf("sendTimeRecheck(opts.userId") > px.indexOf('stage: "exempt_lock"') && px.indexOf("sendTimeRecheck(opts.userId") > px.indexOf("export async function sendExempt(") && px.indexOf("sendTimeRecheck(opts.userId") < px.indexOf("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, notify_class)", px.indexOf("export async function sendExempt(")));
+  check("wiring: sendExempt asks inside its lock and reads the closed subjects through the recheck, before the claim", px.indexOf("sendTimeRecheck(\n      opts.userId") > px.indexOf("export async function sendExempt(") && /closed: \(uid\) => closedInLock\(client/.test(px) && !/heldSendClosed\(client, \{ userId: opts\.userId/.test(px) && px.indexOf("sendTimeRecheck(\n      opts.userId") < px.indexOf("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, notify_class)", px.indexOf("export async function sendExempt(")));
   check("wiring: inRoomSendAllowed asks before it claims", px.indexOf('sendTimeRecheck(userId, { kind: "in_room"') > px.indexOf("export async function inRoomSendAllowed") && px.indexOf('sendTimeRecheck(userId, { kind: "in_room"') < px.indexOf("pg_advisory_xact_lock(hashtext($1))`, [`proactive:${userId}`]);\n    // The member's own rules, the close"));
   const mod = src("harness/sendTimeRecheck.ts");
   check("no model call and no taste write in the recheck", !/generateText|anthropic\(|writeMemory|memberPreferences|kindRestraint|INSERT INTO|UPDATE /.test(mod.replace(/\/\/.*$/gm, "")));
-  check("no regex over their words in the recheck (one key pattern only)", (mod.replace(/\/\/.*$/gm, "").match(/\.(test|match)\(/g) ?? []).length === 1);
+  check("no regex over their words in the recheck (two key patterns only)", (mod.replace(/\/\/.*$/gm, "").match(/\.(test|match)\(/g) ?? []).length === 2);
 }
 
 console.log(`sendTimeRecheck: ${total - failed}/${total} passed`);
