@@ -462,6 +462,14 @@ export async function closeTask(userId: string, id: number, status: "done" | "dr
   return closed;
 }
 
+// A task that ran out of wake-ups, days or deadline with no answer (Royce, 2026-11-06: silence is not rejection). It closes as
+// "expired" with this plain line and nothing else: no outcome row, no taste, no kind preference, no goal state. A stated decline is a
+// different close ("dropped" with their quoted word, closeTask's theirWord) and stays the only one that reads as a no.
+export const RAN_OUT_OUTCOME = "Ran out of wake-ups or days with no answer. That says nothing about what they want.";
+export async function closeRanOut(userId: string, id: number): Promise<boolean> {
+  return closeTask(userId, id, "expired", RAN_OUT_OUTCOME);
+}
+
 // A commitment's window, set or replaced (a work task's followup JSON only).
 export async function setTaskWindow(userId: string, id: number, window: CommitWindow): Promise<void> {
   await pool.query(
