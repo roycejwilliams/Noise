@@ -1,0 +1,102 @@
+{
+  "hash": "1de407d4bb40af58",
+  "case": "share-good-news",
+  "recorded_at": "2026-11-06T19:01:21.681Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"Two years, and it landed this morning. That's not luck, that's you not stopping.\n\nHow are you feeling right now, sitting with it?\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their news: 'Two years, and it landed this morning.'\"}",
+      "usage": {
+        "input_tokens": 327,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 153,
+        "output_tokens_details": {
+          "thinking_tokens": 111
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgnC32thjU8cXWQrXq4Q7",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EpAGCsQCCBMYAipAiSDVo4wlRuICirL22IMMfVVX2sFNMWecrm7sLmlbeCoW6ZiASTjlJmiSXITBFJsc/cNXV2B78lj3IYTI9DjBNzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBgci41wbCAToIBBAAGgwC2ooDTzcFl7gEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAMEORGsP/t56BqLo4wk1CcW2YneKcLBTJDRJ7i03zRjyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgy/UL/6S4CjtbwpQgcaDMZS6du2TO7rQ4CgnSIwvJeuxxO1TUFDgPKbgncE7ilIynfzl9wlRhqspoqgeeRcz6lyTPoXB2NpTtJu6yiaKvgCg5BVrMNLikkgMqRDSZ9BLeNM5ui7UZ74gyAAD1dzzWmV//79mWx/B52bHpLK90utWjGPnC1hEPEYzkimF3Ifmub1yFX+yEGVe5YwWZWg8cTCsrNkIEZiny3hznJhFlrNRNFzEuC0NjGn7gXIs2kfpmltg4HEZUWUpIdiMsFGIDuM0WlZ0JskW2VREShbMTH3czzCVFbijdDFfy4KAwKqPZCYhFBr54rEaZoSyG1y1GpzNWjWxe8AKmtSA1fFwJe+9HJdnjcGPXu6IPIcjVFuI24s7Nu2xM6tF8EUKw/YhIUF/mXkAhWeOYze8GpGrj9lLkp6JA4xndGms38scBYr/EqkjIMuwGwHqdNbuk0zj94ZOZJ4TIAjTySCMimM/9/7jjKWCGCZ0zoBxhKy7ftS0f8H/7bjHJXNoYG5QSknHEwlRBPAW7U+DF2ATfTFAhn7cV6KB4KIAO/ij3D4KQdrTz3mZqCwPoNIhw6mg459aSi4d8RO2XFJURgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens by restating their news: 'Two years, and it landed this morning.'\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 327,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 153,
+          "output_tokens_details": {
+            "thinking_tokens": 111
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "1de407d4bb40af58",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

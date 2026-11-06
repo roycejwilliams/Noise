@@ -1,7 +1,7 @@
 {
   "hash": "d69d81467ba4ecc6",
   "case": "running-work",
-  "recorded_at": "2026-11-06T18:01:07.705Z",
+  "recorded_at": "2026-11-06T18:56:08.266Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"Cue states 'Live jazz nights in SF worth taking a date to' directly as the answer to what it's searching for\"}",
+      "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"Cue states 'Live jazz nights in SF worth taking a date to' as the direct answer to what it's searching for.\"}",
       "usage": {
         "input_tokens": 246,
         "cache_creation_input_tokens": 0,
@@ -54,13 +54,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgn7SfmYqwhHNnU7qiMHF",
+        "id": "msg_011CgnBdytjru3xtx1pfEb5b",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"Cue states 'Live jazz nights in SF worth taking a date to' directly as the answer to what it's searching for\"}"
+            "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"Cue states 'Live jazz nights in SF worth taking a date to' as the direct answer to what it's searching for.\"}"
           }
         ],
         "container": null,

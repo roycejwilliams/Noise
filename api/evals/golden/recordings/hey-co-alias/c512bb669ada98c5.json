@@ -1,0 +1,102 @@
+{
+  "hash": "c512bb669ada98c5",
+  "case": "hey-co-alias",
+  "recorded_at": "2026-11-06T19:00:10.426Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The companion is called Cue; until recently it was called Co, and members may still say \"co\" out of habit. The member texted \"Hey co\". Nothing is running and nothing is waiting on them. Cue's text: \"\"\"Hey. Glad...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The companion is called Cue; until recently it was called Co, and members may still say \"co\" out of habit. The member texted \"Hey co\". Nothing is running and nothing is waiting on them.\n\nCue's text:\n\"\"\"Hey. Glad the Thursday one feels right.\"\"\"\n\nDoes the text answer them warmly as the one they addressed (no confusion about who they meant, no lecture about the name), and if it names itself at all, only as Cue? A light mention of the new name is fine. Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"references a nonexistent 'Thursday one' when nothing is running or waiting, ignoring the greeting\"}",
+      "usage": {
+        "input_tokens": 238,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 179,
+        "output_tokens_details": {
+          "thinking_tokens": 127
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgnBwkHRjeUmMUWWbBG95",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErIGCsQCCBMYAipA1n844wfBfWhi1KC/ZYiDmpl1jZM0VQ/1fGb4bJT5JbfztI07e4fRF4GAu63vFqpgBrXmbUJIJ5gAPQk0epTKUjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBuse41wbCAToIBBAAGgwC2ooDTzcFdK8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBSLBdxqLdwIplPFuuVJtcUPEq3bUgHgeQTO82uqXpbECIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgydWllY141hsKpy37IaDCp5hqC0A4lJ9Lpv6SIwSGDccNGRR1X9cN57R/T357RkhW/yHrn8Bk4X4FRfbFf4BL+NtKicJcTQLpXq07LPKpoDQ+MOvSkMG2HyUMyvbpLsaoqKQ2JmZ2+7335HXwOTzPKxizTu5DyjWgNH+EZXQ6u6jYBgP9+BmurAhGNz7ZiodNyFgH9VZXTroUP79qvSE+jPVTZ9q540pDk5WQcnEATxHScAKwVFArtv8qht9ibuV/ssm0sK+Qu+a9u5SruFEjzTM311KAum0k4M8DpXIqlYPi6Uc8YvE0e29rWNUO9mYpBgM5zQVwC+Zh4gZ0Pk0wmXoHNq+rkwP4A5/8DqUfxo7PfEvcXKj0JNSUwB5xCE9ipEM+MO+BP51U/Dr1dSawh70lbs0us9GLgiNLyYElxagYolQL/TMBVcojNIxZkzX8uxyYr0VKje/1MgShVhcblowlUq3dmfXVkctxkWTeRFBsFQB/0h3dgaVPa+TbBbGa+Ya7+yTnn3nWSnYM+cxBdcB/Q5tb417PVt8sEe5zMNuK6PYozF7le2Ft17KGKsTQOVjfiPkG4jFRM1qmaP/UEWEEXx3duGPUN/jKTq1D0sn5kn19uMbXFRUOl3v9hhzwewDPeL2wDTfB4YAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"references a nonexistent 'Thursday one' when nothing is running or waiting, ignoring the greeting\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 238,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 179,
+          "output_tokens_details": {
+            "thinking_tokens": 127
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "c512bb669ada98c5",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

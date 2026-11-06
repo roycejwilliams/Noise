@@ -1,7 +1,7 @@
 {
   "hash": "dc2b4e6e0d131470",
   "case": "hey-cue",
-  "recorded_at": "2026-11-06T18:03:56.360Z",
+  "recorded_at": "2026-11-06T18:58:55.239Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey Jordan, what's up?\\\" is warm, addresses them by name, and never misnames itself or questions being called Cue\"}",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Hey Jordan, what's up?' responds warmly without using another name or questioning 'cue'\"}",
       "usage": {
         "input_tokens": 190,
         "cache_creation_input_tokens": 0,
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 151,
+        "output_tokens": 50,
         "output_tokens_details": {
-          "thinking_tokens": 90
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,18 +54,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgn7f4uAuEn39d6hgMWxc",
+        "id": "msg_011CgnBrGeNvC43PYiLNaHH9",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EpoFCsQCCBMYAipAnGudls790gboqid6CiO056ARE2N3Ds75yBk3cv+LOI4LE9WeBG4S3T0s4syvcFEz856HbFN6bxNhWTp8fi949jIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBi6241wbCAToIBBAAGgwC2ooDTzcF5lEEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA3lZYQABtPNvZ21yoVreY9ihCbfKvmbvFQkEJ7DbuA2yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyrFaGXHQtWTmsDKs0aDMsQKnRrFQJk23M02yIw6Nx8ifrkW1pag7TilM+JsbnFTtAD+5wGal0pnbfVQboE28AG1hsSmqJqijd8UZcpKoICSRm8H94nNO2saZnd8M1TDyOsjo9uKCtb7FkCIdPKPB/0XU657dV1aBVlWJfOYCftCWRw3CBW6iVNy5vb94uXoCUkZY6DXSM9fkuxxIhuH5ndIcSIIlHJhcO68opU4mJinEET7t3PBZz5S9TvyuPRRv/iDBAS6y5vIE5a7uMDROC8FFdestTjF6UVv1Z5rXj2Pt3OD+dsx3+x9+sohBXRF96IYfq9C5oPvYDfGzr0WWOr+D9X5m3ftMuWq/+HFlq6Nu55XqG+BjoqqaMolvi0RMR2cQfrHq89Oaa1qQJ1zX7xghtabHfsojFPNy8U1MWbMK0scLf9gv81K5e3lqezjF9WGAE="
-          },
-          {
             "type": "text",
-            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey Jordan, what's up?\\\" is warm, addresses them by name, and never misnames itself or questions being called Cue\"}"
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Hey Jordan, what's up?' responds warmly without using another name or questioning 'cue'\"}"
           }
         ],
         "container": null,
@@ -80,9 +75,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 151,
+          "output_tokens": 50,
           "output_tokens_details": {
-            "thinking_tokens": 90
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

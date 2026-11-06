@@ -1,0 +1,102 @@
+{
+  "hash": "ef130be9935df588",
+  "case": "feedback-cue-mistake",
+  "recorded_at": "2026-11-06T19:02:15.002Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it. Cue's text: \"\"...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue sent the member a link to Ember Clay Studio's wheel class page (https://emberclaystudio.example/workshops/wheel-intro); the member says it goes to a 404. Cue has no other link on file for it.\n\nCue's text:\n\"\"\"Good catch, that's on me to flag. I've passed it along to get fixed.\n\nI don't have a working link to hand you right now. Want me to look up Ember Clay Studio's current site so you can get the wheel class booked?\"\"\"\n\nDoes the text own the bad link plainly in a few words AND say what Cue can do now (it may offer to find the right page), WITHOUT inventing a new link or details, blaming their browser, or explaining how Cue works? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"that's on me to flag\\\" owns it; \\\"Want me to look up Ember Clay Studio's current site\\\" offers next step, no invented link or blame\"}",
+      "usage": {
+        "input_tokens": 312,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 139,
+        "output_tokens_details": {
+          "thinking_tokens": 72
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgnC6ykYjUxGWzVGGGB7S",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EugECsQCCBMYAipA8ghpUMA9qkzMjYgT0fTGvPgZklG2wbHKQUoC+oJst839j2VzJ9FAbajjsKE7erD4lN8A53aPvvGX/SeWxy9sqjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBtsi41wbCAToIBBAAGgwC2ooDTzcFPdUEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBxENPZaciGAtqRoyGavW9GVKxaaw7/hQiMVA1CFkplvSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwl+WKK3eHCDhgW550aDJQfIx6emIWw2Tg0RyIwnTU7P0CrN3ZgZOuzmQAfsENZTqTi7E4OtlbigCeSjUsjAVMMOVX/dlv979J8x897KtABAB/wNTqfkrk8l8ZvaH0MzywA4MtQdH2UkNGdwgAFMygefN40DPmUVhbiyVKDKqR6ICbeNl/8Iqamm+RfUx4Vb9SEQIW+nmAHj4ar3OPHqX2tj3G8xnjG4Aa9S49fZX/dm2wZatZvEllQGBE8sUXedz2BLm3NVugkI/U2bMP3RtY9avDk6gwZJNEpJuvuh0zM7ZxdPUGaJV3e+eUiDjMqPEShqphv5dI/C/5hENOmYq2Y0n9+R8lRsWz2+ODbui0Nuhr8h10UrwpliwroUASMbhgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"that's on me to flag\\\" owns it; \\\"Want me to look up Ember Clay Studio's current site\\\" offers next step, no invented link or blame\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 312,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 139,
+          "output_tokens_details": {
+            "thinking_tokens": 72
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "ef130be9935df588",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

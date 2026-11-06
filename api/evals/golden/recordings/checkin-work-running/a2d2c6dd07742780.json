@@ -1,0 +1,97 @@
+{
+  "hash": "a2d2c6dd07742780",
+  "case": "checkin-work-running",
+  "recorded_at": "2026-11-06T18:57:19.190Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 2pm. Cue's daily search is looking for a rooftop venue for the Sequin AI launch party for the member; nothing else is pending. The member texted \"Just checking in\". Cue's text: \"\"\"Good to hear from you. St...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 2pm. Cue's daily search is looking for a rooftop venue for the Sequin AI launch party for the member; nothing else is pending. The member texted \"Just checking in\".\n\nCue's text:\n\"\"\"Good to hear from you. Still on the hunt for a rooftop for the Sequin launch, nothing back yet.\"\"\"\n\nDoes the text give presence (a warm hello back) AND mention the rooftop venue search for the Sequin AI launch party as the one thing from their world? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if both hold.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Good to hear from you' gives presence; 'Still on the hunt for a rooftop for the Sequin launch, nothing back yet' is the single item, no list or rundown.\"}",
+      "usage": {
+        "input_tokens": 288,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 74,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgnBjCmXPN8CPoyBLT7cw",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Good to hear from you' gives presence; 'Still on the hunt for a rooftop for the Sequin launch, nothing back yet' is the single item, no list or rundown.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 288,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 74,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "a2d2c6dd07742780",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
