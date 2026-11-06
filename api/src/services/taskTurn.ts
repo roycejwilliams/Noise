@@ -1106,11 +1106,12 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
     now: clock,
     sentSince: (since) => sendsSince(userId, since, task.id),
     holds: async () => {
-      const [{ safetyHoldActive }, { getEmotionalContext }, { moodHold }] = await Promise.all([import("./safety.js"), import("../harness/emotion.js"), import("./moodHold.js")]);
+      const [{ safetyHoldActive }, { getEmotionalContext }, { holdsFrom }] = await Promise.all([import("./safety.js"), import("../harness/emotion.js"), import("../harness/sendTimeRecheck.js")]);
       const r = k?.restraint ?? null;
       const safety = r ? r.safetyHold : await safetyHoldActive(userId);
       const last = r?.unanswered.lastInboundAt ? new Date(r.unanswered.lastInboundAt) : null;
-      return { safety, mood: moodHold(await getEmotionalContext(userId, clock()), { now: clock(), lastInboundAt: last }).hold };
+      // The same reads as every Cue-started send's recheck (harness/sendTimeRecheck.ts holdsFrom).
+      return { safety, mood: holdsFrom({ safetyHold: safety, emotional: await getEmotionalContext(userId, clock()), lastInboundAt: last }, clock()).mood.hold };
     },
     coveringReminder: async () => {
       // A read that fails throws: the turn then holds the bring-up (a slip), never sends one past a reminder it couldn't see.

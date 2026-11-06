@@ -29,6 +29,7 @@
 // outside this harness.
 import { REACTION_LINE_SQL } from "../services/reactionsIn.js";
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
+import { eventBoundSend, sendTimeRecheck } from "./sendTimeRecheck.js";
 import { inventedFailure } from "../services/speakable.js";
 import { sentinelIn, sentinelRule } from "../services/sentinelBody.js";
 import { proactivePaused, pausedTypes, heldTypes } from "../services/proactivePause.js";
@@ -2420,9 +2421,13 @@ export async function sendExempt(opts: {
   // A file attached to the first message (Sendblue media_url): Cue's contact card (services/cardReissue.ts). Public, ends in its
   // extension, as Sendblue requires.
   mediaUrl?: string;
-  // Work they asked for (a research result): the pause on unprompted outreach never holds it. Opt-out, safety, their hours and their
+  // Work they asked for (a research result): the pause on unprompted outreach never holds it. Opt-out, safety (for Cue's own texts), their hours and their
   // own rule still apply below (services/proactivePause.ts: anything a member asked for is never paused).
   requested?: boolean;
+  // Its purpose is safety (a check that they're okay): the safety hold, the mood hold and away never hold it (harness/sendTimeRecheck.ts).
+  safety?: boolean;
+  // It brings them into an event (away holds it); an intro ask for an event is read from its key when this isn't said.
+  eventBound?: boolean;
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date; queued?: boolean; door?: boolean }> {
   if (proactivePaused() && !opts.requested) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
@@ -2470,6 +2475,13 @@ export async function sendExempt(opts: {
     if (closedHit) {
       await client.query("ROLLBACK");
       return { sent: false, reason: closedReason(closedHit) };
+    }
+    // The one send-time recheck (harness/sendTimeRecheck.ts): a safety hold, a hard stretch or an away claim now holds what Cue starts,
+    // however long it waited. Held with its reason and when to look again, never dropped; what they closed is already read above.
+    const re = await sendTimeRecheck(opts.userId, { kind: opts.type, cls: answersLast ? "reply" : opts.requested ? "requested" : cls, targetKey: opts.targetKey, eventBound: opts.eventBound ?? eventBoundSend(opts.type, opts.targetKey), safety: opts.safety, changedMind: false }, { now });
+    if (!re.go) {
+      await client.query("ROLLBACK");
+      return { sent: false, reason: `held: ${re.reason}`, ...(re.held ? { retryAt: re.retryAt } : {}) };
     }
     if (opts.coInitiated) {
       const { failed, sends } = await coInitiatedHold(client, { userId: opts.userId, timezone: opts.timezone ?? null, now, kind: opts.coInitiated.kind });
@@ -2651,6 +2663,9 @@ export async function inRoomSendAllowed(userId: string, eventId: string, opts: {
   if (proactivePaused()) return false;
   // The matching kill switch, global or this event (services/roomMatching.ts), read fresh.
   if (await (await import("../services/roomMatching.js")).matchingPause(eventId)) return false;
+  // The one send-time recheck (harness/sendTimeRecheck.ts): a safety hold, a hard stretch or an away claim holds an in-room text too;
+  // the close is a goodbye, held only by the safety hold. Held: false, nothing claimed, so a later pass tries again.
+  if (!(await sendTimeRecheck(userId, { kind: "in_room", cls: "unsolicited", targetKey: opts.claim?.targetKey ?? `in_room:${opts.close ? "close" : "check"}:${eventId}`, eventBound: true, close: opts.close, changedMind: false })).go) return false;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
