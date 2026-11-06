@@ -215,6 +215,8 @@ export type MemberKnowledge = {
   // Opt-in (include: ["events"]), services/knowledge/events.ts; [] otherwise. eventsOmitted: what its character budget left out.
   events?: Fact<EventItem>[];
   eventsOmitted?: number;
+  // The events read (or the guards it needs) failed, so the empty section means unread, not "no events".
+  eventsUnread?: boolean;
   // How many things they asked Co to remove (services/whatCoKnows.ts), never what they were: read with exchanges or corrections.
   removedCount?: number;
   // The live guards' read (their removals and corrections) failed, so exchanges and the rest came back unguarded. Said, never silent
@@ -909,10 +911,12 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   }
   if (on("events")) {
     // Fails closed, like transitions: without the guards read nothing is returned.
-    if (guardsUnread || !d.forgotten || !eventsRaw) k.events = [];
-    else {
+    if (guardsUnread || !d.forgotten || !eventsRaw) {
+      k.events = [];
+      k.eventsUnread = true;
+    } else {
       const find = nameFinder(names);
-      const built = eventsOf(guardEvents(eventsRaw, { g, gone: (ref) => removed.some((r) => r.ref === ref), named: (t) => find(t) !== null }), { now });
+      const built = eventsOf(guardEvents(eventsRaw, { g, gone: (ref) => removed.some((r) => r.ref === ref), named: (t) => find(t) !== null }), { now, timeZone: identity.timeZone });
       k.events = built.items;
       if (built.omitted) k.eventsOmitted = built.omitted;
     }

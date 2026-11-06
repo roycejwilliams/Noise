@@ -41,21 +41,36 @@ check("an arrival they texted is attendance, said", a2.attendance?.prov === "sai
 const planOnly = build(raw({ info: [info("e3", "Maker Night", "2026-11-12T18:00:00Z")], offers: [{ eventId: "e3", name: "Maker Night", date: "2026-11-12", at: d("2026-11-01T10:00:00Z") }], plans: [plan("p3", "Maker Night", "2026-11-12")], outcomes: [out("event:e3", "Maker Night", "acted"), out("event:e3", "Maker Night", "interested", { provenance: null })] })).items[0];
 check("a plan, an offer, an acted and an interested are never attendance", planOnly.attendance === null && planOnly.plan !== null && planOnly.offered?.prov === "did" && planOnly.outcomes.length === 2);
 const said = build(raw({ info: [info("e4", "Supper Club", "2026-10-25T18:00:00Z")], outcomes: [out("event:e4", "Supper Club", "helped", { quote: "went last night, it was great", at: d("2026-10-26T09:00:00Z") })] })).items[0];
-check("their own stated words after the event started are attendance (said)", said.attendance?.state === "attended" && said.attendance.prov === "said" && said.attendance.words === "went last night, it was great");
+check("their own stated words after the event started are attendance (said)", said.attendance?.state === "attended" && said.attendance.prov === "said" && said.attendance.quote === "went last night, it was great");
 const before = build(raw({ info: [info("e5", "Supper Club", "2026-10-25T18:00:00Z")], outcomes: [out("event:e5", "Supper Club", "helped", { at: d("2026-10-24T09:00:00Z") })] })).items[0];
 check("a went-result dated before the event started is not attendance", before.attendance === null);
 const inferred = build(raw({ info: [info("e6", "Supper Club", "2026-10-25T18:00:00Z")], outcomes: [out("event:e6", "Supper Club", "helped", { provenance: null, at: d("2026-10-26T09:00:00Z") })] })).items[0];
 check("a went-result Cue only inferred is not attendance", inferred.attendance === null && inferred.outcomes[0].prov === "inferred");
-const metEarly = build(raw({ info: [info("e7", "Mixer", "2026-10-25T18:00:00Z")], presence: [pres("e7", { metAt: d("2026-10-25T12:00:00Z"), metQuote: "met someone" })] }));
-check("a met-someone note from before the event started is not attendance (and is not kept)", metEarly.items.every((x) => x.attendance === null));
-const noStart = build(raw({ presence: [pres("e8", { metAt: d("2026-10-25T21:00:00Z"), metQuote: "met someone great" })] }));
-check("with no start time to compare against, their words can't prove attendance", noStart.items.every((x) => x.attendance === null));
+const metAfter = build(raw({ info: [info("e7", "Mixer", "2026-10-25T18:00:00Z")], presence: [pres("e7", { metAt: d("2026-10-25T21:00:00Z"), metQuote: "met a great designer at the gym" })] }));
+check("a met-someone note with no arrival is not attendance, even after the start", metAfter.items.length === 1 && metAfter.items[0].attendance === null && metAfter.items[0].met?.quote === "met a great designer at the gym");
+const metGym = build(raw({ presence: [pres("e8", { metAt: d("2026-10-25T21:00:00Z"), metQuote: "met a great designer at the gym" })] }));
+check("a met note on an event with no start time is not attendance either", metGym.items.every((x) => x.attendance === null));
+const metArrived = build(raw({ info: [info("e7b", "Mixer", "2026-10-25T18:00:00Z")], presence: [pres("e7b", { arrivedAt: d("2026-10-25T18:05:00Z"), arrivedVia: "door", metAt: d("2026-10-25T21:00:00Z"), metQuote: "met a founder" })] })).items[0];
+check("met stays beside a real arrival; attendance comes from the arrival", metArrived.met !== null && metArrived.attendance?.via === "door");
 const nogo = build(raw({ info: [info("e9", "Panel", "2026-11-20T18:00:00Z")], presence: [pres("e9", { notGoingAt: d("2026-11-02T10:00:00Z") })] })).items[0];
 check("a no is kept as not_going (said), not attendance", nogo.attendance?.state === "not_going" && nogo.attendance.prov === "said");
 const came = build(raw({ info: [info("e10", "Salon", "2026-10-22T18:00:00Z")], presence: [pres("e10", { noshowOutcome: "came" })] })).items[0];
 check("the no-show flow's came (settled only on evidence) is attendance, seen", came.attendance?.state === "attended" && came.attendance.prov === "seen");
 const saidNo = build(raw({ info: [info("e11", "Salon", "2026-10-22T18:00:00Z")], presence: [pres("e11", { noshowOutcome: "said_no" })] }));
 check("no-answer or said_no outcomes alone are never attendance", saidNo.items.every((x) => x.attendance?.state !== "attended"));
+
+// date-only events: a statement the evening before is not "after" (5pm Pacific on 11-19 is 01:00 UTC on 11-20)
+const dateOnly = (at: string, tz: string | null) => EV.eventsOf(raw({ offers: [{ eventId: "do", name: "Pier Night", date: "2026-11-20", at: d("2026-11-10T10:00:00Z") }], outcomes: [out("event:do", "Pier Night", "helped", { at: d(at) })] }), { now: d("2026-11-21T12:00:00Z"), timeZone: tz });
+const evening = dateOnly("2026-11-20T01:00:00Z", "America/Los_Angeles").items[0];
+check("5pm PT on 11-19 about an 11-20 date-only event is not attendance (UTC day would say it was)", evening.attendance === null);
+check("a statement on a strictly later local day counts for a date-only event", dateOnly("2026-11-21T09:00:00Z", "America/Los_Angeles").items[0].attendance?.state === "attended");
+check("with a real start time the instant decides, not the day", EV.eventsOf(raw({ info: [info("st", "Pier Night", "2026-11-20T03:00:00Z")], outcomes: [out("event:st", "Pier Night", "helped", { at: d("2026-11-20T04:00:00Z") })] }), { now: d("2026-11-21T12:00:00Z"), timeZone: "America/Los_Angeles" }).items[0].attendance?.state === "attended");
+// the no-show "came" is dated by the event, never by now
+const cameDated = EV.eventsOf(raw({ info: [info("cd", "Salon", "2026-10-22T18:00:00Z")], presence: [pres("cd", { noshowOutcome: "came" })] }), { now: d("2026-11-30T00:00:00Z") }).items[0];
+check("a no-show came is dated by the event's start, and verifiedAt follows it", cameDated.attendance?.on === "2026-10-22T18:00:00.000Z" && cameDated.verifiedAt === "2026-10-22T18:00:00.000Z");
+check("a no-show came on an event with no known date is not claimed", EV.eventsOf(raw({ presence: [pres("nd", { noshowOutcome: "came" })] }), { now: NOW }).items.every((x) => x.attendance === null));
+check("no item is left with an epoch verifiedAt", [a1, a2, said, nogo, came, everythingCheck()].every((x) => x.verifiedAt > "2000"));
+function everythingCheck() { return build(raw({ plans: [plan("v", "V", "2026-11-20")] })).items[0]; }
 
 // ---------------------------------------------------------------- a passed plan with no evidence drops
 const past = build(raw({ plans: [plan("p1", "Old Mixer", "2026-10-01")], offers: [{ eventId: "o1", name: "Old Offer", date: "2026-10-02", at: d("2026-09-28T10:00:00Z") }], info: [info("o1", "Old Offer", "2026-10-02T18:00:00Z")] }));
@@ -71,19 +86,19 @@ check("a plan with a different date is not merged into that attended event", mis
 const undated = build(raw({ plans: [plan("u1", "Some Meetup", null, { at: d("2026-10-30T10:00:00Z") }), plan("u2", "Ancient Meetup", null, { at: d("2026-08-01T10:00:00Z") })] }));
 check("an undated plan stays while fresh and goes when old", undated.items.map((x) => x.name).join() === "Some Meetup" && undated.items[0].when === "undated");
 const inferredPlan = build(raw({ plans: [plan("i1", "Maybe Event", "2026-11-10", { provenance: null, quote: null })] })).items[0];
-check("a plan Cue only inferred reads as inferred, with no words", inferredPlan.plan?.prov === "inferred" && inferredPlan.plan.words === null);
+check("a plan Cue only inferred reads as inferred, with no words", inferredPlan.plan?.prov === "inferred" && inferredPlan.plan.quote === null);
 
 // ---------------------------------------------------------------- outcomes carry their quote; every value has source, date, provenance
 const oc = build(raw({ info: [info("q1", "Supper Club", "2026-10-25T18:00:00Z")], presence: [pres("q1", { arrivedAt: d("2026-10-25T18:10:00Z"), arrivedVia: "door" })], outcomes: [out("event:q1", "Supper Club", "helped", { quote: "it was exactly the room I needed" })] })).items[0];
-check("an outcome carries its result, date, provenance and their quote", oc.outcomes[0].result === "helped" && oc.outcomes[0].words === "it was exactly the room I needed" && oc.outcomes[0].prov === "said" && oc.outcomes[0].source === "suggestion_outcomes" && !!oc.outcomes[0].on);
+check("an outcome carries its result, date, provenance and their quote", oc.outcomes[0].result === "helped" && oc.outcomes[0].quote === "it was exactly the room I needed" && oc.outcomes[0].prov === "said" && oc.outcomes[0].source === "suggestion_outcomes" && !!oc.outcomes[0].on);
 const everything = build(raw({ info: [info("z", "Z Night", "2026-10-25T18:00:00Z")], plans: [plan("pz", "Z Night", "2026-10-25")], offers: [{ eventId: "z", name: "Z Night", date: "2026-10-25", at: d("2026-10-20T10:00:00Z") }], presence: [pres("z", { arrivedAt: d("2026-10-25T18:10:00Z"), arrivedVia: "location", metAt: d("2026-10-25T22:00:00Z"), metQuote: "met a founder" })], outcomes: [out("event:z", "Z Night", "helped", { quote: "good night" })], followThroughs: [{ eventId: "z", people: 2, at: d("2026-10-26T10:00:00Z") }] })).items[0];
 const vals = [everything.plan, everything.offered, everything.attendance, everything.met, everything.followedUp, ...everything.outcomes];
 check("every value carries a source, a date and a provenance in the snapshot's vocabulary", vals.every((v) => !!v && !!v.source && !!v.on && ["said", "seen", "did", "inferred"].includes((v as any).prov)));
 check("every item is stamped verifiedAt", !!everything.verifiedAt && everything.verifiedAt > "2026-10-26");
-check("who they met: their side only (their words and that they met someone), plus a follow-up as a count", everything.met?.words === "met a founder" && everything.followedUp?.people === 2 && !/people_?names|names/.test(JSON.stringify(Object.keys(everything.followedUp!))));
+check("who they met: their side only (their words and that they met someone), plus a follow-up as a count", everything.met?.quote === "met a founder" && everything.followedUp?.people === 2 && !/people_?names|names/.test(JSON.stringify(Object.keys(everything.followedUp!))));
 const many = Array.from({ length: 12 }, (_, i) => out("event:w", "W", "helped", { provenance: null, at: d(`2026-10-${10 + i}T10:00:00Z`), quote: `n${i}` }));
 const capped = build(raw({ info: [info("w", "W", "2026-10-01T10:00:00Z")], presence: [pres("w", { arrivedAt: d("2026-10-01T10:30:00Z"), arrivedVia: "door" })], outcomes: many })).items[0];
-check("outcomes per event are capped to the newest, the rest counted", capped.outcomes.length === EV.OUTCOMES_PER_EVENT && capped.outcomesOmitted === 12 - EV.OUTCOMES_PER_EVENT && capped.outcomes[0].words === "n11");
+check("outcomes per event are capped to the newest, the rest counted", capped.outcomes.length === EV.OUTCOMES_PER_EVENT && capped.outcomesOmitted === 12 - EV.OUTCOMES_PER_EVENT && capped.outcomes[0].quote === "n11");
 
 // ---------------------------------------------------------------- ordering and budget
 const rank = build(raw({
@@ -129,6 +144,27 @@ check("fails closed when there is no guard read at all", noGuard.events!.length 
 check("the loader's failure gives an empty section, not a throw", (await read(dinner, [], { events: async () => { throw new Error("x"); } })).events!.length === 0);
 const omit = await read(raw({ offers: filler }));
 check("omitted events are counted on the knowledge object", (omit.eventsOmitted ?? 0) > 0 && omit.events!.length + omit.eventsOmitted! === 40);
+
+// real removal refs: what whatCoKnows actually writes when a member removes a plan or an event
+const WK = await import("../../src/services/whatCoKnows.js");
+const known = WK.knownItems({ profile: null, claims: [], files: [], asks: [], kit: [], snapshot: null, tastes: [], threads: [], events: [{ kind: "plan", id: "p77", name: "Pier Night", on: "2026-11-20" }, { kind: "event", id: "e77", name: "Salon", on: "2026-10-22" }] } as any);
+check("whatCoKnows lists a plan and an event with refs plan:<id> and event:<id>, removable only", known.map((i: any) => i.ref).sort().join() === "event:e77,plan:p77" && known.every((i: any) => i.canCorrect === false));
+const calls: { sql: string; args: unknown[] }[] = [];
+const fdb = { query: async (sql: string, args: unknown[]) => (calls.push({ sql, args }), { rows: [], rowCount: 1 }) };
+const appliedPlan = await WK.applyOne(fdb as any, "u1", {} as any, known.find((i: any) => i.ref === "plan:p77")!, "remove", null, "forget that");
+const appliedEvent = await WK.applyOne(fdb as any, "u1", {} as any, known.find((i: any) => i.ref === "event:e77")!, "remove", null, "forget that");
+check("removing them is applied at the source, bound to the member", "ref" in appliedPlan && "ref" in appliedEvent && calls.every((c) => c.args[0] === "u1") && calls.some((c) => /DELETE FROM planned_event_mentions/.test(c.sql)) && calls.some((c) => /DELETE FROM suggestion_outcomes/.test(c.sql)));
+const rows = WK.removalRows([appliedPlan, appliedEvent] as any);
+const afterRemoval = await read(raw({
+  info: [info("e77", "Salon", "2026-10-22T18:00:00Z"), info("e1", "Founders Dinner", "2026-10-20T18:00:00Z")],
+  presence: [pres("e77", { arrivedAt: d("2026-10-22T18:10:00Z"), arrivedVia: "door" }), pres("e1", { arrivedAt: d("2026-10-20T18:20:00Z"), arrivedVia: "door" })],
+  plans: [plan("p77", "Pier Night", "2026-11-20"), plan("p78", "Pottery Night", "2026-11-21")],
+  outcomes: [out("event:e77", "Salon", "helped")],
+}), [], { forgotten: async () => rows });
+check("a plan and an event removed through whatCoKnows' own refs are not returned (a real ref, not a text match)", afterRemoval.events!.map((x) => x.name).sort().join() === "Founders Dinner,Pottery Night" && !/Pier Night|Salon/.test(JSON.stringify(afterRemoval)));
+const flag = await read(dinner, [], { events: async () => { throw new Error("x"); } });
+check("a failed read is told apart from no events (eventsUnread)", flag.eventsUnread === true && (await read(raw())).eventsUnread !== true);
+check("a failed guard read is unread too", (await read(dinner, [], { forgotten: async () => { throw new Error("db"); } })).eventsUnread === true);
 
 // ---------------------------------------------------------------- the loader: every query bound to the member, only theirs
 const seen: { sql: string; args: unknown[] }[] = [];

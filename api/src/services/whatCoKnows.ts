@@ -82,7 +82,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace" | "event" | "plan";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -196,6 +196,10 @@ export type RawKnown = {
   // What the pick is holding for them (harness/waiting.ts, notification grouping item 9), best first, unexpired, as labels that name
   // nothing but the item itself. Removing one means it is never sent.
   waiting?: { id: string; label: string; held: boolean }[];
+  // Events they planned (planned_event_mentions, ref plan:<id>) and events Cue has evidence they were at (event_presence, ref
+  // event:<event_api_id>): the refs the events section of the member picture (services/knowledge/events.ts) is guarded by. Removable;
+  // removing one clears their side (the plan row, or their words and results for that event) and the section never returns it.
+  events?: { kind: "event" | "plan"; id: string; name: string; on: string | null }[];
 };
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
@@ -264,6 +268,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const f of r.photos ?? []) add(`photo:${f.n}`, "photo", "files", `photo ${f.n}, sent ${f.sentOn}`, null, false);
   for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.held ? `${w.label} (held for now)` : w.label, null, false);
   for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
+  for (const e of r.events ?? []) add(`${e.kind}:${e.id}`, e.kind, e.kind === "plan" ? "after" : "said", e.kind === "plan" ? `an event you planned: ${e.name}${e.on ? ` (${e.on})` : ""}` : `an event you were at: ${e.name}${e.on ? ` (${e.on})` : ""}`, null, false);
   for (const x of r.pairOutcomes ?? []) {
     const line = pairOutcomeLine(x.evidence);
     if (line) add(`pair:${x.id}:${x.side}`, "pair", "said", `how an introduction I made${x.eventName ? ` at ${x.eventName}` : ""} went for you: ${line}`, x.note, false);
@@ -586,6 +591,13 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     `SELECT id, happened_at, meta->>'quote' AS quote FROM co_facts WHERE owner_user_id = $1 AND relation = 'already_knows' AND retired_at IS NULL ORDER BY happened_at DESC LIMIT 10`,
     [userId],
   ).catch(() => [] as any[]);
+  const eventRows = await q(
+    `SELECT 'plan' AS kind, id::text AS id, event_name_raw AS name, event_date::text AS day_on FROM planned_event_mentions WHERE user_id = $1 AND (event_date IS NULL OR event_date >= CURRENT_DATE - 1)
+     UNION ALL
+     SELECT 'event', ep.event_api_id, COALESCE(s.name, 'an event'), ep.arrived_at::date::text FROM event_presence ep LEFT JOIN luma_event_snapshots s ON s.event_id = ep.event_api_id WHERE ep.user_id = $1 AND ep.arrived_at IS NOT NULL
+     LIMIT 40`,
+    [userId],
+  ).catch(() => [] as any[]);
   const freeRows = await import("./wantWhen.js").then(async (WW) => {
     const { localDay } = await import("./memberTime.js");
     return (await WW.freeTimesOf(userId, localDay(new Date(), zone ?? null), db as any)).map((f) => ({ id: f.id, text: WW.describeFreeTime(f), quote: f.quote }));
@@ -629,6 +641,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
       const items = await W.waitingOrNull(userId);
       return W.visibleHeld(items ?? []).map((i) => ({ id: i.id, label: i.label, held: i.held.length > 0 }));
     }).catch(() => [] as { id: string; label: string; held: boolean }[]),
+    events: (Array.isArray(eventRows) ? eventRows : []).map((r: any) => ({ kind: r.kind === "plan" ? ("plan" as const) : ("event" as const), id: String(r.id), name: String(r.name ?? "").slice(0, 120), on: r.day_on ? String(r.day_on).slice(0, 10) : null })),
     alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
@@ -915,6 +928,18 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       await must(`UPDATE co_facts SET retired_at = NOW() WHERE id = $2 AND owner_user_id = $1 AND relation = 'already_knows' AND retired_at IS NULL`, [userId, Number(a)]);
       return { ref: item.ref, source: "knows", was, now: null };
     }
+    case "plan": {
+      // A planned event they take back: the row goes (its fingerprint stays in the correction that guards it).
+      await must(`DELETE FROM planned_event_mentions WHERE id::text = $2 AND user_id = $1`, [userId, a]);
+      return { ref: item.ref, source: "plan", was, now: null };
+    }
+    case "event": {
+      // An event Cue has them at: their words and results about it go. The arrival record stays (it is Cue's evidence, not theirs);
+      // the events section drops the event whole by this ref.
+      await db.query(`DELETE FROM suggestion_outcomes WHERE user_id = $1 AND kind = 'event' AND item_key = $2`, [userId, `event:${a}`]);
+      await must(`UPDATE event_presence SET met_someone_at = NULL, met_quote = NULL WHERE user_id = $1 AND event_api_id = $2`, [userId, a]);
+      return { ref: item.ref, source: "event", was, now: null };
+    }
     case "avoid": {
       const list = raw.profile?.avoid ?? [];
       const old = list.find((x) => hashOf(x) === a);
@@ -948,7 +973,7 @@ export function fieldFor(ref: string): string {
   if (kind === "pace") return "a pause on one kind of message";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them", plan: "an event they planned", event: "an event they were at" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -1144,7 +1169,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting", "pace"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting", "pace", "event", "plan"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";
