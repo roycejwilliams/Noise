@@ -87,6 +87,8 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
   if (/^sentinel body:/.test(r.reason ?? "")) return "skipped";
   // It says something they corrected since it was queued (runDueDeferredSends' recheck): skipped, never retried.
   if (/^corrected since queued:/.test(r.reason ?? "")) return "skipped";
+  // Held (safety, a hard stretch, away, their rule) past the point it was worth sending: dropped with its reason, never sent days late.
+  if ((r.reason ?? "").startsWith(PAST_WINDOW)) return "skipped";
   // What it served closed at their word since it was queued (harness/closedSubject.ts): skipped, never retried.
   if ((r.reason ?? "").startsWith(SUBJECT_CLOSED)) return "skipped";
   return "failed";
@@ -96,6 +98,33 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
 // "skipped"/"failed" it records that it didn't. Each handler is idempotent (a row re-claimed after a crash may run it twice).
 // reason: why a send that didn't go failed, when known (a reminder retries only what failed before delivery: services/relay.ts).
 export const EVENT_OVER = "event over";
+// A Cue-started row held this long past it was queued is no longer worth sending (no event end or expiry of its own says otherwise).
+export const HELD_MAX_HOURS = 72;
+export const PAST_WINDOW = "past its window";
+
+// Pure: whether a text Cue started itself (not one they asked for, not another member's words) is held by the recheck or their rule.
+export function cueStartedRow(row: Pick<DeferredRow, "type" | "target_key" | "after_kind">): boolean {
+  if (/^(?:relay|reminder|call|call_reminder):/.test(String(row.target_key ?? ""))) return false;
+  return row.type === "co_event" || row.after_kind === "event_direct_ask" || row.after_kind === "network_intro_ask" || /^direct_ask:[^:]+:[^:]+:[^:]+$/.test(String(row.target_key ?? ""));
+}
+
+// Pure: the event a held row is about, from its after-step or its direct-ask key.
+export function rowEventId(row: Pick<DeferredRow, "target_key" | "after_payload">): string | null {
+  const p = (row.after_payload ?? {}) as { eventId?: unknown };
+  if (typeof p.eventId === "string" && p.eventId) return p.eventId;
+  return String(row.target_key ?? "").match(/^direct_ask:([^:]+):/)?.[1] ?? null;
+}
+
+// Why a held Cue-started row is past its useful window, or null: its event is over, or it has waited more than HELD_MAX_HOURS since it was
+// queued (the table keeps no expiry of its own). `over` reads the event; a failed read leaves the event out of it.
+export async function heldPastWindow(row: Pick<DeferredRow, "type" | "target_key" | "after_kind" | "after_payload" | "created_at">, now: Date, over: (eventId: string, now: Date) => Promise<boolean> = eventIsOver): Promise<string | null> {
+  if (!cueStartedRow(row)) return null;
+  const ev = rowEventId(row);
+  if (ev && (await over(ev, now).catch(() => false))) return `${PAST_WINDOW}: its event is over`;
+  const queued = row.created_at ? new Date(row.created_at).getTime() : NaN;
+  if (Number.isFinite(queued) && now.getTime() - queued > HELD_MAX_HOURS * 3_600_000) return `${PAST_WINDOW}: held more than ${HELD_MAX_HOURS}h since it was queued`;
+  return null;
+}
 export type AfterHandlers = Record<AfterKind, (payload: any, outcome: SendOutcome, reason?: string) => Promise<void>>;
 
 export const afterHandlers: AfterHandlers = {
@@ -264,8 +293,9 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
       pool.query(`UPDATE deferred_sends SET status = $2, error = $3, sent_at = $4 WHERE id = $1 AND attempts = $5`, [row.id, status, error, sentAt, attempts]);
     // A send a correction marked for a recheck keeps the mark across a retry, so its next try is re-read too.
     const recheck = /^recheck:/i.test(String(row.error ?? ""));
-    const requeue = (dueAt: Date, error: string | null) =>
-      pool.query(`UPDATE deferred_sends SET status = 'queued', due_at = $2, error = $3 WHERE id = $1 AND attempts = $4`, [row.id, dueAt, recheck ? row.error : error, attempts]);
+    // unspend: a hold (their rule, the recheck, hours, the pause) is not a send attempt, so it gives the attempt back; only a real failure counts.
+    const requeue = (dueAt: Date, error: string | null, unspend = false) =>
+      pool.query(`UPDATE deferred_sends SET status = 'queued', due_at = $2, error = $3, attempts = attempts - ${unspend ? 1 : 0} WHERE id = $1 AND attempts = $4`, [row.id, dueAt, recheck ? row.error : error, attempts]);
     // Marked by a correction: re-read against that one correction (recheckDecision). Owed texts go as written; a Co-initiated one
     // the judge finds wrong now is skipped with its reason; a failed judgment sends it.
     const verdict = recheck ? await recheckDecision(row, messages, deps.judge ?? judgeAfterCorrection) : null;
@@ -316,21 +346,26 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
         .send({ userId: row.user_id, phoneNumber: row.phone_number, type: row.type, targetKey: row.target_key, messages, timezone: row.timezone, respectHours: true, now, ...(/^reminder:/.test(String(row.target_key)) ? { cls: "requested" as const } : {}) })
         .catch((err: any) => ({ sent: false, reason: `error: ${String(err?.message ?? err)}` }));
     }
+    // A Cue-started text held past its event or its window is dropped with the reason, and its after step hears it didn't go.
+    if (!result.sent && result.reason?.startsWith("held:")) {
+      const gone = await heldPastWindow(row, now);
+      if (gone) result = { sent: false, reason: gone };
+    }
     const o = outcomeOf(result, true);
     // Held by their own rule or the spacing (harness/notifyGate.ts): it waits for when it may go, rechecked then, never dropped.
     const heldUntil = (result as { retryAt?: Date }).retryAt;
     if (!result.sent && result.reason?.startsWith("held:") && heldUntil) {
-      await requeue(heldUntil, null);
+      await requeue(heldUntil, null, true);
       out.requeued++;
       continue;
     }
     if (o === "retry_hours") {
-      await requeue(nextLocalHour(now, row.timezone, RULES.startHour), null);
+      await requeue(nextLocalHour(now, row.timezone, RULES.startHour), null, true);
       out.requeued++;
       continue;
     }
     if (o === "retry_paused") {
-      await requeue(new Date(now.getTime() + DEFERRED_LIMITS.retryAfterMs), result.reason ?? null);
+      await requeue(new Date(now.getTime() + DEFERRED_LIMITS.retryAfterMs), result.reason ?? null, true);
       out.requeued++;
       continue;
     }

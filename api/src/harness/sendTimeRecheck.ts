@@ -22,7 +22,7 @@
 // The end-of-night close is a goodbye (Royce 2026-10-14: one line, once): only the safety hold holds it.
 import { recordDecision } from "./core.js";
 import type { SendClass } from "./notifyGate.js";
-import { closedReason, closedSubjectFor, loadClosedSubjects, type ClosedSet } from "./closedSubject.js";
+import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, type ClosedSet, type ClosedSubject } from "./closedSubject.js";
 import { awayHoldReason, LOCATION_BOUND_TYPES, type AwayState } from "../services/away.js";
 import { MOOD_HOLD_CAP_HOURS, moodHold, type MoodHold } from "../services/moodHold.js";
 
@@ -36,12 +36,17 @@ export type RecheckWhat = {
   payload?: unknown;
   // It brings them into an event (an in-room nudge, an intro ask for an event).
   eventBound?: boolean;
+  // It answers their latest message: the holds never apply (the changed-mind read still does).
+  reply?: boolean;
   // The end-of-night goodbye.
   close?: boolean;
   // Its purpose is safety: never held here.
   safety?: boolean;
-  // false: the caller reads what it serves itself, inside its own lock (sendExempt's heldSendClosed).
+  // false: skip the changed-mind read (a caller with nothing it serves). Default true: closed subjects are read only when the send
+  // names one (an ask, goal, task, thread or loop in its key or payload), so a send that serves nothing costs no query.
   changedMind?: boolean;
+  // The event it is about (an in-room text, an intro ask for an event): arriving there ends an away hold for it.
+  eventId?: string | null;
 };
 
 // Pure: whether an exempt send brings them into an event, from its own key (eventGuestMatchHandoff's directAskKey) or type.
@@ -49,11 +54,19 @@ export function eventBoundSend(type: string, targetKey: string | null | undefine
   return LOCATION_BOUND_TYPES.has(type) || /^direct_ask:[^:]+:[^:]+:[^:]+$/.test(String(targetKey ?? ""));
 }
 
-export type HoldState = { safetyHold: boolean; mood: MoodHold; away: AwayState | null };
+// arrived: they have arrived at what.eventId (by location, their word or the door scan): the away claim doesn't hold a text about the
+// place they are standing in. Absent: not read / not arrived.
+export type HoldState = { safetyHold: boolean; mood: MoodHold; away: AwayState | null; arrived?: boolean };
+
+// Pure: the event an intro ask is about, from its key direct_ask:<event>:<candidate>:<asker>, when the candidate is the member it is for.
+export function directAskEvent(targetKey: string | null | undefined, userId: string): string | null {
+  const m = String(targetKey ?? "").match(/^direct_ask:([^:]+):([^:]+):([^:]+)$/);
+  return m && m[2] === userId ? m[1] : null;
+}
 export type Recheck =
   | { go: true }
   | { go: false; hold: "safety" | "mood" | "away" | "unreadable"; held: true; reason: string; retryAt: Date }
-  | { go: false; hold: "changed_mind"; held: false; reason: string; retryAt?: undefined };
+  | { go: false; hold: "changed_mind"; held: false; reason: string; hit: ClosedSubject; retryAt?: undefined };
 
 const HOUR = 3_600_000;
 // A safety hold's end isn't on the shared read (a flag only): look again in a few hours, which re-reads it.
@@ -69,7 +82,13 @@ export function holdsFrom(r: { safetyHold: boolean; emotional: Parameters<typeof
 // Pure: whether this send goes, against the member's state now. `closed` is the member's closed subjects (null: not read / nothing).
 export function recheckVerdict(what: RecheckWhat, state: HoldState | null, closed: ClosedSet | null, now: Date): Recheck {
   if (what.safety) return { go: true };
-  if (what.cls === "reply") return { go: true };
+  // What they closed or dropped since it was queued: nothing to wait for, it would reopen it. Only closed subjects drop; a narrowed ask
+  // (changed, not closed) keeps its subject open and is never read here.
+  if (what.changedMind !== false && closed) {
+    const hit = closedSubjectFor({ type: what.kind, targetKey: what.targetKey ?? null, payload: what.payload }, closed, what.cls);
+    if (hit) return { go: false, hold: "changed_mind", held: false, reason: closedReason(hit), hit };
+  }
+  if (what.cls === "reply" || what.reply) return { go: true };
   const own = what.cls === "unsolicited";
   if (state === null) {
     // Could not be read: Cue's own sends wait a little (the same fail-closed the mood fallback keeps on a safety read).
@@ -79,56 +98,62 @@ export function recheckVerdict(what: RecheckWhat, state: HoldState | null, close
     if (state.mood.hold && (own || what.cls === "checkin") && !what.close) {
       return { go: false, hold: "mood", held: true, reason: `they're in a hard stretch (mood hold, at most ${MOOD_HOLD_CAP_HOURS}h): this waits`, retryAt: new Date(now.getTime() + MOOD_RETRY_HOURS * HOUR) };
     }
-    if (state.away && own && what.eventBound && !what.close) {
+    if (state.away && own && what.eventBound && !what.close && !(what.eventId && state.arrived)) {
       const until = state.away.until ? Date.parse(`${state.away.until}T12:00:00Z`) + 24 * HOUR : NaN;
       return { go: false, hold: "away", held: true, reason: awayHoldReason(state.away), retryAt: new Date(until > now.getTime() ? until : now.getTime() + 24 * HOUR) };
     }
-  }
-  if (what.changedMind !== false && closed) {
-    const hit = closedSubjectFor({ type: what.kind, targetKey: what.targetKey ?? null, payload: what.payload }, closed, what.cls);
-    if (hit) return { go: false, hold: "changed_mind", held: false, reason: closedReason(hit) };
   }
   return { go: true };
 }
 
 // The one read of the member's state. Replaced in tests only.
-type Reader = (userId: string, now: Date) => Promise<HoldState>;
+type Reader = (userId: string, now: Date, eventId?: string | null) => Promise<HoldState>;
 let reader: Reader | null = null;
 export function setSendHoldReaderForTests(r: Reader | null): void {
   reader = r;
 }
-const readHolds: Reader = async (userId, now) => {
-  if (reader) return reader(userId, now);
+const readHolds: Reader = async (userId, now, eventId) => {
+  if (reader) return reader(userId, now, eventId);
   const MK = await import("../services/memberKnowledge.js");
-  return holdsFrom(await MK.realKnowledgeDeps.restraint(userId, now), now);
+  const holds = holdsFrom(await MK.realKnowledgeDeps.restraint(userId, now), now);
+  // Arrival ends an away hold for that event only, and only when an away claim is what would hold it (no extra read otherwise).
+  if (eventId && holds.away) holds.arrived = !!(await (await import("../services/eventPresence.js")).getPresence(eventId, userId).catch(() => null))?.arrived_at;
+  return holds;
 };
 
-export type RecheckDeps = { now?: Date; closed?: typeof loadClosedSubjects; record?: typeof recordDecision };
+// closed: the member's closed subjects, called only when the send names a subject (a caller inside a lock passes its own client's read).
+// stage: where it was asked, for the dropped_closed log. quiet: a peek ahead of a real attempt writes no decision row.
+export type RecheckDeps = { now?: Date; closed?: (userId: string) => Promise<ClosedSet | null>; record?: typeof recordDecision; stage?: string; quiet?: boolean };
 
 // The recheck every Cue-started send asks right before it goes. Records a decision when it doesn't go (ids and kinds only).
 export async function sendTimeRecheck(userId: string, what: RecheckWhat, deps: RecheckDeps = {}): Promise<Recheck> {
   const now = deps.now ?? new Date();
   if (what.safety) return { go: true };
-  if (what.cls === "reply") return { go: true };
-  const state = await readHolds(userId, now).catch(() => null);
-  // The closed read only when nothing already holds it and the caller wants it; a failed read stands for nothing closed.
+  const reply = what.cls === "reply" || !!what.reply;
+  const state = reply ? null : await readHolds(userId, now, what.eventId ?? null).catch(() => null);
+  // The closed read only when the send names a subject; a failed read stands for nothing closed.
   let closed: ClosedSet | null = null;
-  const holdsFirst = recheckVerdict({ ...what, changedMind: false }, state, null, now);
-  if (!holdsFirst.go) return finish(userId, what, holdsFirst, deps);
-  if (what.changedMind !== false) closed = await (deps.closed ?? loadClosedSubjects)(userId).catch(() => null);
+  if (what.changedMind !== false && subjectRefs({ type: what.kind, targetKey: what.targetKey ?? null, payload: what.payload }).length) {
+    closed = await (deps.closed ?? loadClosedSubjects)(userId).catch(() => null);
+  }
   return finish(userId, what, recheckVerdict(what, state, closed, now), deps);
 }
 
 async function finish(userId: string, what: RecheckWhat, v: Recheck, deps: RecheckDeps): Promise<Recheck> {
-  if (!v.go) {
+  if (!v.go && !deps.quiet) {
+    // A drop for a closed subject is the same row every path writes (proactive.dropped_closed, ids and states only).
+    if (!v.held) {
+      await (deps.record ?? recordDecision)(droppedClosedDecision({ userId, stage: deps.stage ?? "send_recheck", candidate: { type: what.kind, targetKey: what.targetKey ?? null }, hit: v.hit })).catch(() => {});
+      return v;
+    }
     await (deps.record ?? recordDecision)({
       layer: 7,
       decision: SEND_RECHECK,
       userId,
       outcome: "skip",
-      action: v.held ? `held_${v.hold}` : "dropped_changed_mind",
+      action: `held_${v.hold}`,
       reason: v.reason.slice(0, 300),
-      proposal: { kind: what.kind, targetKey: what.targetKey ?? null, cls: what.cls, held: v.held, ...(v.retryAt ? { retryAt: v.retryAt.toISOString() } : {}) },
+      proposal: { kind: what.kind, targetKey: what.targetKey ?? null, cls: what.cls, held: true, ...(v.retryAt ? { retryAt: v.retryAt.toISOString() } : {}) },
     }).catch(() => {});
   }
   return v;

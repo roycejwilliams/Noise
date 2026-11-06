@@ -29,7 +29,7 @@
 // outside this harness.
 import { REACTION_LINE_SQL } from "../services/reactionsIn.js";
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
-import { eventBoundSend, sendTimeRecheck } from "./sendTimeRecheck.js";
+import { directAskEvent, eventBoundSend, sendTimeRecheck } from "./sendTimeRecheck.js";
 import { inventedFailure } from "../services/speakable.js";
 import { sentinelIn, sentinelRule } from "../services/sentinelBody.js";
 import { proactivePaused, pausedTypes, heldTypes } from "../services/proactivePause.js";
@@ -2469,19 +2469,18 @@ export async function sendExempt(opts: {
     const lastIn = await loadLastWrittenInbound(client, opts.userId).catch(() => null);
     const answersLast = !!opts.answers && answersLastText(opts.answers.askedAt, lastIn, now);
     const cls: SendClass = opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited"));
-    // What it serves, read inside the lock (harness/closedSubject.ts): a task's result or check-in for a task they closed or dropped
-    // never goes, owed or not. Logged as proactive.dropped_closed.
-    const closedHit = await heldSendClosed(client, { userId: opts.userId, type: opts.type, targetKey: opts.targetKey, cls, stage: "exempt_lock" });
-    if (closedHit) {
-      await client.query("ROLLBACK");
-      return { sent: false, reason: closedReason(closedHit) };
-    }
-    // The one send-time recheck (harness/sendTimeRecheck.ts): a safety hold, a hard stretch or an away claim now holds what Cue starts,
-    // however long it waited. Held with its reason and when to look again, never dropped; what they closed is already read above.
-    const re = await sendTimeRecheck(opts.userId, { kind: opts.type, cls: answersLast ? "reply" : opts.requested ? "requested" : cls, targetKey: opts.targetKey, eventBound: opts.eventBound ?? eventBoundSend(opts.type, opts.targetKey), safety: opts.safety, changedMind: false }, { now });
+    // The one send-time recheck (harness/sendTimeRecheck.ts), inside the lock. First what it serves (harness/closedSubject.ts): a task's
+    // result or check-in for a task they closed or dropped never goes, owed or not (logged as proactive.dropped_closed). Then a safety
+    // hold, a hard stretch or an away claim, which hold what Cue starts however long it waited: held with its reason and when to look
+    // again, never dropped. A reply to their latest message skips the holds, never the close.
+    const re = await sendTimeRecheck(
+      opts.userId,
+      { kind: opts.type, cls: opts.requested ? "requested" : cls, reply: answersLast, targetKey: opts.targetKey, eventBound: opts.eventBound ?? eventBoundSend(opts.type, opts.targetKey), eventId: directAskEvent(opts.targetKey, opts.userId), safety: opts.safety },
+      { now, stage: "exempt_lock", closed: (uid) => closedInLock(client, uid, [{ type: opts.type, targetKey: opts.targetKey, payload: {} }]) },
+    );
     if (!re.go) {
       await client.query("ROLLBACK");
-      return { sent: false, reason: `held: ${re.reason}`, ...(re.held ? { retryAt: re.retryAt } : {}) };
+      return { sent: false, reason: re.held ? `held: ${re.reason}` : re.reason, ...(re.held ? { retryAt: re.retryAt } : {}) };
     }
     if (opts.coInitiated) {
       const { failed, sends } = await coInitiatedHold(client, { userId: opts.userId, timezone: opts.timezone ?? null, now, kind: opts.coInitiated.kind });
@@ -2659,13 +2658,14 @@ export const MAX_IN_ROOM_SENDS_PER_EVENT = 3;
 // the most engaged people in the room without a goodbye is inverted - one line, once, always"). The kill switches still hold it.
 // claim: the send's ledger row, written in the same locked transaction as the member's rule and the per-event count (harness/notifyGate.ts),
 // so two in-room texts at once can't both pass a cap. A send that then fails takes its claim back (releaseInRoomClaim).
-export async function inRoomSendAllowed(userId: string, eventId: string, opts: { close?: boolean; claim?: { targetKey: string; message: string } } = {}): Promise<boolean> {
+export async function inRoomSendAllowed(userId: string, eventId: string, opts: { close?: boolean; peek?: boolean; claim?: { targetKey: string; message: string } } = {}): Promise<boolean> {
   if (proactivePaused()) return false;
   // The matching kill switch, global or this event (services/roomMatching.ts), read fresh.
   if (await (await import("../services/roomMatching.js")).matchingPause(eventId)) return false;
-  // The one send-time recheck (harness/sendTimeRecheck.ts): a safety hold, a hard stretch or an away claim holds an in-room text too;
-  // the close is a goodbye, held only by the safety hold. Held: false, nothing claimed, so a later pass tries again.
-  if (!(await sendTimeRecheck(userId, { kind: "in_room", cls: "unsolicited", targetKey: opts.claim?.targetKey ?? `in_room:${opts.close ? "close" : "check"}:${eventId}`, eventBound: true, close: opts.close, changedMind: false })).go) return false;
+  // The one send-time recheck (harness/sendTimeRecheck.ts): a safety hold, a hard stretch or an away claim holds an in-room text too
+  // (arriving at this event ends an away hold for it); the close is a goodbye, held only by the safety hold. Held: false, nothing claimed,
+  // so a later pass tries again. peek: a look ahead of the real attempt (eventScoring's pre-check) writes no decision row.
+  if (!(await sendTimeRecheck(userId, { kind: "in_room", cls: "unsolicited", targetKey: opts.claim?.targetKey ?? `in_room:${opts.close ? "close" : "check"}:${eventId}`, eventBound: true, eventId, close: opts.close }, { quiet: opts.peek })).go) return false;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
