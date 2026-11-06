@@ -10,7 +10,7 @@ import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
-import { gateNetworkCandidate } from "../harness/matchGate.js";
+import { gateNetworkCandidate, PAIR_BLOCKED_SQL } from "../harness/matchGate.js";
 import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from "../harness/introConsent.js";
 import { shareableAsks } from "./matching.js";
 import { MODELS } from "../models.js";
@@ -97,12 +97,12 @@ async function saveBacklog(userId: string, askId: string, items: BacklogItem[]):
     .catch((err: any) => console.error("saveBacklog: write failed (non-fatal):", err?.message ?? err));
 }
 
-// A pair already has a network_introductions row (suggested, decided, or
-// introduced either way) — never re-suggest it, regardless of which
-// person's ask or which relevance direction produced the candidate again.
+// A pair already declined, introduced, or with both yeses is never re-suggested, regardless of which person's ask or which relevance
+// direction produced the candidate again. One nobody answered (or only one side did) blocks only while recent (matchGate.ts
+// PAIR_BLOCKED_SQL): silence is not a permanent no.
 async function alreadySuggested(personId: string, candidateId: string): Promise<boolean> {
   const [a, b] = canonicalPair(personId, candidateId);
-  const { rows } = await pool.query(`SELECT 1 FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [a, b]);
+  const { rows } = await pool.query(PAIR_BLOCKED_SQL, [a, b]);
   return rows.length > 0;
 }
 
@@ -303,7 +303,7 @@ export async function resolveNetworkTeaseReply(
       .query(
         `INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id)
          VALUES ($1, $2, 'declined', $3, $4)
-         ON CONFLICT (person_a_id, person_b_id) DO NOTHING`,
+         ON CONFLICT (person_a_id, person_b_id) DO UPDATE SET status = 'declined' WHERE network_introductions.status IN ('suggested', 'a_interested', 'b_interested')`,
         [a, b, pending.candidate.match_reason, pending.askId],
       )
       .catch((err: any) => console.error("resolveNetworkTeaseReply: decline write failed (non-fatal):", err?.message ?? err));

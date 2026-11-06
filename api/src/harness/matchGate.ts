@@ -588,8 +588,13 @@ export type NetworkFacts = {
   // preferences, memory text. None of it may be quoted.
   candidatePrivateTexts: string[];
   alreadySuggestedOrDeclined: boolean;
+  // Reachable: not opted out, with a number. Quiet is never a reason to leave someone out (Royce, 2026-11-04: the 90-day cutoff means
+  // less contact, never removal), so this no longer reads their last message.
   askerActive: boolean;
   candidateActive: boolean;
+  // Nothing from them in ACTIVE_WITHIN_DAYS, a text or a call: lower priority and longer spacing for whoever picks, never excluded.
+  askerQuiet?: boolean;
+  candidateQuiet?: boolean;
   // They already know each other (services/knownConnections.ts): introduced before, one said so, or a personal invite. Optional for
   // callers that build facts by hand; read as not connected.
   alreadyConnected?: string | null;
@@ -635,18 +640,25 @@ export function evaluateNetworkCandidate(f: NetworkFacts): { ok: boolean; checks
   const checks: GateCheck[] = [
     checkShareReason(f),
     f.alreadySuggestedOrDeclined
-      ? { name: "not_already_suggested", pass: false, reason: "pair already suggested, introduced, or declined" }
+      ? { name: "not_already_suggested", pass: false, reason: "pair already declined, introduced or answered, or suggested lately" }
       : { name: "not_already_suggested", pass: true },
-    f.askerActive ? { name: "asker_active", pass: true } : { name: "asker_active", pass: false, reason: "asker opted out or inactive" },
+    f.askerActive
+      ? { name: "asker_active", pass: true, ...(f.askerQuiet ? { reason: `quiet ${ACTIVE_WITHIN_DAYS}+ days: less contact, not left out` } : {}) }
+      : { name: "asker_active", pass: false, reason: "asker opted out or can't be reached" },
     f.candidateActive
-      ? { name: "candidate_active", pass: true }
-      : { name: "candidate_active", pass: false, reason: "candidate opted out or inactive" },
+      ? { name: "candidate_active", pass: true, ...(f.candidateQuiet ? { reason: `quiet ${ACTIVE_WITHIN_DAYS}+ days: less contact, not left out` } : {}) }
+      : { name: "candidate_active", pass: false, reason: "candidate opted out or can't be reached" },
     f.alreadyConnected ? { name: "not_already_connected", pass: false, reason: f.alreadyConnected } : { name: "not_already_connected", pass: true },
   ];
   return { ok: gate(checks).ok, checks };
 }
 
 const ACTIVE_WITHIN_DAYS = 90;
+// An unanswered suggestion is not a permanent block (Royce, 2026-11-04): a pair that was declined, introduced or has both yeses stays
+// closed; one with no answer, or one side's yes, blocks only while it is recent. Shared with services/networkIntroNudge.ts.
+export const PAIR_RETRY_DAYS = 60;
+export const PAIR_BLOCKED_SQL = `SELECT 1 FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2
+  AND (status IN ('declined', 'introduced', 'both_interested') OR GREATEST(created_at, a_interested_at, b_interested_at) > NOW() - INTERVAL '${PAIR_RETRY_DAYS} days')`;
 
 export async function gatherNetworkFacts(
   askerId: string,
@@ -654,20 +666,19 @@ export async function gatherNetworkFacts(
   shareReason: string | null | undefined,
 ): Promise<NetworkFacts> {
   const [a, b] = askerId < candidateId ? [askerId, candidateId] : [candidateId, askerId];
-  const [profile, memories, suggested, active, graphFacts, connected] = await Promise.all([
+  const [profile, memories, suggested, reachable, recent, graphFacts, connected] = await Promise.all([
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [candidateId]),
     pool.query(
       `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent' ORDER BY created_at DESC LIMIT 300`,
       [candidateId],
     ),
-    pool.query(`SELECT 1 FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [a, b]),
+    pool.query(PAIR_BLOCKED_SQL, [a, b]),
+    pool.query(`SELECT u.id FROM users u WHERE u.id = ANY($1::uuid[]) AND coalesce(u.sms_opted_out, false) = false AND u.phone_number IS NOT NULL`, [[askerId, candidateId]]),
+    // Any real activity of theirs: a text, or what they said on a call (a call-only member is not inactive).
     pool.query(
-      `SELECT u.id FROM users u
-       WHERE u.id = ANY($1::uuid[]) AND coalesce(u.sms_opted_out, false) = false AND u.phone_number IS NOT NULL
-         AND EXISTS (
-           SELECT 1 FROM co_memories m WHERE m.user_id = u.id AND m.memory_type = 'text_exchange'
-             AND m.content LIKE 'User %' AND m.created_at > NOW() - ($2 || ' days')::interval
-         )`,
+      `SELECT DISTINCT m.user_id AS id FROM co_memories m
+       WHERE m.user_id = ANY($1::uuid[]) AND m.memory_type = 'text_exchange' AND (m.content LIKE 'User %' OR m.content LIKE '[Call]%')
+         AND m.created_at > NOW() - ($2 || ' days')::interval`,
       [[askerId, candidateId], ACTIVE_WITHIN_DAYS],
     ),
     // Their owner-only facts (services/coFacts.ts): inferred wants and
@@ -678,7 +689,8 @@ export async function gatherNetworkFacts(
   ]);
   const p = profile.rows[0] ?? {};
   const stated = Array.isArray(p.intent) ? (p.intent as any[]).filter((i) => isOpenAsk(i) && i?.shareable === true).map((i) => String(i.text)) : [];
-  const activeIds = new Set(active.rows.map((r: any) => r.id));
+  const activeIds = new Set(reachable.rows.map((r: any) => r.id));
+  const recentIds = new Set(recent.rows.map((r: any) => r.id));
   return {
     shareReason,
     candidateStatedAsks: stated,
@@ -693,6 +705,8 @@ export async function gatherNetworkFacts(
     alreadySuggestedOrDeclined: suggested.rows.length > 0,
     askerActive: activeIds.has(askerId),
     candidateActive: activeIds.has(candidateId),
+    askerQuiet: !recentIds.has(askerId),
+    candidateQuiet: !recentIds.has(candidateId),
     alreadyConnected: connected.known ? connected.why : null,
   };
 }
