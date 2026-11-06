@@ -52,7 +52,7 @@ check("text: it tells the model to answer from what it returns, not guess", /Ans
 check("text: it carries corrections forward (later words qualify earlier, never the older alone)", /Their later words qualify their earlier ones/.test(use));
 check("text: it says a promise found is only a promise, not proof it was done", /A promise found in the record is only a promise/.test(use));
 check("text: it says nothing found is permission to share or start anything", /permission to bring that up with anyone else or to start something new/.test(use));
-check("text: honest miss: one other try, then plainly can't find it, no search talk, never 'didn't happen'", /try one other way/.test(use) && /couldn't find it in the history you can look through/.test(use) && /never that it didn't happen/.test(use) && /Don't describe how the lookup works, but don't hide its limits/.test(use) && /Ask them for a clue only when one would actually help/.test(use) && /never \"there's no record\"/.test(use));
+check("text: honest miss: one other try, then plainly can't find it, no search talk, never 'didn't happen'", /try one other way/.test(use) && /couldn't find it in the history you can access/.test(use) && /never that it didn't happen/.test(use) && /Don't describe how the lookup works, but don't hide its limits/.test(use) && /Ask them for a clue only when one would actually help/.test(use) && /never \"there's no record\"/.test(use));
 check("text: unavailable call records are acknowledged plainly", /call records aren't on file, say that plainly/.test(use));
 const keep = CTools.orderForCache(textTools);
 check("text: it is in the always-offered group (a read, not a come-and-go tool)", Object.keys(keep).indexOf("lookBack") >= 0 && !CTools.comeAndGoTools().has("lookBack"));
@@ -66,7 +66,7 @@ check("result: their old words reach the reply check as known HISTORY (what they
 check("result: the note comes first, so a cut downstream never takes the guidance off the front", Object.keys(tr)[0] === "note");
 hasRows = false;
 const miss: any = await quietly(() => textTools.lookBack.execute({ topic: "skydiving" }, { toolCallId: "t", messages: [] }));
-check("result: a miss returns no results and the honest-miss guidance", miss.ok && miss.results.length === 0 && /one other way/.test(miss.note) && /couldn't find it in the history you can look through/.test(miss.note) && /never how you looked/.test(miss.note) && /Ask them for a clue only if one would help/.test(miss.note) && /There is no earlier conversation on file/.test(miss.note), miss.note);
+check("result: a miss returns no results and the honest-miss guidance", miss.ok && miss.results.length === 0 && /one other way/.test(miss.note) && /couldn't find it in the history you can access/.test(miss.note) && /never how you looked/.test(miss.note) && /Ask them for a clue only if one would help/.test(miss.note) && /There is no earlier conversation on file/.test(miss.note), miss.note);
 hasRows = true;
 guardsBroken = true;
 factsLog.length = 0;
