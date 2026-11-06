@@ -15,7 +15,7 @@
 //   - guards: the same ones as transitions. Their removals (and a forget) take an item out whole; names go through the strip in
 //     memberKnowledge; and if the guards could not be read, nothing is returned (fails closed).
 //
-// Read only, one member (user_id = $1 bound), no model, nothing written. Opt-in: include ["picture"], so the default read (and
+// Read only, one member (user_id = $1 bound), no model, nothing written. Opt-in: include ["learned"], so the default read (and
 // every prompt that renders lessons, corrections and limits today) is unchanged.
 import pool from "../../db/db.js";
 import type { ForgottenRow } from "../whatCoKnows.js";
@@ -31,16 +31,16 @@ const CLIP = 300;
 const READ_BOUND = 500;
 
 export type RawLesson = { id: string; text: string; at: Date };
-export type RawCorrection = { id: string; field: string; itemRef: string; was: string; now: string | null; quote: string | null; at: Date };
+export type RawCorrection = { id: string; field: string; itemRef: string; was: string; now: string | null; theirWords: string | null; at: Date };
 export type RawPicture = { lessons: RawLesson[]; lessonsTotal: number; corrections: RawCorrection[]; correctionsTotal: number };
 
 // Where an item came from. memoryId: the co_memories row the lesson was saved as; exchange: not stored.
 export type LessonSource = { memoryId: string; exchange: "not stored" };
 export type PictureLesson = { id: string; text: string; source: LessonSource; qualifiedBy: string | null; verifiedAt: string };
-// A correction's own row is its source; the member's words for it are the quote (theirs, kept as said).
-export type PictureCorrection = { id: string; field: string; item: string | null; was: string; now: string | null; quote: string | null; qualifiedBy: string | null; verifiedAt: string };
+// A correction's own row is its source; theirWords is what they said, which goes through the name strip like everything else here.
+export type PictureCorrection = { id: string; field: string; item: string | null; was: string; now: string | null; theirWords: string | null; qualifiedBy: string | null; verifiedAt: string };
 export type DatedAvoid = { text: string; dated: false; verifiedAt: null };
-export type DatedRule = { id: string; area: string; text: string; basis: string; expiresAt: string | null; dated: true; verifiedAt: string };
+export type DatedRule = { id: string; area: string; text: string; basis: string; expiresAt: string | null; dated: boolean; verifiedAt: string | null };
 export type PictureLimits = { avoid: DatedAvoid[]; rules: DatedRule[]; availability: string | null };
 export type Picture = {
   lessons: PictureLesson[];
@@ -48,10 +48,9 @@ export type Picture = {
   corrections: PictureCorrection[];
   correctionsOmitted: number;
   limits: PictureLimits;
-  // A read failed (the lessons/corrections or the limits): what's here is not the whole picture. Said, never silent.
-  unread?: true;
 };
-export type PictureOptions = { budget?: number; about?: string };
+// strip: the member-name strip (memberKnowledge), applied to every string BEFORE it is clipped and measured, so the budget counts what is shown.
+export type PictureOptions = { budget?: number; about?: string; strip?: (s: string) => string };
 
 export async function loadPictureRaw(userId: string, q: Q = pool): Promise<RawPicture> {
   const [{ rows: ls }, { rows: cs }] = await Promise.all([
@@ -68,7 +67,7 @@ export async function loadPictureRaw(userId: string, q: Q = pool): Promise<RawPi
   return {
     lessons: ls.map((r) => ({ id: String(r.id), text: String(r.content ?? ""), at: new Date(r.created_at) })),
     lessonsTotal: ls.length ? Number(ls[0].total) : 0,
-    corrections: cs.map((r) => ({ id: String(r.id), field: String(r.field), itemRef: String(r.item_ref ?? ""), was: String(r.old_value ?? ""), now: r.new_value == null ? null : String(r.new_value), quote: r.quote ?? null, at: new Date(r.corrected_at) })),
+    corrections: cs.map((r) => ({ id: String(r.id), field: String(r.field), itemRef: String(r.item_ref ?? ""), was: String(r.old_value ?? ""), now: r.new_value == null ? null : String(r.new_value), theirWords: r.quote ?? null, at: new Date(r.corrected_at) })),
     correctionsTotal: cs.length ? Number(cs[0].total) : 0,
   };
 }
@@ -108,7 +107,8 @@ export function qualifyCorrections(raw: RawCorrection[]): (RawCorrection & { qua
     for (let j = i - 1; j >= 0 && by === null; j--) {
       const n = sorted[j];
       const sameItem = !!c.itemRef && n.itemRef === c.itemRef;
-      const chain = c.now !== null && squash(n.was) !== "" && squash(n.was) === squash(c.now);
+      // The was/now chain only links corrections of the same field (or item): "goal:a" and "ask:b" with the same words are two things.
+      const chain = c.now !== null && squash(n.was) !== "" && squash(n.was) === squash(c.now) && (n.field === c.field || sameItem);
       if (sameItem || chain) by = n.id;
     }
     return { ...c, qualifiedBy: by };
@@ -135,14 +135,17 @@ export function pictureOf(o: { raw: RawPicture; limits: PictureLimits; opts?: Pi
   const budget = Math.max(0, o.opts?.budget ?? PICTURE_BUDGET_CHARS);
   const about = o.opts?.about ? toks(o.opts.about) : null;
   const rel = (text: string) => (about ? jaccard(toks(text), about) : 0);
+  const st = o.opts?.strip ?? ((x: string) => x);
+  const cl = (x: string) => clip(st(x));
+  const clN = (x: string | null) => (x == null ? null : cl(x));
 
   const cs = qualifyCorrections(o.raw.corrections).map((c): PictureCorrection & { _t: number; _r: number } => ({
     id: c.id,
-    field: c.field,
-    item: c.itemRef || null,
-    was: clip(c.was),
-    now: c.now == null ? null : clip(c.now),
-    quote: c.quote == null ? null : clip(c.quote),
+    field: cl(c.field),
+    item: c.itemRef ? cl(c.itemRef) : null,
+    was: cl(c.was),
+    now: clN(c.now),
+    theirWords: clN(c.theirWords),
     qualifiedBy: c.qualifiedBy,
     verifiedAt: c.at.toISOString(),
     _t: c.at.getTime(),
@@ -150,7 +153,7 @@ export function pictureOf(o: { raw: RawPicture; limits: PictureLimits; opts?: Pi
   }));
   const ls = qualifyLessons(o.raw.lessons).map((l): PictureLesson & { _t: number; _r: number } => ({
     id: l.id,
-    text: clip(l.text.trim()),
+    text: cl(l.text.trim()),
     source: { memoryId: l.id, exchange: "not stored" },
     qualifiedBy: l.qualifiedBy,
     verifiedAt: l.at.toISOString(),
@@ -180,15 +183,15 @@ export function pictureOf(o: { raw: RawPicture; limits: PictureLimits; opts?: Pi
 
 // Pure: limits with each item's own date. A rule has its setAt; an avoid item is a plain list entry with no stored date, so it says
 // so (dated: false, verifiedAt: null). co_profiles.updated_at is never used as an item's date. No budget: dropping a limit is unsafe.
-export function datedLimits(l: { avoid: string[]; availability: string | null; rules?: { id: string; area: string; basis: string; words: string[]; expiresAt: string | null; setAt: string }[] }, keep: (text: string) => boolean = () => true): PictureLimits {
+export function datedLimits(strip: (s: string) => string, l: { avoid: string[]; availability: string | null; rules?: { id: string; area: string; basis: string; words: string[]; expiresAt: string | null; setAt: string }[] }, keep: (text: string) => boolean = () => true): PictureLimits {
   return {
-    avoid: l.avoid.filter((a) => a.trim() && keep(a)).map((a) => ({ text: a.trim(), dated: false as const, verifiedAt: null })),
+    avoid: l.avoid.filter((a) => a.trim() && keep(a)).map((a) => ({ text: strip(a.trim()), dated: false as const, verifiedAt: null })),
     rules: (l.rules ?? []).flatMap((r) => {
       const text = r.words.join(" / ").trim();
       const at = new Date(r.setAt);
-      return text && keep(text) ? [{ id: r.id, area: r.area, text, basis: r.basis, expiresAt: r.expiresAt, dated: true as const, verifiedAt: valid(at) ? at.toISOString() : "" }] : [];
+      return text && keep(text) ? [{ id: r.id, area: r.area, text: strip(text), basis: r.basis, expiresAt: r.expiresAt, dated: valid(at), verifiedAt: valid(at) ? at.toISOString() : null }] : [];
     }),
-    availability: l.availability,
+    availability: l.availability ? strip(l.availability) : null,
   };
 }
 
@@ -199,12 +202,9 @@ export function guardPicture(raw: RawPicture, rows: ForgottenRow[], W: { guardTe
   const removed = rows.filter((r) => r.removed);
   if (!removed.length) return raw;
   const same = (t: string) => W.guardText(t, removed) === t;
-  return {
-    ...raw,
-    lessons: raw.lessons.filter((l) => same(l.text)),
-    corrections: raw.corrections.filter((c) => same(c.was) && (c.now == null || same(c.now)) && (c.quote == null || same(c.quote)) && !removed.some((r) => r.ref && r.ref === c.itemRef)),
-  };
+  const lessons = raw.lessons.filter((l) => same(l.text));
+  const corrections = raw.corrections.filter((c) => same(c.was) && (c.now == null || same(c.now)) && (c.theirWords == null || same(c.theirWords)) && !removed.some((r) => r.ref && r.ref === c.itemRef));
+  // A forgotten item is not "left out": it is subtracted from the totals so it never shows up in an omitted count.
+  return { lessons, lessonsTotal: raw.lessonsTotal - (raw.lessons.length - lessons.length), corrections, correctionsTotal: raw.correctionsTotal - (raw.corrections.length - corrections.length) };
 }
 
-// The empty answer, also what a failed guard read gets.
-export const emptyPicture = (): Picture => ({ lessons: [], lessonsOmitted: 0, corrections: [], correctionsOmitted: 0, limits: { avoid: [], rules: [], availability: null } });
