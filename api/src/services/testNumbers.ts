@@ -25,6 +25,20 @@ export function isTestNumber(number: unknown, env: NodeJS.ProcessEnv = process.e
 // member deliberate live tests run through; it keeps paid searches the other test members skip (services/testMemberSpend.ts).
 export const LIVE_TEST_PHONE_LIKE = "+141555501%";
 export const liveTestEmail = (tag: string): string => `jordan.test${tag}@example.test`;
+// Pure: the first live-test slot (scripts/testMember.ts reset) whose phone, reset email and username are all unused. A phone counts as
+// used bare or rewritten with an archive marker ("+14155550150#a1"): 11-06, number 150 looked free beside such a row whose
+// jordan.test50 email was taken, and the insert failed.
+export function freeTestSlot(phones: string[], emails: string[], usernames: string[] = []): { phone: string; tag: string } | null {
+  const usedPhones = new Set(phones.map((p) => String(p ?? "").split("#")[0]));
+  const usedEmails = new Set(emails.map((e) => String(e ?? "").toLowerCase()));
+  const usedNames = new Set(usernames.map((u) => String(u ?? "").toLowerCase()));
+  for (let n = 100; n <= 199; n++) {
+    const phone = `+1415555${String(n).padStart(4, "0")}`;
+    const tag = phone.slice(-2);
+    if (!usedPhones.has(phone) && !usedEmails.has(liveTestEmail(tag).toLowerCase()) && !usedNames.has(`jordan_test_${tag}`)) return { phone, tag };
+  }
+  return null;
+}
 export type LiveTestCandidate = { id: string; phone_number: string | null; email: string | null; archived_at: Date | string | null };
 export const isLiveTestRow = (r: LiveTestCandidate): boolean =>
   !r.archived_at && /^\+141555501\d{2}$/.test(r.phone_number ?? "") && /^jordan\.test\d{2}@example\.test$/.test(r.email ?? "");

@@ -35,5 +35,13 @@ check("calls are never placed to a test number", /if \(isTestNumber\(user\.phone
 check("an inline reply on a test member reads Cue's own send log", /if \(isTestHandle\(handle\)\) \{/.test(src("services/inlineReply.ts")));
 check("the reset archives, never deletes", /UPDATE users SET archived_at = NOW\(\)/.test(src("scripts/testMember.ts")) && !/DELETE FROM/i.test(src("scripts/testMember.ts")));
 
+// The reset's slot (11-06: 150 looked free beside an archived "+14155550150#a1" whose jordan.test50 email was taken; the insert failed)
+check("a number rewritten with an archive marker counts as used", T.freeTestSlot(["+14155550100#a1"], [])?.phone === "+14155550101");
+check("a taken reset email skips that number", T.freeTestSlot([], ["jordan.test00@example.test"])?.phone === "+14155550101");
+check("a taken username skips that number", T.freeTestSlot([], [], ["jordan_test_00"])?.phone === "+14155550101");
+check("the 11-06 case picks a number whose phone, email and username are all free", (() => { const s = T.freeTestSlot(["+14155550150#a1", ...Array.from({ length: 50 }, (_, i) => `+1415555${String(100 + i).padStart(4, "0")}`)], ["jordan.test50@example.test"]); return s?.phone === "+14155550151" && s.tag === "51"; })());
+check("all used: no slot", T.freeTestSlot(Array.from({ length: 100 }, (_, i) => `+1415555${String(100 + i).padStart(4, "0")}`), []) === null);
+check("the reset archives only when the new member is created (one transaction)", /BEGIN[\s\S]*UPDATE users SET archived_at[\s\S]*INSERT INTO users[\s\S]*COMMIT[\s\S]*ROLLBACK/.test(src("scripts/testMember.ts")));
+
 console.log(`test member rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
