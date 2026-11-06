@@ -150,5 +150,19 @@ const sc = src("scripts/cleanupRemovedHelpers.ts");
 check("the script does nothing unless exactly one of --dry-run or --apply is passed", /if \(apply === dry\) \{[\s\S]{0,200}Nothing was done/.test(sc) && /process\.argv\.slice\(2\)/.test(sc));
 check("the old Gmail-only script name is gone", !fs.existsSync(new URL("../../src/scripts/revokeGmailGrants.ts", import.meta.url)));
 
+// ---- photos are kept until the member deletes them (Royce 2026-11-06): no scheduled wipe, delete stays theirs alone
+check("no scheduled photo wipe: the nightly job and the 90-day limit are gone", !/wipeUnusedAssets|memberAssets/.test(src("jobs/index.ts")) && !/wipeUnusedAssets|unusedDays/.test(src("services/memberAssets.ts")) && !("wipeUnusedAssets" in MA) && !("unusedDays" in (MA.ASSET_LIMITS as object)));
+{
+  const seen: { sql: string; params: unknown[] }[] = [];
+  MA.useAssetDb({ query: async (sql: string, params?: unknown[]) => { seen.push({ sql, params: params ?? [] }); return { rows: [], rowCount: 1 }; } });
+  console.log = () => {};
+  await MA.deleteAssets("member-a", [2]);
+  await MA.deleteAssets("member-a", null);
+  console.log = quiet; MA.useAssetDb(null);
+  const del = seen.filter((q) => /UPDATE member_assets SET bytes = NULL/.test(q.sql));
+  check("deleteAssets wipes only the asking member's own photos (scoped to their id, nothing else in the match)", del.length === 2 && del.every((q) => /WHERE owner_user_id = \$1 AND wiped_at IS NULL/.test(q.sql) && q.params[0] === "member-a") && del[0].params[1]?.toString() === "2" && del[1].params[1] === null, del);
+}
+check("photo intake is untouched: a texted photo is still read (routes/sendblue.ts, services/imageRead.ts)", /readableImage/.test(src("routes/sendblue.ts")) && /describeImage/.test(src("routes/sendblue.ts")));
+
 console.log(`assistant helpers removal: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
