@@ -1,21 +1,15 @@
-// Member assets (Royce, 2026-10-11): "Members can text Co material for their artifacts: pictures, logos, inspo images, files. Co
-// stores these as member assets and places them where relevant - in decks now, and the same asset store should serve every artifact
-// type later. Assets follow the same owner-only rules as the artifacts they appear in."
-//
-// Every photo a member texts is kept here as "their image #N" (routes/sendblue.ts), already in a format a browser shows (HEIC is
-// converted to JPEG by services/imageRead.ts readableImage). Files (PDF, PowerPoint, Word) stay in memberFiles.ts. The rules:
-//   - one member's only: an artifact can place an asset only when the asset's owner is the artifact's owner (store.ts checks it on
-//     every write);
-//   - never served on its own: only at /d/<artifact>/a/<asset>, and only while that artifact is live and places it (routes/coPage.ts),
-//     so taking a deck down or its expiry takes its images with it;
-//   - the id is 18 random bytes like a page's, never listed;
-//   - unused for 90 days and on no live page or deck, the bytes are wiped (jobs/index.ts); they can delete them any time
-//     (agent/artifactTools.ts deleteImages).
+// Member assets (Royce, 2026-10-11; photos kept until deleted, 2026-11-06): the pictures a member texts Cue are kept here as "their
+// image #N" (routes/sendblue.ts), already in a format a browser shows (HEIC is converted to JPEG by services/imageRead.ts
+// readableImage). Files (PDF, PowerPoint, Word) stay in memberFiles.ts. The rules:
+//   - kept until the member deletes them, like their texts: there is no automatic wipe (agent/conversationTools.ts deleteImages,
+//     and the removal on what Cue knows, services/whatCoKnows.ts, both go through deleteAssets);
+//   - one member's only: every read and delete is scoped to the owner;
+//   - never served on their own: there is no route that serves a photo, and the id (18 random bytes) is never listed.
 import { createHash, randomBytes } from "crypto";
 import pool from "../db/db.js";
 
 export const ASSET_ID = /^[A-Za-z0-9_-]{24}$/;
-export const ASSET_LIMITS = { bytes: 6 * 1024 * 1024, list: 20, unusedDays: 90 } as const;
+export const ASSET_LIMITS = { bytes: 6 * 1024 * 1024, list: 20 } as const;
 const TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 export type AssetDb = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
@@ -84,29 +78,12 @@ export async function ownedAssetIds(userId: string, ids: string[]): Promise<Set<
   return new Set(rows.map((r) => String(r.id)));
 }
 
-// Placed in an artifact just now: counts as use, so it isn't wiped while it's in use.
-export async function touchAssets(ids: string[]): Promise<void> {
-  if (!ids.length) return;
-  await db.query(`UPDATE member_assets SET last_used_at = NOW() WHERE id = ANY($1::text[])`, [ids]);
-}
-
-// For the artifact route only: the bytes, when the asset is this owner's.
+// The bytes, when the asset is this owner's.
 export async function loadAssetFor(ownerUserId: string, id: string): Promise<{ data: Buffer; mediaType: string } | null> {
   if (!ASSET_ID.test(id)) return null;
   const { rows } = await db.query(`SELECT bytes, media_type FROM member_assets WHERE id = $1 AND owner_user_id = $2 AND wiped_at IS NULL AND bytes IS NOT NULL`, [id, ownerUserId]);
   const r = rows[0];
   return r && TYPES.has(String(r.media_type)) ? { data: Buffer.from(r.bytes), mediaType: String(r.media_type) } : null;
-}
-
-// Never an image a live page or deck of theirs places (review of the decks PR: a kept deck's logo would have gone at 90 days).
-export async function wipeUnusedAssets(): Promise<number> {
-  const { rowCount } = await db.query(
-    `UPDATE member_assets a SET bytes = NULL, wiped_at = NOW()
-     WHERE a.wiped_at IS NULL AND a.last_used_at < NOW() - make_interval(days => $1)
-       AND NOT EXISTS (SELECT 1 FROM co_pages p WHERE p.owner_user_id = a.owner_user_id AND p.taken_down_at IS NULL AND p.expires_at > NOW() AND p.data::text LIKE '%' || a.id || '%')`,
-    [ASSET_LIMITS.unusedDays],
-  );
-  return rowCount ?? 0;
 }
 
 // "Delete the photos I sent you": their own images, the bytes gone now (the number stays retired). numbers null = all of them. A
