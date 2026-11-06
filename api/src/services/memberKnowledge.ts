@@ -222,6 +222,8 @@ export type MemberKnowledge = {
   people?: Fact<Person>[];
   // How many people the character budget left out (never silently).
   peopleOmitted?: number;
+  // The people section could not be read (the loader failed, or the guards were unread): [] above means unread, not none.
+  peopleUnread?: boolean;
   // How many things they asked Co to remove (services/whatCoKnows.ts), never what they were: read with exchanges or corrections.
   removedCount?: number;
   // The live guards' read (their removals and corrections) failed, so exchanges and the rest came back unguarded. Said, never silent
@@ -822,7 +824,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
 
   const transitionsRaw = await skip("transitions", "transitions", () => (d.transitions ? d.transitions(userId) : Promise.resolve([] as RawTransition[])), [] as RawTransition[]);
   const eventsRaw = await skip("events", "events", () => (d.events ? d.events(userId) : Promise.resolve(null)), null as RawEvents | null);
-  const peopleRaw = await skip("people", "people", () => (d.people ? d.people(userId) : Promise.resolve([] as RawPerson[])), [] as RawPerson[]);
+  const peopleRaw = await skip("people", "people", () => (d.people ? d.people(userId) : Promise.resolve(null as RawPerson[] | null)), null as RawPerson[] | null);
   const [states, asks, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, limits] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
@@ -932,7 +934,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   }
   if (on("people")) {
     // Fails closed, like transitions: without the guards read nothing is returned.
-    if (guardsUnread || !d.forgotten) k.people = [];
+    if (guardsUnread || !d.forgotten || !peopleRaw) { k.people = []; k.peopleUnread = true; }
     else {
       const built = buildPeople(peopleRaw, { g, removed, linked: names });
       k.people = built.items;
