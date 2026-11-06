@@ -151,10 +151,23 @@ await O.recordSuggestionOutcome(u, "opportunity", "event:evt-prog", "Open Fellow
 check("job: 'i'm applying' arms nothing", world.rof.length === 0 && (await dueRows()).length === 0, world.rof);
 {
   // An opening follow-up queued before the boundary still never asks "how was it".
-  const legacy = { eventApiId: "evt-prog", eventName: "Open Fellowship", form: "opening", eventDate: null, outcomeFollowupIds: [], checkinFollowupIds: [], walkinCheckinIds: [], askText: "fellowships" };
+  const legacyRow = { id: `rof-${world.nextId++}`, user_id: u, ask_text: "fellowships", tier: 3, match_name: "Open Fellowship", match: jobFind({ event_api_id: "evt-prog" }), created_at: new Date(), send_at: new Date(), harness_status: "queued", drop_reason: null };
+  world.rof.push(legacyRow);
+  const legacy = { eventApiId: "evt-prog", eventName: "Open Fellowship", form: "opening", eventDate: null, outcomeFollowupIds: [legacyRow.id], checkinFollowupIds: [], walkinCheckinIds: [], askText: "fellowships" };
   const d = await draft(legacy);
-  check("job (queued before the boundary): never 'how was it'", kind(d) !== "event" && !/Ask how "/.test(d.prompts[0] ?? ""), { k: kind(d), p: d.prompts[0]?.slice(-300) });
+  check("job (queued before the boundary): drafted as an opening, never 'how was it'", kind(d) === "opening" && !/Ask how "/.test(d.prompts[0] ?? ""), { k: kind(d), p: d.prompts[0]?.slice(-300) });
+  presumptuous = true;
+  const dp = await draft(legacy);
+  check("job (queued before the boundary): a 'how was it, who did you meet' draft is refused", kind(dp) === "skip", dp.r);
+  presumptuous = false;
 }
+// A legacy parked opening armed by "i'm applying" is dropped at enqueue by the real-event check, with a reason, and never sent.
+reset();
+world.rof.push({ id: `rof-${world.nextId++}`, user_id: u, ask_text: "fellowships", tier: 3, match_name: "Open Fellowship", match: jobFind({ event_api_id: "evt-prog" }), created_at: new Date(), send_at: new Date(Date.now() - 3_600_000), harness_status: "awaiting_evidence", drop_reason: null });
+await O.recordSuggestionOutcome(u, "opportunity", "event:evt-prog", "Open Fellowship", "acted", "i'm applying", { provenance: "stated", quote: "i'm applying" });
+check("legacy opening armed by 'i'm applying'", world.rof[0].harness_status === null, world.rof[0]);
+world.rof[0].send_at = new Date(Date.now() - 3_600_000); // the arm pushes a delay out; make it due
+check("legacy opening: dropped at enqueue, nothing sent, reason recorded", (await dueRows()).length === 0 && world.rof[0].harness_status === "dropped" && /not a real event/.test(world.rof[0].drop_reason ?? ""), world.rof[0]);
 
 // ================================================================ 4. "I'm going" -> only the neutral question; "I went" -> the debrief
 reset();

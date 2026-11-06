@@ -203,7 +203,7 @@ export function gateThreadChanges(
       }
     }
     const nextStep = NEXT_STEPS.includes(o.nextStep as NextStep) ? (o.nextStep as NextStep) : "check_in";
-    // The model proposes the kind; the source is "said" unless it says it read it between their words. A transition is always
+    // The model proposes the kind; the source is "inferred" unless it says "said" outright. A transition is always
     // opened from a quote of theirs (the gate above), so there is no transition without their own words.
     const transition: TransitionSource | null = o.transition === "said" ? "said" : o.transition === "inferred" || o.transition === true ? "inferred" : null;
     opened.push({ text, quote: o.quote.trim(), quotedAt: hit.at, dueDate, dueLabel, nextStep, kind: o.commitment && dueDate ? "commitment" : "thread", transition, transitionChannel: transition ? hit.via ?? null : null });
