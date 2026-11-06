@@ -68,6 +68,16 @@ export function restates(edge: string, goal: string): boolean {
   return e.filter((w) => g.has(w)).length / e.length >= 0.75 || edge.trim().toLowerCase() === goal.trim().toLowerCase();
 }
 
+// A goal whose one recheck went unanswered for this long is searched weekly, not daily: less contact and less spend, never dropped
+// (Royce, 2026-11-04). It keeps its own day of the week, so the searches spread out; any signal clears recheck_asked_at and the daily
+// search is back (services/goalRecheck.ts).
+export const QUIET_GOAL_DAYS = 7;
+export function restingToday(row: Pick<GoalStateRow, "recheckAskedAt"> | null | undefined, hash: string, now: Date): boolean {
+  const asked = row?.recheckAskedAt;
+  if (!asked || now.getTime() - asked.getTime() < QUIET_GOAL_DAYS * 86_400_000) return false;
+  return (Math.floor(now.getTime() / 86_400_000) + parseInt(hash.slice(0, 6), 16)) % 7 !== 0;
+}
+
 export function goalHash(goal: string): string {
   return createHash("sha1").update(goal.trim().toLowerCase()).digest("hex").slice(0, 20);
 }
@@ -340,7 +350,10 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
     }
   }
   if (read === "full" || read === "reused") await deps.keepRetireFlags?.(userId, flagged).catch(() => {});
-  const searchText = edgeSearchText(active, { enjoys: o.enjoys, specifics: o.specifics });
+  // Goals whose recheck went unanswered are searched weekly (restingToday); the plan below still records them as active.
+  const resting = active.filter((e) => restingToday(states.get(goalHash(e.goal)), goalHash(e.goal), o.now));
+  const onTurn = resting.length ? active.filter((e) => !resting.includes(e)) : active;
+  const searchText = edgeSearchText(onTurn, { enjoys: o.enjoys, specifics: o.specifics });
   // A read that didn't come back whole logs as a failure, whatever it still searches (Royce, 2026-10-09: "no silent success"). A
   // cut-off read still searches the goals it did read; a failed one searches only what they enjoy, if anything.
   const readFailed = read === "failed" || read === "cut_off";
@@ -357,7 +370,7 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
       ...(readFailed ? { failed: true } : {}),
     })
     .catch(() => {});
-  return { searchText, active, passed, setAside, retiredAsks, read };
+  return { searchText, active: onTurn, passed, setAside, retiredAsks, read };
 }
 
 // ---------- real deps
