@@ -385,7 +385,7 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   check("meaning: the other member's close row is never a candidate (user_id is in the meaning query)", !/other member's own words/.test(JSON.stringify(r)) && asked.filter((q) => /<=>/.test(q.sql)).every((q) => /user_id = \$1/.test(q.sql) && q.args[0] === MEAN));
   const call = r.results.find((h) => h.channel === "call");
   check("meaning: a call matched by meaning shows part of it, not the whole transcript, and says which part", !!call && (call.before.length + 1 + call.after.length) <= R.RECALL.callLinesNoTopic && /start of this call/.test(call.part ?? ""), call);
-  check("meaning: the note tells the model a meaning match is a near match", /found by meaning/.test(R.RECALL_USE));
+  check("meaning: the tool guidance and the result note both say a meaning match is a candidate, not a memory, to be quoted only for what its words say", /candidate, not a memory/.test(R.RECALL_USE) && /never treat it as confirming a specific memory when its words don't support it/.test(R.RECALL_USE) && /candidates, not memories/.test(R.recallNote(r)) && !/candidates, not memories/.test(R.recallNote(okRes(await look(JORDAN, { topic: "glaze" })))));
 
   // guards and dates apply to meaning candidates exactly as to keyword ones
   removed.push(...W.liveGuards([{ field: "life", old: "puppy chewed the couch", now: null, ref: "claim:p", removed: true }]));
