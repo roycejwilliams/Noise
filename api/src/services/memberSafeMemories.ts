@@ -105,8 +105,14 @@ export function nameSpanFinder(linkedNames: string[]): (s: string) => { at: numb
   };
 }
 
-// What historyLine writes (whole, or its first part when split on "; "): never rewritten again.
-const OWN_HISTORY = /^(?:Cue introduced them to [^,;]+, another member\.?|Cue suggested [^,;]+, another member, as someone to meet\.?|[^,;]+, another member, came up here(?:; their details aren't kept for this conversation\.?)?)$/;
+// What historyLine writes (whole, or its first part when split on "; "): never rewritten again. The name slot is captured, and the line
+// only counts as the strip's own when that slot is exactly a linked member's name (ownHistory): anything else, even with the suffix, is stripped.
+const OWN_HISTORY = /^(?:Cue introduced them to ([^,;]+), another member\.?|Cue suggested ([^,;]+), another member, as someone to meet\.?|([^,;]+), another member, came up here(?:; their details aren't kept for this conversation\.?)?)$/;
+const ownHistory = (line: string, names: string[]): boolean => {
+  const m = OWN_HISTORY.exec(line.trim());
+  const slot = m ? (m[1] ?? m[2] ?? m[3] ?? "").trim() : "";
+  return !!slot && names.some((n) => n.trim() === slot);
+};
 // Pure: what one history sentence about a member says, from the sentence that named them.
 export function historyLine(sentence: string, name: string): string {
   const kind = historyKind(sentence);
@@ -161,7 +167,7 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
         const name = find(s);
         if (!name) return s;
         // Its own output is left alone, so a second pass is a no-op (a section stripped early to be measured, then again at the end).
-        if (OWN_HISTORY.test(s.trim())) return s;
+        if (ownHistory(s, names)) return s;
         const h = historyLine(s, name);
         if (seen.has(h)) return "";
         seen.add(h);
