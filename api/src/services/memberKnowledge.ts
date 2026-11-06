@@ -62,6 +62,7 @@ import { DELIVERY_SHAPE_RULE } from "./speakable.js";
 import { eventsOf, guardEvents, loadEvents, type EventItem, type RawEvents } from "./knowledge/events.js";
 import { notToTeammate } from "./teamLines.js";
 import type { SentItem } from "./turnContext.js";
+import { buildPeople, loadPeople, type Person, type RawPerson } from "./knowledge/people.js";
 
 // ---------------------------------------------------------------- types
 
@@ -217,6 +218,10 @@ export type MemberKnowledge = {
   eventsOmitted?: number;
   // The events read (or the guards it needs) failed, so the empty section means unread, not "no events".
   eventsUnread?: boolean;
+  // Opt-in (include: ["people"]); [] otherwise. Their side only; a name only after a double yes (services/knowledge/people.ts).
+  people?: Fact<Person>[];
+  // How many people the character budget left out (never silently).
+  peopleOmitted?: number;
   // How many things they asked Co to remove (services/whatCoKnows.ts), never what they were: read with exchanges or corrections.
   removedCount?: number;
   // The live guards' read (their removals and corrections) failed, so exchanges and the rest came back unguarded. Said, never silent
@@ -226,7 +231,7 @@ export type MemberKnowledge = {
 
 export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"] as const;
 // Sections read only when a caller asks for them in include: the default read is unchanged for its ~25 callers.
-export const OPT_IN_SECTIONS = ["transitions", "learned", "events"] as const;
+export const OPT_IN_SECTIONS = ["transitions", "learned", "events", "people"] as const;
 export type KnowledgeSection = (typeof KNOWLEDGE_SECTIONS)[number] | (typeof OPT_IN_SECTIONS)[number];
 export const EXCHANGE_DEFAULTS = { limit: 20, days: 14 } as const;
 // Corrections: the recent ones by default; goal planning reads them all (a goal retired by an old correction must stay retired).
@@ -289,6 +294,7 @@ export type KnowledgeDeps = {
   transitions?: (userId: string) => Promise<RawTransition[]>;
   picture?: (userId: string) => Promise<RawPicture>;
   events?: (userId: string) => Promise<RawEvents>;
+  people?: (userId: string) => Promise<RawPerson[]>;
   // What they corrected or removed through Co (services/whatCoKnows.ts, the live guards): exchanges that say a removed thing are left
   // out, and ones that still say a corrected-away value carry the correction inline. Optional, so stubs without it work.
   forgotten?: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
@@ -337,6 +343,7 @@ export const realKnowledgeDeps: KnowledgeDeps = {
   transitions: (userId) => loadTransitions(userId),
   picture: (userId) => loadPictureRaw(userId),
   events: (userId) => loadEvents(userId, pool),
+  people: (userId) => loadPeople(userId),
   profile: async (userId) => {
     const r = (await rows(`SELECT u.first_name, cp.city, cp.goals, cp.intent, cp.updated_at FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]))[0];
     return r ? { firstName: r.first_name ?? null, city: r.city ?? null, goals: Array.isArray(r.goals) ? r.goals.map(String) : null, intent: r.intent ?? null, updatedAt: dateOrNull(r.updated_at) } : null;
@@ -751,7 +758,7 @@ export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> |
 // ---------------------------------------------------------------- the strip (every string, inside)
 
 // Keys whose values are structure, not prose: never rewritten (a kind, a state, an id, a time, a URL, the zone, their own name).
-const STRUCTURAL = new Set(["hash", "openedOn", "closedOn", "channel", "userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
+const STRUCTURAL = new Set(["hash", "openedOn", "closedOn", "channel", "userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "personName", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
 // Their own words: a claim's quote. (Their exchange lines are kept by the walk below, by from === "member".)
 const OWN_WORDS = new Set(["quote"]);
 
@@ -790,6 +797,7 @@ const empty = (userId: string, now: Date, identity: Fact<Identity>): MemberKnowl
   learnedCorrections: [],
   learnedLimits: { avoid: [], rules: [], availability: null },
   events: [],
+  people: [],
 });
 
 export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {}, deps: Partial<KnowledgeDeps> = {}): Promise<MemberKnowledge> {
@@ -814,6 +822,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
 
   const transitionsRaw = await skip("transitions", "transitions", () => (d.transitions ? d.transitions(userId) : Promise.resolve([] as RawTransition[])), [] as RawTransition[]);
   const eventsRaw = await skip("events", "events", () => (d.events ? d.events(userId) : Promise.resolve(null)), null as RawEvents | null);
+  const peopleRaw = await skip("people", "people", () => (d.people ? d.people(userId) : Promise.resolve([] as RawPerson[])), [] as RawPerson[]);
   const [states, asks, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, limits] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
@@ -841,7 +850,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   // loops, promise results) and its record of what it sent: each is written from their words, so a thing they had Cue forget
   // can't come back through one of them. A part that says it goes; a line that is only it goes.
   let guardsUnread = false;
-  const guards = ((["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) || on("transitions") || on("learned") || on("events")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
+  const guards = ((["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) || on("transitions") || on("learned") || on("events") || on("people")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
   const removed = guards.filter((r) => r.removed);
   const W = guards.length ? await import("./whatCoKnows.js") : null;
   const g = (t: string): string | null => (W && removed.length ? W.guardText(t, removed) : t);
@@ -919,6 +928,15 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
       const built = eventsOf(guardEvents(eventsRaw, { g, gone: (ref) => removed.some((r) => r.ref === ref), named: (t) => find(t) !== null }), { now, timeZone: identity.timeZone });
       k.events = built.items;
       if (built.omitted) k.eventsOmitted = built.omitted;
+    }
+  }
+  if (on("people")) {
+    // Fails closed, like transitions: without the guards read nothing is returned.
+    if (guardsUnread || !d.forgotten) k.people = [];
+    else {
+      const built = buildPeople(peopleRaw, { g, removed, linked: names });
+      k.people = built.items;
+      if (built.omitted) k.peopleOmitted = built.omitted;
     }
   }
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
