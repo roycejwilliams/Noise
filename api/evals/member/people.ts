@@ -145,13 +145,13 @@ const fake = (byUser: Record<string, Partial<Record<"pairs" | "nets" | "optins" 
   },
 });
 const A = "user-aaa", B = "user-bbb";
-const pairRow = (id: number, side: "a" | "b", o: FakeRow = {}): FakeRow => ({ id, side, other_id: "someone", origin: "co", event_id: "e1", state: "asked", my_answer: null, my_answered_at: null, my_request_at: null, both_yes_at: null, my_asked_at: "2026-10-20T20:00:00Z", my_evidence: {}, my_outcome: null, my_note: null, double_yes: false, intro_sent_at: null, declined_at: null, expired_at: null, created_at: "2026-10-20T19:00:00Z", event_name: "Founders Supper", first_name: null, ...o });
+const pairRow = (id: number, side: "a" | "b", o: FakeRow = {}): FakeRow => ({ id, side, other_id: "someone", origin: "co", event_id: "e1", state: "asked", my_answer: null, my_answered_at: null, from_my_request: false, both_yes_at: null, my_asked_at: "2026-10-20T20:00:00Z", my_evidence: {}, my_outcome: null, my_note: null, double_yes: false, intro_sent_at: null, declined_at: null, expired_at: null, created_at: "2026-10-20T19:00:00Z", event_name: "Founders Supper", first_name: null, ...o });
 const db = fake({
   [A]: {
     pairs: [pairRow(1, "a", { double_yes: true, first_name: "Maya", intro_sent_at: "2026-10-21T00:00:00Z", my_note: "A's own note", value_line_a: "SECRET-VALUE-LINE-A", b_outcome_note: "SECRET-OTHER-SIDE-NOTE", b_evidence: { met: { value: "no" } } }), pairRow(2, "a", { state: "expired", expired_at: "2026-10-20T23:00:00Z" })],
     nets: [{ other_id: "n1", status: "both_interested", created_at: "2026-10-01T00:00:00Z", introduced_at: null, my_interested_at: "2026-10-02T00:00:00Z", double_yes: true, first_name: "Noor", match_reason: "SECRET-MATCH-REASON" }],
     knows: [{ id: 5, happened_at: "2026-10-03T00:00:00Z", quote: "I know Sam from school", other_id: null }],
-    reqs: [{ id: "req-uuid-1", asked_at: "2026-10-04T00:00:00Z", event_id: "e1", event_name: null, name_said: "SECRET-NAME-SAID", target_id: "target-user" }],
+    reqs: [{ id: "0a1b2c3d-0000-0000-0000-000000000001", asked_at: "2026-10-04T00:00:00Z", event_id: "e1", event_name: null, name_said: "SECRET-NAME-SAID", target_id: "target-user" }],
   },
   [B]: { pairs: [pairRow(3, "b", { my_note: "B's own note", event_name: "Other Night" })] },
 });
@@ -163,38 +163,48 @@ const sa = await MK.memberKnowledge(A, { include: ["people"] }, { ...base([]), p
 const sb = await MK.memberKnowledge(B, { include: ["people"] }, { ...base([]), people: (u: string) => P.loadPeople(u, db) });
 check("end to end: B's section holds nothing of A's, A's nothing of B's", sb.people!.length === 1 && !/Founders|Maya|Noor|Sam/.test(JSON.stringify(sb.people)) && !/Other Night|B's own/.test(JSON.stringify(sa.people)));
 check("end to end: A's section is the named double-yes people, the nameless rest", sa.people!.find((p) => p.id === "pair:1:a")?.personName === "Maya" && sa.people!.find((p) => p.id.startsWith("net:"))?.personName === "Noor" && sa.people!.find((p) => p.id === "pair:2:a")?.stage === "suggested_no_answer" && sa.people!.find((p) => p.id === "knows:5")?.personName === null);
-check("an intro they asked for by name carries neither the name nor whether the person was found", /asked/.test(JSON.stringify(sa.people!.find((p) => p.id.startsWith("ask:")))) && !JSON.stringify(sa.people).includes("target") && !JSON.stringify(sa.people).includes("req-uuid"));
+check("an intro they asked for by name carries neither the name nor whether the person was found", /asked/.test(JSON.stringify(sa.people!.find((p) => p.id.startsWith("ask:")))) && !JSON.stringify(sa.people).includes("target"));
 const seen: { sql: string; args: unknown[] }[] = [];
 await P.loadPeople("user-aaa", { query: async (sql, args) => (seen.push({ sql, args }), { rows: [] }) });
 check("six queries, each bound to the member's id as $1 and never in the SQL text", seen.length === 6 && seen.every((q) => q.args.length === 1 && q.args[0] === "user-aaa" && !q.sql.includes("user-aaa") && /\$1/.test(q.sql)));
 check("no query selects another member's side, value lines, reasons or the name a member said", seen.every((q) => !/value_line|match_reason|name_said|a_outcome_note AS|SELECT[^;]*b_answer AS/.test(q.sql) && !/SELECT\s+\*\s+FROM\s+(co_pairs|network_introductions)/.test(q.sql)));
 check("a name is selected only inside a double-yes condition in the SQL itself", /CASE WHEN m\.double_yes THEN u\.first_name END/.test(seen[0].sql) && /CASE WHEN m\.double_yes THEN u\.first_name END/.test(seen[1].sql) && /member_connections is written only after both said yes/.test(src("services/knowledge/people.ts")));
-check("a person is read only if this member knows of them (asked, THEY requested, or a double yes)", /WHERE m\.my_asked_at IS NOT NULL OR m\.my_request_at IS NOT NULL OR m\.double_yes/.test(seen[0].sql) && /WHERE m\.double_yes OR m\.my_interested_at IS NOT NULL/.test(seen[1].sql));
+check("a person is read only if this member knows of them (the ask reached them, or a double yes; their own request is its own entry)", /WHERE m\.double_yes OR \(m\.my_asked_at IS NOT NULL AND NOT m\.from_my_request\)/.test(seen[0].sql) && /WHERE m\.double_yes OR m\.my_interested_at IS NOT NULL/.test(seen[1].sql));
 
 
 // ---------------------------------------------------------------- review of #405: asks, found/not-found, the other side's report, dedupe, unread
 {
   const C = "user-ccc", D = "user-ddd";
   // D asked for C by name: the pair is origin 'member', but C made no request and Cue hasn't asked C.
-  const target = pairRow(20, "b", { origin: "member", other_id: D, my_asked_at: null, my_request_at: null, event_name: "Founders Supper" });
-  const asker = pairRow(21, "a", { origin: "member", other_id: C, my_asked_at: null, my_request_at: "2026-10-21T09:00:00Z" });
+  const target = pairRow(20, "b", { origin: "member", other_id: D, my_asked_at: null, event_name: "Founders Supper" });
+  const asker = pairRow(21, "a", { origin: "member", other_id: C, my_asked_at: null });
   const dbx = fake({ [C]: { pairs: [{ ...target }] }, [D]: { pairs: [{ ...asker }] } });
   const rc = await P.loadPeople(C, dbx);
   check("the side that didn't ask isn't told the other asked: the pair's origin is never read as their ask", rc.length === 1 && rc[0].memberAsked === false && P.stageOf(rc[0]) === "suggested_no_answer" && !/asked/.test(P.descriptionOf(rc[0].viaNetwork ? "intro_via_network" : "matched_at_event", null)));
-  check("the SQL shows a pair to the target only after their own ask or a double yes (their own request by user_id = $1 and target_id)", /FROM intro_requests r WHERE r\.user_id = \$1 AND r\.target_id = CASE WHEN p\.a_id = \$1 THEN p\.b_id ELSE p\.a_id END/.test(seen[0].sql) && /my_asked_at IS NOT NULL OR m\.my_request_at IS NOT NULL OR m\.double_yes/.test(seen[0].sql) && !/origin = 'member'/.test(seen[0].sql.replace(/m\.origin, /, "")));
-  const rd = await P.loadPeople(D, dbx);
-  check("the asker sees their own request, as asked", rd.length === 1 && rd[0].memberAsked && P.stageOf(rd[0]) === "asked_for_intro");
-  // found / not found / asked / declined / expired: same stage, same id shape, no event, no name, same description
-  const variants = [
-    pairRow(30, "a", { my_request_at: "2026-10-21T09:00:00Z", state: "suggested", my_asked_at: null }),
-    pairRow(31, "a", { my_request_at: "2026-10-21T09:00:00Z", state: "declined", declined_at: "2026-10-22T00:00:00Z" }),
-    pairRow(32, "a", { my_request_at: "2026-10-21T09:00:00Z", state: "expired", expired_at: "2026-10-22T00:00:00Z", my_answer: "no" }),
-    pairRow(33, "a", { my_request_at: "2026-10-21T09:00:00Z", state: "blocked", my_asked_at: null }),
-  ];
-  const bareReq = { id: "uuid-9", asked_at: "2026-10-21T09:00:00Z", event_id: "e1", event_name: "Founders Supper" };
-  const vp = (await P.loadPeople(D, fake({ [D]: { pairs: variants, reqs: [bareReq] } }))).map((r) => P.buildPeople([r], { g: (t) => t, removed: [], linked: [] }).items[0]);
-  check("an asker's by-name request reads the same whether the person was found, asked, declined, expired or never found", vp.length === 5 && vp.every((p) => p.stage === "asked_for_intro" && p.how === "asked_for_intro" && p.personName === null && p.where === null && p.description === vp[0].description && p.outcome === null));
-  check("found and not-found requests share one id prefix (the id gives nothing away)", vp.every((p) => p.id.startsWith("ask:")) && !vp.some((p) => p.id.startsWith("pair:") || p.id.startsWith("req:")));
+  check("the target of someone else's request has no entry until Cue asks them or a double yes (their pair is not read as their request)", /WHERE m\.double_yes OR \(m\.my_asked_at IS NOT NULL AND NOT m\.from_my_request\)/.test(seen[0].sql));
+  const mkReq = (id: string, event: string | null) => ({ id, asked_at: "2026-10-21T09:00:00Z", event_id: event, event_name: event ? "Founders Supper" : null });
+  const nobuild = (rs: Raw[]) => P.buildPeople(rs, { g: (t) => t, removed: [], linked: [] }).items;
+  // The SQL hides the pair a request created (the loader gets no pair row for it, found or not); entries come only from intro_requests.
+  const reqSets: Record<string, ReturnType<typeof mkReq>[]> = {
+    "one request": [mkReq("11111111-0000-0000-0000-000000000001", "e1")],
+    "two events": [mkReq("11111111-0000-0000-0000-000000000002", "e1"), mkReq("11111111-0000-0000-0000-000000000003", "e2")],
+    "twice at one event": [mkReq("11111111-0000-0000-0000-000000000004", "e1"), mkReq("11111111-0000-0000-0000-000000000005", "e1")],
+  };
+  let same = true;
+  for (const [, reqs] of Object.entries(reqSets)) {
+    const notFound = nobuild(await P.loadPeople(D, fake({ [D]: { reqs } })));
+    // found: the same requests; the pairs they created are not returned (hidden in SQL), so nothing else can show
+    const found = nobuild(await P.loadPeople(D, fake({ [D]: { reqs, pairs: [] } })));
+    same = same && found.length === reqs.length && notFound.length === reqs.length && found.every((p, i) => p.id === `ask:${reqs[i].id}` && p.id === notFound[i].id && p.stage === "asked_for_intro" && p.personName === null && p.description === notFound[i].description);
+  }
+  check("found and not-found requests give the same number of entries and the same ids, even at two events or twice at one", same);
+  check("every entry's id is its own request's id, never a pair's", Object.values(reqSets).flat().every((r) => nobuild([raw({ id: `ask:${r.id}`, kind: "request", memberAsked: true })])[0].id === `ask:${r.id}`));
+  check("the SQL hides only the pair the member's own request created (same person AND same event), until a double yes", /EXISTS \(SELECT 1 FROM intro_requests r WHERE r\.user_id = \$1 AND r\.target_id = CASE WHEN p\.a_id = \$1 THEN p\.b_id ELSE p\.a_id END AND r\.event_id IS NOT DISTINCT FROM p\.event_id\) AS from_my_request/.test(seen[0].sql) && /WHERE m\.double_yes OR \(m\.my_asked_at IS NOT NULL AND NOT m\.from_my_request\)/.test(seen[0].sql) && !/my_request_at/.test(seen[0].sql));
+  check("a request leaves the list only when its own event's pair, or a network intro, is a double yes", /p\.event_id IS NOT DISTINCT FROM r\.event_id/.test(seen[5].sql));
+  // a later, separate pair with the same person (another event) shows under its own rules, including their own no
+  const later = pairRow(70, "a", { event_id: "e9", my_answer: "no", state: "declined", declined_at: "2026-11-01T00:00:00Z", other_id: C });
+  const shown = nobuild(await P.loadPeople(D, fake({ [D]: { reqs: reqSets["one request"], pairs: [later] } })));
+  check("a later separate pair with the same person still shows (their own no is declined_by_you), next to the request", shown.length === 2 && shown.some((p) => p.stage === "declined_by_you" && p.id.startsWith("pair:")) && shown.some((p) => p.id.startsWith("ask:")));
   check("after a double yes the asker's pair reads normally, named", (() => { const r = P.buildPeople([raw({ id: "pair:40:a", memberAsked: true, doubleYes: true, introduced: true, firstName: "Maya", otherKey: "m" })], { g: (t) => t, removed: [], linked: [] }).items[0]; return r.stage === "introduced" && r.personName === "Maya"; })());
   // B's "we met" must not move A's stage: met_at / outcome_at are shared and aren't read.
   const metByOther = pairRow(50, "a", { double_yes: true, intro_sent_at: "2026-10-21T00:00:00Z", first_name: "Maya", met_at: "2026-10-22T00:00:00Z", outcome_at: "2026-10-22T00:00:00Z", updated_at: "2026-11-01T00:00:00Z", my_evidence: {} });
