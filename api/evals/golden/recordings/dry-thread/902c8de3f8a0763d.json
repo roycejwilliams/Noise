@@ -1,7 +1,7 @@
 {
   "hash": "902c8de3f8a0763d",
   "case": "dry-thread",
-  "recorded_at": "2026-11-06T19:02:28.529Z",
+  "recorded_at": "2026-11-06T19:25:39.071Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They're sharing news about taking time off work for burnout, not answering any waiting item or asking for anything.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off work due to burnout\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're prioritizing rest after burnout, following the recharge from their birthday walk\", \"why\": \"feeling hopeful/recharged theme from birthday message\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"finally taking a break from burnout\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"major_transition\"], \"missing\": [\"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "{\"reason\": \"They're sharing news about taking two weeks off work for burnout recovery, not asking for anything\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off work\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're prioritizing rest after burnout, following up on the hopeful birthday reflection\", \"why\": \"recharge after months of burnout\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"finally taking a break after burning out\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 5000,
         "cache_creation_input_tokens": 0,
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 454,
+        "output_tokens": 417,
         "output_tokens_details": {
-          "thinking_tokens": 35
+          "thinking_tokens": 14
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,18 +57,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgnC7muwobf642NSMBwHd",
+        "id": "msg_011CgnDtHnPY41ZyTM13jv2y",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EpAECsQCCBMYAipApw7tH4QqLkbnfO6N91/8hl4knTjbK4uRx6m1xblr1bNQsvUotXHxE4ZAnuIDbMXqtbM6weDGjOomJmlDeGkeUTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBwci41wbCAToIBBAAGgwC2ooDTzcF+kIEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAtl4cKlx+psPOtxIB0cQv8zKT2AP2IWSaPT1fgcyiLvCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxF2Az2P2ErONgu9LIaDKfmBoDHkXsqmRddrSIw5Xoegy9oUy8ylWxN0rrveDuXpX8SLt5UwZlIetTd+Kj0XdsLIWf84pOwM7OppZdQKnm5W9uq4JABWyZjOp+WIKUyDAElMHwrOfRo1XBKT12dnujrZI/5Hs3mQV3d4y9sHO+OMSPTc05u4d0in0vn+ldBXMNNbiVHMhbCVV2v9llwu3sAQDyyZbDKucnZ1Nh+KkxSToCuQMDXCmGRaqUosXrIVjt1oA2sXqIjGAE="
+            "signature": "EssDCsQCCBMYAipAdVJFyN3GX0Ffp+SDkVfIrkLZhlqzGNUNSAQt0aB4KZZiwyq6HUPtMu6GYLm4NGUpbwEMarQnME04d6Rthm5JJDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBr9O41wbCAToIBBAAGgwC2ooDTzcF+kIEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAtl4cKlx+psPOtxIB0cQv8zKT2AP2IWSaPT1fgcyiLvCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyxiz3vVwLCCsINj2kaDDQDOg4KlPNbjCtC+iIwGpbPCdxEJ1ZeOOV77yMBHmj5yOStEbbjRkKTRcd5eSd0DDOqCpiYGg9yW2E6ZSSpKjS29fKQHMel7Xiv9HZekfm4iZaxTYCxYFM1qS91euoRYgnVT7bxgJaXG4obg37STJ+2It9IGAE="
           },
           {
             "type": "text",
-            "text": "{\"reason\": \"They're sharing news about taking time off work for burnout, not answering any waiting item or asking for anything.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off work due to burnout\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're prioritizing rest after burnout, following the recharge from their birthday walk\", \"why\": \"feeling hopeful/recharged theme from birthday message\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"finally taking a break from burnout\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"major_transition\"], \"missing\": [\"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "{\"reason\": \"They're sharing news about taking two weeks off work for burnout recovery, not asking for anything\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off work\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're prioritizing rest after burnout, following up on the hopeful birthday reflection\", \"why\": \"recharge after months of burnout\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"finally taking a break after burning out\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -83,9 +83,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 454,
+          "output_tokens": 417,
           "output_tokens_details": {
-            "thinking_tokens": 35
+            "thinking_tokens": 14
           },
           "service_tier": "standard",
           "inference_geo": "global",

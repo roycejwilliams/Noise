@@ -1,7 +1,7 @@
 {
   "hash": "0118f8d114a22d19",
   "case": "complete-moment",
-  "recorded_at": "2026-11-06T19:04:07.137Z",
+  "recorded_at": "2026-11-06T19:26:59.174Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "```json\n{\"reason\": \"they're sharing a positive outcome from the board meeting and announcing they're going to sleep\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"the pricing slide they reworked paid off with full budget approval\", \"why\": \"validates their earlier nervousness and the all-night revision\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approved full budget after reworking pricing slide\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```",
+      "text": "{\"reason\": \"They're sharing a positive outcome from the board meeting and that they're going to sleep.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"The pricing slide they reworked seems to have paid off since the full budget was approved.\", \"why\": \"their earlier worry about the pricing slide\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approved the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 5007,
         "cache_creation_input_tokens": 0,
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 415,
+        "output_tokens": 451,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 46
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,13 +57,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgnCF31UtDYjSZ7V98mrg",
+        "id": "msg_011CgnDzCAxEEmkYd9r1agFr",
         "type": "message",
         "role": "assistant",
         "content": [
           {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqsECsQCCBMYAipAMih1p3DwrPv4H66WkJaob94B5bkG7mVHGlDF3kghGXc9apO2mK4CPVpOhcT7n/NITeg3d7EJ+EkFlqWiP0cbYDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBgNS41wbCAToIBBAAGgwC2ooDTzcFIMYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBTVnYTPW8KSPnp86gb9LuUtwOf89Kzwb5f+Eq3nJQdViIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgx/X4+YCNi6C8tIbo8aDMnrPh5XDg5jy+U70CIw07b1hLs40JQi10ktrHd3H3+SWkpfWDydWiZRokQVC8Mr/2j9szILxa80f0akPulDKpMBIgBx6OsBl0pfhJcZHlHEHJoqMSGf3GVTadlzGrrbOZfEwTaiR/47/1y2vXHkI2i1/0IxfSxCZSAVvWE5Ls29jRBTMfyRhiJsTz5JF3q4cIUsbBvVI9/HQsHSiZBnM6lqoJgl0h0W2myJ58iTXcxkpC68oU4Uz7Y/6VsUup1AsVFbI/5dKkT4rs87MTxj/lIT5HCRGAE="
+          },
+          {
             "type": "text",
-            "text": "```json\n{\"reason\": \"they're sharing a positive outcome from the board meeting and announcing they're going to sleep\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"the pricing slide they reworked paid off with full budget approval\", \"why\": \"validates their earlier nervousness and the all-night revision\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approved full budget after reworking pricing slide\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```"
+            "text": "{\"reason\": \"They're sharing a positive outcome from the board meeting and that they're going to sleep.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"The pricing slide they reworked seems to have paid off since the full budget was approved.\", \"why\": \"their earlier worry about the pricing slide\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approved the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -78,9 +83,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 415,
+          "output_tokens": 451,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 46
           },
           "service_tier": "standard",
           "inference_geo": "global",

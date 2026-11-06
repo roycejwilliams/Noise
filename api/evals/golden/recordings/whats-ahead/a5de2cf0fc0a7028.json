@@ -1,7 +1,7 @@
 {
   "hash": "a5de2cf0fc0a7028",
   "case": "whats-ahead",
-  "recorded_at": "2026-11-06T18:56:39.893Z",
+  "recorded_at": "2026-11-06T19:20:04.417Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They're asking what's coming up this week, a general forward-looking question rather than a search request or answer to a waiting item\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"mode\": \"asking\", \"topic\": \"what's coming up this week\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "{\"reason\": \"They're asking what's coming up this week, a general request for something to look forward to\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": true, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": {\"verdict\": \"in\", \"connection\": null}, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"mode\": \"asking\", \"topic\": \"what's coming up this week\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 4953,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 303,
+        "output_tokens": 304,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgnBgD6nZMLkt8s4s8w9D",
+        "id": "msg_011CgnDTjdhVfHuvWuK5grM2",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\": \"They're asking what's coming up this week, a general forward-looking question rather than a search request or answer to a waiting item\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"mode\": \"asking\", \"topic\": \"what's coming up this week\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "{\"reason\": \"They're asking what's coming up this week, a general request for something to look forward to\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": true, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": {\"verdict\": \"in\", \"connection\": null}, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"mode\": \"asking\", \"topic\": \"what's coming up this week\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 303,
+          "output_tokens": 304,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

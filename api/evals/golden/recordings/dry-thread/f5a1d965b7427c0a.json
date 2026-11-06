@@ -1,0 +1,102 @@
+{
+  "hash": "f5a1d965b7427c0a",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-06T19:26:02.158Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. Let me actually say it: a birthday walk with no phone, coming back hopeful for the first time in months, that's a big deal after how heavy it's been.\n\nAnd telling your team you need a real break, that's not nothing either. Two weeks starting Monday sounds like exactly what you've earned.\n\nWhat's first on the list once Monday hits, sleep or something fun?\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Fair. Let me actually say it' owns it briefly, then adds genuine reactions and ends with its own question: 'sleep or something fun?'\"}",
+      "usage": {
+        "input_tokens": 478,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 340,
+        "output_tokens_details": {
+          "thinking_tokens": 273
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgnDv1F2a7jBnhT9AMoXz",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErwJCsQCCBMYAipASQ56N3m4Bd9XYP6feD3rxq3FyWVfKjFxb0ljRFaF920VZbMYqKPgfejSuUCVlmr8mmwuBjoIJz7Q0IBfJjc6eDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBydO41wbCAToIBBAAGgwC2ooDTzcF9r8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiB5QvMunub5UzOsPCX7iScK5wUHqEsKwKvDxlrJmQ1o6SIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzuXfdnjqkVtCZBlqMaDBM7l49BeVGXPXoQCSIwWtWJTJqvD+xT2nI8I1A59ngLlxTLtZDpL5un9MZRV858t3wRmcY015+LWKaio3J1KqQGWeSPaCezt/tUBL3qZMjYpu5qwldC8WTYaWROYDA4Dc0chigfZlQd/qyGUtNUzxQQVj1qFUL0h4naYYIwC/z3z0W6cqVPzXlWt2fPN8lybY76g/RdMR9+o3p7f/yn2J7w4V9oScJYrtOWD+cEpujmqoKEQdsM7PGrbIgbHphclE2dfMmaCnisl6kmq8bprT0SPZARPUKBDK5w3RXBkZYc7LSKD+PetVI3WNpmSOl0sc0FWXjnH9QW0pQpqksS+f06qSMCdBC2L2jVJinxLvS5sGflZUWSVy0ko9RqSPdHeYEfN9ibJEtUGtrK0gNdMubG7PdY4qaPie3YqptGd7Zfnyrrhjv7yP8eRlBKKelV0snBA1vKqthrjbuQ3hC3wWiYBGTgW7Q1h8pWnAGSmNaVCnhGLnxBeWHr0l3E3WMmexkxVCc1fQV2YGAnwuVawis4WIDxOfx8U82Qt7EXGPASVuG6uImF9AdZQdyd7a1+QQPxzPyGtOuOfCSI7Py0j3DdwjHSto5ZAo+KC5NNbvcd/4qRtMLB/I6/eX5ctofH1WXknZwh1dU4/YHEjYnQf4f7OyvkAx02rkaNOH67Q8EiMuuwMJke0knVoN9Q+Y0Dm03nK5uIUSqPqFMSPEBDrQ9oFfednASyvdmdSrUyeqhWQTxG2N2MKIrUu4JPjyvXaZTVPeBZuDJpYwwUlwldPFlbYSdl4waC2zunp6STOqWqFhy4L2aM7Vty9/qgblVWvMCxmfA8ZyyHn5MdQWTVMPIJiBVbCuvvEPSo3BhT31XPDOmDdnay9hzLZ77wHzC4PFQyE9eOGt7u3eBp4rFxwwElGBx/81lCb433fqE6aOykneotrRc9sOCxbnx03W9KH1OMksv0Hukg9qRUWEaBha5UOGiQhIEE0EReuwKDt2TkWtr/fwu6J5xrO9Oo5QRtWAVvg7BIIxEZzFLCMejiMkh4/yS5LSxU83MiwyEzoRTg38SSeYtEfp0s/lPHkbuhhU2k8wJ5JZ2+8uIhAYBQ9T+w6pQW97AwOIOidd2idWO8FtJddmLgQK/lWQ2jC+whKBdUvbTkGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Fair. Let me actually say it' owns it briefly, then adds genuine reactions and ends with its own question: 'sleep or something fun?'\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 478,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 340,
+          "output_tokens_details": {
+            "thinking_tokens": 273
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "f5a1d965b7427c0a",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
