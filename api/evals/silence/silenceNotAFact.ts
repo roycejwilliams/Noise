@@ -160,7 +160,16 @@ const ago = (d: number) => new Date(NOW.getTime() - d * DAY);
   check("inside the answer window it is still searched daily", days.slice(0, 4).every((t) => !G.restingToday(rowAsked(3), h, t)));
   check("after an unanswered recheck it is searched weekly (2 of 14 days), never dropped", searchedDays(30) === 2, searchedDays(30));
   check("a reply or new signal clears the ask and the daily search is back", searchedDays(null) === 14 && /recheck_asked_at = CASE WHEN \$4::boolean THEN NULL/.test(src("services/goalRecheck.ts")));
-  check("the plan still records it active and searches the on-turn goals", /const onTurn = resting\.length/.test(src("services/goalEdges.ts")) && /edgeSearchText\(onTurn/.test(src("services/goalEdges.ts")));
+  // The 9am floor: a resting goal is skipped on non-weekly days and searched on its weekly day; no ask, or an answered one, is daily.
+  const DS = await import("../../src/services/dailySweep.js");
+  const plan = { search: "running clubs in the Marina", why: null };
+  const floor = (asked: number | null, t: Date) => DS.floorGoalDecision(plan, { states: new Map([[h, { state: "active", reason: "", recheckAskedAt: asked === null ? null : ago(asked) }]]), statesError: null, gateError: null, hold: [], goalId: h, now: t });
+  const outcomes = days.map((t) => floor(30, t));
+  check("floor: a resting goal is searched on exactly its weekly day (2 of 14) and skipped, saying why, on the others", outcomes.filter((o) => o === null).length === 2 && outcomes.filter((o) => o?.status === "skipped" && /weekly/.test(o.why)).length === 12, outcomes.map((o) => o?.status ?? "search"));
+  check("floor: with no unanswered recheck it is searched every day", days.every((t) => floor(null, t) === null));
+  check("floor: still inside the answer window it is searched every day", days.slice(0, 4).every((t) => floor(3, t) === null));
+  check("floor: a set-aside goal is still skipped as before", DS.floorGoalDecision(plan, { states: new Map([[h, { state: "stale", reason: "x" }]]), statesError: null, gateError: null, hold: [], goalId: h, now: NOW })?.status === "skipped");
+  check("floor passes the clock to the decision", /goalId: b\.id, now \}/.test(src("services/dailySweep.ts")));
 }
 
 // 5. copy placement
@@ -188,6 +197,26 @@ const ago = (d: number) => new Date(NOW.getTime() - d * DAY);
   check("every ask read is marked checked, named or not", firstReads === 2 && asks[0].expires_at === null && asks[1].expires_at instanceof Date, asks);
   check("the second run reads no ask again", backfillReads === 2, backfillReads);
   check("the column is added", /ADD COLUMN IF NOT EXISTS expiry_checked_at/.test(src("db/migrations.ts")));
+}
+
+// ---- 7. the no-show note's intro tease stamps the pair too
+{
+  const NS = await import("../../src/services/eventNoShow.js");
+  const seen: { sql: string; args: any[] }[] = [];
+  (pool as any).query = async (sql: string, args: any[] = []) => { seen.push({ sql: sql.replace(/\s+/g, " "), args }); return { rows: [], rowCount: 1 }; };
+  await NS.afterNoShowNoteSent({ userId: "z-user", payload: { eventId: "e1", intro: { askId: "ask9", candidate: { candidate_id: "a-user", match_reason: "reason", share_safe: true } } } } as any);
+  const stamp = seen.find((q) => /INSERT INTO network_introductions/.test(q.sql) && /last_suggested_at/.test(q.sql));
+  check("the no-show intro tease stamps the pair (last_suggested_at), canonical order", !!stamp && stamp.args[0] === "a-user" && stamp.args[1] === "z-user", seen.map((q) => q.sql.slice(0, 60)));
+  check("and still writes the open question", seen.some((q) => /network_offer_pending/.test(q.sql)));
+  const none = seen.length;
+  await NS.afterNoShowNoteSent({ userId: "z-user", payload: { eventId: "e1" } } as any);
+  check("a note with no intro offer stamps nothing", !seen.slice(none).some((q) => /network_introductions/.test(q.sql)));
+  // Every writer of network_offer_pending also stamps.
+  const writers = ["harness/proactiveRegistry.ts", "services/eventNoShow.ts"].filter((f) => /'network_offer_pending'/.test(src(f)));
+  check("every path that writes network_offer_pending calls recordTease", writers.length === 2 && writers.every((f) => /recordTease/.test(src(f))), writers);
+  const all = fs.readdirSync(new URL("../../src", import.meta.url), { recursive: true }).map(String).filter((f) => f.endsWith(".ts"));
+  const strays = all.filter((f) => /INSERT INTO co_memories[^`]*'network_offer_pending'/.test(src(f)) && !/recordTease/.test(src(f)));
+  check("no other file writes it without recordTease", strays.length === 0, strays);
 }
 
 console.log(`${total - failed}/${total} passed`);

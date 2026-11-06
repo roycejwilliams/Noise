@@ -411,6 +411,8 @@ async function emailOf(userId: string): Promise<string> {
 export async function afterNoShowNoteSent(c: Candidate): Promise<void> {
   const intro = c.payload?.intro;
   if (intro?.candidate?.candidate_id) {
+    // The pair's unanswered-suggestion window runs from this tease, like every other (networkIntroNudge.ts recordTease).
+    await (await import("./networkIntroNudge.js")).recordTease(c.userId, String(intro.candidate.candidate_id), String(intro.candidate.match_reason ?? ""), intro.askId ?? null);
     await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)`, [c.userId, JSON.stringify(intro)]);
   }
   log(c.payload?.eventId, c.userId, `note sent${intro ? " with an intro offer" : ""}`);
