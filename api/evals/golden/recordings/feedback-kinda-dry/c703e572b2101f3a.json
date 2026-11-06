@@ -1,0 +1,102 @@
+{
+  "hash": "c703e572b2101f3a",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-06T18:06:19.732Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That almost-walked-off moment, then sitting down and nailing the whole thing, that's a real arc for a seven year old on her first recital. The nerve it took to sit back down is the part that'll stick with her.\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Fair.' owns it briefly, then adds Cue's own take—'The nerve it took to sit back down is the part that'll stick with her'—without explaining tone or quoting itself.\"}",
+      "usage": {
+        "input_tokens": 342,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 342,
+        "output_tokens_details": {
+          "thinking_tokens": 264
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgn7qVr98W9rExC1gDLN5",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqUJCsQCCBMYAipANY/eE6Mj1MY2iocSF8fTZJxBDaaIhnMx65NlQB6H/MrKod9Z3Yopc4p7xU0Ea79jHKP6CdfMT9l3ibMzeLvNODIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBm6641wbCAToIBBAAGgwC2ooDTzcF2LYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCMIz+I1bHRmRWq1dcTD1zjVLr6a0cPGs1a/OCDKDVooiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwR5+EZFYENvE2Ud8gaDJ/6lXhdTBJbU9DvBCIwUfLscCIDi5yo9UhDmBRvMZU3UyGEp5gcKtVgmXp3f/PteQBsGvY5Lw5yMArmqZK0Ko0GG6Zlkg9aM65IHk5s4UmsbYTqfsZ0l94IoWrRPDwKLqP8K0VdSvkVJOcbsMIntizp21SkdfalOA7VADQ6OxPGFoiiHKQxYY4pJCzmd7avWhW+AMkt/2uVx3dHY0eYUtfdKgpEjSseRDGIk5NoArQ9lAoS9qwxhZLiypDHJHz3nLl/YtO+Zpx4ko3oJkol6kL7pAeIAmdQVKHtyawr43HX0eRfU9hSZ/9RbFGZgj9fPb4EpghXXGRpGZY3Pqx6qA4X49oOk9AfWkjOCcgAAiqSTj1/syBRX+KO7VzvuqQK31D0EHf2C8r2RK4jRj3AGkjUnOj8tLjmQDCcUCF8AhlTphKglmfxDnFwSmFVHsPWAPHR6DXa2/uVHf4Z6sG1hsL1e1C9rVeu4fccZ5yR1jNLwZqGM7uoHrK/cEgXWfzN3XS9PYNyy6NKPTac0Uswijqmk7bNM3hZ9xqE/BqNvD2pTqlehTV3AMqNXmHG3QUJLfkVh8lASX1Y+YFUMtNymDl9zwODTo8kzMDwlldqj47qRlALe2i9q2tLJD1+ro20zWtnTcrKFOLshz0KtUldEc/RLO2nOt3kP4xcxTUuRaFTT/M6+kYvC575FkPCzCwaL9iFEXN/UTNj9tV80mefMpZzgPrDLWwfnFOTKhwraAQYOdozWFh4CEbrp2GNnQC+2BDAPzJzSEHlb7mzvHmM6O4KPQjmnimg3gLJWYOhjEJ3rOWoIMdGsvOJvdwd7Q95azI5mRfRJDa3oyQPcrHBFNwnvGQ3zU2p9wsOqOxOdJqo/btWgsrFB2AemSkmiZqvIZRJkE6wfnxGFPhEcahNDjia3TmG2ucidJCm34Bkwdg9NwfgcRhe6wd60jMolYgRzVvfsTGwOHssRGw7InlRIg52bSxtELb4d1wfrVtqz8SWL1lgLbmXjstBHGbupiERMJNv/S41qIiRIHX3zwwElJ9sitbaG1A1E20/DSHTS8uZAicqrzFdSsG2fmLi/dHSylGREqGab31GBnIhpkukaEPfSePLTyl/gwOe2vJLJBgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Fair.' owns it briefly, then adds Cue's own take—'The nerve it took to sit back down is the part that'll stick with her'—without explaining tone or quoting itself.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 342,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 342,
+          "output_tokens_details": {
+            "thinking_tokens": 264
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "c703e572b2101f3a",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

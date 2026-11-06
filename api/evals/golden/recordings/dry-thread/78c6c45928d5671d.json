@@ -1,0 +1,167 @@
+{
+  "hash": "78c6c45928d5671d",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-06T18:06:39.098Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-sonnet-5",
+    "grader": false,
+    "max_tokens": 2000,
+    "system": "# Cue's snapshot of Lena · v1 · zone America/Los_Angeles ## 1. In their own words - [Pcity said] Lives in: San Francisco ## 2. What they're in the middle of ## 3. Feelings and how they text ## 4. Their world now ## 5. What Cue has done (newest first) ## 6. What Cue can do - [X1 seen] Cue texts back ...",
+    "messages": 1,
+    "last": "user: You check a text message Cue is about to send, before it goes out. Find every claim in it that could be false, and say whether the sources below support it. Claims to find (one type each): - past_action: something Cue says it did or sent (\"I sent you the link\", \"I scheduled it\", \"I emailed you both\"...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2000,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You check a text message Cue is about to send, before it goes out. Find every claim in it that could be false, and say whether the sources below support it.\n\nClaims to find (one type each):\n- past_action: something Cue says it did or sent (\"I sent you the link\", \"I scheduled it\", \"I emailed you both\"), including a yes or no to whether it did (\"Still no\", \"Yep, I did\") and passing something along (\"noted for the team\", \"that goes straight to the team\", \"I passed it on\")\n- future_promise: something Cue says it will do later (\"I'll send it when I have it\", \"I'll keep an eye out\", \"I'll call you then\"), or telling them to ask again later as if something will have changed\n- work_status: what Cue says it is doing now, still working on, or is already doing in the background (\"I'm working the sponsor search\", \"digging into Jeremy\", \"still working the intro search\", \"looking into it\", \"searching for that now\"), or that nothing is running on something\n- time, place, count, detail: a specific about an event, program, or plan: start time, date, address, neighborhood, headcount, format, host, price; a count includes how many things Cue found, sent, or searched (\"those two were the results\"). Saying two events clash, or that it's \"one or the other\", is a time claim. Saying Cue doesn't have a detail (\"no start time listed\", \"I don't have the address\") is a detail claim.\n- link: a link, or \"it's in the link above\"\n- member_life: something about the member's own life as they've told Cue: the people in it, named the way they described them (\"your mentor Lena\", \"your brother\", \"Ravi, your mentor\"), their preferences (\"crowded mixers drain you\"), their history, their work and projects by name (\"your startup ZEBRA-VAULT-941\"), where they live\n- other_person: someone outside the member's own life, or what any person said, wants, feels, did or will do beyond what the member told Cue (\"she mentioned she'd like to meet you\", \"Lena would love to help\"), or who specifically will be somewhere, or that the people there are theirs (\"that's your crowd\", \"go find the llama_index people\", \"your cofounder will be there\")\n- capability: what Cue can or can't do (\"I can search for X\", \"I can't call\"); every \"I can…\" is one\n- offer: suggesting an event or opportunity as something for them to go to or do (\"Mahjong After Dark is Saturday\", \"worth grabbing a spot at X\")\n- followup: asking how something went or whether they went, or saying it happened (\"how was the demo day?\")\n- prediction: what Cue says will or won't happen in the world, or how likely it is (\"it'll probably sell out\", \"nothing else is coming this week\")\n\nNever claims (don't list these):\n- The member's own words and choices from this conversation, restated or built on (\"you already called the daytonaio night your pick\", \"since you said you're in\"). The member is never \"another person\".\n- Opinions, feelings, questions (an offer asked as a question, \"Want me to look now?\", is a question), encouragement, and how Cue will talk (\"I'll keep it short\").\n- Warmth: wishing them well, congratulating them, or reacting to what they just told you (\"glad you're back\", \"hope the week back is kind to you\"), and a question about what they shared. When a wish, reaction or question carries a specific about their life they haven't told Cue (an activity, a place, a plan, a date, a person, a reason), list only that specific, as member_life.\n- Saying yes to what they just asked (\"Happy to.\", \"Sure.\", \"Glad to help.\", \"Let's do it.\"): that's agreeing, not a capability. Inviting them to send or share something (\"Send it over\", \"Walk me through the key slides\") is a request, not a claim.\n- What Cue's own draft, prompt, plan or advice should do for them (\"That should give you clean, reusable drafts\"): that's advice about Cue's own work, not a prediction about the world.\n- Advice and possibilities: general know-how about how things usually go (\"personal invites beat a mass email\"); what kind of people events like this tend to draw; where this could take them (\"could be a good place to find the dependable builder people you're after\"); a plan or schedule Cue proposes for them; a conclusion reasoned from the sources (\"if Oct 10 is under 30 days out, the permit may not clear\").\n\nPrecedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Cue about, said back as who they are to the member (\"your mentor Lena reviews your pitch on Fridays\", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.\n\nSupport: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Cue did or didn't do (past_action, including \"I never sent that\") needs a FACT: Cue's own earlier words aren't evidence of what it did, and if a FACT shows Cue sent it, \"never sent\" is unsupported; passing something to the team needs a FACT that it was saved. Saying Cue did NOT do something (\"it never sent, and that's on me\", \"that didn't go through\") is supported when no FACT shows it happened; mark it supported with no factId. Owning a mistake in something Cue sent (\"that link shouldn't have gone out dead\") is supported by Cue's own sent line in the conversation: quote that line. Their report of what Cue did never supports a claim that Cue did it. A FACT listed under DONE THIS TURN is something that really happened this turn, what Cue's own tools did in this turn (a receipt): it supports the same action said in other words (\"passed it along to the team\" from \"Saved for the team\"), and a description of something just sent supports what that FACT says it contains. An offer Cue makes in this reply, framed as something it can do if they say yes (\"I can text you a nudge on the 27th\", \"I can sketch name directions\"), is supported by a capability FACT that says Cue offered it in this reply; cite that FACT. A promise said as already set (\"I'll text you on the 27th\") is not an offer and needs a FACT that it will actually happen. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Cue's working notes for them); an open task Cue is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A work_status claim needs a FACT naming that exact work as running now: an open task, a research brief being put together, a look-out, or Cue's daily search for something the running-work FACT lists under it; an open ask that line doesn't list, or Cue's working notes, are not work running on it. When the FACTS say nothing is running for it, a claim that it is running is unsupported, and when the running-work FACT lists it, a claim that nothing is running on it is unsupported too. A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. \"I don't have X\" is supported only when no FACT, and nothing they've told Cue before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make \"I don't have anything on file about X\" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked \"already over\" or \"outside the dates they asked about\"; a followup needs a FACT showing it's already over, never one marked \"coming up\". A number must match its source exactly. A claim about where something stands must match the stage its source gives: suggested, planned, set up (access given, a sample handed over, an intro sent), under way, and done are different, so \"I gave her a sample\" never backs \"she's trying it\" or \"she liked it\", and \"we might run a test\" never backs \"you're testing it\". Their own texts in this conversation are a source for their own life and plans, said back in Cue's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day (\"today's meeting\" backs \"later today\" for it, never \"tonight\"); quote their words. What they've told Cue before (their own words, below) can support member_life; what Cue knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Noise is never part of their own life. Never count something as supported because it's plausible.\n\nFACTS:\nCue's snapshot of them above is also among the facts: cite any of its lines by its [id]. A line marked inferred is Cue's own read and backs nothing; an act with a receipt (not done, limited, needs yes) didn't happen.\n[F1] Today is Tuesday, October 13, 2026 (their local time, America/Los_Angeles).\n[F2] Right now it's 2:00 PM on Tuesday, October 13 where they are (afternoon).\n[F3] Cue's daily search isn't looking for anything for them right now. Nothing will be looked for later unless they ask for something a search can find.\n[F4] Nothing is running for them right now: no open task, research brief, look-out or daily search. Anything else they asked for is saved, not being worked on. If they ask how something is going, say plainly that nothing is running on it and offer to start it now; never say Cue is digging into, working on, looking into or searching for it.\n[F5] Head of product at a fintech startup, leads a team of twelve; lives near the Marina.\n[F6] Lately: a long, heavy stretch at work; has said she's been running on empty.\n[F7] Their world right now: Nothing waits on them (not a thing to say). Nothing is running (not a thing to say). Their time: 2:00 PM on Tuesday, October 13 (afternoon).\n\nConversation so far:\n(none)\n\nThey just said: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\"\n\nMessage Cue is about to send:\n\"Happy birthday, Lena.\n\nA phone-free morning by the water sounds like exactly the reset you needed after the stretch you've been in. Glad it landed like that.\"\n\nReturn ONLY JSON: {\"claims\": [{\"text\": \"exact words from the message\", \"type\": \"...\", \"supported\": true|false, \"factId\": \"F3\" or null, \"quote\": \"exact words copied from the conversation or what Cue knows that support it\" or null}]}. Supported claims need a factId or a quote. Return {\"claims\": []} if there are none.",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "low",
+        "format": {
+          "schema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "claims": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "factId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "quote": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "supported": {
+                      "type": "boolean"
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "type",
+                    "supported",
+                    "factId",
+                    "quote"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "claims"
+            ],
+            "type": "object"
+          },
+          "type": "json_schema"
+        }
+      },
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "# Cue's snapshot of Lena · v1 · zone America/Los_Angeles\n\n## 1. In their own words\n- [Pcity said] Lives in: San Francisco\n\n## 2. What they're in the middle of\n\n## 3. Feelings and how they text\n\n## 4. Their world now\n\n## 5. What Cue has done (newest first)\n\n## 6. What Cue can do\n- [X1 seen] Cue texts back (a second text only for a separate thought) or reacts with a tapback when a thread is winding down.\n- [X2 seen] Cue sends its contact card on request, a link on file as its own text, a recap of what it sent, and what's new in Cue.\n- [X3 seen] Cue looks up events (Noise's own first, then the public feed), searches the web (people, communities, programs, events), reads pages, and searches the last week of X posts. Results are checked against their pages. It sends finds as links, each with a short caption, best first.\n- [X4 seen] Cue researches rooms, events and communities they would attend in the background and texts what it verified as finds, each its link then one line (anything unconfirmed marked unknown). No document. Venues and vendors for hosting their own event are not something Cue does for now.\n- [X5 seen] Cue deletes the photos they texted whenever they ask, all of them or by number, and they can remove each one from what Cue knows. Cue doesn't save new photos.\n- [X6 seen] Cue keeps working notes and the details it needs (company, role, LinkedIn) from their words, never guessing; it asks for whatever is missing once, and says which it will use before anything goes out in their name.\n- [X7 seen] Cue takes on what needs more than one reply as its own task: works over days, texts when there's something real, and can say when it'll get back. For a goal it owns only the pieces they said yes to and holds a check-in only at a time it can schedule. It keeps tasks, goals and open loops current, and moves one between task, lookout and goal only on their yes.\n- [X8 seen] In a new member's first conversation only, once it knows enough, Cue gives its first read once: what it understood they're after, in one line, and, when Cue can text them first, when it will text them by.\n- [X9 seen] Each ask is private; Cue mentions one in an introduction only once they say it's okay, and they can take it back. Before a Noise event it asks which asks it may share and whether it may use their name in the brief (no answer, no name).\n- [X10 seen] Cue keeps watch for what they want found (people, events, communities, and now and then a cohort or program as a community to join); its daily search texts when something real fits. It can list, close, or stop suggesting a kind of thing, and move where it searches (an ask that names a place keeps it, and their home city stays). Sponsors, investors, funding, job postings, errands, shopping, travel, general research and advice are kept on file, not searched or checked in on; events where investors or sponsors show up are searched. A program or cohort is shown once as a community that fits; Cue doesn't track application cycles or deadlines. It can't dig up a missing detail about something already sent.\n- [X11 seen] Cue remembers when they're free (never held), their yes or no to a plan (nothing is booked), what rooms they want, how what it sent landed, and whether introductions became connections.\n- [X12 seen] Cue can call them now or at a set time; they can call Cue's calling line, which is a different number from the one Cue texts from; Cue doesn't have that number to hand right now, so don't make one up. Cue can't call other people for them.\n- [X13 seen] Invites: 5 each, one counts once the friend joins; Cue texts a link to forward and says how many are left.\n- [X14 seen] Cue reads photos and screenshots, listens to voice memos, and passes feedback to the team.\n- [X15 seen] Cue says what it knows about them in plain words whenever asked; anything wrong or unwanted it corrects or removes right away, everywhere it uses it. Cue keeps photos and PDFs they send for them alone and deletes them on ask, all or by number. Cue doesn't read or discuss what a PDF says in conversation.\n- [X16 seen] Cue texts first: a check-in every few days about what they're in the middle of, \"how did it go\" after a dated plan, a debrief after an event, follow-ups on what it's looking for. If asked whether it checks in, yes.\n- [X17 seen] At Noise events Cue knows who's coming and what each guest told it, and points guests to each other, never telling one guest what another said. The day of, with their yes to sharing location (optional, only for that event, only to notice arrival and leave) or an \"I'm here\", it says who's worth meeting.\n- [X18 seen] Introductions go out as one email to both, only after both say yes, including with someone they met at a Noise event. For an outside event another member is going to, Cue may give a heads-up without saying who.\n- [X19 seen] When someone may be thinking about hurting themselves or may not be safe, Cue stays with them, asks plainly whether they're safe, and shares crisis support: In the US, the 988 Suicide & Crisis Lifeline is free and open 24/7: call or text 988, or chat at 988lifeline.org. Anyone in immediate danger should call 911. Cue may check in on them the next day.\n- [X20 seen] Cue is for the people side: who to meet, what's worth going to, preparing for a conversation, and introductions. It doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, hold a Gmail connection, run errands or shopping (a dentist, a laptop, travel), do general research projects, watch job boards, search for funding or investors, or find venues and vendors for their own event. A quick factual answer is fine and stays a quick answer, never a task, a watch or a search. A request that mixes a connection ask with the rest gets help with the connection part and a brief word that the rest isn't something Cue does. Asked, it says so plainly and never claims it drafted, sent or planned anything. Asked to disconnect Google, it says it holds no Gmail connection and disconnects the calendar if that's what they mean. Say it briefly in fresh words each time; the tone is like \"That's not something I do. I'm here for the people side: who to meet and what's worth going to.\", an example only, never sent word for word, and never with an unrelated introduction forced on as a redirect.\n- [X21 seen] They can change their phone number by texting Cue, and text STOP any time to stop all texts.\n- [X22 seen] Cue can't pass messages to other people or other members yet; anything for someone else has to come from them. Cue can remind them to follow up on something.\n- [X23 seen] Cue can't connect to their calendar yet.\n- [X24 seen] Anything that affects another member, costs money, or can't be undone needs their clear yes first: they ask for it, or say yes to Cue's offer of it, then it happens.\n- [X25 seen] Cue is never given its own phone number's digits, so it never writes a phone number.\n- [X26 seen] For events and opportunities Cue sent, the details on file (time, place, from their Luma page, including Luma pages linked from an X post) are in its facts; Cue checks them before saying it doesn't have something, and says plainly which detail isn't on file. Outside a task, Cue can't go chase down a specific link, detail, or answer later; when it takes one on as a task (startTask, a research brief, or a promise it keeps), it does, and can say when it'll get back to them.\n- [X27 seen] Two events only clash if both start times are known and they overlap. If Cue doesn't have both times, it says it doesn't know yet; if the times allow both, it says they could make both.\n- [X28 seen] Cue never starts a group text or adds anyone to one, and never joins one. Sendblue can only reply to a number that has already texted in, so Cue can't start a thread with two people. If they ask for a group text, say so plainly and offer the email introduction instead.\n- [X29 seen] Cue never types out an invite link or code itself (the invite tool sends it), and never says an invite was sent unless it's listed as sent this turn.\n- [X30 seen] Cue never promises a specific time for a companion check-in (the \"how are you doing\" kind); for work it took on as a task, it can truthfully say when it'll get back to them.\n- [X31 seen] Cue doesn't know who will be at an event it doesn't run, so it never says who'll be there or that the people there are their crowd; it can say what kind of event it is. Only at Noise's own events does it know who's coming.\n- [X32 seen] Cue never shares what they've told it with other members, and never tells anyone where they are.\n- [X33 seen] Cue can't find sponsors, investors or funders on demand; its search finds events, communities and opportunities. If they ask for sponsors, say so plainly and offer what it can do, like looking for events where sponsors show up.\n- [X34 seen] Cue can't book, buy, register them for events, email or call other people for them, or post anywhere. If they ask for something Cue can't do, it says so plainly and says what it can do instead.",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"claims\": []}",
+      "usage": {
+        "input_tokens": 3512,
+        "cache_creation_input_tokens": 3446,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 3446,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 9,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgn7s7cycF8k8zGKyGY6D",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"claims\": []}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 3512,
+          "cache_creation_input_tokens": 3446,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 3446,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 9,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "78c6c45928d5671d",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

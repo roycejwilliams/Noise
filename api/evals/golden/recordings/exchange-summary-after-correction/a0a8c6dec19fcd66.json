@@ -1,7 +1,7 @@
 {
   "hash": "a0a8c6dec19fcd66",
   "case": "exchange-summary-after-correction",
-  "recorded_at": "2026-11-05T17:22:11.392Z",
+  "recorded_at": "2026-11-06T18:08:13.047Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "```json\n{\"reason\": \"They're correcting Cue, rejecting the problem statement it gave and asking instead for the one about Theo\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"requesting the Theo problem statement instead\", \"pushback\": \"they wanted the Theo problem statement, not the matching one\", \"lesson\": \"when they ask for 'my problem statement,' infer which thread they mean from what they were just discussing rather than defaulting to the most recent unrelated topic\", \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"], \"move\": \"answer\", \"refers_to\": {\"phrase\": \"the problem about Theo\", \"item\": null, \"not_item\": null, \"between\": []}, \"answered\": [], \"closes\": [], \"reopens\": [], \"asks_again\": null}\n```",
+      "text": "{\"reason\":\"They reject the dessert-related problem statement and ask Cue to give the one about Theo instead\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wanting the problem statement about Theo situation\",\"pushback\":\"wanted the Theo problem statement, not the matching one\",\"lesson\":\"when they ask for 'my problem statement' right after a specific topic, ground it in that topic, not an unrelated one\",\"dots\":[],\"emotion\":null,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
       "usage": {
         "input_tokens": 5952,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 441,
+        "output_tokens": 408,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgkAfLSuQP1maoSeYPAiS",
+        "id": "msg_011Cgn7yqaG7hwVGJLEp1Mn7",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "```json\n{\"reason\": \"They're correcting Cue, rejecting the problem statement it gave and asking instead for the one about Theo\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"requesting the Theo problem statement instead\", \"pushback\": \"they wanted the Theo problem statement, not the matching one\", \"lesson\": \"when they ask for 'my problem statement,' infer which thread they mean from what they were just discussing rather than defaulting to the most recent unrelated topic\", \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"], \"move\": \"answer\", \"refers_to\": {\"phrase\": \"the problem about Theo\", \"item\": null, \"not_item\": null, \"between\": []}, \"answered\": [], \"closes\": [], \"reopens\": [], \"asks_again\": null}\n```"
+            "text": "{\"reason\":\"They reject the dessert-related problem statement and ask Cue to give the one about Theo instead\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wanting the problem statement about Theo situation\",\"pushback\":\"wanted the Theo problem statement, not the matching one\",\"lesson\":\"when they ask for 'my problem statement' right after a specific topic, ground it in that topic, not an unrelated one\",\"dots\":[],\"emotion\":null,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 441,
+          "output_tokens": 408,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

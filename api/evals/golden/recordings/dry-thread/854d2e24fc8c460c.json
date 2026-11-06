@@ -1,0 +1,102 @@
+{
+  "hash": "854d2e24fc8c460c",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-06T18:07:12.890Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. A birthday morning with no phone, just you and the water, after the stretch you've been grinding through, that's not a small thing. That's the first real exhale you've had in a while.\n\nAnd walking into your team and saying you need a real break, after running on empty for months, takes something. Good for you for actually taking it instead of just thinking about it.\n\nTwo weeks starting Monday. What's the plan, actual rest or are you already plotting a trip?\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Starts with brief ownership 'Fair.' then adds original observations ('the first real exhale you've had in a while', 'takes something') and ends with a genuine new question about her plans, without quoting its own lines or explaining its tone.\"}",
+      "usage": {
+        "input_tokens": 499,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 766,
+        "output_tokens_details": {
+          "thinking_tokens": 674
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgn7tzxgWgK9makikvmNo",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Starts with brief ownership 'Fair.' then adds original observations ('the first real exhale you've had in a while', 'takes something') and ends with a genuine new question about her plans, without quoting its own lines or explaining its tone.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 499,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 766,
+          "output_tokens_details": {
+            "thinking_tokens": 674
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "854d2e24fc8c460c",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
