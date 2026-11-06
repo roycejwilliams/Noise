@@ -144,6 +144,8 @@ const forty = Array.from({ length: 40 }, (_, i) => lesson(`n${i}`, `Maya mention
 const fortyRead = await read(raw(forty), [], {}, { budget: 2000 });
 check("40 lessons naming a linked member with a 2,000 budget stay within 2,000 after the final strip", JSON.stringify(fortyRead.learnedLessons).length <= 2000 + 2 * fortyRead.learnedLessons!.length && fortyRead.learnedLessons!.length > 0);
 const inputs = ["Maya works at Stripe; keep it light", "Cue introduced them to Maya yesterday. Maya liked it.", "She told me Maya moved. Then more text.", "plain line with no names", "Cue suggested Maya as a match"];
+const leaks = ["Maya left Stripe and moved to Austin, another member, came up here", "Maya is pregnant and hates her job at Stripe, another member, came up here; their details aren't kept for this conversation.", "Cue introduced them to Maya who just got divorced, another member.", "Goals: a cofounder; Maya at Stripe, another member, came up here"];
+check("text dressed as the strip's own output is still stripped (name slot must be exactly a linked name)", leaks.every((x) => { const o = safeMemory("member_knowledge", x, ["Maya"]) ?? ""; return !/Stripe|Austin|pregnant|divorced|moved/.test(o); }));
 check("the strip is idempotent: strip(strip(x)) === strip(x)", inputs.every((x) => { const a = safeMemory("member_knowledge", x, ["Maya"]) ?? ""; return (safeMemory("member_knowledge", a, ["Maya"]) ?? "") === a; }));
 
 const seen: { sql: string; args: unknown[] }[] = [];
