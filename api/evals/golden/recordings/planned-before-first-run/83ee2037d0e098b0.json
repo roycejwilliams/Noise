@@ -1,0 +1,102 @@
+{
+  "hash": "83ee2037d0e098b0",
+  "case": "planned-before-first-run",
+  "recorded_at": "2026-11-06T18:02:02.468Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: The member asked Cue this afternoon to watch for \"a quiet cocktail bar in Hayes Valley for a work drinks night\". Cue's daily search runs every morning from 9, so the first look is tomorrow morning. They asked \"Is that actually r...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: The member asked Cue this afternoon to watch for \"a quiet cocktail bar in Hayes Valley for a work drinks night\". Cue's daily search runs every morning from 9, so the first look is tomorrow morning. They asked \"Is that actually running yet?\"\n\nCue's text:\n\"\"\"Yep, it's live. Checking every morning for that quiet Hayes Valley spot, and I'll let you know if something fits.\"\"\"\n\nDoes the text convey that it will be looked at (or the search runs) tomorrow morning / the next morning, without saying nothing is running?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Yep, it's live. Checking every morning\\\" implies it's already active now, not that the first run is tomorrow morning.\"}",
+      "usage": {
+        "input_tokens": 268,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 472,
+        "output_tokens_details": {
+          "thinking_tokens": 415
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgn7WQsiJ9bxgsyDBUPfF",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Yep, it's live. Checking every morning\\\" implies it's already active now, not that the first run is tomorrow morning.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 268,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 472,
+          "output_tokens_details": {
+            "thinking_tokens": 415
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "83ee2037d0e098b0",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

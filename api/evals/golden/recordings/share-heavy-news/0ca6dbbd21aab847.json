@@ -1,0 +1,102 @@
+{
+  "hash": "0ca6dbbd21aab847",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-11-06T18:06:01.587Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"This is the kind of news that puts everything else on pause. I'm glad you're not getting that news alone in some other way, even if the waiting room part is its own kind of awful.\n\nHow's he doing right now, as much as they've told you.\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"asks \\\"How's he doing right now\\\" despite them still waiting for the doctor, i.e. before there's news to give.\"}",
+      "usage": {
+        "input_tokens": 324,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 297,
+        "output_tokens_details": {
+          "thinking_tokens": 243
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgn7p8GaNBgWArvy6VGWG",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EuQJCsQCCBMYAipAWFdt7ip0PYduIxtJdgKCz3s7L3H6e5NCjrVmSR1U4olF5stz/O/ewrH+ikIRkLoFD3UVrLx/yDZj9GWulj5FzjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBiK641wbCAToIBBAAGgwC2ooDTzcFCjAEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCMA3uNeA8+T30SOJxxPdZkjRzd+h5UPdicnm3gMMibHSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwm3Yo+I+3IM3Rar00aDGrlULGHI6YnveoXbCIwQEgq2sIgWQ3BuVC2uMaiMDjLDs2Q5iQTup9IsfAAUTAhtzCqrsQEW73cPBR1VLzrKswGcwnw6kDHR9sS4Xn8lfdqVxcS0BKvhtTJCpN/sSCMxdcyz7aDMUcHxIU0U0lwek676HQ4AFtnjqGace8Sl9L6EDz2A9F0ba+ARmwfz4GB0Y+DnmAfjXd1sGymGM8+XXBL0KY389y6r5yLNTLasUKQmyF93ali4BKI5MYB8gONgqbt9pGarOUW6C5D1D7afUOnwnjuj8/pJPYcyjIxKi5Ki1nLDaBUna3gLuGw5MfAH8C21K3Q5GJtAtlHhR7O47XiagS7SH3ahaVyI7TOGAN8xDRZ6Fmx1x3cHoPWhNrZDHogx9JYFem1nTVa7UihbCeVJxfyzafXCQmBEjg7o1OzZl/cBpVzBxzSHoZpyg7F8S/fO8OwhdSZm7Jpg8KJmKV46+LAAzENfYXtcobMfv6gn1HznPpF3x9QWBYVJdc/U0232UpCOllXbrSpaVfqwN1vcnt1nCGgD6j833DoyCZ93xOfbWcZEdzNmNjOmXU+AVKUtaD6caqeXqA5xj8QaQZCQz+h8RtZ/sdWeScMyG8D/5hgYzEBWrVtdiZQzMbaJPu8tNTr+PUUf+YSeSQKclmwQCqSVpZl4vzPEJar/IHY2m0elsd27X/ZFi2PvMaMKWlwIkxCLmwXRD2OaaEgZiTHb9Et2AOj3oC+ByAdtjTwbzA5QJk6Hv78m5eTTDaiYtuLqtILF2JoqXrYe2dN4+sEXN6liSlNmRriN/0BKa7upjrxIxDmJzCscnF7LckhTK7klAC2xQ4BgpPhEdK9t6vMl5rxgCQuRbkrkJ5sLTLKFJA3SUpf8Gb4oMLkeYBGTSGeYMUdZxNmAnsx8n1hiIqy/WUMNuL4apfXfztEKoinuJ4ydspEbRWgTLWg3OcQwTmPuOIiFMfMRi+vLGgrh8F86xvMnxT07tg29ch70eQGeUrJDUFvYTsIjYn0VoGYLtMVaMQYPzu6XsBbP8ynM9q6IoD/V5E6Ocxa9TyciWWxSEzczyPEX+21A7SKwIy7aGX1BRljUjNtQq8Kbtl9BJYNND9JulI33yRhZ8fnAqoyoyPyJuBWBwo8+Ld5clBhGEnskDmpzdjMmDZASY0d37pA3uzJ3kNMWNz4O2jxyuWRUsJgXUY4qaJ414upjRgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"asks \\\"How's he doing right now\\\" despite them still waiting for the doctor, i.e. before there's news to give.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 324,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 297,
+          "output_tokens_details": {
+            "thinking_tokens": 243
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "0ca6dbbd21aab847",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
