@@ -199,7 +199,7 @@ export type RawKnown = {
   // Events they planned (planned_event_mentions, ref plan:<id>) and events Cue has evidence they were at (event_presence, ref
   // event:<event_api_id>): the refs the events section of the member picture (services/knowledge/events.ts) is guarded by. Removable;
   // removing one clears their side (the plan row, or their words and results for that event) and the section never returns it.
-  events?: { kind: "event" | "plan"; id: string; name: string; on: string | null; via?: string | null }[];
+  events?: { kind: "event" | "plan"; id: string; name: string; on: string | null; via?: string | null; attended?: boolean }[];
 };
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
@@ -207,8 +207,8 @@ const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said
 // Neutral labels (Royce 11-06: Cue phrases these itself; no fixed member-facing sentence). Plain facts for the model, and the words
 // anywhere a label is shown verbatim (a page, a log). An attended one carries the kind of evidence.
 const EVIDENCE: Record<string, string> = { door: "door check-in", location: "arrival seen", text: "their text on arrival" };
-export const eventLabel = (e: { kind: "event" | "plan"; name: string; on: string | null; via?: string | null }): string =>
-  e.kind === "plan" ? `a plan to go to ${e.name}${e.on ? `, ${e.on}` : ""}` : `went to ${e.name}${e.on ? `, ${e.on}` : ""}${e.via && EVIDENCE[e.via] ? ` (${EVIDENCE[e.via]})` : ""}`;
+export const eventLabel = (e: { kind: "event" | "plan"; name: string; on: string | null; via?: string | null; attended?: boolean }): string =>
+  e.kind === "plan" ? `a plan to go to ${e.name}${e.on ? `, ${e.on}` : ""}` : (e.attended === false ? `${e.name}${e.on ? `, ${e.on}` : ""}` : `went to ${e.name}${e.on ? `, ${e.on}` : ""}${e.via && EVIDENCE[e.via] ? ` (${EVIDENCE[e.via]})` : ""}`);
 
 // Pure: every item from the raw reads. The member's own name, phone and email (account details) aren't listed: they're the account,
 // not something Co learned. Co's lessons, feelings and the action record never are (team-internal); a paused kind (kindRestraint.ts) is pacing only and is not shown until its wording is approved; its removal path (case "pace") is kept, unreachable meanwhile.
@@ -598,10 +598,20 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     [userId],
   ).catch(() => [] as any[]);
   const eventRows = await q(
-    `SELECT 'plan' AS kind, id::text AS id, event_name_raw AS name, event_date::text AS day_on, NULL::text AS arrived_via FROM planned_event_mentions WHERE user_id = $1 AND (event_date IS NULL OR event_date >= CURRENT_DATE - 1)
+    `SELECT 'plan' AS kind, id::text AS id, event_name_raw AS name, event_date::text AS day_on, NULL::text AS arrived_via, true AS att FROM planned_event_mentions WHERE user_id = $1 AND (event_date IS NULL OR event_date >= CURRENT_DATE - 1)
      UNION ALL
-     SELECT 'event', ep.event_api_id, COALESCE(s.name, 'an event'), ep.arrived_at::date::text, ep.arrived_via FROM event_presence ep LEFT JOIN luma_event_snapshots s ON s.event_id = ep.event_api_id WHERE ep.user_id = $1 AND ep.arrived_at IS NOT NULL
-     LIMIT 40`,
+     SELECT * FROM (
+       SELECT DISTINCT ON (x.id) 'event', x.id, COALESCE(s.name, x.nm, 'an event'), COALESCE(s.start_at::date, x.d)::text, x.via, x.att FROM (
+         SELECT event_api_id AS id, NULL::text AS nm, arrived_at::date AS d, arrived_via AS via, (arrived_at IS NOT NULL OR noshow_outcome LIKE 'came%') AS att FROM event_presence
+           WHERE user_id = $1 AND (arrived_at IS NOT NULL OR not_going_at IS NOT NULL OR met_someone_at IS NOT NULL OR noshow_outcome IS NOT NULL)
+         UNION ALL
+         SELECT substr(item_key, 7), item_name, NULL::date, NULL::text, false FROM suggestion_outcomes WHERE user_id = $1 AND kind = 'event' AND item_key LIKE 'event:%' AND result <> 'no_signal'
+         UNION ALL
+         SELECT payload->'match'->>'event_api_id', payload->'match'->>'name', NULL::date, NULL::text, false FROM proactive_candidates
+           WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND payload->'match'->>'kind' IN ('co_event', 'public_event') AND payload->'match'->>'event_api_id' IS NOT NULL
+       ) x LEFT JOIN luma_event_snapshots s ON s.event_id = x.id ORDER BY x.id, x.att DESC
+     ) ev
+     LIMIT 80`,
     [userId],
   ).catch(() => [] as any[]);
   const freeRows = await import("./wantWhen.js").then(async (WW) => {
@@ -647,7 +657,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
       const items = await W.waitingOrNull(userId);
       return W.visibleHeld(items ?? []).map((i) => ({ id: i.id, label: i.label, held: i.held.length > 0 }));
     }).catch(() => [] as { id: string; label: string; held: boolean }[]),
-    events: (Array.isArray(eventRows) ? eventRows : []).map((r: any) => ({ kind: r.kind === "plan" ? ("plan" as const) : ("event" as const), id: String(r.id), name: String(r.name ?? "").slice(0, 120), on: r.day_on ? String(r.day_on).slice(0, 10) : null, via: r.arrived_via ? String(r.arrived_via) : null })),
+    events: (Array.isArray(eventRows) ? eventRows : []).map((r: any) => ({ kind: r.kind === "plan" ? ("plan" as const) : ("event" as const), id: String(r.id), name: String(r.name ?? "").slice(0, 120), on: r.day_on ? String(r.day_on).slice(0, 10) : null, via: r.arrived_via ? String(r.arrived_via) : null, attended: r.att !== false })),
     alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
@@ -943,7 +953,8 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       // An event Cue has them at: their words and results about it go. The arrival record stays (it is Cue's evidence, not theirs);
       // the events section drops the event whole by this ref.
       await db.query(`DELETE FROM suggestion_outcomes WHERE user_id = $1 AND kind = 'event' AND item_key = $2`, [userId, `event:${a}`]);
-      await must(`UPDATE event_presence SET met_someone_at = NULL, met_quote = NULL WHERE user_id = $1 AND event_api_id = $2`, [userId, a]);
+      // Not every event has a presence row (an outcome or a sent offer alone can show it): the removal's own correction row guards it.
+      await db.query(`UPDATE event_presence SET met_someone_at = NULL, met_quote = NULL WHERE user_id = $1 AND event_api_id = $2`, [userId, a]);
       return { ref: item.ref, source: "event", was, now: null };
     }
     case "avoid": {

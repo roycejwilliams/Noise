@@ -7,8 +7,8 @@
 //     event started. A plan, an offer Cue sent, an "interested" or an "acted" is never attendance.
 //   - A plan whose date has passed with no evidence is dropped, never read as attended. Attended events are kept with no window.
 //   - Their side only: a quote of theirs, the fact that they met someone, never another member's name. Their words go under `quote`
-//     (the picture's one convention); a quote that names a linked member is not carried at all (guardEvents `named`), and the shared
-//     name strip runs over it too wherever that strip covers quotes.
+//     (the picture's one convention). memberKnowledge's final strip exempts the key `quote`, so the name check here is the one in force:
+//     guardEvents `named` drops a quote that names a linked member (linked members only; a name the finder doesn't know passes).
 //   - A met-someone note is kept as `met` and is never attendance: recordMetSomeone writes to the latest-touched event of the last 48
 //     hours, whatever the evidence.
 //   - Every value carries its source (table), its date and its provenance (said, seen, did, inferred: services/memberSnapshot.ts Prov).
@@ -185,7 +185,9 @@ export function eventsOf(raw: RawEvents, o: { now: Date; budget?: number; timeZo
       d.item.attendance = { source: "event_presence", on: p.notGoingAt.toISOString(), state: "not_going", via: null, prov: "said", quote: null };
       touch(d, p.notGoingAt);
     }
-    if (p.metAt) {
+    // A met note counts only when it was said after the event started, or there is an arrival: recordMetSomeone writes to the latest
+    // event of the last 48 hours, so a note from the day before ("met a designer at the gym") must not attach to this one.
+    if (p.metAt && (p.arrivedAt || (d.startAt && p.metAt.getTime() >= d.startAt.getTime()))) {
       d.item.met = { source: "event_presence", on: p.metAt.toISOString(), prov: "said", quote: clip(p.metQuote) };
       d.hasSaid = true;
       touch(d, p.metAt);
