@@ -83,7 +83,7 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 // ---------------------------------------------------------------- types
 
 export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace";
-export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting" | "reach";
+export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
   work: "Your work",
@@ -93,9 +93,8 @@ export const GROUP_TITLES: Record<KnownGroup, string> = {
   likes: "What you like and don't",
   files: "Files you sent",
   waiting: "What I'm holding for you",
-  reach: "How often I reach out",
 };
-const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "reach", "files"];
+const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "files"];
 
 // One thing Co holds, from one source row. ref is stable across turns (an id, a field, or a hash of the text).
 export type KnownItem = { ref: string; source: KnownSource; group: KnownGroup; text: string; theirWords: string | null; canCorrect: boolean };
@@ -197,14 +196,12 @@ export type RawKnown = {
   // What the pick is holding for them (harness/waiting.ts, notification grouping item 9), best first, unexpired, as labels that name
   // nothing but the item itself. Removing one means it is never sent.
   waiting?: { id: string; label: string; held: boolean }[];
-  // Kinds of message Cue is pacing for them (services/kindRestraint.ts): their own setting, shown and removable. Removing one lifts the pause.
-  paces?: { kind: string; line: string }[];
 };
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
 
 // Pure: every item from the raw reads. The member's own name, phone and email (account details) aren't listed: they're the account,
-// not something Co learned. Co's lessons, feelings and the action record never are (team-internal); a paused kind is shown, as pacing, removable (kindRestraint.ts).
+// not something Co learned. Co's lessons, feelings and the action record never are (team-internal); a paused kind (kindRestraint.ts) is pacing only and is not shown until its wording is approved; its removal path (case "pace") is kept, unreachable meanwhile.
 export function knownItems(r: RawKnown): KnownItem[] {
   const out: KnownItem[] = [];
   const add = (ref: string, source: KnownSource, group: KnownGroup, text: string | null | undefined, theirWords: string | null = null, canCorrect = true) => {
@@ -265,7 +262,6 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const x of r.prefs ?? []) add(`pref:${x.id}`, "pref", "said", `how you asked me to work: ${x.text}`, x.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   for (const f of r.photos ?? []) add(`photo:${f.n}`, "photo", "files", `photo ${f.n}, sent ${f.sentOn}`, null, false);
-  for (const x of r.paces ?? []) add(`pace:${x.kind}`, "pace", "reach", x.line, null, false);
   for (const w of r.waiting ?? []) add(`waiting:${w.id}`, "waiting", "waiting", w.held ? `${w.label} (held for now)` : w.label, null, false);
   for (const k of r.alreadyKnows ?? []) add(`knows:${k.id}`, "knows", "said", `someone you told me you already know (${k.on}), so I won't introduce you two as strangers`, k.quote, false);
   for (const x of r.pairOutcomes ?? []) {
@@ -298,7 +294,7 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
     const lines: KnownLine[] = [];
     for (const i of items.filter((x) => x.group === g)) {
       const plain = i.text.replace(/^(my read|looking out for|not for you): /, "");
-      const same = g !== "files" && g !== "waiting" && g !== "reach" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
+      const same = g !== "files" && g !== "waiting" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
       if (same) {
         same.refs.push(i.ref);
         same.theirWords ??= i.theirWords;
@@ -633,8 +629,6 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
       const items = await W.waitingOrNull(userId);
       return W.visibleHeld(items ?? []).map((i) => ({ id: i.id, label: i.label, held: i.held.length > 0 }));
     }).catch(() => [] as { id: string; label: string; held: boolean }[]),
-    // Read in the same view: a read that fails fails it (a pause is never shown as lifted on a guess).
-    paces: await import("./kindRestraint.js").then(async (K) => (await K.pausedKinds(db as any, userId)).map((x) => ({ kind: x.kind, line: `I'm holding off on ${K.PACE_LABELS[x.kind]} for a bit` }))),
     alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
@@ -951,7 +945,7 @@ export function fieldFor(ref: string): string {
   if (kind === "place") return "where Cue looks for one of their wants";
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
-  if (kind === "pace") return "a kind of message Cue was holding off on";
+  if (kind === "pace") return "a pause on one kind of message";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
   return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them" }[kind] ?? kind;

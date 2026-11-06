@@ -49,13 +49,13 @@ const ago = (d: number) => new Date(NOW.getTime() - d * DAY);
   check("a stated done still closes a goal (markGoal 'done' state exists)", /"done"/.test(src("services/goalEdges.ts")));
 }
 
-// ---- 2. a paused kind is visible and removable
+// ---- 2. a paused kind is pacing only, not shown (wording held for Royce), and removal lifts it
 {
-  const items = W.knownItems({ profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], paces: [{ kind: "find", line: `I'm holding off on ${K.PACE_LABELS.find} for a bit` }] } as any);
-  const it = items.find((i: any) => i.source === "pace");
-  check("a paused kind is listed in what-Cue-knows", !!it && it.ref === "pace:find", items);
-  check("it reads as pacing, not taste", !!it && /holding off/.test(it.text) && !/don't like|not interested|lost interest|not your thing/i.test(it.text), it);
-  check("the member can remove it (the removal path knows the kind)", W.fieldFor("pace:find") !== "pace" && /removePace/.test(src("services/whatCoKnows.ts")));
+  const w = src("services/whatCoKnows.ts");
+  const items = W.knownItems({ profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], paces: [{ kind: "find", line: "x" }] } as any);
+  check("a paused kind is not listed in what-Cue-knows", !items.some((i: any) => i.source === "pace"), items);
+  check("no pace rendering or reader in what-Cue-knows, and no 'How often I reach out' section", !/r\.paces|pausedKinds\(|How often I reach out|holding off on/.test(w) && !("reach" in W.GROUP_TITLES));
+  check("the removal path and the pause helpers are kept for when the line ships", /case "pace"/.test(w) && /removePace/.test(w) && typeof K.removePace === "function" && typeof K.pausedKinds === "function" && !!K.PACE_LABELS.find);
   // Removal: the pause lifts and what was let pass before it no longer re-suppresses.
   const sends = [1, 2].map((n) => ({ id: `s${n}`, kind: "find" as const, sentAt: ago(40 - n * 5), message: `find ${n}` }));
   const pausedStored = [{ kind: "find" as const, state: "suppressed" as const, suppressedAt: ago(30), enabledAt: null, evidence: ["s1", "s2"] }];
@@ -172,13 +172,9 @@ const ago = (d: number) => new Date(NOW.getTime() - d * DAY);
   check("floor passes the clock to the decision", /goalId: b\.id, now \}/.test(src("services/dailySweep.ts")));
 }
 
-// 5. copy placement
+// 5. copy: the pause line is held for Royce's wording OK
 {
-  check("the pause sits in its own section, 'How often I reach out'", W.GROUP_TITLES.reach === "How often I reach out");
-  const items = W.knownItems({ profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [], paces: [{ kind: "find", line: "I'm holding off on sending you finds for a bit" }] } as any);
-  const view = W.groupKnown(items);
-  const g = view.groups.find((x: any) => x.group === "reach");
-  check("it renders under that title, not under 'What I'm holding for you'", !!g && g.title === "How often I reach out" && g.lines.length === 1 && !view.groups.some((x: any) => x.group === "waiting"), view.groups.map((x: any) => x.title));
+  check("no new member-facing pause wording ships (no section title, no line)", !("reach" in W.GROUP_TITLES));
 }
 
 // 6. the ask expiry backfill runs once
