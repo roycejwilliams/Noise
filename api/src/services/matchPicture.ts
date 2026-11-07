@@ -10,11 +10,16 @@
 //   - Forgotten or removed content cannot inform a match: it is already out of the picture.
 //   - Silence is not rejection and quiet members rank lower, never out: nothing here reads activity (matchGate.quietAmong still does).
 // Read only; no model call.
+import pool from "../db/db.js";
 import { memberKnowledge, type MemberKnowledge, type KnowledgeSection, type KnowledgeDeps } from "./memberKnowledge.js";
+import { notToTeammate } from "./teamLines.js";
 
-// The sections matching needs: goals (their direction), asks, preferences, limits, learned (lessons, corrections), transitions (what
-// they are in the middle of), people (their own words about people they know) and exchanges (what they said lately, for the denylist).
-export const MATCH_SECTIONS: readonly KnowledgeSection[] = ["goals", "asks", "preferences", "limits", "learned", "transitions", "people", "exchanges"];
+type Q = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
+
+// The sections matching needs: goals (their direction), asks, preferences, learned (lessons, corrections, and their limits and rules: the
+// one read of limits, so it is not read twice), transitions (what they are in the middle of), people (their own words about people they
+// know) and exchanges (what they said lately, for the denylist).
+export const MATCH_SECTIONS: readonly KnowledgeSection[] = ["goals", "asks", "preferences", "learned", "transitions", "people", "exchanges"];
 // The denylist looks further back than a conversation window does: an old private remark is still not for the other member's ears.
 export const MATCH_EXCHANGES = { exchanges: 100, exchangeDays: 120 } as const;
 
@@ -23,7 +28,7 @@ export type MatchPicture = {
   goals: string[];
   // Every word of theirs a line the OTHER member reads must not quote, until they agree to share it (the consented asks are separate).
   privateTexts: string[];
-  // The picture could not be read whole (the guards were unread): privateTexts holds more, never less, and goals holds none from history.
+  // The picture could not be read whole (the guards, learned or people were unread): sections are missing, so the value gate treats this as a failed read.
   unread: boolean;
 };
 
@@ -36,7 +41,6 @@ export function matchPictureOf(k: MemberKnowledge): MatchPicture {
     ...k.goals.map((g) => g.text),
     ...k.asks.map((a) => a.text),
     ...k.preferences.map((p) => p.text),
-    ...(k.limits?.avoid ?? []),
     ...(k.learnedLessons ?? []).map((l) => l.text),
     ...(k.learnedCorrections ?? []).flatMap((c) => [c.now, c.was, c.theirWords]),
     ...(k.learnedLimits?.avoid ?? []).map((a) => a.text),
@@ -48,6 +52,34 @@ export function matchPictureOf(k: MemberKnowledge): MatchPicture {
   return { goals, privateTexts, unread: !!k.guardsUnread || !!k.learnedUnread || !!k.peopleUnread };
 }
 
-export async function matchPicture(userId: string, deps: Partial<KnowledgeDeps> = {}): Promise<MatchPicture> {
-  return matchPictureOf(await memberKnowledge(userId, { include: MATCH_SECTIONS, ...MATCH_EXCHANGES }, deps));
+// What the picture's windowed exchanges do not hold, for the DENYLIST only (never a prompt, never a line): what they said on calls (the
+// "[Call]" summary lines are text_exchange rows labelled from Cue, so the exchanges section drops them; the call transcript, which is
+// where the first-hour intake lives), and their own check-in, outcome, correction and recap rows. No day window and no 100-line cut: an old
+// private remark is still not for the other member's ears. A safety cap of 1000 rows. Read through the forget guards
+// (whatCoKnows.guardRows): what they had Cue forget is out, and the rows' own words are checked, not summarised.
+export const OWN_ROW_TYPES = ["call_transcript", "event_checkin_outcome", "recommendation_outcome", "check_in", "call_correction", "recap"] as const;
+export const OWN_ROWS_CAP = 1000;
+export async function ownRows(userId: string, q: Q = pool): Promise<string[]> {
+  const { rows } = await q.query(
+    `SELECT content, memory_type FROM co_memories
+     WHERE user_id = $1 AND ((memory_type = 'text_exchange' AND content LIKE '[Call]%' AND ${notToTeammate()}) OR memory_type IN (${OWN_ROW_TYPES.map((t) => `'${t}'`).join(", ")}))
+     ORDER BY created_at DESC LIMIT ${OWN_ROWS_CAP}`,
+    [userId],
+  );
+  const { guardRows } = await import("./whatCoKnows.js");
+  const guarded = await guardRows(userId, rows.map((r: any) => ({ content: String(r.content ?? ""), type: String(r.memory_type) })), q);
+  const { userLinesFromTranscript } = await import("../harness/memberThreads.js");
+  return clean(
+    guarded.flatMap((r) => {
+      if (r.type === "call_transcript" && /^\s*(user|assistant)\s*:/im.test(r.content)) return userLinesFromTranscript(r.content);
+      return [r.content.replace(/^\s*\[Call\]\s*/, "")];
+    }),
+  );
+}
+
+// Any failure rejects: a denylist that could not be read is not an empty one (the value gate fails closed on it).
+export async function matchPicture(userId: string, deps: Partial<KnowledgeDeps> = {}, q: Q = pool): Promise<MatchPicture> {
+  const [k, own] = await Promise.all([memberKnowledge(userId, { include: MATCH_SECTIONS, ...MATCH_EXCHANGES }, deps), ownRows(userId, q)]);
+  const p = matchPictureOf(k);
+  return { ...p, privateTexts: clean([...p.privateTexts, ...own]) };
 }

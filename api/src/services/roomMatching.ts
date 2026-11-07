@@ -863,7 +863,8 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [userId]),
     // What they told Co, through the guarded member picture (services/matchPicture.ts): their goals, asks, preferences, limits, lessons,
     // transitions and own lines, minus what they had Cue forget or remove, name strip on. Co's own words are not in it. No raw co_memories.
-    import("./matchPicture.js").then((m) => m.matchPicture(userId)).catch(() => null),
+    // A picture that could not be read whole is a failed read, never a thinner denylist: the value gate fails closed on it.
+    import("./matchPicture.js").then(async (m) => { const pic = await m.matchPicture(userId); if (pic.unread) throw new Error("member picture unread"); return pic; }),
     import("./coFacts.js").then((c) => c.ownerOnlyFacts(userId)).catch(() => [] as string[]),
     pool
       .query(
@@ -880,10 +881,8 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
   // Only shareable asks go into the prompt, even for the member's own line: intro text uses no private ask (hole 1).
   const privateAsks = open.filter((i: any) => i.shareable !== true).map((i: any) => String(i.text));
   const ownAsks = open.filter((i: any) => i.shareable === true).map((i: any) => ({ text: String(i.text), type: String(i.type ?? "seeking"), shareable: true }));
-  const goals = intent.filter((i: any) => i?.kind === "goal" && i?.status === "active" && i?.text).map((i: any) => String(i.text));
-  const { goalTexts } = await import("./goalJourney.js");
-  // Their direction through the picture (active, on-file goals, guarded); the profile's own list stands in only if the picture could not be read.
-  const allGoals = picture && !picture.unread ? picture.goals.slice(0, 6) : [...new Set([...goals, ...goalTexts(intent, prof.goals ?? [])])].slice(0, 6);
+  // Their direction through the picture (active, on-file goals, guarded).
+  const allGoals = picture.goals.slice(0, 6);
   const scrub = (s: string, name: string) => (name ? s.replace(new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), "them") : s);
   return {
     userId,
@@ -901,7 +900,7 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
       ...(prof.activity_preferences ?? []),
       ...(prof.long_term_direction ? [prof.long_term_direction] : []),
       ...allGoals,
-      ...(picture?.privateTexts ?? []),
+      ...picture.privateTexts,
       ...facts,
       // How their earlier intros went, in their words: theirs alone.
       ...past.rows.map((r: any) => String(r.note ?? "")).filter(Boolean),
@@ -927,7 +926,13 @@ export async function valueGate(eventId: string, eventName: string, x: string, y
   if (existing && (existing.state === "blocked" || existing.value_verdict === "weak" || existing.blocked_reason)) return { ok: false, reason: existing.blocked_reason ?? "blocked" };
   if (existing?.value_verdict === "strong") return { ok: true, lineFor: lineOf(existing), cached: true };
 
-  const [sa, sb] = await Promise.all([gatherValueSide(a), gatherValueSide(b)]);
+  // A side whose member picture could not be read fails the gate closed (transient: the next pass tries again), never reads with a thinner denylist.
+  const sides = await Promise.all([gatherValueSide(a), gatherValueSide(b)]).catch(() => null);
+  if (!sides) {
+    await recordDecision({ layer: 6, decision: "match.valueLines", userId: x, outcome: "skip", action, proposal: { eventId, a, b }, reason: "a member picture could not be read; the next pass tries again" }).catch(() => {});
+    return { ok: false, reason: "member picture unread", transient: true };
+  }
+  const [sa, sb] = sides;
   const allow = [eventName, sa.firstName, sb.firstName, ...(opts.allow ?? [])];
   const tidy = (l: string) => l.replace(/\s*[\u2014\u2013]\s*|\s+-\s+/g, ", ").replace(/!/g, ".").trim();
   const read = async (reader: ValueSide, other: ValueSide): Promise<SideJudgment | null | "failed"> => {
