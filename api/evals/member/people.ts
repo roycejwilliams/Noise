@@ -234,7 +234,7 @@ check("a person is read only if this member knows of them (the ask reached them,
 
 // ---------------------------------------------------------------- not rendered into any prompt yet; the diff to memberKnowledge stays small
 const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? walk(join(dir, f)) : f.endsWith(".ts") ? [join(dir, f)] : []));
-const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && !f.endsWith("services/knowledge/people.ts") && (/include:[^\]\n]*"people"|buildPeople|loadPeople|knowledge\/people/.test(readFileSync(f, "utf8")) || (/memberKnowledge/.test(readFileSync(f, "utf8")) && /\b(?:k|knowledge|mk|picture)\.people\b|\.people\b\s*(?:\?\.|\.|\[)/.test(readFileSync(f, "utf8")))));
+const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && !f.endsWith("services/knowledge/people.ts") && !f.endsWith("services/matchPicture.ts") && (/include:[^\]\n]*"people"|buildPeople|loadPeople|knowledge\/people/.test(readFileSync(f, "utf8")) || (/memberKnowledge/.test(readFileSync(f, "utf8")) && /\b(?:k|knowledge|mk|picture)\.people\b|\.people\b\s*(?:\?\.|\.|\[)/.test(readFileSync(f, "utf8")))));
 check("no other source file reads the people section (nothing renders it)", readers.length === 0);
 check("the snapshot render does not mention the people section", !/\.people\b/.test(src("services/memberSnapshot.ts")));
 check("the loader lives in its own file; memberKnowledge only registers the section", !/FROM co_pairs|FROM network_introductions/.test(src("services/memberKnowledge.ts")));

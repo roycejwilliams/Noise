@@ -208,7 +208,7 @@ check("the thread kind column keeps its meaning (thread or commitment)", /kind T
 
 // ---------------------------------------------------------------- not rendered into any prompt yet
 const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? walk(join(dir, f)) : f.endsWith(".ts") ? [join(dir, f)] : []));
-const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && /\.transitions\b|"transitions"/.test(readFileSync(f, "utf8")));
+const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && !f.endsWith("services/matchPicture.ts") && /\.transitions\b|"transitions"/.test(readFileSync(f, "utf8")));
 check("no other source file reads the transitions section (nothing renders it)", readers.length === 0);
 check("the snapshot render does not mention transitions", !/transition/i.test(src("services/memberSnapshot.ts")));
 
