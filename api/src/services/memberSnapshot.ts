@@ -281,14 +281,14 @@ export function linkedNameMatcher(names: string[]): (text: string) => boolean {
 // (services/memberSafeMemories.ts: "Maya is building grid storage and left Tesla" is Maya's and goes; that Cue introduced them stays),
 // except that the snapshot holds no other member's name at all, so the history line is nameless too. A list item ("; ") is one
 // sentence. A lead-in label without a name ("Thread (open): ") is kept.
-export function fenceLine(text: string, hits: (t: string) => boolean): { text: string; n: number } {
+export function fenceLine(text: string, hits: (t: string) => boolean, ownNames: string[] = []): { text: string; n: number } {
   if (!hits(text)) return { text, n: 0 };
   const lead = text.match(/^([^:\n]{1,60}:\s)/)?.[1] ?? "";
   const keepLead = lead && !hits(lead) ? lead : "";
   const rest = text.slice(keepLead.length);
   // The same policy as safeMemory, one shared function (memberSafeMemories.stripAfterNames): the parts after a name are dropped until the member
   // speaks. A history line memberKnowledge's strip already wrote ("Marisol, another member, came up here; ...") is one sentence, whole.
-  const r = stripAfterNames(rest, { named: hits, noSplit: (sentence) => /\banother member\b/i.test(sentence), rewrite: namelessHistoryLine });
+  const r = stripAfterNames(rest, { named: hits, noSplit: (sentence) => /\banother member\b/i.test(sentence), rewrite: namelessHistoryLine, ownNames, iIsMember: false });
   const n = r.n;
   const out = r.text;
   return { text: `${keepLead}${out}`.trim(), n };
@@ -487,6 +487,7 @@ export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built
   const raw = entriesOf(s);
   let forgotten = 0, namesRedacted = 0;
   const hits = linkedNameMatcher(s.names);
+  const ownNames = [s.profile?.firstName ?? s.knowledge.identity.firstName ?? ""].filter(Boolean);
   const sections = SECTION_IDS.map((id) => {
     const entries: Entry[] = [];
     for (const r of raw[id]) {
@@ -499,7 +500,7 @@ export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built
         forgotten++;
         continue;
       }
-      const red = fenceLine(text, hits);
+      const red = fenceLine(text, hits, ownNames);
       namesRedacted += red.n;
       const { guard: _g, ...e } = r;
       entries.push({ ...e, text: red.text });

@@ -23,7 +23,7 @@
 import { createHash } from "node:crypto";
 import pool from "../../db/db.js";
 import type { Fact } from "../memberKnowledge.js";
-import { nameFinder, namelessHistoryLine } from "../memberSafeMemories.js";
+import { nameFinder, namelessHistoryLine, stripAfterNames } from "../memberSafeMemories.js";
 import type { ForgottenRow } from "../whatCoKnows.js";
 
 // How this member is connected to the person.
@@ -326,18 +326,8 @@ function outcomeOf(r: RawPerson, note: string | null): { outcome: PersonOutcome 
 // Pure: a sentence that names a member with no double yes becomes the details-free, nameless history line (the snapshot's policy,
 // memberSnapshot.ts), not memberSafeMemories' "<Name>, another member, came up here", which would say the name out loud.
 function nameless(text: string, find: (s: string) => string | null): string | null {
-  const seen = new Set<string>();
-  const out = text
-    .split(/(?<=[.!?])\s+|;\s*/)
-    .map((sentence) => {
-      if (!find(sentence)) return sentence;
-      const h = namelessHistoryLine(sentence);
-      if (seen.has(h)) return "";
-      seen.add(h);
-      return h;
-    })
-    .filter((x) => x.trim())
-    .join(" ");
+  // The same policy as safeMemory and the snapshot (memberSafeMemories.stripAfterNames): what follows a name is dropped until the text turns back to the member.
+  const out = stripAfterNames(text.replace(/;\s*/g, "; "), { named: (s) => find(s) !== null, rewrite: namelessHistoryLine, iIsMember: false }).text;
   return out.trim() || null;
 }
 
