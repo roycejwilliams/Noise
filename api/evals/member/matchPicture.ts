@@ -7,6 +7,8 @@ process.env.OPENAI_API_KEY ||= "unused-in-tests";
 process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+// The opt-in write embeds its memory in the background: answered by a local stub, set before anything is imported (the client keeps the fetch it is built with), so no outside call is made.
+globalThis.fetch = (async () => new Response(JSON.stringify({ object: "list", data: [{ object: "embedding", index: 0, embedding: [0] }], model: "stub", usage: { prompt_tokens: 0, total_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
 const MP = await import("../../src/services/matchPicture.js");
 const RM = await import("../../src/services/roomMatching.js");
 const MG = await import("../../src/harness/matchGate.js");
@@ -111,9 +113,9 @@ check("a quiet candidate still passes the gate (less contact, never ejection)", 
 check("quiet members sort after active ones, order kept", MG.activeFirst(["q1", "a1", "q2", "a2"], (x) => x.startsWith("q")).join() === "a1,a2,q1,q2");
 // ---------------------------------------------------------------- call content stays in the denylist (the reviewer's probe)
 const REHAB = "I'm fresh out of rehab and nobody at work knows";
-const callOnly = stub({ own: [{ content: `[Call] They said ${REHAB}`, memory_type: "text_exchange" }, { content: `user: ${REHAB}, so please keep it quiet\nassistant: Understood.`, memory_type: "call_transcript" }, { content: "assistant: Co's own phrasing that is not theirs", memory_type: "call_transcript" }] });
+const callOnly = stub({ own: [{ content: `[Call] They said ${REHAB}`, memory_type: "text_exchange" }, { content: `user: ${REHAB}, so please keep it quiet\nassistant: Understood.`, memory_type: "call_transcript" }, { content: "Co initiated call to Jordan at 4pm", memory_type: "call_transcript" }] });
 const pCall = await MP.matchPicture("a", deps({}), callOnly);
-check("a member with only call content has it in the denylist ([Call] summary and the transcript's own lines)", pCall.privateTexts.some((t) => t.includes("fresh out of rehab")) && !pCall.privateTexts.some((t) => /Co's own phrasing/.test(t)));
+check("a member with only call content has it in the denylist ([Call] summary and the transcript)", pCall.privateTexts.some((t) => t.includes("fresh out of rehab")));
 const sideCall = { ...sideA, goals: [], privateTexts: pCall.privateTexts };
 const rehabLine = "Jordan is looking for a cofounder who knows climate hardware, and he is fresh out of rehab and nobody at work knows.";
 const withDeny = RM.checkValueLines({ forFirst: clean, forSecond: rehabLine, verdict: "strong", why: "ok", judged: { first: true, second: true } }, sideCall, sideB);
@@ -123,7 +125,19 @@ check("the same line with an empty denylist passes every other check, so the den
 const forgot = await MP.matchPicture("a", deps({}), stub({ own: [{ content: `[Call] They said ${REHAB}`, memory_type: "text_exchange" }], corrections: [{ field: "x", old_value: REHAB, new_value: null, item_ref: "m:1", removed: true }] }));
 check("a call row they had Cue forget is out of the denylist", !JSON.stringify(forgot).includes("rehab"));
 const ownSql = callOnly.sql.find((q) => /memory_type IN \('call_transcript'/.test(q)) ?? "";
-check("the own-lines read is bound to the member, has no day window and caps its rows", /user_id = \$1/.test(ownSql) && !/NOW\(\)|INTERVAL|created_at >/.test(ownSql) && /LIMIT 1000/.test(ownSql));
+check("the own-lines read is bound to the member and has no day window", /user_id = \$1/.test(ownSql) && !/NOW\(\)|INTERVAL|created_at >/.test(ownSql));
+// Transcripts keep both sides: a vague member, and Cue's line that names the detail outright.
+const vague = stub({ own: [{ content: "user: it's been a rough few months, you know\nassistant: So you're fresh out of rehab, and that's why the job change matters.", memory_type: "call_transcript" }] });
+const pVague = await MP.matchPicture("a", deps({}), vague);
+check("a call transcript is in the denylist whole: Cue's lines that name the private detail count too", pVague.privateTexts.some((t) => t.includes("So you're fresh out of rehab")));
+const vagueLine = "Jordan is looking for a cofounder who knows climate hardware, and he is fresh out of rehab, which is why the job change matters.";
+const vagueRes = RM.checkValueLines({ forFirst: clean, forSecond: vagueLine, verdict: "strong", why: "ok", judged: { first: true, second: true } }, { ...sideA, goals: [], privateTexts: pVague.privateTexts }, sideB);
+check("an intro line carrying what only Cue's transcript line said is refused", !vagueRes.ok && vagueRes.checks.some((c) => !c.pass && /private|hidden|sensitive/.test(c.name)));
+// The cap: call content is never capped; the markers are left out in SQL; only check_in and recap are capped, newest dropped first.
+const [uncapped, capped] = ownSql.split("UNION ALL");
+check("call transcripts, call summaries, outcome and correction rows are in the uncapped read, which has no LIMIT", /call_transcript/.test(uncapped) && /\[Call\]/.test(uncapped) && /event_checkin_outcome/.test(uncapped) && /call_correction/.test(uncapped) && !/LIMIT/.test(uncapped));
+check("call-attempt markers are excluded in SQL from both reads", (ownSql.match(/NOT LIKE 'Co initiated call%'/g) ?? []).length === 2);
+check("only check_in and recap are capped, ordered oldest first so the newest are what the cap drops", /check_in/.test(capped) && /recap/.test(capped) && !/call_transcript|\[Call\]/.test(capped) && /ORDER BY created_at ASC LIMIT 300/.test(capped));
 
 // ---------------------------------------------------------------- behaviour of the two gathers, with the pool stubbed
 const pool = (await import("../../src/db/db.js")).default as any;
@@ -170,6 +184,35 @@ check("gatherNetworkFacts' denylist is the profile's own fields, and its shareab
 check("the network gate stays at the pair rules (PAIR_BLOCKED_SQL) and still passes a quiet candidate", ns.sql.some((q) => /FROM network_introductions/.test(q)) && MG.evaluateNetworkCandidate({ ...facts, alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true, candidateQuiet: true, askerQuiet: true }).ok);
 const vg = await withPool(stub({ failOwn: true, profile }), () => RM.valueGate("evt-1", "Founders Supper", "00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000b", "test"));
 check("valueGate fails closed and transient when a side's picture cannot be read (no pair is blocked or judged)", vg.ok === false && (vg as any).transient === true);
+
+// ---------------------------------------------------------------- a yes is never dropped by a picture blip (eventGuestMatchHandoff.ts)
+const H = await import("../../src/services/eventGuestMatchHandoff.js");
+const A = { user_id: "00000000-0000-0000-0000-00000000000a", first_name: "Jordan", phone_number: "+15550000001", email: "a@example.com" };
+const B = { user_id: "00000000-0000-0000-0000-00000000000b", first_name: "Priya", phone_number: "+15550000002", email: "b@example.com" };
+const hs = stub({ failOwn: true, profile });
+let handoffThrew = false;
+await withPool(hs, async () => {
+  try {
+    await H.handleMatchNudgeReply("evt-1", "Founders Supper", "interested", A, B);
+  } catch {
+    handoffThrew = true;
+  }
+});
+check("when the asker's picture cannot be read, the reply handling does not throw (so the member's yes is acknowledged)", !handoffThrew);
+check("the ask waits in line (queued for the candidate, naming the asker) instead of being dropped", hs.sql.some((q) => /INSERT INTO event_match_offers/.test(q) && /'queued'/.test(q)));
+check("nothing was drafted or claimed against a thinner denylist (no slot claimed, no send)", !hs.sql.some((q) => /pg_advisory_xact_lock|INSERT INTO deferred_sends/.test(q)));
+check("a decision is recorded for the held ask", hs.sql.some((q) => /INSERT INTO decisions|INSERT INTO decision/i.test(q)) || hs.sql.some((q) => /decision/i.test(q) && /INSERT/.test(q)));
+// The drain: a queued ask whose asker's picture still cannot be read stays in line for the next drain; it is not expired.
+const drain = stub({ failOwn: true, profile });
+const baseQuery = drain.query;
+drain.query = async (q: string, a: unknown[]) => {
+  if (/FROM event_match_offers/.test(q) && /status = 'queued' ORDER BY created_at ASC LIMIT 1/.test(q)) return (drain.sql.push(q), { rows: [{ event_id: "evt-1", person_id: B.user_id, candidate_key: A.user_id, kind: "direct_ask", candidate_id: A.user_id, asker_id: A.user_id, status: "queued", opened_at: null, event_name: "Founders Supper" }] });
+  if (/SELECT id AS user_id, first_name, phone_number, email FROM users/.test(q)) return (drain.sql.push(q), { rows: [{ ...A }, { ...B }] });
+  if (/SELECT 1 FROM event_match_offers WHERE event_id = \$1 AND person_id = \$2 AND candidate_key = \$3 AND status = 'queued'/.test(q)) return (drain.sql.push(q), { rows: [{ "?column?": 1 }] });
+  return baseQuery(q, a);
+};
+await withPool(drain, () => H.sendNextQueued(B.user_id));
+check("a queued ask that cannot be read yet is not expired by the drain (it waits for the next one)", !drain.sql.some((q) => /UPDATE event_match_offers SET status = 'expired'/.test(q)));
 check("no model call in matchPicture", !/generateText|anthropic|openai/i.test(code("services/matchPicture.ts")));
 
 console.log(`member matchPicture: ${total - failed}/${total} passed`);

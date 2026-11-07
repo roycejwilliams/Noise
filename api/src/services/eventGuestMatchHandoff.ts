@@ -224,7 +224,7 @@ async function maybeAskCandidateDirectly(
   askerFirstName: string,
   candidate: MatchNudgeCandidate,
   asker: MatchNudgeCandidate,
-): Promise<boolean | void> {
+): Promise<boolean | void | "retry"> {
   const O = await import("./inRoomOffers.js");
   const RM = await import("./roomMatching.js");
   // Already asked (or already answered) about this person, from either path.
@@ -248,7 +248,18 @@ async function maybeAskCandidateDirectly(
   const pair = await RM.pairRow(eventId, candidate.user_id, asker.user_id);
   const { a } = RM.orderPair(candidate.user_id, asker.user_id);
   const valueLine = pair?.value_verdict === "strong" ? RM.usableLine(a === candidate.user_id ? pair.value_line_a : pair.value_line_b) : "";
-  const askerSide = await RM.gatherValueSide(asker.user_id);
+  // The asker's member picture could not be read (a blip, or its guards unread): the ask waits in line and the drain tries again
+  // (drainStaleAsks), it is never dropped, and the asker's yes is still acknowledged (the caller carries on). Nothing is drafted
+  // against a thinner denylist.
+  let askerSide: Awaited<ReturnType<typeof RM.gatherValueSide>>;
+  try {
+    askerSide = await RM.gatherValueSide(asker.user_id);
+  } catch (err: any) {
+    await O.queueOffer({ eventId, eventName, personId: candidate.user_id, candidateId: asker.user_id, askerId: asker.user_id }).catch((e: any) => console.error("maybeAskCandidateDirectly: queueing the held ask failed (non-fatal):", e?.message ?? e));
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 6, decision: "match.direct_ask", userId: candidate.user_id, outcome: "skip", action: "asker_picture_unread_queued", reason: "the asker's member picture could not be read; the ask waits in line and is tried again", proposal: { eventId, askerId: asker.user_id, error: String(err?.message ?? err).slice(0, 120) } }).catch(() => {});
+    return "retry";
+  }
   // An ask held for their morning (services/deferredSends.ts) opens its offer only once it reaches them, so a held ask
   // counts here too: the same one is already asked, and any other is their open question.
   const D = await import("./deferredSends.js");
@@ -622,7 +633,9 @@ export async function sendNextQueued(personId: string): Promise<void> {
     const { rows } = next.asker_id ? await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[personId, next.asker_id]]) : { rows: [] as any[] };
     const me = rows.find((r: any) => r.user_id === personId);
     const asker = rows.find((r: any) => r.user_id === next.asker_id);
-    if (me && asker) await maybeAskCandidateDirectly(next.event_id, next.event_name ?? "the event", asker.first_name, me, asker);
+    const tried = me && asker ? await maybeAskCandidateDirectly(next.event_id, next.event_name ?? "the event", asker.first_name, me, asker) : undefined;
+    // Held for a blip (the asker's picture could not be read): it stays in line for the next drain, it is not dropped below.
+    if (tried === "retry") return;
     // Still waiting in line after its turn came: it isn't going (a queued ask that's sent takes the slot, 'sending' then 'open').
     const { rows: still } = await pool.query(`SELECT 1 FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'queued'`, [next.event_id, personId, next.candidate_key]);
     if (!still.length) return;

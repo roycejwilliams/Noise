@@ -54,27 +54,28 @@ export function matchPictureOf(k: MemberKnowledge): MatchPicture {
 
 // What the picture's windowed exchanges do not hold, for the DENYLIST only (never a prompt, never a line): what they said on calls (the
 // "[Call]" summary lines are text_exchange rows labelled from Cue, so the exchanges section drops them; the call transcript, which is
-// where the first-hour intake lives), and their own check-in, outcome, correction and recap rows. No day window and no 100-line cut: an old
-// private remark is still not for the other member's ears. A safety cap of 1000 rows. Read through the forget guards
-// (whatCoKnows.guardRows): what they had Cue forget is out, and the rows' own words are checked, not summarised.
-export const OWN_ROW_TYPES = ["call_transcript", "event_checkin_outcome", "recommendation_outcome", "check_in", "call_correction", "recap"] as const;
-export const OWN_ROWS_CAP = 1000;
+// where the first-hour intake lives, whole: both sides, because when the member was vague Cue's own line often names the private detail),
+// and their own check-in, outcome, correction and recap rows. No day window. Never capped: call transcripts, call summaries, outcome and
+// correction rows. Call-attempt markers ("Co initiated call...") are left out in SQL. Only the high-volume types (check_in, recap) are capped
+// (CHATTY_CAP), and when they are, the newest go first, not the oldest. Read through the forget guards (whatCoKnows.guardRows): what they
+// had Cue forget is out, and the rows' own words are checked, not summarised.
+export const OWN_ROW_TYPES = ["call_transcript", "event_checkin_outcome", "recommendation_outcome", "call_correction"] as const;
+export const CHATTY_TYPES = ["check_in", "recap"] as const;
+export const CHATTY_CAP = 300;
 export async function ownRows(userId: string, q: Q = pool): Promise<string[]> {
   const { rows } = await q.query(
-    `SELECT content, memory_type FROM co_memories
-     WHERE user_id = $1 AND ((memory_type = 'text_exchange' AND content LIKE '[Call]%' AND ${notToTeammate()}) OR memory_type IN (${OWN_ROW_TYPES.map((t) => `'${t}'`).join(", ")}))
-     ORDER BY created_at DESC LIMIT ${OWN_ROWS_CAP}`,
+    `(SELECT content, memory_type FROM co_memories
+      WHERE user_id = $1 AND content NOT LIKE 'Co initiated call%'
+        AND ((memory_type = 'text_exchange' AND content LIKE '[Call]%' AND ${notToTeammate()}) OR memory_type IN (${OWN_ROW_TYPES.map((t) => `'${t}'`).join(", ")})))
+     UNION ALL
+     (SELECT content, memory_type FROM co_memories
+      WHERE user_id = $1 AND content NOT LIKE 'Co initiated call%' AND memory_type IN (${CHATTY_TYPES.map((t) => `'${t}'`).join(", ")})
+      ORDER BY created_at ASC LIMIT ${CHATTY_CAP})`,
     [userId],
   );
   const { guardRows } = await import("./whatCoKnows.js");
   const guarded = await guardRows(userId, rows.map((r: any) => ({ content: String(r.content ?? ""), type: String(r.memory_type) })), q);
-  const { userLinesFromTranscript } = await import("../harness/memberThreads.js");
-  return clean(
-    guarded.flatMap((r) => {
-      if (r.type === "call_transcript" && /^\s*(user|assistant)\s*:/im.test(r.content)) return userLinesFromTranscript(r.content);
-      return [r.content.replace(/^\s*\[Call\]\s*/, "")];
-    }),
-  );
+  return clean(guarded.map((r) => r.content.replace(/^\s*\[Call\]\s*/, "")));
 }
 
 // Any failure rejects: a denylist that could not be read is not an empty one (the value gate fails closed on it).
