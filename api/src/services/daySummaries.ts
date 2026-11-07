@@ -258,7 +258,7 @@ export async function earlierSummaryFor(userId: string, o: { windowOldest?: Date
   }
 }
 
-// ---------------------------------------------------------------- the job (paid, not scheduled)
+// ---------------------------------------------------------------- the job (paid, nightly: jobs/index.ts)
 
 export type JobDeps = {
   db: Db;

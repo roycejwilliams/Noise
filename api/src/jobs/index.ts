@@ -157,7 +157,19 @@ export async function runAutoIntakeCalls(io: Server): Promise<void> {
   }
 }
 
+// Daily summaries of older conversation (services/daySummaries.ts; Royce approved the spend 2026-11-06, about $0.0015 per member-day,
+// at most 60 days a run with a fair share per member). 03:45 Pacific: a quiet hour, clear of the other nightly jobs. The run logs its
+// model calls and tokens itself (runDaySummariesJob).
+export const DAY_SUMMARIES_SCHEDULE = { cron: "45 3 * * *", timezone: "America/Los_Angeles" } as const;
+export function daySummariesTick(): Promise<void> {
+  return import("../services/daySummaries.js")
+    .then((m) => m.runDaySummariesJob())
+    .then(() => undefined)
+    .catch((err: any) => console.error("day summaries failed:", err?.message ?? err));
+}
+
 export function registerJobs(io: Server) {
+  cron.schedule(DAY_SUMMARIES_SCHEDULE.cron, daySummariesTick, { timezone: DAY_SUMMARIES_SCHEDULE.timezone });
   // Model prompt/answer text past its 14 days is deleted, with or without a member on it (services/llmTraceText.ts).
   cron.schedule("35 4 * * *", () => {
     import("../services/llmTraceText.js")

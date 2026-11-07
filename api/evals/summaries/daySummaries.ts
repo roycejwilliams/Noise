@@ -192,16 +192,31 @@ let guards_: W.ForgottenRow[] = [];
   check("forget: a day whose only line was removed has no input, so no model call", D.dayInputs(kiln, ZONE, allGone, strip).length === 0 && D.dayInputs(kiln, ZONE, [], strip).length === 1);
 }
 
-// ---- 6. not scheduled, no repeat spend
+// ---- 6. scheduled nightly (Royce approved the spend 2026-11-06), no toggle, no repeat spend
 {
   const src = (f: string) => fs.readFileSync(path.join(new URL("../..", import.meta.url).pathname, f), "utf8");
   const strip_ = (t: string) => t.replace(/\/\/.*$/gm, "");
-  check("off: jobs/index.ts and jobs/cron.ts never mention the summary job", !/daySummar|runDaySummaries/i.test(strip_(src("src/jobs/index.ts")) + strip_(src("src/jobs/cron.ts"))));
+  // Behaviour: registerJobs against a recording scheduler (nothing is scheduled for real; its startup timer is captured too).
+  delete process.env.MONITORING_ENABLED;
+  delete process.env.DEV_REVIEW;
+  const { default: cron } = await import("../../src/jobs/cron.js");
+  const J = await import("../../src/jobs/index.js");
+  const scheduled: { expr: string; fn: unknown; opts: any }[] = [];
+  const realSchedule = (cron as any).schedule;
+  (cron as any).schedule = (expr: string, fn: unknown, opts?: any) => { scheduled.push({ expr, fn, opts }); return { stop() {} }; };
+  const realSetTimeout = globalThis.setTimeout;
+  (globalThis as any).setTimeout = (() => 0) as any;
+  try { J.registerJobs({ to: () => ({ emit() {} }), emit() {} } as any); } finally { (cron as any).schedule = realSchedule; globalThis.setTimeout = realSetTimeout; }
+  const mine = scheduled.filter((j) => j.fn === J.daySummariesTick);
+  check("on: registerJobs schedules the summary job exactly once", mine.length === 1, scheduled.length);
+  check("on: nightly at 03:45 Pacific, a quiet hour", mine[0]?.expr === "45 3 * * *" && mine[0]?.opts?.timezone === "America/Los_Angeles", mine[0] && { expr: mine[0].expr, opts: mine[0].opts });
+  const sameSlot = scheduled.filter((j) => j.fn !== J.daySummariesTick && j.expr === "45 3 * * *");
+  check("on: no other job shares its minute", sameSlot.length === 0);
   const callers: string[] = [];
   const walk = (dir: string) => { for (const e of fs.readdirSync(path.join(new URL("../..", import.meta.url).pathname, dir), { withFileTypes: true })) { const p = `${dir}/${e.name}`; if (e.isDirectory()) walk(p); else if (/\.ts$/.test(e.name) && /runDaySummaries(Job)?\(/.test(strip_(src(p))) && !p.endsWith("services/daySummaries.ts")) callers.push(p); } };
   walk("src");
-  check("off: nothing in src calls the job (only the module that defines it)", callers.length === 0, callers);
-  check("off: no env switch gates it (it is unscheduled, not toggled)", !/process\.env/.test(strip_(src("src/services/daySummaries.ts"))));
+  check("on: the schedule is the only caller of the job outside its module", callers.join() === "src/jobs/index.ts", callers);
+  check("on: no env switch gates it", !/process\.env/.test(strip_(src("src/services/daySummaries.ts"))) && !/process\.env[^\n]*(SUMMAR)/i.test(src("src/jobs/index.ts")));
   check("cheap: the only model is Haiku", /MODELS\.haiku/.test(src("src/services/daySummaries.ts")) && !/MODELS\.sonnet/.test(src("src/services/daySummaries.ts")));
   check("bounded: a run is capped per run and per day of input", D.SUMMARY.maxDaysPerRun <= 100 && D.SUMMARY.maxInputChars <= 15_000 && D.SUMMARY.maxOutputTokens <= 400);
   const capped = await D.runDaySummaries(mkDeps({ maxDays: 1 }));

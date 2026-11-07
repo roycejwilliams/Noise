@@ -194,5 +194,11 @@ const notesOf = async (who: string) => {
   check("correct: the note's record guards nothing else (a line about the kiln reads as it was)", W.guardText("User said: the kiln delivery came today", g) === "User said: the kiln delivery came today");
 }
 
+// ---- 6. both mediums: a call reaches the same view and the same removal (the texting tools themselves, services/callTools.ts)
+{
+  const C = await import("../../src/services/callTools.js");
+  check("calls: the call's tools include whatCoKnows and correctWhatCoKnows (the same view and the same one-gesture removal)", C.CALL_TOOL_NAMES.includes("whatCoKnows") && C.CALL_TOOL_NAMES.includes("correctWhatCoKnows"));
+}
+
 console.log(`visible summaries: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
