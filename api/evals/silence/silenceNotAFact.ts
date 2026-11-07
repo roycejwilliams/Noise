@@ -68,6 +68,25 @@ const ago = (d: number) => new Date(NOW.getTime() - d * DAY);
   check("one more let pass after the removal is not enough either", !K.evaluateKindRestraint({ sends: newer, inbound: [], stored: lifted, now: NOW }).get("find")!.suppressed);
 }
 
+// ---- 2b. end to end: a stored pause comes through readKnown into the member's view, and removing it lifts it
+{
+  let paused = true;
+  const fake = { query: async (sql: string, _a?: unknown[]) => {
+    if (/FROM member_kind_preferences/.test(sql)) return { rows: paused ? [{ kind: "find", state: "suppressed", suppressed_at: ago(3), enabled_at: null, evidence: ["s1"] }, { kind: "deadline", state: "enabled", suppressed_at: null, enabled_at: null, evidence: [] }] : [{ kind: "find", state: "enabled", suppressed_at: ago(3), enabled_at: ago(0), evidence: [] }] };
+    if (/UPDATE member_kind_preferences/.test(sql)) { const was = paused; paused = false; return { rows: was ? [{ kind: "find" }] : [], rowCount: was ? 1 : 0 }; }
+    return { rows: [] };
+  } };
+  const raw = await W.readKnown("u-pace", fake as any);
+  check("readKnown carries the stored pause as a plain fact line (and not an enabled kind)", JSON.stringify(raw.paces) === JSON.stringify([{ kind: "find", line: "paused for now: finds" }]), raw.paces);
+  const items = W.knownItems(raw);
+  const view = W.groupKnown(items);
+  const g = view.groups.find((x: any) => x.title === "Paused for now");
+  check("it reaches the member's view under its own neutral title, with no fixed sentence", !!g && g.lines.length === 1 && g.lines[0].text === "paused for now: finds" && !/holding off/i.test(JSON.stringify(view)), view.groups.map((x: any) => x.title));
+  const done = await W.applyOne(fake as any, "u-pace", raw, items.find((i: any) => i.ref === "pace:find")!, "remove", null, "stop pausing finds");
+  const after = await W.readKnown("u-pace", fake as any);
+  check("removing it lifts the pause and the next read no longer lists it", (done as any).source === "pace" && (done as any).now === null && (after.paces ?? []).length === 0, { done, paces: after.paces });
+}
+
 // ---- 3. unanswered research finds
 {
   check("an ignored find weighs 0", Q.OUTCOME_WEIGHT.ignored === 0);

@@ -259,7 +259,7 @@ for (const voice of [false, true]) {
   check("flagged mixed with no usable phrase: not searched at all", K.searchPartOf("find me a therapist and some founder dinners", row("")) === null);
   check("flagged mixed with a phrase: only the phrase", K.searchPartOf("find me a therapist and some founder dinners", row("founder dinners")) === "founder dinners");
   check("the plain probe (an ask not flagged mixed) is the read's 'in': searched as written", K.searchPartOf("find me a therapist and some founder dinners", { kind: "find", scope_connection: null }) === "find me a therapist and some founder dinners");
-  check("the read keeps the flag for a short phrase (\"\"), and a not-mixed ask stays null", /phrase\.length >= 4 \? phrase : ""/.test(src("services/askKind.ts")));
+  check("the read keeps a short phrase as it is (\"VCs\"), the flag with no phrase (\"\"), and a not-mixed ask stays null", /phrase \? phrase : ""/.test(src("services/askKind.ts")) && !/phrase\.length >= 4/.test(src("services/askKind.ts")));
 }
 
 if (failed) { console.log(`\n${failed} of ${total} checks failed.`); process.exit(1); }

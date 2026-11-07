@@ -38,6 +38,7 @@ const answer = async (sql: string, p: any[] = []): Promise<{ rows: any[]; rowCou
 (await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
 
 const S = await import("../../src/harness/scope.js");
+const WC = await import("../../src/services/wantCriteria.js");
 const T = await import("../../src/agent/conversationTools.js");
 const CT = await import("../../src/services/coTasks.js");
 const RT = await import("../../src/services/readTurn.js");
@@ -291,14 +292,22 @@ check("startTask refusals for scope are never fallen back from in the call path"
   const mixedMsg = "also can you find me a dentist near the mission, and any founder dinners this week?";
   const mixedV = S.parseVerdict({ scope: "mixed", connection: "founder dinners this week" });
   check("a mixed turn saves its connection part, never its out part", (await capture(dinners, mixedMsg, mixedV)) > 0 && (await capture(dentist, mixedMsg, mixedV)) === 0);
-  // Mixed with an out part the backstop doesn't know: only the connection part is saved (the model's connection phrase decides).
-  const bundle = { asks: [{ text: "a pitch deck for their startup", type: "seeking" as const, quote: "make me a pitch deck" }, { text: "founder dinners this week", type: "seeking" as const, quote: "find founder dinners" }], concrete_preferences: [], wants: [], availability: null };
-  const bundleMsg = "make me a pitch deck and find founder dinners this week";
-  const bundleV = S.parseVerdict({ scope: "mixed", connection: "founder dinners this week" });
-  check("a mixed turn whose out part is not on the backstop saves only the connection ask", (await capture(bundle, bundleMsg, bundleV)) > 0 && (await capture({ ...bundle, asks: [bundle.asks[0]] }, bundleMsg, bundleV)) === 0);
-  check("…and a mixed turn with no connection phrase saves no ask", (await capture(bundle, bundleMsg, S.parseVerdict({ scope: "mixed" }))) === 0);
-  check("askDeclinedForScope(mixed): the deck is declined, the dinners are kept", S.askDeclinedForScope(bundleV, "a pitch deck for their startup", "make me a pitch deck") && !S.askDeclinedForScope(bundleV, "founder dinners", "find founder dinners"));
-  check("askDeclinedForScope: out turn or an unmistakable-out ask only", S.askDeclinedForScope({ scope: "out", connection: null }, "anything") && S.askDeclinedForScope(null, "a dentist near the Mission") && !S.askDeclinedForScope(mixedV, "founder dinners this week") && !S.askDeclinedForScope(null, "a pitch deck for their startup") && /scope: turnRead\?\.scope \?\? null/.test(src("routes/sendblue.ts")) && /scope: input\.scope \?\? null/.test(src("services/turnLearning.ts")));
+  // Mixed with an out part the backstop doesn't know: the read marks each ask in or out (in_scope), and only the marked-in ones are saved.
+  // The marks are the model's; the paraphrases below share no words with the connection phrase, and none of them is vetoed or kept by wording.
+  const ask = (text: string, in_scope: boolean | undefined, quote = text) => ({ text, type: "seeking" as const, quote, ...(in_scope === undefined ? {} : { in_scope }) });
+  const one = (asks: any[]) => ({ asks, concrete_preferences: [], wants: [], availability: null });
+  const mixedAI = S.parseVerdict({ scope: "mixed", connection: "people working on AI safety" });
+  const aiMsg = "make me a pitch deck for VCs and find me AI safety researchers to talk to";
+  check("mixed turn: 'AI safety researchers to talk to' (marked in) is kept though it shares few words with the phrase", (await capture(one([ask("AI safety researchers to talk to", true)]), aiMsg, mixedAI)) > 0);
+  check("mixed turn: 'a pitch deck for VCs' (marked out) is dropped", (await capture(one([ask("a pitch deck for VCs", false)]), aiMsg, mixedAI)) === 0);
+  check("mixed turn: both returned, the deck first: only the marked-in ask is saved", (await capture(one([ask("a pitch deck for VCs", false), ask("AI safety researchers to talk to", true)]), aiMsg, mixedAI)) > 0);
+  const cof = S.parseVerdict({ scope: "mixed", connection: "a co-founder" });
+  check("mixed turn: 'technical cofounder' vs the phrase 'co-founder' is kept (no word match needed)", (await capture(one([ask("a technical cofounder", true)]), "write my investor email and find me a technical cofounder", cof)) > 0);
+  check("an ask the read did not mark is kept (fail open); the mark decides on any turn", (await capture(one([ask("founder dinners", undefined)]), aiMsg, mixedAI)) > 0 && (await capture(one([ask("a pitch deck for VCs", false)]), aiMsg, null)) === 0);
+  check("a short model phrase is kept ('VCs'), not thrown away for being under four characters", S.parseVerdict({ scope: "mixed", connection: "VCs" })?.connection === "VCs" && S.connectionPart("deck and VCs", S.parseVerdict({ scope: "mixed", connection: "VCs" })) === "VCs");
+  check("the extraction prompts ask for in_scope per ask", /"in_scope": true/.test(WC.ASK_JSON) && /in_scope/.test(WC.WANT_WORDS_RULE));
+  check("no word comparison is left in askDeclinedForScope", !/sameWords|sameThing/.test(src("harness/scope.ts")));
+  check("askDeclinedForScope: out turn, an unmistakable-out ask, or an ask the read marked out", S.askDeclinedForScope({ scope: "out", connection: null }, "anything") && S.askDeclinedForScope(null, "a dentist near the Mission") && S.askDeclinedForScope(mixedV, "a pitch deck", false) && !S.askDeclinedForScope(mixedV, "founder dinners this week", true) && !S.askDeclinedForScope(null, "a pitch deck for their startup") && /scope: turnRead\?\.scope \?\? null/.test(src("routes/sendblue.ts")) && /scope: input\.scope \?\? null/.test(src("services/turnLearning.ts")));
 }
 
 console.log(`${total - failed}/${total} scope boundary checks passed`);

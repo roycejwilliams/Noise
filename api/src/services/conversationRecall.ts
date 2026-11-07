@@ -151,16 +151,29 @@ export function resolveWhen(when: string, now: Date, zone: string | null | undef
 const STOP = new Set(
   "the a an and or but if so of to in on at for with about from by as is are was were be been being it its this that these those i me my we our you your they them their he she his her what when where who why how which did do does done have has had not no yes just any some there then than too very can could would should will shall may might also into over out up down again said say says told tell talk talked talking mention mentioned discuss discussed discussion conversation chat text texts call called calls ever remember".split(" "),
 );
-const CASELESS = /^[^\p{Lu}\p{Ll}\p{Lt}]*\p{Lo}[^\p{Lu}\p{Ll}\p{Lt}]*$/u;
+// Scripts written without spaces between words (Chinese, Japanese, Thai, Lao, Khmer, Myanmar): no word boundary exists to match on.
+const UNSPACED_CHARS = "\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\u30fc\\p{Script=Thai}\\p{Script=Lao}\\p{Script=Khmer}\\p{Script=Myanmar}";
+const UNSPACED_RUNS = new RegExp(`[${UNSPACED_CHARS}]+|[^${UNSPACED_CHARS}]+`, "gu");
+const UNSPACED_ONLY = new RegExp(`^[${UNSPACED_CHARS}]+$`, "u");
 // Pure: the words of a topic worth matching, lowercased, a light suffix trim so "moving" finds "moved" and "dogs" finds "dog".
 export function topicTerms(topic: string | undefined | null): string[] {
   const out: string[] = [];
-  // Words in any script (東京, Москва, تل أبيب), not only Latin ones: they were dropped, so only the meaning search could find them.
-  for (const orig of String(topic ?? "").split(/[^\p{L}\p{N}\p{M}']+/u)) {
+  // Words in any script, not only Latin ones (they were dropped, so only the meaning search could find them). Scripts written with spaces
+  // (Cyrillic, Greek, Arabic, Hebrew, Devanagari...) go through the same word rules as Latin ones below, matched on word boundaries.
+  // Scripts written without spaces (Chinese, Japanese, Thai...) have no boundary to match on: a run of them is matched as written
+  // anywhere in a line, at least two characters per term; a longer run is also split into overlapping two-character pieces (a line that
+  // has the pieces ranks below one that has the whole run). A single character never matches on its own.
+  const pieces: string[] = [];
+  for (const tok of String(topic ?? "").split(/[^\p{L}\p{N}\p{M}']+/u)) for (const piece of tok.match(UNSPACED_RUNS) ?? []) pieces.push(piece);
+  for (const orig of pieces) {
+    if (UNSPACED_ONLY.test(orig)) {
+      const chars = [...orig];
+      if (chars.length < 2) continue;
+      if (!out.includes(orig)) out.push(orig);
+      if (chars.length > 2) for (let i = 0; i + 2 <= chars.length; i++) { const bi = chars.slice(i, i + 2).join(""); if (!out.includes(bi)) out.push(bi); }
+      continue;
+    }
     const word = orig.toLowerCase().replace(/'s$/, "").replace(/^'+|'+$/g, "");
-    // A word in a script with no letter case (CJK, Thai, Hebrew, Arabic...) has no capital to tell a name from a small word and is not
-    // written with spaces around it: it is matched as written, anywhere in a line, at any length.
-    if (word && CASELESS.test(word)) { if (!out.includes(word)) out.push(word); continue; }
     // Two-letter words count only when written as a name or an acronym (LA, AI), never as "to" or "in".
     if (word.length < 2 || STOP.has(word) || (word.length === 2 && !/^\p{Lu}/u.test(orig))) continue;
     // A short word (three letters or fewer) is matched whole, with its plural: "art" is not in "party", "dog" is not "dogma".
@@ -172,6 +185,10 @@ export function topicTerms(topic: string | undefined | null): string[] {
     else if (stem.length > 4 && stem.endsWith("ed")) { stem = stem.slice(0, -2); ending = "ed"; }
     else if (stem.length > 4 && /(?:s|x|z|ch|sh)es$/.test(stem)) stem = stem.slice(0, -2);
     else if (stem.length > 3 && stem.endsWith("s") && !stem.endsWith("ss")) stem = stem.slice(0, -1);
+    // Other scripts with inflected endings (Москва, Москве, Москву): the last letter of a word of five or more is left off so the stem
+    // opens the other forms. A heuristic, not grammar: a form that changes its stem (Russian "человек" / "люди") is a known limit; only
+    // the meaning search finds those.
+    else if (!/\p{Script=Latin}/u.test(stem) && stem.length >= 5) stem = stem.slice(0, -1);
     // A stem of four letters or more opens a word ("note" finds notes, noted, notebook). A shorter one is never matched as a bare prefix
     // ("mov", "dat" would match anything): the word as written and the usual forms of the stem are matched whole instead.
     const term = stem.length >= 4 ? stem : [...new Set([word, stem, `${stem}e`, `${stem}s`, `${stem}es`, `${stem}ed`, `${stem}d`, `${stem}ing`])].join("|");
@@ -183,7 +200,7 @@ export function topicTerms(topic: string | undefined | null): string[] {
 // A term is a bare word (matched whole when three letters or fewer, else as the start of a word) or alternatives joined by "|" (matched
 // whole). Postgres \m / \M and the JS twin below treat letters and numbers from any script as word characters ("Émile" the same in both).
 const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const caseless = (t: string) => CASELESS.test(t);
+const caseless = (t: string) => UNSPACED_ONLY.test(t);
 const whole = (t: string) => !caseless(t) && (t.includes("|") || t.length <= 3);
 export const termPattern = (t: string): string => (caseless(t) ? reEscape(t) : whole(t) ? `\\m(${t.split("|").map(reEscape).join("|")})\\M` : `\\m${reEscape(t)}`);
 export const termRegex = (t: string): RegExp => new RegExp(`${caseless(t) ? "" : "(?<![\\p{L}\\p{N}])"}(?:${t.split("|").map(reEscape).join("|")})${whole(t) ? "(?![\\p{L}\\p{N}])" : ""}`, "iu");
