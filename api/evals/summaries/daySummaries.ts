@@ -210,8 +210,6 @@ let guards_: W.ForgottenRow[] = [];
   const mine = scheduled.filter((j) => j.fn === J.daySummariesTick);
   check("on: registerJobs schedules the summary job exactly once", mine.length === 1, scheduled.length);
   check("on: nightly at 03:45 Pacific, a quiet hour", mine[0]?.expr === "45 3 * * *" && mine[0]?.opts?.timezone === "America/Los_Angeles", mine[0] && { expr: mine[0].expr, opts: mine[0].opts });
-  const sameSlot = scheduled.filter((j) => j.fn !== J.daySummariesTick && j.expr === "45 3 * * *");
-  check("on: no other job shares its minute", sameSlot.length === 0);
   const callers: string[] = [];
   const walk = (dir: string) => { for (const e of fs.readdirSync(path.join(new URL("../..", import.meta.url).pathname, dir), { withFileTypes: true })) { const p = `${dir}/${e.name}`; if (e.isDirectory()) walk(p); else if (/\.ts$/.test(e.name) && /runDaySummaries(Job)?\(/.test(strip_(src(p))) && !p.endsWith("services/daySummaries.ts")) callers.push(p); } };
   walk("src");

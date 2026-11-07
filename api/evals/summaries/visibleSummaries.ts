@@ -102,6 +102,14 @@ note(JORDAN, "2026-10-31", "They applied for a stall at the pottery market.", j4
 note(JORDAN, "2026-10-30", "They planned an open studio night with Priya.", j5);
 const p1 = [mem(PRIYA, "2026-11-01T17:00:00Z", longText("User said: PRIYA-ONLY the glaze recipe for the spring show"))];
 note(PRIYA, "2026-11-01", "PRIYA-ONLY: they worked on a glaze recipe for the spring show.", p1);
+note(PRIYA, "2026-09-01", "PRIYA-ONLY: they priced the spring show.", [mem(PRIYA, "2026-09-01T17:00:00Z", longText("User said: PRIYA-ONLY pricing the spring show"))]);
+// A note the strip rewrites into a false line ("Cue introduced them to Priya, another member"): never used anywhere.
+note(JORDAN, "2026-10-27", "Cue offered to introduce them to Priya Shah at the pottery market.", [mem(JORDAN, "2026-10-27T18:00:00Z", longText("User said: who should I meet at the pottery market"))]);
+// Ten older notes, so the member has more than the 8 lines a group usually shows.
+for (let d = 1; d <= 10; d++) {
+  const day = `2026-10-${String(d).padStart(2, "0")}`;
+  note(JORDAN, day, `Older note ${d}: they worked on studio pieces for the fall.`, [mem(JORDAN, `${day}T18:00:00Z`, longText(`User said: studio pieces, day ${d}`))]);
+}
 
 const notesOf = async (who: string) => {
   const got = await W.whatCoKnows(who);
@@ -134,9 +142,29 @@ const notesOf = async (who: string) => {
   check("isolation: Jordan never sees Priya's note", !/PRIYA-ONLY|glaze/.test(all));
   check("their side only: a note naming another member never shows that name", !/Priya/.test(lines.map((l) => l.text).join("\n")), lines.map((l) => l.text));
   const p = await notesOf(PRIYA);
-  check("isolation: Priya sees only her own note", p.lines.length === 1 && p.lines[0].text.startsWith("2026-11-01: PRIYA-ONLY") && !/kiln|lease/.test(p.all), p.lines.map((l) => l.text));
+  check("isolation: Priya sees only her own note", p.lines.length === 2 && p.lines.every((l) => /^\d{4}-\d{2}-\d{2}: PRIYA-ONLY/.test(l.text)) && !/kiln|lease/.test(p.all), p.lines.map((l) => l.text));
   const reads = said.filter((q) => /member_day_summaries/.test(q.sql));
   check("isolation: every read of the notes is scoped to one member (user_id = $1)", reads.length > 0 && reads.every((q) => /user_id = \$1/.test(q.sql) && (q.args[0] === JORDAN || q.args[0] === PRIYA)), reads.map((q) => q.sql.slice(0, 90)));
+}
+
+// ---- 3b. the view and the reply/call block make ONE decision: every note the block can use is a line the member can see
+{
+  const { lines } = await notesOf(JORDAN);
+  const viewText = new Set(lines.map((l) => l.text.replace(/^\d{4}-\d{2}-\d{2}: /, "")));
+  const strip = await (await import("../../src/services/memberSafeMemories.js")).memberSafeLine(JORDAN);
+  const guards = await W.forgottenRows(JORDAN, { query: handle }, { all: true });
+  const NOW = new Date("2026-11-06T18:00:00Z");
+  const blockAt = async (windowOldest?: Date) => (await D.earlierSummaryBlock(JORDAN, { strip, guards, zone: "America/Los_Angeles", now: NOW, windowOldest }, { query: handle })).split("\n").slice(1).map((l) => l.replace(/^- [^:]*\): /, ""));
+  const recent = await blockAt();
+  const older = await blockAt(new Date("2026-10-07T18:00:00Z"));
+  check("one decision: the block (recent window) uses notes, all of them lines in the view", recent.length >= 2 && recent.every((t) => viewText.has(t)), { recent, view: [...viewText] });
+  check("one decision: the block (an older window, past the newest 8) uses only notes the view lists", older.length >= 3 && older.every((t) => viewText.has(t)), { older });
+  check("all of it: more than 8 notes are all listed (every note the block could use is visible)", lines.length >= 12 && lines.some((l) => l.text.startsWith("2026-10-01: Older note 1")), lines.length);
+  check("strip-changed: a note naming a member is in neither the view nor the block", ![...viewText, ...recent, ...older].some((t) => /Priya|another member|open studio night|introduce/.test(t)), { recent, older });
+  // The pure decision itself: a note the strip would change in any way is skipped, never passed on as the rewrite.
+  const rows = [{ id: "a", day: "2026-10-20", summary: "They planned an open studio night with Priya.", source_ids: [], source_stamp: D.stampOf([], []), status: "ok" }, { id: "b", day: "2026-10-21", summary: "They glazed mugs.", source_ids: [], source_stamp: D.stampOf([], []), status: "ok" }];
+  const u = D.usableSummaries(rows, [], [], strip);
+  check("one decision (pure): only the note the strip leaves whole is usable", u.usable.map((x) => x.id).join() === "b", u);
 }
 
 // ---- 4. a removal deletes the text, keeps the fingerprint, and blocks the day from being written again
@@ -176,8 +204,12 @@ const notesOf = async (who: string) => {
   check("regenerate: and not on the next run either", !asked.slice(-again.modelCalls).includes(`${JORDAN}:2026-11-01`) && sums.filter((s) => s.user_id === JORDAN && s.day === "2026-11-01").length === 1);
   check("spend log: the run counts its model calls and tokens", res.modelCalls === asked.length - again.modelCalls && res.inputTokens === 900 * res.modelCalls && res.outputTokens === 60 * res.modelCalls && res.modelCalls >= 1, res);
   check("spend log: the run's line carries counts, tokens and cost only", /^day summaries: \d+ model call\(s\), \d+ input \+ \d+ output tokens \(~\$\d+\.\d{4}\)/.test(D.runLogLine(res, { input: 0.1, output: 0.5 })) && !/studio|2026|0000/.test(D.runLogLine(res, { input: 0.1, output: 0.5 })), D.runLogLine(res, { input: 0.1, output: 0.5 }));
+  // The removed day later gets a new line of conversation (a late-synced call, a backfilled text): the day is still never written again.
+  mem(JORDAN, "2026-11-01T20:00:00Z", longText("User said: one more thing about the lease, the landlord called back"));
+  const late = await D.runDaySummaries(deps);
+  check("regenerate: a new source line on a removed day does not bring the note back", !asked.includes(`${JORDAN}:2026-11-01`) && sums.find((s) => s.user_id === JORDAN && s.day === "2026-11-01")?.status === "removed" && sums.filter((s) => s.user_id === JORDAN && s.day === "2026-11-01").length === 1, { late, asked });
   // A removal of the other member's note, by ref, from Jordan's side: not one of Jordan's items, nothing changes.
-  const pr = await W.applyKnowledgeChanges(JORDAN, [{ action: "remove", refs: ["summary:2026-10-15"] }], { message: "remove that", theirWords: "remove that" });
+  const pr = await W.applyKnowledgeChanges(JORDAN, [{ action: "remove", refs: ["summary:2026-09-01"] }], { message: "remove that", theirWords: "remove that" });
   check("isolation: a ref that is not one of their own notes is refused and changes nothing", !pr.ok && pr.refused.length === 1 && sums.filter((s) => s.status === "removed").length === 1, pr);
 }
 
@@ -198,6 +230,49 @@ const notesOf = async (who: string) => {
 {
   const C = await import("../../src/services/callTools.js");
   check("calls: the call's tools include whatCoKnows and correctWhatCoKnows (the same view and the same one-gesture removal)", C.CALL_TOOL_NAMES.includes("whatCoKnows") && C.CALL_TOOL_NAMES.includes("correctWhatCoKnows"));
+}
+
+// ---- 7. one run at a time across processes (the dev database is shared; api and co-test both register the jobs)
+{
+  // A fake database's session advisory locks: one holder per key, released by unlock or by the connection going away.
+  let holder: number | null = null;
+  let conn = 0;
+  const destroyed: number[] = [];
+  let failUnlock = false;
+  const lockPool: import("../../src/services/daySummaries.js").LockPool = {
+    connect: async () => {
+      const me = ++conn;
+      return {
+        query: async (sql: string, args?: unknown[]) => {
+          if (/pg_try_advisory_lock\(hashtext\(\$1\)\)/.test(sql) && args?.[0] === D.RUN_LOCK_KEY) { if (holder === null) { holder = me; return { rows: [{ ok: true }] }; } return { rows: [{ ok: false }] }; }
+          if (/pg_advisory_unlock\(hashtext\(\$1\)\)/.test(sql)) { if (failUnlock) throw new Error("connection lost"); if (holder === me) holder = null; return { rows: [{ pg_advisory_unlock: true }] }; }
+          throw new Error(`unexpected: ${sql}`);
+        },
+        release: (destroy?: boolean) => { if (destroy) { destroyed.push(me); if (holder === me) holder = null; } },
+      };
+    },
+  };
+  let runs = 0;
+  let finish!: () => void;
+  const first = D.runLocked(lockPool, () => new Promise<string>((res) => { runs++; finish = () => res("first"); }));
+  await new Promise((r) => setImmediate(r));
+  const logged: string[] = [];
+  const realLog = console.log;
+  console.log = (...a: unknown[]) => { logged.push(a.join(" ")); };
+  let second: string | null;
+  try { second = await D.runLocked(lockPool, async () => { runs++; return "second"; }); } finally { console.log = realLog; }
+  check("lock: a second run while one holds the lock is skipped (no model call, nothing paid twice)", second === null && runs === 1, { second, runs });
+  check("lock: the skip is logged", logged.some((l) => /day summaries: another run holds the lock; this run is skipped/.test(l)), logged);
+  finish();
+  check("lock: the holder's run completes", (await first) === "first" && holder === null);
+  check("lock: once released, the next run goes ahead", (await D.runLocked(lockPool, async () => "third")) === "third" && holder === null);
+  failUnlock = true;
+  await D.runLocked(lockPool, async () => "fourth");
+  check("lock: a connection that can't unlock is destroyed, which releases the lock", destroyed.length === 1 && holder === null, { destroyed, holder });
+  failUnlock = false;
+  let threw = false;
+  try { await D.runLocked(lockPool, async () => { throw new Error("run failed"); }); } catch { threw = true; }
+  check("lock: a run that fails still releases the lock", threw && holder === null);
 }
 
 console.log(`visible summaries: ${total - failed}/${total} passed`);

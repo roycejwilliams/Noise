@@ -15,7 +15,7 @@
 //     clears a fingerprint.
 //
 // THE JOB RUNS NIGHTLY (jobs/index.ts, 03:45 Pacific; Royce approved the spend 2026-11-06 at about $0.0015 per member-day). Each run
-// logs its model calls and tokens (runDaySummariesJob). Reading is free: until the job has run, the reply and the call get no block.
+// logs its model calls and tokens, and runs under a once-only advisory lock (runLocked) so two processes never both pay. Reading is free.
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
@@ -187,22 +187,40 @@ export async function pruneAfterChange(userId: string, db: Db = pool): Promise<n
 // against their removals and corrections, newest first, through the removal guard. One read on db (a transaction's client works: the
 // queries run one after another). Guards unreadable: nothing (never a note that may carry what they removed). The name strip runs on
 // the way out (whatCoKnows.ts strippedItems), as on every line there.
-export async function visibleSummaries(userId: string, db: Db = pool): Promise<{ day: string; summary: string }[]> {
+export async function visibleSummaries(userId: string, db: Db = pool, o: { strip?: Strip } = {}): Promise<{ day: string; summary: string }[]> {
   const { rows } = await db.query(
-    `SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp FROM member_day_summaries
+    `SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp, status FROM member_day_summaries
      WHERE user_id = $1 AND status = 'ok' AND btrim(summary) <> '' ORDER BY day DESC`,
     [userId],
   );
   if (!rows.length) return [];
-  const guards = await import("./whatCoKnows.js").then((W) => W.forgottenRows(userId, db as any, { all: true })).catch(() => null);
-  if (guards === null) return [];
+  const [guards, strip] = await Promise.all([
+    import("./whatCoKnows.js").then((W) => W.forgottenRows(userId, db as any, { all: true })).catch(() => null),
+    o.strip ? Promise.resolve(o.strip) : import("./sourceFence.js").then((F) => F.memberFence(userId)).then((f) => (f.failed ? null : f.strip)).catch(() => null),
+  ]);
+  if (guards === null || strip === null) return [];
   const ids = [...new Set(rows.flatMap((r: any) => r.source_ids as string[]))];
   const src = ids.length ? (await db.query(`SELECT id::text AS id, memory_type, content FROM co_memories WHERE user_id = $1 AND id = ANY($2::uuid[])`, [userId, ids])).rows : [];
-  return (rows as StoredSummary[]).flatMap((r) => {
-    if (!String(r.summary ?? "").trim() || !stillStands(r, src, guards)) return [];
-    const text = guardText(String(r.summary), guards);
-    return text && text.trim() ? [{ day: r.day, summary: text.trim() }] : [];
-  });
+  return usableSummaries(rows as StoredSummary[], src, guards, strip).usable.map((u) => ({ day: u.day, summary: u.summary }));
+}
+
+// Pure: THE one decision of which stored notes Cue may use, for both the member's view (visibleSummaries, what Cue knows) and the
+// reply/call block (earlierSummaryBlock), so a note never shapes a reply or a call unless the member can see it (ruling 5). A note is
+// usable only when it is 'ok' and not blank, every source still reads the same through the guards, the removal guard leaves something,
+// and the name strip leaves it EXACTLY as it is: a note the strip would change in any way (it names a member, even as "came up here")
+// is skipped in both, never shown as a rewrite. stale: notes whose sources changed (the readers delete them; the job writes the day once more).
+export function usableSummaries(rows: StoredSummary[], sources: Pick<SrcRow, "id" | "memory_type" | "content">[], guards: ForgottenRow[], strip: Strip): { usable: { id: string; day: string; summary: string; sources: number }[]; stale: string[] } {
+  const usable: { id: string; day: string; summary: string; sources: number }[] = [];
+  const stale: string[] = [];
+  for (const r of rows) {
+    if ((r.status ?? "ok") !== "ok" || !String(r.summary ?? "").trim()) continue;
+    if (!stillStands(r, sources, guards)) { stale.push(r.id); continue; }
+    const text = guardText(String(r.summary), guards)?.trim();
+    if (!text) continue;
+    if ((strip(text) ?? "").trim() !== text) continue;
+    usable.push({ id: r.id, day: r.day, summary: text, sources: r.source_ids.length });
+  }
+  return { usable, stale };
 }
 
 // The block a reply or a call gets for one member. before: the oldest moment already shown in full in the thread window, so a day the
@@ -218,21 +236,15 @@ export async function earlierSummaryBlock(
     const now = o.now ?? new Date();
     const cutoff = o.windowOldest ? dayOf(o.windowOldest, o.zone) : "9999-12-31";
     const { rows } = await db.query(
-      `SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp FROM member_day_summaries
+      `SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp, status FROM member_day_summaries
        WHERE user_id = $1 AND status = 'ok' AND day < $2::date ORDER BY day DESC LIMIT $3`,
       [userId, cutoff, SUMMARY.recentN * 2],
     );
     if (!rows.length) return "";
     const ids = [...new Set(rows.flatMap((r: any) => r.source_ids as string[]))];
     const src = ids.length ? (await db.query(`SELECT id::text AS id, memory_type, content FROM co_memories WHERE user_id = $1 AND id = ANY($2::uuid[])`, [userId, ids])).rows : [];
-    const good: { day: string; summary: string; sources: number }[] = [];
-    const stale: string[] = [];
-    for (const r of rows as StoredSummary[]) {
-      if (!stillStands(r, src, o.guards)) { stale.push(r.id); continue; }
-      const text = guardText(r.summary, o.guards);
-      const safe = text === null ? null : o.strip(text);
-      if (safe && safe.trim()) good.push({ day: r.day, summary: safe.trim(), sources: r.source_ids.length });
-    }
+    // The same decision the member's view makes (usableSummaries): only notes they can see in what Cue knows.
+    const { usable: good, stale } = usableSummaries(rows as StoredSummary[], src, o.guards, o.strip);
     // Forget by default: a summary built on a line that was since removed or corrected is deleted now (free). Its day is summarized again
     // by the job, once, from the guarded lines.
     if (stale.length) db.query(`DELETE FROM member_day_summaries WHERE user_id = $1 AND id::text = ANY($2::text[])`, [userId, stale]).catch(() => {});
@@ -390,9 +402,39 @@ export function runLogLine(r: JobResult, price: { input: number; output: number 
 
 // The one entry point, run nightly by jobs/index.ts. Every run logs its model calls and tokens so the spend can be tracked (the same
 // calls are also in the usage table under functionId memory.daySummary).
-export async function runDaySummariesJob(): Promise<JobResult> {
-  const res = await runDaySummaries(await realJobDeps());
-  const [{ priceFor }, { MODELS }] = await Promise.all([import("./llmUsage.js"), import("../models.js")]);
-  console.log(runLogLine(res, priceFor(String(MODELS.haiku))));
-  return res;
+// One run at a time across every process on the database: the dev Postgres is shared by every Railway environment, and api and
+// co-test both register the jobs, so without this two schedules would pay for the same days twice (the insert's ON CONFLICT keeps one
+// row, but both calls are paid). A session advisory lock on its own connection, tried once: held elsewhere, this run is skipped with a
+// log line (the other one is doing the work). Released when the run ends; a connection that can't unlock is destroyed, which releases it.
+export const RUN_LOCK_KEY = "member_day_summaries:job";
+export type LockPool = { connect: () => Promise<{ query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }>; release: (destroy?: boolean) => void }> };
+export async function runLocked<T>(lockPool: LockPool, fn: () => Promise<T>): Promise<T | null> {
+  const c = await lockPool.connect();
+  let got = false;
+  try {
+    got = (await c.query(`SELECT pg_try_advisory_lock(hashtext($1)) AS ok`, [RUN_LOCK_KEY])).rows[0]?.ok === true;
+  } catch (err) {
+    c.release(true);
+    throw err;
+  }
+  if (!got) {
+    c.release();
+    console.log("day summaries: another run holds the lock; this run is skipped");
+    return null;
+  }
+  try {
+    return await fn();
+  } finally {
+    const unlocked = await c.query(`SELECT pg_advisory_unlock(hashtext($1))`, [RUN_LOCK_KEY]).then(() => true).catch(() => false);
+    c.release(!unlocked);
+  }
+}
+
+export async function runDaySummariesJob(lockPool: LockPool = pool as unknown as LockPool): Promise<JobResult | null> {
+  return runLocked(lockPool, async () => {
+    const res = await runDaySummaries(await realJobDeps());
+    const [{ priceFor }, { MODELS }] = await Promise.all([import("./llmUsage.js"), import("../models.js")]);
+    console.log(runLogLine(res, priceFor(String(MODELS.haiku))));
+    return res;
+  });
 }
