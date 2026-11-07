@@ -512,6 +512,8 @@ export function agreedBriefly(req: OaiRequest): boolean {
 }
 export const AGREED_NOTE = "(Cue's note, not their words.) They agreed in a few words. A short reaction can be enough: no need for a new question or topic to keep the call going.";
 export type ThinkOptions = {
+  // Whether a follow-on question asks for the same answer as the turn's question (services/questionRead.ts); Haiku when not given.
+  sameQuestion?: import("./questionRead.js").SameQuestion;
   // This turn's tools (liveCallTools), built only when it isn't a safety turn.
   tools?: LiveToolsFor | null;
   // What the word cap kept from the last answer (capNote), and where this answer's capped rest goes.
@@ -566,7 +568,7 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
   const ran: string[] = [];
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange, callRead: o.callRead ?? ((i) => import("./exchangeRecord.js").then((X) => X.readCallTurn(i))) } : {}), onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange, callRead: o.callRead ?? ((i) => import("./exchangeRecord.js").then((X) => X.readCallTurn(i))) } : {}), onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead, sameQuestion: o.sameQuestion ?? ((a, b) => import("./questionRead.js").then((m) => m.haikuSameQuestion(a, b))) })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") {
       text += d.content;

@@ -130,8 +130,14 @@ const day = () => "Oct 8";
   check(`voice-only: an echo question never cuts the answer ("${echo}")`, /Friday at seven/.test(echo));
   const rhet = await run("Honestly? I think you should go. What's holding you back?");
   check(`voice-only: a one-word rhetorical question isn't the turn's question ("${rhet}")`, /What's holding you back\?/.test(rhet));
-  const twoQ = await run("What kind of messages are you getting? Like, people wanting to come, or something else?");
-  check("voice-only: never two questions in one turn", (twoQ.match(/\?/g) ?? []).length === 1);
+  // Royce's ruling (2026-11-07): decided by meaning, not by the opener. A follow-on the model reads as asking for the same answer is the
+  // turn's question and is said (services/questionRead.ts); one asking for a different answer is a second question and is held.
+  const twoQ = await run("What kind of messages are you getting? Like, people wanting to come, or something else?", { sameQuestion: async () => true });
+  check(`voice-only: a follow-on read as the same question is said ("${twoQ}")`, /messages are you getting\?/.test(twoQ) && /people wanting to come, or something else\?/.test(twoQ));
+  const otherQ = await run("What kind of messages are you getting? Like, who's sending most of them?", { sameQuestion: async () => false });
+  check(`voice-only: never two different questions in one turn, whatever the opener ("${otherQ}")`, (otherQ.match(/\?/g) ?? []).length === 1 && !/who's sending/.test(otherQ));
+  const noRead = await run("What kind of messages are you getting? Like, people wanting to come, or something else?");
+  check(`voice-only: with no read, still one question ("${noRead}")`, (noRead.match(/\?/g) ?? []).length === 1);
   const safety = await run("Are you safe right now? If you're not, call or text 988, any time. I'm staying right here with you.");
   const lifeline = await run("Are you safe right now? If not, please reach out to the crisis lifeline by calling nine eight eight. Is someone with you tonight?");
   check(`voice-only: a safety turn has no question limit and keeps every help line ("${lifeline}")`, /nine eight eight/.test(lifeline) && /someone with you tonight\?/.test(lifeline));

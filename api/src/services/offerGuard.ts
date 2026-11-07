@@ -194,12 +194,32 @@ export const CRISIS_NUMBERS: ReadonlySet<string> = new Set(["988", "911", "74174
 export const CRISIS_RESOURCE_LINE = /\b(?:call|text|dial|reach|contact)\b[^.!?]{0,40}?(?:\b988\b|\b911\b|\b741741\b|\b9-8-8\b|\bnine[- ]eight[- ]eight\b)|\b988\s+(?:suicide|lifeline|crisis)\b|\bcrisis (?:text )?line\b/i;
 // The crisis text line's keyword ("text HOME to 741741") and the lifeline's own name, on such a line only.
 const CRISIS_WORDS = /^(?:home|988|911|741741|lifeline|crisis|suicide|(?:the )?988 suicide (?:&|and) crisis lifeline|crisis text line)$/i;
+// An all-caps term on its own ("TTS", "LLMs", "API") said in a sentence that offers nothing is vocabulary, the way SPOKEN_COMMON's
+// formats and titles are: "A lot of TTS systems sound fine in isolation..." was held back on Royce's dev calls (2026-10-31 to 11-04)
+// as an unbacked name. It stays checked as a name where it can be one: after "at", "from", "in", "with"... ("someone at IBM",
+// "the scene in SF"), and in any sentence that offers to do, find, send or set up something or promises a result (offersToAct).
+const ACRONYM = /^[A-Z]{2,5}s?$/;
+const ORG_OR_PLACE_BEFORE = /\b(?:at|from|with|in|near|around|inside|joined|joining|by|to|for|of the|via)\s+$/i;
+// Cue proposing to act for them, or promising a result: a promise of later work (promisesLaterWork), an event placed, or a first-person
+// offer to intro, connect, send, book, reserve, set up, find or get them something ("I can intro you to...", "want me to book it?",
+// "let me set that up", "you'll have three intros by Friday"). Questions count: "Want me to...?" is an offer.
+const OFFER_TO_ACT = /\b(?:i'?ll|i will|i can|i could|let me|i'?m going to|i'?m gonna|want me to|should i|i'?d be happy to|happy to)\s+(?:\w+\s+){0,2}?(?:intro(?:duce)?|connect|put you in touch|send|text|email|book|reserve|set (?:it |that |this |you |something )?up|find|get you|line up|hook you up|schedule|make (?:an |the )?intro)\b|\byou'?ll (?:have|get|hear from|be (?:on|in))\b/i;
+export function offersToAct(sentence: string): boolean {
+  const s = sentence.replace(/[’‘]/g, "'");
+  return OFFER_TO_ACT.test(s) || promisesLaterWork(s) || placesAnEvent(s);
+}
+// Pure: the mention is an all-caps term used as vocabulary in this sentence (never in an offer, never after an org or place word).
+export function vocabularyTerm(m: Mention, sentence: string): boolean {
+  if (m.kind !== "name" || !ACRONYM.test(m.text) || offersToAct(sentence)) return false;
+  const at = [...sentence.matchAll(new RegExp(String.raw`(?<![A-Za-z])${m.text}(?![A-Za-z])`, "g"))].map((x) => x.index ?? 0);
+  return at.length > 0 && at.every((i) => !ORG_OR_PLACE_BEFORE.test(sentence.slice(Math.max(0, i - 24), i)));
+}
 export function spokenProblem(sentence: string, src: SpokenSources): SpokenProblem | null {
   const s = sentence.replace(/\[[a-z][a-z ]*\]\s*/gi, "").trim();
   if (!s) return null;
   const crisis = CRISIS_RESOURCE_LINE.test(s);
   const mentions = mentionsIn(s);
-  const bad = unbackedMentions(mentions, src.all).filter((m) => !(crisis && CRISIS_WORDS.test(m.text.trim())));
+  const bad = unbackedMentions(mentions, src.all).filter((m) => !(crisis && CRISIS_WORDS.test(m.text.trim())) && !vocabularyTerm(m, s));
   // A clock time makes it an event placement (placesAnEvent), held as before; a name elsewhere is said as not known.
   if (bad.length) return { kind: placesAnEvent(s) ? "event" : "name", missing: bad.map((m) => m.text) };
   // Clock times were checked as mentions; the rest of the digits as numbers.
@@ -211,6 +231,24 @@ export function spokenProblem(sentence: string, src: SpokenSources): SpokenProbl
     const missing = promiseTopic(s).filter((w) => !wordBacked(w, src.asked));
     if (missing.length) return { kind: "promise", missing };
   }
+  return null;
+}
+
+// ---------- Offers that need a way to carry them out (Royce, 2026-11-07): a booking, reservation, purchase or sign-up Cue says it will
+// make ("I'll book that", "I'll reserve a table for you"), or introductions promised as a result ("You'll have three intros by next
+// week"). Neither has a source a name check could find: what backs one is a way to do it. So it is its own check, read in
+// callLlmProxy.ts say(): the line is said only when a tool on this call that carries that kind out (CallToolset.carries) came back
+// done this turn, which is where the capability, the member's yes (the tool's own guard) and the execution path all are. Nothing on a
+// call books or introduces today, so these are held; the turn is answered again without them, never with another promise.
+// Pure, statements only: a question ("want me to book it?") asks, it doesn't promise.
+export type OfferKind = "book" | "intro";
+const BOOKING_PROMISE = /\b(?:i'?ll|i will|i'?m going to|i'?m gonna|let me|i can|i could)\s+(?:\w+\s+){0,2}?(?:book|reserve|buy|purchase|pay for|rsvp|sign you up|register you|grab you (?:a |the )?(?:table|ticket|tickets|spot|seat)|get you (?:a |the )?(?:table|reservation|ticket|tickets|spot|seat))\b/i;
+const INTRO_RESULT = /\byou'?ll (?:have|get|receive|be getting)\s+(?:\w+\s+){0,2}?(?:intros?|introductions?|matches)\b|\b(?:i'?ll|i will|i'?m going to|i'?m gonna|i can)\s+(?:get|find|line up|set up)\s+(?:you\s+)?(?:\w+\s+){0,2}?(?:intros|introductions|matches)\b/i;
+export function offerNeedingPath(sentence: string): OfferKind | null {
+  const s = sentence.replace(/[’‘]/g, "'").replace(/\[[a-z][a-z ]*\]\s*/gi, "").trim();
+  if (!s || /\?["')\]]*\s*$/.test(s)) return null;
+  if (BOOKING_PROMISE.test(s)) return "book";
+  if (INTRO_RESULT.test(s)) return "intro";
   return null;
 }
 
