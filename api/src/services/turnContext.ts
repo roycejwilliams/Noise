@@ -505,7 +505,7 @@ const reEsc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // member. Null when none is stored.
 export async function loadStoredMatch(userId: string, item: Pick<SentItem, "name" | "url" | "key">, db: Db = pool): Promise<any | null> {
   const apiId = item.key?.startsWith("event:") ? item.key.slice(6) : null;
-  const likeUrl = (u: string) => normUrlOf(u).replace(/^luma\.com(?=\/)/, ""); // a Luma event is stored under either host: match on its path
+  const likeUrl = (u: string) => normUrlOf(u).replace(/^luma\.com(?=\/)/, "").replace(/\?.*$/, ""); // a Luma event is stored under either host: match on its path (the query, kept by normUrlOf, may be stored in another order: the exact check below decides)
   const pats = [item.url ? `%${likeEsc(likeUrl(item.url))}%` : null, apiId ? `%${likeEsc(apiId)}%` : null, !item.url && !apiId ? `%${likeEsc(item.name)}%` : null].filter((x): x is string => !!x);
   if (!pats.length) return null;
   const { rows } = await db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'event_offer_pending' AND content ILIKE ANY($2::text[]) ORDER BY created_at DESC LIMIT 20`, [userId, pats]);
