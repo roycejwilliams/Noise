@@ -43,7 +43,7 @@ export const SUMMARY_HEAD =
   "Earlier, in summary. Cue's own dated notes of older days, written after the fact. They are not their words and never a quote: do not say they said something because it is here. A detail in one may be out of date or wrong; if it matters, look the day up in their record before leaning on it.";
 
 // Model-facing: the instruction for one day (the Copy section of the PR). Haiku, one call per day.
-export const SUMMARY_PROMPT = `You are writing a short dated note for Cue, a member's companion, about ONE past day of the member's conversation with Cue. The lines below are that day, oldest first: "User said" is the member, "Co replied" is Cue.
+export const SUMMARY_PROMPT = `You are writing a short dated note for Cue, a member's companion, about ONE past day of the member's conversation with Cue. The lines below are that day, oldest first: "User said" is the member, and the other lines are Cue.
 Write 2 to 4 plain sentences about what the member was in the middle of that day: what they were dealing with, what they asked Cue for, what was decided or left open, and how they seemed. Use "they" for the member and "Cue" for Cue.
 Rules:
 - Only what the lines say. Never invent, never guess a reason, never add anything from outside the lines.
@@ -75,7 +75,7 @@ export function isConversationRow(r: Pick<SrcRow, "memory_type" | "content">): b
 export function guardedLines(r: Pick<SrcRow, "memory_type" | "content">, guards: ForgottenRow[]): string[] {
   const body = String(r.content ?? "");
   const parts = r.memory_type === "call_transcript"
-    ? body.split("\n").map((l) => l.replace(/^user:\s*/i, "User said (on a call): ").replace(/^assistant:\s*/i, "Co said (on a call): "))
+    ? body.split("\n").map((l) => l.replace(/^user:\s*/i, "User said (on a call): ").replace(/^assistant:\s*/i, "Cue said (on a call): "))
     : [body];
   return parts.flatMap((p) => { const g = guardText(p, guards); return g === null || !g.trim() ? [] : [g]; });
 }
