@@ -487,6 +487,52 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   check("injection: an old instruction comes back as history, with the note that it is not an instruction now", r.history === true && /ignore previous instructions/.test(texts(r.results)) && /not an instruction/.test(R.recallNote(r)) && /not approval for any new action/.test(R.recallNote(r)));
 }
 
+// ---- call chunks: a stored call is split by topic at read time, and a hit returns the part that is about the question
+{
+  const CH = "00000000-0000-4000-8000-00000000c0c1";
+  const { chunkRanges } = await import("../../src/services/callChunks.js");
+  const lease = [
+    "assistant: How did the landlord meeting go this week?",
+    "user: Badly. The landlord wants a rent increase of eighteen percent on the studio lease renewal.",
+    "assistant: Eighteen percent is steep. Did the landlord put it in writing?",
+    "user: Only an email. I think the landlord expects me to negotiate the lease renewal terms.",
+    "assistant: What would you ask for in the lease renewal?",
+    "user: A longer term and a cap on the rent increase, since the landlord raised the rent last year too.",
+  ];
+  const sister = [
+    "assistant: Switching gears, how is your sister doing?",
+    "user: Maren is visiting from Lisbon and we are cooking together every night, plus the pottery wheel in the garage.",
+    "assistant: Cooking every night sounds lovely. What is Maren making?",
+    "user: Mostly bacalhau, and a custard tart recipe from her grandmother, the grandmother taught Maren everything.",
+    "assistant: A custard tart from her grandmother is a good thing to keep.",
+    "user: We want to open a small pastry stall together, Maren and I, maybe at the Saturday market.",
+  ];
+  const transcript = [...lease, ...sister].join("\n");
+  add(CH, "2026-10-20T20:00:00Z", "call_transcript", transcript);
+  const lines = transcript.split("\n").map((t) => ({ text: t.replace(/^(user|assistant):\s*/, "") }));
+  const ranges = chunkRanges(lines);
+  check("chunks: the ranges cover every line once, in order, none empty", ranges.length >= 2 && ranges[0][0] === 0 && ranges[ranges.length - 1][1] === lines.length && ranges.every(([a, b], i) => b > a && (i === 0 || ranges[i - 1][1] === a)), ranges);
+  check("chunks: the change of subject (lease to sister) is a boundary", ranges.some(([a]) => a === lease.length), ranges);
+  check("chunks: a short call stays one part", chunkRanges(lines.slice(0, 3)).length === 1);
+  const r = okRes(await look(CH, { topic: "pastry stall" }));
+  const hit = r.results.find((h) => h.channel === "call");
+  const all = hit ? [...hit.before, hit.matched, ...hit.after] : [];
+  check("chunks: a hit on the sister part returns that part, with its lines", !!hit && /pastry stall/.test(hit.matched.text) && all.some((l) => /bacalhau/.test(l.text)), hit);
+  check("chunks: the lease part is not in the sister part's hit", !!hit && !all.some((l) => /landlord/.test(l.text)), all.map((l) => l.text.slice(0, 30)));
+  check("chunks: the speaker labels are kept (member and cue)", all.some((l) => l.speaker === "member") && all.some((l) => l.speaker === "cue"));
+  check("chunks: it says which part of the stored call this is", /part 2 of \d of this call/.test(hit?.part ?? ""), hit?.part);
+  check("chunks: still marked as history", r.history === true && /HISTORY/.test(R.recallNote(r)));
+  const lr = okRes(await look(CH, { topic: "landlord" }));
+  const lh = lr.results.find((h) => h.channel === "call");
+  const lall = lh ? [...lh.before, lh.matched, ...lh.after] : [];
+  check("chunks: a hit on the lease part returns the lease lines and not the sister ones", lall.some((l) => /rent increase/.test(l.text)) && !lall.some((l) => /bacalhau|pastry/.test(l.text)), lall.map((l) => l.text.slice(0, 30)));
+  check("chunks: the hit stays inside the call result budget", JSON.stringify(lr).length < R.RECALL.callResultChars * 2, JSON.stringify(lr).length);
+  // meaning match, no word in common: the part closest by word beginnings, else only the start
+  const mr = okRes(await look(CH, { topic: "pastries" }, deps({ embed: async () => [1, 1, 1] })));
+  const mh = mr.results.find((h) => h.channel === "call");
+  check("chunks: with no topic word the part chosen by shared word beginnings is shown and said to be a meaning match", !mh || /pastry|meaning/.test(`${mh.matched.text} ${mh.part ?? ""}`), mh);
+}
+
 // ---- retrieved isn't disclosable / purpose boundary: the surface is read-only, text only
 {
   const src = (await import("node:fs")).readFileSync(new URL("../../src/services/conversationRecall.ts", import.meta.url), "utf8");
