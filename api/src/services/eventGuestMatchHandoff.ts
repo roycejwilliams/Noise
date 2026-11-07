@@ -68,7 +68,16 @@ export type PendingMatchNudge = {
   kind?: "nudge" | "direct_ask" | "additive";
   candidate_ids?: string[];
   asked_at?: Date | null;
+  // An additive question held open for a failed read, with their earlier yes kept on it (inRoomOffers.ts holdOffer).
+  heldYes?: boolean;
 };
+
+// What a reply means for an additive question. Normally the router's yes/no. On a held question their yes is already on file, so anything
+// that isn't a no goes straight to the reveal: they are never asked to say yes a second time.
+export function additiveClassification(value: string | null | undefined, pending: { heldYes?: boolean }): "interested" | "not_interested" {
+  if (pending.heldYes) return value === "no" ? "not_interested" : "interested";
+  return value === "yes" ? "interested" : "not_interested";
+}
 
 // Mirrors sendblue.ts's other pending-offer lookups exactly (same
 // created_at-cutoff + NOT EXISTS resolved-row pattern) — a nudge nobody
@@ -94,7 +103,7 @@ export async function findPendingMatchNudges(userId: string): Promise<PendingMat
   const out: PendingMatchNudge[] = [];
   for (const offer of offers) {
     if (offer.kind === "additive") {
-      out.push({ event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: "", candidate_first_name: "", candidate_phone: "", candidate_email: "", anonymous: true, kind: "additive", candidate_ids: offer.candidate_ids ?? [], asked_at: offer.opened_at });
+      out.push({ event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: "", candidate_first_name: "", candidate_phone: "", candidate_email: "", anonymous: true, kind: "additive", candidate_ids: offer.candidate_ids ?? [], asked_at: offer.opened_at, heldYes: offer.answer === "yes" });
     } else if (offer.candidate_id) {
       const { rows: who } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [offer.candidate_id]);
       if (who[0]) out.push({ event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: offer.candidate_id, candidate_first_name: who[0].first_name, candidate_phone: who[0].phone_number, candidate_email: who[0].email, anonymous: false, kind: offer.kind, asked_at: offer.opened_at });
@@ -107,7 +116,7 @@ export async function findPendingMatchNudge(userId: string): Promise<PendingMatc
   // The offer they were asked most recently and haven't answered, per pair (services/inRoomOffers.ts).
   const offer = await (await import("./inRoomOffers.js")).latestOpenOffer(userId).catch(() => null);
   if (offer?.kind === "additive") {
-    return { event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: "", candidate_first_name: "", candidate_phone: "", candidate_email: "", anonymous: true, kind: "additive", candidate_ids: offer.candidate_ids ?? [], asked_at: offer.opened_at };
+    return { event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: "", candidate_first_name: "", candidate_phone: "", candidate_email: "", anonymous: true, kind: "additive", candidate_ids: offer.candidate_ids ?? [], asked_at: offer.opened_at, heldYes: offer.answer === "yes" };
   }
   if (offer?.candidate_id) {
     const { rows: who } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [offer.candidate_id]);
@@ -255,9 +264,20 @@ async function maybeAskCandidateDirectly(
   try {
     askerSide = await RM.gatherValueSide(asker.user_id);
   } catch (err: any) {
-    await O.queueOffer({ eventId, eventName, personId: candidate.user_id, candidateId: asker.user_id, askerId: asker.user_id }).catch((e: any) => console.error("maybeAskCandidateDirectly: queueing the held ask failed (non-fatal):", e?.message ?? e));
+    // The drain tries this every few minutes, so it is bounded: the first failure queues the ask and records one decision, the retries are
+    // silent, and an ask still unreadable a day later is given up on with one decision (a stale ask would be wrong by then anyway).
     const { recordDecision } = await import("../harness/core.js");
-    await recordDecision({ layer: 6, decision: "match.direct_ask", userId: candidate.user_id, outcome: "skip", action: "asker_picture_unread_queued", reason: "the asker's member picture could not be read; the ask waits in line and is tried again", proposal: { eventId, askerId: asker.user_id, error: String(err?.message ?? err).slice(0, 120) } }).catch(() => {});
+    const { rows: held } = await pool.query(`SELECT created_at FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'queued'`, [eventId, candidate.user_id, asker.user_id]).catch(() => ({ rows: [] as any[] }));
+    const waitedMs = held[0]?.created_at ? Date.now() - new Date(held[0].created_at).getTime() : 0;
+    if (held.length && waitedMs >= PICTURE_RETRY_LIMIT_MS) {
+      await O.dropQueued(eventId, candidate.user_id, asker.user_id).catch(() => {});
+      await recordDecision({ layer: 6, decision: "match.direct_ask", userId: candidate.user_id, outcome: "skip", action: "asker_picture_unread_gave_up", reason: "the asker's member picture stayed unreadable for a day; the ask is dropped", proposal: { eventId, askerId: asker.user_id } }).catch(() => {});
+      return;
+    }
+    if (!held.length) {
+      await O.queueOffer({ eventId, eventName, personId: candidate.user_id, candidateId: asker.user_id, askerId: asker.user_id }).catch((e: any) => console.error("maybeAskCandidateDirectly: queueing the held ask failed (non-fatal):", e?.message ?? e));
+      await recordDecision({ layer: 6, decision: "match.direct_ask", userId: candidate.user_id, outcome: "skip", action: "asker_picture_unread_queued", reason: "the asker's member picture could not be read; the ask waits in line and is tried again", proposal: { eventId, askerId: asker.user_id, error: String(err?.message ?? err).slice(0, 120) } }).catch(() => {});
+    }
     return "retry";
   }
   // An ask held for their morning (services/deferredSends.ts) opens its offer only once it reaches them, so a held ask
@@ -363,6 +383,9 @@ async function maybeAskCandidateDirectly(
     }
   }
 }
+
+// An ask whose asker's picture stays unreadable is given up on after this long.
+const PICTURE_RETRY_LIMIT_MS = 24 * 3600_000;
 
 const directAskKey = (eventId: string, candidateId: string, askerId: string) => `direct_ask:${eventId}:${candidateId}:${askerId}`;
 
@@ -703,7 +726,7 @@ export async function handleAdditiveReply(
   if (held) {
     // Nobody was ruled out: a read could not be done. Their yes is not consumed: the additive question is open again (so their next
     // reply tries once more; nothing retries it on a timer), a decision is recorded, and the reply still acknowledges them (routes/sendblue.ts).
-    await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds }).catch((err: any) => console.error("handleAdditiveReply: re-opening the held question failed (non-fatal):", err?.message ?? err));
+    await O.holdOffer(eventId, person.user_id, "additive").catch((err: any) => console.error("handleAdditiveReply: holding the question open failed (non-fatal):", err?.message ?? err));
     const { recordDecision } = await import("../harness/core.js");
     await recordDecision({ layer: 6, decision: "match.additive_reveal", userId: person.user_id, outcome: "skip", action: "picture_unread_held", reason: "a member picture could not be read; their yes is kept and the question is open again", proposal: { eventId } }).catch(() => {});
     return { revealed: null, held: true };

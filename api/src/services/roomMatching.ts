@@ -857,14 +857,15 @@ export function checkValueLines(j: ValueJudgment | null, x: ValueSide, y: ValueS
 const VALUE_MODEL = MODELS.sonnet;
 
 
-export async function gatherValueSide(userId: string): Promise<ValueSide> {
+// read: how the member picture is read (matchPicture; a test passes its own).
+export async function gatherValueSide(userId: string, read?: (userId: string) => Promise<import("./matchPicture.js").MatchPicture>): Promise<ValueSide> {
   const [u, p, picture, facts, past] = await Promise.all([
     pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [userId]),
     // What they told Co, through the guarded member picture (services/matchPicture.ts): their goals, asks, preferences, limits, lessons,
     // transitions and own lines, minus what they had Cue forget or remove, name strip on. Co's own words are not in it. No raw co_memories.
     // A picture that could not be read whole is a failed read, never a thinner denylist: the value gate fails closed on it.
-    import("./matchPicture.js").then(async (m) => { const pic = await m.matchPicture(userId); if (pic.unread) throw new Error("member picture unread"); return pic; }),
+    import("./matchPicture.js").then(async (m) => { const pic = await (read ?? m.matchPicture)(userId); if (pic.unread) throw new Error("member picture unread"); return pic; }),
     import("./coFacts.js").then((c) => c.ownerOnlyFacts(userId)).catch(() => [] as string[]),
     pool
       .query(
@@ -877,7 +878,8 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
   ]);
   const prof = p.rows[0] ?? {};
   const intent = Array.isArray(prof.intent) ? prof.intent : [];
-  const open = intent.filter((i: any) => isOpenAsk(i));
+  // An ask they had Cue forget, or corrected away, is not current: left out of what is shared and of what is kept private alike.
+  const open = intent.filter((i: any) => isOpenAsk(i) && picture.keep(String(i.text)));
   // Only shareable asks go into the prompt, even for the member's own line: intro text uses no private ask (hole 1).
   const privateAsks = open.filter((i: any) => i.shareable !== true).map((i: any) => String(i.text));
   const ownAsks = open.filter((i: any) => i.shareable === true).map((i: any) => ({ text: String(i.text), type: String(i.type ?? "seeking"), shareable: true }));

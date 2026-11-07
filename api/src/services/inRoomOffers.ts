@@ -24,6 +24,8 @@ export type Offer = {
   candidate_ids: string[];
   asker_id: string | null;
   status: "queued" | "sending" | "open" | "answered" | "expired";
+  // Their answer once given. An additive question held open for a failed read keeps its 'yes' (holdOffer), so the next reply goes straight to the reveal.
+  answer?: "yes" | "no" | null;
   opened_at: Date | null;
   event_name: string | null;
 };
@@ -48,6 +50,16 @@ export async function openOffer(o: { eventId: string; eventName?: string | null;
      VALUES ($1, $2, $3, $4, $5, $6::uuid[], $7, $8, 'open', NOW())
      ON CONFLICT (event_id, person_id, candidate_key) DO UPDATE SET kind = EXCLUDED.kind, candidate_ids = EXCLUDED.candidate_ids, asker_id = EXCLUDED.asker_id, event_name = COALESCE(EXCLUDED.event_name, event_match_offers.event_name), status = 'open', opened_at = NOW(), answered_at = NULL, answer = NULL`,
     [o.eventId, o.personId, keyOf(o.kind, o.candidateId ?? null), o.kind, o.candidateId ?? null, o.candidateIds ?? [], o.askerId ?? null, o.eventName ?? null],
+  );
+}
+
+// A 'yes' to an additive question ("want to hear who?") whose reveal could not be done just now (a member picture could not be read): the
+// question is open again and the yes is kept on it (answer 'yes'), so the member's next reply goes straight to the reveal without asking
+// them to say yes a second time. Additive only; anything else is left as it was.
+export async function holdOffer(eventId: string, personId: string, candidateKey: string): Promise<void> {
+  await pool.query(
+    `UPDATE event_match_offers SET status = 'open', opened_at = NOW(), answered_at = NULL, answer = 'yes' WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND kind = 'additive'`,
+    [eventId, personId, candidateKey],
   );
 }
 
@@ -77,7 +89,7 @@ export async function openQuestionCount(personId: string, q: { query: typeof poo
 // Every question they have open, newest first: what a reply could be answering (services/messageRouter.ts gatherOpenItems).
 export async function openOffers(personId: string): Promise<Offer[]> {
   const { rows } = await pool.query(
-    `SELECT event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, asker_id, status, opened_at, event_name FROM event_match_offers
+    `SELECT event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, asker_id, status, answer, opened_at, event_name FROM event_match_offers
      WHERE person_id = $1 AND status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval
      ORDER BY opened_at DESC LIMIT 10`,
     [personId, REPLY_EXPIRY_DAYS],
@@ -187,7 +199,7 @@ export async function releaseAskSlot(eventId: string, personId: string, candidat
 // The offer a reply answers: their most recent open one.
 export async function latestOpenOffer(personId: string): Promise<Offer | null> {
   const { rows } = await pool.query(
-    `SELECT event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, asker_id, status, opened_at, event_name FROM event_match_offers
+    `SELECT event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, asker_id, status, answer, opened_at, event_name FROM event_match_offers
      WHERE person_id = $1 AND status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval
      ORDER BY opened_at DESC LIMIT 1`,
     [personId, REPLY_EXPIRY_DAYS],
