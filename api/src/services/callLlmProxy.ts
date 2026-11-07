@@ -10,7 +10,8 @@
 // (the stream passes through untouched, no push needed).
 import { SpeakableStream } from "./speakable.js";
 import { stockSentence } from "../harness/stockLines.js";
-import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
+import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, offerNeedingPath, prepareSource, sourceCorpus, spokenProblem, type OfferKind, type SpokenSources } from "./offerGuard.js";
+import { SAME_QUESTION_TIMEOUT_MS, type SameQuestion } from "./questionRead.js";
 import { memberStateSignal } from "./memberState.js";
 import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.js";
 import { recordAnthropicUsage, recordUsage, scopeMember, asMemberId } from "./llmUsage.js";
@@ -63,6 +64,9 @@ export type CallToolset = {
   // Resolves once every send that didn't go is queued for after the call (its co_tasks row and ledger row written): true when all of
   // them were, false when one couldn't be. Only a queued one is promised aloud.
   owedDurable?: () => Promise<boolean>;
+  // The kind of offer a tool carries out on this call, when it does one (offerGuard.ts offerNeedingPath): its done result this turn is
+  // what lets "I'll book that" or "you'll have three intros" be said. Its own guard holds the member's yes. No call tool does today.
+  carries?: (name: string) => OfferKind | null;
   // Job text only (callClaims.ts JobState): what a spoken "started" or "I'll text you" may stand on, never finds or loops on record.
   jobs?: { corpus: string; callJobs: string };
 };
@@ -184,6 +188,8 @@ export const isOutboundCall = (system: string): boolean => /This call is outboun
 // Pure: a question that counts as the turn's one. A short one counts too ("What changed?", "Why not?", "Did you?"); only an
 // interjection ("Honestly?", "Right?") or an echo of their words ("The dinner?") doesn't (2026-10-08 eval: "What changed? Did
 // something just feel different...?" slipped through as two).
+// Why an offer that needs a way to carry it out was held (logged call.offer_unsourced).
+export const offerHeldWhy = (k: OfferKind): string => `offer held: ${k === "book" ? "says it will book, reserve, buy or sign them up" : "promises introductions"}, and nothing on this call carries that out`;
 export function countsAsQuestion(sentence: string): boolean {
   const ws = sentence.replace(/\[[a-z ]+\]\s*/gi, "").replace(/[?"')\]]+$/g, "").split(/\s+/).filter(Boolean).map((w) => w.toLowerCase().replace(/[^a-z']/g, ""));
   if (ws.length > 2) return true;
@@ -347,6 +353,9 @@ export type ProxyDeps = {
   // The read of their latest words that the check waits for (services/exchangeRecord.ts readCallTurn): started with the turn, never
   // awaited by the voice. Until it lands, or when it fails or isn't given, nothing is held for repeating (review of #368).
   callRead?: (i: import("./exchangeRecord.js").CallReadInput) => Promise<import("./exchangeRecord.js").CallTurnRead | null>;
+  // Whether a follow-on question asks for the same answer as the turn's question (services/questionRead.ts): a same-answer follow-on is
+  // that question and is said; a different one is a second question. Not given, failed or slow: the follow-on is held (one question).
+  sameQuestion?: SameQuestion;
 };
 
 // What the member last said, for the safety check on the question rule.
@@ -474,6 +483,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   if (moveCheck && deps.callRead) deps.callRead(callReadInput(callTurns, deps.exchange ?? null, [])).then((r) => { callRead = r; }).catch(() => {});
   // A job line said before the tool that starts it, in this same reply: held until that tool comes back, then said if the job is real.
   let pendingJob: string[] = [];
+  // Offers that need a way to carry them out (offerNeedingPath), waiting on this round's tools; and the kinds a tool carried out this turn.
+  let pendingOffer: { s: string; kind: OfferKind }[] = [];
+  const carried = new Set<OfferKind>();
   // A send that didn't go couldn't be queued for after the call: nothing may promise it later.
   let owedFailed = false;
   // Past the last round of tools (tool_choice none): nothing more can start this turn.
@@ -512,17 +524,33 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // "The dinner? It's Friday at seven." came out as "The dinner?"). A one- or two-word rhetorical "Honestly?" isn't the question.
   // No limit once the call has touched their safety (safetyCall).
   let asked = false;
+  // The turn's question as said, and its one follow-on question waiting on the same-answer read (deps.sameQuestion): what was said after
+  // the follow-on waits behind it, so nothing is said out of order. Only one follow-on a turn is read; a later question is held.
+  let turnQuestion = "";
+  let follow: { s: string; read: Promise<boolean | null>; after: string[] } | null = null;
+  let followRead = false, followSame = "";
   let safetyTurn = safetyCall(b);
   const say = (s: string): string | null => {
     const sentence = s.trim();
     const isQuestion = /\?["')\]]*\s*$/.test(sentence);
     // The safety reads see phone punctuation made plain ("don’t", a no-break space); everything else reads the sentence as said.
     const plainS = plainPunctuation(sentence);
-    if (clean && asked && ruledOut(decision, "after_question") && !safetyTurn && !SAFETY_LINE.test(plainS)) {
+    // Waiting behind the follow-on question: said (or not) in order once its read is back.
+    if (follow) { follow.after.push(s); return null; }
+    // The follow-on question the read said asks for the same answer: it is the turn's question, said.
+    const sameAsAsked = asked && isQuestion && followSame !== "" && followSame === sentence;
+    // A follow-on question after the turn's question: read for meaning first (one a turn), held until the read is back.
+    if (clean && asked && isQuestion && !sameAsAsked && !followRead && !inRetry && deps.sameQuestion && (ruledOut(decision, "second_question") || ruledOut(decision, "after_question")) && !safetyTurn && !SAFETY_LINE.test(plainS)) {
+      followRead = true;
+      const bound = new Promise<null>((r) => setTimeout(() => r(null), SAME_QUESTION_TIMEOUT_MS).unref?.());
+      follow = { s, read: Promise.race([deps.sameQuestion(turnQuestion, sentence).catch(() => null), bound]), after: [] };
+      return null;
+    }
+    if (clean && asked && !sameAsAsked && ruledOut(decision, "after_question") && !safetyTurn && !SAFETY_LINE.test(plainS)) {
       deps.onDropped?.(sentence, "after the question on an inbound call's first reply: they lead");
       return null;
     }
-    if (clean && asked && isQuestion && ruledOut(decision, "second_question") && !safetyTurn && !SAFETY_LINE.test(plainS)) {
+    if (clean && asked && isQuestion && !sameAsAsked && ruledOut(decision, "second_question") && !safetyTurn && !SAFETY_LINE.test(plainS)) {
       deps.onDropped?.(sentence, "a second question in the turn");
       return null;
     }
@@ -556,6 +584,20 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       if (jk && !jobBacked(sentence, jobs)) {
         if (!inRetry && co && !toolsOff && jk !== "booked") { pendingJob.push(s); return null; }
         const why = `claim held: ${jk === "booked" ? "says something was booked, bought, reserved or made public, and nothing on a call does that" : jk === "started" ? "says work started with no job behind it" : "promises later work with no job behind it"}`;
+        deps.onDropped?.(sentence, why);
+        heldWhy.push(why);
+        blanked = true;
+        return null;
+      }
+    }
+    // An offer that needs a way to carry it out (offerGuard.ts offerNeedingPath): said only once a tool on this call that does that
+    // kind came back done this turn. While such a tool could still run this turn the line waits for the round; with none, it's held.
+    if (clean && !voiceOnly && !safetyTurn && !SAFETY_LINE.test(plainS)) {
+      const ok = offerNeedingPath(sentence);
+      if (ok && !carried.has(ok)) {
+        const canCarry = !!co?.carries && [...co.names].some((n) => co.carries!(n) === ok);
+        if (canCarry && !inRetry && !toolsOff) { pendingOffer.push({ s, kind: ok }); return null; }
+        const why = offerHeldWhy(ok);
         deps.onDropped?.(sentence, why);
         heldWhy.push(why);
         blanked = true;
@@ -623,7 +665,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
     // Co checking on their safety makes the whole turn a safety turn: no question limit after it.
     if (SAFETY_LINE.test(plainS) || (isQuestion && SAFETY_TURN.test(plainS))) { safetyTurn = true; stream?.lift(); }
-    if (isQuestion && countsAsQuestion(sentence)) asked = true;
+    if (isQuestion && countsAsQuestion(sentence) && !asked) { asked = true; turnQuestion = sentence; }
     spokeAny = true;
     spokeSinceTools = true;
     linesSinceTools.push(line);
@@ -647,8 +689,27 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     for (const p of pendingJob) { deps.onDropped?.(p.trim(), `claim held: ${why}`); heldWhy.push(`claim held: ${why}`); blanked = true; }
     pendingJob = [];
   };
+  // The follow-on question once its read is back: said when it asks for the same answer, else held as a second question (say); then
+  // what was said after it, in order.
+  async function* releaseFollow(): AsyncGenerator<OaiChunk> {
+    if (!follow) return;
+    const f = follow;
+    const same = await f.read;
+    follow = null;
+    if (same === true) followSame = f.s.trim();
+    const out = say(f.s);
+    followSame = "";
+    if (out) yield chunk({ content: out });
+    for (const a of f.after) { const o = say(a); if (o) yield chunk({ content: o }); }
+  }
   // The held job lines, once this round's tools are back: said when a job now backs them, else kept from the voice.
   function* releasePending(): Generator<OaiChunk> {
+    const offers = pendingOffer;
+    pendingOffer = [];
+    for (const p of offers) {
+      if (carried.has(p.kind)) { const out = say(p.s); if (out) yield chunk({ content: out }); }
+      else { const why = offerHeldWhy(p.kind); deps.onDropped?.(p.s.trim(), why); heldWhy.push(why); blanked = true; }
+    }
     const held = pendingJob;
     pendingJob = [];
     for (const p of held) {
@@ -691,6 +752,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           if (clean) for (const s of endStream(stream)) { const out = say(s); if (out) yield chunk({ content: out }); }
           stream = null;
         }
+        yield* releaseFollow();
         if (cur?.kind === "text" && cur.text.trim()) blocks.push({ type: "text", text: cur.text });
         else if (cur?.kind === "co") {
           // Started the moment its input is complete, while the voice is still saying the line before it.
@@ -751,6 +813,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
     if (stream && clean) for (const s of endStream(stream)) { const out = say(s); if (out) yield chunk({ content: out }); }
     stream = null;
+    yield* releaseFollow();
     // A "texting it now" with no send behind it in this reply: never said.
     for (const p of pendingNow) {
       const why = "claim held: says a send is happening when none is in flight";
@@ -758,7 +821,12 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       if (!voiceOnly) { heldWhy.push(why); blanked = true; }
     }
     pendingNow = [];
-    if (!runs.length) { if (pendingJob.length) dropPendingJob("says work started or promises it, and nothing was started"); break; }
+    if (!runs.length) {
+      if (pendingJob.length) dropPendingJob("says work started or promises it, and nothing was started");
+      for (const p of pendingOffer) { const why = offerHeldWhy(p.kind); deps.onDropped?.(p.s.trim(), why); heldWhy.push(why); blanked = true; }
+      pendingOffer = [];
+      break;
+    }
     const settled = await Promise.all(runs);
     const results = settled.map((x) => x.block);
     for (const x of settled) if (x.block.type === "tool_result" && !x.noCorpus) toolCorpus += `\n${x.block.content}`;
@@ -786,6 +854,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       const meta = runMeta.get(id);
       // A start that came back as a job already running (alreadyStarted): that job's own goal, never this call's input (review of #365,
       // round 2: "and a florist" returned as the caterers job would otherwise have backed "I'll text you the florists").
+      if (meta && !x.timedOut && raw && raw.ok !== false && raw.pending !== true) { const k = co?.carries?.(meta.name); if (k) carried.add(k); }
       if (meta && !x.timedOut && raw && raw.ok !== false && co?.starts?.(meta.name)) { const r2 = raw as { alreadyStarted?: unknown; goal?: unknown }; const t = r2.alreadyStarted === true ? `\n${typeof r2.goal === "string" ? r2.goal : ""}` : `\n${JSON.stringify(meta.input ?? {})}\n${JSON.stringify(raw).slice(0, 2000)}`; jobs.thisTurn++; jobs.corpus += t; jobs.callJobs += t; }
       if (tried && (raw as { owedAfterCall?: unknown } | null)?.owedAfterCall === true) owedThisRound.push(...(tried.length ? tried : ["it"]));
       if (x.timedOut || !raw || raw.ok === false) continue;
@@ -852,11 +921,13 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     blanked = true;
     spokeSinceTools = false;
   }
-  if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools)) {
+  // A held offer always gets its answer: "Sure." with the booking held back would leave them thinking it's being done.
+  const heldOffer = heldWhy.some((w) => w.startsWith("offer held: "));
+  if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools || heldOffer)) {
     const already = spokenLines.length ? ` You already said: "${spokenLines.join(" ")}". Carry on from it; don't repeat it.` : "";
     // A sentence held only for repeating what's done, asked or closed gets its own note (review of #368), never the "can't back" one.
     const moveOnly = heldWhy.length > 0 && heldWhy.every((w) => w.startsWith("move held: "));
-    const note = moveOnly ? `What you were about to say repeated something already said, sent or closed in this exchange (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer what they last said, in your own words, without repeating it.${already}` : `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${already}`;
+    const note = moveOnly ? `What you were about to say repeated something already said, sent or closed in this exchange (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer what they last said, in your own words, without repeating it.${already}` : `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${heldWhy.some((w) => w.startsWith("offer held: ")) ? " Nothing on this call can book anything or make introductions: don't offer or promise it another way (later, by text, after the call). Say plainly it isn't something you can do from here." : ""}${already}`;
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
     inRetry = true;
     let rs: SpeakableStream | null = null;

@@ -176,6 +176,8 @@ export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Rout
         if (userId) recordDecision({ layer: 8, decision: claim ? "call.claim_held" : "call.offer_unsourced", userId, outcome: "skip", action: claim ? "held_claim" : "dropped_sentence", proposal: { sentence: s.slice(0, 240) }, reason: why }).catch(() => {});
       },
       onToolRound: (r) => { if (r.overBudget) slow = true; },
+      // A follow-on question is said when it asks for the same answer as the turn's question (services/questionRead.ts).
+      sameQuestion: (a, q) => import("../services/questionRead.js").then((m) => m.haikuSameQuestion(a, q)),
       onFirstText: (t) => { timing = t; },
       // The turn ended on the last-resort line: a member who didn't get help (harness/failureCount.ts counts it).
       onLastResort: (line) => {
