@@ -1502,6 +1502,10 @@ export function sendblueRouter(io: Server): Router {
         // A failed guard read sends the old, shorter window unguarded, never the longer one.
         const chronologicalRows = await import("../services/whatCoKnows.js").then((W) => W.guardRows(user.id, chronological)).catch(() => chronological.slice(-OLD_WINDOW_ROWS));
         const recentConversation = annotateConversationGaps(chronologicalRows);
+        // Older days as dated summaries (services/daySummaries.ts), beside the thread and never inside it: a summary is Cue's note, not their
+        // words, so it stays out of recentConversation (which the learning and the gates read as the conversation). Empty until the
+        // summary job has run for them; any failure is no block.
+        const earlierSummaryP = import("../services/daySummaries.js").then((D) => D.earlierSummaryFor(user.id, { windowOldest: chronologicalRows[0]?.created_at ? new Date(chronologicalRows[0].created_at) : null })).catch(() => "");
         if (hasText) {
           turnP = assembleContext(user.id, resolvedContent, {
             inlineTarget,
@@ -1583,6 +1587,7 @@ export function sendblueRouter(io: Server): Router {
         // runs on its tail and rules.
         const replyContextStarted = Date.now();
         const snapshotP = import("../services/memberSnapshot.js").then((S) => S.replySnapshot(user.id)).catch(() => null);
+        const earlierSummary = await earlierSummaryP;
         const routeInput = {
           // Which text they replied to, so "I'm in" under an offer resolves to it.
           message: inlineTarget ? `${resolvedContent} ${inlineNote(inlineTarget)}` : resolvedContent,
@@ -2776,6 +2781,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 seekingModeContext,
                 styleHint,
                 recentConversation,
+                earlierSummary,
                 snapshot: replySnapshot,
                 personaPrompt,
                 sendCoReply: threadedSend,

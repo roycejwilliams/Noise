@@ -592,7 +592,7 @@ export function pairCalls(rows: { created_at: Date | string; memory_type: string
 // not the end of the build, so a long one can't take every later short one with it.
 // thread: the text thread (callThread), after the rest and before what was sent, outside max: it has its own budget (the reply's), and
 // a full summary never drops it, nor it anything else.
-export function assembleCallSummary(o: { haveIt?: string | null; now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number; thread?: string | null }): string {
+export function assembleCallSummary(o: { haveIt?: string | null; now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number; thread?: string | null; earlier?: string | null }): string {
   const max = o.max ?? CALL_CONTEXT_MAX;
   const sentMax = o.sentMax ?? CALL_SENT_MAX;
   const now = o.now ? `Where things stand now (start here). ${o.now}` : null;
@@ -626,7 +626,8 @@ export function assembleCallSummary(o: { haveIt?: string | null; now?: string | 
     if (next.length + reserve > max) continue;
     summary = next;
   }
-  return [summary, o.thread?.trim() || "", sent ?? ""].filter(Boolean).join("\n\n");
+  // earlier: older days as labelled summaries (services/daySummaries.ts), before the recent thread, with its own small budget.
+  return [summary, o.earlier?.trim() || "", o.thread?.trim() || "", sent ?? ""].filter(Boolean).join("\n\n");
 }
 // A call can't wait on slow page reads: whatever details are on file by then are used.
 const CALL_CONTEXT_WAIT_MS = 3000;
@@ -839,7 +840,11 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const share = Math.max(320, Math.floor((CALL_SENT_MAX - SENT_HEADER.length - (recordNote?.length ?? 0) - 12 * (named.length + 1)) / Math.max(1, named.length)));
   const sentLines = await strip([...(recordNote ? [recordNote] : []), ...sentDetailLines({ sent }, 7, new Date(), { also: named, zone, referentMax: share })]);
   const thread = callThread(k.exchanges, { guardsUnread: !!k.guardsUnread });
-  const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread });
+  // Older days, as the reply gets them (both mediums): the days before the oldest line the thread window above shows in full. Not part of
+  // `thread`, which the after-call audit reads as their words. Nothing when the guards could not be read or they have no summaries.
+  const windowOldest = threadWindow(k.exchanges.filter((x) => !x.call).map((x) => ({ content: exchangeLine(x), at: x.verifiedAt })).reverse())[0]?.at;
+  const earlier = k.guardsUnread ? "" : await withinWait(import("./daySummaries.js").then((D) => D.earlierSummaryFor(userId, { windowOldest: windowOldest ? new Date(windowOldest) : null, zone })), "the earlier-days read").catch(() => "");
+  const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread, earlier });
 
   const ledger = await strip(await ledgerLines);
   const facts = [
