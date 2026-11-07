@@ -114,12 +114,23 @@ const ownHistory = (line: string, names: string[]): boolean => {
   const slot = m ? (m[1] ?? m[2] ?? m[3] ?? "") : "";
   return !!slot && names.some((n) => n.trim() === slot);
 };
-// Everything after a linked member's name is hers until the member speaks again (2026-11-06, Royce: no cross-member leaks, safe side). The rewrite
-// replaces the part that names her; the parts after it are dropped too, however they refer back ("She left Stripe", "Left Stripe last week",
-// "It rained. She left"), across sentences, "; " items, lines and bullets, until a part that is clearly the member talking about themselves
-// (I, I'm, my, me, we), a part that names a different linked member (its own strip), or the end of the text. No pronoun or descriptor
-// list: not judging meaning, only guarding a boundary.
-const MEMBER_SPEAKS = /^[\s\-*\u2022\d.)>]*["'\u201c\u2018(]*(?:i|my|me|we)\b/i;
+// Everything after a linked member's name is hers until the text clearly turns back to the member (2026-11-06, Royce: no cross-member leaks,
+// safe side). The rewrite replaces the part that names her; the parts after it are dropped too, however they refer back ("She left
+// Stripe", "Left Stripe last week", "It rained. She left"), across sentences, "; " items and the lines of one paragraph. It ends at:
+//   - a part that opens with the member speaking (I, my, me, we) AND points back at no one (no she/he/her/him/they/them/their, no
+//     descriptor): "I told him she's moving" and "I'm pregnant, she said" keep going. In a Cue-written line (a "Co replied:" line, a
+//     snapshot line) "I" is Cue, never the member, so it ends nothing there;
+//   - a part with the member's own first name or "the member" and no pointer back (Cue's third-person lines about them);
+//   - the start of a bullet, numbered item, header or label line, or a blank line (a new paragraph): never crossed;
+//   - a part that names a different linked member (its own strip), or the end of the text.
+// A "User said:" line is the member's own words and is kept; one that named her keeps the carry into the next line.
+const MEMBER_SPEAKS = /^[\s\-*•\d.)>]*["'“‘(]*(?:i|my|me|we)\b/i;
+const POINTS_BACK = /\b(?:she|he|her|hers|him|his|herself|himself|they|them|their|theirs|themselves)\b/i;
+const DESCRIPTOR = /\b(?:the|that|this|said)\s+(?:[\w-]+\s+)?(?:founder|cofounder|co-founder|ceo|cto|designer|engineer|developer|artist|director|manager|investor|partner|friend|colleague|boss|mentor|candidate|person|woman|man|guy|lady|owner|writer|photographer|doctor|lawyer|consultant|other member|other person)\b/i;
+const pointsBack = (s: string) => POINTS_BACK.test(s) || DESCRIPTOR.test(s);
+const STRUCTURAL = /^\s*(?:(?:[-*•–]|\d+[.)])\s+|#{1,6}\s|[^.!?\n]{1,80}:\s*$|\[[^\]\n]{1,40}\]\s*$)/;
+const BULLET = /^\s*(?:[-*\u2022\u2013]|\d+[.)])\s+/;
+const CUE_LABEL = /^\s*(?:co|cue)\b[^:\n]{0,40}:/i;
 // The suffix historyLine ends a "came up" line with; a stripped part followed by it on a "; " split doesn't carry it twice.
 const SUFFIX_ONLY = /^their details aren't kept for this conversation\.?$/i;
 
@@ -146,26 +157,56 @@ export function namelessHistoryLine(sentence: string): string {
 
 // Pure: the one policy for stripping a text around linked members, shared by safeMemory (a history line with the name) and the snapshot's
 // fenceLine (nameless). Parts are lines, sentences and "; " items. A part that names a member is rewritten (or kept whole when it is the strip's
-// own output, keepPart), and carries: every part after it is dropped until one where the member speaks (MEMBER_SPEAKS) or a part that names a
-// member again. A line keepLine accepts (their own stored words) is kept and ends the carry. n counts the parts rewritten.
+// own output, keepPart), and carries: every part after it is dropped until the text turns back to the member (see MEMBER_SPEAKS above), a bullet,
+// header or paragraph starts, or a member is named again. A line keepLine accepts (their own stored words) is kept. n counts the parts rewritten.
 export function stripAfterNames(
   text: string,
-  o: { named: (s: string) => boolean; keepLine?: (line: string) => boolean; keepPart?: (s: string) => boolean; noSplit?: (sentence: string) => boolean; rewrite: (s: string) => string },
+  o: {
+    named: (s: string) => boolean;
+    keepLine?: (line: string) => boolean;
+    keepPart?: (s: string) => boolean;
+    noSplit?: (sentence: string) => boolean;
+    rewrite: (s: string) => string;
+    // The member's own first name(s): a part with one and no pointer back is Cue talking about the member, which ends the carry.
+    ownNames?: string[];
+    // False when every line is Cue's (the snapshot): "I" there is Cue. Otherwise "I" is the member's, except in a "Co replied:" line.
+    iIsMember?: boolean;
+  },
 ): { text: string; n: number } {
+  const own = (o.ownNames ?? []).map((x) => x.trim()).filter((x) => x.length >= 2);
+  const ownRe = own.length ? new RegExp(`(?<![\\p{L}\\p{N}_])(?:${own.map((x) => escape(x).replace(/\s+/g, "\\s+")).join("|")})(?![\\p{L}\\p{N}_])`, "iu") : null;
   let carrying = false;
+  let cue = !o.iIsMember;
   let n = 0;
   const lines: string[] = [];
   for (const line of text.split("\n")) {
-    if (o.keepLine?.(line)) {
+    if (!line.trim()) {
       carrying = false;
+      cue = !o.iIsMember;
       lines.push(line);
       continue;
     }
-    if (!line.trim() || (!carrying && !o.named(line))) {
+    if (STRUCTURAL.test(line)) carrying = false;
+    if (o.iIsMember && CUE_LABEL.test(line)) cue = true;
+    if (o.keepLine?.(line)) {
+      // Their own words stay; if they named her, the next line is still about her.
+      carrying = o.named(line);
       lines.push(line);
       continue;
     }
+    if (!carrying && !o.named(line)) {
+      lines.push(line);
+      continue;
+    }
+    // A bullet keeps its marker; the rest of the line is what's judged.
+    const marker = BULLET.exec(line)?.[0] ?? "";
+    const body = marker ? line.slice(marker.length) : line;
     const seen = new Set<string>();
+    const endsCarry = (part: string): boolean => {
+      if (pointsBack(part)) return false;
+      if (ownRe?.test(part) || /\bthe member\b/i.test(part)) return true;
+      return !cue && MEMBER_SPEAKS.test(part);
+    };
     const step = (part: string): string => {
       // The history line's own tail, when it was split on "; ": never a detail, and it doesn't end the carry.
       if (SUFFIX_ONLY.test(part.trim())) return part;
@@ -179,13 +220,13 @@ export function stripAfterNames(
         return h;
       }
       if (!carrying) return part;
-      if (MEMBER_SPEAKS.test(part)) {
+      if (endsCarry(part)) {
         carrying = false;
         return part;
       }
       return "";
     };
-    const sentences = line.split(/(?<=[.!?])\s+/).map((sentence) => {
+    const sentences = body.split(/(?<=[.!?])\s+/).map((sentence) => {
       // List items ("Wants right now: a cofounder; ...") are judged one by one, so the member's own items stay.
       if (!sentence.includes("; ") || !(carrying || o.named(sentence)) || o.keepPart?.(sentence) || o.noSplit?.(sentence)) return step(sentence);
       let joined = "";
@@ -199,13 +240,13 @@ export function stripAfterNames(
       return joined;
     });
     const out = sentences.filter(Boolean).join(" ");
-    if (out) lines.push(out);
+    if (out) lines.push(`${marker}${out}`);
   }
   return { text: lines.join("\n").trim(), n };
 }
 
 // Pure: one memory made safe, or null when nothing safe is left in it.
-export function safeMemory(type: string | null, content: string, linkedNames: string[]): string | null {
+export function safeMemory(type: string | null, content: string, linkedNames: string[], ownNames: string[] = []): string | null {
   const t = type ?? "";
   // An additive offer never named anyone to them: older rows listed who arrived in parentheses. Never passed on.
   if (t === "event_guest_match_nudge" && /^Additive offer\b/.test(content)) return content.replace(/\s*\([^)]*\)\s*$/, "").replace(/\bcandidate\(s\) checked in\b/, "more people checked in") + (/\bno one has been named\b/.test(content) ? "" : " No one has been named to them.");
@@ -232,6 +273,8 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
     keepLine: (line) => OWN_WORDS.test(line),
     keepPart: (x) => ownHistory(x, names),
     rewrite: (x) => historyLine(x, find(x) ?? ""),
+    ownNames,
+    iIsMember: true,
   }).text;
   return out || null;
 }
@@ -285,9 +328,22 @@ export function namesInRecords(rows: { content: string; memory_type?: string | n
 // introduced to them. The
 // member's own words ("User said: ...") are theirs and kept. A failed name lookup throws, so callers that catch it leave the
 // context out instead of sending it unstripped.
-export async function memberSafeLine(userId: string, linked?: string[]): Promise<(s: string) => string | null> {
+export async function memberSafeLine(userId: string, linked?: string[], own?: string[]): Promise<(s: string) => string | null> {
   const names = linked ?? (await memberNamesStrict(userId));
-  return (s: string) => safeMemory("context", String(s ?? ""), names);
+  const ownNames = own ?? (linked ? [] : await ownFirstName(userId));
+  return (s: string) => safeMemory("context", String(s ?? ""), names, ownNames);
+}
+
+// The member's own first name, for the strip to see where Cue's text turns back to them. Only asked when the caller is already reading the database
+// for the linked names; a failed lookup is none (the strip then drops more, never less).
+export async function ownFirstName(userId: string): Promise<string[]> {
+  try {
+    const r = await pool.query("SELECT first_name FROM users WHERE id = $1", [userId]);
+    const n = String(r.rows?.[0]?.first_name ?? "").trim();
+    return n ? [n] : [];
+  } catch {
+    return [];
+  }
 }
 
 // Only this member's own side (2026-10-28, Royce: no cross-member leaks). A name on this list is a member THIS member knows as one,
@@ -344,7 +400,8 @@ export async function memberNamesStrict(userId: string): Promise<string[]> {
 
 // Memories as the reply may read them.
 // linked: the names from linkedMemberNames, when the caller already has them.
-export async function memberSafe(userId: string, rows: { content: string; memory_type?: string | null }[], linked?: string[]): Promise<string[]> {
+export async function memberSafe(userId: string, rows: { content: string; memory_type?: string | null }[], linked?: string[], own?: string[]): Promise<string[]> {
   const names = [...new Set([...(linked ?? (await linkedMemberNames(userId))), ...namesInRecords(rows)])];
-  return rows.map((r) => safeMemory(r.memory_type ?? null, String(r.content ?? ""), names)).filter((x): x is string => !!x);
+  const ownNames = own ?? (linked ? [] : await ownFirstName(userId));
+  return rows.map((r) => safeMemory(r.memory_type ?? null, String(r.content ?? ""), names, ownNames)).filter((x): x is string => !!x);
 }

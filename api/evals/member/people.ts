@@ -53,6 +53,10 @@ const base = (people: Raw[], removed: { old: string; ref: string }[] = [], linke
 });
 const read = (people: Raw[], removed: { old: string; ref: string }[] = [], deps: Partial<Deps> = {}, linked?: string[]) => MK.memberKnowledge("u1", { include: ["people"] }, { ...base(people, removed, linked), ...deps });
 
+// The follow-on policy (memberSafeMemories.stripAfterNames) reaches the free text here too: what follows a stranger's name goes with it.
+const lk = P.buildPeople([raw({ id: "n1", firstName: "Priya", doubleYes: false, note: "Priya is a founder. She is moving to Austin to raise a fund with her brother." }), raw({ id: "n2", firstName: "Priya", doubleYes: false, note: "I already know Priya. She is going through a divorce and moving to Austin." })], { g: (t) => t, removed: [], linked: ["Priya"] }).items;
+check("a stranger's follow-on sentences are stripped from the free text, not only the sentence with the name", !/Austin|fund|brother|divorce/.test(JSON.stringify(lk)));
+
 // ---------------------------------------------------------------- a name only after a double yes
 const both = raw({ id: "pair:1:a", firstName: "Maya", doubleYes: true, mine: "yes", introduced: true, otherKey: "m" });
 const oneSided = raw({ id: "pair:2:a", firstName: "Priya", doubleYes: false, mine: "yes", otherKey: "p" });
