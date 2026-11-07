@@ -154,6 +154,13 @@ export type ConversationReplyInput = {
 // from 2026-08-27 was still "pending" over a week later and got matched
 // against an unrelated "For sure" reply on 2026-09-04, triggering an
 // unwanted real outbound call.
+// The thread as the reply prompt shows it: older days as labelled summaries first (when there are any), then the recent conversation as it
+// happened. The summaries stay out of the thread's own text, so nothing reads one as a line they said.
+export function threadSection(input: Pick<ConversationReplyInput, "recentConversation" | "earlierSummary">): string {
+  return `${input.earlierSummary ? `${input.earlierSummary}\n\n` : ""}Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
+${input.recentConversation || "(this is the start of the conversation)"}`;
+}
+
 export const CALL_OFFER_EXPIRY_DAYS = 7;
 
 // Re-checks the actual sent text for whether it's a call offer, rather than
@@ -445,8 +452,7 @@ ${renderReplyFacts(input.facts, { tail: true })}
 ${input.seekingModeContext}
 ${input.styleHint}
 ${input.isFirstContact ? `\nThis is the start of your first real conversation with ${name}. They just finished the intro: greeting, what Cue is, saving your contact, verification. What they just said may only be a greeting.${hasContext ? ` You already have real context on them (see "What you already know" above). Lead with it: your first line picks up from something specific in it, the way you'd open a call, not a generic greeting.` : ""} If it IS something real, pick up from it. If it's just a greeting or blank, don't treat it as substance. Open the real conversation yourself${hasContext ? ", grounded in what you already know" : ""}: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
-${input.earlierSummary ? `${input.earlierSummary}\n\n` : ""}Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
-${input.recentConversation || "(this is the start of the conversation)"}
+${threadSection(input)}
 
 ${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.lastReaction ? `Your last reaction to them was ${input.lastReaction}; if you react this time, use a different one.\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
 

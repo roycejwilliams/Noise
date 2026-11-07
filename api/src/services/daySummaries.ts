@@ -44,9 +44,13 @@ export const SUMMARY_HEAD =
 
 // Model-facing: the instruction for one day (the Copy section of the PR). Haiku, one call per day.
 export const SUMMARY_PROMPT = `You are writing a short dated note for Cue, a member's companion, about ONE past day of the member's conversation with Cue. The lines below are that day, oldest first: "User said" is the member, and the other lines are Cue.
-Write 2 to 4 plain sentences about what the member was in the middle of that day: what they were dealing with, what they asked Cue for, what was decided or left open, and how they seemed. Use "they" for the member and "Cue" for Cue.
+Write 2 to 4 plain sentences about what the member was in the middle of that day: what they were dealing with, what they asked Cue for, what was decided or left open. Use "they" for the member and "Cue" for Cue.
 Rules:
 - Only what the lines say. Never invent, never guess a reason, never add anything from outside the lines.
+- Each thing only as far along as they said it is: planned is not started, started is not done.
+- Never state that they went to, attended or did something unless they said they did. What they meant to do stays intent ("planned to", "said they would").
+- Silence or a missing reply is not a fact: never write that they did not answer, ignored, declined or lost interest.
+- Feelings: only how they said they felt, in their own words, and only if they said it. Never read a mood into a line.
 - Never quote them: no quotation marks, no sentence of theirs repeated word for word.
 - Say who did what: what they told Cue is different from what Cue offered or found.
 - Leave out another person's contact details, and any detail about anyone that is not needed to understand the member's day.
@@ -119,7 +123,7 @@ export function cleanSummary(raw: string | null | undefined, strip: Strip): stri
   return s && s.trim() ? s.trim() : null;
 }
 
-export type StoredSummary = { id: string; day: string; summary: string; source_ids: string[]; source_stamp: string };
+export type StoredSummary = { id: string; day: string; summary: string; source_ids: string[]; source_stamp: string; status?: string };
 
 // Pure: whether a stored summary still stands: every source row is there and reads the same through the guards as when it was built.
 export function stillStands(s: Pick<StoredSummary, "source_ids" | "source_stamp">, sources: Pick<SrcRow, "id" | "memory_type" | "content">[], guards: ForgottenRow[]): boolean {
@@ -149,6 +153,29 @@ export function summaryBlock(items: { day: string; summary: string; sources: num
   return picked.length ? `${SUMMARY_HEAD}\n${picked.reverse().join("\n")}` : "";
 }
 
+// Every stored summary of the member (not just the newest few the read loads), checked against how its source rows read through the
+// guards now. A summary whose source line was removed, corrected or deleted, or whose own text says a removed thing, is deleted: free,
+// no model. The day then has no summary, so the job writes it once more from the guarded lines (or not at all when nothing is left).
+// A blank record (a paid attempt that came back empty) goes the same way when its stamp no longer matches, so a changed day gets one
+// new try and an unchanged one never gets a second. Returns how many were deleted; guards unreadable (null): nothing is deleted.
+export async function pruneStale(db: Db, userId: string, guards: ForgottenRow[] | null): Promise<number> {
+  if (guards === null) return 0;
+  const { rows } = await db.query(`SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp, status FROM member_day_summaries WHERE user_id = $1`, [userId]);
+  if (!rows.length) return 0;
+  const ids = [...new Set(rows.flatMap((r: any) => r.source_ids as string[]))];
+  const src = ids.length ? (await db.query(`SELECT id::text AS id, memory_type, content FROM co_memories WHERE user_id = $1 AND id = ANY($2::uuid[])`, [userId, ids])).rows : [];
+  const stale = (rows as StoredSummary[]).filter((r) => !stillStands(r, src, guards) || (r.status !== "blank" && guardText(r.summary, guards) === null)).map((r) => r.id);
+  if (stale.length) await db.query(`DELETE FROM member_day_summaries WHERE user_id = $1 AND id::text = ANY($2::text[])`, [userId, stale]);
+  return stale.length;
+}
+
+// Right after a removal or correction (services/whatCoKnows.ts applyKnowledgeChanges): the guards are read fresh and the member's stale
+// summaries are cleared at once, not at the next reply. Best effort; the read path withholds them anyway.
+export async function pruneAfterChange(userId: string, db: Db = pool): Promise<number> {
+  const guards = await import("./whatCoKnows.js").then((W) => W.forgottenRows(userId, db as any, { all: true })).catch(() => null);
+  return pruneStale(db, userId, guards).catch(() => 0);
+}
+
 // ---------------------------------------------------------------- read (free, per reply)
 
 // The block a reply or a call gets for one member. before: the oldest moment already shown in full in the thread window, so a day the
@@ -165,7 +192,7 @@ export async function earlierSummaryBlock(
     const cutoff = o.windowOldest ? dayOf(o.windowOldest, o.zone) : "9999-12-31";
     const { rows } = await db.query(
       `SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp FROM member_day_summaries
-       WHERE user_id = $1 AND day < $2::date ORDER BY day DESC LIMIT $3`,
+       WHERE user_id = $1 AND status = 'ok' AND day < $2::date ORDER BY day DESC LIMIT $3`,
       [userId, cutoff, SUMMARY.recentN * 2],
     );
     if (!rows.length) return "";
@@ -215,51 +242,78 @@ export type JobDeps = {
   guardsFor: (userId: string) => Promise<ForgottenRow[] | null>;
   zoneFor: (userId: string) => Promise<string | null>;
   maxDays?: number;
+  lookbackDays?: number;
 };
-export type JobResult = { members: number; days: number; written: number; skipped: number; failed: number };
+export type JobResult = { members: number; days: number; written: number; blank: number; pruned: number; skipped: number; failed: number };
 
-// One run: for each member with older conversation, every day old enough that has no summary and enough to say. Newest days first,
-// at most maxDaysPerRun in all. A day with a summary is never summarized again (ON CONFLICT DO NOTHING); a summary deleted for
-// forgetting is the only way a day comes round again. Only the member's own rows are read (user_id = $1).
+// Pure: the member's local window for a run: from the start of the local day lookbackDays back (so the oldest day is whole, across a
+// clock change too) up to, not including, the start of the day after the last summarizable one.
+export function runWindow(now: Date, zone: string | null | undefined, lookbackDays: number): { from: Date; to: Date; last: string } {
+  const z = wordsZone(zone);
+  const last = lastSummarizableDay(now, zone);
+  return {
+    from: DateTime.fromJSDate(now).setZone(z).minus({ days: lookbackDays }).startOf("day").toJSDate(),
+    to: DateTime.fromISO(last, { zone: z }).plus({ days: 1 }).startOf("day").toJSDate(),
+    last,
+  };
+}
+
+// One run. Members with the fewest summaries go first and each gets a fair share of the run's day budget (budget / members, at least
+// one), so a backfill of one member never starves the rest. For each member: first every stored summary is checked against the guards
+// (all of them) and stale ones are deleted, then every day old enough that has no record and enough to say is summarized, newest
+// first. A day with a record, a summary or a blank, is never paid for again at the same stamp (ON CONFLICT DO NOTHING): a summary is
+// replaced only after its sources changed, and a day that came back empty is recorded with its stamp and tried again only if the
+// stamp changes. Only the member's own rows are read (user_id = $1).
 export async function runDaySummaries(d: JobDeps): Promise<JobResult> {
-  const res: JobResult = { members: 0, days: 0, written: 0, skipped: 0, failed: 0 };
+  const res: JobResult = { members: 0, days: 0, written: 0, blank: 0, pruned: 0, skipped: 0, failed: 0 };
   const budget = d.maxDays ?? SUMMARY.maxDaysPerRun;
-  const since = new Date(d.now.getTime() - SUMMARY.lookbackDays * 86_400_000);
-  const upto = new Date(d.now.getTime() - SUMMARY.minAgeDays * 86_400_000 + 86_400_000);
+  const lookback = d.lookbackDays ?? SUMMARY.lookbackDays;
+  const wide = { from: new Date(d.now.getTime() - (lookback + 1) * 86_400_000), to: new Date(d.now.getTime() - (SUMMARY.minAgeDays - 2) * 86_400_000) };
   const who = await d.db.query(
-    `SELECT DISTINCT m.user_id::text AS user_id FROM co_memories m JOIN users u ON u.id = m.user_id
-     WHERE u.archived_at IS NULL AND m.memory_type IN ('text_exchange', 'call_transcript') AND m.created_at >= $1 AND m.created_at < $2`,
-    [since, upto],
+    `SELECT u.id::text AS user_id FROM users u
+     WHERE u.archived_at IS NULL AND EXISTS (SELECT 1 FROM co_memories m WHERE m.user_id = u.id AND m.memory_type IN ('text_exchange', 'call_transcript') AND m.created_at >= $1 AND m.created_at < $2)
+     ORDER BY (SELECT count(*) FROM member_day_summaries s WHERE s.user_id = u.id), u.id`,
+    [wide.from, wide.to],
   );
-  for (const { user_id: userId } of who.rows as { user_id: string }[]) {
+  const members = who.rows as { user_id: string }[];
+  const share = Math.max(1, Math.floor(budget / Math.max(1, members.length)));
+  for (const { user_id: userId } of members) {
     if (res.days >= budget) break;
     res.members++;
     try {
       const fence = await d.fenceFor(userId);
       const guards = await d.guardsFor(userId);
-      // Unreadable names or guards: this member's days wait (never a summary that may carry another member's details or removed words).
+      // Unreadable names or guards: this member waits (never a summary that may carry another member's details or removed words).
       if (fence.failed || guards === null) { res.skipped++; continue; }
+      res.pruned += await pruneStale(d.db, userId, guards);
       const zone = await d.zoneFor(userId);
-      const last = lastSummarizableDay(d.now, zone);
+      const win = runWindow(d.now, zone, lookback);
       const have = new Set((await d.db.query(`SELECT to_char(day, 'YYYY-MM-DD') AS day FROM member_day_summaries WHERE user_id = $1`, [userId])).rows.map((r: any) => r.day as string));
       const rows = (await d.db.query(
         `SELECT id::text AS id, memory_type, content, created_at FROM co_memories
          WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') AND created_at >= $2 AND created_at < $3
            AND (memory_type <> 'text_exchange' OR ${notToTeammate()}) ORDER BY created_at, id`,
-        [userId, since, upto],
+        [userId, win.from, win.to],
       )).rows as SrcRow[];
+      let mine = 0;
       for (const day of dayInputs(rows, zone, guards, fence.strip)) {
-        if (res.days >= budget) break;
-        if (day.day > last || have.has(day.day)) continue;
+        if (res.days >= budget || mine >= share) break;
+        if (day.day > win.last || have.has(day.day)) continue;
         res.days++;
-        const text = cleanSummary(await d.summarize(userId, { day: day.day, text: day.text }).catch(() => null), fence.strip);
-        if (!text) { res.failed++; continue; }
+        mine++;
+        // A call that threw (a refused or timed-out request) is not recorded: nothing came back to pay for. One that came back empty, or
+        // that the name strip blanked, was paid for and is recorded with its stamp below.
+        let raw: string | null;
+        try { raw = await d.summarize(userId, { day: day.day, text: day.text }); } catch { res.failed++; continue; }
+        const text = cleanSummary(raw, fence.strip);
+        const blank = !text;
         await d.db.query(
-          `INSERT INTO member_day_summaries (user_id, day, zone, summary, source_ids, source_stamp, model) VALUES ($1, $2::date, $3, $4, $5::text[], $6, $7)
+          `INSERT INTO member_day_summaries (user_id, day, zone, summary, status, source_ids, source_stamp, model) VALUES ($1, $2::date, $3, $4, $5, $6::text[], $7, $8)
            ON CONFLICT (user_id, day) DO NOTHING`,
-          [userId, day.day, zone, text, day.rows.map((r) => r.id), stampOf(day.rows, guards), "haiku"],
+          [userId, day.day, zone, text ?? "", blank ? "blank" : "ok", day.rows.map((r) => r.id), stampOf(day.rows, guards), "haiku"],
         );
-        res.written++;
+        if (blank) res.blank++;
+        else res.written++;
       }
     } catch (err: any) {
       res.failed++;
@@ -270,6 +324,9 @@ export async function runDaySummaries(d: JobDeps): Promise<JobResult> {
 }
 
 // The real dependencies. This is the only place that spends: one Haiku call per day, under the member's cost mark.
+// Cost ceiling per day: thinking cannot be turned off on Haiku 5.x (thinkingRoom.ts adds THINKING_ROOM = 2048 to max_tokens on every request),
+// so the output is bounded at maxOutputTokens + 2048 = 2,348 tokens ($0.0012) and the input at about 3,400 tokens ($0.0003): $0.0015 a day,
+// at most maxDaysPerRun (60) a run: $0.09. Typical is far below (a short read like this one thinks little), but that is not measured here.
 export async function realJobDeps(now = new Date()): Promise<JobDeps> {
   const [{ generateText }, { anthropic }, { MODELS }, { withMember }, { withTraceUser }, W, F, T] = await Promise.all([
     import("ai"), import("@ai-sdk/anthropic"), import("../models.js"), import("./llmUsage.js"), import("./llmTraceText.js"), import("./whatCoKnows.js"), import("./sourceFence.js"), import("./memberTime.js"),

@@ -17,13 +17,15 @@ const check = (label: string, ok: boolean, detail: unknown = "") => {
 };
 
 type Row = { id: string; user_id: string; memory_type: string; content: string; created_at: Date };
-type Sum = { id: string; user_id: string; day: string; zone: string | null; summary: string; source_ids: string[]; source_stamp: string; model: string };
+type Sum = { id: string; user_id: string; day: string; zone: string | null; summary: string; status: string; source_ids: string[]; source_stamp: string; model: string };
 const JORDAN = "00000000-0000-4000-8000-00000000a001";
 const PRIYA = "00000000-0000-4000-8000-00000000b002";
 let seq = 0;
 const rows: Row[] = [];
 const sums: Sum[] = [];
 const asked: { sql: string; args: unknown[] }[] = [];
+let sumSeq = 0;
+const corrections: any[] = [];
 const add = (user_id: string, at: string, memory_type: string, content: string) => { rows.push({ id: `row-${String(++seq).padStart(4, "0")}`, user_id, memory_type, content, created_at: new Date(at) }); return rows[rows.length - 1].id; };
 const longText = (s: string) => `${s} ${"and we talked it over for a while, ".repeat(9)}`;
 
@@ -31,19 +33,22 @@ const db = {
   query: async (sql: string, args: unknown[] = []) => {
     asked.push({ sql, args });
     const u = args[0] as string;
-    if (/SELECT DISTINCT m\.user_id/.test(sql)) {
+    if (/FROM users u\s+WHERE u\.archived_at/.test(sql)) {
       const ids = [...new Set(rows.filter((r) => +r.created_at >= +(args[0] as Date) && +r.created_at < +(args[1] as Date)).map((r) => r.user_id))];
-      return { rows: ids.map((user_id) => ({ user_id })) };
+      const have = (id: string) => sums.filter((x) => x.user_id === id).length;
+      return { rows: ids.sort((a, b) => have(a) - have(b) || a.localeCompare(b)).map((user_id) => ({ user_id })) };
     }
+    if (/FROM profile_corrections/.test(sql)) return { rows: corrections.filter(() => true) };
+    if (/status FROM member_day_summaries WHERE user_id = \$1$/.test(sql.trim())) return { rows: sums.filter((x) => x.user_id === u) };
     if (/^SELECT 1 FROM member_day_summaries/.test(sql.trim())) return { rows: sums.filter((s) => s.user_id === u).slice(0, 1).map(() => ({ "?column?": 1 })) };
     if (/SELECT to_char\(day, 'YYYY-MM-DD'\) AS day FROM member_day_summaries WHERE user_id = \$1$/.test(sql.trim())) return { rows: sums.filter((s) => s.user_id === u).map((s) => ({ day: s.day })) };
-    if (/FROM member_day_summaries\s+WHERE user_id = \$1 AND day < \$2::date/.test(sql)) {
-      const out = sums.filter((s) => s.user_id === u && s.day < (args[1] as string)).sort((a, b) => b.day.localeCompare(a.day)).slice(0, Number(args[2]));
+    if (/FROM member_day_summaries\s+WHERE user_id = \$1 AND status = 'ok' AND day < \$2::date/.test(sql)) {
+      const out = sums.filter((s) => s.user_id === u && s.status === "ok" && s.day < (args[1] as string)).sort((a, b) => b.day.localeCompare(a.day)).slice(0, Number(args[2]));
       return { rows: out };
     }
     if (/INSERT INTO member_day_summaries/.test(sql)) {
-      const [user_id, day, zone, summary, source_ids, source_stamp, model] = args as [string, string, string | null, string, string[], string, string];
-      if (!sums.some((s) => s.user_id === user_id && s.day === day)) sums.push({ id: `sum-${sums.length + 1}`, user_id, day, zone, summary, source_ids, source_stamp, model });
+      const [user_id, day, zone, summary, status, source_ids, source_stamp, model] = args as [string, string, string | null, string, string, string[], string, string];
+      if (!sums.some((s) => s.user_id === user_id && s.day === day)) sums.push({ id: `sum-${++sumSeq}`, user_id, day, zone, summary, status, source_ids, source_stamp, model });
       return { rows: [] };
     }
     if (/DELETE FROM member_day_summaries/.test(sql)) {
@@ -116,7 +121,7 @@ const mkDeps = (over: Partial<import("../../src/services/daySummaries.js").JobDe
 {
   check("isolation: another member's rows never reach Jordan's model input", seen.filter((x) => x.userId === JORDAN).every((x) => !/PRIYA-ONLY/.test(x.text)));
   check("isolation: each member's summary is built from that member's rows only", sums.filter((s) => s.user_id === JORDAN).every((s) => s.source_ids.every((id) => rows.find((r) => r.id === id)?.user_id === JORDAN)) && sums.filter((s) => s.user_id === PRIYA).every((s) => s.source_ids.every((id) => rows.find((r) => r.id === id)?.user_id === PRIYA)));
-  check("isolation: every read of rows or summaries is scoped to one user id", asked.filter((q) => /FROM co_memories|FROM member_day_summaries/.test(q.sql) && !/SELECT DISTINCT m\.user_id/.test(q.sql)).every((q) => /user_id = \$1/.test(q.sql)));
+  check("isolation: every read of rows or summaries is scoped to one user id", asked.filter((q) => /FROM co_memories|FROM member_day_summaries/.test(q.sql) && !/FROM users u/.test(q.sql)).every((q) => /user_id = \$1/.test(q.sql)));
   const named = await D.runDaySummaries(mkDeps({ summarize: async () => "They talked about a plan with Priya and a trip.", db: { query: async (sql: string, a?: unknown[]) => (/SELECT to_char\(day/.test(sql) ? { rows: [] } : /ON CONFLICT/.test(sql) ? { rows: [] } : db.query(sql, a)) } }));
   check("name strip: a written summary that names another member is not stored", named.written === 0 && !sums.some((s) => /Priya/.test(s.summary)), named);
   check("name strip: input lines go through the fence too", D.dayInputs([{ id: "x", memory_type: "text_exchange", content: longText("User said: Dana called and so did Priya"), created_at: new Date("2026-10-01T10:00:00Z") }], ZONE, [], strip).length === 0);
@@ -203,17 +208,115 @@ let guards_: W.ForgottenRow[] = [];
   check("bounded: maxDays stops a run", capped.days <= 1);
 }
 
-// ---- 7. both mediums see the block, outside the thread
+// ---- 7. both mediums see the block, outside the thread (behaviour: what each prompt is built to show)
 {
-  const src = (f: string) => fs.readFileSync(path.join(new URL("../..", import.meta.url).pathname, f), "utf8");
-  const reply = src("src/agent/conversationReply.ts");
-  check("reply: the prompt puts the summary block before the recent thread", reply.indexOf("input.earlierSummary") > 0 && reply.indexOf("input.earlierSummary") < reply.indexOf("Recent conversation, in order"));
-  const route = src("src/routes/sendblue.ts");
-  check("reply: the summaries ride beside recentConversation, never inside it", /earlierSummary,\s*\n\s*snapshot: replySnapshot/.test(route) && !/recentConversation = .*earlier/i.test(route));
+  const RP = await import("../../src/agent/conversationReply.js");
+  const block = "Earlier, in summary. x\n- Sun Nov 1 (summary of 3 lines): y";
+  const withIt = RP.threadSection({ recentConversation: "User said: hi\nCo replied: hello", earlierSummary: block });
+  check("reply: the summary block comes before the recent thread, and the thread text itself is untouched", withIt.indexOf("Earlier, in summary") === 0 && withIt.indexOf("Earlier, in summary") < withIt.indexOf("Recent conversation, in order") && withIt.endsWith("User said: hi\nCo replied: hello"), withIt);
+  check("reply: without summaries the section is exactly the old one", RP.threadSection({ recentConversation: "User said: hi" }) === "Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.\nUser said: hi");
+  check("reply: an empty thread still says it is the start", /start of the conversation/.test(RP.threadSection({ recentConversation: "", earlierSummary: block })));
   const CC = await import("../../src/services/callContext.js");
-  const sum = CC.assembleCallSummary({ lessons: [], sentLines: [], threads: [], base: "Who they are.", thread: "Your recent texts with them, oldest first:\nUser said: hi", earlier: "Earlier, in summary. x\n- Sun Nov 1 (summary of 3 lines): y" });
+  const sum = CC.assembleCallSummary({ lessons: [], sentLines: [], threads: [], base: "Who they are.", thread: "Your recent texts with them, oldest first:\nUser said: hi", earlier: block });
   check("call: the same block sits before the recent texts, labelled", sum.indexOf("Earlier, in summary") > 0 && sum.indexOf("Earlier, in summary") < sum.indexOf("Your recent texts with them"));
   check("call: without it the summary is as before", !/Earlier, in summary/.test(CC.assembleCallSummary({ lessons: [], sentLines: [], threads: [], base: "Who they are.", thread: "t" })));
+  // the cutoff time uses the same rows (and the same long-text marker) as the thread the call shows
+  const huge = "word ".repeat(2000);
+  const ex = (text: string, from: "member" | "co", at: string) => ({ text, from, verifiedAt: at, call: false }) as any;
+  const exs = [ex("old line", "member", "2026-11-01T10:00:00Z"), ex("Cue's answer", "co", "2026-11-01T10:01:00Z"), ex(huge, "member", "2026-11-02T10:00:00Z"), ex("last", "member", "2026-11-03T10:00:00Z")];
+  const rowsOf = CC.callThreadRows(exs);
+  check("call: a text too long for the window is the marker in the rows, as in the thread, and rows carry their time", rowsOf.some((r) => /a long text of theirs/.test(r.content)) && rowsOf.every((r) => !!r.at) && CC.callThread(exs).split("\n").length === rowsOf.length + 1);
+}
+
+// ---- 8. grounding: the prompt carries the house rules
+{
+  const P = D.SUMMARY_PROMPT;
+  check("prompt: each thing only as far along as they said it is", /planned is not started, started is not done/.test(P));
+  check("prompt: attendance is never stated, intent stays intent", /Never state that they went to, attended or did something unless they said they did/.test(P) && /intent/.test(P));
+  check("prompt: silence or a missing reply is not a fact", /Silence or a missing reply is not a fact/.test(P));
+  check("prompt: feelings only as they said them, in their own words; no 'how they seemed'", /only how they said they felt, in their own words, and only if they said it/.test(P) && !/seemed/i.test(P));
+  check("prompt: no quotes, no invention, who did what", /Never quote them/.test(P) && /Never invent/.test(P) && /Say who did what/.test(P));
+  check("prompt: no old house name in it", !/\bCo\b/.test(P));
+}
+
+// ---- 9. forgetting across ALL stored days (the read loads only the newest), and straight after a removal
+const LONG = "00000000-0000-4000-8000-00000000d003";
+const longIds: string[] = [];
+let THINGS: string[] = [];
+const lineWords = (d: number) => [d - 1, d + 7, d + 13, d + 19, d + 25].map((i) => THINGS[i % 30]).join(" ");
+{
+  THINGS = "kiln saffron lantern harbor quartz meadow copper velvet orchid anchor ember willow marble thistle cobalt juniper pewter sorrel tundra fennel garnet basalt cypress indigo walnut ribbon topaz bramble clover mistral".split(" ");
+  for (let d = 1; d <= 30; d++) longIds.push(add(LONG, `2026-10-${String(d).padStart(2, "0")}T18:00:00Z`, "text_exchange", longText(`User said: ${lineWords(d)}`)));
+  await D.runDaySummaries(mkDeps({ maxDays: 400 }));
+  const mine = sums.filter((x) => x.user_id === LONG);
+  check("30 days: thirty summaries are stored for the member", mine.length === 30 && mine.every((x) => x.status === "ok"), mine.length);
+  const oldest = mine.find((x) => x.day === "2026-10-01")!;
+  const oldestId = oldest.id;
+  const loaded = (await db.query(`SELECT id::text AS id FROM member_day_summaries WHERE user_id = $1 AND status = 'ok' AND day < $2::date ORDER BY day DESC LIMIT $3`, [LONG, "9999-12-31", D.SUMMARY.recentN * 2])).rows;
+  check("30 days: the oldest is far past the 14 the read path loads", !loaded.some((x: any) => x.id === oldestId));
+  const gone = W.liveGuards([{ field: "life", old: lineWords(1), now: null, ref: "claim:9", removed: true }]);
+  seen.length = 0;
+  const callsBefore = modelCalls;
+  const res = await D.runDaySummaries(mkDeps({ maxDays: 400, guardsFor: async () => gone }));
+  const after = sums.filter((x) => x.user_id === LONG);
+  const oldestNow = after.find((x) => x.day === "2026-10-01");
+  check("30 days: after a line is removed from the oldest day, the job deletes that stored row", res.pruned >= 1 && !after.some((x) => x.id === oldestId), res);
+  check("30 days: the day is gone (nothing left to say) or regenerated from the guarded lines only", !oldestNow || (oldestNow.id !== oldestId && !seen.some((x) => x.day === "2026-10-01" && new RegExp(THINGS[0]).test(x.text))), { oldestNow, seen: seen.map((x) => x.day) });
+  check("30 days: the other twenty-nine are untouched and no other day is summarized again", after.filter((x) => x.day !== "2026-10-01").length === 29 && modelCalls - callsBefore === seen.length && seen.every((x) => x.day === "2026-10-01"), { calls: modelCalls - callsBefore, seen: seen.map((x) => x.day) });
+  // straight after a removal: no job, no read
+  const d2 = sums.find((x) => x.user_id === LONG && x.day === "2026-10-13")!;
+  corrections.push({ field: "life", old_value: lineWords(13), new_value: null, item_ref: "claim:5", removed: true });
+  const n = await D.pruneAfterChange(LONG, db);
+  check("removal: straight after it, the summary built on the removed line is deleted (no waiting for the next read)", n >= 1 && !sums.some((x) => x.id === d2.id) && sums.filter((x) => x.user_id === LONG).length >= 27, n);
+  corrections.length = 0;
+  check("removal: another member's summaries are not touched", sums.filter((x) => x.user_id === JORDAN).length === 2);
+  check("removal: unreadable guards delete nothing", (await D.pruneStale(db, LONG, null)) === 0);
+}
+
+// ---- 10. no repeat spend: an empty or blanked result is recorded with its stamp
+{
+  const B = "00000000-0000-4000-8000-00000000e004";
+  const bid = add(B, "2026-10-10T18:00:00Z", "text_exchange", longText("User said: the supplier invoice and the kiln schedule for the week"));
+  let calls = 0;
+  const empty = (over: any = {}) => mkDeps({ summarize: async (u) => { if (u !== B) return "They sorted a few errands."; calls++; return "   "; }, ...over });
+  const r1 = await D.runDaySummaries(empty());
+  const rec = sums.find((x) => x.user_id === B);
+  check("blank: an empty answer is recorded as blank with its stamp and sources", r1.blank === 1 && !!rec && rec.status === "blank" && rec.summary === "" && rec.source_ids.includes(bid) && /^[0-9a-f]{16}$/.test(rec.source_stamp), { r1, rec });
+  const r2 = await D.runDaySummaries(empty());
+  check("blank: the same stamp is never paid for again", calls === 1 && sums.filter((x) => x.user_id === B).length === 1 && r2.members >= 1, { calls, r2 });
+  check("blank: it is never shown", (await D.earlierSummaryBlock(B, { strip, guards: [], zone: ZONE, now: NOW }, db)) === "");
+  check("blank: a note the name strip blanks is recorded as blank too (cleanSummary gives null, so the same path)", D.cleanSummary("A note about Priya.", strip) === null);
+  // a threw call is not recorded (nothing came back to pay for)
+  const T = "00000000-0000-4000-8000-00000000f005";
+  add(T, "2026-10-11T18:00:00Z", "text_exchange", longText("User said: the florist and the table rental"));
+  const thrown = await D.runDaySummaries(mkDeps({ summarize: async (u) => { if (u === T) throw new Error("refused"); return "They sorted a few errands."; } }));
+  check("blank: a request that threw leaves no record, so it can be tried again", thrown.failed >= 1 && !sums.some((x) => x.user_id === T));
+  // the stamp changes (a source line is removed later): one new try, then it stands again
+  const g = W.liveGuards([{ field: "life", old: "supplier invoice and the kiln schedule", now: "vendor invoice", ref: "claim:b", removed: false }]);
+  const r3 = await D.runDaySummaries(empty({ guardsFor: async () => g }));
+  check("blank: when the day's stamp changes the record is dropped and the day tried once more", r3.pruned >= 1 && calls === 2, { r3, calls });
+  const r4 = await D.runDaySummaries(empty({ guardsFor: async () => g }));
+  check("blank: and not again at the new stamp", calls === 2 && r4.pruned === 0, { calls, r4 });
+}
+
+// ---- 11. whole local days, DST, and a fair share
+{
+  const win = D.runWindow(new Date("2026-11-08T20:00:00Z"), ZONE, 10);
+  const z = (d: Date) => DateTimeOf(d);
+  const DateTimeOf = (d: Date) => new Date(d.toLocaleString("en-US", { timeZone: ZONE }));
+  const localFrom = z(win.from), localTo = z(win.to);
+  check("window: the oldest day is whole (starts at local midnight)", localFrom.getHours() === 0 && localFrom.getMinutes() === 0 && localFrom.getDate() === 29, localFrom);
+  check("window: it ends at a local midnight after the last summarizable day", localTo.getHours() === 0 && win.last === "2026-11-06" && localTo.getDate() === 7, { localTo, last: win.last });
+  const spring = D.runWindow(new Date("2026-03-15T20:00:00Z"), ZONE, 7);
+  check("window: across the March clock change the start is still local midnight", z(spring.from).getHours() === 0 && z(spring.from).getDate() === 8, z(spring.from));
+  check("window: the dayOf of a late-evening Pacific text is that Pacific day", D.dayOf("2026-11-06T06:30:00Z", ZONE) === "2026-11-05");
+  // fair share: three members, a budget of three days, one day each, the member with the fewest summaries first
+  const F: string[] = ["00000000-0000-4000-8000-0000000f1001", "00000000-0000-4000-8000-0000000f1002", "00000000-0000-4000-8000-0000000f1003"];
+  for (const m of F) for (let d = 12; d <= 20; d++) add(m, `2026-10-${d}T18:00:00Z`, "text_exchange", longText(`User said: fair-share fixture ${m.slice(-2)} day ${d}`));
+  sums.splice(0, sums.length, ...sums.filter((x) => !F.includes(x.user_id)));
+  const gotBy: Record<string, number> = {};
+  const r = await D.runDaySummaries(mkDeps({ maxDays: 3, summarize: async (u) => { gotBy[u] = (gotBy[u] ?? 0) + 1; return "They sorted errands."; } }));
+  check("fair share: one member's backlog does not use the run's whole budget", F.every((m) => (gotBy[m] ?? 0) <= 1) && r.days <= 3, gotBy);
 }
 
 console.log(`day summaries: ${total - failed}/${total} passed`);

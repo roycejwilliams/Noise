@@ -1116,6 +1116,9 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     await client.query("COMMIT");
     // The reply's pinned snapshot still says what changed: its next reply pins afresh (services/memberSnapshot.ts dropPin).
     if (applied.length) await import("./memberSnapshot.js").then((S) => S.dropPin(userId)).catch(() => {});
+    // Their dated summaries of older days are checked against the new removal at once (services/daySummaries.ts): one built on a line they just
+    // removed or corrected is deleted now and written again from the guarded lines, not left until the next reply reads it.
+    if (applied.length) await import("./daySummaries.js").then((D) => D.pruneAfterChange(userId)).catch(() => {});
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
