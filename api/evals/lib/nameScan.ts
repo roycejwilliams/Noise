@@ -27,6 +27,7 @@ export const ALLOWED: { file: string; text: string; why: string; exact?: true }[
   { file: "api/src/services/daySummaries.ts", text: "Co is looking:", why: "reader of the stored search-note prefix, left out of the day summaries" },
   { file: "api/src/services/daySummaries.ts", text: "Co initiated call", why: "reader of the stored call-attempt marker, left out of the day summaries" },
   { file: "api/src/services/conversationRecall.ts", text: "Co is looking:", why: "SQL reader of the stored search-note prefix, left out of recall" },
+  { file: "api/src/services/matchPicture.ts", text: "Co initiated call", why: "SQL reader of the stored call-attempt marker, left out of the matching denylist" },
   { file: "api/src/services/conversationRecall.ts", text: "Co initiated call", why: "SQL reader of the stored call-attempt marker, left out of recall" },
   { file: "api/src/services/callTrigger.ts", text: "Co initiated call to ", why: "stored marker row of a call attempt, read by SQL elsewhere" },
   ...["api/src/harness/callGate.ts", "api/src/harness/proactive.ts", "api/src/jobs/index.ts", "api/src/services/claims.ts", "api/src/services/elevenLabsCalls.ts", "api/src/services/memoryCompaction.ts", "api/src/services/firstCall.ts"].map((file) => ({ file, text: "Co initiated call", why: "SQL reader of the stored call-attempt marker" })),
