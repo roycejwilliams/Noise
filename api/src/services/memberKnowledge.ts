@@ -63,6 +63,8 @@ import { eventsOf, guardEvents, loadEvents, type EventItem, type RawEvents } fro
 import { notToTeammate } from "./teamLines.js";
 import type { SentItem } from "./turnContext.js";
 import { buildPeople, loadPeople, type Person, type RawPerson } from "./knowledge/people.js";
+import { matchSent, type SentRecord } from "./knowledge/sent.js";
+import type { EventLike } from "./eventIdentity.js";
 
 // ---------------------------------------------------------------- types
 
@@ -627,18 +629,28 @@ export function settleGoalCorrections<C extends Correction>(corrections: C[], go
 // Pure: everything Co sent them, one entry per thing (a URL or a name), from all three records. at is the newest send of it.
 export function mergeDelivered(o: { ledger: RawSent[]; offers: SentItem[] }): Fact<Delivered>[] {
   const items: Fact<Delivered>[] = [];
-  const find = (what: string, url: string | null) => {
-    const u = urlKey(url), n = norm(what);
-    return items.find((i) => (u && urlKey(i.url) === u) || (n && norm(i.what) === n));
+  // The same thing is the lookup's rule (knowledge/sent.ts): one link, one event (an id, or one event on two platforms), or one name when
+  // neither says which event. A recurring event (the same name, a new id or date) is its own entry, not folded into the last one.
+  const recs: SentRecord[] = [];
+  const find = (what: string, url: string | null, eventId: string | null, ident: EventLike) => {
+    const p = { name: what, url, eventId, ident };
+    const i = recs.findIndex((r) => matchSent(r, p) !== null);
+    return i < 0 ? undefined : { item: items[i], rec: recs[i] };
   };
-  const add = (x: { what: string; kind: string; at: Date; via: DeliveredVia; url: string | null; reaction?: string | null }) => {
+  const add = (x: { what: string; kind: string; at: Date; via: DeliveredVia; url: string | null; reaction?: string | null; eventId?: string | null; ident?: EventLike }) => {
     if (!x.what.trim()) return;
-    const had = find(x.what, x.url);
+    const ident: EventLike = { name: x.what, url: x.url, ...(x.ident ?? {}) };
+    const hit = find(x.what, x.url, x.eventId ?? null, ident);
+    const had = hit?.item;
     const at = x.at.toISOString();
     if (!had) {
       items.push({ what: x.what.trim(), kind: x.kind, at, via: [x.via], url: x.url, reaction: x.reaction ?? null, verifiedAt: at });
+      recs.push({ name: x.what, url: x.url, eventId: x.eventId ?? null, ident, kind: x.kind, at: x.at, via: [], reaction: null });
       return;
     }
+    hit!.rec.eventId ??= x.eventId ?? null;
+    if (!hit!.rec.ident.event_date && !hit!.rec.ident.startAt) hit!.rec.ident = { ...ident, ...hit!.rec.ident, event_date: ident.event_date ?? null, startAt: ident.startAt ?? null };
+    hit!.rec.url ??= x.url;
     if (!had.via.includes(x.via)) had.via.push(x.via);
     had.url ??= x.url;
     had.reaction ??= x.reaction ?? null;
@@ -649,7 +661,7 @@ export function mergeDelivered(o: { ledger: RawSent[]; offers: SentItem[] }): Fa
     const doc = DOC_LABEL.test(r.label);
     add({ what: doc ? docTitle(r.label) : r.label, kind: doc ? "document" : r.kind ?? "item", at: r.at, via: "ledger", url: r.url });
   }
-  for (const s of o.offers) add({ what: s.name, kind: s.kind, at: s.sentAt, via: "offer", url: s.url, reaction: s.reaction });
+  for (const s of o.offers) add({ what: s.name, kind: s.kind, at: s.sentAt, via: "offer", url: s.url, reaction: s.reaction, eventId: s.key?.startsWith("event:") ? s.key.slice(6) : null, ident: { event_date: s.endsOn ?? null, startAt: s.details?.startAt ?? null, city: s.city ?? null, details: s.details as any } });
   return items.sort((a, b) => b.at.localeCompare(a.at));
 }
 
