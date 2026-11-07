@@ -60,6 +60,24 @@ check("member knowledge's type strips the same way", M.safeMemory("member_knowle
 check("each sentence on its own: one naming her goes, the rest stays", M.safeMemory("recap", "They want a caterer for 60. noor is opening a gallery in Oakland.", ["Noor"]) === `They want a caterer for 60. ${gone("Noor")}`);
 check("the history line names her as given, never as written", M.safeMemory("recap", "NOOR wants the space", ["Noor"]) === gone("Noor"));
 
+// Follow-on sentences about a linked member (2026-11-06): a detail that refers back to her goes with her, an unrelated sentence stays.
+const sm = (x: string) => M.safeMemory("recap", x, ["Maya"]) ?? "";
+const DETAIL = /Stripe|Austin/;
+check("follow-on: a detail after the history line is stripped", sm(`${gone("Maya")} She left Stripe.`) === gone("Maya"));
+check("follow-on: \"She's moving to Austin\" after her name is stripped", sm("Maya mentioned it. She's moving to Austin.") === gone("Maya"));
+check("follow-on: \"Her new job is at Stripe\" is stripped", sm("Talked about Maya. Her new job is at Stripe.") === gone("Maya"));
+check("follow-on: his/him and a descriptor are stripped, a chain of them too", ["Maya came up. His new job is at Stripe.", "Maya came up. I told him about Austin.", "Maya came up. The founder left Stripe. Then she moved to Austin.", "Maya came up. And she left Stripe, honestly."].every((x) => !DETAIL.test(sm(x))));
+check("follow-on: an unrelated next sentence stays", sm("Maya came up. I'm free Thursday.") === `${gone("Maya")} I'm free Thursday.`);
+check("follow-on: the member's own \"I\" sentences stay, and the carry ends at the first unrelated one", sm("Maya came up. I left Stripe. She moved to Austin.") === `${gone("Maya")} I left Stripe. She moved to Austin.`);
+check("follow-on: a part of a list after her is stripped, their own items stay", sm("Maya at Stripe; she is moving to Austin; I want a cofounder") === `${gone("Maya")}; I want a cofounder`);
+check("follow-on: nothing before her name is touched, and the carry stays on its own line", sm("She left Stripe. I'm free Thursday.") === "She left Stripe. I'm free Thursday." && sm("Maya came up.\nShe left Stripe.").split("\n")[1] === "She left Stripe.");
+check("follow-on: \"They\" in Cue's own line is the member, so it stays (pinned in facts/rules.ts)", sm("Maya came up. They want a cofounder by spring.") === `${gone("Maya")} They want a cofounder by spring.`);
+// Cosmetic: the suffix is carried once, and a stray space before the comma doesn't pass as the strip's own output.
+const dup = sm("Maya at Stripe, another member, came up here; their details aren't kept for this conversation.");
+check("cosmetic: a name, a detail and the suffix come out with the suffix once", dup === gone("Maya"), dup);
+check("cosmetic: \"Maya , another member, came up here\" gets the full line", sm("Maya , another member, came up here") === gone("Maya"));
+check("idempotent on genuine output, follow-ons included", ["Maya mentioned it. She's moving to Austin. I'm free Thursday.", "Maya at Stripe; she left; I want a cofounder", `${gone("Maya")} She left Stripe.`, "Maya came up here"].every((x) => { const a = sm(x); return sm(a) === a; }));
+
 // The finder itself.
 const find = M.nameFinder(["Rose", "Noor", "Sarah Hao"]);
 check("finder: leftmost person wins", find("rose to the top, then noor and Rose met") === "Noor");

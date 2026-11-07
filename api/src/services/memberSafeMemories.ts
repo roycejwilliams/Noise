@@ -110,9 +110,23 @@ export function nameSpanFinder(linkedNames: string[]): (s: string) => { at: numb
 const OWN_HISTORY = /^(?:Cue introduced them to ([^,;]+), another member\.?|Cue suggested ([^,;]+), another member, as someone to meet\.?|([^,;]+), another member, came up here(?:; their details aren't kept for this conversation\.?)?)$/;
 const ownHistory = (line: string, names: string[]): boolean => {
   const m = OWN_HISTORY.exec(line.trim());
-  const slot = m ? (m[1] ?? m[2] ?? m[3] ?? "").trim() : "";
+  // The slot is compared as written (no trim): "Maya , another member, came up here" isn't the strip's own output, so it is rewritten.
+  const slot = m ? (m[1] ?? m[2] ?? m[3] ?? "") : "";
   return !!slot && names.some((n) => n.trim() === slot);
 };
+// A sentence that carries on about someone just named (2026-11-06, Royce: no cross-member leaks): "Maya came up. She left Stripe." The rewrite
+// above replaces only the sentence that names the member, so the next one that refers back to them is stripped too, until a sentence
+// with no pointer back to them (she/he/her/his/him, or a descriptor like "the founder") starts something new. "They/their" are not pointers:
+// Cue's own lines say "they" for the member ("They want a technical cofounder by spring", pinned in evals/facts/rules.ts), so stripping it
+// would cut the member's own words; a "they" used for the linked person is a known gap. Code guarding a boundary, not
+// a judgment of meaning, so it errs toward stripping: any such pointer anywhere in the sentence counts. The member's own "I ..." and
+// "we ..." sentences carry none, so they stay.
+const POINTS_BACK = /\b(?:she|he|her|hers|him|his|herself|himself)\b/i;
+const DESCRIPTOR = /\b(?:the|that|this|said)\s+(?:[\w-]+\s+)?(?:founder|cofounder|co-founder|ceo|cto|designer|engineer|developer|artist|director|manager|investor|partner|friend|colleague|boss|mentor|candidate|person|woman|man|guy|lady|owner|writer|photographer|doctor|lawyer|consultant|other member|other person)\b/i;
+const pointsBack = (s: string) => POINTS_BACK.test(s) || DESCRIPTOR.test(s);
+// The suffix historyLine ends a "came up" line with; a stripped part followed by it on a "; " split doesn't carry it twice.
+const SUFFIX_ONLY = /^their details aren't kept for this conversation\.?$/i;
+
 // Pure: what one history sentence about a member says, from the sentence that named them.
 export function historyLine(sentence: string, name: string): string {
   const kind = historyKind(sentence);
@@ -173,11 +187,34 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
         seen.add(h);
         return h;
       };
+      // After a part that names a linked member, the parts that carry on about them are dropped too.
+      let carrying = false;
+      const step = (s: string) => {
+        // The history line's own tail, when it was split on "; ": never a detail, and it doesn't end the carry.
+        if (SUFFIX_ONLY.test(s.trim())) return s;
+        if (find(s)) {
+          carrying = true;
+          return strip(s);
+        }
+        if (carrying && pointsBack(s)) return "";
+        carrying = false;
+        return s;
+      };
       // List items ("Wants right now: a cofounder; …") are stripped one by one,
       // so their own items on the same line stay.
       return line
         .split(/(?<=[.!?])\s+/)
-        .map((sentence) => (sentence.includes("; ") && named.test(sentence) ? sentence.split("; ").map(strip).filter(Boolean).join("; ") : strip(sentence)))
+        .map((sentence) => {
+          if (!(sentence.includes("; ") && named.test(sentence))) return step(sentence);
+          const parts: string[] = [];
+          for (const item of sentence.split("; ")) {
+            const out = step(item);
+            if (!out) continue;
+            if (SUFFIX_ONLY.test(out.trim()) && parts.length && parts[parts.length - 1].includes("their details aren't kept for this conversation")) continue;
+            parts.push(out);
+          }
+          return parts.join("; ");
+        })
         .filter(Boolean)
         .join(" ");
     })
