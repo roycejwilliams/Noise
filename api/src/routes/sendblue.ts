@@ -2333,7 +2333,7 @@ export function sendblueRouter(io: Server): Router {
                 addFact(replyFacts, "did_this_turn", `Told them ${revealed.first_name} also got to the event and is worth meeting. ${revealed.first_name} hasn't been asked anything yet.`);
                 addInstruction(replyFacts, `They said yes to hearing who else arrived. Tell them: ${revealed.first_name} just got here and is worth finding, because of ${revealed.shareReason}. Ask if they'd like an intro. Say nothing else about ${revealed.first_name}, and name no one else.`);
               } else if (held) {
-                addInstruction(replyFacts, "They said yes to hearing who else arrived, but Cue couldn't finish checking just now. Don't name or describe anyone, and don't say nobody new is here. Say plainly that you couldn't finish looking this second and will look again, and that a nudge from them brings it back.");
+                addInstruction(replyFacts, "They said yes to hearing who else arrived, but Cue couldn't finish checking just now. Don't name or describe anyone, and don't say nobody new is here. Say plainly that you couldn't finish looking this second, and that a nudge from them brings it back.");
               } else {
                 addInstruction(replyFacts, "They said yes to hearing who else arrived, but on a second look nobody new is someone Cue can point them to right now. Say so plainly and warmly. Don't name or describe anyone.");
               }
