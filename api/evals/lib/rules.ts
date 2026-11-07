@@ -105,7 +105,7 @@ check("no workflow file uses YAML anchors or aliases", anchors.length === 0, `an
 const inputLines = workflows.flatMap((w) => w.text.split("\n")).filter((l) => /\$\{\{[^}]*\b(inputs|github\.event\.inputs)\b/.test(l));
 check("no workflow puts a dispatch input into a shell command", !/run:[^\n]*\$\{\{\s*inputs\./.test(wf) && /ONLY: \$\{\{ inputs\.only \}\}/.test(wf) && /GOLDEN_ONLY: \$\{\{ inputs\.golden_only \}\}/.test(wf) && inputLines.every((l) => /^\s+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}\s*$/.test(l)), inputLines.join(" | "));
 // Royce, 2026-10-14: "golden cases must not hit the live API on every CI run ... Live API runs only on a deliberate manual trigger
-// (workflow_dispatch or equivalent), never automatically per PR." The golden job stays a required check on every PR into co-test, but
+// (workflow_dispatch or equivalent), never automatically per PR." The golden job stays a required check on every PR into test, but
 // it replays committed recordings with no key in reach; the real-model run is its own job, on a manual dispatch only. Held exactly
 // (review of the harness: a loose match let a widened trigger, an extra paid step, allowed hosts or a raised cap through).
 const coJobs = jobsOf(uncomment(wf));
@@ -116,7 +116,7 @@ const wfJobs = Object.keys(coJobs);
 const STEPS = ["actions/checkout@v4", "actions/setup-node@v4", "actions/upload-artifact@v4"];
 check("CI on a push or pull request runs layer 1 and the golden REPLAY only: no key, no expression, no live model call",
   /evals:code/.test(pushJob) && !/evals:nightly|evals:live|eval:live/.test(pushJob) && !SECRET.test(pushJob) &&
-  /\n    if: github\.event_name == 'pull_request' && github\.base_ref == 'co-test'\n/.test(goldenJob) &&
+  /\n    if: github\.event_name == 'pull_request' && github\.base_ref == 'test'\n/.test(goldenJob) &&
   JSON.stringify(runsOf(goldenJob)) === JSON.stringify(["npm ci", "npm run -s evals:golden"]) && JSON.stringify(usesOf(goldenJob)) === JSON.stringify(STEPS) && stepsOf(goldenJob) === 5 &&
   !/\$\{\{/.test(goldenJob) && !SECRET.test(goldenJob) &&
   !/ANTHROPIC_API_KEY|GOLDEN_MODE|EVAL_ALLOW_HOSTS|EVAL_WEB_SEARCH|EVAL_KEEP_MODEL|EVAL_REAL_MODELS|EVAL_COST_CAP_USD|EVAL_TOKEN_CAP|DOTENV/.test(goldenJob) &&
