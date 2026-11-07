@@ -41,6 +41,8 @@ const WRITTEN_DECISIONS = [
   "reply.grounding", "proactive.dailyPick", "recommendation.search", "turn.latency", "call.grounding",
   "profile.snapshotCheck", "profile.city", "turn.closing", "router.decideActions",
   "proactive.windowFollowUp", "proactive.exemptSend", "tier1.announce", "call.gate",
+  // Matching holds for an unreadable member picture (services/roomMatching.ts valueGate, eventGuestMatchHandoff.ts).
+  "match.valueLines", "match.direct_ask", "match.additive_reveal",
   // Written by the companion cron (jobs/index.ts, services/understanding.ts).
   "understanding.check",
   // Written by the daily sweep's finding (services/sweepFind.ts).
