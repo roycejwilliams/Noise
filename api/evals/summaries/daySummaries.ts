@@ -39,7 +39,7 @@ const db = {
       return { rows: ids.sort((a, b) => have(a) - have(b) || a.localeCompare(b)).map((user_id) => ({ user_id })) };
     }
     if (/FROM profile_corrections/.test(sql)) return { rows: corrections.filter(() => true) };
-    if (/status FROM member_day_summaries WHERE user_id = \$1$/.test(sql.trim())) return { rows: sums.filter((x) => x.user_id === u) };
+    if (/status FROM member_day_summaries WHERE user_id = \$1 AND status <> 'removed'$/.test(sql.trim())) return { rows: sums.filter((x) => x.user_id === u && x.status !== "removed") };
     if (/^SELECT 1 FROM member_day_summaries/.test(sql.trim())) return { rows: sums.filter((s) => s.user_id === u).slice(0, 1).map(() => ({ "?column?": 1 })) };
     if (/SELECT to_char\(day, 'YYYY-MM-DD'\) AS day FROM member_day_summaries WHERE user_id = \$1$/.test(sql.trim())) return { rows: sums.filter((s) => s.user_id === u).map((s) => ({ day: s.day })) };
     if (/FROM member_day_summaries\s+WHERE user_id = \$1 AND status = 'ok' AND day < \$2::date/.test(sql)) {

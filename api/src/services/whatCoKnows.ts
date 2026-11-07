@@ -82,8 +82,8 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace" | "event" | "plan";
-export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting" | "reach";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace" | "event" | "plan" | "summary";
+export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting" | "reach" | "notes";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
   work: "Your work",
@@ -94,8 +94,10 @@ export const GROUP_TITLES: Record<KnownGroup, string> = {
   files: "Files you sent",
   waiting: "What I'm holding for you",
   reach: "Paused for now",
+  // Neutral label (Royce 11-06: Cue phrases what it says about these; this title is only shown verbatim where a label is).
+  notes: "Daily notes",
 };
-const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "reach", "files"];
+const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "reach", "notes", "files"];
 
 // One thing Co holds, from one source row. ref is stable across turns (an id, a field, or a hash of the text).
 export type KnownItem = { ref: string; source: KnownSource; group: KnownGroup; text: string; theirWords: string | null; canCorrect: boolean };
@@ -203,6 +205,10 @@ export type RawKnown = {
   events?: { kind: "event" | "plan"; id: string; name: string; on: string | null; via?: string | null; attended?: boolean }[];
   // Kinds of message Cue is pacing for them (services/kindRestraint.ts): their own setting, shown and removable. Removing one lifts the pause.
   paces?: { kind: string; line: string }[];
+  // Cue's dated notes of their older days (services/daySummaries.ts, member_day_summaries): only 'ok' ones that still stand against
+  // their removals, newest first, their side only (the name strip ran when each was written and runs again on the way out). Ruling 5:
+  // visible knowledge is all of it. Removing one deletes its text and keeps the day's stamp, so the job never writes that day again.
+  daySummaries?: { day: string; summary: string }[];
 };
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
@@ -217,9 +223,9 @@ export const eventLabel = (e: { kind: "event" | "plan"; name: string; on: string
 // not something Co learned. Co's lessons, feelings and the action record never are (team-internal); a paused kind is shown, as pacing, removable (kindRestraint.ts).
 export function knownItems(r: RawKnown): KnownItem[] {
   const out: KnownItem[] = [];
-  const add = (ref: string, source: KnownSource, group: KnownGroup, text: string | null | undefined, theirWords: string | null = null, canCorrect = true) => {
+  const add = (ref: string, source: KnownSource, group: KnownGroup, text: string | null | undefined, theirWords: string | null = null, canCorrect = true, max = 240) => {
     const t = String(text ?? "").trim();
-    if (t) out.push({ ref, source, group, text: t.slice(0, 240), theirWords: theirWords?.trim() ? theirWords.trim().slice(0, 200) : null, canCorrect });
+    if (t) out.push({ ref, source, group, text: t.slice(0, max), theirWords: theirWords?.trim() ? theirWords.trim().slice(0, 200) : null, canCorrect });
   };
   const p = r.profile;
   if (p) {
@@ -283,6 +289,9 @@ export function knownItems(r: RawKnown): KnownItem[] {
     const line = pairOutcomeLine(x.evidence);
     if (line) add(`pair:${x.id}:${x.side}`, "pair", "said", `how an introduction I made${x.eventName ? ` at ${x.eventName}` : ""} went for you: ${line}`, x.note, false);
   }
+  // Each daily note as "<date>: <summary>" (a neutral label; Cue phrases it). A blank one is never a line. Shown whole (a summary is at
+  // most daySummaries.ts SUMMARY.maxSummaryChars), not cut at the usual 240, so nothing of it is hidden.
+  for (const d of r.daySummaries ?? []) if (/^\d{4}-\d{2}-\d{2}$/.test(d.day) && String(d.summary ?? "").trim()) add(`summary:${d.day}`, "summary", "notes", `${d.day}: ${String(d.summary).trim()}`, null, true, 1000);
   return out;
 }
 
@@ -309,7 +318,7 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
     const lines: KnownLine[] = [];
     for (const i of items.filter((x) => x.group === g)) {
       const plain = i.text.replace(/^(my read|looking out for|not for you): /, "");
-      const same = g !== "files" && g !== "waiting" && g !== "reach" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
+      const same = g !== "files" && g !== "waiting" && g !== "reach" && g !== "notes" ? lines.find((l) => sameThing(l.text.replace(/^(my read|looking out for|not for you): /, ""), plain)) : undefined;
       if (same) {
         same.refs.push(i.ref);
         same.theirWords ??= i.theirWords;
@@ -393,7 +402,7 @@ const GUARDED_BY: Record<Guarded, string[]> = {
   // The raw exchanges and memories that say a removed thing (memberKnowledge exchanges, the reply's memory search): only specific removals.
   their_words: [],
 };
-const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:", "photo:"];
+const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:", "photo:", "summary:"];
 const plainOf = (t: string) => t.replace(/^(my read|looking out for|not for you): /, "");
 
 // Pure: the row that says this text is gone (or changed), if any. rows: live guards (forgottenRows / liveGuards).
@@ -461,7 +470,8 @@ export function guardText(text: string, rows: ForgottenRow[]): string | null {
   }
   const notes: string[] = [];
   for (const r of rows) {
-    if (!r.now || !correctedSays(r.old, r.now, out)) continue;
+    // A corrected daily note guards nothing else: its record holds only the day, never their words (ruling B).
+    if (!r.now || r.ref.startsWith("summary:") || !correctedSays(r.old, r.now, out)) continue;
     const now = r.now.replace(/^[a-z]+: /, "").slice(0, 80);
     if (!notes.some((n) => squash(n) === squash(now))) notes.push(now);
   }
@@ -665,6 +675,9 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     // Read in the same view: a read that fails fails it (a pause is never shown as lifted on a guess).
     paces: await import("./kindRestraint.js").then(async (K) => (await K.pausedKinds(db as any, userId)).map((x) => ({ kind: x.kind, line: `paused for now: ${K.PACE_LABELS[x.kind]}` }))),
     alreadyKnows: (Array.isArray(knowsRows) ? knowsRows : []).map((r: any) => ({ id: String(r.id), on: day(r.happened_at) ?? "", quote: r.quote ? String(r.quote) : null })),
+    // Read through the same stamp and guard check the reply's block uses (daySummaries.ts visibleSummaries): a note built on a line they
+    // since removed is never shown. Unreadable (or the guards unreadable): this group is left out, the rest of the view still reads.
+    daySummaries: await import("./daySummaries.js").then((D) => D.visibleSummaries(userId, db)).catch(() => [] as { day: string; summary: string }[]),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
 }
@@ -713,6 +726,9 @@ export function strippedItems(raw: RawKnown, safe: (s: string) => string | null)
   return knownItems(raw).flatMap((i) => {
     const text = safe(i.text);
     if (!text?.trim()) return [];
+    // A daily note is their side only, never another member's name (the job's own strip ran when it was written): one the strip
+    // would change (it names a member, even as "came up here") is left out whole.
+    if (i.source === "summary" && text.trim() !== i.text.trim()) return [];
     // Their own words are theirs (safeMemory keeps "User said:" the same way), but a name in them is still stripped.
     const theirWords = i.theirWords ? safe(i.theirWords) : null;
     return [{ ...i, text: text.trim(), theirWords: theirWords?.trim() || null }];
@@ -963,6 +979,15 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       await db.query(`UPDATE event_presence SET met_someone_at = NULL, met_quote = NULL WHERE user_id = $1 AND event_api_id = $2`, [userId, a]);
       return { ref: item.ref, source: "event", was, now: null };
     }
+    case "summary": {
+      // One of Cue's daily notes (services/daySummaries.ts), removed or corrected ("not that"): either way the note goes. Its text is
+      // deleted and the row stays only as the day's fingerprint (status 'removed', its stamp), so the job never writes that day again
+      // (ruling B: the raw text is deleted, the fingerprint kept). A correction's words are recorded by the corrections row below, as
+      // every correction is; the record holds the day, never the note's text.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(a ?? "")) return { why: "not something Cue can change" };
+      await must(`UPDATE member_day_summaries SET summary = '', status = 'removed', source_ids = '{}', built_at = NOW() WHERE user_id = $1 AND day = $2::date AND status = 'ok'`, [userId, a]);
+      return { ref: item.ref, source: "summary", was: `daily note for ${a}`, now: v };
+    }
     case "avoid": {
       const list = raw.profile?.avoid ?? [];
       const old = list.find((x) => hashOf(x) === a);
@@ -996,7 +1021,7 @@ export function fieldFor(ref: string): string {
   if (kind === "pace") return "a kind of message Cue had paused";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them", plan: "an event they planned", event: "an event they were at" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them", plan: "an event they planned", event: "an event they were at", summary: "a daily note Cue wrote about one of their days" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -1195,7 +1220,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting", "pace", "event", "plan"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting", "pace", "event", "plan", "summary"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";
@@ -1251,6 +1276,8 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
   const done = new Set<string>();
   for (const a of applied) {
     const [kind, id] = a.ref.split(":");
+    // A daily note is Cue's own record of a day: nothing queued rests on it, and its record names only the day.
+    if (kind === "summary") continue;
     const removing = a.now == null;
     const because = `${removing ? "removed" : "corrected"} at their request: ${fieldFor(a.ref)}`;
     // A want's place changed (Royce, 2026-10-29): its finds queued but not sent were found for the old place, so they're cancelled
@@ -1358,7 +1385,7 @@ async function refreshDerived(userId: string, applied: Applied[]): Promise<void>
   }
   // The people graph's wants/offers that say the old thing are retired now; the rest are re-read from the corrected sources.
   const { rows: facts } = await pool.query(`SELECT id, object_label FROM co_facts WHERE owner_user_id = $1 AND relation IN ('wants', 'offers') AND retired_at IS NULL`, [userId]);
-  const stale = facts.filter((f: any) => applied.some((a) => words(plainOf(a.was)).length >= 2 && covers(plainOf(a.was), String(f.object_label)))).map((f: any) => f.id);
+  const stale = facts.filter((f: any) => applied.some((a) => a.source !== "summary" && words(plainOf(a.was)).length >= 2 && covers(plainOf(a.was), String(f.object_label)))).map((f: any) => f.id);
   if (stale.length) await pool.query(`UPDATE co_facts SET retired_at = NOW() WHERE owner_user_id = $1 AND id = ANY($2::bigint[])`, [userId, stale]);
   if (stale.length) await (await import("./peopleGraph.js")).refreshPeopleFacts(userId, { maxAgeHours: 0 }).catch(() => null);
   void import("./sweepShadow.js").then((m) => m.rerunPickerForTaste(userId)).catch(() => {});
