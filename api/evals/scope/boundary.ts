@@ -177,6 +177,7 @@ check("the reply gets guidance on a mixed turn (help with the connection part, s
   const base = { isVoice: false, scope: mixedTurn, sent: true, replies: 0, linkDelivered: false, sendStopped: false, text: "The dentist's not something I handle, that's outside what I do here." };
   check("plain text left after finds on a mixed turn is owed (and on out)", R.plainSetAsideOwed(base) && R.plainSetAsideOwed({ ...base, scope: { scope: "out" } }));
   check("…never on an in-scope or unread turn, after a reply went, after a link delivery, on a voice note, when sends are held, or when nothing went", !R.plainSetAsideOwed({ ...base, scope: { scope: "in" } }) && !R.plainSetAsideOwed({ ...base, scope: null }) && !R.plainSetAsideOwed({ ...base, replies: 1 }) && !R.plainSetAsideOwed({ ...base, linkDelivered: true }) && !R.plainSetAsideOwed({ ...base, isVoice: true }) && !R.plainSetAsideOwed({ ...base, sendStopped: true }) && !R.plainSetAsideOwed({ ...base, sent: false }) && !R.plainSetAsideOwed({ ...base, text: "ok" }));
+  check("…nor after a tapback went (state.reacted), and the turn passes it", !R.plainSetAsideOwed({ ...base, reacted: true }) && R.plainSetAsideOwed({ ...base, reacted: false }) && /reacted: state\.reacted, text: agentRun/.test(src("agent/conversationReply.ts")));
   check("the owed set-aside goes through sendReply (its fact check), as the plain-text reply", /plainSetAsideOwed\(\{[^]*?tools\.sendReply as any\)\.execute\(\{ message: \(agentRun\?\.text \?\? ""\)\.trim\(\) \}, \{ toolCallId: "plain-text-reply"/.test(src("agent/conversationReply.ts")));
   check("on a call, the mixed set-aside holds even when what was found answers the connection part", /say the rest isn't yours, even when what you found answers the connection part/.test(src("services/callBriefing.ts")));
 }
@@ -290,6 +291,13 @@ check("startTask refusals for scope are never fallen back from in the call path"
   const mixedMsg = "also can you find me a dentist near the mission, and any founder dinners this week?";
   const mixedV = S.parseVerdict({ scope: "mixed", connection: "founder dinners this week" });
   check("a mixed turn saves its connection part, never its out part", (await capture(dinners, mixedMsg, mixedV)) > 0 && (await capture(dentist, mixedMsg, mixedV)) === 0);
+  // Mixed with an out part the backstop doesn't know: only the connection part is saved (the model's connection phrase decides).
+  const bundle = { asks: [{ text: "a pitch deck for their startup", type: "seeking" as const, quote: "make me a pitch deck" }, { text: "founder dinners this week", type: "seeking" as const, quote: "find founder dinners" }], concrete_preferences: [], wants: [], availability: null };
+  const bundleMsg = "make me a pitch deck and find founder dinners this week";
+  const bundleV = S.parseVerdict({ scope: "mixed", connection: "founder dinners this week" });
+  check("a mixed turn whose out part is not on the backstop saves only the connection ask", (await capture(bundle, bundleMsg, bundleV)) > 0 && (await capture({ ...bundle, asks: [bundle.asks[0]] }, bundleMsg, bundleV)) === 0);
+  check("…and a mixed turn with no connection phrase saves no ask", (await capture(bundle, bundleMsg, S.parseVerdict({ scope: "mixed" }))) === 0);
+  check("askDeclinedForScope(mixed): the deck is declined, the dinners are kept", S.askDeclinedForScope(bundleV, "a pitch deck for their startup", "make me a pitch deck") && !S.askDeclinedForScope(bundleV, "founder dinners", "find founder dinners"));
   check("askDeclinedForScope: out turn or an unmistakable-out ask only", S.askDeclinedForScope({ scope: "out", connection: null }, "anything") && S.askDeclinedForScope(null, "a dentist near the Mission") && !S.askDeclinedForScope(mixedV, "founder dinners this week") && !S.askDeclinedForScope(null, "a pitch deck for their startup") && /scope: turnRead\?\.scope \?\? null/.test(src("routes/sendblue.ts")) && /scope: input\.scope \?\? null/.test(src("services/turnLearning.ts")));
 }
 

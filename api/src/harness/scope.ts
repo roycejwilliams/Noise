@@ -123,10 +123,27 @@ export const workVerdict = (v: ScopeVerdict | null | undefined): ScopeVerdict | 
 
 // An ask the turn declined is never saved as an open ask (2026-11-06 live test: "make me a pitch deck", declined as outside, was
 // captured as "seeking: a pitch deck for their startup"). The turn read's "out" skips every ask from that turn; under any read, an ask
-// whose own words are an unmistakable out (the backstop: a dentist, travel booking) is skipped too. A mixed turn keeps the ask for its
-// connection part (services/askKind.ts stores that part beside it, and only that part is ever searched).
-export function askDeclinedForScope(turn: ScopeVerdict | null | undefined, askText: string): boolean {
-  return turn?.scope === "out" || classifyScope(askText).scope === "out";
+// whose own words are an unmistakable out (the backstop: a dentist, travel booking) is skipped too. A mixed turn saves only the ask that
+// is the connection part, judged against the model's own connection phrase (no word list: an ask that says the same thing as that phrase,
+// by its text or its quote, stays; any other ask from that turn is the out part and is skipped). With no phrase there is no clean
+// connection part, so none is saved (the reply asks one question). services/askKind.ts stores the phrase beside the ask.
+// Same words, same thing (the shape of whatCoKnows.ts sameThing, kept local so this file keeps no imports): at least three quarters of the
+// smaller side's content words are in the other, after a light stem.
+const SAME_STOP = new Set("the and for but not you are was has had with that this what your have just like would want into some more they them their from about also then than over will this week".split(" "));
+const sameWords = (a: string, b: string): boolean => {
+  const w = (t: string) => new Set(String(t ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((x) => x.length >= 3 && !SAME_STOP.has(x)).map((x) => x.replace(/(ing|ed|es|s)$/, "")));
+  const A = w(a), B = w(b);
+  if (!A.size || !B.size) return false;
+  let n = 0;
+  for (const x of A) if (B.has(x)) n++;
+  return n / Math.min(A.size, B.size) >= 0.75;
+};
+export function askDeclinedForScope(turn: ScopeVerdict | null | undefined, askText: string, askQuote?: string | null): boolean {
+  if (turn?.scope === "out" || classifyScope(askText).scope === "out") return true;
+  if (turn?.scope !== "mixed") return false;
+  const part = String(turn.connection ?? "").trim();
+  if (!part) return true;
+  return !(sameWords(askText, part) || (!!askQuote && sameWords(askQuote, part)));
 }
 
 // Model-facing guidance for the reply on a turn whose read is mixed: help with the connection part, set the rest aside briefly, promise

@@ -151,13 +151,18 @@ export function resolveWhen(when: string, now: Date, zone: string | null | undef
 const STOP = new Set(
   "the a an and or but if so of to in on at for with about from by as is are was were be been being it its this that these those i me my we our you your they them their he she his her what when where who why how which did do does done have has had not no yes just any some there then than too very can could would should will shall may might also into over out up down again said say says told tell talk talked talking mention mentioned discuss discussed discussion conversation chat text texts call called calls ever remember".split(" "),
 );
+const CASELESS = /^[^\p{Lu}\p{Ll}\p{Lt}]*\p{Lo}[^\p{Lu}\p{Ll}\p{Lt}]*$/u;
 // Pure: the words of a topic worth matching, lowercased, a light suffix trim so "moving" finds "moved" and "dogs" finds "dog".
 export function topicTerms(topic: string | undefined | null): string[] {
   const out: string[] = [];
-  for (const orig of String(topic ?? "").split(/[^A-Za-z0-9'\u00c0-\u024f]+/)) {
+  // Words in any script (東京, Москва, تل أبيب), not only Latin ones: they were dropped, so only the meaning search could find them.
+  for (const orig of String(topic ?? "").split(/[^\p{L}\p{N}\p{M}']+/u)) {
     const word = orig.toLowerCase().replace(/'s$/, "").replace(/^'+|'+$/g, "");
+    // A word in a script with no letter case (CJK, Thai, Hebrew, Arabic...) has no capital to tell a name from a small word and is not
+    // written with spaces around it: it is matched as written, anywhere in a line, at any length.
+    if (word && CASELESS.test(word)) { if (!out.includes(word)) out.push(word); continue; }
     // Two-letter words count only when written as a name or an acronym (LA, AI), never as "to" or "in".
-    if (word.length < 2 || STOP.has(word) || (word.length === 2 && !/^[A-Z]/.test(orig))) continue;
+    if (word.length < 2 || STOP.has(word) || (word.length === 2 && !/^\p{Lu}/u.test(orig))) continue;
     // A short word (three letters or fewer) is matched whole, with its plural: "art" is not in "party", "dog" is not "dogma".
     if (word.length === 2) { if (!out.includes(word)) out.push(word); continue; }
     if (word.length === 3) { const t = `${word}|${word}s|${word}es`; if (!out.includes(t)) out.push(t); continue; }
@@ -178,9 +183,10 @@ export function topicTerms(topic: string | undefined | null): string[] {
 // A term is a bare word (matched whole when three letters or fewer, else as the start of a word) or alternatives joined by "|" (matched
 // whole). Postgres \m / \M and the JS twin below treat letters and numbers from any script as word characters ("Émile" the same in both).
 const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const whole = (t: string) => t.includes("|") || t.length <= 3;
-export const termPattern = (t: string): string => (whole(t) ? `\\m(${t.split("|").map(reEscape).join("|")})\\M` : `\\m${reEscape(t)}`);
-export const termRegex = (t: string): RegExp => new RegExp(`(?<![\\p{L}\\p{N}])(?:${t.split("|").map(reEscape).join("|")})${whole(t) ? "(?![\\p{L}\\p{N}])" : ""}`, "iu");
+const caseless = (t: string) => CASELESS.test(t);
+const whole = (t: string) => !caseless(t) && (t.includes("|") || t.length <= 3);
+export const termPattern = (t: string): string => (caseless(t) ? reEscape(t) : whole(t) ? `\\m(${t.split("|").map(reEscape).join("|")})\\M` : `\\m${reEscape(t)}`);
+export const termRegex = (t: string): RegExp => new RegExp(`${caseless(t) ? "" : "(?<![\\p{L}\\p{N}])"}(?:${t.split("|").map(reEscape).join("|")})${whole(t) ? "(?![\\p{L}\\p{N}])" : ""}`, "iu");
 
 // ---------------------------------------------------------------- labelling
 
@@ -398,7 +404,7 @@ async function recallInner(userId: string, input: RecallInput, deps: RecallDeps,
       : Promise.resolve(null);
   const [page, newestRow, cover, meaningRows] = await Promise.all([
     timed(terms.length ? "keyword" : "date", () => deps.db.query(`SELECT id::text AS id, memory_type, content, created_at, ${scoreSql} AS score, count(*) OVER()::int AS total ${base} ${order} LIMIT ${pageSize} OFFSET ${offset}`, args)),
-    terms.length && offset === 0 ? timed("newest", () => deps.db.query(`SELECT id::text AS id, memory_type, content, created_at ${base} ORDER BY created_at DESC, id DESC LIMIT 1`, args)) : Promise.resolve({ rows: [] as Row[] }),
+    terms.length ? timed("newest", () => deps.db.query(`SELECT id::text AS id, memory_type, content, created_at ${base} ORDER BY created_at DESC, id DESC LIMIT 1`, args)) : Promise.resolve({ rows: [] as Row[] }),
     timed("cover", () => deps.db.query(
       `SELECT MIN(created_at) FILTER (WHERE memory_type = 'text_exchange') AS texts, MIN(created_at) FILTER (WHERE memory_type = 'call_transcript' AND content NOT LIKE 'Co initiated call%') AS calls FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
       [userId],
@@ -420,7 +426,9 @@ async function recallInner(userId: string, input: RecallInput, deps: RecallDeps,
   const total: number = rows[0]?.total ?? 0;
   const iso = (v: unknown) => (v ? new Date(v as any).toISOString() : null);
   const coverage: Coverage = { texts: iso(cover.rows[0]?.texts), calls: iso(cover.rows[0]?.calls) };
-  const top = (newestRow.rows as Row[])[0];
+  // The newest match is looked up on every page so a later page can skip it; it is shown (and its context read) on the first page only.
+  const newest = (newestRow.rows as Row[])[0];
+  const top = offset === 0 ? newest : undefined;
   const matchers = terms.map(termRegex);
 
   // All the context for the page's text hits in one read: the lines either side of each hit, compared against the hit's own stored row
@@ -476,7 +484,7 @@ async function recallInner(userId: string, input: RecallInput, deps: RecallDeps,
   let consumed = 0;
   let pageHits = 0;
   for (const row of rows) {
-    if (top && row.id === top.id) { consumed++; continue; }
+    if (newest && row.id === newest.id) { consumed++; continue; }
     const built = build(row);
     if (built) {
       // The first row of the page is always admitted (trimmed to fit if it must be), so a page never stalls at the same offset.
@@ -493,7 +501,7 @@ async function recallInner(userId: string, input: RecallInput, deps: RecallDeps,
   // Meaning matches, first page only: rows the words missed (a different way of saying it). They come after the keyword hits, share the
   // same budget, and are labelled so the model knows they were found by meaning.
   if (meaningRows.length) {
-    const have = new Set([...rows.map((r) => r.id), ...(top ? [top.id] : [])]);
+    const have = new Set([...rows.map((r) => r.id), ...(newest ? [newest.id] : [])]);
     const room = hits.length === 0 || total === 0 ? pageSize : RECALL.meaningExtra;
     let added = 0;
     for (const row of meaningRows) {
