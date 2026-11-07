@@ -15,6 +15,8 @@ export const EVENT_SAME = { startMinutes: 30 } as const;
 // What identity reads off a find: the shapes the finds come in (a TierMatch, a backlog item's match, a feed event).
 export type EventLike = {
   name?: string | null;
+  // The platform's own id for this event, when the record has one (a match's event_api_id).
+  event_api_id?: string | null;
   url?: string | null;
   startAt?: string | null;
   start_at?: string | null;

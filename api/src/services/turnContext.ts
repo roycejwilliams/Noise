@@ -25,6 +25,7 @@ import { loadKit, type Kit } from "./memberKit.js";
 import type { RepliedTo } from "./inlineReply.js";
 import { getEmotionalContext, type EmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, type PersonSnapshot } from "../harness/personSnapshot.js";
+import { normUrlOf } from "./knowledge/sent.js";
 import { memberKnowledge, memberRules, type CarryItem as KnownCarry, type Fact, type KnowledgeDeps, type KnowledgeSection, type MemberKnowledge, type MemberRules } from "./memberKnowledge.js";
 
 // One entry per thing Co sent them, under the key the router's reaction path
@@ -226,9 +227,8 @@ export async function loadSentItems(userId: string, days = 45): Promise<SentItem
   return mergeSent(revealed, offers, recs, dated);
 }
 
-// One key per link: no scheme or www, no query or fragment, no trailing slash or punctuation, lower case, and Luma's two hosts (lu.ma,
-// luma.com) as one, so the same event sent under either link is one find.
-export const normUrlOf = (u: string): string => u.replace(/[.,;!?]+$/, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase().replace(/^lu\.ma(?=\/|$)/, "luma.com");
+// One key per link (knowledge/sent.ts): the same event sent under either Luma host is one find.
+export { normUrlOf };
 
 // Pure: the three sources as one list, one entry per thing, revealed_offers'
 // key first (the router's), details and post text filled in from the offers.
