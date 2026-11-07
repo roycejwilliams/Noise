@@ -81,8 +81,14 @@ export const ANSWER_VALUES: Record<OpenItemKind, readonly string[]> = {
 // couldn't finish checking and that a quick nudge would bring it back. So a nudge is the yes, not a new question.
 export const HELD_REVEAL_DESCRIPTION =
   "Cue offered to tell them who else just got to the same event and they already said yes, but Cue told them it couldn't finish checking and to send a quick nudge to try again. They are waiting on Cue. A nudge to try again (\"try again?\", \"any luck?\", \"well?\", \"yes, who should I meet?\") is answer yes; a clear no is answer no; anything unrelated answers nothing.";
-// Cue's hold line, in whatever words it used: it said it couldn't finish, or asked for a nudge / another try.
-const HELD_LINE = /(couldn'?t|could not|wasn'?t able to|can'?t|unable to)\s+(quite\s+)?(finish|complete)|\btry again\b|\bnudge\b/i;
+// Cue's hold line, the hold wording only: it said it couldn't finish checking, or named who else is here. (Not "try again" or "nudge" alone:
+// "Want me to try again with a wider radius?" is another question.)
+const HELD_LINE = /(couldn'?t|could not|wasn'?t able to|unable to)\s+(quite\s+)?(finish|complete)\s+(checking|looking)|who else is here/i;
+// What a nudge to a held reveal looks like in the member's own message: a try-again, a "well?", or the question itself. Word-bounded, so
+// "whole" is not "who"; a bare "?" or "and?" counts.
+const HELD_NUDGE = /\b(try again|again|any luck|well|anything|update|still|who|meet|connect|intros?|introduc\w*)\b|^\W*(\?+|and\s*\?+)\W*$/i;
+// ...or the member names the ask itself, which stands without the hold line.
+const HELD_NAMES_ASK = /\b(who|meet|connect|intros?|introduc\w*)\b/i;
 
 // One description per kind, shared by production and the eval set so the
 // router sees the same wording in both. `detail` is the call offer's stored
@@ -499,8 +505,8 @@ export function lastCoTurn(recentConversation: string): string {
 // (c148): a bare "yes" to an unrelated Co question was read as opting into a
 // match intro that was open but hadn't been mentioned in the conversation.
 export function askIsFresh(item: Pick<OpenItem, "kind" | "detail" | "held">, message: string, recentConversation: string): boolean {
-  // A held reveal: their yes is on file, so a nudge is fresh when Cue's last turn was its hold line (or the message itself names the ask).
-  if (item.kind === "match_nudge" && item.held) return HELD_LINE.test(lastCoTurn(recentConversation)) || /connect|introduc|meet|who/i.test(message);
+  // A held reveal: their yes is on file, so a message that looks like a nudge is fresh when Cue's last turn was its hold line (or the message itself names the ask).
+  if (item.kind === "match_nudge" && item.held) return HELD_NUDGE.test(message) && (HELD_LINE.test(lastCoTurn(recentConversation)) || HELD_NAMES_ASK.test(message));
   const text = `${lastCoTurn(recentConversation)}\n${message}`;
   switch (item.kind) {
     case "call_offer":
