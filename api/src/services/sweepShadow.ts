@@ -22,6 +22,7 @@ import { exitKey } from "./findForm.js";
 import { closedAskRefs, servesClosedAsk } from "./askLifecycle.js";
 import { withMember } from "./llmUsage.js";
 import { preferEvent, sameEvent, type EventLike } from "./eventIdentity.js";
+import { sentByReferent, wasSent, type SentRecord } from "./knowledge/sent.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -47,7 +48,7 @@ export async function shadowUserIds(env: NodeJS.ProcessEnv = process.env): Promi
 // heldUntil: an event page past the event tier's window, held in the backlog until that day (sweepFind.ts holdForWindow).
 type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; details: string | null; ident?: EventLike; heldUntil?: string | null };
 // Pure: a waiting find's identity, from its match.
-export const identOf = (m: any): EventLike => ({ name: m?.name ?? null, url: m?.url ?? null, startAt: m?.startAt ?? null, event_date: m?.event_date ?? null, city: m?.city ?? null, details: m?.details && typeof m.details === "object" ? m.details : null });
+export const identOf = (m: any): EventLike => ({ name: m?.name ?? null, event_api_id: typeof m?.event_api_id === "string" && m.event_api_id ? m.event_api_id : null, url: m?.url ?? null, startAt: m?.startAt ?? null, event_date: m?.event_date ?? null, city: m?.city ?? null, details: m?.details && typeof m.details === "object" ? m.details : null });
 
 // Pure: the pool from what's waiting (the event backlogs and the queued
 // offers): deduped by name + date, past ones and things already sent dropped
@@ -58,7 +59,7 @@ export const identOf = (m: any): EventLike => ({ name: m?.name ?? null, url: m?.
 // One event on two platforms (Royce, 2026-10-28; eventIdentity.ts sameEvent) is one pool item: the version with the richest record
 // (Luma's when tied) under its own key, serving every ask either served; and one already sent under another link isn't picked again
 // (sentEvents: what was sent, by its record).
-export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>, closedAsks: ReadonlySet<string> = new Set(), judgedKeys: ReadonlySet<string> = new Set(), sentEvents: EventLike[] = []): PoolItem[] {
+export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>, closedAsks: ReadonlySet<string> = new Set(), judgedKeys: ReadonlySet<string> = new Set(), sentEvents: EventLike[] = [], sent: readonly SentRecord[] = []): PoolItem[] {
   const items = new Map<string, PoolItem>();
   const idents = new Map<string, EventLike>();
   for (const r of raw) {
@@ -68,6 +69,8 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
     if (r.heldUntil && r.heldUntil > today) continue;
     if (sentNames.has(norm(r.name)) && !r.reminder && !r.again) continue;
     if (r.ident && !r.reminder && !r.again && sentEvents.some((s) => sameEvent(s, r.ident!))) continue;
+    // Anything Cue ever sent them (knowledge/sent.ts): the same link, the same event, or the same name when neither says which event.
+    if (!r.reminder && !r.again && wasSent(sent, { name: r.name, url: r.ident?.url ?? null, eventId: r.ident?.event_api_id ?? null, ident: r.ident ?? { name: r.name, event_date: r.date } })) continue;
     let key = shadowKey(r.name, r.date);
     // The same event already in the pool under another name or link: one item, the richer version's.
     const twinKey = r.ident && !items.has(key) ? [...idents.entries()].find(([k, id]) => k !== key && sameEvent(id, r.ident!))?.[0] : undefined;
@@ -274,21 +277,13 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     if (!opts.dryRun) await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: "member knowledge unavailable (failed closed); no picks today", proposal: { day: today } });
     return { day: today, signature: "", skipped: true, judgments: [], pool: [], error: "member knowledge unavailable" };
   }
-  // Never re-pick what they already have: the offers Co sent, plus everything the layer has as delivered (receipts, Co's ledger,
-  // sent offers). A reminder or a month-later resurface still stays (buildShadowPool).
-  const sentRows = await q(`SELECT payload->'match' AS match FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent'`, [userId]);
-  // What was sent, by its record: the same event found again under another link isn't picked again (Royce, 2026-10-28).
-  const sentEvents = sentRows.map((r: any) => identOf(r.match)).filter((e: EventLike) => !!e.name);
-  const sentNames = new Set(
-    [
-      ...sentRows.map((r: any) => String(r.match?.name ?? "")),
-      ...(knowledge?.delivered ?? []).map((d) => d.what),
-    ].map(norm).filter(Boolean),
-  );
+  // Never re-pick what they already have. A reminder or a month-later resurface still stays (buildShadowPool).
+  // One lookup of everything Cue sent them, no window (knowledge/sent.ts): the same find under another name or link isn't picked again.
+  const sent = await sentByReferent(q, userId);
   // The last run: what it judged orders the pool (never-judged first), and its signature and holds decide the unchanged skip.
   const [last] = await q(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]);
   const judgedKeys = new Set<string>(((last?.proposal?.judgments ?? []) as Judgment[]).filter((j) => j.verdict !== "no_verdict").map((j) => j.key));
-  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames, closed, judgedKeys, sentEvents), ...(opts.morning ? { morning: true } : {}) };
+  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, new Set<string>(), closed, judgedKeys, [], sent), ...(opts.morning ? { morning: true } : {}) };
 
   // Skip unchanged days: same signature as the last run (holds that came due count as a change).
   const holds = holdDueDates((last?.proposal?.judgments ?? []) as Judgment[], String(last?.proposal?.day ?? today));
