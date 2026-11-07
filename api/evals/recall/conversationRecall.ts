@@ -21,6 +21,8 @@ const JORDAN = "00000000-0000-4000-8000-00000000a001";
 const PRIYA = "00000000-0000-4000-8000-00000000b002";
 let seq = 0;
 const rows: Row[] = [];
+const REPEAT = "00000000-0000-4000-8000-00000000c003";
+const TOKYO = "00000000-0000-4000-8000-00000000d004";
 const add = (user_id: string, at: string, memory_type: string, content: string) => rows.push({ id: String(++seq).padStart(6, "0"), user_id, memory_type, content, created_at: new Date(at) });
 
 // ---- the fake: the three query shapes the lookup runs, over the fixture, honouring the SQL's own user_id and kind filters.
@@ -96,6 +98,13 @@ const deps = (over: Partial<import("../../src/services/conversationRecall.js").R
 });
 const look = (u: string, i: import("../../src/services/conversationRecall.js").RecallInput, d = deps()) => R.recallConversation(u, i, d);
 const okRes = (r: Awaited<ReturnType<typeof look>>) => (r.ok ? r : (() => { throw new Error("not ok: " + JSON.stringify(r)); })());
+
+// Recall limits (2026-11-07): the newest match must not come back again on page 2; topic words in other scripts are terms.
+for (let i = 0; i < 8; i++) add(REPEAT, new Date(Date.parse("2026-10-01T16:00:00Z") + i * 3_600_000).toISOString(), "text_exchange", `User said: alphaword and betaword together, number ${i}`);
+add(REPEAT, "2026-10-20T16:00:00Z", "text_exchange", "User said: only alphaword here, the newest line");
+add(TOKYO, "2026-10-05T16:00:00Z", "text_exchange", "User said: 来月から東京に引っ越します");
+add(TOKYO, "2026-10-06T16:00:00Z", "text_exchange", "User said: Переезжаю в Москва весной");
+add(TOKYO, "2026-10-07T16:00:00Z", "text_exchange", "User said: nothing about that, just the weather");
 
 // ---- Jordan's record
 // 1. a long thread: the glaze talk is early; 120 rows of other things come after. The reply window cannot reach it.
@@ -484,6 +493,16 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   check("read-only: the module issues only SELECTs", !/\b(INSERT|UPDATE|DELETE)\s/i.test(src.replace(/\/\/.*$/gm, "")));
   check("history: the use line tells the model nothing found is permission to share or start", /permission to bring that up with anyone else or to start something new/.test(R.RECALL_USE));
   check("history: the use line says never on every turn and to answer from what it returns", /Never on every turn/.test(R.RECALL_USE) && /Answer from what it returns/.test(R.RECALL_USE));
+}
+
+{
+  const p1 = okRes(await look(REPEAT, { topic: "alphaword betaword" }));
+  const p2 = okRes(await look(REPEAT, { topic: "alphaword betaword", offset: p1.nextOffset! }));
+  const newestText = "only alphaword here, the newest line";
+  check("limits (a): the newest match is on page 1 and is not repeated on page 2", p1.results.some((h) => h.newest && h.matched.text.includes(newestText)) && p2.results.length > 0 && !p2.results.some((h) => h.matched.text.includes(newestText)), { p1: p1.results.length, p2: p2.results.map((h) => h.matched.text) });
+  check("limits (b): topic words in other scripts are kept as terms", R.topicTerms("東京").join() === "東京" && R.topicTerms("Москва").length === 1 && R.topicTerms("to in 东京 LA").join() === "东京,la", R.topicTerms("東京 Москва"));
+  const tk = okRes(await look(TOKYO, { topic: "東京" }));
+  check("limits (b): a keyword lookup in that script finds the line, mid-sentence", tk.results.length === 1 && /東京/.test(tk.results[0].matched.text) && R.termRegex(R.topicTerms("Москва")[0]).test("Переезжаю в Москва весной") && R.termRegex("東京").test("来月から東京に引っ越します") && !R.termRegex("東京").test("nothing"), tk.results.length);
 }
 
 console.log(`recall: ${total - failed}/${total} passed`);

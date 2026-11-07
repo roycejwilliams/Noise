@@ -330,13 +330,13 @@ export async function runKindRestraintSync(now = new Date()): Promise<number> {
 
 // ---------------------------------------------------------------- the member's own view of a pause (services/whatCoKnows.ts)
 
-// A paused kind is pacing, never taste (Royce, 2026-11-04/05): said in what-Cue-knows as "I'm holding off on X for a bit", and removable.
+// A paused kind is pacing, never taste (Royce, 2026-11-04/05): shown in what-Cue-knows as a plain fact with a neutral label ("paused for now: <kind>"; Cue phrases it itself, Royce 11-06), and removable.
 export const PACE_LABELS: Record<ProactiveKind, string> = {
-  find: "sending you finds",
-  intro_followup: "following up on introductions",
+  find: "finds",
+  intro_followup: "intro follow-ups",
   deadline: "deadline reminders",
-  goal_nudge: "check-ins about your goals",
-  member_commitment: "reminders of what you said you'd do",
+  goal_nudge: "goal check-ins",
+  member_commitment: "commitment reminders",
 };
 
 // The kinds paused for this member now, from the stored preference.
