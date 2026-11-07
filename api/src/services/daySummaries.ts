@@ -9,9 +9,13 @@
 //   - No other member's details: the input lines and the written summary both go through the member fence (the name strip), and every
 //     read is user_id = $1. Nothing here reads another member's rows.
 //
-// THE JOB IS NOT SCHEDULED. runDaySummariesJob is exported and nothing registers it (jobs/index.ts has no cron for it; a layer-1 check
-// holds that). It makes paid model calls (Haiku), so it stays off until Royce approves the spend. Reading is free and harmless with
-// an empty table: until the job has run, the reply and the call get no block.
+//   - Visible and removable (Royce 2026-11-06, ruling 5): each 'ok' summary is a line in what Cue knows (services/whatCoKnows.ts,
+//     group "Daily notes", ref summary:<day>), read through visibleSummaries below. Removing or correcting one deletes its text and
+//     keeps the row as the day's fingerprint (status 'removed', its stamp): the job never writes that day again, and pruneStale never
+//     clears a fingerprint.
+//
+// THE JOB RUNS NIGHTLY (jobs/index.ts, 03:45 Pacific; Royce approved the spend 2026-11-06 at about $0.0015 per member-day). Each run
+// logs its model calls and tokens (runDaySummariesJob). Reading is free: until the job has run, the reply and the call get no block.
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
@@ -160,7 +164,8 @@ export function summaryBlock(items: { day: string; summary: string; sources: num
 // new try and an unchanged one never gets a second. Returns how many were deleted; guards unreadable (null): nothing is deleted.
 export async function pruneStale(db: Db, userId: string, guards: ForgottenRow[] | null): Promise<number> {
   if (guards === null) return 0;
-  const { rows } = await db.query(`SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp, status FROM member_day_summaries WHERE user_id = $1`, [userId]);
+  // A removed day's fingerprint is never pruned: it is what keeps the job from writing that day again.
+  const { rows } = await db.query(`SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp, status FROM member_day_summaries WHERE user_id = $1 AND status <> 'removed'`, [userId]);
   if (!rows.length) return 0;
   const ids = [...new Set(rows.flatMap((r: any) => r.source_ids as string[]))];
   const src = ids.length ? (await db.query(`SELECT id::text AS id, memory_type, content FROM co_memories WHERE user_id = $1 AND id = ANY($2::uuid[])`, [userId, ids])).rows : [];
@@ -177,6 +182,28 @@ export async function pruneAfterChange(userId: string, db: Db = pool): Promise<n
 }
 
 // ---------------------------------------------------------------- read (free, per reply)
+
+// What the member is shown in what Cue knows (services/whatCoKnows.ts readKnown): every 'ok', non-blank summary that still stands
+// against their removals and corrections, newest first, through the removal guard. One read on db (a transaction's client works: the
+// queries run one after another). Guards unreadable: nothing (never a note that may carry what they removed). The name strip runs on
+// the way out (whatCoKnows.ts strippedItems), as on every line there.
+export async function visibleSummaries(userId: string, db: Db = pool): Promise<{ day: string; summary: string }[]> {
+  const { rows } = await db.query(
+    `SELECT id::text AS id, to_char(day, 'YYYY-MM-DD') AS day, summary, source_ids, source_stamp FROM member_day_summaries
+     WHERE user_id = $1 AND status = 'ok' AND btrim(summary) <> '' ORDER BY day DESC`,
+    [userId],
+  );
+  if (!rows.length) return [];
+  const guards = await import("./whatCoKnows.js").then((W) => W.forgottenRows(userId, db as any, { all: true })).catch(() => null);
+  if (guards === null) return [];
+  const ids = [...new Set(rows.flatMap((r: any) => r.source_ids as string[]))];
+  const src = ids.length ? (await db.query(`SELECT id::text AS id, memory_type, content FROM co_memories WHERE user_id = $1 AND id = ANY($2::uuid[])`, [userId, ids])).rows : [];
+  return (rows as StoredSummary[]).flatMap((r) => {
+    if (!String(r.summary ?? "").trim() || !stillStands(r, src, guards)) return [];
+    const text = guardText(String(r.summary), guards);
+    return text && text.trim() ? [{ day: r.day, summary: text.trim() }] : [];
+  });
+}
 
 // The block a reply or a call gets for one member. before: the oldest moment already shown in full in the thread window, so a day the
 // window holds is never summarized on top of its own words. Fails closed on anything unreadable: no block, never an error.
@@ -236,15 +263,17 @@ export async function earlierSummaryFor(userId: string, o: { windowOldest?: Date
 export type JobDeps = {
   db: Db;
   now: Date;
-  // One Haiku call for one day. Returns the model's text, or null.
-  summarize: (userId: string, input: { day: string; text: string }) => Promise<string | null>;
+  // One Haiku call for one day. Returns the model's text (or null), with its token counts when it has them.
+  summarize: (userId: string, input: { day: string; text: string }) => Promise<string | null | Summarized>;
   fenceFor: (userId: string) => Promise<{ strip: Strip; failed?: boolean }>;
   guardsFor: (userId: string) => Promise<ForgottenRow[] | null>;
   zoneFor: (userId: string) => Promise<string | null>;
   maxDays?: number;
   lookbackDays?: number;
 };
-export type JobResult = { members: number; days: number; written: number; blank: number; pruned: number; skipped: number; failed: number };
+export type Summarized = { text: string | null; inputTokens?: number; outputTokens?: number };
+// modelCalls counts every request made (one that threw too); tokens are what came back, for the per-run spend log.
+export type JobResult = { members: number; days: number; written: number; blank: number; pruned: number; skipped: number; failed: number; modelCalls: number; inputTokens: number; outputTokens: number };
 
 // Pure: the member's local window for a run: from the start of the local day lookbackDays back (so the oldest day is whole, across a
 // clock change too) up to, not including, the start of the day after the last summarizable one.
@@ -265,7 +294,7 @@ export function runWindow(now: Date, zone: string | null | undefined, lookbackDa
 // replaced only after its sources changed, and a day that came back empty is recorded with its stamp and tried again only if the
 // stamp changes. Only the member's own rows are read (user_id = $1).
 export async function runDaySummaries(d: JobDeps): Promise<JobResult> {
-  const res: JobResult = { members: 0, days: 0, written: 0, blank: 0, pruned: 0, skipped: 0, failed: 0 };
+  const res: JobResult = { members: 0, days: 0, written: 0, blank: 0, pruned: 0, skipped: 0, failed: 0, modelCalls: 0, inputTokens: 0, outputTokens: 0 };
   const budget = d.maxDays ?? SUMMARY.maxDaysPerRun;
   const lookback = d.lookbackDays ?? SUMMARY.lookbackDays;
   const wide = { from: new Date(d.now.getTime() - (lookback + 1) * 86_400_000), to: new Date(d.now.getTime() - (SUMMARY.minAgeDays - 2) * 86_400_000) };
@@ -304,7 +333,15 @@ export async function runDaySummaries(d: JobDeps): Promise<JobResult> {
         // A call that threw (a refused or timed-out request) is not recorded: nothing came back to pay for. One that came back empty, or
         // that the name strip blanked, was paid for and is recorded with its stamp below.
         let raw: string | null;
-        try { raw = await d.summarize(userId, { day: day.day, text: day.text }); } catch { res.failed++; continue; }
+        res.modelCalls++;
+        try {
+          const got = await d.summarize(userId, { day: day.day, text: day.text });
+          if (got && typeof got === "object") {
+            raw = got.text;
+            res.inputTokens += Number(got.inputTokens) || 0;
+            res.outputTokens += Number(got.outputTokens) || 0;
+          } else raw = got;
+        } catch { res.failed++; continue; }
         const text = cleanSummary(raw, fence.strip);
         const blank = !text;
         await d.db.query(
@@ -335,15 +372,27 @@ export async function realJobDeps(now = new Date()): Promise<JobDeps> {
     db: pool,
     now,
     summarize: (userId, i) =>
-      withTraceUser(userId, () => withMember(userId, async () =>
-        (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: SUMMARY.maxOutputTokens, experimental_telemetry: { isEnabled: true, functionId: "memory.daySummary" }, system: SUMMARY_PROMPT, prompt: `Day: ${i.day}\n\n${i.text}`, abortSignal: AbortSignal.timeout(30_000) })).text)),
+      withTraceUser(userId, () => withMember(userId, async () => {
+        const r = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: SUMMARY.maxOutputTokens, experimental_telemetry: { isEnabled: true, functionId: "memory.daySummary" }, system: SUMMARY_PROMPT, prompt: `Day: ${i.day}\n\n${i.text}`, abortSignal: AbortSignal.timeout(30_000) });
+        return { text: r.text, inputTokens: r.usage?.inputTokens ?? 0, outputTokens: r.usage?.outputTokens ?? 0 };
+      })),
     fenceFor: (u) => F.memberFence(u).catch(() => ({ strip: () => null, failed: true })),
     guardsFor: (u) => W.forgottenRows(u, pool, { all: true }).catch(() => null),
     zoneFor: (u) => T.memberZone(u).catch(() => null),
   };
 }
 
-// The one entry point. NOT registered with any schedule (see the top of this file and the PR).
+// Pure: one run's spend line for the log: counts and tokens only (never a member, a day or a word), and the cost at list price.
+export function runLogLine(r: JobResult, price: { input: number; output: number } | null): string {
+  const usd = price ? (r.inputTokens * price.input + r.outputTokens * price.output) / 1_000_000 : null;
+  return `day summaries: ${r.modelCalls} model call(s), ${r.inputTokens} input + ${r.outputTokens} output tokens${usd === null ? "" : ` (~$${usd.toFixed(4)})`}; members ${r.members}, written ${r.written}, blank ${r.blank}, pruned ${r.pruned}, skipped ${r.skipped}, failed ${r.failed}`;
+}
+
+// The one entry point, run nightly by jobs/index.ts. Every run logs its model calls and tokens so the spend can be tracked (the same
+// calls are also in the usage table under functionId memory.daySummary).
 export async function runDaySummariesJob(): Promise<JobResult> {
-  return runDaySummaries(await realJobDeps());
+  const res = await runDaySummaries(await realJobDeps());
+  const [{ priceFor }, { MODELS }] = await Promise.all([import("./llmUsage.js"), import("../models.js")]);
+  console.log(runLogLine(res, priceFor(String(MODELS.haiku))));
+  return res;
 }
