@@ -3304,4 +3304,24 @@ export async function concurrencyMigrations(): Promise<void> {
   await pool
     .query(`CREATE UNIQUE INDEX IF NOT EXISTS member_assets_one_live_copy ON member_assets (owner_user_id, sha256) WHERE wiped_at IS NULL AND n > 0`)
     .catch((err: Error) => console.error("member_assets_one_live_copy init failed (copies already on file?):", err.message));
+  // Daily summaries of older conversation (services/daySummaries.ts, Cue Memory Spec step 10): one dated note per member per local day,
+  // the ids of the rows it was built from, and a stamp of how those rows read through the removal guards when it was built (a row
+  // removed or corrected afterwards changes the stamp, and the note is dropped). New and empty: nothing existing is touched, and
+  // nothing writes to it until the (unscheduled) job is switched on.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_day_summaries (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        day DATE NOT NULL,
+        zone TEXT,
+        summary TEXT NOT NULL,
+        source_ids TEXT[] NOT NULL DEFAULT '{}',
+        source_stamp TEXT NOT NULL,
+        model TEXT,
+        built_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, day)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_day_summaries init failed:", err));
 }
