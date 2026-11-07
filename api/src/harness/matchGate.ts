@@ -695,12 +695,11 @@ export async function gatherNetworkFacts(
   shareReason: string | null | undefined,
 ): Promise<NetworkFacts> {
   const [a, b] = askerId < candidateId ? [askerId, candidateId] : [candidateId, askerId];
-  const [profile, memories, suggested, reachable, recent, graphFacts, connected] = await Promise.all([
+  const [profile, picture, suggested, reachable, recent, graphFacts, connected] = await Promise.all([
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [candidateId]),
-    pool.query(
-      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent' ORDER BY created_at DESC LIMIT 300`,
-      [candidateId],
-    ),
+    // The candidate through the guarded member picture (services/matchPicture.ts), not raw co_memories rows: what they had Cue forget or
+    // remove is out, their name strip is on, and nothing of theirs but this one read crosses into the asker's side.
+    import("../services/matchPicture.js").then((m) => m.matchPicture(candidateId)),
     pool.query(PAIR_BLOCKED_SQL, [a, b]),
     pool.query(`SELECT u.id FROM users u WHERE u.id = ANY($1::uuid[]) AND coalesce(u.sms_opted_out, false) = false AND u.phone_number IS NOT NULL`, [[askerId, candidateId]]),
     // Any real activity of theirs: a text, or what they said on a call (a call-only member is not inactive).
@@ -728,7 +727,7 @@ export async function gatherNetworkFacts(
       ...(p.blockers ?? []),
       ...(p.activity_preferences ?? []),
       ...(p.long_term_direction ? [p.long_term_direction] : []),
-      ...memories.rows.map((r: any) => String(r.content)),
+      ...picture.privateTexts,
       ...graphFacts,
     ],
     alreadySuggestedOrDeclined: suggested.rows.length > 0,
