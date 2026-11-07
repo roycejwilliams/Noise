@@ -327,7 +327,8 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
         if (same.text.startsWith("my read: ") && !i.text.startsWith("my read: ")) same.text = i.text;
       } else lines.push({ refs: [i.ref], text: i.text, theirWords: i.theirWords, canCorrect: i.canCorrect });
     }
-    if (lines.length) groups.push({ group: g, title: GROUP_TITLES[g], lines: lines.slice(0, perGroup) });
+    // Daily notes are listed whole: every note the reply or a call can use is one they can see (ruling 5; daySummaries.ts usableSummaries).
+    if (lines.length) groups.push({ group: g, title: GROUP_TITLES[g], lines: g === "notes" ? lines : lines.slice(0, perGroup) });
   }
   return { groups, calls: CALLS_PROCESSOR_LINE };
 }
@@ -724,11 +725,14 @@ export async function whatCoKnows(userId: string): Promise<{ view: KnownView; it
 // line about another member and carry the name into the reply).
 export function strippedItems(raw: RawKnown, safe: (s: string) => string | null): KnownItem[] {
   return knownItems(raw).flatMap((i) => {
+    // A daily note is their side only: the same test the reply/call block makes (daySummaries.ts usableSummaries), on the note itself
+    // without its date label, so a note is listed exactly when the block may use it. One the strip would change is left out whole.
+    if (i.source === "summary") {
+      const body = i.text.replace(/^\d{4}-\d{2}-\d{2}: /, "").trim();
+      return (safe(body) ?? "").trim() === body ? [i] : [];
+    }
     const text = safe(i.text);
     if (!text?.trim()) return [];
-    // A daily note is their side only, never another member's name (the job's own strip ran when it was written): one the strip
-    // would change (it names a member, even as "came up here") is left out whole.
-    if (i.source === "summary" && text.trim() !== i.text.trim()) return [];
     // Their own words are theirs (safeMemory keeps "User said:" the same way), but a name in them is still stripped.
     const theirWords = i.theirWords ? safe(i.theirWords) : null;
     return [{ ...i, text: text.trim(), theirWords: theirWords?.trim() || null }];
