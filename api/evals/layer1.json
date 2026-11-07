@@ -167,6 +167,7 @@
     "evals/sweepSelect/tierPicks.ts",
     "evals/sweepSelect/morningReview.ts",
     "evals/sweepSelect/shadowOff.ts",
+    "evals/sentLookup/run.ts",
     "evals/goals/planCurrent.ts",
     "evals/goals/taperHolds.ts",
     "evals/proactive/specifics.ts",
