@@ -71,7 +71,8 @@ check("follow-on: an unrelated next sentence stays", sm("Maya came up. I'm free 
 check("follow-on: the member's own \"I\" sentences stay, and the carry ends at the first unrelated one", sm("Maya came up. I left Stripe. She moved to Austin.") === `${gone("Maya")} I left Stripe. She moved to Austin.`);
 check("follow-on: a part of a list after her is stripped, their own items stay", sm("Maya at Stripe; she is moving to Austin; I want a cofounder") === `${gone("Maya")}; I want a cofounder`);
 check("follow-on: nothing before her name is touched, and the carry stays on its own line", sm("She left Stripe. I'm free Thursday.") === "She left Stripe. I'm free Thursday." && sm("Maya came up.\nShe left Stripe.").split("\n")[1] === "She left Stripe.");
-check("follow-on: \"They\" in Cue's own line is the member, so it stays (pinned in facts/rules.ts)", sm("Maya came up. They want a cofounder by spring.") === `${gone("Maya")} They want a cofounder by spring.`);
+check("follow-on: they/their/them point back right after a stripped part", ["Maya came up. They left Stripe.", "Maya came up. Their new job is at Stripe.", "Maya came up. I met them at Stripe."].every((x) => !DETAIL.test(sm(x))));
+check("follow-on: \"They\" with no stripped name before it stays", sm("They want a cofounder by spring. I'm free Thursday.") === "They want a cofounder by spring. I'm free Thursday.");
 // Cosmetic: the suffix is carried once, and a stray space before the comma doesn't pass as the strip's own output.
 const dup = sm("Maya at Stripe, another member, came up here; their details aren't kept for this conversation.");
 check("cosmetic: a name, a detail and the suffix come out with the suffix once", dup === gone("Maya"), dup);

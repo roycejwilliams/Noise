@@ -293,10 +293,10 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("a revealed intro offer keeps the name, drops the profile", safeOffer === "Cue offered to introduce them to Celine, another member." && !MAYA.test(safeOffer) && !/seed|stealth|bio/i.test(safeOffer));
   check("a tease that never named them stays unnamed", MS.safeMemory("network_offer_pending", offer, []) === "Cue mentioned that another member could be worth meeting, without naming them.");
   check("a broken intro-offer record is dropped, not passed raw", MS.safeMemory("network_intro_offer_pending", "{not json", []) === null);
-  const recap = "Cue introduced them to Maya at the Climate Founders Mixer. Maya is building grid storage and left Tesla. They want a technical cofounder by spring.";
+  const recap = "Cue introduced them to Maya at the Climate Founders Mixer. Maya is building grid storage and left Tesla. The member wants a technical cofounder by spring.";
   const safeRecap = MS.safeMemory("recap", recap, ["Maya"]) ?? "";
   check("in Cue's own lines, the intro survives as history and Maya's details go", safeRecap.startsWith("Cue introduced them to Maya, another member.") && !MAYA.test(safeRecap), safeRecap as any);
-  check("the rest of their recap is untouched", /They want a technical cofounder by spring\./.test(safeRecap));
+  check("the rest of their recap is untouched", /The member wants a technical cofounder by spring\./.test(safeRecap));
   check("Cue's earlier reply carrying her details is stripped too", !MAYA.test(MS.safeMemory("text_exchange", "Co replied: Maya's building grid storage and just left Tesla, worth meeting.", ["Maya"]) ?? ""));
   check("their own words are theirs and stay as they are", MS.safeMemory("text_exchange", "User said: Maya told me she's leaving Tesla.", ["Maya"]) === "User said: Maya told me she's leaving Tesla.");
   check("a name they're not linked with is left alone (their mentor Lena)", MS.safeMemory("recap", "Their mentor Lena reviews the pitch on Fridays.", ["Maya"]) === "Their mentor Lena reviews the pitch on Fridays.");
