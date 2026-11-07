@@ -59,7 +59,7 @@ check("nothing sent: no empty sent block, the rest intact", !assembleCallSummary
 check("a single sent line longer than its cap is skipped, not truncated mid-fact", assembleCallSummary({ lessons: [], sentLines: ["x".repeat(CALL_SENT_MAX + 50), "short one"], threads: [], base: "" }).includes("- short one"));
 check("empty in, empty out", assembleCallSummary({ lessons: [], sentLines: [], threads: [], base: "" }) === "");
 const ctxSrc = read("src/services/callContext.ts");
-check("buildCallKnowledge uses the assembly (no second, stopping loop)", /const summary = assembleCallSummary\(\{ haveIt: haveIt \|\| null, now: loops \|\| null, lastCalls: lastCalls \|\| null, settled: settled \|\| null, lessons, sentLines, threads, base, thread \}\);/.test(ctxSrc) && !/if \(next\.length > CALL_CONTEXT_MAX\) break;/.test(ctxSrc));
+check("buildCallKnowledge uses the assembly (no second, stopping loop)", /const summary = assembleCallSummary\(\{ haveIt: haveIt \|\| null, now: loops \|\| null, lastCalls: lastCalls \|\| null, settled: settled \|\| null, lessons, sentLines, threads, base, thread, earlier \}\);/.test(ctxSrc) && !/if \(next\.length > CALL_CONTEXT_MAX\) break;/.test(ctxSrc));
 check("the call reads the same model of the person as texting (personModel.ts)", /personModelParts\(userId\)/.test(ctxSrc) && /p\.model\?\.threadList/.test(ctxSrc) && /p\.model\?\.loops/.test(ctxSrc));
 
 // ---- the opening line
