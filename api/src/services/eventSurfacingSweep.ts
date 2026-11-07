@@ -15,6 +15,7 @@ import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
 import { MULTI_DAY_HOURS, START_LEAD_MINUTES, leadFor, matchStartProblem } from "./eventStart.js";
 import { ledgerWrite, offerRow } from "./ledger.js";
+import { probeOfMatch, sentOnce, wasSent, type SentOnce } from "./knowledge/sent.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -641,11 +642,14 @@ export async function holdInBacklog(userId: string, askId: string, askText: stri
   await saveBacklogMerged(userId, askId, items, next);
 }
 
+// One member's sent record for one run (knowledge/sent.ts sentOnce): read on first use, then shared by every check in the run.
+export const sentForRun = (userId: string): SentOnce => sentOnce((sql, args) => pool.query(sql, args as any[]).then((r) => r.rows), userId);
+
 // The harness already sent, skipped, or expired this one for this person.
 // A failed attempt (a draft that failed its checks, a send that failed) is not a decision: only a sent text or a member-visible
 // outcome closes a find (Royce, 2026-10-09: a failed Oct 6 draft kept the Extraordinary Founders Dinner out for good). An exited find
 // (services/workingSet.ts) is decided whatever its row says: it's inert and never re-queued.
-async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | "reminder" | "again">): Promise<boolean> {
+async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | "reminder" | "again">, sent: SentOnce = sentForRun(userId)): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT skip_reason FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`,
     [userId, offerTargetKey(item)],
@@ -655,11 +659,11 @@ async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | 
   if ((await exitedFindKeys(userId, [exitKey(item.match)]).catch(() => new Set<string>())).size) return true;
   // Already sent, under any key: a new pitch of a find Cue ever sent them (the same link, event or name, however long ago: no window,
   // knowledge/sent.ts) is the same text twice. A reminder or a month-later resurface is meant to come after a send. A lookup that
-  // fails doesn't decide anything here (the key check above and the repeat rule still stand).
+  // fails decides it (fails closed, logged once by sentOnce): a record it couldn't read is no proof it wasn't sent (review of #409).
   if (!item.reminder && !item.again) {
-    const { sentByReferent, wasSent, probeOfMatch } = await import("./knowledge/sent.js");
-    const sent = await sentByReferent((sql, args) => pool.query(sql, args).then((r) => r.rows), userId).catch(() => [] as import("./knowledge/sent.js").SentRecord[]);
-    if (wasSent(sent, probeOfMatch(item.match))) return true;
+    const records = await sent();
+    if (!records) return true;
+    if (wasSent(records, probeOfMatch(item.match))) return true;
   }
   // A reminder for something Co already gave them a deadline heads-up about (services/memberStateNudges.ts, entry
   // deadline:<item key>, queued or sent) would be the same heads-up twice (review of the branch, 2026-10-08).
@@ -686,11 +690,11 @@ async function shownSinceQueued(userId: string, item: BacklogItem, zone: string 
 // some other path, already decided by the harness, or a real event/deadline
 // that's fully passed while it sat waiting its turn — without losing what's
 // behind it. "Passed" is their day, not the server's.
-async function dropStaleFront(userId: string, items: BacklogItem[], zone: string | null): Promise<BacklogItem[]> {
+async function dropStaleFront(userId: string, items: BacklogItem[], zone: string | null, sent: SentOnce): Promise<BacklogItem[]> {
   let rest = items;
   while (
     rest.length &&
-    ((await shownSinceQueued(userId, rest[0], zone)) || isPastEvent(rest[0].match, zone) || tooLateToOffer(rest[0].match, zone) || (await alreadyDecided(userId, rest[0])))
+    ((await shownSinceQueued(userId, rest[0], zone)) || isPastEvent(rest[0].match, zone) || tooLateToOffer(rest[0].match, zone) || (await alreadyDecided(userId, rest[0], sent)))
   ) {
     rest = rest.slice(1);
   }
@@ -809,7 +813,15 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     return { queued: false };
   }
   const readAtStart = await getBacklog(candidate.userId, candidate.askId);
-  const queued = await dropStaleFront(candidate.userId, readAtStart, zone);
+  // What Cue ever sent them, read once for this run (knowledge/sent.ts). Unreadable, the run stops here, before the search, with the
+  // backlog read but untouched: every find would count as decided and be dropped from it (review of #409: fail closed, never lose the finds).
+  const sent = sentForRun(candidate.userId);
+  if (!(await sent())) {
+    await recordDecision({ layer: 5, decision: "sweep.surface", userId: candidate.userId, outcome: "skip", action: "sent_lookup_failed", proposal: { askId: candidate.askId, fromProfile: candidate.fromProfile ?? false } }).catch(() => {});
+    candidate.onReport?.({ sources: { events: false, web: false, x: false, failures: ["sent lookup: what Cue already sent couldn't be read"] }, found: 0, pooled: 0, queued: 0, outcome: "skipped: what Cue already sent couldn't be read" });
+    return { queued: false };
+  }
+  const queued = await dropStaleFront(candidate.userId, readAtStart, zone, sent);
   // The want's stored coordinates, pinned for this search: everything it geocodes by that label gets them (never a cache row).
   const { withPinnedPlace } = await import("./geocoding.js");
   const { items: rawFound, trace } = where.city && where.point ? await withPinnedPlace(where.city, where.point, () => findFreshPending(candidate, zone, where)) : await findFreshPending(candidate, zone, where);
@@ -842,7 +854,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       await lastOfferedTier(candidate.userId),
       await waitingOfferTiers(candidate.userId),
     ),
-  ], zone);
+  ], zone, sent);
   await saveBacklogMerged(candidate.userId, candidate.askId, readAtStart, pending);
   // For the daily sweep's summary: what was searched, kept by the search, and is now in the pool (this ask's backlog).
   const report = (outcome: string, queued = 0): void =>
@@ -1013,10 +1025,11 @@ export async function pickerDecides(userId: string): Promise<boolean> {
 // What queueing a pick did (Royce, 2026-10-12: why a chosen pick didn't queue took a manual trace): queued, or why not. A thrown
 // error is the caller's fourth answer.
 export type PickQueued = "queued" | "already decided" | "past" | "already exists";
-export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[]; tierPick?: boolean; tierNext?: { key: string; why: string }[] } }): Promise<PickQueued> {
+// sent: the member's sent record for this run (sentForRun), shared by every pick queued in it; read fresh when not given.
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[]; tierPick?: boolean; tierNext?: { key: string; why: string }[] } }, sent?: SentOnce): Promise<PickQueued> {
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
-  if (await alreadyDecided(userId, item)) return "already decided";
+  if (await alreadyDecided(userId, item, sent)) return "already decided";
   if (isPastEvent(o.match, zone) || tooLateToOffer(o.match, zone)) return "past";
   const match = await enrichMatch({ ...o.match, whyItFits: o.why || o.match.whyItFits });
   // Its page's start, read just now, decides too (the pick's record may not have had one).

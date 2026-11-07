@@ -479,12 +479,13 @@ export async function queueTierNext(userId: string, cand: { payload: any }, why:
   const next: { key: string; why: string }[] = Array.isArray(cand.payload?.pick?.tierNext) ? cand.payload.pick.tierNext : [];
   const tried: { name: string; why: string }[] = [];
   if (next.length) {
-    const { queuePickedOffer } = await import("./eventSurfacingSweep.js");
+    const { queuePickedOffer, sentForRun } = await import("./eventSurfacingSweep.js");
+    const sent = sentForRun(userId);
     const backlogs = (await pool.query(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId])).rows;
     for (const n of next) {
       const from = backlogs.flatMap((b: any) => (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ b, it }))).find(({ it }: any) => shadowKey(String(it?.match?.name ?? ""), dateOf(it?.match)) === n.key);
       if (!from) { tried.push({ name: n.key, why: "not in the backlog" }); continue; }
-      const ok = await queuePickedOffer(userId, { askId: String(from.b.ask_id), askText: String(from.it?.askText ?? ""), fromProfile: from.b.ask_id === "profile", match: from.it.match, reminder: !!from.it.reminder, again: !!from.it.again, why: n.why, lastDay: null, pick: { whyMember: n.why, whyNow: "", set: null } }).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 160)}`);
+      const ok = await queuePickedOffer(userId, { askId: String(from.b.ask_id), askText: String(from.it?.askText ?? ""), fromProfile: from.b.ask_id === "profile", match: from.it.match, reminder: !!from.it.reminder, again: !!from.it.again, why: n.why, lastDay: null, pick: { whyMember: n.why, whyNow: "", set: null } }, sent).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 160)}`);
       if (ok === "queued") {
         await recordDecision({ layer: 5, decision: "sweep.tier_next", userId, outcome: "act", action: "queued", reason: why, proposal: { skipped: cand.payload?.match?.name ?? null, queued: from.it.match?.name ?? n.key, tried } }).catch(() => {});
         return String(from.it.match?.name ?? n.key);
@@ -519,7 +520,9 @@ export async function fillTiers(judgments: Judgment[], report: ApplyReport, tryQ
 }
 
 async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: any[], set: string | null, report: ApplyReport, ids?: ReadonlySet<string>, o: { protect?: boolean } = {}): Promise<ReturnType<typeof planPicks>> {
-  const { queuePickedOffer, onEventOfferDropped } = await import("./eventSurfacingSweep.js");
+  const { queuePickedOffer, onEventOfferDropped, sentForRun } = await import("./eventSurfacingSweep.js");
+  // What Cue ever sent them, read once for every pick this run queues (review of #409).
+  const sent = sentForRun(userId);
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
     (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ askId: String(b.ask_id), askText: String(it?.askText ?? ""), fromProfile: b.ask_id === "profile", match: it?.match, reminder: !!it?.reminder, again: !!it?.again })),
   );
@@ -562,7 +565,7 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
   const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
   for (const q of plan.queue) {
     // The pick's view of the set rides with each find it chose today, only when it chose more than one (Phase C3).
-    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set, ids) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}), ...(q.tierNext ? { tierPick: true, tierNext: q.tierNext } : {}) } }).catch((err: any) => {
+    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set, ids) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}), ...(q.tierNext ? { tierPick: true, tierNext: q.tierNext } : {}) } }, sent).catch((err: any) => {
       const msg = String(err?.message ?? err).slice(0, 200);
       console.error("picker: queueing a pick failed:", msg);
       // One pick erroring fails the day too: its retry queues what's missing, and what did queue merges into its own row.
@@ -587,7 +590,7 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
     if (!from) return "not in the backlog";
     // The member's why is the alternate's own forThem line, never its hold or reject reason (memberWhyOf); empty, its details speak.
     const why = memberSafeWhy(memberWhyOf(j), ids);
-    return queuePickedOffer(userId, { askId: from.askId, askText: from.askText, fromProfile: from.fromProfile, match: from.match, reminder: from.reminder, again: from.again, why, lastDay: null, pick: { whyMember: why, whyNow: "", set: null, tierPick: true } }).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 200)}`);
+    return queuePickedOffer(userId, { askId: from.askId, askText: from.askText, fromProfile: from.fromProfile, match: from.match, reminder: from.reminder, again: from.again, why, lastDay: null, pick: { whyMember: why, whyNow: "", set: null, tierPick: true } }, sent).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 200)}`);
   });
   // After the picks (and any tier fallback) are applied: fit-only holds on their last morning age out and leave with their fact.
   const aged = o.protect ? [] : ageOutFitOnly(judgments);
