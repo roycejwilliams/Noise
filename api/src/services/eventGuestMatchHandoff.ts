@@ -702,7 +702,7 @@ export async function handleAdditiveReply(
   }
   if (held) {
     // Nobody was ruled out: a read could not be done. Their yes is not consumed: the additive question is open again (so their next
-    // reply, or the next room pass, tries once more), a decision is recorded, and the reply still acknowledges them (routes/sendblue.ts).
+    // reply tries once more; nothing retries it on a timer), a decision is recorded, and the reply still acknowledges them (routes/sendblue.ts).
     await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds }).catch((err: any) => console.error("handleAdditiveReply: re-opening the held question failed (non-fatal):", err?.message ?? err));
     const { recordDecision } = await import("../harness/core.js");
     await recordDecision({ layer: 6, decision: "match.additive_reveal", userId: person.user_id, outcome: "skip", action: "picture_unread_held", reason: "a member picture could not be read; their yes is kept and the question is open again", proposal: { eventId } }).catch(() => {});
