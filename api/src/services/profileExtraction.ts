@@ -1340,7 +1340,7 @@ export type CapturedIntentData = {
 };
 
 // quote/criteria as the read returned them; persistIntentFrom grounds them (wantWords) before anything is written.
-export type CapturedAsk = { text: string; type: "seeking" | "offering"; quote?: unknown; criteria?: unknown; wantWords?: WantWords };
+export type CapturedAsk = { text: string; type: "seeking" | "offering"; inScope?: boolean; quote?: unknown; criteria?: unknown; wantWords?: WantWords };
 // A want's own words, grounded: their checked quote (or none: "inferred"), where they said it, the conditions in their words.
 export type WantWords = { quote: string | null; provenance: "stated" | "inferred"; via: "text" | "call" | "intake"; criteria: import("./wantCriteria.js").Criterion[] };
 
@@ -1417,7 +1417,7 @@ export function normalizeCapturedAsks(parsed: CapturedIntentData | null, scope: 
     if (!text || !type) continue;
     // The same ask returned twice in one pass is one ask row, not two.
     if (out.some((o) => o.text.toLowerCase() === text.toLowerCase())) continue;
-    out.push({ text, type, ...(a?.quote !== undefined ? { quote: a.quote } : {}), ...(a?.criteria !== undefined ? { criteria: a.criteria } : {}) });
+    out.push({ text, type, ...(typeof a?.in_scope === "boolean" ? { inScope: a.in_scope } : {}), ...(a?.quote !== undefined ? { quote: a.quote } : {}), ...(a?.criteria !== undefined ? { criteria: a.criteria } : {}) });
   }
   // A text turn is one member message — it can only ever open one ask, no
   // matter what the model hands back. This is what keeps the text path
@@ -1493,20 +1493,21 @@ export async function persistIntentFrom(
     // A condition left out is logged with its reason (never their words), so a rejection is never silent.
     const rejected: Record<string, number> = {};
     const onReject = (why: string) => void (rejected[why] = (rejected[why] ?? 0) + 1);
-    // A mixed turn reads every ask the read returned (not just the first, which may be the out part), then keeps the connection part: one for a text turn.
-    const mixedTurn = wopts.scope?.scope === "mixed" && scope === "last_user_message";
-    const captured = normalizeCapturedAsks(parsed, mixedTurn ? "whole_transcript" : scope)
+    // A text turn reads every ask the read returned (not just the first, which may be the part Cue doesn't do), drops the ones the read marked
+    // outside (in_scope false), and keeps one: a text turn still opens at most one ask.
+    const textTurn = scope === "last_user_message";
+    const captured = normalizeCapturedAsks(parsed, textTurn ? "whole_transcript" : scope)
       .filter((a) => mine(a.text))
       // A pure personal share is not an ask (harness/scope.ts isPureShare): remembered in the profile reads, never an ask to search for. The
       // turn read's verdict decides when there is one ("both" keeps the ask); else the word backstop, on the whole message and not the ask's quote.
       .filter((a) => !isPureShare(wopts.messageKind, ownWords || String(a.quote ?? "")))
       // A request Cue declined as outside connections is never an open ask (harness/scope.ts askDeclinedForScope).
       .filter((a) => {
-        const declined = askDeclinedForScope(wopts.scope, a.text, typeof a.quote === "string" ? a.quote : null);
-        if (declined) recordDecision({ layer: 4, decision: "profile.write", userId: user_id, outcome: "skip", action: "declined_out_of_scope", reason: wopts.scope?.scope === "out" ? "the turn read judged it outside connections" : wopts.scope?.scope === "mixed" ? "not the connection part of a mixed turn" : "unmistakably outside connections", proposal: { ask: a.text.slice(0, 200) } }).catch(() => {});
+        const declined = askDeclinedForScope(wopts.scope, a.text, a.inScope);
+        if (declined) recordDecision({ layer: 4, decision: "profile.write", userId: user_id, outcome: "skip", action: "declined_out_of_scope", reason: wopts.scope?.scope === "out" ? "the turn read judged it outside connections" : a.inScope === false ? "the read marked it outside what Cue does" : "unmistakably outside connections", proposal: { ask: a.text.slice(0, 200) } }).catch(() => {});
         return !declined;
       })
-      .slice(0, mixedTurn ? 1 : MAX_ASKS_PER_CAPTURE)
+      .slice(0, textTurn ? 1 : MAX_ASKS_PER_CAPTURE)
       .map((a) => ({ ...a, wantWords: { ...WC.groundWant(a.quote, ownWords), via, criteria: WC.groundCriteria(a.criteria, ownWords, undefined, onReject) } }));
     // Conditions said about something already open (criteria_for): each lands on its own want only, written before the asks below so
     // a deduped restatement in the same turn merges on top of it.

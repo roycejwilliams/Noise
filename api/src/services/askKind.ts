@@ -101,7 +101,7 @@ export async function classifyAskRead(text: string): Promise<AskScopeRead | null
     const kind: AskKind = w.startsWith("outside") ? "outside" : w.startsWith("help") ? "help" : w.startsWith("person") ? "person" : "find";
     const m = out.match(/\|\s*mixed\s*:\s*(.+)$/i);
     const phrase = m ? m[1].replace(/\s+/g, " ").trim().slice(0, 200) : null;
-    return { kind, connection: kind === "outside" || phrase === null ? null : phrase.length >= 4 ? phrase : "" };
+    return { kind, connection: kind === "outside" || phrase === null ? null : phrase ? phrase : "" };
   } catch {
     return null;
   }
