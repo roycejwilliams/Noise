@@ -66,12 +66,12 @@ const DETAIL = /Stripe|Austin/;
 check("follow-on: a detail after the history line is stripped", sm(`${gone("Maya")} She left Stripe.`) === gone("Maya"));
 check("follow-on: \"She's moving to Austin\" after her name is stripped", sm("Maya mentioned it. She's moving to Austin.") === gone("Maya"));
 check("follow-on: \"Her new job is at Stripe\" is stripped", sm("Talked about Maya. Her new job is at Stripe.") === gone("Maya"));
-check("follow-on: his/him and a descriptor are stripped, a chain of them too", ["Maya came up. His new job is at Stripe.", "Maya came up. I told him about Austin.", "Maya came up. The founder left Stripe. Then she moved to Austin.", "Maya came up. And she left Stripe, honestly."].every((x) => !DETAIL.test(sm(x))));
+check("follow-on: his/him and a descriptor are stripped, a chain of them too", ["Maya came up. His new job is at Stripe.", "Maya came up. The founder left Stripe. Then she moved to Austin.", "Maya came up. And she left Stripe, honestly."].every((x) => !DETAIL.test(sm(x))));
 check("follow-on: an unrelated next sentence stays", sm("Maya came up. I'm free Thursday.") === `${gone("Maya")} I'm free Thursday.`);
 check("follow-on: the member's own \"I\" sentences stay, and the carry ends at the first unrelated one", sm("Maya came up. I left Stripe. She moved to Austin.") === `${gone("Maya")} I left Stripe. She moved to Austin.`);
-check("follow-on: a part of a list after her is stripped, their own items stay", sm("Maya at Stripe; she is moving to Austin; I want a cofounder") === `${gone("Maya")}; I want a cofounder`);
-check("follow-on: nothing before her name is touched, and the carry stays on its own line", sm("She left Stripe. I'm free Thursday.") === "She left Stripe. I'm free Thursday." && sm("Maya came up.\nShe left Stripe.").split("\n")[1] === "She left Stripe.");
-check("follow-on: they/their/them point back right after a stripped part", ["Maya came up. They left Stripe.", "Maya came up. Their new job is at Stripe.", "Maya came up. I met them at Stripe."].every((x) => !DETAIL.test(sm(x))));
+check("follow-on: a part of a list after her is stripped, their own items stay", sm("Maya at Stripe; she is moving to Austin; I want a cofounder") === `${gone("Maya")} I want a cofounder`);
+check("follow-on: nothing before her name is touched", sm("She left Stripe. I'm free Thursday.") === "She left Stripe. I'm free Thursday.");
+check("follow-on: they/their/them point back right after a stripped part", ["Maya came up. They left Stripe.", "Maya came up. Their new job is at Stripe."].every((x) => !DETAIL.test(sm(x))));
 check("follow-on: \"They\" with no stripped name before it stays", sm("They want a cofounder by spring. I'm free Thursday.") === "They want a cofounder by spring. I'm free Thursday.");
 // Cosmetic: the suffix is carried once, and a stray space before the comma doesn't pass as the strip's own output.
 const dup = sm("Maya at Stripe, another member, came up here; their details aren't kept for this conversation.");
@@ -79,6 +79,21 @@ check("cosmetic: a name, a detail and the suffix come out with the suffix once",
 check("cosmetic: \"Maya , another member, came up here\" gets the full line", sm("Maya , another member, came up here") === gone("Maya"));
 check("idempotent on genuine output, follow-ons included", ["Maya mentioned it. She's moving to Austin. I'm free Thursday.", "Maya at Stripe; she left; I want a cofounder", `${gone("Maya")} She left Stripe.`, "Maya came up here"].every((x) => { const a = sm(x); return sm(a) === a; }));
 
+// Drop everything after her until the member speaks (2026-11-06, Royce): subject-less parts, lines, bullets and intervening sentences go.
+check("carry: subject-less follow-on sentences are dropped", sm("Maya came up. Left Stripe last week, moving to Austin.") === gone("Maya"));
+check("carry: subject-less \"; \" items are dropped, the member's own item kept, no \".;\" join", sm("Maya came up; left Stripe; I want a cofounder") === `${gone("Maya")} I want a cofounder`);
+check("carry: the next line is dropped", sm("Maya came up.\nShe left Stripe.") === gone("Maya") && sm("Maya came up.\nLeft Stripe last week.") === gone("Maya"));
+check("carry: bullets are parts, and the member's own bullet stays", sm("- Maya came up\n- left Stripe\n- I want a cofounder") === `${gone("Maya")}\n- I want a cofounder`);
+check("carry: an intervening sentence doesn't end it", sm("Maya came up. It rained. She left Stripe.") === gone("Maya"));
+check("carry: the member speaking ends it (I, I'm, my, me, we), a later line is untouched", sm("Maya came up. My week is full. Dinner is at 8.") === `${gone("Maya")} My week is full. Dinner is at 8.` && sm("Maya came up.\nWe talked Friday.\nThe gallery opens at 6.") === `${gone("Maya")}\nWe talked Friday.\nThe gallery opens at 6.`);
+check("carry: their own stored words end it", sm("Maya came up.\nUser said: I'm tired.\nShe left Stripe.") === `${gone("Maya")}\nUser said: I'm tired.\nShe left Stripe.`);
+check("carry: a different linked member gets her own strip", M.safeMemory("recap", "Maya came up. Left Stripe. Noor came up too. Opened a gallery.", ["Maya", "Noor"]) === `${gone("Maya")} ${gone("Noor")}`);
+check("carry: a blank line between keeps the carry, and the strip's own output is stable", sm("Maya came up.\n\nLeft Stripe.") === gone("Maya") && ["Maya came up; left Stripe; I want a cofounder", "- Maya came up\n- left Stripe\n- I want a cofounder", "Maya came up.\nShe left Stripe.", "Maya came up. It rained. She left Stripe."].every((x) => { const a = sm(x); return sm(a) === a; }));
+// Known limits, on the safe side or documented: the strip starts at a linked name, so a part about her BEFORE any name isn't found, and a
+// part that opens with "I" is the member's. Cheap cases: a descriptor not on any list, a surname-only title, non-English follow-ons.
+check("limit: after her name, a descriptor off any list, a surname title and non-English are all dropped", ["Maya came up. The cellist left Stripe.", "Maya came up. Ms. Chen left Stripe.", "Maya came up. Elle a quitté Stripe.", "Maya came up. Ella dejó Stripe."].every((x) => sm(x) === gone("Maya")));
+check("limit: before any linked name nothing is found (\"Ms. Chen\" alone isn't a linked name)", sm("Ms. Chen left Stripe.") === "Ms. Chen left Stripe." && sm("Elle a quitté Stripe. Maya came up.") === `Elle a quitté Stripe. ${gone("Maya")}`);
+check("limit: a non-English member line doesn't end the carry (dropped, the safe side)", sm("Maya came up. Yo quiero un cofundador.") === gone("Maya"));
 // The finder itself.
 const find = M.nameFinder(["Rose", "Noor", "Sarah Hao"]);
 check("finder: leftmost person wins", find("rose to the top, then noor and Rose met") === "Noor");

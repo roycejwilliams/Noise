@@ -47,7 +47,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { capabilitySheet } from "./capabilities.js";
 import type { MemberKnowledge, KnowledgeSection } from "./memberKnowledge.js";
-import { nameFinder, namelessHistoryLine, WORD_NAMES } from "./memberSafeMemories.js";
+import { nameFinder, namelessHistoryLine, stripAfterNames, WORD_NAMES } from "./memberSafeMemories.js";
 import { wordsZone } from "./memberTime.js";
 import { forgets, guardText, type ForgottenRow, type Guarded } from "./whatCoKnows.js";
 
@@ -283,25 +283,14 @@ export function linkedNameMatcher(names: string[]): (text: string) => boolean {
 // sentence. A lead-in label without a name ("Thread (open): ") is kept.
 export function fenceLine(text: string, hits: (t: string) => boolean): { text: string; n: number } {
   if (!hits(text)) return { text, n: 0 };
-  let n = 0;
   const lead = text.match(/^([^:\n]{1,60}:\s)/)?.[1] ?? "";
   const keepLead = lead && !hits(lead) ? lead : "";
   const rest = text.slice(keepLead.length);
-  const seen = new Set<string>();
-  const one = (piece: string) => {
-    if (!hits(piece)) return piece;
-    n++;
-    const h = namelessHistoryLine(piece);
-    if (seen.has(h)) return "";
-    seen.add(h);
-    return h;
-  };
-  const out = rest
-    .split(/(?<=[.!?])\s+/)
-    // A history line memberKnowledge's strip already wrote ("Marisol, another member, came up here; ...") is one sentence, whole.
-    .map((sentence) => (sentence.includes("; ") && hits(sentence) && !/\banother member\b/i.test(sentence) ? sentence.split("; ").map(one).filter(Boolean).join("; ") : one(sentence)))
-    .filter(Boolean)
-    .join(" ");
+  // The same policy as safeMemory, one shared function (memberSafeMemories.stripAfterNames): the parts after a name are dropped until the member
+  // speaks. A history line memberKnowledge's strip already wrote ("Marisol, another member, came up here; ...") is one sentence, whole.
+  const r = stripAfterNames(rest, { named: hits, noSplit: (sentence) => /\banother member\b/i.test(sentence), rewrite: namelessHistoryLine });
+  const n = r.n;
+  const out = r.text;
   return { text: `${keepLead}${out}`.trim(), n };
 }
 

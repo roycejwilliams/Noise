@@ -293,10 +293,10 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("a revealed intro offer keeps the name, drops the profile", safeOffer === "Cue offered to introduce them to Celine, another member." && !MAYA.test(safeOffer) && !/seed|stealth|bio/i.test(safeOffer));
   check("a tease that never named them stays unnamed", MS.safeMemory("network_offer_pending", offer, []) === "Cue mentioned that another member could be worth meeting, without naming them.");
   check("a broken intro-offer record is dropped, not passed raw", MS.safeMemory("network_intro_offer_pending", "{not json", []) === null);
-  const recap = "Cue introduced them to Maya at the Climate Founders Mixer. Maya is building grid storage and left Tesla. The member wants a technical cofounder by spring.";
+  const recap = "Cue introduced them to Maya at the Climate Founders Mixer. Maya is building grid storage and left Tesla. I want a technical cofounder by spring.";
   const safeRecap = MS.safeMemory("recap", recap, ["Maya"]) ?? "";
   check("in Cue's own lines, the intro survives as history and Maya's details go", safeRecap.startsWith("Cue introduced them to Maya, another member.") && !MAYA.test(safeRecap), safeRecap as any);
-  check("the rest of their recap is untouched", /The member wants a technical cofounder by spring\./.test(safeRecap));
+  check("the rest of their recap is untouched", /I want a technical cofounder by spring\./.test(safeRecap));
   check("Cue's earlier reply carrying her details is stripped too", !MAYA.test(MS.safeMemory("text_exchange", "Co replied: Maya's building grid storage and just left Tesla, worth meeting.", ["Maya"]) ?? ""));
   check("their own words are theirs and stay as they are", MS.safeMemory("text_exchange", "User said: Maya told me she's leaving Tesla.", ["Maya"]) === "User said: Maya told me she's leaving Tesla.");
   check("a name they're not linked with is left alone (their mentor Lena)", MS.safeMemory("recap", "Their mentor Lena reviews the pitch on Fridays.", ["Maya"]) === "Their mentor Lena reviews the pitch on Fridays.");
@@ -306,8 +306,8 @@ check("the record starts filled from what was already logged", /backfillCoAction
   // Snapshot step 3: the reply no longer retrieves memories; what Cue knows reaches it through the snapshot, fenced at its build.
   check("the text reply retrieves no memories (the snapshot is fenced where it's built)", !/content_embedding <=>/.test(sb) && !/filterRelevantMemories/.test(sb) && /fenceCheck\(built, src\.names/.test(src("services/memberSnapshot.ts")));
   // Call summaries and the person model (#49 review items 1 and 2).
-  const call = MS.safeMemory("text_exchange", "[Call] Avery said they met Maya at the mixer. Maya is leaving Tesla and raising for her grid storage startup. Avery wants a technical cofounder.", ["Maya"]) ?? "";
-  check("a call summary describing another member is stripped, the member's own part kept", !MAYA.test(call) && /Cue introduced them to Maya, another member\.|Maya, another member/.test(call) && /Avery wants a technical cofounder\./.test(call), call as any);
+  const call = MS.safeMemory("text_exchange", "[Call] Avery said they met Maya at the mixer. Maya is leaving Tesla and raising for her grid storage startup. I want a technical cofounder.", ["Maya"]) ?? "";
+  check("a call summary describing another member is stripped, the member's own part kept", !MAYA.test(call) && /Cue introduced them to Maya, another member\.|Maya, another member/.test(call) && /I want a technical cofounder\./.test(call), call as any);
   const PM = await import("../../src/services/personModel.js");
   const block = PM.renderPersonModel({ who: "Work: climate founder\nPeople: Maya (another member) is building grid storage and leaving Tesla", threads: "- the intro with Maya: she wants to raise soon", did: [], loops: null });
   const safeBlock = MS.safeMemory("person_model", block, ["Maya"]) ?? "";

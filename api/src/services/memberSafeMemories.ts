@@ -114,17 +114,12 @@ const ownHistory = (line: string, names: string[]): boolean => {
   const slot = m ? (m[1] ?? m[2] ?? m[3] ?? "") : "";
   return !!slot && names.some((n) => n.trim() === slot);
 };
-// A sentence that carries on about someone just named (2026-11-06, Royce: no cross-member leaks): "Maya came up. She left Stripe." The rewrite
-// above replaces only the sentence that names the member, so the next one that refers back to them is stripped too, until a sentence
-// with no pointer back to them (she/he/her/his/him, they/their/them/theirs, or a descriptor like "the founder") starts something new.
-// "They" is ambiguous (Cue's own lines also say it for the member), and cross-member privacy outranks keeping it: it counts only directly
-// after a stripped part, so a line with no linked name before it keeps its "they". Code guarding a boundary, not
-// a judgment of meaning, so it errs toward stripping: any such pointer anywhere in the sentence counts. The member's own "I ..." and
-// "we ..." sentences carry none, so they stay.
-const POINTS_BACK = /\b(?:she|he|her|hers|him|his|herself|himself)\b/i;
-const DESCRIPTOR = /\b(?:the|that|this|said)\s+(?:[\w-]+\s+)?(?:founder|cofounder|co-founder|ceo|cto|designer|engineer|developer|artist|director|manager|investor|partner|friend|colleague|boss|mentor|candidate|person|woman|man|guy|lady|owner|writer|photographer|doctor|lawyer|consultant|other member|other person)\b/i;
-const PLURAL = /\b(?:they|them|their|theirs|themselves)\b/i;
-const pointsBack = (s: string) => POINTS_BACK.test(s) || DESCRIPTOR.test(s) || PLURAL.test(s);
+// Everything after a linked member's name is hers until the member speaks again (2026-11-06, Royce: no cross-member leaks, safe side). The rewrite
+// replaces the part that names her; the parts after it are dropped too, however they refer back ("She left Stripe", "Left Stripe last week",
+// "It rained. She left"), across sentences, "; " items, lines and bullets, until a part that is clearly the member talking about themselves
+// (I, I'm, my, me, we), a part that names a different linked member (its own strip), or the end of the text. No pronoun or descriptor
+// list: not judging meaning, only guarding a boundary.
+const MEMBER_SPEAKS = /^[\s\-*\u2022\d.)>]*["'\u201c\u2018(]*(?:i|my|me|we)\b/i;
 // The suffix historyLine ends a "came up" line with; a stripped part followed by it on a "; " split doesn't carry it twice.
 const SUFFIX_ONLY = /^their details aren't kept for this conversation\.?$/i;
 
@@ -147,6 +142,66 @@ export function namelessHistoryLine(sentence: string): string {
   if (kind === "intro") return "Cue introduced them to another member.";
   if (kind === "suggested") return "Cue suggested another member as someone to meet.";
   return "Another member came up here; their details aren't kept.";
+}
+
+// Pure: the one policy for stripping a text around linked members, shared by safeMemory (a history line with the name) and the snapshot's
+// fenceLine (nameless). Parts are lines, sentences and "; " items. A part that names a member is rewritten (or kept whole when it is the strip's
+// own output, keepPart), and carries: every part after it is dropped until one where the member speaks (MEMBER_SPEAKS) or a part that names a
+// member again. A line keepLine accepts (their own stored words) is kept and ends the carry. n counts the parts rewritten.
+export function stripAfterNames(
+  text: string,
+  o: { named: (s: string) => boolean; keepLine?: (line: string) => boolean; keepPart?: (s: string) => boolean; noSplit?: (sentence: string) => boolean; rewrite: (s: string) => string },
+): { text: string; n: number } {
+  let carrying = false;
+  let n = 0;
+  const lines: string[] = [];
+  for (const line of text.split("\n")) {
+    if (o.keepLine?.(line)) {
+      carrying = false;
+      lines.push(line);
+      continue;
+    }
+    if (!line.trim() || (!carrying && !o.named(line))) {
+      lines.push(line);
+      continue;
+    }
+    const seen = new Set<string>();
+    const step = (part: string): string => {
+      // The history line's own tail, when it was split on "; ": never a detail, and it doesn't end the carry.
+      if (SUFFIX_ONLY.test(part.trim())) return part;
+      if (o.named(part)) {
+        carrying = true;
+        if (o.keepPart?.(part)) return part;
+        const h = o.rewrite(part);
+        n++;
+        if (seen.has(h)) return "";
+        seen.add(h);
+        return h;
+      }
+      if (!carrying) return part;
+      if (MEMBER_SPEAKS.test(part)) {
+        carrying = false;
+        return part;
+      }
+      return "";
+    };
+    const sentences = line.split(/(?<=[.!?])\s+/).map((sentence) => {
+      // List items ("Wants right now: a cofounder; ...") are judged one by one, so the member's own items stay.
+      if (!sentence.includes("; ") || !(carrying || o.named(sentence)) || o.keepPart?.(sentence) || o.noSplit?.(sentence)) return step(sentence);
+      let joined = "";
+      for (const item of sentence.split("; ")) {
+        const out = step(item);
+        if (!out) continue;
+        if (SUFFIX_ONLY.test(out.trim()) && joined.includes("their details aren't kept for this conversation")) continue;
+        // After a part that already ends a sentence, the next one is a new sentence, not "; ...".
+        joined = !joined ? out : /[.!?]$/.test(joined) ? `${joined} ${out}` : `${joined}; ${out}`;
+      }
+      return joined;
+    });
+    const out = sentences.filter(Boolean).join(" ");
+    if (out) lines.push(out);
+  }
+  return { text: lines.join("\n").trim(), n };
 }
 
 // Pure: one memory made safe, or null when nothing safe is left in it.
@@ -172,55 +227,12 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
   const names = linkedNames.map((n) => n.trim()).filter((n) => n.length >= 2);
   if (!names.length) return text.trim() || null;
   const find = nameFinder(names);
-  const named = { test: (x: string) => find(x) !== null };
-  const out = text
-    .split("\n")
-    .map((line) => {
-      if (OWN_WORDS.test(line) || !named.test(line)) return line;
-      const seen = new Set<string>();
-      const strip = (s: string) => {
-        const name = find(s);
-        if (!name) return s;
-        // Its own output is left alone, so a second pass is a no-op (a section stripped early to be measured, then again at the end).
-        if (ownHistory(s, names)) return s;
-        const h = historyLine(s, name);
-        if (seen.has(h)) return "";
-        seen.add(h);
-        return h;
-      };
-      // After a part that names a linked member, the parts that carry on about them are dropped too.
-      let carrying = false;
-      const step = (s: string) => {
-        // The history line's own tail, when it was split on "; ": never a detail, and it doesn't end the carry.
-        if (SUFFIX_ONLY.test(s.trim())) return s;
-        if (find(s)) {
-          carrying = true;
-          return strip(s);
-        }
-        if (carrying && pointsBack(s)) return "";
-        carrying = false;
-        return s;
-      };
-      // List items ("Wants right now: a cofounder; …") are stripped one by one,
-      // so their own items on the same line stay.
-      return line
-        .split(/(?<=[.!?])\s+/)
-        .map((sentence) => {
-          if (!(sentence.includes("; ") && named.test(sentence))) return step(sentence);
-          const parts: string[] = [];
-          for (const item of sentence.split("; ")) {
-            const out = step(item);
-            if (!out) continue;
-            if (SUFFIX_ONLY.test(out.trim()) && parts.length && parts[parts.length - 1].includes("their details aren't kept for this conversation")) continue;
-            parts.push(out);
-          }
-          return parts.join("; ");
-        })
-        .filter(Boolean)
-        .join(" ");
-    })
-    .join("\n")
-    .trim();
+  const out = stripAfterNames(text, {
+    named: (x) => find(x) !== null,
+    keepLine: (line) => OWN_WORDS.test(line),
+    keepPart: (x) => ownHistory(x, names),
+    rewrite: (x) => historyLine(x, find(x) ?? ""),
+  }).text;
   return out || null;
 }
 
