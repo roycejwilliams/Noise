@@ -42,7 +42,7 @@ const mk = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: nu
   check("same name, same date, no ids: a duplicate", wasSent(recs, { name: "Founder Dinner", ident: { name: "Founder Dinner", event_date: "2026-10-12" } }));
   check("an opening (no id, no date) is matched by name", wasSent([mk({ name: "ERA Winter 2027 Cohort", kind: "opportunity" })], { name: "era winter 2027 cohort!" }));
   check("a different find is not a duplicate", !wasSent(recs, { name: "Poker Night", url: "https://lu.ma/poker" }));
-  check("priority: a link beats a name", findSent([mk({ name: "A Night", url: "https://x.com/1" }), mk({ name: "Other", url: "https://x.com/2" })], { name: "A Night", url: "https://x.com/2" })?.by === "url");
+  check("priority: a link beats a name", findSent([mk({ name: "A Night", url: "https://x.com/1" }), mk({ name: "A Night (Late Edition)", url: "https://x.com/2" })], { name: "A Night", url: "https://x.com/2" })?.by === "url");
   check("url-only records never match by name", matchSent(mk({ name: "Founder Dinner", url: "https://x.com/1", urlOnly: true }), { name: "Founder Dinner" }) === null);
   const m = probeOfMatch({ name: "X", url: "u", event_api_id: "e9", event_date: "2026-11-09" });
   check("a stored match is a probe with its id and date", m.eventId === "e9" && m.ident?.event_date === "2026-11-09");
@@ -80,6 +80,14 @@ const mk = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: nu
   check("group page: a new event id and date on the same link is NOT a duplicate", !wasSent(mu, { name: "SF Founders Monthly", url: group, eventId: "mu-344", ident: { name: "SF Founders Monthly", event_date: "2026-11-19" } }));
   check("group page: a new id alone on the same link is NOT a duplicate", !wasSent(mu, { name: "Founders Social", url: group, eventId: "mu-350" }));
   check("group page: the same id on the same link is a duplicate", findSent(mu, { name: "SF Founders Monthly", url: group, eventId: "mu-301" })?.by === "url");
+  // The dev case: one listing, named finds with no id or date.
+  const bj = mk({ name: "Butchertown Jazz", url: listing, via: ["fact"], ident: { name: "Butchertown Jazz" } });
+  const vm = mk({ name: "Valencia Night Market", url: listing, via: ["offer"], ident: { name: "Valencia Night Market" } });
+  check("listing, undated: Butchertown Jazz and Valencia Night Market on one link are two records", mergeSentRecords([bj, vm]).length === 2);
+  check("listing, undated: Valencia Night Market isn't blocked by Butchertown Jazz's link", !wasSent([bj], { name: "Valencia Night Market", url: listing }));
+  check("listing, undated: the same name on the same link is one record", mergeSentRecords([bj, mk({ ...bj, via: ["ledger"], at: NOW })]).length === 1);
+  check("listing, undated: the same name on the same link is a duplicate", findSent([bj], { name: "Butchertown Jazz!", url: `${listing}?utm_source=x` })?.by === "url");
+  check("link: a shared meaningful word still counts as the same (Dinner for Founders / Founder Dinner)", findSent([mk({ name: "Founder Dinner", url: "https://lu.ma/fd" })], { name: "Dinner for Founders (SF)", url: "https://luma.com/fd" })?.by === "url");
   check("merge: two finds on one listing stay two records", mergeSentRecords([fc[0], mk({ name: "Night Market", url: listing, ident: { name: "Night Market", event_date: "2026-11-14" } })]).length === 2);
 
   // An undated reply-path fact (no id, no ISO date): its name never blocks a find that says which event it is.
@@ -152,7 +160,7 @@ const mk = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: nu
   check("a find sent 100+ days ago is still caught (offer)", wasSent(mine, { name: "Founder Dinner", eventId: "evt-1" }));
   check("a find sent 100+ days ago is still caught (action record, by link variant)", wasSent(mine, { name: "Rooftop Mixer night", url: "https://luma.com/roof" }));
   check("a find sent 100+ days ago is still caught (send ledger, by name)", wasSent(mine, { name: "YC S27" }));
-  check("the action ledger answers by link", wasSent(mine, { name: "Whatever", url: "https://luma.com/only-ledger" }));
+  check("the action ledger answers by link", wasSent(mine, { name: "Only Ledger Night", url: "https://luma.com/only-ledger" }));
   check("the action ledger never folds a recurrence in by name", !wasSent(mine, { name: "only ledger", ident: { event_date: "2026-11-30" } }));
   check("every query binds the member as $1", seen.length === 4 && seen.every((s) => s === "me|true"), seen);
   check("another member's sends never count", !wasSent(mine, { name: "Secret Thing", url: "https://lu.ma/secret", eventId: "evt-77" }));
