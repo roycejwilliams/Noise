@@ -38,6 +38,7 @@ export const STORES: Store[] = [
   { name: "co_memories: other types", table: "co_memories", owner: "user_id", cols: ["content"], where: "t.memory_type NOT IN ('text_exchange', 'call_transcript', 'recap', 'co_lesson', 'recommendation', 'promise_result')" },
   { name: "co_memories: rows with an embedding (any type)", table: "co_memories", owner: "user_id", cols: ["content"], where: "t.content_embedding IS NOT NULL" },
   { name: "member_claims", table: "member_claims", owner: "user_id", cols: ["text", "quote"] },
+  { name: "member_day_summaries: Cue's dated notes of older days", table: "member_day_summaries", owner: "user_id", cols: ["summary"] },
   { name: "member_threads: open or waiting", table: "member_threads", owner: "user_id", cols: ["text", "opened_quote", "closed_quote"], where: "t.status IN ('open', 'waiting')" },
   { name: "member_threads: any status", table: "member_threads", owner: "user_id", cols: ["text", "opened_quote", "closed_quote"] },
   { name: "person_snapshots", table: "person_snapshots", owner: "user_id", cols: ["snapshot"] },
