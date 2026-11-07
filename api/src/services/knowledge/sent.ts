@@ -92,9 +92,23 @@ const idsOrDaysDiffer = (rec: SentRecord, p: SentProbe): boolean => {
   return !!(rd && pd && rd !== pd);
 };
 
+// Two named records whose names share no meaningful word (eventNameKey's words, less the little ones) are two finds, even on one
+// link: a listing, venue or group page carries many, mostly with no id or date (review of #409: funcheap, tagvenue). This only stops
+// a false "same"; a renamed event on the same link may go twice, which beats a real find blocked for good.
+const LITTLE = new Set(["a", "an", "the", "and", "or", "of", "in", "at", "on", "for", "with", "to", "by", "from", "x", "vs"]);
+const wordsOf = memo((n: string) => new Set(nameKey(n).split(" ").filter((w) => w && !LITTLE.has(w))));
+const namesDiffer = (rec: SentRecord, p: SentProbe): boolean => {
+  const pn = p.name ?? p.ident?.name ?? "";
+  if (!rec.name || !pn) return false;
+  const a = wordsOf(rec.name), b = wordsOf(pn);
+  if (!a.size || !b.size) return false;
+  for (const w of a) if (b.has(w)) return false;
+  return true;
+};
+
 // Pure: how a record matches a find, or null. Priority: link, event identity, name.
 export function matchSent(rec: SentRecord, p: SentProbe): "url" | "event" | "name" | null {
-  if (rec.url && p.url && urlKey(rec.url) === urlKey(p.url) && !idsOrDaysDiffer(rec, p)) return "url";
+  if (rec.url && p.url && urlKey(rec.url) === urlKey(p.url) && !idsOrDaysDiffer(rec, p) && !namesDiffer(rec, p)) return "url";
   const pid = p.eventId ?? p.ident?.event_api_id ?? null;
   if (rec.eventId && pid && rec.eventId === pid) return "event";
   const pi: EventLike = { name: p.name ?? p.ident?.name ?? null, url: p.url ?? p.ident?.url ?? null, ...(p.ident ?? {}) };
