@@ -124,7 +124,13 @@ const ownHistory = (line: string, names: string[]): boolean => {
 //   - the start of a bullet, numbered item, header or label line, or a blank line (a new paragraph): never crossed;
 //   - a part that names a different linked member (its own strip), or the end of the text.
 // A "User said:" line is the member's own words and is kept; one that named her keeps the carry into the next line.
-const MEMBER_SPEAKS = /^[\s\-*•\d.)>]*["'“‘(]*(?:i|my|me|we)\b/i;
+// A part that opens with a quote is never the member speaking: it may be her words ("I'm pregnant.").
+const MEMBER_SPEAKS = /^[\s\-*•\d.)>]*(?:i|my|me|we)\b/i;
+// Cue's own third-person line about the member: opens with their name or "the member" and says what THEY want, nothing about anyone else.
+const MEMBER_WANTS = /^\s*(?:the member|NAME)(?:['’]s)?\s+(?:wants?|needs?|is looking for|are looking for|would like|likes?|prefers?|hopes?|is hoping|is free|is available|is open to|asked for|is interested in)\b/i;
+// A part with no finite verb cue: a bare detail ("Pregnant, moving to Austin", "Left Stripe last week"), with no subject of its own.
+const FINITE = /\b(?:am|is|are|was|were|has|have|had|will|would|can|could|do|does|did|wants?|needs?|likes?|loves?|prefers?|said|says|told|asked|thinks?|[a-z]{3,}ed)\b/i;
+const fragment = (s: string) => !FINITE.test(s);
 const POINTS_BACK = /\b(?:she|he|her|hers|him|his|herself|himself|they|them|their|theirs|themselves)\b/i;
 const DESCRIPTOR = /\b(?:the|that|this|said)\s+(?:[\w-]+\s+)?(?:founder|cofounder|co-founder|ceo|cto|designer|engineer|developer|artist|director|manager|investor|partner|friend|colleague|boss|mentor|candidate|person|woman|man|guy|lady|owner|writer|photographer|doctor|lawyer|consultant|other member|other person)\b/i;
 const pointsBack = (s: string) => POINTS_BACK.test(s) || DESCRIPTOR.test(s);
@@ -174,27 +180,39 @@ export function stripAfterNames(
   },
 ): { text: string; n: number } {
   const own = (o.ownNames ?? []).map((x) => x.trim()).filter((x) => x.length >= 2);
-  const ownRe = own.length ? new RegExp(`(?<![\\p{L}\\p{N}_])(?:${own.map((x) => escape(x).replace(/\s+/g, "\\s+")).join("|")})(?![\\p{L}\\p{N}_])`, "iu") : null;
+  const memberWants = new RegExp(MEMBER_WANTS.source.replace("NAME", own.length ? own.map((x) => escape(x).replace(/\s+/g, "\\s+")).join("|") : "(?!)"), "iu");
   let carrying = false;
+  let carryBullet = false; // the line that started the carry was a bullet
+  let underHeader = false; // a header line came before: bullets are independent items of a section
+  let justEnded = false; // the carry just ended on the member's own part: a bare detail right after it still goes
   let cue = !o.iIsMember;
   let n = 0;
   const lines: string[] = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) {
-      carrying = false;
+      // A blank line is a new paragraph for Cue's cue state only; the carry goes on unless the next line is a header or turns back to the member.
       cue = !o.iIsMember;
       lines.push(line);
       continue;
     }
-    if (STRUCTURAL.test(line)) carrying = false;
+    const isBullet = BULLET.test(line);
+    const isHeader = STRUCTURAL.test(line) && !isBullet;
+    if (isHeader) {
+      carrying = false;
+      justEnded = false;
+      underHeader = true;
+    } else if (isBullet && carrying && carryBullet && underHeader && !POINTS_BACK.test(line.replace(BULLET, "").trim().split(/\s+/)[0] ?? "")) {
+      // Sibling items of a section (a recap's bullets) are independent; one that starts by pointing back at her keeps the carry.
+      carrying = false;
+    }
     if (o.iIsMember && CUE_LABEL.test(line)) cue = true;
     if (o.keepLine?.(line)) {
-      // Their own words stay; if they named her, the next line is still about her.
-      carrying = o.named(line);
+      // Their own words stay; if they named her, the next line is still about her. One that doesn't name her leaves the carry as it is.
+      if (o.named(line)) carrying = true;
       lines.push(line);
       continue;
     }
-    if (!carrying && !o.named(line)) {
+    if (!carrying && !justEnded && !o.named(line)) {
       lines.push(line);
       continue;
     }
@@ -204,7 +222,7 @@ export function stripAfterNames(
     const seen = new Set<string>();
     const endsCarry = (part: string): boolean => {
       if (pointsBack(part)) return false;
-      if (ownRe?.test(part) || /\bthe member\b/i.test(part)) return true;
+      if (memberWants.test(part)) return true;
       return !cue && MEMBER_SPEAKS.test(part);
     };
     const step = (part: string): string => {
@@ -212,6 +230,8 @@ export function stripAfterNames(
       if (SUFFIX_ONLY.test(part.trim())) return part;
       if (o.named(part)) {
         carrying = true;
+        carryBullet = !!marker;
+        justEnded = false;
         if (o.keepPart?.(part)) return part;
         const h = o.rewrite(part);
         n++;
@@ -219,9 +239,18 @@ export function stripAfterNames(
         seen.add(h);
         return h;
       }
-      if (!carrying) return part;
+      if (!carrying) {
+        if (justEnded && fragment(part)) {
+          carrying = true;
+          justEnded = false;
+          return "";
+        }
+        justEnded = false;
+        return part;
+      }
       if (endsCarry(part)) {
         carrying = false;
+        justEnded = true;
         return part;
       }
       return "";

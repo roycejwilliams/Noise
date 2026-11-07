@@ -831,6 +831,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
 
   const [profile, zone, names] = await Promise.all([safe("profile", () => d.profile(userId), null), safe("zone", () => d.zone(userId), null), d.linkedNames(userId)]);
   // No names, no knowledge: a failed name read throws rather than returning anything unstripped (fails closed, PR #118).
+  const ownNames = profile?.firstName?.trim() ? [profile.firstName.trim()] : [];
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
@@ -920,7 +921,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
       const [raw, lim] = await Promise.all([safe("learned", () => d.picture!(userId), null as RawPicture | null), safe("learned limits", () => d.limits(userId), null as (Limits & { at: Date | null }) | null)]);
       const linkedNames = [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))];
       // Every string, their own words included, goes through the name strip before it is clipped and measured.
-      const stripNames = (s: string) => safeMemory("member_knowledge", s, linkedNames) ?? "";
+      const stripNames = (s: string) => safeMemory("member_knowledge", s, linkedNames, ownNames) ?? "";
       const keep = (t: string) => !W || (W.guardText(t, removed) === t && !removed.some((r) => r.ref.startsWith("avoid:") && W.covers(r.old, t)));
       const guarded = raw && W ? guardPicture(raw, guards, W) : raw;
       const built = pictureOf({ raw: guarded ?? { lessons: [], lessonsTotal: 0, corrections: [], correctionsTotal: 0 }, limits: datedLimits(stripNames, lim ?? { avoid: [], availability: null }, keep), opts: { budget: opts.budget, about: opts.about, strip: stripNames } });
@@ -958,7 +959,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
 
   // The strip, last, over everything (see the header): nothing un-stripped leaves.
   const linked = [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))];
-  const strip = (s: string) => safeMemory("member_knowledge", s, linked) ?? "";
+  const strip = (s: string) => safeMemory("member_knowledge", s, linked, ownNames) ?? "";
   return stripDeep(k, strip);
 }
 

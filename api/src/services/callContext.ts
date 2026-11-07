@@ -219,11 +219,13 @@ async function loadContextParts(userId: string, include: readonly KnowledgeSecti
   });
   // A Tier 0 pick names someone their recap or texts may describe too.
   const names = linked ? [...linked, ...namesInRecords(recentRecommendationResult.rows)] : null;
-  const [safeRecap, safeRecommendation] = names ? await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names)]) : [[], []];
+  // Their own first name (already read with the layer), so the strip can see where the text turns back to them.
+  const ownName = k.identity.firstName ? [k.identity.firstName] : [];
+  const [safeRecap, safeRecommendation] = names ? await Promise.all([memberSafe(userId, recapResult.rows, names, ownName), memberSafe(userId, recentRecommendationResult.rows, names, ownName)]) : [[], []];
   // The person model is model-written (snapshot, threads, loops): it gets the
   // same strip, so another member's details never reach a call or reply.
   const rawPicture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
-  const picture = rawPicture && names ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : names ? rawPicture : "";
+  const picture = rawPicture && names ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names, ownName))[0] ?? "") : names ? rawPicture : "";
   // The recap through the live guards (services/whatCoKnows.ts): a line on something they removed is out, a corrected one says so.
   if (safeRecap[0]) safeRecap[0] = await import("./whatCoKnows.js").then(async (W) => W.guardBlock(String(safeRecap[0]), await W.forgottenRows(userId))).catch(() => String(safeRecap[0]));
   // The suggestions through the same live guards as the recap: one they removed is out, a corrected one says so (3 rows now, not 1).
@@ -735,7 +737,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // (memberSafeMemories.ts; 2026-10-01 call review: these bypassed it). The layer's parts are stripped inside it already; they go
   // through this strip again with the call's own name set (linked members and the names in their last suggestion).
   const { memberSafe } = memberSafeModule;
-  const strip = async (xs: string[]) => (xs.length && p.names ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" })), p.names) : []);
+  const strip = async (xs: string[]) => (xs.length && p.names ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" })), p.names, k.identity.firstName ? [k.identity.firstName] : []) : []);
   const stripOne = async (x: string) => (await strip([x]))[0] ?? "";
   const corrections = p.corrections;
   const keep = (text: string, at?: Date | string | null) => !retiredBy(text, corrections, at);

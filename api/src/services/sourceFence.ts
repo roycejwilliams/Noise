@@ -39,8 +39,8 @@ export type Fence = { userId: string; strip: Strip; failed?: boolean };
 
 // One fence per member per turn (turnContext builds it and hands it on). Names read strictly; a failure withholds everything rather
 // than letting anything through.
-export async function memberFence(userId: string, linked?: string[]): Promise<Fence> {
-  return fenceFrom(userId, await import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId, linked)).catch(() => null));
+export async function memberFence(userId: string, linked?: string[], own?: string[]): Promise<Fence> {
+  return fenceFrom(userId, await import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId, linked, own)).catch(() => null));
 }
 // Pure: the fence from a strip already read (turnContext reads it once per turn), or a failed fence when there's none.
 export function fenceFrom(userId: string, line: Strip | null): Fence {
