@@ -667,7 +667,7 @@ export async function handleAdditiveReply(
   classification: MatchNudgeReplyClassification,
   person: MatchNudgeCandidate,
   candidateIds: string[],
-): Promise<{ revealed: { first_name: string; shareReason: string } | null }> {
+): Promise<{ revealed: { first_name: string; shareReason: string } | null; held?: boolean }> {
   if (classification === "unrelated") return { revealed: null };
   const O = await import("./inRoomOffers.js");
   await O.answerOffer(eventId, person.user_id, "additive", classification === "interested" ? "yes" : "no");
@@ -682,11 +682,16 @@ export async function handleAdditiveReply(
   const [room, ranking] = await Promise.all([RM.inRoomNow(eventId).catch(() => ({ open: false, people: [] as any[] })), rankingFor(eventId, person.user_id)]);
   const here = new Map(room.people.map((g: any) => [g.user_id, g]));
   const options = room.open && here.has(person.user_id) ? ranking.filter((r) => candidateIds.includes(r.candidate_id) && here.has(r.candidate_id) && r.shareReason && r.score >= MATCH_NUDGE_MIN_SCORE).sort((a, b) => b.score - a.score) : [];
+  let held = false;
   for (const r of options) {
     if (!(await gateShareReason(person.user_id, r.candidate_id, r.shareReason, "eventGuestMatchHandoff.additiveReveal"))) continue;
     if (await RM.mayAsk(eventId, person.user_id, r.candidate_id, "eventGuestMatchHandoff.additiveReveal")) continue;
     const v = await RM.valueGate(eventId, eventName, person.user_id, r.candidate_id, "eventGuestMatchHandoff.additiveReveal", { allow: [eventName] });
-    if (!v.ok) continue;
+    if (!v.ok) {
+      // A blip (a member picture or the read could not be done): not a no. Their yes stays alive below.
+      if (v.transient) held = true;
+      continue;
+    }
     const line = v.lineFor(person.user_id);
     if (!line) continue;
     const who = here.get(r.candidate_id)!;
@@ -694,6 +699,14 @@ export async function handleAdditiveReply(
     await RM.notePairAsked(eventId, person.user_id, who.user_id);
     await writeMemory(person.user_id, "event_guest_match_nudge", `Told ${person.first_name} that ${who.first_name} also got to "${eventName}" and is worth meeting: ${line}`);
     return { revealed: { first_name: who.first_name, shareReason: line } };
+  }
+  if (held) {
+    // Nobody was ruled out: a read could not be done. Their yes is not consumed: the additive question is open again (so their next
+    // reply, or the next room pass, tries once more), a decision is recorded, and the reply still acknowledges them (routes/sendblue.ts).
+    await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds }).catch((err: any) => console.error("handleAdditiveReply: re-opening the held question failed (non-fatal):", err?.message ?? err));
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 6, decision: "match.additive_reveal", userId: person.user_id, outcome: "skip", action: "picture_unread_held", reason: "a member picture could not be read; their yes is kept and the question is open again", proposal: { eventId } }).catch(() => {});
+    return { revealed: null, held: true };
   }
   await sendNextQueued(person.user_id);
   return { revealed: null };
