@@ -213,6 +213,13 @@ drain.query = async (q: string, a: unknown[]) => {
 };
 await withPool(drain, () => H.sendNextQueued(B.user_id));
 check("a queued ask that cannot be read yet is not expired by the drain (it waits for the next one)", !drain.sql.some((q) => /UPDATE event_match_offers SET status = 'expired'/.test(q)));
+// The additive reveal (handleAdditiveReply): a transient value-gate result is a hold, not a no. The reveal needs the live room (timing, roster,
+// rankings, the share gate) to run, so this is pinned in the source; the gate's transient result itself is run above (valueGate).
+const hs2 = code("services/eventGuestMatchHandoff.ts");
+const reveal = hs2.slice(hs2.indexOf("export async function handleAdditiveReply"));
+check("a transient value gate in the reveal sets a hold and does not count as 'nobody'", /if \(v\.transient\) held = true;/.test(reveal) && /if \(held\) \{[\s\S]*kind: "additive"[\s\S]*return \{ revealed: null, held: true \};/.test(reveal));
+check("a held reveal re-opens the question, records a decision, and skips the 'next queued ask' send", /action: "picture_unread_held"/.test(reveal) && reveal.indexOf("return { revealed: null, held: true }") < reveal.lastIndexOf("await sendNextQueued(person.user_id);"));
+check("the reply for a held reveal is acknowledged and neither names anyone nor says nobody is there", /else if \(held\)[\s\S]{0,400}Don't name or describe anyone, and don't say nobody new is here/.test(code("routes/sendblue.ts")));
 check("no model call in matchPicture", !/generateText|anthropic|openai/i.test(code("services/matchPicture.ts")));
 
 console.log(`member matchPicture: ${total - failed}/${total} passed`);
