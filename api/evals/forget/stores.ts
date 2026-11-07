@@ -58,6 +58,7 @@ const theirWords = "please forget the custody hearing thing";
 let askClose: { sql: string; p: any[] } | null = null;
 const r = await W.applyKnowledgeChanges(U, [{ action: "remove", refs: ["claim:c1"] } as any], { message: theirWords, theirWords });
 check("the removal ran (the fixture reaches every store below)", r.ok && r.applied.length === 1);
+check("member_day_summaries: a removal reaches the member's dated summaries at once (they are checked against the new guards, not left to the next read)", said.some((q) => /FROM member_day_summaries WHERE user_id = \$1/.test(q.sql) && q.p[0] === U));
 
 // What the removal asked the database to do, per table.
 const words = (t: string) => t.toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 4);

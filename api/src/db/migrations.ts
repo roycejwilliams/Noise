@@ -3316,6 +3316,8 @@ export async function concurrencyMigrations(): Promise<void> {
         day DATE NOT NULL,
         zone TEXT,
         summary TEXT NOT NULL,
+        -- 'ok', or 'blank': a paid attempt that came back empty, kept with its stamp so the same stamp is never paid for twice
+        status TEXT NOT NULL DEFAULT 'ok',
         source_ids TEXT[] NOT NULL DEFAULT '{}',
         source_stamp TEXT NOT NULL,
         model TEXT,

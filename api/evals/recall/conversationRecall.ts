@@ -527,10 +527,15 @@ const texts = (res: R.RecallHit[]) => res.map((h) => h.matched.text).join(" || "
   const lall = lh ? [...lh.before, lh.matched, ...lh.after] : [];
   check("chunks: a hit on the lease part returns the lease lines and not the sister ones", lall.some((l) => /rent increase/.test(l.text)) && !lall.some((l) => /bacalhau|pastry/.test(l.text)), lall.map((l) => l.text.slice(0, 30)));
   check("chunks: the hit stays inside the call result budget", JSON.stringify(lr).length < R.RECALL.callResultChars * 2, JSON.stringify(lr).length);
-  // meaning match, no word in common: the part closest by word beginnings, else only the start
-  const mr = okRes(await look(CH, { topic: "pastries" }, deps({ embed: async () => [1, 1, 1] })));
+  // meaning match, no word in common: the part closest by word beginnings is shown, said to be a meaning match
+  vecs.set(rows.find((r) => r.user_id === CH && r.memory_type === "call_transcript")!.id, [0.01, 0.01, 1]);
+  const mr = okRes(await look(CH, { topic: "pastries" }, deps({ embed: async () => [0.01, 0.01, 1] })));
   const mh = mr.results.find((h) => h.channel === "call");
-  check("chunks: with no topic word the part chosen by shared word beginnings is shown and said to be a meaning match", !mh || /pastry|meaning/.test(`${mh.matched.text} ${mh.part ?? ""}`), mh);
+  const mall = mh ? [mh.matched, ...mh.before, ...mh.after] : [];
+  check("chunks: a call matched by meaning with no topic word comes back as the part closest to the topic, and says it matched by meaning", !!mh && mh.via === "meaning" && mall.some((l) => /pastry stall/.test(l.text)) && !mall.some((l) => /landlord/.test(l.text)) && /closest to the topic/.test(mh.part ?? "") && /matched by meaning/.test(mh.part ?? ""), mh);
+  const mr2 = okRes(await look(CH, { topic: "dinner" }, deps({ embed: async () => [0.01, 0.01, 1] })));
+  const mh2 = mr2.results.find((h) => h.channel === "call");
+  check("chunks: when no part shares a word beginning with the topic only the start of the call is shown, and it says so", !!mh2 && /^the start of this call/.test(mh2.part ?? "") && [mh2.matched, ...mh2.before, ...mh2.after].length <= R.RECALL.callLinesNoTopic, mh2);
 }
 
 // ---- retrieved isn't disclosable / purpose boundary: the surface is read-only, text only

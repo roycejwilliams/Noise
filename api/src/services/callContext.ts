@@ -132,13 +132,17 @@ export const CALL_THREAD_HEAD = "Your recent texts with them, oldest first:";
 // as the reply does (routes/sendblue.ts), never the longer one. Hard-capped at WINDOW_CHARS (review of #354): threadWindow drops older
 // rows first and cuts only Cue's; a text of theirs too long for the whole budget is never cut mid-way, it's left out with a marker.
 export const CALL_THREAD_TOO_LONG = (words: number) => `User said: [a long text of theirs, about ${words} words, is left out here]`;
-export function callThread(exchanges: readonly Fact<Exchange>[], o: { guardsUnread?: boolean } = {}): string {
+// The window's rows with the time of each, oldest first: callThread's text and the summaries' cutoff (the oldest line shown in full) read the same rows.
+export function callThreadRows(exchanges: readonly Fact<Exchange>[], o: { guardsUnread?: boolean } = {}): { content: string; at: string }[] {
   // A text of theirs longer than the whole budget becomes the marker before the window is taken, so it never pushes out the rest.
   const newestFirst = exchanges
     .filter((x) => !x.call)
-    .map((x) => ({ content: x.from === "member" && exchangeLine(x).length > WINDOW_CHARS ? CALL_THREAD_TOO_LONG(x.text.split(/\s+/).filter(Boolean).length) : exchangeLine(x) }))
+    .map((x) => ({ content: x.from === "member" && exchangeLine(x).length > WINDOW_CHARS ? CALL_THREAD_TOO_LONG(x.text.split(/\s+/).filter(Boolean).length) : exchangeLine(x), at: x.verifiedAt }))
     .reverse();
-  const rows = threadWindow(o.guardsUnread ? newestFirst.slice(0, OLD_WINDOW_ROWS) : newestFirst);
+  return threadWindow(o.guardsUnread ? newestFirst.slice(0, OLD_WINDOW_ROWS) : newestFirst);
+}
+export function callThread(exchanges: readonly Fact<Exchange>[], o: { guardsUnread?: boolean } = {}): string {
+  const rows = callThreadRows(exchanges, o);
   return rows.length ? `${CALL_THREAD_HEAD}\n${rows.map((r) => r.content).join("\n")}` : "";
 }
 
@@ -842,7 +846,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const thread = callThread(k.exchanges, { guardsUnread: !!k.guardsUnread });
   // Older days, as the reply gets them (both mediums): the days before the oldest line the thread window above shows in full. Not part of
   // `thread`, which the after-call audit reads as their words. Nothing when the guards could not be read or they have no summaries.
-  const windowOldest = threadWindow(k.exchanges.filter((x) => !x.call).map((x) => ({ content: exchangeLine(x), at: x.verifiedAt })).reverse())[0]?.at;
+  const windowOldest = callThreadRows(k.exchanges, { guardsUnread: !!k.guardsUnread })[0]?.at;
   const earlier = k.guardsUnread ? "" : await withinWait(import("./daySummaries.js").then((D) => D.earlierSummaryFor(userId, { windowOldest: windowOldest ? new Date(windowOldest) : null, zone })), "the earlier-days read").catch(() => "");
   const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base, thread, earlier });
 
