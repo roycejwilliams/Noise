@@ -856,22 +856,14 @@ export function checkValueLines(j: ValueJudgment | null, x: ValueSide, y: ValueS
 
 const VALUE_MODEL = MODELS.sonnet;
 
-const CO_WRITTEN_MEMORY_TYPES = ["system", "event_guest_match_nudge", "event_guest_match_optin", "event_intro_email_sent", "event_discovery_surfacing", "event_pre_arrival", "event_follow_through", "event_change_notification", "event_brief_ask", "event_brief", "event_ask_solicitation", "promise_result", "mo_member_offer"];
 
 export async function gatherValueSide(userId: string): Promise<ValueSide> {
-  const [u, p, m, facts, past] = await Promise.all([
+  const [u, p, picture, facts, past] = await Promise.all([
     pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [userId]),
-    // What they told Co. Co's own words (its texts, its event notes) are left out: they aren't the member's private
-    // matter, and Co's stock phrasing in them would read as a quote of every later draft.
-    pool
-      .query(
-        `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent' AND memory_type <> ALL($2::text[])
-           AND NOT (memory_type = 'text_exchange' AND content LIKE 'Co %')
-         ORDER BY created_at DESC LIMIT 300`,
-        [userId, CO_WRITTEN_MEMORY_TYPES],
-      )
-      .catch(() => ({ rows: [] as any[] })),
+    // What they told Co, through the guarded member picture (services/matchPicture.ts): their goals, asks, preferences, limits, lessons,
+    // transitions and own lines, minus what they had Cue forget or remove, name strip on. Co's own words are not in it. No raw co_memories.
+    import("./matchPicture.js").then((m) => m.matchPicture(userId)).catch(() => null),
     import("./coFacts.js").then((c) => c.ownerOnlyFacts(userId)).catch(() => [] as string[]),
     pool
       .query(
@@ -890,7 +882,8 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
   const ownAsks = open.filter((i: any) => i.shareable === true).map((i: any) => ({ text: String(i.text), type: String(i.type ?? "seeking"), shareable: true }));
   const goals = intent.filter((i: any) => i?.kind === "goal" && i?.status === "active" && i?.text).map((i: any) => String(i.text));
   const { goalTexts } = await import("./goalJourney.js");
-  const allGoals = [...new Set([...goals, ...goalTexts(intent, prof.goals ?? [])])].slice(0, 6);
+  // Their direction through the picture (active, on-file goals, guarded); the profile's own list stands in only if the picture could not be read.
+  const allGoals = picture && !picture.unread ? picture.goals.slice(0, 6) : [...new Set([...goals, ...goalTexts(intent, prof.goals ?? [])])].slice(0, 6);
   const scrub = (s: string, name: string) => (name ? s.replace(new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), "them") : s);
   return {
     userId,
@@ -908,8 +901,7 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
       ...(prof.activity_preferences ?? []),
       ...(prof.long_term_direction ? [prof.long_term_direction] : []),
       ...allGoals,
-      // Co's own texts to them ("Co replied: ...") are never their private words, whatever the read returned.
-      ...m.rows.map((r: any) => String(r.content)).filter((c: string) => !c.startsWith("Co replied:")),
+      ...(picture?.privateTexts ?? []),
       ...facts,
       // How their earlier intros went, in their words: theirs alone.
       ...past.rows.map((r: any) => String(r.note ?? "")).filter(Boolean),
