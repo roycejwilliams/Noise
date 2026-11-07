@@ -653,6 +653,14 @@ async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | 
   const { decidedByRows, exitedFindKeys } = await import("./workingSet.js");
   if (decidedByRows(rows)) return true;
   if ((await exitedFindKeys(userId, [exitKey(item.match)]).catch(() => new Set<string>())).size) return true;
+  // Already sent, under any key: a new pitch of a find Cue ever sent them (the same link, event or name, however long ago: no window,
+  // knowledge/sent.ts) is the same text twice. A reminder or a month-later resurface is meant to come after a send. A lookup that
+  // fails doesn't decide anything here (the key check above and the repeat rule still stand).
+  if (!item.reminder && !item.again) {
+    const { sentByReferent, wasSent, probeOfMatch } = await import("./knowledge/sent.js");
+    const sent = await sentByReferent((sql, args) => pool.query(sql, args).then((r) => r.rows), userId).catch(() => [] as import("./knowledge/sent.js").SentRecord[]);
+    if (wasSent(sent, probeOfMatch(item.match))) return true;
+  }
   // A reminder for something Co already gave them a deadline heads-up about (services/memberStateNudges.ts, entry
   // deadline:<item key>, queued or sent) would be the same heads-up twice (review of the branch, 2026-10-08).
   if (item.reminder) {
