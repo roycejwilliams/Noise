@@ -88,7 +88,7 @@ const HELD_LINE = /(couldn'?t|could not|wasn'?t able to|unable to)\s+(quite\s+)?
 // "whole" is not "who"; a bare "?" or "and?" counts.
 const HELD_NUDGE = /\b(try again|again|any luck|well|anything|update|still|who|meet|connect|intros?|introduc\w*)\b|^\W*(\?+|and\s*\?+)\W*$/i;
 // ...or the member names the ask itself, which stands without the hold line.
-const HELD_NAMES_ASK = /\b(who|meet|connect|intros?|introduc\w*)\b/i;
+const HELD_NAMES_ASK = /\b(who else|who'?s here|who should i meet|meet|connect|intros?|introduc\w*)\b/i;
 
 // One description per kind, shared by production and the eval set so the
 // router sees the same wording in both. `detail` is the call offer's stored
