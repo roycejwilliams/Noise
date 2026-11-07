@@ -20,14 +20,14 @@ The member is the customer. Hosts get room-level signal only, never member-level
 
 ## Branches and deploys
 
-- **`co-test`**: the working branch. Every backend change lands here first and deploys to the **co-test** service (Railway, `dev`).
-  Members test on co-test.
-- **`main`**: production, which deploys to the production services. It is promoted from `co-test` deliberately, never directly.
-- Feature work happens on its own branch, with a pull request into `co-test`.
+- **`test`**: the working branch. Every backend change lands here first and deploys to the **co-test** service (Railway, `dev`).
+  Members test there.
+- **`main`**: production, which deploys to the production services. It is promoted from `test` deliberately, never directly.
+- Feature work happens on its own branch, with a pull request into `test`.
 
 ## Merge gate (local, no paid CI)
 
-Every pull request into `co-test` must pass all of these before it merges:
+Every pull request into `test` must pass all of these before it merges:
 
 1. **Layer 1**: `TZ=UTC npm --prefix api run evals:code`. Typecheck, the voice check and every logic test, with the model stubbed. $0.
 2. **Golden replay**: `npm --prefix api run evals:golden`. Every model call is answered from `api/evals/golden/recordings/`. No key, no network, $0.

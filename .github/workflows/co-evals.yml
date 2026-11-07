@@ -1,7 +1,7 @@
 # Two layers (api/evals/README.md; Royce, 2026-10-06: cut the API spend).
 # code  = LAYER 1, every push and PR that touches api/: typecheck, the voice check and every logic test with the model
 #         fully stubbed. Zero tokens, no secrets needed.
-# golden = GOLDEN conversations (api/evals/golden), every PR into co-test: REPLAYED from committed recordings, no API key, zero
+# golden = GOLDEN conversations (api/evals/golden), every PR into test: REPLAYED from committed recordings, no API key, zero
 #          model calls (Royce, 2026-10-14: "golden cases must not hit the live API on every CI run").
 # golden-live = the same cases against the real models ($4 cap, cost printed), ONLY on a manual dispatch with golden_live ticked.
 # live  = LAYER 2, nightly or when asked, NEVER on a push or PR: a small sample of the highest-signal cases, Haiku for
@@ -64,11 +64,11 @@ jobs:
       - run: npm ci
       - run: npm run -s evals:code
   # GOLDEN conversations (api/evals/golden; Royce, 2026-10-13: "same command runs locally and is required in pre-merge CI").
-  # Every PR into co-test (a required check), replayed from api/evals/golden/recordings: every model call is answered from a
+  # Every PR into test (a required check), replayed from api/evals/golden/recordings: every model call is answered from a
   # committed recording and a call with no recording fails its case; nothing reaches the network. No API key in this job, on purpose
   # (Royce, 2026-10-14: "Live API runs only on a deliberate manual trigger ... never automatically per PR").
   golden:
-    if: github.event_name == 'pull_request' && github.base_ref == 'co-test'
+    if: github.event_name == 'pull_request' && github.base_ref == 'test'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
