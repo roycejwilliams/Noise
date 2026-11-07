@@ -24,6 +24,7 @@
 import { DateTime } from "luxon";
 import { notToTeammate } from "./teamLines.js";
 import { wordsZone } from "./memberTime.js";
+import { CHUNK, chunkRanges, chunkScore } from "./callChunks.js";
 
 export type RecallDb = {
   query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }>;
@@ -470,7 +471,7 @@ async function recallInner(userId: string, input: RecallInput, deps: RecallDeps,
   };
   const build = (r: Row): RecallHit | null => {
     const at = new Date(r.created_at);
-    if (r.memory_type === "call_transcript") return callHit(r, at, zone, matchers, terms.length > 0, clean);
+    if (r.memory_type === "call_transcript") return callHit(r, at, zone, matchers, terms.length > 0, clean, terms);
     const matched = lineOf(r);
     if (!matched) return null;
     const c = ctxById.get(r.id);
@@ -483,7 +484,7 @@ async function recallInner(userId: string, input: RecallInput, deps: RecallDeps,
   // The newest match on the topic is built first and its size reserved, so a later change of mind is always on the first page; then the
   // page fills the rest of the budget. A hit that does not fit loses its context lines (two, then one, then none) before it loses its place.
   const fit = (hit: RecallHit, room: number): RecallHit => {
-    for (const n of [RECALL.contextLines, 1, 0]) {
+    for (const n of hit.channel === "call" ? [CHUNK.maxLines, 4, RECALL.contextLines, 1, 0] : [RECALL.contextLines, 1, 0]) {
       const t = { ...hit, before: n ? hit.before.slice(-n) : [], after: hit.after.slice(0, n) };
       if (JSON.stringify(t).length <= room) return t;
     }
@@ -552,23 +553,49 @@ async function recallInner(userId: string, input: RecallInput, deps: RecallDeps,
   };
 }
 
-function callHit(row: Row, at: Date, zone: string, matchers: RegExp[], hasTopic: boolean, clean: Strip): RecallHit | null {
+// A stored call is cut into topic parts at read time (services/callChunks.ts); a hit returns the part that is about the question, not
+// the call's opening or a five-line window. Short calls are one part, shown as before.
+function callHit(row: Row, at: Date, zone: string, matchers: RegExp[], hasTopic: boolean, clean: Strip, terms: string[] = []): RecallHit | null {
   // Each stored line through the guard whole ("user: ..." with its prefix) before it is read as a line.
   const raw = String(row.content ?? "").split("\n").flatMap((l) => { const g = clean(l); return g === null ? [] : [g]; }).join("\n");
   const all = labelCallTranscript(raw, at, zone);
   if (!all.length) return null;
-  let idx = hasTopic ? all.findIndex((l) => matchers.some((m) => m.test(l.text))) : 0;
-  // Matched by meaning with no topic word anywhere in it: only the start of the call is shown, never the whole transcript, and it says so.
-  const noWord = hasTopic && idx < 0;
-  if (idx < 0) idx = 0;
-  const from = Math.max(0, idx - RECALL.contextLines);
-  const to = Math.min(all.length, idx + 1 + (hasTopic ? RECALL.contextLines : RECALL.callLinesNoTopic - 1));
+  const ranges = chunkRanges(all);
+  const partOf = (i: number) => ranges.findIndex(([a, b]) => i >= a && i < b);
+  const nth = (k: number) => (ranges.length > 1 ? `part ${k + 1} of ${ranges.length} of this call, split by topic from the whole stored transcript` : undefined);
+  const idx = hasTopic ? all.findIndex((l) => matchers.some((m) => m.test(l.text))) : 0;
+  let from: number;
+  let to: number;
+  let part: string | undefined;
+  let matchAt = idx;
+  if (hasTopic && idx >= 0) {
+    // A topic word is in the call: the part holding the first line that carries it, whole (bounded), with the word's line as the match.
+    const k = partOf(idx);
+    [from, to] = ranges[k];
+    if (to - from > CHUNK.maxLines) { from = Math.max(from, idx - Math.floor(CHUNK.maxLines / 2)); to = Math.min(to, from + CHUNK.maxLines); }
+    part = nth(k);
+  } else if (hasTopic) {
+    // Matched by meaning with no topic word anywhere in it: the part that shares the most word beginnings with the topic, else only the
+    // start of the call. Never the whole transcript, and it says which part.
+    const scored = ranges.map(([a, b], k) => ({ k, a, b, s: chunkScore(all.slice(a, b), terms) })).sort((x, y) => y.s - x.s || x.k - y.k)[0];
+    if (scored && scored.s > 0) {
+      from = scored.a; to = scored.b; matchAt = scored.a;
+      part = `${nth(scored.k) ?? "the whole call"}, picked as the closest to the topic by shared words; it matched by meaning, so the part that matters may be elsewhere. Say so rather than treating these lines as the answer.`;
+    } else {
+      from = 0; to = Math.min(all.length, RECALL.callLinesNoTopic); matchAt = 0;
+      part = "the start of this call; it matched by meaning, so the part that matters may be later. Say so rather than treating these lines as the answer.";
+    }
+  } else {
+    // No topic (a date listing): the call's opening part, as many lines as before.
+    from = 0; to = Math.min(all.length, RECALL.callLinesNoTopic); matchAt = 0;
+    part = ranges.length > 1 ? `the start of this call (${ranges.length} parts); ask about a topic to see another part` : undefined;
+  }
   const kept = all.slice(from, to);
-  // The matched line is the first line carrying a topic word; with no topic, the call's opening.
-  const m = hasTopic && !noWord ? kept.find((l) => matchers.some((x) => x.test(l.text))) : kept[0];
+  // The matched line is the first line carrying a topic word; otherwise the part's first line.
+  const m = hasTopic && idx >= 0 ? all[idx] : all[matchAt];
   if (!m) return null;
   const mi = kept.indexOf(m);
-  return { at: at.toISOString(), atLocal: when(at, zone), channel: "call", matched: m, before: kept.slice(0, mi), after: kept.slice(mi + 1), ...(noWord ? { part: "the start of this call; it matched by meaning, so the part that matters may be later. Say so rather than treating these lines as the answer." } : {}) };
+  return { at: at.toISOString(), atLocal: when(at, zone), channel: "call", matched: m, before: kept.slice(0, Math.max(mi, 0)), after: kept.slice(mi + 1), ...(part ? { part } : {}) };
 }
 
 // ---------------------------------------------------------------- what the model is told
