@@ -116,14 +116,15 @@ const ownHistory = (line: string, names: string[]): boolean => {
 };
 // A sentence that carries on about someone just named (2026-11-06, Royce: no cross-member leaks): "Maya came up. She left Stripe." The rewrite
 // above replaces only the sentence that names the member, so the next one that refers back to them is stripped too, until a sentence
-// with no pointer back to them (she/he/her/his/him, or a descriptor like "the founder") starts something new. "They/their" are not pointers:
-// Cue's own lines say "they" for the member ("They want a technical cofounder by spring", pinned in evals/facts/rules.ts), so stripping it
-// would cut the member's own words; a "they" used for the linked person is a known gap. Code guarding a boundary, not
+// with no pointer back to them (she/he/her/his/him, they/their/them/theirs, or a descriptor like "the founder") starts something new.
+// "They" is ambiguous (Cue's own lines also say it for the member), and cross-member privacy outranks keeping it: it counts only directly
+// after a stripped part, so a line with no linked name before it keeps its "they". Code guarding a boundary, not
 // a judgment of meaning, so it errs toward stripping: any such pointer anywhere in the sentence counts. The member's own "I ..." and
 // "we ..." sentences carry none, so they stay.
 const POINTS_BACK = /\b(?:she|he|her|hers|him|his|herself|himself)\b/i;
 const DESCRIPTOR = /\b(?:the|that|this|said)\s+(?:[\w-]+\s+)?(?:founder|cofounder|co-founder|ceo|cto|designer|engineer|developer|artist|director|manager|investor|partner|friend|colleague|boss|mentor|candidate|person|woman|man|guy|lady|owner|writer|photographer|doctor|lawyer|consultant|other member|other person)\b/i;
-const pointsBack = (s: string) => POINTS_BACK.test(s) || DESCRIPTOR.test(s);
+const PLURAL = /\b(?:they|them|their|theirs|themselves)\b/i;
+const pointsBack = (s: string) => POINTS_BACK.test(s) || DESCRIPTOR.test(s) || PLURAL.test(s);
 // The suffix historyLine ends a "came up" line with; a stripped part followed by it on a "; " split doesn't carry it twice.
 const SUFFIX_ONLY = /^their details aren't kept for this conversation\.?$/i;
 
