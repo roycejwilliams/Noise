@@ -7,11 +7,18 @@
 //     context (their active goals) and the denylist that checks intro text (privateTexts: words that must not show up in a line the
 //     other member reads). It is never an input to any text a second member reads, and a private section never becomes intro wording.
 //   - Each side's private knowledge stays private: one call per member, bound to that member's id; nothing of the other side is read.
-//   - Forgotten or removed content cannot inform a match: it is already out of the picture.
+//   - Forgotten or removed content cannot inform a match: it is already out of the picture, and their goals and asks are checked once more
+//     against the live guards here (keep): a removed goal or ask, or one they corrected away, is not current. A done or set-aside goal is
+//     history, never current.
+//
+// Permitted views (Royce, 2026-11-07): the member's own ACTIVE GOALS feed only their own fit prompt. Every other section (asks, preferences,
+// learned, transitions, people, exchanges, calls) feeds only the intro-text denylist. Private conversation context never becomes a match
+// input or intro copy: it can only make a line be refused.
 //   - Silence is not rejection and quiet members rank lower, never out: nothing here reads activity (matchGate.quietAmong still does).
 // Read only; no model call.
 import pool from "../db/db.js";
-import { memberKnowledge, type MemberKnowledge, type KnowledgeSection, type KnowledgeDeps } from "./memberKnowledge.js";
+import { memberKnowledge, realKnowledgeDeps, type MemberKnowledge, type KnowledgeSection, type KnowledgeDeps } from "./memberKnowledge.js";
+import { guardText, type ForgottenRow } from "./whatCoKnows.js";
 import { notToTeammate } from "./teamLines.js";
 
 type Q = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
@@ -28,6 +35,8 @@ export type MatchPicture = {
   goals: string[];
   // Every word of theirs a line the OTHER member reads must not quote, until they agree to share it (the consented asks are separate).
   privateTexts: string[];
+  // Whether a word of theirs is still current: false for what they had Cue forget or corrected away (the live guards).
+  keep: (text: string) => boolean;
   // The picture could not be read whole (the guards, learned or people were unread): sections are missing, so the value gate treats this as a failed read.
   unread: boolean;
 };
@@ -35,8 +44,9 @@ export type MatchPicture = {
 const clean = (xs: (string | null | undefined)[]) => [...new Set(xs.map((x) => String(x ?? "").trim()).filter(Boolean))];
 
 // Pure: a picture into what matching uses. Their own lines only (Cue's words are not their private matter), no raw rows.
-export function matchPictureOf(k: MemberKnowledge): MatchPicture {
-  const goals = k.goals.filter((g) => g.state === "active" && g.onFile).map((g) => g.text);
+export function matchPictureOf(k: MemberKnowledge, guards: ForgottenRow[] = []): MatchPicture {
+  const keep = (text: string) => !guards.length || guardText(text, guards) === text;
+  const goals = k.goals.filter((g) => g.state === "active" && g.onFile && keep(g.text)).map((g) => g.text);
   const privateTexts = clean([
     ...k.goals.map((g) => g.text),
     ...k.asks.map((a) => a.text),
@@ -49,7 +59,7 @@ export function matchPictureOf(k: MemberKnowledge): MatchPicture {
     ...(k.people ?? []).flatMap((p) => [p.quote, p.outcome?.quote]),
     ...k.exchanges.filter((e) => e.from === "member").map((e) => e.text),
   ]);
-  return { goals, privateTexts, unread: !!k.guardsUnread || !!k.learnedUnread || !!k.peopleUnread };
+  return { goals, privateTexts, keep, unread: !!k.guardsUnread || !!k.learnedUnread || !!k.peopleUnread };
 }
 
 // What the picture's windowed exchanges do not hold, for the DENYLIST only (never a prompt, never a line): what they said on calls (the
@@ -62,7 +72,7 @@ export function matchPictureOf(k: MemberKnowledge): MatchPicture {
 export const OWN_ROW_TYPES = ["call_transcript", "event_checkin_outcome", "recommendation_outcome", "call_correction"] as const;
 export const CHATTY_TYPES = ["check_in", "recap"] as const;
 export const CHATTY_CAP = 300;
-export async function ownRows(userId: string, q: Q = pool): Promise<string[]> {
+export async function ownRows(userId: string, q: Q = pool, guards: ForgottenRow[] = []): Promise<string[]> {
   const { rows } = await q.query(
     `(SELECT content, memory_type FROM co_memories
       WHERE user_id = $1 AND content NOT LIKE 'Co initiated call%'
@@ -73,14 +83,18 @@ export async function ownRows(userId: string, q: Q = pool): Promise<string[]> {
       ORDER BY created_at ASC LIMIT ${CHATTY_CAP})`,
     [userId],
   );
-  const { guardRows } = await import("./whatCoKnows.js");
-  const guarded = await guardRows(userId, rows.map((r: any) => ({ content: String(r.content ?? ""), type: String(r.memory_type) })), q);
-  return clean(guarded.map((r) => r.content.replace(/^\s*\[Call\]\s*/, "")));
+  const guarded = rows.flatMap((r: any) => {
+    const content = guardText(String(r.content ?? ""), guards);
+    return content === null ? [] : [content];
+  });
+  return clean(guarded.map((c) => c.replace(/^\s*\[Call\]\s*/, "")));
 }
 
 // Any failure rejects: a denylist that could not be read is not an empty one (the value gate fails closed on it).
 export async function matchPicture(userId: string, deps: Partial<KnowledgeDeps> = {}, q: Q = pool): Promise<MatchPicture> {
-  const [k, own] = await Promise.all([memberKnowledge(userId, { include: MATCH_SECTIONS, ...MATCH_EXCHANGES }, deps), ownRows(userId, q)]);
-  const p = matchPictureOf(k);
+  // The live guards, read once for every use here; a failed read rejects (a denylist or goal list that could not be guarded is not used).
+  const guards = await (deps.forgotten ?? realKnowledgeDeps.forgotten!)(userId);
+  const [k, own] = await Promise.all([memberKnowledge(userId, { include: MATCH_SECTIONS, ...MATCH_EXCHANGES }, { ...deps, forgotten: async () => guards }), ownRows(userId, q, guards)]);
+  const p = matchPictureOf(k, guards);
   return { ...p, privateTexts: clean([...p.privateTexts, ...own]) };
 }

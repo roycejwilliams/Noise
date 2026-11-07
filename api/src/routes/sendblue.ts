@@ -60,7 +60,7 @@ import { detectCheckinPhrase, recordCheckin, recordWalkinAsk } from "../services
 import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { walkinAskDue, noteWalkinAsked, walkinAskNoted } from "../services/eventWalkinCheckin.js";
-import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
+import { additiveClassification, handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { networkIntroFact, resolveNetworkTeaseReply, resolveNetworkIntroReplyState } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
@@ -2311,7 +2311,7 @@ export function sendblueRouter(io: Server): Router {
         if (resolvedMatchNudge?.item.ref?.kind === "match_nudge") {
           try {
             const pendingMatchNudge = resolvedMatchNudge.item.ref.pending;
-            let classification: "interested" | "not_interested" = resolvedMatchNudge.value === "yes" ? "interested" : "not_interested";
+            let classification: "interested" | "not_interested" = pendingMatchNudge.kind === "additive" ? additiveClassification(resolvedMatchNudge.value, pendingMatchNudge) : resolvedMatchNudge.value === "yes" ? "interested" : "not_interested";
             // A yes that says they already know the person they were named ("yes! Maya and I work together") is no intro: read before
             // the yes is acted on (services/knownConnections.ts), declined silently, kept against that person.
             const alreadyKnew =
@@ -2333,7 +2333,7 @@ export function sendblueRouter(io: Server): Router {
                 addFact(replyFacts, "did_this_turn", `Told them ${revealed.first_name} also got to the event and is worth meeting. ${revealed.first_name} hasn't been asked anything yet.`);
                 addInstruction(replyFacts, `They said yes to hearing who else arrived. Tell them: ${revealed.first_name} just got here and is worth finding, because of ${revealed.shareReason}. Ask if they'd like an intro. Say nothing else about ${revealed.first_name}, and name no one else.`);
               } else if (held) {
-                addInstruction(replyFacts, "They said yes to hearing who else arrived, but Cue couldn't finish checking just now. Don't name or describe anyone, and don't say nobody new is here. Say plainly that you couldn't finish looking this second, and that a nudge from them brings it back.");
+                addInstruction(replyFacts, "They said yes to hearing who else arrived, but you couldn't finish checking who else is here just now. Tell them that in your own voice: you couldn't finish checking who else is here just now, and they can send you a quick nudge when they want you to try again. Don't name or describe anyone, don't say nobody new is there, and don't imply you'll try again on your own.");
               } else {
                 addInstruction(replyFacts, "They said yes to hearing who else arrived, but on a second look nobody new is someone Cue can point them to right now. Say so plainly and warmly. Don't name or describe anyone.");
               }

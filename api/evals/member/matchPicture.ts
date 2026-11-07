@@ -48,21 +48,21 @@ const stub = (o: { own?: { content: string; memory_type: string }[]; corrections
 };
 const q0 = stub();
 
-type World = { goals?: string[]; asks?: string[]; exchanges?: string[]; removed?: string[]; prefs?: string[]; transitions?: string[]; goalStates?: { goal: string; state: string }[] };
+type World = { lessons?: string[]; people?: any[]; goals?: string[]; asks?: string[]; exchanges?: string[]; removed?: string[]; prefs?: string[]; transitions?: string[]; goalStates?: { goal: string; state: string }[] };
 const deps = (w: World, seen: string[] = []): Partial<Deps> =>
   ({
     profile: async (u: string) => (seen.push(u), { firstName: "Jordan", city: null, goals: w.goals ?? [], intent: null, updatedAt: null }),
     zone: async () => null,
     linkedNames: async () => [],
-    goalStates: async (u: string) => (seen.push(u), []),
+    goalStates: async (u: string) => (seen.push(u), (w.goalStates ?? []) as any),
     asks: async (u: string) => (seen.push(u), (w.asks ?? []).map((t, i) => ({ id: `a${i}`, text: t, kind: "find", createdAt: at, lastMentionedAt: null }))),
     taste: async () => null,
     roomTaste: async () => (w.prefs ?? []).map((text) => ({ text, at })),
     limits: async () => ({ avoid: [], availability: null, at: null }),
     exchanges: async (u: string) => (seen.push(u), (w.exchanges ?? []).map((c) => ({ content: `User said: ${c}`, at }))),
     transitions: async () => (w.transitions ?? []).map((t, i) => ({ id: String(i), text: t, quote: "", openedAt: at, closedAt: null, closedQuote: null, lastTouchedAt: at, status: "active", source: "said", channel: "text", corrections: [] })) as any,
-    picture: async () => ({ lessons: [], lessonsTotal: 0, corrections: [], correctionsTotal: 0 }) as any,
-    people: async () => [],
+    picture: async () => ({ lessons: (w.lessons ?? []).map((text, i) => ({ id: `l${i}`, text, at })), lessonsTotal: (w.lessons ?? []).length, corrections: [], correctionsTotal: 0 }) as any,
+    people: async () => w.people ?? [],
     forgotten: async () => (w.removed ?? []).map((old, i) => ({ field: "x", old, now: null, ref: `m:${i}`, removed: true })),
   }) as unknown as Partial<Deps>;
 
@@ -122,7 +122,7 @@ const withDeny = RM.checkValueLines({ forFirst: clean, forSecond: rehabLine, ver
 const noDeny = RM.checkValueLines({ forFirst: clean, forSecond: rehabLine, verdict: "strong", why: "ok", judged: { first: true, second: true } }, { ...sideCall, privateTexts: [] }, sideB);
 check("an intro line quoting call-only content is refused by the denylist (private_second)", !withDeny.ok && withDeny.checks.some((c) => c.name === "private_second" && !c.pass));
 check("the same line with an empty denylist passes every other check, so the denylist is what refused it", noDeny.ok);
-const forgot = await MP.matchPicture("a", deps({}), stub({ own: [{ content: `[Call] They said ${REHAB}`, memory_type: "text_exchange" }], corrections: [{ field: "x", old_value: REHAB, new_value: null, item_ref: "m:1", removed: true }] }));
+const forgot = await MP.matchPicture("a", deps({ removed: [REHAB] }), stub({ own: [{ content: `[Call] They said ${REHAB}`, memory_type: "text_exchange" }] }));
 check("a call row they had Cue forget is out of the denylist", !JSON.stringify(forgot).includes("rehab"));
 const ownSql = callOnly.sql.find((q) => /memory_type IN \('call_transcript'/.test(q)) ?? "";
 check("the own-lines read is bound to the member and has no day window", /user_id = \$1/.test(ownSql) && !/NOW\(\)|INTERVAL|created_at >/.test(ownSql));
@@ -147,6 +147,8 @@ const withPool = async <T,>(s: Stub, fn: () => Promise<T>): Promise<T> => {
   try {
     return await fn();
   } finally {
+    // A rejected Promise.all leaves its other reads running: let them finish against this stub, not the next one.
+    await new Promise((r) => setTimeout(r, 60));
     pool.query = real;
   }
 };
@@ -187,6 +189,7 @@ check("valueGate fails closed and transient when a side's picture cannot be read
 
 // ---------------------------------------------------------------- a yes is never dropped by a picture blip (eventGuestMatchHandoff.ts)
 const H = await import("../../src/services/eventGuestMatchHandoff.js");
+const H_class = H.additiveClassification;
 const A = { user_id: "00000000-0000-0000-0000-00000000000a", first_name: "Jordan", phone_number: "+15550000001", email: "a@example.com" };
 const B = { user_id: "00000000-0000-0000-0000-00000000000b", first_name: "Priya", phone_number: "+15550000002", email: "b@example.com" };
 const hs = stub({ failOwn: true, profile });
@@ -217,9 +220,76 @@ check("a queued ask that cannot be read yet is not expired by the drain (it wait
 // rankings, the share gate) to run, so this is pinned in the source; the gate's transient result itself is run above (valueGate).
 const hs2 = code("services/eventGuestMatchHandoff.ts");
 const reveal = hs2.slice(hs2.indexOf("export async function handleAdditiveReply"));
-check("a transient value gate in the reveal sets a hold and does not count as 'nobody'", /if \(v\.transient\) held = true;/.test(reveal) && /if \(held\) \{[\s\S]*kind: "additive"[\s\S]*return \{ revealed: null, held: true \};/.test(reveal));
-check("a held reveal re-opens the question, records a decision, and skips the 'next queued ask' send", /action: "picture_unread_held"/.test(reveal) && reveal.indexOf("return { revealed: null, held: true }") < reveal.lastIndexOf("await sendNextQueued(person.user_id);"));
-check("the reply for a held reveal is acknowledged and neither names anyone nor says nobody is there", /else if \(held\)[\s\S]{0,400}Don't name or describe anyone, and don't say nobody new is here/.test(code("routes/sendblue.ts")));
+check("a transient value gate in the reveal sets a hold and does not count as 'nobody'", /if \(v\.transient\) held = true;/.test(reveal) && /if \(held\) \{[\s\S]*holdOffer[\s\S]*return \{ revealed: null, held: true \};/.test(reveal));
+check("a held reveal keeps the yes on the re-opened question (holdOffer), records a decision, and skips the 'next queued ask' send", /O\.holdOffer\(eventId, person\.user_id, "additive"\)/.test(reveal) && /action: "picture_unread_held"/.test(reveal) && reveal.indexOf("return { revealed: null, held: true }") < reveal.lastIndexOf("await sendNextQueued(person.user_id);"));
+check("the reply for a held reveal is acknowledged and neither names anyone nor says nobody is there", /else if \(held\)[\s\S]{0,700}Don't name or describe anyone, don't say nobody new is there, and don't imply you'll try again on your own/.test(code("routes/sendblue.ts")));
+
+// ---------------------------------------------------------------- permitted views: only the member's own active goals reach a prompt
+const rawPerson = { id: "knows:1", kind: "knows", at, eventName: null, firstName: null, doubleYes: false, otherKey: null, mine: null, reached: false, memberAsked: false, introduced: false, ended: null, evidence: {}, outcome: null, note: null, viaNetwork: false, quote: "PEOPLEMARK my old landlord Dana" };
+const marks = { ask: "ASKMARK a quiet therapist", pref: "PREFMARK only small dinners", trans: "TRANSMARK worried about the layoffs", ex: "EXMARK what I said last week", less: "LESSMARK never joke about my sister", call: "CALLMARK told Cue on a call about the move", assist: "ASSISTMARK Cue said you're leaving your marriage", people: "PEOPLEMARK" };
+const goalMark = "GOALMARK find a climate hardware cofounder";
+const viewWorld: World = { goals: [goalMark], asks: [marks.ask], prefs: [marks.pref], transitions: [marks.trans], exchanges: [marks.ex], lessons: [marks.less], people: [rawPerson] };
+const viewProfile = { goals: [goalMark], blockers: [], activity_preferences: [], long_term_direction: null, intent: [{ kind: "ask", status: "active", type: "seeking", text: "a cofounder who knows climate hardware", shareable: true }, { kind: "ask", status: "active", type: "seeking", text: marks.ask, shareable: false }] };
+const viewQ = stub({ own: [{ content: `[Call] ${marks.call}`, memory_type: "text_exchange" }, { content: `user: hmm\nassistant: ${marks.assist}`, memory_type: "call_transcript" }], profile: viewProfile });
+const viewSide = await withPool(viewQ, () => RM.gatherValueSide("a", (u) => MP.matchPicture(u, deps(viewWorld), viewQ)));
+const otherSide: import("../../src/services/roomMatching.js").ValueSide = { userId: "b", firstName: "Priya", ownAsks: [{ text: "can offer introductions to climate hardware founders", type: "offering", shareable: true }], goals: [], pastOutcomes: [], shared: ["can offer introductions to climate hardware founders"], privateAsks: [], privateTexts: [] };
+const nonGoal = Object.values(marks);
+const ownPrompt = RM.sideLinePrompt("Founders Supper", viewSide, { firstName: "Priya", shared: otherSide.shared });
+const theirPrompt = RM.sideLinePrompt("Founders Supper", otherSide, { firstName: "Jordan", shared: viewSide.shared });
+check("the member's own active goal is in their own fit prompt", ownPrompt.includes(goalMark));
+check("the goal is in no prompt the other side's call sees", !theirPrompt.includes("GOALMARK"));
+check("no other section (asks, preferences, transitions, exchanges, lessons, people, calls, Cue's call lines) reaches either side's prompt", nonGoal.every((m) => !ownPrompt.includes(m.split(" ")[0]) && !theirPrompt.includes(m.split(" ")[0])));
+check("the free-text fields a prompt or draft is built from hold none of them (goals, shared asks, past outcomes)", nonGoal.every((m) => !JSON.stringify([viewSide.goals, viewSide.ownAsks, viewSide.shared, viewSide.pastOutcomes]).includes(m.split(" ")[0])));
+check("every one of them is in the denylist instead, where it can only make a line be refused", nonGoal.every((m) => viewSide.privateTexts.some((t) => t.includes(m.split(" ")[0]))));
+// The draft intro text: the asker's `said` is their shared asks and the value line, and privateTexts is only ever handed to checkNoPrivateQuote.
+for (const f of ["services/eventGuestMatchHandoff.ts", "services/eventScoring.ts"]) {
+  const uses = code(f).split("\n").filter((l) => /privateTexts/.test(l));
+  check(`${f}: privateTexts is used only inside checkNoPrivateQuote`, uses.length > 0 && uses.every((u) => /checkNoPrivateQuote\(/.test(u)));
+}
+
+// ---------------------------------------------------------------- memory rules for matching
+const goalsOnly = async (w: World, extra: Partial<Deps> = {}) => (await MP.matchPicture("a", { ...deps(w), ...extra }, q0)).goals;
+const podcast = await goalsOnly({ goals: ["start a podcast", "find a climate cofounder"], removed: ["start a podcast"] });
+check("a goal they had Cue forget is not current", !podcast.some((g) => /podcast/.test(g)) && podcast.includes("find a climate cofounder"));
+const { goalHash } = await import("../../src/services/goalEdges.js");
+const states = ["done", "stale"].map((state, i) => ({ goalHash: goalHash(["finish the deck", "open a studio"][i]), goal: ["finish the deck", "open a studio"][i], state, reason: "", source: "member", changedAt: at, toldAt: at, hints: 0 }));
+const closed = await goalsOnly({ goals: ["finish the deck", "open a studio", "find a climate cofounder"], goalStates: states as any });
+check("a done goal and a set-aside goal are history, not current", closed.join() === "find a climate cofounder");
+const oakland = await MP.matchPicture("a", { ...deps({ goals: ["move to Oakland", "find a climate cofounder"] }), forgotten: async () => [{ field: "goals", old: "move to Oakland", now: "move to Berkeley", ref: "goal:9", removed: false }] }, q0);
+check("a goal they corrected away does not beat the correction", !oakland.goals.some((g) => /Oakland/.test(g)) && oakland.goals.includes("find a climate cofounder"));
+const ask = await withPool(stub({ profile: viewProfile }), () => RM.gatherValueSide("a", (u) => MP.matchPicture(u, deps({ removed: ["a cofounder who knows climate hardware", marks.ask] }), q0)));
+check("an ask they had Cue forget is in neither what is shared nor what is kept private", ask.shared.length === 0 && ask.ownAsks.length === 0 && ask.privateAsks.length === 0);
+const kept = await withPool(stub({ profile: viewProfile }), () => RM.gatherValueSide("a", (u) => MP.matchPicture(u, deps({}), q0)));
+check("with nothing forgotten the same asks are there", kept.shared.length === 1 && kept.privateAsks.length === 1);
+
+// ---------------------------------------------------------------- the held reveal keeps the yes; the direct ask retry is bounded
+check("additive reply: a held question treats anything but a no as the yes already given", H_class("yes", { heldYes: true }) === "interested" && H_class("nudge", { heldYes: true }) === "interested" && H_class(null, { heldYes: true }) === "interested" && H_class("no", { heldYes: true }) === "not_interested");
+check("additive reply: an ordinary question still needs the yes (as before)", H_class("yes", {}) === "interested" && H_class("no", {}) === "not_interested" && H_class("nudge", {}) === "not_interested");
+const O = await import("../../src/services/inRoomOffers.js");
+const hold = stub({});
+await withPool(hold, () => O.holdOffer("evt-1", B.user_id, "additive"));
+check("holdOffer re-opens only an additive question and keeps its yes on it", hold.sql.length === 1 && /SET status = 'open'/.test(hold.sql[0]) && /answer = 'yes'/.test(hold.sql[0]) && /kind = 'additive'/.test(hold.sql[0]));
+const pendRow = (answer: string | null) => ({ event_id: "evt-1", person_id: B.user_id, candidate_key: "additive", kind: "additive", candidate_id: null, candidate_ids: [A.user_id], asker_id: null, status: "open", answer, opened_at: at, event_name: "Founders Supper" });
+const pendQ = (answer: string | null) => { const s0 = stub({}); const qq = s0.query; s0.query = async (q: string, a: unknown[]) => (/FROM event_match_offers/.test(q) && /status = 'open'/.test(q) ? (s0.sql.push(q), { rows: [pendRow(answer)] }) : qq(q, a)); return s0; };
+const heldPend = await withPool(pendQ("yes"), () => H.findPendingMatchNudges(B.user_id));
+const plainPend = await withPool(pendQ(null), () => H.findPendingMatchNudges(B.user_id));
+check("a held additive question is found with its yes; an ordinary one without", heldPend[0]?.heldYes === true && plainPend[0]?.heldYes === false && heldPend[0]?.kind === "additive");
+// The bound on the direct-ask retry.
+const retryQ = (ageHours: number | null) => {
+  const s0 = stub({ failOwn: true, profile });
+  const qq = s0.query;
+  s0.query = async (q: string, a: unknown[]) => (/SELECT created_at FROM event_match_offers/.test(q) && /status = 'queued'/.test(q) ? (s0.sql.push(q), { rows: ageHours === null ? [] : [{ created_at: new Date(Date.now() - ageHours * 3600_000) }] }) : qq(q, a));
+  return s0;
+};
+const first = retryQ(null);
+await withPool(first, () => H.handleMatchNudgeReply("evt-1", "Founders Supper", "interested", A, B));
+check("first failure: the ask is queued and one decision is recorded", first.sql.some((q) => /INSERT INTO event_match_offers/.test(q)) && first.sql.filter((q) => /INSERT INTO harness_decisions/.test(q)).length >= 1);
+const again = retryQ(1);
+await withPool(again, () => H.handleMatchNudgeReply("evt-1", "Founders Supper", "interested", A, B));
+check("a retry within the day is silent: no new row, no new decision, still queued", !again.sql.some((q) => /INSERT INTO event_match_offers|UPDATE event_match_offers SET status = 'expired'/.test(q)) && !again.sql.some((q) => /INSERT INTO harness_decisions/.test(q) && /asker_picture_unread/.test(q)));
+const gaveUp = retryQ(25);
+await withPool(gaveUp, () => H.handleMatchNudgeReply("evt-1", "Founders Supper", "interested", A, B));
+check("still unreadable after a day: the queued ask is dropped (expired) and the decision says so", gaveUp.sql.some((q) => /UPDATE event_match_offers SET status = 'expired'/.test(q)));
 check("no model call in matchPicture", !/generateText|anthropic|openai/i.test(code("services/matchPicture.ts")));
 
 console.log(`member matchPicture: ${total - failed}/${total} passed`);
