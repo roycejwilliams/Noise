@@ -127,6 +127,9 @@ export type ConversationReplyInput = {
   seekingModeContext: string;
   styleHint: string;
   recentConversation: string;
+  // Older days as Cue's own dated summaries (services/daySummaries.ts earlierSummaryBlock), already labelled as summaries. Empty or absent
+  // when none; never part of recentConversation.
+  earlierSummary?: string;
   // What Cue knows about them: the member's snapshot (services/memberSnapshot.ts replySnapshot), its pinned version sent whole as a
   // cached prefix and what's been added since in the tail. Null when it couldn't be read (failed or fenced): the reply runs on its tail
   // and rules, and never treats them as new because of it.
@@ -442,7 +445,7 @@ ${renderReplyFacts(input.facts, { tail: true })}
 ${input.seekingModeContext}
 ${input.styleHint}
 ${input.isFirstContact ? `\nThis is the start of your first real conversation with ${name}. They just finished the intro: greeting, what Cue is, saving your contact, verification. What they just said may only be a greeting.${hasContext ? ` You already have real context on them (see "What you already know" above). Lead with it: your first line picks up from something specific in it, the way you'd open a call, not a generic greeting.` : ""} If it IS something real, pick up from it. If it's just a greeting or blank, don't treat it as substance. Open the real conversation yourself${hasContext ? ", grounded in what you already know" : ""}: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
-Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
+${input.earlierSummary ? `${input.earlierSummary}\n\n` : ""}Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
 ${input.recentConversation || "(this is the start of the conversation)"}
 
 ${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.lastReaction ? `Your last reaction to them was ${input.lastReaction}; if you react this time, use a different one.\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
