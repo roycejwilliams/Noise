@@ -931,7 +931,7 @@ export async function valueGate(eventId: string, eventName: string, x: string, y
   // A side whose member picture could not be read fails the gate closed (transient: the next pass tries again), never reads with a thinner denylist.
   const sides = await Promise.all([gatherValueSide(a), gatherValueSide(b)]).catch(() => null);
   if (!sides) {
-    await recordDecision({ layer: 6, decision: "match.valueLines", userId: x, outcome: "skip", action, proposal: { eventId, a, b }, reason: "a member picture could not be read; the next pass tries again" }).catch(() => {});
+    await recordDecision({ layer: 6, decision: "match.valueLines", userId: x, outcome: "skip", action: `picture_unread:${action}`, proposal: { eventId, a, b }, reason: "a member picture could not be read; the next pass tries again" }).catch(() => {});
     return { ok: false, reason: "member picture unread", transient: true };
   }
   const [sa, sb] = sides;

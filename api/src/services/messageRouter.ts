@@ -49,6 +49,8 @@ export type OpenItem = {
   // The other person's first name (match_nudge, network_intro)
   // or the event name; null when there isn't one.
   detail: string | null;
+  // A match question they already said yes to (an additive reveal held for a failed read): the yes is on file and Cue owes them the reveal.
+  held?: boolean;
   askedAt: Date | null;
   ref?:
     | { kind: "call_offer"; memoryId: string; content: string; createdAt: Date }
@@ -75,10 +77,17 @@ export const ANSWER_VALUES: Record<OpenItemKind, readonly string[]> = {
   offer_reaction: ["interested", "not_interested", "already_did_it"],
 };
 
+// A held reveal (eventGuestMatchHandoff.ts handleAdditiveReply): they already said yes to hearing who else is here, and Cue told them it
+// couldn't finish checking and that a quick nudge would bring it back. So a nudge is the yes, not a new question.
+export const HELD_REVEAL_DESCRIPTION =
+  "Cue offered to tell them who else just got to the same event and they already said yes, but Cue told them it couldn't finish checking and to send a quick nudge to try again. They are waiting on Cue. A nudge to try again (\"try again?\", \"any luck?\", \"well?\", \"yes, who should I meet?\") is answer yes; a clear no is answer no; anything unrelated answers nothing.";
+// Cue's hold line, in whatever words it used: it said it couldn't finish, or asked for a nudge / another try.
+const HELD_LINE = /(couldn'?t|could not|wasn'?t able to|can'?t|unable to)\s+(quite\s+)?(finish|complete)|\btry again\b|\bnudge\b/i;
+
 // One description per kind, shared by production and the eval set so the
 // router sees the same wording in both. `detail` is the call offer's stored
 // content, the outcome/check-in's event name, or the other person's first name.
-export function describeOpenItem(kind: OpenItemKind, detail: string | null): string {
+export function describeOpenItem(kind: OpenItemKind, detail: string | null, opts: { held?: boolean } = {}): string {
   switch (kind) {
     case "call_offer": {
       const offered = detail?.split(/\| (?:Co|Cue) offered:/)[1]?.trim() ?? detail ?? "";
@@ -91,6 +100,7 @@ export function describeOpenItem(kind: OpenItemKind, detail: string | null): str
     case "event_checkin":
       return `Cue asked who they met at "${detail ?? "the event"}" tonight`;
     case "match_nudge":
+      if (opts.held) return HELD_REVEAL_DESCRIPTION;
       return detail
         ? `Cue told them about ${detail}, someone at the same event, and asked if they want to be connected`
         : "Cue told them another member is going to the same event, without saying who, and asked if they'd like an intro";
@@ -119,7 +129,8 @@ export async function matchNudgeItems(userId: string, pendings: PendingMatchNudg
       id: `match_nudge:${matchNudge.event_id}:${matchNudge.kind === "additive" ? "additive" : matchNudge.candidate_id}`,
       kind: "match_nudge",
       // Never the name for an anonymous heads-up: this text reaches the reply.
-      description: describeOpenItem("match_nudge", matchNudge.anonymous ? null : matchNudge.candidate_first_name),
+      description: describeOpenItem("match_nudge", matchNudge.anonymous ? null : matchNudge.candidate_first_name, { held: !!matchNudge.heldYes }),
+      held: !!matchNudge.heldYes,
       detail: matchNudge.anonymous ? null : matchNudge.candidate_first_name,
       askedAt: at ? new Date(at) : null,
       ref: { kind: "match_nudge", pending: matchNudge },
@@ -487,7 +498,9 @@ export function lastCoTurn(recentConversation: string): string {
 // actually just asked, or that names it outright. Confirmed in the eval
 // (c148): a bare "yes" to an unrelated Co question was read as opting into a
 // match intro that was open but hadn't been mentioned in the conversation.
-export function askIsFresh(item: Pick<OpenItem, "kind" | "detail">, message: string, recentConversation: string): boolean {
+export function askIsFresh(item: Pick<OpenItem, "kind" | "detail" | "held">, message: string, recentConversation: string): boolean {
+  // A held reveal: their yes is on file, so a nudge is fresh when Cue's last turn was its hold line (or the message itself names the ask).
+  if (item.kind === "match_nudge" && item.held) return HELD_LINE.test(lastCoTurn(recentConversation)) || /connect|introduc|meet|who/i.test(message);
   const text = `${lastCoTurn(recentConversation)}\n${message}`;
   switch (item.kind) {
     case "call_offer":

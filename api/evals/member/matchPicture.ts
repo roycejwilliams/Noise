@@ -263,7 +263,28 @@ const kept = await withPool(stub({ profile: viewProfile }), () => RM.gatherValue
 check("with nothing forgotten the same asks are there", kept.shared.length === 1 && kept.privateAsks.length === 1);
 
 // ---------------------------------------------------------------- the held reveal keeps the yes; the direct ask retry is bounded
-check("additive reply: a held question treats anything but a no as the yes already given", H_class("yes", { heldYes: true }) === "interested" && H_class("nudge", { heldYes: true }) === "interested" && H_class(null, { heldYes: true }) === "interested" && H_class("no", { heldYes: true }) === "not_interested");
+// Through the router's own code gates (messageRouter.ts decideActions), with the output the model would give for each message against the
+// held item's description: a nudge resumes the reveal without a second yes; unrelated texts bind nothing; a no is a no.
+const MR = await import("../../src/services/messageRouter.js");
+const heldPending = { event_id: "evt-1", event_name: "Founders Supper", candidate_id: "", candidate_first_name: "", candidate_phone: "", candidate_email: "", anonymous: true, kind: "additive" as const, candidate_ids: [A.user_id], asked_at: at, heldYes: true };
+const [heldItem] = await MR.matchNudgeItems(B.user_id, [heldPending]);
+const plainItem = (await MR.matchNudgeItems(B.user_id, [{ ...heldPending, heldYes: false }]))[0];
+check("the held item tells the router they already said yes and are waiting on Cue; an ordinary one does not", heldItem.held === true && /already said yes/.test(heldItem.description) && /try again/.test(heldItem.description) && !plainItem.held && !/already said yes/.test(plainItem.description));
+const holdLine = "Co replied: I couldn't finish checking who else is here just now. Send me a quick nudge when you want me to try again.";
+const unrelatedLine = "Co replied: The back room at Fern is booked for Thursday.";
+const out = (value: "yes" | "no" | null, confidence: "high" | "medium" | "low" = "high"): any => ({ answers: value ? { itemId: heldItem.id, value } : null, ambiguousBetween: [], call: "none", wantsRecommendation: false, confidence, reason: "" });
+const route = (o: any, message: string, conv: string) => MR.decideActions(o, [heldItem], { message, recentConversation: `${conv}\nUser said: ${message}` });
+const resolved = (d: any) => (d.resolve ? additive(d.resolve.value) : null);
+const additive = (v: string) => H.additiveClassification(v, { heldYes: true });
+check("\"try again?\" after the hold line resumes the reveal", resolved(route(out("yes"), "try again?", holdLine)) === "interested");
+check("\"any luck?\" after the hold line resumes the reveal", resolved(route(out("yes"), "any luck?", holdLine)) === "interested");
+check("\"yes, who should I meet?\" resumes the reveal", resolved(route(out("yes"), "yes, who should I meet?", holdLine)) === "interested");
+check("\"nah I'm good\" is a no and the reveal does not run", resolved(route(out("no"), "nah I'm good", holdLine)) === "not_interested");
+check("\"what time is dinner?\" binds nothing (the router answers nothing)", route(out(null), "what time is dinner?", holdLine).resolve === null);
+check("\"lol\" binds nothing (the router answers nothing, and a low-confidence yes does not bind either)", route(out(null), "lol", holdLine).resolve === null && route(out("yes", "low"), "lol", holdLine).resolve === null && route(out("yes", "medium"), "lol", holdLine).resolve === null);
+check("without Cue's hold line as its last turn, a bare \"any luck?\" does not bind (the yes is irreversible)", route(out("yes"), "any luck?", unrelatedLine).resolve === null && route(out("yes"), "try again?", "").resolve === null);
+check("an ordinary (not held) question is as before: a bare \"try again?\" does not bind", MR.decideActions({ ...out("yes"), answers: { itemId: plainItem.id, value: "yes" } }, [plainItem], { message: "try again?", recentConversation: `${holdLine}\nUser said: try again?` }).resolve === null);
+check("the held yes stays: the reply classification of a resolved yes is interested, of a no not interested", additive("yes") === "interested" && additive("no") === "not_interested");
 check("additive reply: an ordinary question still needs the yes (as before)", H_class("yes", {}) === "interested" && H_class("no", {}) === "not_interested" && H_class("nudge", {}) === "not_interested");
 const O = await import("../../src/services/inRoomOffers.js");
 const hold = stub({});
