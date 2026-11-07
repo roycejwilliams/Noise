@@ -835,9 +835,11 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
-  const transitionsRaw = await skip("transitions", "transitions", () => (d.transitions ? d.transitions(userId) : Promise.resolve([] as RawTransition[])), [] as RawTransition[]);
-  const eventsRaw = await skip("events", "events", () => (d.events ? d.events(userId) : Promise.resolve(null)), null as RawEvents | null);
-  const peopleRaw = await skip("people", "people", () => (d.people ? d.people(userId) : Promise.resolve(null as RawPerson[] | null)), null as RawPerson[] | null);
+  const [transitionsRaw, eventsRaw, peopleRaw] = await Promise.all([
+    skip("transitions", "transitions", () => (d.transitions ? d.transitions(userId) : Promise.resolve([] as RawTransition[])), [] as RawTransition[]),
+    skip("events", "events", () => (d.events ? d.events(userId) : Promise.resolve(null)), null as RawEvents | null),
+    skip("people", "people", () => (d.people ? d.people(userId) : Promise.resolve(null as RawPerson[] | null)), null as RawPerson[] | null),
+  ]);
   const [states, asks, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, limits] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),

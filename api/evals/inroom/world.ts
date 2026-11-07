@@ -743,6 +743,8 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R([...(m?.memories ?? []), ...W.memoriesWritten.filter((x) => x.user_id === p[0]).map((x) => x.content)].map((content) => ({ content: /^\s*(User|Co)\b/.test(String(content)) ? String(content) : `User said: ${content}`, created_at: new Date() })));
   }
   if (has("SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('network_intro_offer_pending'") || has("SELECT DISTINCT u.first_name FROM network_introductions n JOIN users u") || has("FROM member_threads") || has("FROM profile_corrections")) return R([]);
+  // matchPicture's own-lines read (call transcripts, call summaries, check-in and outcome rows): none in this world.
+  if (has("memory_type IN ('call_transcript'")) return R([]);
   // The rest of the picture's reads (limits, taste, goal states, lessons, corrections): empty in this world.
   if (has("SELECT avoid, availability_pattern, intent, updated_at FROM co_profiles") || has("FROM suggestion_outcomes WHERE user_id = $1 AND created_at > NOW()") || has("SELECT * FROM goal_states WHERE user_id = $1") || (has("FROM co_memories WHERE user_id = $1 AND memory_type = $2 AND created_at > NOW()") && has("SELECT content, created_at")) || has("COUNT(*) OVER() AS total FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesso")) return R([]);
   // The people section's loader (services/knowledge/people.ts): no one has a people record in this world.

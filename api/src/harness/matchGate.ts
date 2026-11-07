@@ -584,8 +584,10 @@ export type NetworkFacts = {
   shareReason: string | null | undefined;
   // The candidate's open asks they marked shareable: the only allowed source, and the reason must be one of them.
   candidateStatedAsks: string[];
-  // Everything else known about the candidate: goals, blockers, activity
-  // preferences, memory text. None of it may be quoted.
+  // Everything else known about the candidate: goals, blockers, activity preferences, owner-only facts. None of it may be quoted.
+  // (No memory read here: a reason that passes must already equal one of their shareable asks word for word, so its shingles are the
+  // allowed ones and a memory-text shingle check can never fail. The member picture is read where it decides something, in
+  // services/roomMatching.ts gatherValueSide. Known and left as it was: this shingle check is inert.)
   candidatePrivateTexts: string[];
   alreadySuggestedOrDeclined: boolean;
   // Reachable: not opted out, with a number. Quiet is never a reason to leave someone out (Royce, 2026-11-04: the 90-day cutoff means
@@ -695,11 +697,8 @@ export async function gatherNetworkFacts(
   shareReason: string | null | undefined,
 ): Promise<NetworkFacts> {
   const [a, b] = askerId < candidateId ? [askerId, candidateId] : [candidateId, askerId];
-  const [profile, picture, suggested, reachable, recent, graphFacts, connected] = await Promise.all([
+  const [profile, suggested, reachable, recent, graphFacts, connected] = await Promise.all([
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [candidateId]),
-    // The candidate through the guarded member picture (services/matchPicture.ts), not raw co_memories rows: what they had Cue forget or
-    // remove is out, their name strip is on, and nothing of theirs but this one read crosses into the asker's side.
-    import("../services/matchPicture.js").then((m) => m.matchPicture(candidateId)),
     pool.query(PAIR_BLOCKED_SQL, [a, b]),
     pool.query(`SELECT u.id FROM users u WHERE u.id = ANY($1::uuid[]) AND coalesce(u.sms_opted_out, false) = false AND u.phone_number IS NOT NULL`, [[askerId, candidateId]]),
     // Any real activity of theirs: a text, or what they said on a call (a call-only member is not inactive).
@@ -727,7 +726,6 @@ export async function gatherNetworkFacts(
       ...(p.blockers ?? []),
       ...(p.activity_preferences ?? []),
       ...(p.long_term_direction ? [p.long_term_direction] : []),
-      ...picture.privateTexts,
       ...graphFacts,
     ],
     alreadySuggestedOrDeclined: suggested.rows.length > 0,
