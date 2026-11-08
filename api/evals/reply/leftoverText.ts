@@ -21,12 +21,17 @@ function turn() {
   return { state, went, tools };
 }
 const FIRST = "Got it, that's on me to flag, just passed it to the team so they can fix it.";
+// The read, stubbed: what it was asked, and its answer for each leftover.
+const asked: string[] = [];
+let answer: (prompt: string) => Promise<string> = async () => '{"send": true, "why": "offers to find the right page"}';
+R.setLeftoverModelForTests(async (p) => { asked.push(p); return answer(p); });
+const THEIRS = "that link you sent is dead, it goes to a 404";
 const OFFER = "I don't have another working link for the studio right now, so I won't send you a dead end twice. If you want, I can look into their booking page or find the class another way.";
 
 {
   const t = turn();
   await t.tools.sendReply.execute({ message: FIRST });
-  const sent = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u-marisol", text: OFFER, dryRun: true });
+  const sent = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u-marisol", text: OFFER, theirMessage: THEIRS, dryRun: true });
   check("case 63's shape: sendReply, then an offer in plain text: both go, in order", sent && JSON.stringify(t.went) === JSON.stringify([FIRST, OFFER]), t.went);
   check("...past the one-reply hold only for that text (the hold is back on after)", !t.state.leftoverOnce && t.state.extraSendsRefused === 0);
   const again = await t.tools.sendReply.execute({ message: "One more thing about the class." });
@@ -35,14 +40,41 @@ const OFFER = "I don't have another working link for the studio right now, so I 
 {
   const t = turn();
   await t.tools.sendReply.execute({ message: FIRST });
-  const sent = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: "Got it, that's on me to flag. Passed it to the team so they can fix it.", dryRun: true });
-  const sent2 = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: "Passed it to the team, they'll fix the link.", dryRun: true });
+  const sent = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: "Got it, that's on me to flag. Passed it to the team so they can fix it.", theirMessage: THEIRS, dryRun: true });
+  const sent2 = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: "Passed it to the team, they'll fix the link.", theirMessage: THEIRS, dryRun: true });
   check("plain text that repeats what went is not sent (reworded, or most of its words already said)", !sent && !sent2 && t.went.length === 1, t.went);
 }
 {
   const t = turn();
-  const sent = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: OFFER, dryRun: true });
+  const sent = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: OFFER, theirMessage: THEIRS, dryRun: true });
   check("nothing sent yet: this path does nothing (the plain-text reply path handles it, as today)", !sent && t.went.length === 0 && R.leftoverAfterReply({ isVoice: false, sent: false, replies: 0, sendStopped: false, text: OFFER, sentMessages: [] }) === null);
+}
+// The read decides (Royce, option 2). Stubbed as a reader would answer: filler, repeats, Cue on its own replies and sign-offs get false.
+{
+  check("case 63: the read saw what went, their message and the leftover", asked.length >= 1 && asked[0].includes(FIRST) && asked[0].includes(THEIRS) && asked[0].includes(OFFER));
+  const held: [string, string, string][] = [
+    ["Hayes Valley just confirmed! What should I sort out next for the 14th?", "That's great, congrats on locking it in. Next, nail down the headcount, since that drives everything else.", "Sounds like a solid plan to build from."],
+    ["Anything you have for me in SF?", "https://example.test/one", "A few different directions there, mostly Saturday. Let me know if any catch your eye or if you're after something more specific."],
+    ["My dad was admitted to the hospital last night. They think it's his heart.", "That kind of waiting is its own special hell, not knowing anything yet.", "I'm here while you wait, and I hope you hear something soon."],
+    ["why are your responses so dry?", "Fair. Two weeks with no agenda after that stretch is exactly right, and I hope those two weeks actually let you exhale.", "I rewrote that one properly instead of brushing past it."],
+    ["Got the offer from the design studio today, first one in years I actually wanted", "That's huge, Priya. Congratulations.", "Congratulations. That it's the first one in years you actually wanted makes it mean more."],
+  ];
+  for (const [theirs, first, left] of held) {
+    const t = turn();
+    await t.tools.sendReply.execute({ message: first });
+    answer = async () => '{"send": false, "why": "adds nothing they need now"}';
+    const sent = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: left, theirMessage: theirs, dryRun: true });
+    check(`held when the read says no: "${left.slice(0, 50)}"`, !sent && t.went.length === 1, t.went);
+  }
+  const t = turn();
+  await t.tools.sendReply.execute({ message: FIRST });
+  answer = async () => { throw new Error("overloaded"); };
+  const failedRead = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: OFFER, theirMessage: THEIRS, dryRun: true });
+  answer = async () => "sure, send it";
+  const badAnswer = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: OFFER, theirMessage: THEIRS, dryRun: true });
+  check("a failed read, or one that doesn't answer, sends nothing", !failedRead && !badAnswer && t.went.length === 1);
+  check("the verdict is parsed only from its JSON shape", R.parseLeftoverVerdict('{"send": true, "why": "an offer"}')?.send === true && R.parseLeftoverVerdict('{"send": "yes"}') === null && R.parseLeftoverVerdict("no") === null);
+  R.setLeftoverModelForTests(null);
 }
 check("never on a voice turn, when sends are stopped, or for a few words", R.leftoverAfterReply({ isVoice: true, sent: true, replies: 1, sendStopped: false, text: OFFER, sentMessages: [FIRST] }) === null && R.leftoverAfterReply({ isVoice: false, sent: true, replies: 1, sendStopped: true, text: OFFER, sentMessages: [FIRST] }) === null && R.leftoverAfterReply({ isVoice: false, sent: true, replies: 1, sendStopped: false, text: "Got it.", sentMessages: [FIRST] }) === null);
 check("the turn calls it after the run, before the nothing-went paths", (() => { const s = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8"); const i = s.indexOf("await sendLeftover({ tools, state,"); return i > 0 && i < s.indexOf("const plain = (agentRun?.text ?? \"\").trim();"); })());
