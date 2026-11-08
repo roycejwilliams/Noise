@@ -190,7 +190,7 @@ for (const f of files) {
   for (const m of fs.readFileSync(f, "utf8").matchAll(/\bmemberKnowledge\(\s*[A-Za-z_.]+\s*(?:\)|,\s*\{([^}]*)\})/g)) if (!/include/.test(m[1] ?? "")) includeUses.push({ file: rel(f), set: [...MK.KNOWLEDGE_SECTIONS] });
 }
 const carriers = includeUses.filter((u) => u.set.some((x) => OPT_IN.includes(x)));
-check("the include sets that carry a picture section are SNAPSHOT_KNOWLEDGE and CALL_KNOWLEDGE and nothing else (named constants resolved)", carriers.length >= 2 && carriers.every((u) => /services\/(memberSnapshot|callContext)\.ts$|^services\/memberKnowledge\.ts$/.test(u.file)) && [...named].filter(([n, set]) => set.some((x) => OPT_IN.includes(x))).every(([n]) => ["SNAPSHOT_KNOWLEDGE", "CALL_KNOWLEDGE", "OPT_IN_SECTIONS", "PICTURE_SECTION_IDS"].includes(n)), { carriers, withOptIn: [...named].filter(([, set]) => set.some((x) => OPT_IN.includes(x))).map(([n]) => n) });
+check("the include sets that carry a picture section are SNAPSHOT_KNOWLEDGE and CALL_KNOWLEDGE and nothing else (named constants resolved)", carriers.length >= 2 && carriers.every((u) => /services\/(memberSnapshot|callContext|matchPicture)\.ts$|^services\/memberKnowledge\.ts$/.test(u.file)) && [...named].filter(([n, set]) => set.some((x) => OPT_IN.includes(x))).every(([n]) => ["SNAPSHOT_KNOWLEDGE", "CALL_KNOWLEDGE", "OPT_IN_SECTIONS", "PICTURE_SECTION_IDS", "MATCH_SECTIONS"].includes(n)), { carriers, withOptIn: [...named].filter(([, set]) => set.some((x) => OPT_IN.includes(x))).map(([n]) => n) });
 check("both carrying sets hold all four sections", OPT_IN.every((x) => (S.SNAPSHOT_KNOWLEDGE as string[]).includes(x) && (CC.CALL_KNOWLEDGE as readonly string[]).includes(x)));
 check("the default (no include) never reaches the opt-in sections", OPT_IN.every((x) => !(MK.KNOWLEDGE_SECTIONS as readonly string[]).includes(x)));
 const optInRead = await MK.memberKnowledge("u1", {}, baseDeps({ transitions: async () => { throw new Error("must not run"); }, events: async () => { throw new Error("must not run"); }, people: async () => { throw new Error("must not run"); } }));
@@ -218,13 +218,17 @@ const MATCHING_VIEWS: Record<string, string[]> = {
   "services/sweepFind.ts": ["goals", "asks", "delivered", "lessons", "corrections", "preferences", "claims", "restraint", "person", "limits"],
   // No include: the default set. The sweep picker reads this member's own texts (40 over 14 days) for their own sweep: their own
   // conversation for their own find, not a leak and not an intro input. Pinned so it can't widen.
-  "services/sweepSelectContext.ts": [...MK.KNOWLEDGE_SECTIONS],
+  "services/sweepSelectContext.ts": ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"],
+  // #412: matching reads its own narrow view of the same source: the member's own goals for fit, and the denylist that checks intro text
+  // (their own private words, so a line the other member reads never quotes them). Pinned: it is the one matching read of the picture
+  // sections, and nothing it reads becomes intro copy or the other side's prompt.
+  "services/matchPicture.ts": ["goals", "asks", "preferences", "learned", "transitions", "people", "exchanges"],
 };
 const matchingUses = includeUses.filter((u) => /(sweep|match|intro|outreach|partner|roomSim)/i.test(u.file));
 check("view: a memberKnowledge call with no include is the default set, which holds no opt-in picture section", OPT_IN.every((x) => !(MK.KNOWLEDGE_SECTIONS as readonly string[]).includes(x)) && includeUses.some((u) => u.file === "services/sweepSelectContext.ts"));
 check("view: every include set in a matching, sweep or intro file is pinned exactly (a new or wider one fails until reviewed)", matchingUses.every((u) => MATCHING_VIEWS[u.file] && sameSet(MATCHING_VIEWS[u.file], u.set)) && Object.keys(MATCHING_VIEWS).every((f) => matchingUses.some((u) => u.file === f)), matchingUses);
-check("view: no matching, sweep or intro read takes the conversation itself (exchanges) except the sweep picker's own (pinned above), and none takes an opt-in picture section", matchingUses.every((u) => (!u.set.includes("exchanges") || u.file === "services/sweepSelectContext.ts") && !u.set.some((x) => OPT_IN.includes(x))), matchingUses);
-check("view: every other include set in src is free of the opt-in picture sections", includeUses.filter((u) => !/services\/(memberSnapshot|callContext)\.ts$/.test(u.file) && !/^services\/memberKnowledge\.ts$/.test(u.file)).every((u) => !u.set.some((x) => OPT_IN.includes(x))));
+check("view: no matching, sweep or intro read takes the conversation itself (exchanges) except the sweep picker's own and matching's denylist (both pinned above), and none takes an opt-in picture section except matching's pinned one", matchingUses.every((u) => (!u.set.includes("exchanges") || u.file === "services/sweepSelectContext.ts" || u.file === "services/matchPicture.ts") && (u.file === "services/matchPicture.ts" || !u.set.some((x) => OPT_IN.includes(x)))), matchingUses);
+check("view: every other include set in src is free of the opt-in picture sections", includeUses.filter((u) => !/services\/(memberSnapshot|callContext|matchPicture)\.ts$/.test(u.file) && !/^services\/memberKnowledge\.ts$/.test(u.file)).every((u) => !u.set.some((x) => OPT_IN.includes(x))));
 
 // ---- memory rules, end to end through memberKnowledge, in the snapshot AND the call
 const tRows = [tRow({ id: "keep-t", text: "moving to Berkeley for the job", quote: "I'm moving to Berkeley", corrections: [] }), tRow({ id: "gone-t", text: "thinking about leaving the firm", quote: "thinking about leaving", corrections: [] })];

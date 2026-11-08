@@ -734,9 +734,9 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
 
   // The member picture's reads (services/memberKnowledge.ts, via services/matchPicture.ts): matching no longer reads co_memories rows
   // itself. Their private memories come back as their own exchange lines; the rest of the picture is empty in this world.
-  if (has("SELECT u.first_name, cp.city, cp.goals, cp.intent, cp.updated_at FROM users u LEFT JOIN co_profiles cp")) {
+  if (has("SELECT u.first_name, cp.city, cp.goals, cp.intent, cp.long_term_direction, cp.updated_at FROM users u LEFT JOIN co_profiles cp")) {
     const m = W.members.get(p[0]);
-    return R(m ? [{ first_name: m.first_name, city: null, goals: m.goals ?? [], intent: m.intent ?? [], updated_at: null }] : []);
+    return R(m ? [{ first_name: m.first_name, city: null, goals: m.goals ?? [], intent: m.intent ?? [], long_term_direction: null, updated_at: null }] : []);
   }
   if (has("FROM co_memories") && has("memory_type = 'text_exchange'") && has("created_at > NOW() - make_interval")) {
     const m = W.members.get(p[0]);
