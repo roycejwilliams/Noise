@@ -113,7 +113,15 @@ const base = { approved: true, now: () => now, told: async () => false, othersWa
   const noAnswer = await AN.othersWaitingOf({ userId: "u", candidateId: "c1", zone: null, now, carriesRename: false }, db(undefined)).then(() => "answered", () => "threw");
   check("stack read: no answer throws (the draft then waits)", noAnswer === "threw");
   const sql = AN.OTHERS_WAITING_SQL.replace(/\s+/g, " ");
-  check("stack read: pending candidates of theirs, not this one, not another announcement, due by the end of their day, not past their end", /FROM proactive_candidates WHERE user_id = \$1 AND status = 'pending' AND \(\$2::text IS NULL OR id::text <> \$2\)/.test(sql) && /type <> 'announcement'/.test(sql) && /due_at < \$3/.test(sql) && /expires_at IS NULL OR expires_at > NOW\(\)/.test(sql));
+  check("stack read: pending candidates of theirs, not this one, not another announcement, due inside the window, not past their end", /FROM proactive_candidates WHERE user_id = \$1 AND status = 'pending' AND \(\$2::text IS NULL OR id::text <> \$2\)/.test(sql) && /type <> 'announcement'/.test(sql) && /due_at >= \$5 AND due_at < \$3/.test(sql) && /expires_at IS NULL OR expires_at > \$6/.test(sql));
+  check("stack read: the window is from STALE_DUE_HOURS ago to the end of their day, and now is the expiry test", (seen[0].args[4] as Date).getTime() === now.getTime() - AN.STALE_DUE_HOURS * H && (seen[0].args[5] as Date).getTime() === now.getTime() && AN.STALE_DUE_HOURS === 6);
+  // The rule itself (the same one the SQL holds): a stale past-due candidate (gated, NULL expiry) never blocks; one due later today does.
+  const z = "America/Los_Angeles";
+  check("stack rule: a candidate past due by more than 6 hours with no expiry doesn't block", !AN.countsAsWaiting({ dueAt: new Date(now.getTime() - 7 * H), expiresAt: null }, now, z) && !AN.countsAsWaiting({ dueAt: new Date(now.getTime() - 5 * 24 * H), expiresAt: null }, now, z));
+  check("stack rule: one due later today blocks", AN.countsAsWaiting({ dueAt: new Date(now.getTime() + 2 * H), expiresAt: null }, now, z) && AN.countsAsWaiting({ dueAt: new Date(now.getTime() + 2 * H), expiresAt: new Date(now.getTime() + 24 * H) }, now, z));
+  check("stack rule: one due a little while ago (inside 6 hours) still blocks", AN.countsAsWaiting({ dueAt: new Date(now.getTime() - 5 * H), expiresAt: null }, now, z));
+  check("stack rule: one due tomorrow, or past its end, doesn't block", !AN.countsAsWaiting({ dueAt: new Date(AN.endOfLocalDay(now, z).getTime() + H), expiresAt: null }, now, z) && !AN.countsAsWaiting({ dueAt: new Date(now.getTime() + H), expiresAt: new Date(now.getTime() - 1000) }, now, z));
+  check("stack rule: the SQL's bounds are the rule's window", (seen[0].args[2] as Date).getTime() === AN.waitingWindow(now, z).to.getTime() && (seen[0].args[4] as Date).getTime() === AN.waitingWindow(now, z).from.getTime());
   check("stack read: any deferred send of theirs queued or going out", /FROM deferred_sends WHERE user_id = \$1 AND status IN \('queued', 'sending'\)/.test(sql));
   const end = seen[0].args[2] as Date;
   check("stack read: 'today' ends at the end of their local day", end.toISOString() === "2026-11-21T07:59:59.999Z", end);
@@ -214,9 +222,10 @@ const base = { approved: true, now: () => now, told: async () => false, othersWa
 
 // ---------------------------------------------------------------- 9. the first-use note: once, plainly, the first time it matters
 {
-  check("note: a deck, a page or a document ask is one", F.asksForRemovedMaker("can you make me a pitch deck for friday", MAKER_ASK) && F.asksForRemovedMaker("could you build a landing page for it", MAKER_ASK));
-  check("note: an email draft ask is one", F.asksForRemovedMaker("can you draft an email to the venue", MAKER_ASK) && F.asksForRemovedMaker("help me write an email to my old manager", MAKER_ASK));
-  check("note: talk about a deck or an email isn't", !F.asksForRemovedMaker("my presentation went badly", MAKER_ASK) && !F.asksForRemovedMaker("she never answered my email", MAKER_ASK));
+  const ask = (m: string) => F.asksForRemovedMaker(m);
+  for (const m of ["can you draft an email to my landlord", "make me a deck for Friday", "can you make me a pitch deck for friday", "could you build a landing page for it", "help me write an email to my old manager", "could you help me write a one-pager", "write an email for me to the venue", "draft me a quick email to Sam"]) check(`note: an ask aimed at Cue to make one: "${m}"`, ask(m));
+  for (const m of ["I need to write a resignation email tomorrow, wish me luck", "I have to write an email to my boss about quitting and I am dreading it", "just finished my draft of the email to investors", "could you send me the doc from the event", "my presentation went badly", "she never answered my email", "can you share the deck from last night", "I wrote a doc about it"]) check(`note: not an ask to make one: "${m}"`, !ask(m));
+  check("note: the decline rule's MAKER_ASK is unchanged (it still matches what it did, the note's read is its own)", MAKER_ASK.test("could you send me the doc from the event") && /F && F\.asksForRemovedMaker\(theirMessage\) \?/.test(src("harness/replyGrounding.ts")));
   const joinedBefore = async () => before, joinedAfter = async () => new Date(AN.HELPERS_REMOVED_AT.getTime() + H);
   check("note: joined before, not told: the facts go in", (await F.makerFirstUseNote("u", { joinedAt: joinedBefore, told: async () => false })) === F.MAKER_FIRST_USE_FACTS);
   check("note: already told: nothing", (await F.makerFirstUseNote("u", { joinedAt: joinedBefore, told: async () => true })) === null);
@@ -241,7 +250,7 @@ const base = { approved: true, now: () => now, told: async () => false, othersWa
   const toldNow = await F.makerFirstUseNote("u", { joinedAt: joinedBefore, told: async () => writes.length > 0 });
   check("once: after it's recorded, the next ask gets no note", toldNow === null);
   const RG = src("harness/replyGrounding.ts");
-  check("wiring: the reply adds the note beside the decline rule, and notes it every turn (given or not)", /F && F\.asksForRemovedMaker\(theirMessage, MAKER_ASK\) \? await F\.makerFirstUseNote\(userId\)/.test(RG) && /if \(note\) addInstruction\(rf, note\);/.test(RG) && /F\?\.noteMakerFirstUse\(userId, !!note\);/.test(RG) && /if \(MAKER_ASK\.test\(theirMessage\)\) addInstruction\(rf, MAKER_DECLINE_RULE\);/.test(RG));
+  check("wiring: the reply adds the note beside the decline rule, and notes it every turn (given or not)", /F && F\.asksForRemovedMaker\(theirMessage\) \? await F\.makerFirstUseNote\(userId\)/.test(RG) && /if \(note\) addInstruction\(rf, note\);/.test(RG) && /F\?\.noteMakerFirstUse\(userId, !!note\);/.test(RG) && /if \(MAKER_ASK\.test\(theirMessage\)\) addInstruction\(rf, MAKER_DECLINE_RULE\);/.test(RG));
   check("wiring: it's recorded from the reply's own send, only when it went", /if \(ok\) import\("\.\.\/services\/firstUseNotes\.js"\)\.then\(\(F\) => F\.confirmMakerFirstUse\(user\.id\)\)/.test(src("routes/sendblue.ts")));
 }
 
