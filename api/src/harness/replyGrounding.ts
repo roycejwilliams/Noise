@@ -65,6 +65,7 @@ import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
 import { textStockSentence } from "./stockLines.js";
+import { QUOTE_IS_THEIRS, quoteCheck, quotesAsTheirs, quotesNamedIn, withoutQuoted } from "./quotedWords.js";
 import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn, isNeutralTurn } from "./discretion.js";
 import { PROMISE_RE, STARTED_WORK, dropPromise, promiseFact, promiseSentence, promiseStays, trackPromise } from "../services/promises.js";
 
@@ -1170,6 +1171,12 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   if (callDenial(draft)) {
     checks.push({ name: "no_capability_denial", pass: false, reason: "says Cue can't call, which is false" });
   }
+  // Words in quotation marks said to be theirs must be theirs (harness/quotedWords.ts, 2026-11-07): their message, their lines in the
+  // thread and their own memories; never Cue's lines or a summary. The sentence is cut (or the reply redrafted when too little is left).
+  if (quotesAsTheirs(draft).length) {
+    const q = quoteCheck(draft, [src.message, theirOwnWords(src.recentConversation), theirOwnWords(src.recentMemories)]);
+    if (!q.pass) checks.push(q);
+  }
   // An invite said to be sent or on its way when this turn's invite step
   // didn't send one (2026-09-19: "send my friend a code" drafted "Sending
   // that now, one sec."). Only the invite step (services/invites.ts) sends
@@ -1907,6 +1914,12 @@ export function cutTrailingClaims(sentence: string, failed: GateCheck[]): string
 
 // Last resort: drop the sentences that carry an unsupported claim.
 export function stripUnsupported(draft: string, failed: GateCheck[], opts: { allow?: (sentence: string) => boolean } = {}): string {
+  // A quote of theirs they never said goes with its sentence, split the quote-aware way (a "." inside quotation marks isn't an end).
+  const badQuotes = quotesNamedIn(failed.filter((f) => f.name === QUOTE_IS_THEIRS).map((f) => f.reason));
+  if (badQuotes.length) {
+    draft = withoutQuoted(draft, badQuotes);
+    failed = failed.filter((f) => f.name !== QUOTE_IS_THEIRS);
+  }
   // A sentence whose unsupported claim is only its last clause keeps the rest (row 10393, 2026-10-10: "Send over the deck or walk me
   // through the key slides and I'll give you a real read." lost the invitation with the promise). See cutTrailingClaim.
   const sentences = (draft.match(SENTENCES_SP) ?? [draft]).map((s) => cutTrailingClaims(s, failed));

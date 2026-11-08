@@ -20,6 +20,7 @@
 import { notToTeammate } from "../services/teamLines.js";
 import { stampOf } from "../services/factLabels.js";
 import { sameThing } from "../services/whatCoKnows.js";
+import { closeSaysHowItLanded } from "../services/milestones.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -170,6 +171,8 @@ export function gateThreadChanges(
     else if (!hit) reason = "no quote of theirs supports it";
     else if (hit.at <= t.openedAt.slice(0, 16)) reason = "quote isn't newer than the thread";
     else if (squash(c.quote) === squash(t.openedQuote)) reason = "same quote that opened it";
+    // A bare reaction ("I like that.") is agreement with something said, not how it landed (2026-11-07 review, services/milestones.ts).
+    else if (!closeSaysHowItLanded(t.text, c.quote)) reason = "a bare reaction doesn't say how it landed";
     checks.push({ name: "thread_close_quoted", pass: !reason, reason: `${c.id}: ${reason ?? `closed as ${c.status}`}` });
     if (!reason && hit && !closed.some((x) => x.id === c.id)) closed.push({ ...c, quotedAt: hit.at });
   }
@@ -255,21 +258,119 @@ export async function listThreads(userId: string, statuses: ThreadStatus[] = ["o
   return rows.map(rowToThread);
 }
 
-export async function ownLines(userId: string, days = LOOKBACK_DAYS): Promise<OwnLine[]> {
-  const { rows } = await pool.query(
+// A text they took back (2026-11-07 review: on 11-06 a member's "Cleanup: whether to delete the old pages, decks..." went to Cue by
+// mistake, they said it was "the wrong chat", and the threads read still proposed "deciding whether to delete old pages, decks and design
+// data"). Only a short line that is nothing but a take-back, anchored end to end ("wrong chat", "sorry, wrong person", "that wasn't
+// meant for you", "ignore that last text"): "I just try to ignore that part", "she gave me the wrong number lol" and "HR sent it to the
+// wrong person at first" are ordinary lines and stay. A line that also says something new ("actually disregard that, it's Austin") is
+// a correction, never a take-back: both lines stay, and the earlier one carries the correction inline, so the newer word wins. A fact
+// about where a text was sent, never about Cue's speech.
+const FILLER = String.raw`(?:sorry|oops|whoops|my bad|ugh|lol|haha|ha|omg|oh|ah|actually|please|pls|plz)`;
+// Strong: it names where the text went ("wrong chat", "not meant for you", "sent that to the wrong person"), within DISOWN_WINDOW_MINUTES.
+const STRONG_TAKE_BACK = String.raw`(?:(?:that was |that's |this was |)(?:the )?wrong (?:chat|thread|convo|conversation|window|tab|text)|(?:that|this|it) (?:was|wasn'?t|is|isn'?t) (?:not )?(?:meant|supposed) (?:for|to go to) (?:you|cue|co)|not meant for you|(?:i )?sent (?:that|this|it) to the wrong (?:chat|person|thread|number))`;
+// Weak: a bare "wrong person" / "ignore that" says nothing about where it went (after "Went on a date last night", "wrong person" is
+// about the date). It takes back only the text right before it (within BURST_MINUTES) when that text looks meant for someone else.
+const WEAK_TAKE_BACK = String.raw`(?:(?:that was |that's |)(?:the )?wrong person|(?:please |pls )?(?:ignore|disregard) (?:that|this)(?: last)?(?: one| message| text)?|(?:please |pls )?(?:ignore|disregard) (?:the|my) last (?:one|message|text))`;
+const anchored = (core: string) => new RegExp(String.raw`^\s*(?:${FILLER}[\s,.!]*)*${core}(?:[\s,.!]*${FILLER})*[\s.!]*$`, "i");
+export const STRONG_DISOWN = anchored(STRONG_TAKE_BACK);
+export const WEAK_DISOWN = anchored(WEAK_TAKE_BACK);
+export const DISOWNS = { test: (t: string) => STRONG_DISOWN.test(t) || WEAK_DISOWN.test(t) };
+// Pure: a text that reads as written to someone else: it greets or names someone first ("Hey Sam,", "Mom:", "babe"), or it's a
+// labelled note or paste ("Cleanup: ...", a list), never a line about their own life told to Cue.
+// A "Name, ..." or "Word: ..." opener with their own life news in it ("Maya, my cofounder, quit today", "Stripe: we got the partnership")
+// is them telling Cue, never a text meant for someone else.
+// Family and partner terms: someone else, whatever follows. Casual ones ("Dude, the investor said yes!", "Bro, I finally shipped it") are
+// as often said to Cue as to a friend, so they go through the own-news check like a name.
+const FAMILY_ADDRESSEE = String.raw`(?:mom|mum|mommy|mama|ma|mother|dad|daddy|papa|pops|father|babe|baby|bae|honey|sweetie|sweetheart|grandma|grandpa|nana|granny|auntie|aunt|uncle)`;
+const CASUAL_ADDRESSEE = String.raw`(?:dude|bro|brother|sis|sister|love|hon|son|kiddo|cuz|guys|team|all|everyone)`;
+const OWN_NEWS = /\b(?:i|i'm|im|i've|i'd|my|me|we|we're|we've|our|us)\b/i;
+const ADDRESSED = /^(?:(?:[Hh]ey|[Hh]i|[Hh]ello|[Yy]o|[Oo]k|[Oo]kay)\s+)?(?!(?:Ok|Okay|Yeah|Yes|No|So|Well|Also|Sure|Honestly|Actually|Lol|Haha|Hmm|Thanks|Update|Today|Tonight|Anyway|Btw|Oh|Ah|Wow|Cue|Co)\b)[A-Z][a-z]+\s*[,:]/;
+export function meantForSomeoneElse(text: string): boolean {
+  const t = text.trim();
+  // A greeting first ("Hey Sam, I'm running late") is written to that person; a bare "Name," or "Word:" only without their own news in it.
+  const greeted = /^(?:[Hh]ey|[Hh]i|[Hh]ello|[Yy]o)\s+(?!(?:Cue|Co)\b)[A-Z][a-z]+\s*[,:]/.test(t);
+  // A family or partner addressee first ("Mom: landing at 6, can you pick me up?", "babe, ..."): written to them, whatever pronouns follow.
+  const family = new RegExp(String.raw`^(?:(?:hey|hi|hello|yo)\s+)?${FAMILY_ADDRESSEE}\s*[,:!]|^(?:hey|hi|hello|yo)\s+${FAMILY_ADDRESSEE}\b`, "i").test(t);
+  // A casual one only without their own news ("Dude, the investor said yes!" is news told to Cue).
+  const casual = new RegExp(String.raw`^(?:(?:hey|hi|hello|yo)\s+)?${CASUAL_ADDRESSEE}\s*[,:!]|^(?:hey|hi|yo)\s+${CASUAL_ADDRESSEE}\b`, "i").test(t) && !OWN_NEWS.test(t) && !/!\s*$/.test(t);
+  // A bare "Name," / "Word:" opener (never a casual addressee: those are read above), without their own news or an exclaimed one.
+  const named = ADDRESSED.test(t) && !new RegExp(String.raw`^${CASUAL_ADDRESSEE}\b`, "i").test(t) && !OWN_NEWS.test(t);
+  return greeted || family || casual || named || /\b(?:babe|honey|sweetie)\b/i.test(t) || /^\s*[-*\d]+[.)]?\s+\S/.test(t);
+}
+// "actually disregard that, it's Austin" / "scratch that, Austin": a correction of the text before it, with what's true now.
+export const CORRECTS = new RegExp(String.raw`^\s*(?:${FILLER}[\s,.!]*)*(?:ignore that|disregard that|scratch that|no wait|correction)[\s,:;.!-]+(\S.*)$`, "i");
+// Within this long before their take-back, the text it is about (the one right before it, and any sent with it in one burst).
+const DISOWN_WINDOW_MINUTES = 30;
+const BURST_MINUTES = 2;
+const minutesOf = (at: string) => Date.parse(`${at.length === 16 ? `${at}:00` : at}Z`) / 60_000;
+// Pure: the texts they took back (and the take-back itself) left out, and a correction applied to the text before it. Texts only: a call
+// is one conversation.
+export function withoutDisowned(lines: OwnLine[]): OwnLine[] {
+  const gone = new Set<number>();
+  const corrected = new Map<number, string>();
+  const previousText = (i: number) => {
+    for (let j = i - 1; j >= 0; j--) if (lines[j].via !== "call" && !gone.has(j)) return minutesOf(lines[i].at) - minutesOf(lines[j].at) <= DISOWN_WINDOW_MINUTES ? j : -1;
+    return -1;
+  };
+  lines.forEach((l, i) => {
+    if (l.via === "call") return;
+    const fix = CORRECTS.exec(l.text);
+    if (fix && !DISOWNS.test(l.text)) {
+      const j = previousText(i);
+      if (j >= 0) corrected.set(j, fix[1].trim().slice(0, 120));
+      return;
+    }
+    const strong = STRONG_DISOWN.test(l.text);
+    if (!strong && !WEAK_DISOWN.test(l.text)) return;
+    if (!strong) {
+      // A bare take-back: only the text right before it, sent moments before, that reads as meant for someone else.
+      const j = previousText(i);
+      if (j < 0 || minutesOf(l.at) - minutesOf(lines[j].at) > BURST_MINUTES || !meantForSomeoneElse(lines[j].text)) return;
+    }
+    gone.add(i);
+    let prev = -1;
+    for (let j = i - 1; j >= 0; j--) {
+      if (lines[j].via === "call" || gone.has(j)) continue;
+      const gap = (prev < 0 ? minutesOf(l.at) : minutesOf(lines[prev].at)) - minutesOf(lines[j].at);
+      if (prev < 0 ? gap > DISOWN_WINDOW_MINUTES : gap > BURST_MINUTES) break;
+      // Beyond the text right before it, a text sent in the same burst goes too only when it is itself addressed to someone else.
+      if (prev >= 0 && !meantForSomeoneElse(lines[j].text)) break;
+      gone.add(j);
+      prev = j;
+    }
+  });
+  return lines.flatMap((l, i) => (gone.has(i) ? [] : [corrected.has(i) ? { ...l, text: `${l.text} [since corrected: ${corrected.get(i)}]` } : l]));
+}
+// Pure: their lines as the threads read may use them: what they took back left out, and each through the correction and removal guards
+// (services/whatCoKnows.ts guardText: a removed part dropped, a corrected value noted inline).
+export function usableLines(lines: OwnLine[], rows: import("../services/whatCoKnows.js").ForgottenRow[], guard: (text: string, rows: import("../services/whatCoKnows.js").ForgottenRow[]) => string | null): OwnLine[] {
+  return withoutDisowned(lines).flatMap((l) => {
+    const text = rows.length ? guard(l.text, rows) : l.text;
+    return text ? [{ ...l, text }] : [];
+  });
+}
+
+// newest: the newest 200 rows over the window (oldest first, as always), for a long window; default: the oldest 200, as before.
+export async function ownLines(userId: string, days = LOOKBACK_DAYS, o: { newest?: boolean } = {}): Promise<OwnLine[]> {
+  const { rows: got } = await pool.query(
     `SELECT created_at, memory_type, content FROM co_memories
      WHERE user_id = $1 AND created_at > NOW() - make_interval(days => $2)
        AND ((memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}) OR memory_type = 'call_transcript')
-     ORDER BY created_at LIMIT 200`,
+     ORDER BY created_at${o.newest ? " DESC" : ""} LIMIT 200`,
     [userId, days],
   );
+  const rows = o.newest ? [...got].reverse() : got;
   const out: OwnLine[] = [];
   for (const r of rows) {
     const at = new Date(r.created_at).toISOString().slice(0, 16);
     if (r.memory_type === "call_transcript") for (const t of userLinesFromTranscript(String(r.content))) out.push({ at, text: t.slice(0, 500), via: "call" });
     else out.push({ at, text: String(r.content).replace(/^User said:\s*/, "").slice(0, 500), via: "text" });
   }
-  return out;
+  // What they took back, removed or corrected never comes back through their raw words (a failed guard read: their words as they are,
+  // the took-back filter still applied).
+  const W = await import("../services/whatCoKnows.js");
+  const guards = await W.forgottenRows(userId).catch(() => [] as import("../services/whatCoKnows.js").ForgottenRow[]);
+  return usableLines(out, guards, W.guardText);
 }
 
 // The feeling they had when they said it: the life emotion signal nearest the
@@ -362,11 +463,14 @@ export async function applyThreadProposal(
     if (!lines.length) return;
     parsed = parsed ?? {};
     const zone = await zoneFor(userId);
-    const gated = gateThreadChanges(parsed.open ?? [], parsed.close ?? [], onFile, lines, zone);
-    const { closed, checks } = gated;
     // A thread they had removed (services/whatCoKnows.ts) isn't opened again from their older words.
     const forgotten = await import("../services/whatCoKnows.js").then((W) => W.forgottenRows(userId).then((rows) => ({ W, rows }))).catch(() => null);
-    const opened = gated.opened.filter((o) => !forgotten?.W.forgets(o.text, forgotten.rows, "thread"));
+    // The gate reads only the lines they still stand by (usableLines; ownLines already did this, and it's the same on lines read before),
+    // so a quote from a text they took back, or a removed part of one, supports nothing.
+    const usable = forgotten ? usableLines(lines, forgotten.rows, forgotten.W.guardText) : withoutDisowned(lines);
+    const gated = gateThreadChanges(parsed.open ?? [], parsed.close ?? [], onFile, usable, zone);
+    const { closed, checks } = gated;
+    const opened = gated.opened.filter((o) => !forgotten?.W.forgets(o.text, forgotten.rows, "thread") && !forgotten?.W.forgets(o.quote, forgotten.rows, "their_words"));
 
     for (const c of closed) {
       await pool.query(

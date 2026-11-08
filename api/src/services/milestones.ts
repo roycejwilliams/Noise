@@ -28,6 +28,8 @@ export type Milestone = {
   confirmed?: boolean;
 };
 
+// How far back their own lines are read to trace a quote (newest first, harness/memberThreads.ts ownLines).
+export const OWN_LINES_DAYS = 120;
 // Older than this when first found: known to Co's story, never announced.
 export const ANNOUNCE_WITHIN_DAYS = 14;
 // Co marks a moment at most this often.
@@ -38,7 +40,26 @@ export type Source = {
   now: string;
   went: { itemKey: string; name: string; at: string }[];
   closed: { id: string; text: string; openedQuote: string; closedQuote: string | null; at: string }[];
+  // Their own lines as stored now (texts and call lines, harness/memberThreads.ts ownLines). Given: a quote that isn't in them is
+  // never carried as theirs. Absent: not read (the quotes stand as the thread's gate checked them when it opened and closed).
+  lines?: string[];
 };
+
+// 2026-11-07 review (candidate 854): a thread "deciding how to position the concept" closed on "I like that." became a milestone, and the
+// check-in said 'You went from "We are really a social club" to "I like that."' A closing line that says nothing about the thread
+// (a bare reaction) doesn't establish how it landed, so it isn't a moment; and a quote is carried only when it traces to a line of theirs.
+// A bare reaction ("I like that.", "sounds good", "love it", "yeah totally"): agreement with something said, never how their thread
+// landed. Anything else of theirs ("we found one", "we moved it to November") still stands as a close.
+const REACTION = new Set("i i'm im we you it it's its that this so yeah yes yep ok okay sure totally really like love liked loved sounds sound good great nice cool agree agreed true makes make sense fair perfect amazing awesome interesting right exactly".split(" "));
+export function closeSaysHowItLanded(_threadText: string, closedQuote: string): boolean {
+  const w = closedQuote.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(Boolean);
+  return !(w.length > 0 && w.length <= 5 && w.every((x) => REACTION.has(x)));
+}
+const flatQ = (t: string) => t.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+export function tracesToTheirLine(quote: string, lines: string[]): boolean {
+  const q = flatQ(quote);
+  return !!q && lines.some((l) => flatQ(l).includes(q));
+}
 
 const dayMs = 86_400_000;
 
@@ -55,7 +76,11 @@ export function deriveMilestones(s: Source): Omit<Milestone, "markedAt">[] {
     if (!t.closedQuote) continue;
     // A thread about something outside the purpose boundary (an errand, a purchase) isn't a moment in their story with Cue.
     if (classifyScope(t.text).scope === "out") continue;
-    out.push({ key: `thread:${t.id}`, kind: "thread_done", text: `They were in the middle of: ${t.text}. It came through.`, then: t.openedQuote, now: t.closedQuote, happenedAt: new Date(t.at).toISOString() });
+    if (!closeSaysHowItLanded(t.text, t.closedQuote)) continue;
+    // Their closing words must still be theirs on file; the opening words are kept only when they are (else no quote, never a guess).
+    if (s.lines && !tracesToTheirLine(t.closedQuote, s.lines)) continue;
+    const then = t.openedQuote && (!s.lines || tracesToTheirLine(t.openedQuote, s.lines)) ? t.openedQuote : null;
+    out.push({ key: `thread:${t.id}`, kind: "thread_done", text: `They were in the middle of: ${t.text}. It came through.`, then, now: t.closedQuote, happenedAt: new Date(t.at).toISOString() });
   }
   return out;
 }
@@ -65,7 +90,7 @@ export function deriveMilestones(s: Source): Omit<Milestone, "markedAt">[] {
 export function pickToMark(all: Milestone[], now: Date): Milestone | null {
   // A row already stored is judged now, at pick time, not only when it was derived: a thread_done for something outside the purpose
   // boundary (an errand, a purchase) is never marked, and "N days with Cue" rows from before they were removed are never picked.
-  all = all.filter((m) => m.confirmed !== false && (m.kind as string) !== "with_co" && !(m.kind === "thread_done" && classifyScope(`${m.text}\n${m.then ?? ""}\n${m.now ?? ""}`).scope === "out"));
+  all = all.filter((m) => m.confirmed !== false && (m.kind as string) !== "with_co" && !(m.kind === "thread_done" && classifyScope(`${m.text}\n${m.then ?? ""}\n${m.now ?? ""}`).scope === "out") && !(m.kind === "thread_done" && m.now && !closeSaysHowItLanded(m.text.replace(/^They were in the middle of: |\. It came through\.$/g, ""), m.now)));
   const lastMarked = all.filter((m) => m.markedAt).map((m) => new Date(m.markedAt!).getTime()).sort((a, b) => b - a)[0];
   if (lastMarked && now.getTime() - lastMarked < MARK_EVERY_DAYS * dayMs) return null;
   const fresh = all
@@ -108,6 +133,7 @@ export async function milestoneConfirmed(userId: string, key: string): Promise<b
 }
 
 async function loadSource(userId: string, now: Date): Promise<Source | null> {
+  const lines = await import("../harness/memberThreads.js").then((T) => T.ownLines(userId, OWN_LINES_DAYS, { newest: true })).then((ls) => ls.map((l) => l.text)).catch(() => null);
   const [u, went, closed] = await Promise.all([
     pool.query(`SELECT created_at FROM users WHERE id = $1`, [userId]),
     pool.query(`SELECT item_key, item_name, created_at FROM suggestion_outcomes WHERE user_id = $1 AND result IN ('helped', 'didnt_help') AND provenance = 'stated' ORDER BY created_at DESC LIMIT 30`, [userId]),
@@ -119,6 +145,8 @@ async function loadSource(userId: string, now: Date): Promise<Source | null> {
     now: now.toISOString(),
     went: went.rows.map((r: any) => ({ itemKey: r.item_key, name: r.item_name, at: new Date(r.created_at).toISOString() })),
     closed: closed.rows.map((r: any) => ({ id: r.id, text: r.text, openedQuote: r.opened_quote, closedQuote: r.closed_quote, at: new Date(r.closed_at).toISOString() })),
+    // A failed read: not given (the quotes as the thread's gate checked them).
+    ...(lines ? { lines } : {}),
   };
 }
 

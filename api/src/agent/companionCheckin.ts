@@ -2,6 +2,7 @@ import { draftProactive, type OutputRules } from "../harness/proactive.js";
 import { PRESUMES_THEY_WENT } from "../services/followUpEvidence.js";
 import { splitRecap } from "../services/claims.js";
 import { judgeCheckin, ruledOut } from "../brain/index.js";
+import { CHECKIN_TONE } from "../services/coVoice.js";
 
 // One of their open threads (harness/memberThreads.ts), as the cron hands it.
 export type CompanionThread = { text: string; quote: string; dueDate: string | null; feeling: string | null };
@@ -94,7 +95,7 @@ async function draftFromAdvice(firstName: string, advice: CompanionAdvice): Prom
     functionId: "agent.companionCheckin",
     firstName,
     facts: { what_you_advised_them_about: advice.topic, what_you_told_them: advice.gist, days_ago: String(advice.daysAgo) },
-    task: `Ask how it went since you talked about what_you_advised_them_about, like an advisor who remembered. Name the thing itself in a few plain words. One short question: did they try it, or where did it land. Use only the facts given; don't add new advice, details or promises, and don't repeat the whole advice. Start with the thought itself, not a greeting like "Hey".`,
+    task: `Ask how it went since you talked about what_you_advised_them_about, like an advisor who remembered. Name the thing itself in a few plain words. One short question: did they try it, or where did it land. Use only the facts given; don't add new advice, details or promises, and don't repeat the whole advice. Start with the thought itself, not a greeting like "Hey". ${CHECKIN_TONE}`,
     maxSentences: 2,
   });
   if (!text) return null;
@@ -114,7 +115,7 @@ async function draftFromStory(firstName: string, story: CompanionStory): Promise
       ...(story.then ? { their_words_when_it_started: story.then.slice(0, 300) } : {}),
       ...(story.now ? { their_words_when_it_landed: story.now.slice(0, 300) } : {}),
     },
-    task: `Mark this moment like a friend who has been beside them the whole way. Say what happened in a few plain words, and if their_words_when_it_started is there, let the contrast with where they are now show, in their terms. Use only what_happened and their words; add nothing that isn't there (no numbers, names, or time words like today or tonight of your own). Warm, not gushing, no exclamation-mark pile. Offer nothing, ask at most one short question, and never promise anything Cue will do later. Start with the thought itself, not a greeting like "Hey".`,
+    task: `Mark this moment like a friend who has been beside them the whole way. Say what happened in a few plain words. Their words, when given, are background: quote them only exactly, or say it in your own words only as far as they support, and never frame it as a change of mind unless their words show one. Use only what_happened and their words; add nothing that isn't there (no numbers, names, or time words like today or tonight of your own). Warm, not gushing, no exclamation-mark pile. Offer nothing, and never promise anything Cue will do later. Start with the thought itself, not a greeting like "Hey". ${CHECKIN_TONE}`,
     maxSentences: 3,
   });
   if (!text) return null;
@@ -167,7 +168,7 @@ async function draftFromThread(
       item
         ? ` Then mention one_thing_found_for_it in one short sentence with its link, as something you came across that might help with it. If it wouldn't actually help with this, leave it out and offer nothing. Nothing else offered.`
         : ` Offer nothing: no events, no links, no suggestions.`
-    } Never promise anything Cue will do later. Don't mention any other person. Start with the thought itself, not a greeting like "Hey".`,
+    } Never promise anything Cue will do later. Don't mention any other person. Start with the thought itself, not a greeting like "Hey". ${CHECKIN_TONE}`,
     maxSentences: item ? 3 : 2,
   });
   if (!text) return null;

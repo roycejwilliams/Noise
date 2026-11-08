@@ -1360,6 +1360,11 @@ export function sendblueRouter(io: Server): Router {
           }),
         ]);
 
+        // Their text takes back the one before it ("sorry wrong person", "wrong chat"): whatever that text set going (a reminder, a relay,
+        // an ask or goal, a task or promise, a loop, a follow-up, a thread) is settled before this turn's reply reads any of it
+        // (services/takeBack.ts). Free unless the text reads as a take-back.
+        if (hasText && !isVoice) await import("../services/takeBack.js").then((T) => T.settleTakeBack(user.id, resolvedContent)).catch(() => null);
+
         // A taken-back reaction (services/reactionsIn.ts) says nothing: the line is kept so the record clears the reaction it removed, and
         // nobody is answered. In code, not a prompt line. The text is only ever the whole iMessage string, so nothing else rides in it.
         // Whether this text is a reaction at all: its exact iMessage shape AND (when it quotes) the quote is one of Cue's own recent texts or the

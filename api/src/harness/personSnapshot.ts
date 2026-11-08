@@ -26,6 +26,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "./core.js";
 import { withMember } from "../services/llmUsage.js";
+import { MAKER_WANTS_LABEL, wantNeedsMaker } from "../services/coVoice.js";
 
 export type PersonSnapshot = {
   work: string | null; // what they do and at what stage
@@ -112,10 +113,14 @@ export function parseSnapshot(text: string): PersonSnapshot | null {
 
 export function renderSnapshot(s: PersonSnapshot | null): string {
   if (!s) return "";
+  // A want for something Cue no longer makes (services/coVoice.ts wantNeedsMaker) is never one to act on: said as what Cue doesn't do.
+  const wants = s.wantsNow.filter((w) => !wantNeedsMaker(w));
+  const cut = s.wantsNow.filter((w) => wantNeedsMaker(w));
   const lines = [
     s.work ? `Work: ${s.work}` : null,
     s.place ? `Where: ${s.place}` : null,
-    s.wantsNow.length ? `Wants right now: ${s.wantsNow.join("; ")}` : null,
+    wants.length ? `Wants right now: ${wants.join("; ")}` : null,
+    cut.length ? `${MAKER_WANTS_LABEL}: ${cut.join("; ")}` : null,
     s.weighingOn.length ? `Weighing on them: ${s.weighingOn.join("; ")}` : null,
     s.valuesInPeople.length ? `What matters to them in people and plans: ${s.valuesInPeople.join("; ")}` : null,
     s.worked.length ? `Suggestions that helped: ${s.worked.join("; ")}` : null,
@@ -169,9 +174,11 @@ async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
   return {
     firstName: user.rows[0].first_name || "them",
     previous,
-    recentStatements: statements.rows
+    // A text they took back ("sorry wrong person") never shapes the picture (memberThreads.ts withoutDisowned: also applies a correction).
+    recentStatements: (await import("./memberThreads.js")).withoutDisowned(statements.rows
       .reverse()
-      .map((r: any) => ({ at: new Date(r.created_at).toISOString().slice(0, 16), text: String(r.content).replace(/^User said: /, "").slice(0, 400) })),
+      .map((r: any) => ({ at: new Date(r.created_at).toISOString().slice(0, 16), text: String(r.content).replace(/^User said: /, "").slice(0, 400), via: String(r.content).startsWith("[Call]") ? ("call" as const) : ("text" as const) })))
+      .map(({ at, text }) => ({ at, text })),
     openAsks: asks.rows.map((r: any) => r.ask_text),
     goals: goalEntries(intentRow.rows[0]?.intent).map((g) => String(g.text)).slice(0, 6),
     outcomes,

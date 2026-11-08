@@ -239,6 +239,9 @@ export async function queueMilestone(userId: string): Promise<boolean> {
       topicKey: "companion",
       summary: `Mark a moment in their story: ${m.text.slice(0, 100)}`,
       payload: { recap: "", threadId: null, thread: null, item: null, story: { key: m.key, text: m.text, then: m.then, now: m.now } },
+      // An optional moment, not an obligation (2026-11-07 review: one queued 11-02 went six days later, right after an unrelated call).
+      // The expiry stays the follow-up one (a shorter one could never clear the companion type gap: evals/guards/rules.ts); before it
+      // goes, the send-time read re-judges it against what they just talked about (harness/momentFit.ts), and waiting is capped there.
       expiresAt: new Date(Date.now() + FOLLOW_UP_EXPIRES_DAYS * 86400_000),
     }).catch(() => ({ queued: false }));
     await recordDecision({ layer: 7, decision: "proactive.milestone", userId, outcome: r.queued ? "act" : "skip", action: r.queued ? "queued" : "not_queued", proposal: { key: m.key, kind: m.kind } }).catch(() => {});

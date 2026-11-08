@@ -7,6 +7,7 @@
 // Reads, never rewrites: the shared restraint read (services/memberKnowledge.ts realKnowledgeDeps.restraint: safety hold, emotional
 // context, away claim, last inbound), services/moodHold.ts for the mood verdict, services/away.ts for away, harness/closedSubject.ts
 // for a changed mind (an ask, goal, task, thread or loop they closed, at their word or not). No model call: a send never costs a read.
+// The one model read before a queued check-in goes is harness/momentFit.ts (Royce, 2026-11-07), asked by the dispatch after these.
 //
 // Held, never dropped, except a changed mind. A hold says why and when to look again; it writes a decision row (proactive.sendRecheck,
 // ids and kinds only, never their words) and nothing else: no memory, no preference, no kind restraint. Silence is not rejection, so a
@@ -158,3 +159,4 @@ async function finish(userId: string, what: RecheckWhat, v: Recheck, deps: Reche
   }
   return v;
 }
+

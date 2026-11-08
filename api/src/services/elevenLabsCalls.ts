@@ -75,10 +75,19 @@ export function verifyCallToken(userId: string, token: string | undefined | null
 // call's context (context_summary), which the direct path and the call brain (services/callLlmProxy.ts) both read, so it needs no
 // agent push; the call brain also refuses a "glad you called" on an outbound call in code (thanksForCallingCut).
 // Pure.
-export function callSituation(o: { direction: "inbound" | "outbound"; team: boolean }): string {
+// Who asked for an outbound call (2026-11-07 call review: the member texted "Call me", and Cue opened "I had a minute and figured I'd
+// take you up on your offer and call" and closed "I'm glad you picked up", as if the call were its own idea). A fact to remember, never
+// wording to say: Cue speaks naturally from it. "member": they asked
+// (their "call me", a time they picked, their yes to Cue's offer); "cue": Cue placed it on its own; absent: not known, said as before.
+export type CallAskedBy = "member" | "cue";
+export const MEMBER_ASKED_CALL_LINE = "This call: they asked you to call them, and you're calling them back; they did not call you. Never thank them for calling or say you're glad they called.";
+export const CUE_PLACED_CALL_LINE = "This call was your idea: they didn't ask for it.";
+export function callSituation(o: { direction: "inbound" | "outbound"; team: boolean; askedBy?: CallAskedBy | null }): string {
   const lines = [
     o.direction === "outbound"
-      ? "This call: you called them; they did not call you. Never thank them for calling or say you're glad they called (you can be glad to talk with them, or glad they picked up)."
+      ? o.askedBy === "member"
+        ? MEMBER_ASKED_CALL_LINE
+        : `This call: you called them; they did not call you. Never thank them for calling or say you're glad they called (you can be glad to talk with them, or glad they picked up).${o.askedBy === "cue" ? ` ${CUE_PLACED_CALL_LINE}` : ""}`
       : "This call: they called you.",
     o.team ? TEAM_BUILDER_LINE : null,
   ].filter(Boolean);
@@ -89,7 +98,7 @@ export function withVoiceReadRule(contextSummary: string, voiceOn: boolean): str
   return voiceOn ? `${contextSummary}\n\n${VOICE_READ_CALL_RULE}` : contextSummary;
 }
 
-export function withCallSituation(contextSummary: string, o: { direction: "inbound" | "outbound"; team: boolean }): string {
+export function withCallSituation(contextSummary: string, o: { direction: "inbound" | "outbound"; team: boolean; askedBy?: CallAskedBy | null }): string {
   return [callSituation(o), contextSummary.trim()].filter(Boolean).join("\n\n");
 }
 

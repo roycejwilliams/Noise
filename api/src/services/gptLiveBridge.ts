@@ -48,6 +48,8 @@ export type LiveDeps = {
   upstream: Upstream;
   record: (d: HarnessDecision) => void;
   postCall: (r: LiveResult) => Promise<unknown>;
+  // The call's live mark cleared when it ends without its post-call (routes/co.ts releaseLiveCallMark): never started, or the post-call failed.
+  release: (call: LiveCall) => Promise<void>;
   minutes: (sessionId: string, seconds: number, endedBy: string | null) => void;
   now: () => number;
   log: (line: string) => void;
@@ -86,6 +88,7 @@ const defaults = (): LiveDeps => ({
   upstream: (req, userId) => anthropicStream(req, undefined, undefined, userId),
   record: (d) => void recordDecision(d).catch(() => {}),
   postCall: (r) => import("../routes/co.js").then((m) => m.runGptLivePostCall(r)),
+  release: (call) => import("../routes/co.js").then((m) => m.releaseLiveCallMark(call.userId, call.callSid)),
   minutes: (id, secs, by) => void writeMinutes(id, secs, by),
   now: Date.now,
   log: (l) => console.log(l),
@@ -236,6 +239,8 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     if (!call || !started) {
       // Never connected: the <Connect> action plays the can't-connect line and releases the call's status (routes/co.ts).
       if (call) markCall(call.callSid, call.userId, "failed", Date.now(), failClass ?? "refused");
+      // The <Connect> action releases it by the call's sid; without a sid it can't, so it's released here too (harmless twice).
+      if (call) d.release(call).catch(() => {});
       return void d.log(`gpt-live: session ended before it started (${reason})`);
     }
     const turns = turnsFrom(frags);
@@ -246,7 +251,11 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     d.log(`gpt-live: session ${sessionId} ended (${endedBy}: ${reason}) ${secs}s, ${turns.length} turns, ${delegations} delegations, ${clears} clears`);
     // OpenAI's safety filter ended the call while it was on their safety: the team hears now and they get the safety path's follow-up.
     safetyCutIfDue();
-    d.postCall({ call, sessionId, turns, startedAt: new Date(startedAt), endedAt: new Date(d.now()), seconds: secs, reason, endedBy: endedBy!, voicemail: voicemailAt != null ? { fromMs: voicemailMs } : null }).catch((err: any) => d.log(`gpt-live: post-call failed for ${sessionId}: ${err?.message ?? err}`));
+    d.postCall({ call, sessionId, turns, startedAt: new Date(startedAt), endedAt: new Date(d.now()), seconds: secs, reason, endedBy: endedBy!, voicemail: voicemailAt != null ? { fromMs: voicemailMs } : null }).catch((err: any) => {
+      d.log(`gpt-live: post-call failed for ${sessionId}: ${err?.message ?? err}`);
+      // Nothing will mark it completed: its live mark is cleared so calls and check-ins aren't held for it.
+      return d.release(call!).catch(() => {});
+    });
   };
   // Ask OpenAI to close, keep reading until session.closed (final usage), then finish. Every ending (hang-up, either cap) goes here.
   const close = (why: string, by: EndedBy) => {
