@@ -1,0 +1,102 @@
+{
+  "hash": "e581779391bdf88d",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-08T00:46:57.068Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. Let me actually say it: a birthday morning with no phone, walking by the water, feeling hopeful for the first time in months after the stretch you've been grinding through, that's worth more than a one-liner.\n\nAnd telling your team you need two weeks, after running on empty for this long, takes something. That's not a small decision.\n\nI hope those two weeks actually let you exhale.\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"recaps her own words verbatim: 'no phone, walking by the water, feeling hopeful...for the first time in months' instead of offering something of its own\"}",
+      "usage": {
+        "input_tokens": 478,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 452,
+        "output_tokens_details": {
+          "thinking_tokens": 387
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgpYCEAhsT7T2cygS2bsn",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"recaps her own words verbatim: 'no phone, walking by the water, feeling hopeful...for the first time in months' instead of offering something of its own\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 478,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 452,
+          "output_tokens_details": {
+            "thinking_tokens": 387
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "e581779391bdf88d",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

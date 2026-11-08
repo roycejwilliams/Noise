@@ -1,0 +1,102 @@
+{
+  "hash": "52c02b1f271cd9b6",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-11-08T00:45:42.972Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"That kind of waiting is its own special hell, not knowing anything yet.\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"not knowing anything yet\\\" names their actual situation without pivoting, presuming, asking, or generic comfort\"}",
+      "usage": {
+        "input_tokens": 277,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 132,
+        "output_tokens_details": {
+          "thinking_tokens": 76
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgpY6yiucaF7qfEEKPErb",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EooFCsQCCBMYAipADJJPX0M9f3X2wWmKxpUVBA+HwjG9abnUds5XmYaSQqJImMAA6rL0kReCv/jajbTy6NNvZfIWY6pvCv9zJFbJjzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBtoy/1wbCAToIBBAAGgwC2ooDTzcF2RcEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCAnWqSB7HrsXOf5vMCqUlHjXOnm7ZPnAkCJjDb340x8SIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyVT4yxTD4XHKzB6cMaDIUhA7PR6mznJt6tVCIwGhqyp2ZcFVVWScJzUQBn6foRcec/TW+K6GkjRl3yuxGxzb1l9MAfzvYqD/za5I/GKvIBnYSMNm5ObfZBPe2+rVnIJfJechLc3Yl72H5gu2Lm542ucF31bEsZ1lAhGWXV6QcNCtgklWTmBkAIL+DQ8OjUrTWkBSlZJc2axDNWarWQVF/RFO7xqrX3eAqWeMYmXXagTX+9u4JLEdUmOMjxskvFWryX5DBThdP/3kOsdIN5Q+UX8Ny2qKHCLwCHMl3ebVdGGhb5rdb0N97dM632siTRFk1DzHBOlnWtE/jllEdKsSnRqp9ZblVhdQwVExysqjVDXije9c5+AaQ1UDRGXtqE6El6QdwHA7XZm/OuFhU6eGAO7qRLW7rqtWEGKEUiZyq7lX4YAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"not knowing anything yet\\\" names their actual situation without pivoting, presuming, asking, or generic comfort\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 277,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 132,
+          "output_tokens_details": {
+            "thinking_tokens": 76
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "52c02b1f271cd9b6",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
