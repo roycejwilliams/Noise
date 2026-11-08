@@ -58,7 +58,7 @@ const OPENERS = [
   "Actually, that changes things.", "Don't overthink it.", "Let's keep going.", "That's the hard part.", "Yeah, that tracks.", "Lol, fair.",
   "Absolutely.", "Okay, so what's next?", "Gotcha.", "Cool.", "Congrats on the raise!", "Everyone has that moment.", "Will you be there?", "Mark my words.",
   "Voice is harder than text because people interrupt.", "Timing matters more than polish.", "Pitching is hard for everyone.", "Investors want a clear story.",
-  "Founders often skip this.", "Coffee sounds good.", "Momentum is everything.", "Clarity is what they buy.", "Running a company is lonely.", "Shipping fast matters.",
+  "Founders often skip this.", "Coffee sounds good.", "Summer is a slow season for this.", "Winter is quiet for events.", "Momentum is everything.", "Clarity is what they buy.", "Running a company is lonely.", "Shipping fast matters.",
   "Jordan, that's great.", "Hey Jordan.",
   // From #418's edge cases (the ones that don't depend on #418's acronym rule).
   "What would you want an investor to feel in the first ten seconds?", "If you woke up tomorrow and it just worked, what would be different?",
