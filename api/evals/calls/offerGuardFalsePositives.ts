@@ -200,6 +200,23 @@ check("a proper name in an observation is still checked (the 10-08 rule): 'Brigh
       const first = await turn([text(`Sure. I'll book that for you. ${VIBE}`), text("I'll book it.")], { their: ASK, jobClaims });
       check(`offer first, answer after: the answer goes out, no "Sure.", the fallback covers the offer (${tag})`, first.spoken.join(" ") === `${VIBE} ${G.HELD_OFFER_LINE}`, first.spoken);
     }
+    // Review of #418: a "Sure." on an ordinary turn is said at once, never held for the sentence after it (first audio).
+    for (const [their, held] of [["What's the vibe at Nopa?", false], [ASK, true]] as [string, boolean][]) {
+      let gateHit = "";
+      let open!: (v: string) => void;
+      const gate = new Promise<string>((r) => { open = r; setTimeout(() => r("timeout"), 400); });
+      const spokenAt: string[] = [];
+      const stream = () => (async function* () {
+        yield { type: "content_block_start", index: 0, content_block: { type: "text" } } as any;
+        yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sure. " } } as any;
+        yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "N" } } as any;
+        gateHit = await gate;
+        yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: VIBE.slice(1) } } as any;
+        yield { type: "content_block_stop", index: 0 } as any;
+      })();
+      for await (const _ of P.runCallLlm(body(their) as any, { stream, clean: true, onSpoken: (x: string) => { spokenAt.push(x); if (x === "Sure.") open("spoken"); } } as any)) {}
+      check(held ? "a turn that asks for a booking: the \"Sure.\" waits for the sentence after it" : "an ordinary turn: \"Sure.\" is said at once, before the next sentence is written", held ? gateHit === "timeout" && spokenAt.join(" ") === `Sure. ${VIBE}` : gateHit === "spoken" && spokenAt.join(" ") === `Sure. ${VIBE}`, { gateHit, spokenAt });
+    }
     const plainSure = await turn(`Sure. ${VIBE}`, { their: "What's the vibe at Nopa?" });
     check("a bare agreement before anything else is said, in order", plainSure.spoken.join(" ") === `Sure. ${VIBE}`, plainSure.spoken);
     const alone = await turn("Sure.", { their: "Can we talk Friday?" });

@@ -190,6 +190,8 @@ export const isOutboundCall = (system: string): boolean => /This call is outboun
 // something just feel different...?" slipped through as two).
 // A sentence that is only agreement ("Sure.", "Absolutely!", "Of course.", "Sure thing."): before a held offer it sounds like a yes.
 const BARE_AGREEMENT = /^(?:\[[a-z ]+\]\s*)?(?:(?:oh|ok|okay|alright|yeah|yes),?\s+)?(?:sure(?: thing)?|yes|yeah|yep|absolutely|of course|definitely|will do|you got it|got it|on it|happy to|no problem|for sure|totally|okay|ok|alright|sounds good|perfect|great|done deal)[.!]*\s*$/i;
+// Their words ask for something an offer needs (a booking, a purchase, a sign-up, an intro, a meeting set up).
+const OFFER_ASK = /\b(?:book(?:ing)?|reserv(?:e|ation)|buy|purchase|order|sign (?:me |us )?up|register|rsvp|tickets?|intro(?:duce|duction)?s?|connect (?:me|us)|put me in touch|set up (?:a |the )?(?:meeting|call|time|intro)|schedule)\b/i;
 // Why an offer that needs a way to carry it out was held (logged call.offer_unsourced).
 export const offerHeldWhy = (k: OfferKind): string => `offer held: ${k === "book" ? "says it will book, reserve, buy or sign them up" : "promises introductions"}, and nothing on this call carries that out`;
 export function countsAsQuestion(sentence: string): boolean {
@@ -531,6 +533,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // A bare agreement waiting on the sentence after it (say), and whether it's being said now.
   let pendingAgree: string | null = null;
   let agreeing = false;
+  // Whether an offer could come this turn, so a bare agreement is worth holding for the sentence after it (review of #418: holding every
+  // "Sure." moved first audio from ~0ms to 300-800ms). Only when their last words ask for what an offer needs, or a tool that carries
+  // offers is on the call. This gates the wait only; what's said is decided as before.
+  const offerMayCome = OFFER_ASK.test(plainPunctuation(theirLast)) || (!!co?.carries && [...co.names].some((n) => !!co.carries!(n)));
   const canCarry = (k: OfferKind) => !!co?.carries && !inRetry && !toolsOff && [...co.names].some((n) => co.carries!(n) === k);
   let turnQuestion = "";
   let follow: { s: string; read: Promise<boolean | null>; after: string[] } | null = null;
@@ -558,7 +564,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         return first || rest ? `${first ?? ""}${first && rest && !/\s$/.test(first) ? " " : ""}${rest ?? ""}` : null;
       }
     }
-    if (clean && !voiceOnly && !agreeing && !safetyTurn && BARE_AGREEMENT.test(sentence)) { pendingAgree = s; return null; }
+    if (clean && !voiceOnly && !agreeing && !safetyTurn && offerMayCome && BARE_AGREEMENT.test(sentence)) { pendingAgree = s; return null; }
     // The follow-on question the read said asks for the same answer: it is the turn's question, said.
     const sameAsAsked = asked && isQuestion && followSame !== "" && followSame === sentence;
     // A follow-on question after the turn's question: read for meaning first (one a turn), held until the read is back.
