@@ -1,0 +1,102 @@
+{
+  "hash": "b4b02c11d9d59ae3",
+  "case": "hey-cue",
+  "recorded_at": "2026-11-08T05:04:35.338Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The companion's name is Cue. The member texted \"Hey cue\". Nothing is running and nothing is waiting on them. Cue's text: \"\"\"Hey Jordan, what's on your mind?\"\"\" Does the text answer them warmly as the one they a...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The companion's name is Cue. The member texted \"Hey cue\". Nothing is running and nothing is waiting on them.\n\nCue's text:\n\"\"\"Hey Jordan, what's on your mind?\"\"\"\n\nDoes the text answer them warmly as the one they addressed, without calling itself by any name other than Cue and without questioning the name? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey Jordan, what's on your mind?\\\" greets warmly, uses no other name, doesn't question it\"}",
+      "usage": {
+        "input_tokens": 193,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 131,
+        "output_tokens_details": {
+          "thinking_tokens": 77
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgpsqwCGefrexXPA3tcde",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EoAFCsQCCBMYAipAW/ooEXBt/jARecqUdmVgy4qbbUXtF1qO0QiRGVNk+qxApvuNZX4kLep5hpfnNK2gOfjS3yms+XzSLqBrpmqNAjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB4oXA1wbCAToIBBAAGgwC2ooDTzcFp9UEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCxcMMX37DA9Es9lmIp0gEKHu1EGFd1Vc8T1B35AY1F8SIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgySwB4ZfQmWWRe6CdUaDKGZmvyd8aELj4ZAmyIwwpyNd/c4hz1/huvOs/U4/ieFfbgaphXKJsWU4XNTS6ihQ/ZMMuhpca14M4lptV6UKugBEE0TsWU7073Y2G2WM8DCi6y8V2b7m/fnKjUkOTCsCHgA5pwZcd0g9U0JhIAqsS3IvKC9uhimjXOce5PtTFKn5Ro2mgo6tQK2ow+SM1aiAIDoj6SrYJYfL+j+/kzZmeVj5SVeKj2I3aapEMmx4JE1Ca0j3EgRpuFxuaRYtMvW+1Nb5dHd5MNAM36oN36glzWB3ZuquAIpuLrnLV1yzyxes9kO5xKivNZReqg8KG7TFe9DAH3Gze3k36tKhj+seTJLnfsz8aUNy0va1PTYr9cApXPH1oI8ZzoE7/TYOoScdaAhcOIWaZYHiBgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey Jordan, what's on your mind?\\\" greets warmly, uses no other name, doesn't question it\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 193,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 131,
+          "output_tokens_details": {
+            "thinking_tokens": 77
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "b4b02c11d9d59ae3",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,7 +1,7 @@
 {
   "hash": "3c3fd901fa44c17f",
   "case": "checkin-live-thread",
-  "recorded_at": "2026-11-08T00:43:53.462Z",
+  "recorded_at": "2026-11-08T05:03:55.690Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -105,13 +105,13 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"claims\": [{\"text\": \"Any word yet from the Hayes Valley place?\", \"type\": \"followup\", \"supported\": true, \"factId\": \"F5\", \"quote\": \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner (said Mon Oct 12).\"}]}",
+      "text": "{\"claims\": [{\"text\": \"Any word yet from the Hayes Valley place?\", \"type\": \"followup\", \"supported\": true, \"factId\": \"F5\", \"quote\": \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner (said Mon Oct 12)\"}]}",
       "usage": {
         "input_tokens": 3528,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 3447,
+        "cache_creation_input_tokens": 3447,
+        "cache_read_input_tokens": 0,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 3447,
           "ephemeral_1h_input_tokens": 0
         },
         "output_tokens": 101,
@@ -124,13 +124,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgpXxuszx3AKg2viFLoUc",
+        "id": "msg_011Cgpso3esPFaytFUo4JAZV",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"claims\": [{\"text\": \"Any word yet from the Hayes Valley place?\", \"type\": \"followup\", \"supported\": true, \"factId\": \"F5\", \"quote\": \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner (said Mon Oct 12).\"}]}"
+            "text": "{\"claims\": [{\"text\": \"Any word yet from the Hayes Valley place?\", \"type\": \"followup\", \"supported\": true, \"factId\": \"F5\", \"quote\": \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner (said Mon Oct 12)\"}]}"
           }
         ],
         "container": null,
@@ -139,10 +139,10 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 3528,
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 3447,
+          "cache_creation_input_tokens": 3447,
+          "cache_read_input_tokens": 0,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 3447,
             "ephemeral_1h_input_tokens": 0
           },
           "output_tokens": 101,
