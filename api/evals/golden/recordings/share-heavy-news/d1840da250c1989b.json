@@ -1,7 +1,7 @@
 {
   "hash": "d1840da250c1989b",
   "case": "share-heavy-news",
-  "recorded_at": "2026-11-08T00:45:35.330Z",
+  "recorded_at": "2026-11-08T05:05:42.706Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"they're sharing that their father was hospitalized, not answering anything or asking for help\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"would_benefit\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"father hospitalized with heart issue\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"they're in a stressful waiting-room situation, not available for logistics right now\", \"why\": \"dinner planning for investors next week\"}], \"emotion\": {\"emotion\": \"anxious\", \"intensity\": \"high\", \"valence\": \"negative\", \"about\": \"father's hospitalization\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "```json\n{\"reason\": \"they're sharing a serious, stressful personal situation about their father's hospitalization, not asking for anything\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"would_benefit\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"dad's hospitalization\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"they're in crisis mode and need warmth, not logistics or task-mode replies right now\", \"why\": \"dinner planning request should pause\"}], \"emotion\": {\"emotion\": \"anxious\", \"intensity\": \"high\", \"valence\": \"negative\", \"about\": \"father hospitalized, possible heart issue\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```",
       "usage": {
         "input_tokens": 4982,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 398,
+        "output_tokens": 416,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgpY6JTWZH8GxM45kMrM4",
+        "id": "msg_011CgpsvkftAgHaGAakwB6sx",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\": \"they're sharing that their father was hospitalized, not answering anything or asking for help\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"would_benefit\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"father hospitalized with heart issue\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"they're in a stressful waiting-room situation, not available for logistics right now\", \"why\": \"dinner planning for investors next week\"}], \"emotion\": {\"emotion\": \"anxious\", \"intensity\": \"high\", \"valence\": \"negative\", \"about\": \"father's hospitalization\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "```json\n{\"reason\": \"they're sharing a serious, stressful personal situation about their father's hospitalization, not asking for anything\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"would_benefit\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"dad's hospitalization\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"they're in crisis mode and need warmth, not logistics or task-mode replies right now\", \"why\": \"dinner planning request should pause\"}], \"emotion\": {\"emotion\": \"anxious\", \"intensity\": \"high\", \"valence\": \"negative\", \"about\": \"father hospitalized, possible heart issue\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 398,
+          "output_tokens": 416,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

@@ -1,7 +1,7 @@
 {
   "hash": "07df597eab19ecb7",
   "case": "exchange-that-referent",
-  "recorded_at": "2026-11-08T00:48:21.092Z",
+  "recorded_at": "2026-11-08T05:08:50.945Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -105,7 +105,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"claims\": [{\"text\": \"Thursday at 8pm, down at the pier.\", \"type\": \"time\", \"supported\": true, \"factId\": null, \"quote\": \"Harbor Jazz Night, Thursday 8pm at the pier.\"}]}",
+      "text": "{\"claims\":[{\"text\":\"Thursday at 8pm, down at the pier.\",\"type\":\"time\",\"supported\":true,\"factId\":null,\"quote\":\"Harbor Jazz Night, Thursday 8pm at the pier.\"}]}",
       "usage": {
         "input_tokens": 3494,
         "cache_creation_input_tokens": 0,
@@ -114,7 +114,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 80,
+        "output_tokens": 78,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -124,13 +124,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgpYJgioJ1rnGt5kjfq7n",
+        "id": "msg_011CgptApFLD1XWoA226idKh",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"claims\": [{\"text\": \"Thursday at 8pm, down at the pier.\", \"type\": \"time\", \"supported\": true, \"factId\": null, \"quote\": \"Harbor Jazz Night, Thursday 8pm at the pier.\"}]}"
+            "text": "{\"claims\":[{\"text\":\"Thursday at 8pm, down at the pier.\",\"type\":\"time\",\"supported\":true,\"factId\":null,\"quote\":\"Harbor Jazz Night, Thursday 8pm at the pier.\"}]}"
           }
         ],
         "container": null,
@@ -145,7 +145,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 80,
+          "output_tokens": 78,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

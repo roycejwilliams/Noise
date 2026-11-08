@@ -1,7 +1,7 @@
 {
   "hash": "0118f8d114a22d19",
   "case": "complete-moment",
-  "recorded_at": "2026-11-08T00:47:21.875Z",
+  "recorded_at": "2026-11-08T05:07:40.957Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "```json\n{\"reason\": \"They're sharing a great outcome from the board meeting and that they're going to rest\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're relieved and exhausted after a big win, so Cue should keep this light and celebratory, not push anything else.\", \"why\": \"board meeting stress thread\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approved the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```",
+      "text": "{\"reason\": \"They're sharing the positive outcome of the board meeting and plans to rest.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"The pricing slide they reworked held up and contributed to the full budget approval.\", \"why\": \"ties back to their earlier nervousness about the pricing slide\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approving the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 5007,
         "cache_creation_input_tokens": 0,
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 411,
+        "output_tokens": 456,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 50
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,13 +57,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgpYE91wogqDSPEbx3kze",
+        "id": "msg_011Cgpt5RzVNKrQhtp68quxo",
         "type": "message",
         "role": "assistant",
         "content": [
           {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErEECsQCCBMYAipA4HSWbehNUSN2CUvbcvj0S+xplcTBwvIxA9aStXKP6yB5WUlZRvUm3uZvUmNAcIDi9c8QEm9rI1LHEU4ouyQU+DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBmYfA1wbCAToIBBAAGgwC2ooDTzcFIMYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBTVnYTPW8KSPnp86gb9LuUtwOf89Kzwb5f+Eq3nJQdViIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzY+w+Amwd0MMz2g5gaDAdaiawmACzqXfX4iSIwCQE9JP6l4OZqhK0SJMMbnS7ujI9stx5e3dzm6ZkIBC2gM1AgnlkIxdI/qhjofKlCKpkBhRNzsCoZAIv+AGSrbF9yPWMIqPtMQ624cSE8t+b9rFWX8LVUgQWPsIKF3ipetvoi4XDZk0xLbm5VG0GoX1Pj2I9CIpv7H3S2pe81q6WKZ4szipPL5C822cGfilrxFKZUUDaReR9fpUjNo1aciL1zPWVX+vaq3M9yOQ6xWReH7y/E3msjbxB4gNGaH4t3tS3KGoWdNy0AarwlGAE="
+          },
+          {
             "type": "text",
-            "text": "```json\n{\"reason\": \"They're sharing a great outcome from the board meeting and that they're going to rest\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're relieved and exhausted after a big win, so Cue should keep this light and celebratory, not push anything else.\", \"why\": \"board meeting stress thread\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"high\", \"valence\": \"positive\", \"about\": \"board approved the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}\n```"
+            "text": "{\"reason\": \"They're sharing the positive outcome of the board meeting and plans to rest.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"The pricing slide they reworked held up and contributed to the full budget approval.\", \"why\": \"ties back to their earlier nervousness about the pricing slide\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approving the full budget\", \"target\": \"life\"}, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -78,9 +83,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 411,
+          "output_tokens": 456,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 50
           },
           "service_tier": "standard",
           "inference_geo": "global",
