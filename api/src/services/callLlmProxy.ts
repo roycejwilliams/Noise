@@ -188,6 +188,8 @@ export const isOutboundCall = (system: string): boolean => /This call is outboun
 // Pure: a question that counts as the turn's one. A short one counts too ("What changed?", "Why not?", "Did you?"); only an
 // interjection ("Honestly?", "Right?") or an echo of their words ("The dinner?") doesn't (2026-10-08 eval: "What changed? Did
 // something just feel different...?" slipped through as two).
+// A sentence that is only agreement ("Sure.", "Absolutely!", "Of course.", "Sure thing."): before a held offer it sounds like a yes.
+const BARE_AGREEMENT = /^(?:\[[a-z ]+\]\s*)?(?:(?:oh|ok|okay|alright|yeah|yes),?\s+)?(?:sure(?: thing)?|yes|yeah|yep|absolutely|of course|definitely|will do|you got it|got it|on it|happy to|no problem|for sure|totally|okay|ok|alright|sounds good|perfect|great|done deal)[.!]*\s*$/i;
 // Why an offer that needs a way to carry it out was held (logged call.offer_unsourced).
 export const offerHeldWhy = (k: OfferKind): string => `offer held: ${k === "book" ? "says it will book, reserve, buy or sign them up" : "promises introductions"}, and nothing on this call carries that out`;
 export function countsAsQuestion(sentence: string): boolean {
@@ -526,6 +528,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let asked = false;
   // The turn's question as said, and its one follow-on question waiting on the same-answer read (deps.sameQuestion): what was said after
   // the follow-on waits behind it, so nothing is said out of order. Only one follow-on a turn is read; a later question is held.
+  // A bare agreement waiting on the sentence after it (say), and whether it's being said now.
+  let pendingAgree: string | null = null;
+  let agreeing = false;
+  const canCarry = (k: OfferKind) => !!co?.carries && !inRetry && !toolsOff && [...co.names].some((n) => co.carries!(n) === k);
   let turnQuestion = "";
   let follow: { s: string; read: Promise<boolean | null>; after: string[] } | null = null;
   let followRead = false, followSame = "";
@@ -537,6 +543,22 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     const plainS = plainPunctuation(sentence);
     // Waiting behind the follow-on question: said (or not) in order once its read is back.
     if (follow) { follow.after.push(s); return null; }
+    // A bare agreement ("Sure.") waits for the next sentence: in front of an offer that's held (offerNeedingPath, nothing on the call
+    // carries it out) it would sound like a yes, so it goes with it; before anything else it's said as it was.
+    if (pendingAgree !== null && !agreeing) {
+      const a = pendingAgree;
+      pendingAgree = null;
+      const kind = clean && !voiceOnly ? offerNeedingPath(sentence) : null;
+      if (kind && !carried.has(kind) && !canCarry(kind)) deps.onDropped?.(a.trim(), "agreement before a held offer: it would sound like a yes");
+      else {
+        agreeing = true;
+        const first = say(a);
+        agreeing = false;
+        const rest = say(s);
+        return first || rest ? `${first ?? ""}${first && rest && !/\s$/.test(first) ? " " : ""}${rest ?? ""}` : null;
+      }
+    }
+    if (clean && !voiceOnly && !agreeing && !safetyTurn && BARE_AGREEMENT.test(sentence)) { pendingAgree = s; return null; }
     // The follow-on question the read said asks for the same answer: it is the turn's question, said.
     const sameAsAsked = asked && isQuestion && followSame !== "" && followSame === sentence;
     // A follow-on question after the turn's question: read for meaning first (one a turn), held until the read is back.
@@ -595,8 +617,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (clean && !voiceOnly && !safetyTurn && !SAFETY_LINE.test(plainS)) {
       const ok = offerNeedingPath(sentence);
       if (ok && !carried.has(ok)) {
-        const canCarry = !!co?.carries && [...co.names].some((n) => co.carries!(n) === ok);
-        if (canCarry && !inRetry && !toolsOff) { pendingOffer.push({ s, kind: ok }); return null; }
+        if (canCarry(ok)) { pendingOffer.push({ s, kind: ok }); return null; }
         const why = offerHeldWhy(ok);
         deps.onDropped?.(sentence, why);
         heldWhy.push(why);
@@ -691,6 +712,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   };
   // The follow-on question once its read is back: said when it asks for the same answer, else held as a second question (say); then
   // what was said after it, in order.
+  // A bare agreement left waiting when its block ended: nothing followed it, so it's said.
+  function* releaseAgree(): Generator<OaiChunk> {
+    if (pendingAgree === null || follow) return;
+    const a = pendingAgree;
+    pendingAgree = null;
+    agreeing = true;
+    const out = say(a);
+    agreeing = false;
+    if (out) yield chunk({ content: out });
+  }
   async function* releaseFollow(): AsyncGenerator<OaiChunk> {
     if (!follow) return;
     const f = follow;
@@ -753,6 +784,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           stream = null;
         }
         yield* releaseFollow();
+        yield* releaseAgree();
         if (cur?.kind === "text" && cur.text.trim()) blocks.push({ type: "text", text: cur.text });
         else if (cur?.kind === "co") {
           // Started the moment its input is complete, while the voice is still saying the line before it.
@@ -814,6 +846,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (stream && clean) for (const s of endStream(stream)) { const out = say(s); if (out) yield chunk({ content: out }); }
     stream = null;
     yield* releaseFollow();
+    yield* releaseAgree();
     // A "texting it now" with no send behind it in this reply: never said.
     for (const p of pendingNow) {
       const why = "claim held: says a send is happening when none is in flight";
@@ -949,6 +982,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     } catch (err: any) {
       console.error("call: the held-turn retry failed (non-fatal):", err?.message ?? err);
     }
+    yield* releaseFollow();
+    yield* releaseAgree();
   }
   if (heldStock && !spokeAny && !blanked && finish !== "tool_calls") { const h = sayHeld(); if (h) yield chunk({ content: h }); }
   // end_call was held and nothing else was said: Co answers them instead, once, in its own words (never a scripted line).
