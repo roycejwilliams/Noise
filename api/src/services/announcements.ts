@@ -19,17 +19,27 @@
 //   expiry    when what hasn't gone by then never goes: a fixed day, or a number of days after the first one was queued.
 //   tryLines  the one "thing to try" line, picked from approved lines by the member's situation, in code, at send time ($0). What
 //             Cue knows about them only picks among approved words; it never decides whether they get it.
+//   changes   (2026-11-08) one text, one change: several approved one-text lines, each with the situation it fits and a priority.
+//             The member gets the first that fits (lowest priority number first), picked in code at send time ($0), or NOTHING:
+//             no fit is no send, never a generic fallback. A signal that couldn't be read fits nothing (pickChange, changeSituationOf).
+//   overrideMonthly  an explicit, dated exception to the monthly limit for this one announcement (who said so, and when). The rule
+//             itself stays: every announcement without it is still held by monthlyLimit.
 //   foldLead  for an announcement that follows the rename: a member the rename notice hasn't reached yet gets ONE text that opens
 //             with the rename's own words instead of the follow-up's lead, and the rename's ledger key is claimed with it, inside
 //             the send lock (harness/proactive.ts sendWithLedger's ride). Never two texts.
 //
 // Delivery is the normal proactive path (harness/proactive.ts), exactly as the rename notice: hours, opt-out, the conversation hold,
-// the safety hold, the hold on a hard day (HOLD_WHILE_STRUGGLING), pacing, a quiet member's taper, archived accounts skipped. A full
-// announcement is too long to ride in another text and never does: it goes as its own text, at the lowest priority, only on a day
-// nothing else is ready (quietDayOnly), and nothing rides in it except the rename it carries.
+// the safety hold, pacing, a quiet member's taper, archived accounts skipped. A full announcement is too long to ride in another text
+// and never does: it goes as its own text, at the lowest priority, only on a day nothing else is ready (quietDayOnly), and nothing rides
+// in it except the rename it carries. It never stacks: while another of their candidates is due today, or a deferred send of theirs is
+// queued, its draft waits (othersWaitingOf, STACK_WAIT_HOURS).
+// A hard day (2026-11-08): no longer a class hold (announcements left HOLD_WHILE_STRUGGLING). Every announcement is judged right before
+// it goes by the send-time read (harness/momentFit.ts: send, wait or drop), which is told when they've had a hard stretch: a reason to
+// be more thoughtful about whether this particular message helps now, not a blanket silence.
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { isTestNumber } from "./testNumbers.js";
+import { notToTeammate } from "./teamLines.js";
 import { goalTexts } from "./goalJourney.js";
 import { NAME_CHANGE_EXPIRES, NAME_CHANGE_KEY, NAME_CHANGE_TEXT, carriesNameChange } from "./nameChange.js";
 import type { Candidate, DraftResult, EnqueueInput, ProactiveType } from "../harness/proactive.js";
@@ -37,6 +47,18 @@ import type { Candidate, DraftResult, EnqueueInput, ProactiveType } from "../har
 // What the "thing to try" line is picked by. Read at send time from the member's own record; a read that fails is the default.
 export type Situation = { hasOwnGoal: boolean };
 export type TryLine = { when: "default" | "own_goal"; line: string };
+
+// What the one change is picked by (2026-11-08), read at send time from the member's own record. null: that signal couldn't be read,
+// and a change that needs it doesn't fit (fail closed: nothing goes rather than the wrong line).
+//   joinedAt          when they joined: a change they never lived through (they joined after it landed) never fits;
+//   talkDays          how many different days they've texted Cue (their own texts, within the daily notes' lookback);
+//   usedRemovedMaker  Cue made a page, deck, document or email draft for them before the makers were removed;
+//   hadCalls          they've had at least one call with Cue (a stored call transcript or call summary);
+//   makerChangeTold   they've already been told the makers changed (the first-use note in a reply, services/firstUseNotes.ts).
+export type ChangeSituation = { joinedAt: Date | null; talkDays: number | null; usedRemovedMaker: boolean | null; hadCalls: boolean | null; makerChangeTold: boolean | null };
+// One change: its approved one-text line, the moment it landed, the situation it fits, and its priority (lower goes first when more
+// than one fits).
+export type Change = { id: string; line: string; landed: Date; priority: number; fits: (s: ChangeSituation) => boolean };
 
 export type Announcement = {
   key: string;
@@ -57,6 +79,11 @@ export type Announcement = {
   // "knew_co": joined before the rename's first notice. joinedBefore: joined before this change landed.
   audience: "knew_co" | { joinedBefore: Date };
   expires: { at: Date } | { daysAfterFirstQueued: number };
+  // One text, one change (2026-11-08): the approved changes; the member gets the first that fits, or nothing. Sent in place of lead +
+  // body + try line.
+  changes?: readonly Change[];
+  // An explicit exception to the monthly limit for this announcement: who said so and on what day (YYYY-MM-DD). Never an env switch.
+  overrideMonthly?: { by: string; on: string };
 };
 
 // ---------------------------------------------------------------- the registry
@@ -136,9 +163,54 @@ export const UPDATE_1102: Announcement = {
   expires: { daysAfterFirstQueued: UPDATE_1102_LIVE_DAYS },
 };
 
+// One text, one change (drafted 2026-11-08; ONE_CHANGE_APPROVED false: the wording waits on approval, so nothing is queued). Each member
+// gets the one change most relevant to them, or nothing. No list, no "on my side" lead. Every claim checked against the code (see the PR):
+//   helpers  the makers were removed (#386-#388); a person to meet for it is an intro ask (askKind.ts "person", routed to network
+//            surfacing in jobs/index.ts), which is a look among the people Cue knows, never a promised find;
+//   recall   lookBack over their own texts and calls (services/conversationRecall.ts; capabilities.ts look_back, onCall): a keyword and
+//            meaning lookup that can miss, so the line promises a look;
+//   notes    the nightly daily notes (services/daySummaries.ts, switched on 2026-11-07), each shown in what Cue knows and removable
+//            (services/whatCoKnows.ts summary:<day>). A day too short to summarize gets no note, so the line doesn't say "each day";
+//            and not every line of what Cue knows is removable (an arrival record stays), so it says the notes go, not "anything".
+export const ONE_CHANGE_APPROVED = false;
+export const ONE_CHANGE_KEY = "announcement:one-change-2026-11";
+export const ONE_CHANGE_LIVE_DAYS = 21;
+// When each change landed (the merge, or the switch-on), so a member who joined after it only ever knew the new way.
+export const HELPERS_REMOVED_AT = new Date("2026-11-05T03:45:40Z");
+export const RECALL_LANDED_AT = new Date("2026-11-06T18:37:59Z");
+export const DAILY_NOTES_LANDED_AT = new Date("2026-11-07T17:09:21Z");
+// Daily notes: they've texted Cue on at least this many different days, so there are notes worth seeing.
+export const NOTES_MIN_DAYS = 3;
+export const ONE_CHANGE_HELPERS =
+  "I've stopped making decks, pages and email drafts so I can put that time into who you should meet. If you need one made, tell me and I'll look for someone you could meet who does that.";
+export const ONE_CHANGE_RECALL =
+  "I can look back on what we've talked about before now, by text or on a call. Ask me about something from a while ago and I'll look for it.";
+export const ONE_CHANGE_NOTES =
+  "I keep short notes on what we talk about now, and you can see every one. Ask me what I know about you, and any note you'd rather I didn't keep is gone when you say so.";
+const knewBefore = (s: ChangeSituation, at: Date) => !!s.joinedAt && s.joinedAt.getTime() < at.getTime();
+export const ONE_CHANGE_CHANGES: readonly Change[] = [
+  // Most relevant first: something they used is gone (and a reply hasn't already told them).
+  { id: "helpers", line: ONE_CHANGE_HELPERS, landed: HELPERS_REMOVED_AT, priority: 1, fits: (s) => knewBefore(s, HELPERS_REMOVED_AT) && s.usedRemovedMaker === true && s.makerChangeTold === false },
+  { id: "recall", line: ONE_CHANGE_RECALL, landed: RECALL_LANDED_AT, priority: 2, fits: (s) => knewBefore(s, RECALL_LANDED_AT) && s.hadCalls === true },
+  { id: "notes", line: ONE_CHANGE_NOTES, landed: DAILY_NOTES_LANDED_AT, priority: 3, fits: (s) => knewBefore(s, DAILY_NOTES_LANDED_AT) && s.talkDays !== null && s.talkDays >= NOTES_MIN_DAYS },
+];
+export const ONE_CHANGE: Announcement = {
+  key: ONE_CHANGE_KEY,
+  type: "announcement",
+  approved: ONE_CHANGE_APPROVED,
+  summary: "Tell them, once, the one change most relevant to them (makers gone, looking back, daily notes), or nothing",
+  lead: "",
+  body: "",
+  tryLines: [],
+  changes: ONE_CHANGE_CHANGES,
+  // The latest change: anyone who joined before it lived through at least one; each change's own moment is checked again at the pick.
+  audience: { joinedBefore: DAILY_NOTES_LANDED_AT },
+  expires: { daysAfterFirstQueued: ONE_CHANGE_LIVE_DAYS },
+};
+
 // Every announcement, in the order they are queued. The rename is queued by its own job first (jobs/index.ts), so a member's rename
 // candidate exists before a follow-up that carries it.
-export const ANNOUNCEMENTS: readonly Announcement[] = [RENAME, SHIFT, UPDATE_1102];
+export const ANNOUNCEMENTS: readonly Announcement[] = [RENAME, SHIFT, UPDATE_1102, ONE_CHANGE];
 export function announcementByKey(key: string): Announcement | null {
   return ANNOUNCEMENTS.find((a) => a.key === key) ?? null;
 }
@@ -153,6 +225,22 @@ export const ANNOUNCEMENT_RULES = { maxChars: 520, maxSentences: 6 } as const;
 export function pickTryLine(a: Pick<Announcement, "tryLines">, s: Situation): string | null {
   const fits = (t: TryLine) => t.when === "default" || (t.when === "own_goal" && s.hasOwnGoal);
   return a.tryLines.find(fits)?.line ?? null;
+}
+
+// The one change for this member: the first (by priority, then registry order) whose situation fits, or null (nothing goes). A
+// predicate that throws fits nothing.
+export function pickChange(a: Pick<Announcement, "changes">, s: ChangeSituation): Change | null {
+  const ordered = [...(a.changes ?? [])].map((c, i) => ({ c, i })).sort((x, y) => x.c.priority - y.c.priority || x.i - y.i);
+  for (const { c } of ordered) {
+    let ok = false;
+    try {
+      ok = c.fits(s) === true;
+    } catch {
+      ok = false;
+    }
+    if (ok) return c;
+  }
+  return null;
 }
 
 // The text: the lead (or, for a member the rename hasn't reached, the rename's words), the body, the try line. One text.
@@ -245,8 +333,15 @@ const OTHERS_SQL = `SELECT target_key, 'sent' AS state, COUNT(*) AS n FROM proac
                     UNION ALL
                     SELECT target_key, 'pending' AS state, COUNT(*) AS n FROM proactive_candidates
                      WHERE type = 'announcement' AND target_key <> $1 AND status = 'pending' GROUP BY target_key`;
-export async function monthlyLimit(db: Db, a: Pick<Announcement, "key" | "type">, now: Date): Promise<string | null> {
+// Pure: this announcement's explicit, dated exception (who, and a YYYY-MM-DD day), or null. A malformed one is no exception.
+export function monthlyOverride(a: Pick<Announcement, "overrideMonthly">): { by: string; on: string } | null {
+  const o = a.overrideMonthly;
+  return o && String(o.by ?? "").trim() && /^\d{4}-\d{2}-\d{2}$/.test(String(o.on ?? "")) ? o : null;
+}
+export async function monthlyLimit(db: Db, a: Pick<Announcement, "key" | "type" | "overrideMonthly">, now: Date): Promise<string | null> {
   if (a.type !== "announcement") return null;
+  // The rule stays the default; only an announcement given an explicit exception skips it (said in the queue's log).
+  if (monthlyOverride(a)) return null;
   const { rows } = await db.query(OTHERS_SQL, [a.key, monthStart(now)]);
   return monthlyBlock(a.key, rows as OtherAnnouncement[]);
 }
@@ -288,6 +383,8 @@ export async function queueAnnouncement(a: Announcement, now: Date = new Date(),
     d.log(`announcement ${a.key}: ${block}; nothing queued`);
     return 0;
   }
+  const override = monthlyOverride(a);
+  if (override) d.log(`announcement ${a.key}: the monthly limit is waived for it (said by ${override.by} on ${override.on})`);
   const { rows } = await d.db.query(
     `SELECT u.id, u.created_at, u.archived_at, u.sms_opted_out, (u.phone_number IS NOT NULL) AS has_phone, u.invite_verified,
             u.phone_number, COALESCE((to_jsonb(u)->>'is_simulated')::boolean, false) AS simulated,
@@ -323,7 +420,15 @@ export async function queueUpdateAnnouncements(now: Date = new Date()): Promise<
 
 // ---------------------------------------------------------------- draft (send time)
 
-export type DraftDeps = { told: (userId: string, key: string) => Promise<boolean>; situation: (userId: string) => Promise<Situation>; now: () => Date };
+export type DraftDeps = {
+  told: (userId: string, key: string) => Promise<boolean>;
+  situation: (userId: string) => Promise<Situation>;
+  // The one-change pick's reads (changeSituationOf): each signal null when it couldn't be read.
+  changeSituation: (userId: string) => Promise<ChangeSituation>;
+  // Anything else of theirs about to go (othersWaitingOf). Throws when it can't be read.
+  othersWaiting: (o: { userId: string; candidateId: string | null; zone: string | null; now: Date; carriesRename: boolean }) => Promise<boolean>;
+  now: () => Date;
+};
 
 // Their own goals, as the record holds them now: goals and goal entries, minus any done or set aside, minus Cue's own tasks.
 export async function situationOf(userId: string): Promise<Situation> {
@@ -336,15 +441,64 @@ export async function situationOf(userId: string): Promise<Situation> {
     return { hasOwnGoal: false };
   }
 }
+
+// The days they texted Cue, in the notes' lookback (services/daySummaries.ts SUMMARY.lookbackDays, 60): their own texts and voice
+// memos, never a line to a teammate. Days are Pacific's, as the monthly limit's.
+export const TALK_DAYS_SQL = `SELECT COUNT(DISTINCT (created_at AT TIME ZONE '${MONTH_ZONE}')::date)::int AS n FROM co_memories
+  WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%')
+    AND created_at > NOW() - INTERVAL '60 days' AND ${notToTeammate()}`;
+// A call with Cue on file: its stored transcript, or the summary note written after it.
+export const HAD_CALLS_SQL = `SELECT EXISTS (SELECT 1 FROM co_memories WHERE user_id = $1 AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE '[Call] %'))) AS had`;
+
+// Every signal read on its own; one that fails is null and only the change that needs it is out.
+export async function changeSituationOf(userId: string, db: Db = pool): Promise<ChangeSituation> {
+  const F = await import("./firstUseNotes.js").catch(() => null);
+  const [joinedAt, talkDays, hadCalls, usedRemovedMaker, makerChangeTold] = await Promise.all([
+    db.query(`SELECT created_at FROM users WHERE id = $1`, [userId]).then((r) => (r.rows[0]?.created_at ? new Date(r.rows[0].created_at) : null)).catch(() => null),
+    db.query(TALK_DAYS_SQL, [userId]).then((r) => (r.rows[0] && Number.isFinite(Number(r.rows[0].n)) ? Number(r.rows[0].n) : null)).catch(() => null),
+    db.query(HAD_CALLS_SQL, [userId]).then((r) => (typeof r.rows[0]?.had === "boolean" ? (r.rows[0].had as boolean) : null)).catch(() => null),
+    F ? F.usedRemovedMaker(userId, db).catch(() => null) : Promise.resolve(null),
+    F ? F.makerChangeTold(userId, db).catch(() => null) : Promise.resolve(null),
+  ]);
+  return { joinedAt: joinedAt && !Number.isNaN(joinedAt.getTime()) ? joinedAt : null, talkDays, hadCalls, usedRemovedMaker, makerChangeTold };
+}
+
+// Never stacked (2026-11-08): an announcement doesn't go while anything else of theirs is about to: another of their pending
+// candidates due by the end of their day (and not past its end), or a deferred send of theirs queued or going out
+// (services/deferredSends.ts). Other announcements aren't counted (quietDayOnly already sends those one at a time, oldest first, a week
+// apart, and counting them would hold both forever), nor, for one that carries the rename, the rename notice it claims.
+export const STACK_WAIT_HOURS = 3;
+export const OTHERS_WAITING_SQL = `SELECT EXISTS (SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND ($2::text IS NULL OR id::text <> $2)
+         AND type <> 'announcement' AND NOT ($4::boolean AND type = 'name_change') AND due_at < $3 AND (expires_at IS NULL OR expires_at > NOW()))
+    OR EXISTS (SELECT 1 FROM deferred_sends WHERE user_id = $1 AND status IN ('queued', 'sending')) AS waiting`;
+// Pure: the end of their local day (their zone, else Pacific's).
+export function endOfLocalDay(now: Date, zone: string | null): Date {
+  const z = zone && DateTime.now().setZone(zone).isValid ? zone : MONTH_ZONE;
+  return DateTime.fromJSDate(now).setZone(z).endOf("day").toJSDate();
+}
+export async function othersWaitingOf(o: { userId: string; candidateId: string | null; zone: string | null; now: Date; carriesRename: boolean }, db: Db = pool): Promise<boolean> {
+  const { rows } = await db.query(OTHERS_WAITING_SQL, [o.userId, o.candidateId, endOfLocalDay(o.now, o.zone), o.carriesRename]);
+  if (typeof rows[0]?.waiting !== "boolean") throw new Error("no answer");
+  return rows[0].waiting;
+}
+
 const realDraftDeps: DraftDeps = {
   told: async (userId, key) => (await pool.query(`SELECT 1 FROM proactive_sends WHERE user_id = $1 AND target_key = $2`, [userId, key])).rows.length > 0,
   situation: situationOf,
+  changeSituation: (userId) => changeSituationOf(userId),
+  othersWaiting: (o) => othersWaitingOf(o),
   now: () => new Date(),
 };
+const UNREAD_SITUATION: ChangeSituation = { joinedAt: null, talkDays: null, usedRemovedMaker: null, hadCalls: null, makerChangeTold: null };
 
 // The announcement's own text, re-read at send time: unapproved waits (it can't be queued, so this is a backstop), past its end it
-// never goes, already told means nothing goes, and a member the rename hasn't reached gets the rename's words in the same text.
-export async function draftAnnouncement(c: Pick<Candidate, "userId" | "targetKey" | "expiresAt">, deps: Partial<DraftDeps> & { approved?: boolean } = {}): Promise<DraftResult> {
+// never goes, already told means nothing goes, anything else of theirs about to go means it waits (never stacked; a failed read waits
+// too), and a member the rename hasn't reached gets the rename's words in the same text. One with changes goes as the one change that
+// fits them, or not at all.
+export async function draftAnnouncement(
+  c: Pick<Candidate, "userId" | "targetKey" | "expiresAt"> & { id?: string },
+  deps: Partial<DraftDeps> & { approved?: boolean; zone?: string | null } = {},
+): Promise<DraftResult> {
   const d = { ...realDraftDeps, ...deps };
   const a = announcementByKey(c.targetKey);
   if (!a || a.type !== "announcement") return { skip: "not an announcement Cue has" };
@@ -353,6 +507,16 @@ export async function draftAnnouncement(c: Pick<Candidate, "userId" | "targetKey
   const ends = "at" in a.expires ? a.expires.at : c.expiresAt;
   if (ends && ends.getTime() <= now.getTime()) return { skip: "past its end" };
   if (await d.told(c.userId, a.key)) return { skip: "already told" };
+  const waiting = await d.othersWaiting({ userId: c.userId, candidateId: c.id ?? null, zone: deps.zone ?? null, now, carriesRename: !!a.foldLead }).catch(() => null);
+  if (waiting !== false) {
+    return { defer: new Date(now.getTime() + STACK_WAIT_HOURS * 3_600_000), reason: waiting === null ? "couldn't read what else of theirs is about to go, so it waits" : "something else of theirs is about to go today; an announcement never goes beside it" };
+  }
+  // One text, one change: the first that fits them, or nothing at all (never a generic fallback).
+  if (a.changes?.length) {
+    const change = pickChange(a, await d.changeSituation(c.userId).catch(() => UNREAD_SITUATION));
+    if (!change) return { skip: "none of its changes fits them" };
+    return { messages: [change.line], text: change.line, rules: { ...ANNOUNCEMENT_RULES }, meta: { change: change.id } };
+  }
   // Separate fixed texts need no situation read (there is no try line to pick).
   if (a.texts?.length) {
     const messages = announcementMessages(a, { hasOwnGoal: false }, { nameTold: true });
@@ -362,3 +526,4 @@ export async function draftAnnouncement(c: Pick<Candidate, "userId" | "targetKey
   const text = announcementText(a, await d.situation(c.userId), { nameTold });
   return { messages: [text], text, rules: { ...ANNOUNCEMENT_RULES } };
 }
+
