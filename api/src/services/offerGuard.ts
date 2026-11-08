@@ -28,7 +28,7 @@ export type Mention = { text: string; kind: "name" | "time" };
 // (STARTERS, NOT_NAMES, days and months) and interjections are never names. Without the word table, no first word is (as before).
 const STARTERS = new Set("he she they we you it its this that these those there here everyone everybody everything someone somebody something anyone anybody anything nobody nothing none each every either neither both all most many much more some few several one another other others such which what who whom whose whoever whatever whichever where when why how today tonight tomorrow yesterday now then later soon often sometimes usually always never once mine yours ours theirs his hers my our their me us them myself yourself ourselves themselves himself herself itself lol haha ha hah ooh aw aww yay whoa mhm mm hmm um uh".split(" "));
 // Short month and day names ("Oct 16 is 3 days out", "Thu works").
-const DATE_SHORT = new Set("jan feb mar apr jun jul aug sep sept oct nov dec mon tue tues wed thu thur thurs fri sat sun".split(" "));
+const DATE_SHORT = new Set("jan feb mar apr jun jul aug sep sept oct nov dec mon tue tues wed thu thur thurs fri sat sun summer winter spring fall autumn".split(" "));
 const NAME_VERBS = new Set("is was has had would will can could should might may must does did knows knew said says thinks thought wants wanted loves loved likes liked runs ran works worked lives lived told tells asked asks went goes got gets came comes made started starts".split(" "));
 export function firstWordName(words: string[]): string | null {
   const w = (words[0] ?? "").replace(/[’]/g, "'");

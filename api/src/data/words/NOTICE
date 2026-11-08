@@ -1,7 +1,7 @@
 Word tables (common.txt.gz, common-and-proper.txt.gz)
 
 Derived from the en_US Hunspell dictionary (SCOWL size 60, version 2020.12.07, http://wordlist.sourceforge.net) as
-packaged in the npm package dictionary-en@4.0.0 (license: MIT AND BSD; the full license is in LICENSE, copied unchanged).
+packaged in the npm package dictionary-en@4.0.0. The data's terms are in LICENSE (SCOWL / Hunspell), copied unchanged.
 
 common.txt.gz: every all-lowercase entry of index.dic, affix flags removed (base forms only), sorted.
 common-and-proper.txt.gz: the entries the dictionary lists both as a proper noun (capitalized) and as a common word
