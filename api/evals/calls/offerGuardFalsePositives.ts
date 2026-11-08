@@ -94,7 +94,40 @@ for (const jobClaims of [false, true]) {
   const pr = Qr.sameQuestionPrompt("What's the first thing you want to say?", "Like, who's your audience?");
   check("the read's prompt gives both questions and asks same answer or different answer", pr.includes("What's the first thing you want to say?") && pr.includes("Like, who's your audience?") && /SAME answer/.test(pr) && /DIFFERENT answer/.test(pr));
   check("the read's answer parses; anything else is no read", Qr.parseSameQuestion('{"same": true}') === true && Qr.parseSameQuestion('Sure: {"same": false}') === false && Qr.parseSameQuestion("same") === null && Qr.parseSameQuestion('{"same":"yes"}') === null);
-  check("both call paths give the read: the ElevenLabs route and GPT-Live's thinking", /sameQuestion: \(a, q\) => import\("..\/services\/questionRead\.js"\)/.test(fs.readFileSync(new URL("../../src/routes/callLlm.ts", import.meta.url), "utf8")) && /sameQuestion: o\.sameQuestion \?\?/.test(fs.readFileSync(new URL("../../src/services/gptLive.ts", import.meta.url), "utf8")));
+}
+
+// ---- both call paths ask the read (behaviour: the read stubbed, each path driven with a two-question reply)
+{
+  const Qr = await import("../../src/services/questionRead.js");
+  const asked: string[] = [];
+  Qr.setSameQuestionForTest(async (a, b) => { asked.push(`${a} || ${b}`); return true; });
+  const TWOQ = "What do you want them to feel? Like, what's the one word for it?";
+  // GPT-Live: the thinking (gptLive.ts thinkOnCall), with no read of its own given.
+  const GL = await import("../../src/services/gptLive.js");
+  const call = GL.buildLiveCall({ userId: "u-jordan", callSid: "CA-jordan", firstName: "Jordan", direction: "inbound", team: true, voiceLayer: base, contextSummary: "Jordan is building a voice product.", rightNow: "It's Saturday afternoon for them.", findsNow: "", callReason: "", timeOfDay: "Saturday afternoon" });
+  const gl = await GL.thinkOnCall(call, [{ who: "member", text: "I'm stuck on the pitch.", startMs: 0, endMs: 900 }], () => (async function* () { for (const e of text(TWOQ)) yield e as any; })(), undefined, undefined, undefined, undefined, { tools: async () => null });
+  check("GPT-Live's thinking asks the read, and says the same-answer follow-on", asked.length === 1 && asked[0] === "What do you want them to feel? || Like, what's the one word for it?" && /one word for it\?/.test(gl.text), { asked, text: gl.text });
+  // ElevenLabs: the call route (routes/callLlm.ts), its database stubbed.
+  const { default: pool } = await import("../../src/db/db.js");
+  const realQuery = pool.query.bind(pool);
+  (pool as any).query = async () => ({ rows: [] });
+  const savedEnv = { ...process.env };
+  Object.assign(process.env, { CALL_LLM_PROXY_SECRET: "proxy-secret", ELEVENLABS_TOOL_SECRET: "tool-secret", CALL_TOOLS: "off" });
+  const { createCallLlmRouter } = await import("../../src/routes/callLlm.js");
+  const U = "41414141-1111-2222-3333-444444444444";
+  let wrote = "";
+  const router = createCallLlmRouter((() => (async function* () { yield { type: "message_start", message: { id: "m", usage: { input_tokens: 0, output_tokens: 0 } } } as any; for (const e of text(TWOQ)) yield e as any; yield { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } as any; })()) as any);
+  await new Promise<void>((resolve) => {
+    const res: any = { statusCode: 200, headersSent: false, status(c: number) { this.statusCode = c; return this; }, json() { resolve(); return this; }, set() { return this; }, setHeader() {}, flushHeaders() {}, write(d: string) { wrote += d; return true; }, end() { resolve(); } };
+    const req: any = { method: "POST", url: "/", headers: { authorization: "Bearer proxy-secret" }, body: { model: "x", stream: true, messages: [{ role: "system", content: "You are Cue." }, { role: "assistant", content: "Hi Jordan." }, { role: "user", content: "I'm stuck on the pitch." }], elevenlabs_extra_body: { user_id: U, call_token: E.issueCallToken(U) } } };
+    (router as any).handle(req, res, () => resolve());
+    setTimeout(resolve, 5000);
+  });
+  check("the ElevenLabs route asks the read too, and says the same-answer follow-on", asked.length === 2 && asked[1] === asked[0] && /one word for it\?/.test(wrote), { asked, wrote: wrote.slice(0, 400) });
+  (pool as any).query = realQuery;
+  for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
+  Object.assign(process.env, savedEnv);
+  Qr.setSameQuestionForTest(null);
 }
 
 // ---- real unsourced offers stay held (each never reaches the voice)
@@ -121,6 +154,15 @@ for (const jobClaims of [false, true]) for (const o of OFFERS) {
 }
 check("an acronym in an offer is still checked as a name", G.spokenProblem("I can set you up with the TTS team.", src)?.kind === "name");
 check("an acronym after an org or place word is still a name: 'someone at IBM', 'the scene in SF'", G.spokenProblem("I know someone at IBM who'd get it.", src)?.kind === "name" && G.spokenProblem("The voice scene in SF is pretty deep.", src)?.kind === "name");
+// Review of #418: an all-caps name is still a name. A subject, after a person cue, or followed by a verb: checked, held unbacked.
+for (const l of ["AJ would be a great person for you to meet.", "IBM has a program for exactly that.", "YC is a good fit for this.", "Honestly, AJ would be a great person for you to meet.", "You should meet AJ.", "I know someone who knows JT really well.", "For this, YC is a good fit."]) {
+  check(`an all-caps name is checked, held unbacked: ${l}`, G.spokenProblem(l, src)?.kind === "name", G.spokenProblem(l, src));
+}
+for (const jobClaims of [false, true]) {
+  const r = await turn("AJ would be a great person for you to meet.", { jobClaims });
+  check(`...and never reaches the voice (${jobClaims ? "gpt-live" : "elevenlabs"})`, !said(r, "AJ"), r);
+}
+check("the same names pass when they said them", G.spokenProblem("AJ would be a great person for you to meet.", P.callSources(body("My friend AJ runs a voice studio.") as any, "", "")) === null && G.spokenProblem("YC is a good fit for this.", P.callSources(body("I'm thinking about applying to YC.") as any, "", "")) === null);
 check("a proper name in an observation is still checked (the 10-08 rule): 'Brightline Studio'", G.spokenProblem("Brightline Studio does a lot of voice work.", src)?.kind === "name");
 
 // ---- offers that need a way to carry them out (the gap): held without one, said with one
@@ -135,6 +177,18 @@ check("a proper name in an observation is still checked (the 10-08 rule): 'Brigh
     check(`...and the turn isn't answered with another promise: the retry is told not to offer it later or by text (${tag})`, r.reqs.length === 2 && JSON.stringify(r.reqs[1].system).includes("don't offer or promise it another way (later, by text, after the call)") && !/after the call|by text|I'll/i.test(r.spoken.join(" ").replace(/^Sure\.\s*/, "")), r);
   }
   check("the turn never falls back to the safe line (itself a promise)", !(await turn("I'll reserve a table for you.")).content.includes(G.SAFE_LINE));
+  // The retry held too: the last line is never "Got it." (after "can you book it?" that's a yes) and never a promise.
+  for (const jobClaims of [false, true]) {
+    const tag = jobClaims ? "gpt-live" : "elevenlabs";
+    const both = await turn([text("I'll book that."), text("I'll reserve it for you.")], { their: "Can you book it?", jobClaims });
+    check(`retry held too: the held-offer line, not "Got it." (${tag})`, both.content.trim() === G.HELD_OFFER_LINE && !both.content.includes(G.HELD_LINE), both);
+    const sure = await turn([text("Sure. I'll book that."), text("I'll reserve it for you.")], { their: "Can you book it?", jobClaims });
+    check(`after a "Sure." with the booking held and the retry held: the held-offer line follows, so it isn't left as a yes (${tag})`, sure.spoken.join(" ") === `Sure. ${G.HELD_OFFER_LINE}`, sure.spoken);
+  }
+  const plain = await turn([text("There's a mixer at Foundry Hall on Friday."), text("Maybe the Foundry Hall one.")], { their: "Anything on this week?" });
+  check("other held turns keep their line (the event fallback is unchanged)", plain.content.trim() === G.SAFE_LINE, plain.content);
+  const S = await import("../../src/services/speakable.js");
+  check("the held-offer line is speakable, narrates nothing, and promises nothing", S.speakable(G.HELD_OFFER_LINE) === G.HELD_OFFER_LINE && S.narratesInternalState(G.HELD_OFFER_LINE) === null && G.offerNeedingPath(G.HELD_OFFER_LINE) === null && !G.promisesLaterWork(G.HELD_OFFER_LINE));
   // A tool on the call that books: its own guard holds the member's yes; done this turn, the line is said.
   const booker = (ok: boolean) => ({ defs: [{ name: "bookTable", description: "b", input_schema: { type: "object", properties: {} } }], names: new Set(["bookTable"]), note: "", records: "", carries: (n: string) => (n === "bookTable" ? "book" : null), run: async () => (ok ? { ok: true, booked: true } : { ok: false, error: "They haven't said yes." }) });
   const tool = { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "b1", name: "bookTable" } };
