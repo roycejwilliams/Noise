@@ -33,8 +33,11 @@ export const MOMENT_FIT = { waitHours: 3, maxWaits: 2, maxUnread: 6, timeoutMs: 
 export const CALL_CONTEXT = { summaryWaitMinutes: 30, liveCallHours: 2, retryMinutes: 10, lastTurns: 6 } as const;
 export type MomentVerdict = { verdict: "send" | "wait" | "drop"; why: string; read: "model" | "failed" | "no_context" | "call_not_ready" };
 
-// Pure: which sends the moment read covers: Cue's optional check-ins only.
+// Pure: which sends the moment read covers: Cue's optional check-ins, and update announcements (2026-11-08: an announcement is judged
+// right before it goes instead of being held by class on a hard day; the read is told of the hard stretch, momentPrompt hardDay).
+// An announcement a member pulled ("anything for me?") is theirs to have asked for, and isn't read.
 export function momentFitApplies(cls: SendClass, payload: unknown, o: { pulled?: boolean; type?: string } = {}): boolean {
+  if (o.type === "announcement") return !o.pulled;
   const p = (payload ?? {}) as { safetyFollowUp?: boolean; kind?: string };
   if (cls !== "checkin" || p.safetyFollowUp === true || o.pulled) return false;
   // Obligations, never optional: the follow-up on their own dated commitment, and a check-in on something they asked Cue for.
@@ -80,7 +83,10 @@ export async function loadCallContext(userId: string): Promise<CallContextRead> 
   return { status: r.call_status ?? null, statusAt: r.call_status_updated_at ? new Date(r.call_status_updated_at) : null, transcript: row(r.transcript), summary: row(r.summary) };
 }
 
-export function momentPrompt(o: { firstName: string; message: string; recent: string; call?: string | null; queuedAt: Date; now: Date }): string {
+// hardDay: the hard-day read is on (an announcement's read only, 2026-11-08). A reason to weigh this message more carefully, never a
+// verdict on its own. Absent: the prompt is exactly as before.
+export const HARD_DAY_LINE = "They've had a hard stretch lately. That is a reason to be more thoughtful about this text, not a reason on its own to stay silent: judge whether this particular message helps them right now.";
+export function momentPrompt(o: { firstName: string; message: string; recent: string; call?: string | null; queuedAt: Date; now: Date; hardDay?: boolean }): string {
   const days = Math.max(0, Math.round((o.now.getTime() - o.queuedAt.getTime()) / 86_400_000));
   return `Cue is about to text ${o.firstName || "a member"} on its own, unprompted. Decide whether this text belongs right now.
 
@@ -88,7 +94,7 @@ The text:
 "${o.message.slice(0, 900)}"
 
 It was queued ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}.
-
+${o.hardDay ? `\n${HARD_DAY_LINE}\n` : ""}
 Their latest call with Cue:
 ${o.call?.trim() || "(none)"}
 
@@ -118,14 +124,17 @@ export function setMomentModelForTests(f: ((prompt: string) => Promise<string>) 
 }
 // The read. recent: the dispatch's own stamped exchange (the context the draft was written from), or null when it couldn't be read.
 // call: the latest call (callContextFor over loadCallContext), or null when it couldn't be read.
-export async function momentFit(o: { userId: string; firstName: string; message: string; recent: string | null; call: ReturnType<typeof callContextFor> | null; queuedAt: Date; now: Date }): Promise<MomentVerdict> {
+// kind: the candidate's type; hardDay (the capped hard-day hold, harness/proactive.ts heldForMood) reaches the prompt for an announcement
+// only (momentHardDay), so every check-in's prompt stays exactly as it was.
+export const momentHardDay = (o: { kind?: string; hardDay?: boolean }): boolean => o.kind === "announcement" && o.hardDay === true;
+export async function momentFit(o: { userId: string; firstName: string; message: string; recent: string | null; call: ReturnType<typeof callContextFor> | null; queuedAt: Date; now: Date; kind?: string; hardDay?: boolean }): Promise<MomentVerdict> {
   if (o.recent === null || o.call === null) return { verdict: "wait", why: "their latest texts and calls couldn't be read, so this waits", read: "no_context" };
   if (!o.call.ready) return { verdict: "wait", why: `${o.call.why}, so this waits for it`, read: "call_not_ready" };
   const gen = momentModel ?? (async (p: string) => {
     const [{ generateText }, { anthropic }, { MODELS }, { withMember }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js"), import("../services/llmUsage.js")]);
     return withMember(o.userId, () => generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 150, abortSignal: AbortSignal.timeout(MOMENT_FIT.timeoutMs), experimental_telemetry: { isEnabled: true, functionId: "sendRecheck.momentFit" }, prompt: p })).then((r) => r.text);
   });
-  const answer = parseMoment(await gen(momentPrompt({ ...o, recent: o.recent, call: o.call.line })).catch(() => ""));
+  const answer = parseMoment(await gen(momentPrompt({ firstName: o.firstName, message: o.message, queuedAt: o.queuedAt, now: o.now, recent: o.recent, call: o.call.line, hardDay: momentHardDay(o) })).catch(() => ""));
   return answer ? { ...answer, read: "model" } : { verdict: "wait", why: "the read of whether it fits now didn't answer, so this waits", read: "failed" };
 }
 // Pure: what code does with the verdict. waits: how many times the read already chose wait for it.

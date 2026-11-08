@@ -379,7 +379,8 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "commitment_nudge",
   "goal_recheck",
   "name_change",
-  "announcement",
+  // Not "announcement" (2026-11-08): an update announcement is judged right before it goes (harness/momentFit.ts, send/wait/drop), and
+  // the read is told when they've had a hard stretch, so a hard day is a reason to be more thoughtful, never a class-wide silence.
   // The voice read's one question (services/voiceReadConsent.ts): a permission ask about their calls waits out a hard day (timing only).
   "voice_read_ask",
   // Closing an intro they asked for is news about something they wanted: on a hard day it waits until they're okay (timing only).
@@ -904,7 +905,9 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (opts.pulled && heldForMood(state) && isUnrequested(candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload))) {
     checks.push({ name: "hard_day", pass: false, reason: `a hard day: a pull delivers only what they asked for; the rest waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
-  if (!opts.pulled && hardDayHolds({ cls: candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type], payload: c.payload, held: heldForMood(state) })) {
+  // An update announcement isn't held by class on a hard day (2026-11-08): the send-time read judges it, told of the hard stretch
+  // (harness/momentFit.ts momentFitApplies, hardDay).
+  if (!opts.pulled && c.type !== "announcement" && hardDayHolds({ cls: candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type], payload: c.payload, held: heldForMood(state) })) {
     checks.push({ name: "hard_day", pass: false, reason: `a hard day: only companionship goes; a find or an offer Cue starts waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
   if (draftWaitRead(c, state)?.hold) {
@@ -3424,7 +3427,9 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     const judge = async (message: string, checks: GateCheck[]): Promise<boolean> => {
       const zoneNow = known?.identity.zone ?? person.timezone;
       const call = await STR.loadCallContext(userId).then((r) => STR.callContextFor(r, new Date(), (d) => localStamp(d.toISOString(), zoneNow))).catch(() => null);
-      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date() });
+      // An announcement's read is told while the capped hard-day hold is on (2026-11-08): more thought about this message now, never a
+      // blanket no. The read uses it for announcements only (momentFit kind); a check-in's prompt is unchanged.
+      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date(), kind: c.type, hardDay: heldForMood(state) });
       const waits = Number(pay.momentWaits ?? 0), unread = Number(pay.momentUnread ?? 0);
       const act = STR.momentAction(v, { waits, unread }, new Date());
       await recordDecision(STR.momentDecision({ userId, candidateId: c.id, kind: c.type, targetKey: c.targetKey, v, action: act, waits, unread })).catch(() => {});
@@ -3463,11 +3468,13 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     return;
   }
 
+  // An announcement's defer (waiting on approval, or for something else of theirs to go first: never stacked) keeps its own end
+  // (services/announcements.ts expiryOf), so waiting can't keep it alive past its window.
   if ("defer" in draft) {
     // A find's defer (Phase B) and a pre-arrival text's (review of #377) never pass their expiry; a door text's moves with it (a pause
     // never expires it).
     if (!opts.dryRun) await pool.query(
-      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type IN ('task_update', 'co_event', 'event_change', 'direct_ask') THEN $4::timestamptz WHEN type IN ('event_offer', 'pre_arrival') AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type IN ('task_update', 'co_event', 'event_change', 'direct_ask') THEN $4::timestamptz WHEN type IN ('event_offer', 'pre_arrival') AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) WHEN type = 'announcement' THEN expires_at ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
       [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000), deferredDoorExpiry(c.expiresAt, draft.defer)],
     );
     if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });
