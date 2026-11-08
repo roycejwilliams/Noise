@@ -168,7 +168,7 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   const jordan = await answer("u-jordan", "CA-jordan");
   const jc = G.takeLiveLink(streamId(jordan.text));
   check("on the team, answered: GPT-Live's stream with the <Connect> action, ElevenLabs never registered", /<Connect action="https:\/\/cue\.example\.test\/co\/gpt-live\/after-stream"><Stream url="wss:\/\/cue\.example\.test\/co\/gpt-live\/stream">/.test(jordan.text) && registered.length === 0 && !/u-jordan|Jordan|15550000001/.test(jordan.text), jordan);
-  check("...the call is outbound in both prompts, told to wait through a voicemail greeting (no set message)", jc?.direction === "outbound" && jc.instructions.includes("This call: you called them") && jc.backendSystem.includes("This call is outbound") && jc.instructions.includes(G.VOICEMAIL_WAIT) && !jc.instructions.includes(E.voicemailLeft("Jordan")), jc?.instructions.slice(0, 400));
+  check("...the call is outbound in both prompts, told to wait through a voicemail greeting (no set message)", jc?.direction === "outbound" && /This call: (?:you called them|they asked you to call)/.test(jc.instructions) && jc.backendSystem.includes("This call is outbound") && jc.instructions.includes(G.VOICEMAIL_WAIT) && !jc.instructions.includes(E.voicemailLeft("Jordan")), jc?.instructions.slice(0, 400));
   check("...no call status written here (the dial set it)", !sqls.some((w) => /UPDATE users SET call_sid/.test(w.sql)));
   check("...opening logged as GPT-Live's own words, outbound", decided("call.opening", "outbound").some((w) => JSON.parse(w.params[5]).mode === "own_words"));
 

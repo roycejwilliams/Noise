@@ -359,6 +359,13 @@ export function heldCallReason(userId: string, now = Date.now()): { result: Call
   if (!h || now - h.at >= CALL_REASON.ttlMs) return null;
   return { result: h.result, kind: h.kind };
 }
+// Pure: who asked for an outbound call, from the gate's held reason (2026-11-07 call review: a call they asked for was framed as Cue's
+// idea). A member-asked reason or kind: theirs. A kind Cue starts on its own: Cue's. Inbound, or nothing held: not known (null).
+export function callAskedBy(direction: "inbound" | "outbound", held: { result: CallReasonResult; kind: CallAuthKind | null } | null): "member" | "cue" | null {
+  if (direction !== "outbound" || !held) return null;
+  if (held.result.reason?.kind === "member_asked" || (held.kind && !needsMemberReason(held.kind))) return "member";
+  return needsMemberReason(held.kind) ? "cue" : null;
+}
 // The {{call_reason}} dynamic variable: outbound only, "" when nothing is held (inbound: they called Co).
 export function callReasonVariable(userId: string, direction: "inbound" | "outbound", now = Date.now()): string {
   if (direction !== "outbound") return "";

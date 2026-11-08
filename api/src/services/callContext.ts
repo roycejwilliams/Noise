@@ -9,6 +9,7 @@ import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { renderSnapshot } from "../harness/personSnapshot.js";
+import { notToTeammate } from "./teamLines.js";
 import { latestAskEntry } from "../harness/profileWrite.js";
 import { stampOf } from "./factLabels.js";
 import { FALLBACK_ZONE } from "./memberTime.js";
@@ -926,7 +927,7 @@ export async function buildCallContextSummary(userId: string): Promise<string> {
 // Exported for evals (2026-09-23): a real summary dropped both partnerships
 // the member named (Lythe.ai, Sangria) and read a voice score as "may have
 // wanted to continue" when their last words were "we can close out good".
-export function callSummaryPrompt(transcript: string): string {
+export function callSummaryPrompt(transcript: string, typedNames: string[] = []): string {
   return `Summarize what was actually discussed in this phone call transcript, in 2-3 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Write the person on the call as {M} every time, never a pronoun for them (no he, she, they, his, her, their): "{M} is building...", "{M}'s cofounder". We fill in their name. Refer to anyone else by that person's own name (2026-09-22: summaries were calling a member "he" from their name alone).
 
 Names of companies and people come from what THEY said (the "user:" lines), never from the assistant's lines: when the assistant says a different name than the member did ("Bumble" for the member's "Boardy"), the member's wins, because the assistant can mishear. A name the member said and speech-to-text garbled ("Boredy") is written as the real company when it is plain which one.
@@ -935,10 +936,75 @@ Lead with the concrete facts they gave: the names of companies, people, places, 
 
 How the call ended comes only from what they said at the end, never from a voice reading. Don't say they wanted to keep talking unless they said so.
 
-Transcript:
+${typedNames.length ? `${typedNamesLine(typedNames)}\n\n` : ""}Transcript:
 "${transcript}"
 Return ONLY the summary, no preamble.`;
 }
+
+// Proper nouns they've typed to Cue (2026-11-07 review: a company the member texts as "Boardy" came out of a call summary as "Bordy", the
+// speech-to-text spelling). Only a name that a word said on the call is a near-miss of, and never through an ordinary word ("I may make
+// it" is not Maya, "I'm done with data rooms" is not Dana): a company or product-style name (an inner capital, a digit, a .ai/.io-style
+// ending) at most two letters off, or another name of 5+ letters at most one letter off that speech-to-text wrote capitalized mid-sentence
+// (it heard a name, "talked to Bordy", never "I need to hurry"), either way never matched from a common English word (COMMON, a short
+// list: the capitalization rule does the rest). The summary gets their own spelling for what it hears and nothing else of their texts.
+export const typedNamesLine = (names: string[]): string => `Names they have typed to Cue in texts, spelled as they type them: ${names.join(", ")}. When the call names one of these, even misspelled by speech-to-text, write it their way.`;
+const NAME_STOP = new Set("i im i'm ok okay yes yeah no hey hi hello thanks thank sure cool also and but so the a an it its this that what when where who why how my we our you your cue co noise monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december sf la nyc".split(" "));
+// Common English words a spoken word may be (never read as a misheard name). Short on purpose: the near-miss rules above do most of it.
+const COMMON = new Set(("about above after again against almost alone along already also always among another answer anyone anything around asked away "
+  + "back based became because become been before began being below best better between board body book both bought brand bring brought build built "
+  + "call came cannot card care case cause change check city class clear close come could count course cover data date days deal dear deck done door "
+  + "down draft drive during each early easy else even ever every face fact fair fall family fast feel field fine first five floor food form found four "
+  + "free friend from full fund gave give given going gone good grand grant great green group grow half hand happy hard have head hear heard heart help "
+  + "here high hold home hope hour house idea into just keep kind knew know land last late later lead learn least left less life light like line list "
+  + "little live long look lord lost lots love made main make many mark mass maybe mean meet might mind miss model money month more most move much "
+  + "must name near need never next nice night none note nothing open order other over owner page paid part party pass past pick place plan play point "
+  + "post power price print quite rather read ready real really right road room round rule said same save seen sell send sense sent seven shall share "
+  + "short should show side since small social some soon sorry sound speak start state still stop story such sure take talk team tell than that their "
+  + "them then there these they thing think those though three time today told took town tried true turn under until upon very wait want ward watch "
+  + "water week well went were what when where which while white whole wide will with word work world would write year young "
+  // Words a name's spelling is one letter off (the delta review of dcb074a6: hurry/Harry, windy/Wendy, bully/Billy, laurel/Lauren).
+  + "hurry windy bully laurel sandy candy merry jerry penny rusty dusty misty sunny mason baker cooper hunter carter archer porter tanner "
+  + "grace faith hope joy rose daisy lily holly ivy ruby pearl amber dawn summer autumn april june august river brook stone forest "
+  + "frank earnest noble august prince rich bill mark pat sue chase lance grant will wade rob guy ray jack bob sky cliff glen dale "
+  + "dean drew gene neil miles max victor angel violet hazel olive ginger").split(" "));
+function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+const PRODUCT_STYLE = /^(?:[A-Za-z]*[a-z][A-Z][A-Za-z0-9]*|[A-Za-z]*\d[A-Za-z0-9]*|[A-Za-z0-9-]+\.(?:ai|io|co|com|app|xyz|so|dev))$/;
+// Pure: the names in their texts that a word of theirs on the call is a near-miss of, at most `max`.
+export function typedNamesFor(transcript: string, theirTexts: string[], max = 12): string[] {
+  const names = new Map<string, string>();
+  for (const t of theirTexts) {
+    for (const m of t.matchAll(/(?<=[^.!?\s]\s+|[a-z],\s*)([A-Z][A-Za-z0-9]*(?:\.[a-z]{2,})?)\b|\b([a-z]+[A-Z][A-Za-z]+|[A-Za-z]+\.(?:ai|io|co|com|app|xyz|so|dev))\b/g)) {
+      const n = (m[1] ?? m[2] ?? "").trim();
+      if (n.length < 4 || NAME_STOP.has(n.toLowerCase()) || COMMON.has(n.toLowerCase())) continue;
+      if (!names.has(n.toLowerCase())) names.set(n.toLowerCase(), n);
+    }
+  }
+  const said = userLinesOf(transcript).join(" ");
+  const spoken = [...new Set(said.toLowerCase().split(/[^a-z0-9.]+/).map((w) => w.replace(/\.+$/, "")).filter((w) => w.length >= 4 && !COMMON.has(w) && !NAME_STOP.has(w)))];
+  // Words the transcript capitalized mid-sentence (speech-to-text heard a name there).
+  const heardAsName = new Set([...said.matchAll(/(?<=[^.!?\s]\s+)([A-Z][a-z]+)\b/g)].map((m) => m[1].toLowerCase()));
+  const out: string[] = [];
+  for (const [low, n] of names) {
+    const product = PRODUCT_STYLE.test(n);
+    const bare = low.replace(/\.[a-z]+$/, "");
+    if (!product && bare.length < 5) continue;
+    const near = spoken.some((w) => {
+      const sw = w.replace(/\.[a-z]+$/, "");
+      if (sw[0] !== bare[0]) return false;
+      const dist = editDistance(sw, bare);
+      return dist > 0 && (product ? dist <= 2 && Math.abs(sw.length - bare.length) <= 2 : dist <= 1 && sw.length >= 5 && heardAsName.has(sw));
+    });
+    if (near) out.push(n);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+const userLinesOf = (transcript: string): string[] => transcript.split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, ""));
 
 // "They" for the member only, never for anyone else (code review,
 // 2026-09-24, twice). Blanket neutralizing turned "Royce talked about Maya.
@@ -1037,10 +1103,15 @@ export async function summarizeCallForTextContext(...a: Parameters<typeof summar
 }
 async function summarizeCallForTextContextInScope(userId: string, transcript: string): Promise<void> {
   try {
+    // Their own typed spellings of names the call says (typedNamesFor). A failed read: the summary as before.
+    const texts = await pool
+      .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - INTERVAL '90 days' ORDER BY created_at DESC LIMIT 300`, [userId])
+      .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/, "")))
+      .catch(() => [] as string[]);
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
-      prompt: callSummaryPrompt(transcript),
+      prompt: callSummaryPrompt(transcript, typedNamesFor(transcript, texts)),
     });
     // The prompt already says "they"; the model still wrote "he" on all
     // three runs of a real call (2026-09-23), so it's enforced in code.

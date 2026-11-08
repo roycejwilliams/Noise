@@ -18,6 +18,7 @@ import { parseModelJson } from "./modelJson.js";
 import { generateEmbeddings } from "./embeddings.js";
 import { withTraceUser } from "./llmTraceText.js";
 import { getPersonSnapshot } from "../harness/personSnapshot.js";
+import { wantNeedsMaker } from "./coVoice.js";
 import { askEntries } from "../harness/profileWrite.js";
 
 export const PEOPLE_FACTS_MAX_AGE_HOURS = 72;
@@ -71,7 +72,8 @@ export async function readWantsOffers(input: PeopleInput): Promise<WantsOffers |
   }
 }
 
-async function gather(userId: string): Promise<PeopleInput | null> {
+// Exported for the layer-1 tests (what matching reads, evals/reply-flow/callReview1107.ts).
+export async function gather(userId: string): Promise<PeopleInput | null> {
   const [u, p, asks, snap] = await Promise.all([
     pool.query(`SELECT first_name FROM users WHERE id = $1 AND archived_at IS NULL`, [userId]).catch(() => ({ rows: [] as any[] })),
     pool.query(`SELECT goals, life_chapters, intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] })),
@@ -84,7 +86,8 @@ async function gather(userId: string): Promise<PeopleInput | null> {
   return {
     firstName: u.rows[0].first_name ?? "Member",
     work: snap?.work ?? null,
-    wantsNow: snap?.wantsNow ?? [],
+    // A want for something Cue no longer makes (a deck, a page) is never matched on (services/coVoice.ts wantNeedsMaker).
+    wantsNow: (snap?.wantsNow ?? []).filter((w) => !wantNeedsMaker(w)),
     valuesInPeople: snap?.valuesInPeople ?? [],
     goals: prof.goals ?? [],
     lifeChapters: prof.life_chapters ?? [],

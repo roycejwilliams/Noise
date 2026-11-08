@@ -671,6 +671,7 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
 // (the member's id never goes to Twilio), and a <Connect> action for when the stream ends. GPT-Live opens in its own words from the
 // opening's background (gptLive.ts OpeningContext): no written or template opening line on this path.
 type GptLiveAnswer = { twiml: string } | { refused: "budget_used"; why: "minutes_used" | "unreadable" } | { refused: "unavailable"; failClass: "no_key" | "no_api_url" | "build_error" };
+export const gptLiveAnswerForTests = (...a: Parameters<typeof gptLiveAnswer>) => gptLiveAnswer(...a);
 async function gptLiveAnswer(o: { userId: string; callSid: string | null; direction: "inbound" | "outbound"; context?: () => Promise<string> }): Promise<GptLiveAnswer> {
   // Every verified member (Royce, 2026-10-31, with the processor line in what Cue knows). Team only shapes the prompt (TEAM_BUILDER_LINE).
   const team = await import("../services/extensions.js").then((m) => m.isTeamMember(o.userId)).catch(() => false);
@@ -682,7 +683,9 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
   if (!G.admitted(slot)) return { refused: "budget_used", why: slot.refused };
   const admitted = slot;
   try {
-    if (o.callSid && o.direction === "inbound") await pool.query(`UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [o.userId, o.callSid]);
+    // An inbound call is marked on the member's row (with or without a sid), so anything that reads whether a call is on sees it
+    // (harness/momentFit.ts callContextFor: a check-in is never judged or sent mid-call).
+    if (o.direction === "inbound") await pool.query(`UPDATE users SET call_sid = COALESCE($2, call_sid), call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [o.userId, o.callSid]);
     const [{ rows: u }, contextSummary, briefing, voiceLayer, zone] = await Promise.all([
       pool.query(`SELECT first_name FROM users WHERE id = $1`, [o.userId]),
       (o.context ?? (() => buildCallContextSummary(o.userId)))().catch(() => ""),
@@ -700,18 +703,25 @@ async function gptLiveAnswer(o: { userId: string; callSid: string | null; direct
     const first = await import("../services/firstCall.js").then((m) => m.firstCallFacts(o.userId)).catch(() => ({ firstCall: false }));
     // A later call opens from where they left off: one line, the most recent open thread or topic (services/firstCall.ts laterCallThread).
     // Outbound, only when they asked for the call: on Cue's own unrequested calls whoever is confirmed on the line may not be them.
-    const memberAsked = o.direction === "inbound" || (await import("../services/callReason.js").then((m) => m.heldCallReason(o.userId)?.result.reason?.kind === "member_asked").catch(() => false));
+    const held = o.direction === "outbound" ? await import("../services/callReason.js").then((m) => ({ h: m.heldCallReason(o.userId), m })).catch(() => null) : null;
+    const memberAsked = o.direction === "inbound" || held?.h?.result.reason?.kind === "member_asked";
+    // Who asked for an outbound call, said plainly for the opening and the close (2026-11-07 call review: Cue framed a call they asked
+    // for as its own idea). From the gate's held kind: a member-asked kind or reason is theirs, a Cue-initiated kind is Cue's; nothing
+    // held is not known, said as before.
+    const askedBy = held ? held.m.callAskedBy(o.direction, held.h) : null;
     const thread = (first as { firstCall?: boolean }).firstCall || !memberAsked ? null : await import("../services/firstCall.js").then((m) => m.laterCallThread(o.userId)).catch(() => null);
-    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone), first, thread });
+    const call = G.buildLiveCall({ userId: o.userId, callSid: o.callSid, firstName, direction: o.direction, team, voiceOn, callKey: `${o.userId}:gl:${admitted.id}`, voiceLayer: voiceLayer ?? "", contextSummary, rightNow: briefing.rightNow, findsNow: briefing.findsNow, callReason, timeOfDay: G.timeOfDay(new Date(), zone), first, thread, askedBy });
     const id = G.issueLiveLink({ ...call, capMs: admitted.capMs, budgetLimited: admitted.budgetLimited }, Date.now(), admitted.id);
     G.markCall(o.callSid, o.userId, "pending");
     // What the opening had to go on (which pieces, never their words): GPT-Live writes the line itself.
-    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason, firstCall: !!call.opening.firstCall, theirWords: !!call.opening.theirWords, inviter: !!call.opening.inviter, thread: !!call.opening.thread } } }).catch(() => {});
+    recordDecision({ layer: 8, decision: "call.opening", userId: o.userId, outcome: "act", action: o.direction, proposal: { provider: "gpt-live", mode: "own_words", had: { firstName: !!firstName, timeOfDay: !!call.opening.timeOfDay, reason: !!call.opening.reason, firstCall: !!call.opening.firstCall, theirWords: !!call.opening.theirWords, inviter: !!call.opening.inviter, thread: !!call.opening.thread, askedBy: call.opening.askedBy ?? null } } }).catch(() => {});
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.connect({ action: `${process.env.API_URL}/co/gpt-live/after-stream` }).stream({ url: streamUrl }).parameter({ name: "s", value: id });
     return { twiml: twiml.toString() };
   } catch (err: any) {
     G.releaseSession(admitted.id);
+    // The inbound mark set above, cleared: no call will follow it (with or without a sid).
+    if (o.direction === "inbound") await releaseLiveCallMark(o.userId, o.callSid);
     console.error(`gpt-live: answer not built for ${o.userId.slice(0, 8)} (${String(err?.message ?? err).slice(0, 120)})`);
     return { refused: "unavailable", failClass: "build_error" };
   }
@@ -910,6 +920,14 @@ async function finishCallProcessing(chatId: string, status: "completed" | "faile
 // The call never reached the agent (registration failed): no post-call webhook
 // will come to clear the live status, and "call me" would stay blocked until
 // the 30-minute reclaim. Scoped to this call's sid.
+// A GPT-Live call's live mark, cleared when the call ends without its post-call (the answer couldn't be built, the session never
+// started, or the post-call failed), so "call me" isn't blocked for the 30-minute reclaim and check-ins aren't held for liveCallHours
+// (harness/momentFit.ts). Only a mark still live; scoped to this call's sid when there is one.
+export async function releaseLiveCallMark(userId: string, callSid: string | null | undefined): Promise<void> {
+  await pool
+    .query(`UPDATE users SET call_status = 'failed', call_status_updated_at = NOW() WHERE id = $1 AND call_status IN ('initiated', 'dialing', 'ringing', 'in-progress', 'processing') AND ($2::text IS NULL OR call_sid = $2)`, [userId, callSid ?? null])
+    .catch((err: any) => console.error("releaseLiveCallMark failed (non-fatal):", err?.message ?? err));
+}
 async function releaseFailedCall(userId: string, callSid: string | undefined): Promise<void> {
   await pool
     .query(`UPDATE users SET call_status = 'failed', call_status_updated_at = NOW() WHERE id = $1 AND ($2::text IS NULL OR call_sid = $2)`, [userId, callSid ?? null])

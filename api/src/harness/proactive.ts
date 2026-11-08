@@ -30,6 +30,8 @@
 import { REACTION_LINE_SQL } from "../services/reactionsIn.js";
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
 import { directAskEvent, eventBoundSend, sendTimeRecheck } from "./sendTimeRecheck.js";
+import * as STR from "./momentFit.js";
+import * as Q from "./quotedWords.js";
 import { inventedFailure } from "../services/speakable.js";
 import { sentinelIn, sentinelRule } from "../services/sentinelBody.js";
 import { proactivePaused, pausedTypes, heldTypes } from "../services/proactivePause.js";
@@ -1297,6 +1299,8 @@ export const DISPATCH_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks",
 // The transcript the pick, the relevance check, the repeat-question check and payload first read: the last 12 exchanges, as far
 // back as they go (the same window the dispatch always read).
 export const DISPATCH_EXCHANGES = { exchanges: 12, exchangeDays: 365 } as const;
+// The moment read sees the newest of those lines (harness/momentFit.ts), beside the latest call.
+export const MOMENT_RECENT_LINES = 12;
 // Types whose draft builds its own member section from memberKnowledge (jobs/postCallFollowUp.ts, PR #121): the dispatch hands
 // them no member block, so the lists and rules aren't in the prompt twice.
 export const OWN_MEMBER_CONTEXT: ReadonlySet<ProactiveType> = new Set<ProactiveType>(["post_call"]);
@@ -2174,7 +2178,8 @@ async function sendWithLedger(
   c: Candidate,
   person: Person,
   messages: string[],
-  opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[]; pulled?: boolean } = {},
+  // judgedAt: when the moment read said this check-in fits (harness/sendTimeRecheck.ts momentFit). Anything of theirs since holds it.
+  opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[]; pulled?: boolean; judgedAt?: Date | null } = {},
   extras: { candidate: Candidate; messages: string[] }[] = [],
   // A note riding in this text with its own once-only key (the name notice): claimed here, inside the lock, or the text goes without it.
   ride: { candidate: Candidate; without: string[] } | null = null,
@@ -2227,6 +2232,11 @@ async function sendWithLedger(
     if (discovery) {
       const sentToday = await findsSentToday(person.userId, person.timezone, now, client).catch(() => DAILY_FIND_CAP);
       checks.push({ name: "daily_find_cap", pass: sentToday + discovery <= DAILY_FIND_CAP, reason: `${sentToday} discovery find(s) went today; this send has ${discovery}; the day's cap is ${DAILY_FIND_CAP}` });
+    }
+    // Judged to fit (momentFit) before a text, call or correction of theirs arrived: that judgment is stale, so it isn't sent now.
+    if (opts.judgedAt) {
+      const newer = !(await STR.momentStillCurrent(client, person.userId, opts.judgedAt));
+      checks.push({ name: "moment_still_current", pass: !newer, reason: "something of theirs arrived after it was judged to fit; it is judged again" });
     }
     const g = gate(checks);
     if (!g.ok) {
@@ -3102,6 +3112,10 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // stripped inside it. The gates above keep their own reads, exactly as they were. A read that fails (a failed name lookup fails
   // closed) leaves the transcript empty and the drafts as they were, never unstripped.
   const MK = await import("../services/memberKnowledge.js");
+  // When this context was read, in the database's own clock (the rows the send lock compares are stamped by it): anything of theirs
+  // after this was never seen by the pick, the draft or the moment read, so the send lock holds the send (harness/momentFit.ts). A
+  // failed clock read stamps it a few minutes early, which can only hold a send, never let a newer text slip past.
+  const contextAt: Date = await pool.query(`SELECT NOW() AS now`).then((r) => new Date(r.rows[0].now)).catch(() => new Date(Date.now() - 5 * 60_000));
   // Restraint is the read the gates above made (one read, Phase A6).
   const known = await MK.memberKnowledge(userId, { now: state.now, include: DISPATCH_KNOWLEDGE, ...DISPATCH_EXCHANGES }, { restraint: async () => member.raw }).catch((err: any) => {
     console.error("proactive: member knowledge read failed (non-fatal, drafting without it):", err?.message ?? err);
@@ -3399,6 +3413,43 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     }
   }
 
+  // Does it belong now (harness/momentFit.ts, Royce 2026-11-07): an optional check-in is judged against their latest texts and call
+  // (the stamped exchange the draft is written from, and the latest call, always in view). Code guards the verdict: wait re-queues it
+  // with the reason and keeps its draft, drop closes it, a failed or unread read waits (capped). Requested reminders, promises and
+  // obligations never come through here. A check-in that waited is judged again on its kept draft first, and only drafted fresh once
+  // the verdict is send. The send lock holds anything of theirs newer than this context's read (contextAt).
+  const moment = (() => {
+    const applies = !opts.dryRun && !composed && STR.momentFitApplies(candidateClass(c.type, isAnswering(c), c.payload), c.payload, { pulled: opts.pulled, type: c.type });
+    const pay = (c.payload ?? {}) as { momentWaits?: number; momentUnread?: number; momentDraft?: string };
+    const judge = async (message: string, checks: GateCheck[]): Promise<boolean> => {
+      const zoneNow = known?.identity.zone ?? person.timezone;
+      const call = await STR.loadCallContext(userId).then((r) => STR.callContextFor(r, new Date(), (d) => localStamp(d.toISOString(), zoneNow))).catch(() => null);
+      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date() });
+      const waits = Number(pay.momentWaits ?? 0), unread = Number(pay.momentUnread ?? 0);
+      const act = STR.momentAction(v, { waits, unread }, new Date());
+      await recordDecision(STR.momentDecision({ userId, candidateId: c.id, kind: c.type, targetKey: c.targetKey, v, action: act, waits, unread })).catch(() => {});
+      if (act.act === "send") return true;
+      if (act.act === "drop") {
+        await dropCandidate(registry, c, "skipped", `doesn't fit now: ${act.why}`);
+        await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `moment_drop:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks, ...checks], reason: act.why });
+      } else {
+        await pool.query(
+          `UPDATE proactive_candidates SET due_at = GREATEST(due_at, $2), payload = payload || jsonb_build_object('momentWaits', $3::int, 'momentUnread', $4::int, 'momentDraft', $5::text), updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+          [c.id, act.retryAt, waits + (act.counted === "wait" ? 1 : 0), unread + (act.counted === "unread" ? 1 : 0), message.slice(0, 2000)],
+        );
+        await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `moment_wait:${c.type}`, proposal: { ...proposal, picked: c.id, retryAt: act.retryAt.toISOString() }, checks: [...ev.userChecks, ...pickChecks, ...checks], reason: act.why });
+      }
+      done(c.type);
+      return false;
+    };
+    return { applies, judge, kept: applies && typeof pay.momentDraft === "string" && pay.momentDraft.trim() ? pay.momentDraft : null, preJudged: false };
+  })();
+  // Waited before: its kept draft is judged first, with no new draft written; only a send verdict goes on to draft it fresh.
+  if (moment.kept) {
+    if (!(await moment.judge(moment.kept, []))) return;
+    moment.preJudged = true;
+  }
+
   let draft: DraftResult;
   try {
     draft = composed ? { messages: composed.messages, text: composed.text, rules: {} } : await drafting(c.type, () => registry[c.type].draft(c, person));
@@ -3495,8 +3546,31 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
       draftChecks = [...draftChecks, { name: NO_ASSERTED_FEELING, pass: true, reason: `the line that said how they feel beyond their own words was taken out ("${read.phrase}")` }];
     } else draftChecks = [...draftChecks, read];
   }
+  // Words quoted as theirs must be theirs (harness/quotedWords.ts, 2026-11-07): traced to a line of theirs on file (their texts and call
+  // lines, harness/memberThreads.ts ownLines), never to a thread's or story's saved quote alone. Read only when a draft quotes them. A
+  // door text (written by its own path) goes without the sentence; a draft written here gets its one rewrite, told what to fix.
+  let theirLines: string[] | null = null;
+  const theirsFor = async (text: string): Promise<string[]> => {
+    if (!Q.quotesAsTheirs(text).length) return [];
+    theirLines ??= await Q.theirLinesForQuotes(userId);
+    return theirLines;
+  };
+  const withQuote = async (checks: GateCheck[], text: string): Promise<GateCheck[]> => (composed || asWritten || !Q.quotesAsTheirs(text).length ? checks : [...checks, Q.quoteCheck(text, await theirsFor(text))]);
+  if (asWritten && Q.quotesAsTheirs(draft.messages.join("\n")).length) {
+    const theirs = await theirsFor(draft.messages.join("\n"));
+    if (Q.unbackedQuotes(draft.messages.join("\n"), theirs).length) {
+      const cut = Q.withoutUnbackedQuotes(draft.messages, theirs);
+      if (!cut) {
+        if (!opts.dryRun) await dropCandidate(registry, c, "skipped", "it quotes as theirs words they never said, and nothing is left without them");
+        done(c.type);
+        return;
+      }
+      draft = { ...draft, messages: cut, text: cut.join("\n") };
+      draftChecks = [...draftChecks, { name: Q.QUOTE_IS_THEIRS, pass: true, reason: "a sentence quoting as theirs words they never said was taken out" }];
+    }
+  }
   const writtenHere = checkinFeeling && !asWritten;
-  const withFeeling = async (checks: GateCheck[], text: string): Promise<GateCheck[]> => (writtenHere ? [...checks, await feelingCheck({ userId, draft: text, ownWords })] : checks);
+  const withFeeling = async (checks: GateCheck[], text: string): Promise<GateCheck[]> => withQuote(writtenHere ? [...checks, await feelingCheck({ userId, draft: text, ownWords })] : checks, text);
   const infraOf = (checks: GateCheck[]) => checks.find((k) => (k as FeelingCheck).infra === true);
   draftChecks = await withFeeling(draftChecks, draft.text);
   if (infraOf(draftChecks)) return holdForFeelingRead(infraOf(draftChecks)!.reason ?? "the feeling read couldn't answer");
@@ -3528,6 +3602,16 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     done(c.type);
     return;
   }
+
+  // Does it belong now (harness/sendTimeRecheck.ts momentFit, Royce 2026-11-07): a queued check-in is judged against their latest texts
+  // and calls (the same stamped exchange the draft was written from; none read is "couldn't read", which waits). Code guards the verdict:
+  // wait re-queues it with the reason, drop closes an optional one, a failed read waits. The time of the judgment goes to the send lock,
+  // which holds it if anything of theirs arrived since (it is judged again on the next pick, never sent stale).
+  // The text that goes is the one judged: a fresh draft after a kept draft's send verdict is judged once more when it differs.
+  if (moment.applies && (!moment.preJudged || STR.sameDraft(moment.kept, draft.messages.join("\n")) === false)) {
+    if (!(await moment.judge(draft.messages.join("\n"), draftChecks))) return;
+  }
+  const judgedAt: Date | null = moment.applies ? contextAt : null;
 
   // Payload first (harness/payloadFirst.ts, 2026-10-04): a text asking whether
   // Co should do something it could just do goes to one of its tasks instead,
@@ -3630,7 +3714,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
 
   let result: Awaited<ReturnType<typeof sendWithLedger>>;
   try {
-    result = await sendWithLedger(c, person, sending, { ...opts, suppressedKinds: state.suppressedKinds }, extras, nameRide);
+    result = await sendWithLedger(c, person, sending, { ...opts, suppressedKinds: state.suppressedKinds, judgedAt }, extras, nameRide);
   } catch (err: any) {
     // Send failed and the ledger row rolled back. Retry on a later tick, up
     // to the attempt limit, instead of every 15 minutes until it expires.

@@ -504,7 +504,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const noor = await call("+15550000002", "CA-noor");
   const nc = G.takeLiveLink(streamId(noor.text));
   check("main number, a verified member not on the team: GPT-Live's stream, ElevenLabs never registered", noor.status === 200 && /<Stream url="wss:\/\/cue\.example\.test\/co\/gpt-live\/stream">/.test(noor.text) && registered.length === 0 && nc?.userId === "u-noor" && !nc.instructions.includes(TEAM_BUILDER_LINE), noor);
-  check("...the same call status write", sqls.some((w) => /UPDATE users SET call_sid = \$2, call_status = 'initiated'/.test(w.sql) && w.params[0] === "u-noor" && w.params[1] === "CA-noor"));
+  check("...the same call status write", sqls.some((w) => /UPDATE users SET call_sid = (?:COALESCE\(\$2, call_sid\)|\$2), call_status = 'initiated'/.test(w.sql) && w.params[0] === "u-noor" && w.params[1] === "CA-noor"));
   const unknownCaller = await call("+15550009876", "CA-unknown");
   check("an unknown number is still declined, nothing streamed or registered", /we don't recognize this number/.test(unknownCaller.text) && !/<Stream/.test(unknownCaller.text) && registered.length === 0);
 
@@ -514,7 +514,7 @@ function bridge(call: import("../../src/services/gptLive.js").LiveCall | null, o
   const jid = streamId(jordan.text);
   check("main number, on the team: answered with GPT-Live's stream, with the <Connect> action, and ElevenLabs never registered", jordan.status === 200 && /<Connect action="https:\/\/cue\.example\.test\/co\/gpt-live\/after-stream"><Stream url="wss:\/\/cue\.example\.test\/co\/gpt-live\/stream"><Parameter name="s" value="[^"]+"\/><\/Stream><\/Connect>/.test(jordan.text) && registered.length === 0, jordan);
   check("...the TwiML carries a one-time id only: never their id, name or number", !!jid && !/u-jordan|Jordan|15550000001/.test(jordan.text));
-  check("...call status set for the call, as on ElevenLabs", sqls.some((w) => /UPDATE users SET call_sid = \$2, call_status = 'initiated'/.test(w.sql) && w.params[0] === "u-jordan" && w.params[1] === "CA-jordan"));
+  check("...call status set for the call, as on ElevenLabs", sqls.some((w) => /UPDATE users SET call_sid = (?:COALESCE\(\$2, call_sid\)|\$2), call_status = 'initiated'/.test(w.sql) && w.params[0] === "u-jordan" && w.params[1] === "CA-jordan"));
   const jcall = G.takeLiveLink(jid);
   check("...the stream id opens their own call: GPT-Live's short prompt, inbound, the 30-minute cap", jcall?.userId === "u-jordan" && jcall.direction === "inbound" && jcall.instructions.startsWith(`${G.LIVE_WHO} You're on a phone call with Jordan.`) && jcall.instructions.length < G.GPT_LIVE.maxInstructionChars && jcall.capMs === 30 * 60_000 && jcall.budgetLimited === false && G.openSessions.has(jid!));
 

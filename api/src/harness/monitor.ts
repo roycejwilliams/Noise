@@ -64,6 +64,9 @@ export const SIGNALS: Signal[] = [
   // give-ups, and call-gate blocks all happened silently as far as
   // monitoring was concerned, even though the harness already recorded a
   // decision for each one.
+  // The send-time moment read (harness/momentFit.ts): reads that failed or had nothing to read, and check-ins let go after its caps. A
+  // Haiku outage shows here.
+  { key: "moment_read_trouble", label: "Check-in moment reads that failed, couldn't read the context, or gave up", bad: `decision = 'proactive.sendRecheck' AND action LIKE 'moment_%' AND (proposal->>'read' IN ('failed', 'no_context') OR proposal ? 'gaveUp')`, total: `decision = 'proactive.sendRecheck' AND action LIKE 'moment_%'`, floor: 0.2, minCount: 3 },
   { key: "proactive_blocked_at_send", label: "Proactive sends blocked at send time (caps/hours/opt-out changed since the pick)", bad: `decision = 'proactive.dailyPick' AND reason LIKE 'blocked at send:%'`, total: `decision = 'proactive.dailyPick' AND action IS NOT NULL`, floor: 0.1, minCount: 2 },
   { key: "exempt_send_blocked_or_failed", label: "Transactional (exempt) sends blocked by hours/opt-out or failed", bad: `decision = 'proactive.exemptSend' AND outcome = 'skip'`, total: `decision = 'proactive.exemptSend'`, floor: 0.3, minCount: 3 },
   { key: "announcement_gave_up", label: "Noise event announcements given up on (event gone/past, or opted out)", bad: `decision = 'tier1.announce' AND action LIKE 'gave_up%'`, total: `decision = 'tier1.announce'`, floor: 0.3, minCount: 2 },

@@ -47,6 +47,8 @@ const WRITTEN_DECISIONS = [
   "understanding.check",
   // Written by the daily sweep's finding (services/sweepFind.ts).
   "sweep.find",
+  // The send-time recheck and the check-in moment read (harness/sendTimeRecheck.ts SEND_RECHECK, harness/momentFit.ts momentDecision).
+  "proactive.sendRecheck",
   // Cold start (services/coldStart.ts): a new member's sweep, a hit or a miss; what a reply to an unseeded member did with steering.
   "sweep.cold_start_miss", "coldstart.reply",
   // A picker claim check that couldn't run (services/sweepShadow.ts, 2026-10-14).
