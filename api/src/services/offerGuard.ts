@@ -101,6 +101,7 @@ export function numbersOf(text: string, withWords = false): Set<string> {
   return out;
 }
 
+const NAME_JOINERS = new Set(["the", "and", "for", "of", "at", "de", "la"]);
 function unbackedMentions(mentions: Mention[], src: Source): Mention[] {
   return mentions.filter((m) => {
     if (m.kind === "time") return !src.flat.includes(squash(m.text).replace(/m$/, "m"));
@@ -109,8 +110,10 @@ function unbackedMentions(mentions: Mention[], src: Source): Mention[] {
     // A plural of a backed word is backed ("PDFs" for "PDF", 2026-10-08 live call: "Should I keep sending PDFs?" was replaced).
     const singular = (w: string) => (w.length > 3 && /s$/.test(w) && !/ss$/.test(w) ? w.slice(0, -1) : w);
     if (src.hay.includes(n.replace(/\S+/g, singular))) return false;
-    // A name the sentence only shortens or re-cases ("Sequent" for "Sequent AI") still has a source.
-    const parts = n.trim().split(" ").filter((p) => p.length > 2);
+    // A name the sentence only shortens or re-cases ("Sequent" for "Sequent AI") still has a source. Each part is read without its
+    // possessive and the joiners need no source: Cue saying back "Stripe's CEO and Ramp" when they said "the Stripe CEO and Ramp
+    // connected" is their words (2026-11-07 live call: it was held as "names what nothing backs", and the turn came out broken).
+    const parts = n.trim().split(" ").map((p) => p.replace(/'s?$/, "")).filter((p) => p.length > 2 && !NAME_JOINERS.has(p));
     const has = (p: string) => src.hay.includes(` ${p} `) || src.hay.includes(` ${p}'s `) || src.hay.includes(` ${p}s `);
     return !(parts.length && parts.every((p) => has(p) || has(singular(p))));
   });

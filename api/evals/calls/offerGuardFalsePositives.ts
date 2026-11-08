@@ -149,6 +149,40 @@ check("a proper name in an observation is still checked (the 10-08 rule): 'Brigh
   check("a booking tool carries no intro promise", !said(wrongKind, "three intros") && wrongKind.dropped.some((d) => /promises introductions/.test(d)), wrongKind);
 }
 
+// ---- 2026-11-07 live call: the member's own words, said back a turn later, were held ("names what nothing backs")
+{
+  const said1 = "So the Stripe CEO and Ramp connected last week, which is huge for us.";
+  const call = (first: string, reply: string, sameQuestion?: any) => ({ model: "co", stream: true, messages: [{ role: "system", content: system }, { role: "assistant", content: "Hey Jordan, it's Cue." }, { role: "user", content: first }, { role: "assistant", content: "That's big." }, { role: "user", content: "Yeah. Anyway, what do I do with it?" }] });
+  const REFLECT = "The fact that Stripe's CEO and Ramp connected is your proof point.";
+  for (const [their, label] of [[said1, "the Stripe CEO"], ["Stripe's CEO and Ramp connected last week.", "Stripe's CEO"], ["The CEO of Stripe and Ramp connected.", "the CEO of Stripe"], ["stripes ceo and ramp connected", "speech recognition's 'stripes ceo'"]]) {
+    const s2 = P.callSources(call(their, REFLECT) as any, "", "");
+    check(`their own words said back pass: they said ${label}`, G.spokenProblem(REFLECT, s2) === null, G.spokenProblem(REFLECT, s2));
+  }
+  const never = P.callSources(call("Ramp's been growing fast.", REFLECT) as any, "", "");
+  check("a name they never said is still held (Stripe, when they only said Ramp)", G.spokenProblem(REFLECT, never)?.kind === "name" && G.spokenProblem(REFLECT, never)!.missing.some((m) => /Stripe/.test(m)), G.spokenProblem(REFLECT, never));
+  check("...and one with a possessive they never said ('Brex's CEO')", G.spokenProblem("The fact that Brex's CEO and Ramp connected is your proof point.", P.callSources(call(said1, "") as any, "", ""))?.kind === "name");
+  // Through the proxy: the whole reply, in one generation, in order (the live turn took 8.3s and came out broken: a hold, then a retry).
+  for (const jobClaims of [false, true]) {
+    const reqs: any[] = [], spoken: string[] = [], dropped: string[] = [];
+    const reply = `${REFLECT} Lead with it in the first minute. What's the one number that shows it?`;
+    for await (const _ of P.runCallLlm(call(said1, reply) as any, { stream: (r: any) => { reqs.push(r); return (async function* () { for (const e of text(reply)) yield e as any; })(); }, clean: true, jobClaims, onSpoken: (x: string) => spoken.push(x), onDropped: (x: string, w: string) => dropped.push(`${x} | ${w}`) } as any)) {}
+    check(`the reflection reaches the voice whole, in one generation, no hold and no retry (${jobClaims ? "gpt-live" : "elevenlabs"})`, spoken.join(" ") === reply && !dropped.length && reqs.length === 1, { spoken, dropped, reqs: reqs.length });
+  }
+}
+
+// ---- 2026-11-07 live call: two questions asking for different answers, in one turn
+{
+  const TWO = "What's the contract you're thinking about with him? Are you two on the same page about it?";
+  for (const jobClaims of [false, true]) {
+    const tag = jobClaims ? "gpt-live" : "elevenlabs";
+    reads.length = 0;
+    const r = await turn(TWO, { their: "I'm thinking about a contract with my cofounder.", jobClaims, sameQuestion: judge(false) });
+    check(`the read says different answers: the second is held (${tag})`, r.spoken.join(" ") === "What's the contract you're thinking about with him?" && r.dropped.some((d) => /same page.*second question/.test(d)) && reads.length === 1 && reads[0][1] === "Are you two on the same page about it?", { r, reads });
+    const nr = await turn(TWO, { their: "I'm thinking about a contract with my cofounder.", jobClaims });
+    check(`with no read: still held (${tag})`, !said(nr, "same page"), nr);
+  }
+}
+
 // ---- edge cases that pass: questions, hypotheticals, observations about the world, "like if you..."
 const PASS = [
   "What would you want an investor to feel in the first ten seconds?",
