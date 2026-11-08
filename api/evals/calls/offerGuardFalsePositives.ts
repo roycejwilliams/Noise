@@ -183,7 +183,27 @@ check("a proper name in an observation is still checked (the 10-08 rule): 'Brigh
     const both = await turn([text("I'll book that."), text("I'll reserve it for you.")], { their: "Can you book it?", jobClaims });
     check(`retry held too: the held-offer line, not "Got it." (${tag})`, both.content.trim() === G.HELD_OFFER_LINE && !both.content.includes(G.HELD_LINE), both);
     const sure = await turn([text("Sure. I'll book that."), text("I'll reserve it for you.")], { their: "Can you book it?", jobClaims });
-    check(`after a "Sure." with the booking held and the retry held: the held-offer line follows, so it isn't left as a yes (${tag})`, sure.spoken.join(" ") === `Sure. ${G.HELD_OFFER_LINE}`, sure.spoken);
+    check(`offer only, the retry held too: the fallback line only, no stray "Sure." (${tag})`, sure.spoken.join(" ") === G.HELD_OFFER_LINE && sure.dropped.some((d) => /^Sure\. \| agreement before a held offer/.test(d)), sure);
+    const sureRetry = await turn([text("Sure. I'll book that."), text("I can't book tables from here.")], { their: "Can you book it?", jobClaims });
+    check(`offer only, the retry answers: its words only, no "Sure." in front (${tag})`, sureRetry.spoken.join(" ") === "I can't book tables from here.", sureRetry.spoken);
+  }
+  // Royce, 2026-11-07: the guard replaces the held offer only, never the whole reply.
+  {
+    const ASK = "Can you book a table at Nopa for Friday and tell me what the vibe is like there?";
+    const VIBE = "Nopa is warm and buzzy, the kind of room where dinner runs long.";
+    for (const jobClaims of [false, true]) {
+      const tag = jobClaims ? "gpt-live" : "elevenlabs";
+      const mixed = await turn([text(`${VIBE} I'll book that for you.`), text("I'll book it for you.")], { their: ASK, jobClaims });
+      check(`mixed: the vibe answer goes out and the fallback stands in for the booking only (${tag})`, mixed.spoken.join(" ") === `${VIBE} ${G.HELD_OFFER_LINE}`, mixed.spoken);
+      const answered = await turn([text(`${VIBE} I'll book that for you.`), text("Booking isn't something I can do from here, but Fridays there are lively.")], { their: ASK, jobClaims });
+      check(`mixed, the retry answers: the vibe stays, the retry's own words cover the booking, no fallback (${tag})`, answered.spoken.join(" ") === `${VIBE} Booking isn't something I can do from here, but Fridays there are lively.` && answered.reqs.length === 2 && JSON.stringify(answered.reqs[1].system).includes(VIBE.slice(0, 30)), answered.spoken);
+      const first = await turn([text(`Sure. I'll book that for you. ${VIBE}`), text("I'll book it.")], { their: ASK, jobClaims });
+      check(`offer first, answer after: the answer goes out, no "Sure.", the fallback covers the offer (${tag})`, first.spoken.join(" ") === `${VIBE} ${G.HELD_OFFER_LINE}`, first.spoken);
+    }
+    const plainSure = await turn(`Sure. ${VIBE}`, { their: "What's the vibe at Nopa?" });
+    check("a bare agreement before anything else is said, in order", plainSure.spoken.join(" ") === `Sure. ${VIBE}`, plainSure.spoken);
+    const alone = await turn("Sure.", { their: "Can we talk Friday?" });
+    check("a bare agreement on its own is said", alone.spoken.join(" ") === "Sure.", alone.spoken);
   }
   const plain = await turn([text("There's a mixer at Foundry Hall on Friday."), text("Maybe the Foundry Hall one.")], { their: "Anything on this week?" });
   check("other held turns keep their line (the event fallback is unchanged)", plain.content.trim() === G.SAFE_LINE, plain.content);
