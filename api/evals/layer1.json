@@ -45,6 +45,7 @@
     "evals/proactive/moodFrustration.ts",
     "evals/proactive/moodFollowUps.ts",
     "evals/proactive/announcements.ts",
+    "evals/proactive/announcementOneChange.ts",
     "evals/events/audience.ts",
     "evals/rhythm/rules.ts",
     "evals/delivery/rules.ts",

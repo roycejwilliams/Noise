@@ -41,6 +41,8 @@ const checksFor = (c: any, extra: Record<string, unknown>) => P.candidateChecks(
 const failedNames = (c: any, extra: Record<string, unknown>) => checksFor(c, extra).filter((k) => !k.pass).map((k) => k.name);
 const shiftCand = (userId: string, id = "s1", more: Record<string, unknown> = {}) => cand({ id, userId, type: "announcement", targetKey: AN.SHIFT_KEY, ...more });
 const renameCand = (userId: string, id = "n1") => cand({ id, userId, type: "name_change", targetKey: NC.NAME_CHANGE_KEY });
+// The draft, with nothing else of theirs waiting (the never-stacked read is tested on its own in evals/proactive/announcementOneChange.ts).
+const draftA = (c: any, deps: Parameters<typeof AN.draftAnnouncement>[1] = {}) => AN.draftAnnouncement(c, { othersWaiting: async () => false, ...deps });
 
 // ---------------------------------------------------------------- 1. the registry
 check("registry: one key each, every key unique", new Set(AN.ANNOUNCEMENTS.map((a) => a.key)).size === AN.ANNOUNCEMENTS.length);
@@ -52,7 +54,8 @@ check("registry: the rename goes first, so a follow-up that carries it finds it 
 // ---------------------------------------------------------------- 2. the words (proposed, option A), and the try line
 check("the shift's words are Royce's approved copy, as written", AN.SHIFT_LEAD === "We're Noise now, and I'm Cue." && AN.SHIFT_BODY === "Noise is for the stretches when life is shifting: a new city, a new role, starting something. My part is knowing what you're in the middle of and finding the person worth meeting for it, at a Noise night or between them. I only introduce you when you both say yes.");
 check("the try lines are Royce's approved copy", AN.SHIFT_TRY_DEFAULT === "If something's shifting for you right now, tell me who'd be good to meet for it and I'll start looking." && AN.SHIFT_TRY_GOAL === "Tell me who'd be good to meet for what you're working on, and I'll start looking.");
-check("the visible-knowledge line is not wired (dropped: not fully true on co-test, see the PR)", !/what I know about you/i.test(src("services/announcements.ts").replace(/^\s*\/\/.*$/gm, "")));
+// The shift's dropped visible-knowledge line stays dropped (the one-change notes line, checked against the code on 2026-11-08, is its own).
+check("the visible-knowledge line is not wired into the shift (dropped: not fully true on co-test, see the PR)", ![AN.SHIFT_LEAD, AN.SHIFT_BODY, AN.SHIFT_TRY_DEFAULT, AN.SHIFT_TRY_GOAL].some((t) => /what I know about you/i.test(t)));
 check("try line: a member with a goal of their own gets the goal line", AN.pickTryLine(AN.SHIFT, { hasOwnGoal: true }) === AN.SHIFT_TRY_GOAL);
 check("try line: everyone else gets the default", AN.pickTryLine(AN.SHIFT, { hasOwnGoal: false }) === AN.SHIFT_TRY_DEFAULT);
 check("try line: the same situation always picks the same line", [1, 2, 3].every(() => AN.pickTryLine(AN.SHIFT, { hasOwnGoal: true }) === AN.SHIFT_TRY_GOAL));
@@ -74,19 +77,20 @@ check("never a changelog or stats: no counts, versions, 'shipped', 'features', '
 // ---------------------------------------------------------------- 3. the harness knows it
 check("a proactive type with its own policy: lowest but the rename, a week between two", P.TYPE_POLICY.announcement.priority === 2 && P.TYPE_POLICY.announcement.typeGapDays === 7 && Object.entries(P.TYPE_POLICY).filter(([t]) => t !== "announcement" && t !== "name_change").every(([, p]) => p.priority > 2));
 check("purpose: ops; payload first never turns it into a task", PROACTIVE_PURPOSE.announcement === "ops" && PAYLOAD_FIRST_EXEMPT.has("announcement"));
-check("drafted from the registry, not a model", /announcement: \{\s*async draft\(c\) \{\s*return \(await import\("\.\.\/services\/announcements\.js"\)\)\.draftAnnouncement\(c\);/.test(src("harness/proactiveRegistry.ts")));
+check("drafted from the registry, not a model", /announcement: \{\s*async draft\(c, person\) \{\s*return \(await import\("\.\.\/services\/announcements\.js"\)\)\.draftAnnouncement\(c, \{ zone: person\.timezone \?\? null \}\);/.test(src("harness/proactiveRegistry.ts")));
 check("a safety hold holds it", failedNames(shiftCand("u"), { safetyHold: true }).includes("safety_hold"));
 check("already on the ledger: never again", failedNames(shiftCand("u"), { sends: [{ type: "announcement", targetKey: AN.SHIFT_KEY, topicKey: AN.SHIFT_KEY, sentAt: new Date(day.getTime() - 30 * D), exempt: false }] }).includes("not_sent_before"));
 check("two announcements a week apart at least", failedNames(cand({ id: "x", userId: "u", type: "announcement", targetKey: "announcement:later" }), { sends: [{ type: "announcement", targetKey: AN.SHIFT_KEY, topicKey: AN.SHIFT_KEY, sentAt: new Date(day.getTime() - 3 * D), exempt: false }] }).includes("type_gap"));
 check("eligible on a plain day", failedNames(shiftCand("u"), {}).length === 0, failedNames(shiftCand("u"), {}));
 
-// ---------------------------------------------------------------- 4. a hard day: it waits, capped, never cancelled
-check("a hard day holds it (the same hold as the rename notice: HOLD_WHILE_STRUGGLING)", P.HOLD_WHILE_STRUGGLING.has("announcement") && failedNames(shiftCand("u"), { needsCare: true }).includes("emotional_timing"));
+// ---------------------------------------------------------------- 4. a hard day: judged, never a class hold (2026-11-08), never cancelled for it
+check("a hard day no longer holds it by class: off HOLD_WHILE_STRUGGLING, no emotional_timing or hard_day check (the send-time read judges it)", !P.HOLD_WHILE_STRUGGLING.has("announcement") && !failedNames(shiftCand("u"), { needsCare: true }).some((n) => n === "emotional_timing" || n === "hard_day"), failedNames(shiftCand("u"), { needsCare: true }));
+check("the rename notice is still held by class on a hard day (unchanged)", P.HOLD_WHILE_STRUGGLING.has("name_change"));
 check("a hard day only waits: the hold is a failed check, so it stays pending (nothing drops it for that)", !/needsCare|struggl|heavy|frustrat|emotion|mood/i.test(src("services/announcements.ts").replace(/^\s*\/\/.*$/gm, "")));
 {
   // The draft never sees a feeling: same text with or without a hard day, and no read of it at all.
   const deps = { approved: true, told: async () => false, situation: async () => ({ hasOwnGoal: false }), now: () => day };
-  const a = await AN.draftAnnouncement(shiftCand("u"), deps);
+  const a = await draftA(shiftCand("u"), deps);
   check("the draft has no mood input and never skips for one", "messages" in a && a.messages[0] === AN.announcementText(AN.SHIFT, { hasOwnGoal: false }, { nameTold: false }), a);
 }
 // With the capped hold (services/moodHold.ts, #253): the cap releases it like every other held check-in. Only when that file is here.
@@ -94,9 +98,9 @@ const MH = await import("../../src/services/moodHold.js" as string).catch(() => 
 if (MH && typeof (P as any).heldForMood === "function") {
   const hardAt = new Date(day.getTime() - 50 * H);
   const capped = MH.moodHold({ needsCare: true, hardAt, hardSince: hardAt }, { now: day, lastInboundAt: null });
-  check("capped: past the cap it goes, struggling or not", capped.state === "released_cap" && !failedNames(shiftCand("u"), { needsCare: true, moodHold: capped }).includes("emotional_timing"), capped);
+  check("capped: past the cap, nothing holds it by class", capped.state === "released_cap" && !failedNames(shiftCand("u"), { needsCare: true, moodHold: capped }).includes("emotional_timing"), capped);
   const held = MH.moodHold({ needsCare: true, hardAt: new Date(day.getTime() - 2 * H), hardSince: new Date(day.getTime() - 2 * H) }, { now: day, lastInboundAt: null });
-  check("capped: inside the cap it waits", held.hold && failedNames(shiftCand("u"), { needsCare: true, moodHold: held }).includes("emotional_timing"));
+  check("inside the cap: still no class hold (the read decides send, wait or drop)", held.hold && !failedNames(shiftCand("u"), { needsCare: true, moodHold: held }).includes("emotional_timing"));
 }
 
 // ---------------------------------------------------------------- 5. nothing rides along
@@ -115,19 +119,19 @@ check("dispatch: the only thing an announcement claims with it is the rename it 
 {
   let reads = 0;
   const counting = { told: async () => (reads++, false), situation: async () => (reads++, { hasOwnGoal: false }), now: () => day };
-  const d = await AN.draftAnnouncement(shiftCand("u"), { ...counting, approved: false });
+  const d = await draftA(shiftCand("u"), { ...counting, approved: false });
   check("unapproved: the draft waits a day and reads nothing", "defer" in d && d.defer.getTime() === day.getTime() + D && reads === 0, d);
-  const told = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async (_u, k) => k === AN.SHIFT_KEY, situation: async () => ({ hasOwnGoal: true }), now: () => day });
+  const told = await draftA(shiftCand("u"), { approved: true, told: async (_u, k) => k === AN.SHIFT_KEY, situation: async () => ({ hasOwnGoal: true }), now: () => day });
   check("told already: nothing goes", "skip" in told, told);
-  const past = await AN.draftAnnouncement(shiftCand("u", "s1", { expiresAt: new Date(day.getTime() - 1000) }), { approved: true, told: async () => false, situation: async () => ({ hasOwnGoal: true }), now: () => day });
+  const past = await draftA(shiftCand("u", "s1", { expiresAt: new Date(day.getTime() - 1000) }), { approved: true, told: async () => false, situation: async () => ({ hasOwnGoal: true }), now: () => day });
   check("past its end: nothing goes", "skip" in past && /end/.test(past.skip), past);
-  const renamed = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async (_u, k) => k === NC.NAME_CHANGE_KEY, situation: async () => ({ hasOwnGoal: true }), now: () => day });
+  const renamed = await draftA(shiftCand("u"), { approved: true, told: async (_u, k) => k === NC.NAME_CHANGE_KEY, situation: async () => ({ hasOwnGoal: true }), now: () => day });
   check("rename reached them: the follow-up lead and their goal line", "messages" in renamed && renamed.messages.length === 1 && renamed.messages[0] === `${AN.SHIFT_LEAD} ${AN.SHIFT_BODY} ${AN.SHIFT_TRY_GOAL}`, renamed);
-  const fresh = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async () => false, situation: async () => ({ hasOwnGoal: false }), now: () => day });
+  const fresh = await draftA(shiftCand("u"), { approved: true, told: async () => false, situation: async () => ({ hasOwnGoal: false }), now: () => day });
   check("rename hasn't reached them: one text, the same opening (it says the new name)", "messages" in fresh && fresh.messages.length === 1 && fresh.messages[0] === `${AN.SHIFT_LEAD} ${AN.SHIFT_BODY} ${AN.SHIFT_TRY_DEFAULT}`, fresh);
-  const odd = await AN.draftAnnouncement(cand({ id: "z", userId: "u", type: "announcement", targetKey: "announcement:unknown" }), { approved: true });
+  const odd = await draftA(cand({ id: "z", userId: "u", type: "announcement", targetKey: "announcement:unknown" }), { approved: true });
   check("an unknown key is never drafted", "skip" in odd);
-  const sitFails = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async () => true, situation: async () => { throw new Error("db down"); }, now: () => day }).catch(() => "threw");
+  const sitFails = await draftA(shiftCand("u"), { approved: true, told: async () => true, situation: async () => { throw new Error("db down"); }, now: () => day }).catch(() => "threw");
   check("told check first: an already-told member costs no situation read", typeof sitFails === "object" && "skip" in sitFails);
 }
 
@@ -244,13 +248,13 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
     const jordan = person("Jordan", "+14155550301");
     f.ledger.sends.push({ user_id: jordan.userId, type: "name_change", target_key: NC.NAME_CHANGE_KEY, topic_key: NC.NAME_CHANGE_KEY, sent_at: new Date(day.getTime() - 20 * D), exempt: false, message: NC.NAME_CHANGE_TEXT });
     const c = shiftCand(jordan.userId, "s1");
-    const drafted = await AN.draftAnnouncement(c, { approved: true, situation: async () => ({ hasOwnGoal: false }) });
+    const drafted = await draftA(c, { approved: true, situation: async () => ({ hasOwnGoal: false }) });
     check("once: the draft (real ledger read) knows the rename reached him", "messages" in drafted && drafted.messages[0] === leadA, drafted);
     const first = await P.sendWithLedgerForTests(c, jordan, [leadA]);
     const second = await P.sendWithLedgerForTests(c, jordan, [leadA]);
     check("once: it goes once, as its own text", first.sent === true && f.ledger.outbox.filter((m: any) => m.to === jordan.phoneNumber).length === 1, f.ledger.outbox);
     check("once: the second try is refused at the ledger", second.sent === false);
-    const again = await AN.draftAnnouncement(c, { approved: true, situation: async () => ({ hasOwnGoal: false }) });
+    const again = await draftA(c, { approved: true, situation: async () => ({ hasOwnGoal: false }) });
     check("once: the draft re-reads the ledger and skips once told", "skip" in again, again);
     check("once: it counts as a paced text (not exempt), like the rename's own text", f.ledger.sends.some((s) => s.target_key === AN.SHIFT_KEY && !s.exempt));
   } finally {
@@ -264,7 +268,7 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
     const noor = person("Noor", "+14155550302");
     const notice = renameCand(noor.userId, "n2");
     const c = shiftCand(noor.userId, "s2");
-    const drafted = await AN.draftAnnouncement(c, { approved: true, situation: async () => ({ hasOwnGoal: false }) });
+    const drafted = await draftA(c, { approved: true, situation: async () => ({ hasOwnGoal: false }) });
     check("not told: the draft (real ledger read) opens with the rename", "messages" in drafted && drafted.messages[0] === folded, drafted);
     const fold = AN.nameFold(c, [folded], [notice]);
     const sent = await P.sendWithLedgerForTests(c, noor, [folded], {}, [], fold as any);
@@ -341,7 +345,7 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
   check("11-02: texts only: no link, no page, no try line, no rename fold", !/https?:|www\.|\.com|\/\//.test(APPROVED.join(" ")) && U.tryLines.length === 0 && !U.foldLead);
   check("11-02: for members who joined before the first change landed (#345, 2026-11-02 18:45 UTC)", typeof U.audience === "object" && U.audience.joinedBefore.toISOString() === "2026-11-02T18:45:06.000Z");
   let reads = 0;
-  const d = await AN.draftAnnouncement(cand({ id: "u1", userId: "u", type: "announcement", targetKey: U.key }), { told: async () => (reads++, false), situation: async () => { throw new Error("never read"); }, now: () => day });
+  const d = await draftA(cand({ id: "u1", userId: "u", type: "announcement", targetKey: U.key }), { told: async () => (reads++, false), situation: async () => { throw new Error("never read"); }, now: () => day });
   check("11-02 draft: the three texts as separate messages, one told read, no situation read", "messages" in d && JSON.stringify(d.messages) === JSON.stringify(APPROVED) && reads === 1, d);
   if ("messages" in d) {
     const bad = P.checkDraft(d.text, d.rules).filter((k) => !k.pass);
@@ -349,9 +353,9 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
   }
   check("11-02: the narration rule would refuse the opening ('on my side'); only that approved sentence is admitted, by exact match", P.checkDraft(APPROVED.join("\n"), AN.ANNOUNCEMENT_RULES).some((k) => k.name === "draft_narrates_state" && !k.pass) && JSON.stringify(U.narrationApproved) === JSON.stringify([APPROVED[0]]));
   check("narration admission is exact: a model draft with the same words in another sentence still fails", P.checkDraft("Nothing new on my side today.", { ...AN.ANNOUNCEMENT_RULES, approvedSentences: [APPROVED[0]] }).some((k) => k.name === "draft_narrates_state" && !k.pass) && P.checkDraft("A few things changed on my side: calls.", { ...AN.ANNOUNCEMENT_RULES, approvedSentences: [APPROVED[0]] }).some((k) => k.name === "draft_narrates_state" && !k.pass));
-  const toldD = await AN.draftAnnouncement(cand({ id: "u2", userId: "u", type: "announcement", targetKey: U.key }), { told: async (_u, k) => k === U.key, now: () => day });
+  const toldD = await draftA(cand({ id: "u2", userId: "u", type: "announcement", targetKey: U.key }), { told: async (_u, k) => k === U.key, now: () => day });
   check("11-02 draft: told already, nothing goes", "skip" in toldD);
-  const unappr = await AN.draftAnnouncement(cand({ id: "u3", userId: "u", type: "announcement", targetKey: U.key }), { approved: false, told: async () => false, now: () => day });
+  const unappr = await draftA(cand({ id: "u3", userId: "u", type: "announcement", targetKey: U.key }), { approved: false, told: async () => false, now: () => day });
   check("11-02 draft: unapproved waits", "defer" in unappr);
 }
 {
