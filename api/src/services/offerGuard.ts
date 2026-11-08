@@ -8,6 +8,7 @@
 import { numbersBacked } from "./taskWeb.js";
 import { PROMISE_RE } from "./promises.js";
 import { COMMIT_RE } from "./callCommitments.js";
+import { isAlsoAName, isCommonWord } from "./commonWords.js";
 const EVENT_WORDS = /\b(events?|workshops?|fairs?|pop-?ups?|concerts?|panels?|meet-?ups?|mixers?|dinners?|parties|party|classes|class|festivals?|launch(?:es)?|demo days?|hackathons?|retreats?|happening|going on|gatherings?|sessions?|tournaments?|markets?|screenings?|exhibits?|reception)\b/i;
 const TIME = /\b\d{1,2}(?::\d{2})?\s?(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b/gi;
 const MONTHS_DAYS = new Set("monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december".split(" "));
@@ -19,7 +20,34 @@ const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 export type Mention = { text: string; kind: "name" | "time" };
 
-// The names (capitalized runs after the sentence's first word) and clock times a sentence puts forward.
+// The sentence's first word is a name it puts forward (review of #418: "Maya would be great for you to meet." passed on calls with no
+// backing, while "You should meet Maya." was held). A capital there is the sentence's own, so the word counts as a name only when it isn't
+// an ordinary English word (services/commonWords.ts, the en_US Hunspell dictionary): "Maya", "Priya", "Stripe's" go on to be checked like
+// any other name; "Honestly", "Today", "Coffee", "Pitching" don't. A word the dictionary also has as a name ("Grace", "Will", "Mark")
+// leans to a name when a verb a name takes follows it ("Will is coming", never "Will you be there?"). Contractions, sentence openers
+// (STARTERS, NOT_NAMES, days and months) and interjections are never names. Without the word table, no first word is (as before).
+const STARTERS = new Set("he she they we you it its this that these those there here everyone everybody everything someone somebody something anyone anybody anything nobody nothing none each every either neither both all most many much more some few several one another other others such which what who whom whose whoever whatever whichever where when why how today tonight tomorrow yesterday now then later soon often sometimes usually always never once mine yours ours theirs his hers my our their me us them myself yourself ourselves themselves himself herself itself lol haha ha hah ooh aw aww yay whoa mhm mm hmm um uh".split(" "));
+// Short month and day names ("Oct 16 is 3 days out", "Thu works").
+const DATE_SHORT = new Set("jan feb mar apr jun jul aug sep sept oct nov dec mon tue tues wed thu thur thurs fri sat sun".split(" "));
+const NAME_VERBS = new Set("is was has had would will can could should might may must does did knows knew said says thinks thought wants wanted loves loved likes liked runs ran works worked lives lived told tells asked asks went goes got gets came comes made started starts".split(" "));
+export function firstWordName(words: string[]): string | null {
+  const w = (words[0] ?? "").replace(/[’]/g, "'");
+  const bare = w.replace(/^[("'“]+|[)"'”.,!?;:]+$/g, "");
+  // One capital, then lowercase ("Maya", "Stripe's"): an all-caps word ("APIs", "YC") is an acronym, read by its own rule.
+  if (!/^[A-Z][a-z'-]*[a-z]$/.test(bare)) return null;
+  // A contraction ("Don't", "Let's", "That's", "I'm") is the word before it; only a possessive or "is" ('s) carries a name.
+  if (/'(?!s$)/.test(bare)) return null;
+  const name = bare.replace(/'s$/, "");
+  const lower = name.toLowerCase();
+  if (STARTERS.has(lower) || NOT_NAMES.has(lower) || MONTHS_DAYS.has(lower) || DATE_SHORT.has(lower)) return null;
+  const common = isCommonWord(name);
+  if (common === null) return null;
+  if (!common) return name;
+  const next = (words[1] ?? "").toLowerCase().replace(/[’]/g, "'").replace(/[^a-z']/g, "");
+  return !/[.,!?;:]$/.test(w) && isAlsoAName(name) && (NAME_VERBS.has(next) || /'s$/.test(bare)) ? name : null;
+}
+
+// The names (capitalized runs, the first word only when it reads as a name: firstWordName) and clock times a sentence puts forward.
 export function mentionsIn(sentence: string): Mention[] {
   const clean = sentence.replace(/\[[a-z][a-z ]*\]\s*/gi, "");
   const out: Mention[] = [];
@@ -27,10 +55,15 @@ export function mentionsIn(sentence: string): Mention[] {
   const words = clean.split(/\s+/).filter(Boolean);
   let run: string[] = [];
   const flush = () => { if (run.length) out.push({ text: run.join(" "), kind: "name" }); run = []; };
+  const lead = firstWordName(words);
   words.forEach((w, i) => {
     const bare = w.replace(/^[("'“]+|[)"'”.,!?;:]+$/g, "");
     const lower = bare.toLowerCase();
-    if (i === 0) return; // a capital at the start of a sentence says nothing
+    // A capital at the start of a sentence says nothing, unless the word reads as a name there (firstWordName).
+    if (i === 0) {
+      if (lead) { run.push(lead); if (/[.,!?;:]$/.test(w)) flush(); }
+      return;
+    }
     if (/^[A-Z]/.test(bare) && !NOT_NAMES.has(lower) && !MONTHS_DAYS.has(lower)) {
       run.push(bare);
       if (/[.,!?;:]$/.test(w)) flush();
