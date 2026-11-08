@@ -464,20 +464,33 @@ export async function changeSituationOf(userId: string, db: Db = pool): Promise<
 }
 
 // Never stacked (2026-11-08): an announcement doesn't go while anything else of theirs is about to: another of their pending
-// candidates due by the end of their day (and not past its end), or a deferred send of theirs queued or going out
-// (services/deferredSends.ts). Other announcements aren't counted (quietDayOnly already sends those one at a time, oldest first, a week
-// apart, and counting them would hold both forever), nor, for one that carries the rename, the rename notice it claims.
+// candidates that could actually go today (due from STALE_DUE_HOURS ago up to the end of their local day, and not past its end), or a
+// deferred send of theirs queued or going out (services/deferredSends.ts). A candidate long past due that never became eligible (a
+// gate keeps it back, a NULL expiry) doesn't count: it would hold every announcement for as long as it sits there. Other announcements
+// aren't counted (quietDayOnly already sends those one at a time, oldest first, a week apart, and counting them would hold both
+// forever), nor, for one that carries the rename, the rename notice it claims.
 export const STACK_WAIT_HOURS = 3;
+export const STALE_DUE_HOURS = 6;
 export const OTHERS_WAITING_SQL = `SELECT EXISTS (SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND ($2::text IS NULL OR id::text <> $2)
-         AND type <> 'announcement' AND NOT ($4::boolean AND type = 'name_change') AND due_at < $3 AND (expires_at IS NULL OR expires_at > NOW()))
+         AND type <> 'announcement' AND NOT ($4::boolean AND type = 'name_change') AND due_at >= $5 AND due_at < $3 AND (expires_at IS NULL OR expires_at > $6))
     OR EXISTS (SELECT 1 FROM deferred_sends WHERE user_id = $1 AND status IN ('queued', 'sending')) AS waiting`;
 // Pure: the end of their local day (their zone, else Pacific's).
 export function endOfLocalDay(now: Date, zone: string | null): Date {
   const z = zone && DateTime.now().setZone(zone).isValid ? zone : MONTH_ZONE;
   return DateTime.fromJSDate(now).setZone(z).endOf("day").toJSDate();
 }
+// Pure: the window a pending candidate's due time must fall in to count (from STALE_DUE_HOURS ago to the end of their day), and the
+// same rule in code: due inside it, and not past its end.
+export function waitingWindow(now: Date, zone: string | null): { from: Date; to: Date } {
+  return { from: new Date(now.getTime() - STALE_DUE_HOURS * 3_600_000), to: endOfLocalDay(now, zone) };
+}
+export function countsAsWaiting(c: { dueAt: Date; expiresAt: Date | null }, now: Date, zone: string | null): boolean {
+  const w = waitingWindow(now, zone);
+  return c.dueAt.getTime() >= w.from.getTime() && c.dueAt.getTime() < w.to.getTime() && (!c.expiresAt || c.expiresAt.getTime() > now.getTime());
+}
 export async function othersWaitingOf(o: { userId: string; candidateId: string | null; zone: string | null; now: Date; carriesRename: boolean }, db: Db = pool): Promise<boolean> {
-  const { rows } = await db.query(OTHERS_WAITING_SQL, [o.userId, o.candidateId, endOfLocalDay(o.now, o.zone), o.carriesRename]);
+  const w = waitingWindow(o.now, o.zone);
+  const { rows } = await db.query(OTHERS_WAITING_SQL, [o.userId, o.candidateId, w.to, o.carriesRename, w.from, o.now]);
   if (typeof rows[0]?.waiting !== "boolean") throw new Error("no answer");
   return rows[0].waiting;
 }
