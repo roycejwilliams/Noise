@@ -59,10 +59,11 @@ export function mentionsIn(sentence: string): Mention[] {
   words.forEach((w, i) => {
     const bare = w.replace(/^[("'“]+|[)"'”.,!?;:]+$/g, "");
     const lower = bare.toLowerCase();
-    // A capital at the start of a sentence says nothing, unless the word reads as a name there (firstWordName).
+    // A capital at the start of a sentence says nothing, unless the word reads as a name there (firstWordName, #419) or is all caps:
+    // "AJ would be great to meet", "IBM has a program" put a name forward like any other (review of #418).
     if (i === 0) {
-      if (lead) { run.push(lead); if (/[.,!?;:]$/.test(w)) flush(); }
-      return;
+      if (lead) { run.push(lead); if (/[.,!?;:]$/.test(w)) flush(); return; }
+      if (!(/^[A-Z]{2,5}s?$/.test(bare) && !NOT_NAMES.has(lower))) return;
     }
     if (/^[A-Z]/.test(bare) && !NOT_NAMES.has(lower) && !MONTHS_DAYS.has(lower)) {
       run.push(bare);
@@ -148,6 +149,11 @@ export const UNSURE_NAME = "I'm not sure of the name.";
 export const UNSURE_NUMBER = "I'm not sure of the exact number.";
 // Said when everything else this turn was held back and none of it was an event offer (whose fallback is SAFE_LINE).
 export const HELD_LINE = "Got it.";
+// Said instead when the held line was an offer that needs a way to carry it out (offerNeedingPath) and the retry was held too: after
+// "can you book it?", "Got it." sounds like a yes (review of #418). Never a promise, never agreement.
+// TODO(Royce): exact wording pending Royce's yes. Options proposed on PR #418: "That's not something I can do from here." (wired, the
+// safest), "I can't do that one from here.", "That one's not something I can take care of on a call."
+export const HELD_OFFER_LINE = "That's not something I can do from here.";
 
 // Capitalized words that are formats, everyday apps and titles, not a claim about anyone or anywhere ("I'll send the PDF",
 // "a Google Doc"). They back a spoken name like any source line (callLlmProxy.ts callSources); a promise's subject never.
@@ -197,12 +203,18 @@ export const CRISIS_NUMBERS: ReadonlySet<string> = new Set(["988", "911", "74174
 export const CRISIS_RESOURCE_LINE = /\b(?:call|text|dial|reach|contact)\b[^.!?]{0,40}?(?:\b988\b|\b911\b|\b741741\b|\b9-8-8\b|\bnine[- ]eight[- ]eight\b)|\b988\s+(?:suicide|lifeline|crisis)\b|\bcrisis (?:text )?line\b/i;
 // The crisis text line's keyword ("text HOME to 741741") and the lifeline's own name, on such a line only.
 const CRISIS_WORDS = /^(?:home|988|911|741741|lifeline|crisis|suicide|(?:the )?988 suicide (?:&|and) crisis lifeline|crisis text line)$/i;
-// An all-caps term on its own ("TTS", "LLMs", "API") said in a sentence that offers nothing is vocabulary, the way SPOKEN_COMMON's
-// formats and titles are: "A lot of TTS systems sound fine in isolation..." was held back on Royce's dev calls (2026-10-31 to 11-04)
-// as an unbacked name. It stays checked as a name where it can be one: after "at", "from", "in", "with"... ("someone at IBM",
-// "the scene in SF"), and in any sentence that offers to do, find, send or set up something or promises a result (offersToAct).
+// An all-caps term used as a kind of thing ("TTS systems", "API calls", "LLMs") in a sentence that offers nothing is vocabulary, the way
+// SPOKEN_COMMON's formats and titles are: "A lot of TTS systems sound fine in isolation..." was held back on Royce's dev calls
+// (2026-10-31 to 11-04) as an unbacked name. Narrowed in review of #418: exempt only when it's plural ("LLMs") or a common noun follows
+// it ("TTS systems"); never when it's the sentence's singular subject ("YC is a good fit", "IBM has a program"), after a person cue
+// ("meet AJ", "someone at", "talk to"), after at/from/with/in ("someone at IBM", "the scene in SF"), or in any sentence that offers to do,
+// find, send or set up something or promises a result (offersToAct). A singular one followed by a function word or a verb ("AJ would",
+// "IBM has") is a name and stays checked.
 const ACRONYM = /^[A-Z]{2,5}s?$/;
 const ORG_OR_PLACE_BEFORE = /\b(?:at|from|with|in|near|around|inside|joined|joining|by|to|for|of the|via)\s+$/i;
+const PERSON_CUE_BEFORE = /\b(?:meet|meeting|met|talk(?:ing)? to|speak(?:ing)? (?:to|with)|know|knows|someone|somebody|person|people|introduce|introducing|intro|ask|call|text|email|reach out to|ping)\s+(?:\w+\s+)?$/i;
+// What can follow a singular name but never makes it a kind of thing: verbs and function words ("AJ would", "IBM has", "YC is").
+const NOT_A_NOUN_AFTER = new Set("is are was were be been being has have had would will can could should may might must does do did says said thinks knows wants runs and or but nor so yet a an the to of for in on at with by from that this it its who which whose whom if as than then just really also too".split(" "));
 // Cue proposing to act for them, or promising a result: a promise of later work (promisesLaterWork), an event placed, or a first-person
 // offer to intro, connect, send, book, reserve, set up, find or get them something ("I can intro you to...", "want me to book it?",
 // "let me set that up", "you'll have three intros by Friday"). Questions count: "Want me to...?" is an offer.
@@ -214,8 +226,17 @@ export function offersToAct(sentence: string): boolean {
 // Pure: the mention is an all-caps term used as vocabulary in this sentence (never in an offer, never after an org or place word).
 export function vocabularyTerm(m: Mention, sentence: string): boolean {
   if (m.kind !== "name" || !ACRONYM.test(m.text) || offersToAct(sentence)) return false;
+  const plural = /[A-Z]s$/.test(m.text);
   const at = [...sentence.matchAll(new RegExp(String.raw`(?<![A-Za-z])${m.text}(?![A-Za-z])`, "g"))].map((x) => x.index ?? 0);
-  return at.length > 0 && at.every((i) => !ORG_OR_PLACE_BEFORE.test(sentence.slice(Math.max(0, i - 24), i)));
+  return at.length > 0 && at.every((i) => {
+    const before = sentence.slice(Math.max(0, i - 32), i);
+    if (ORG_OR_PLACE_BEFORE.test(before) || PERSON_CUE_BEFORE.test(before)) return false;
+    if (plural) return true;
+    // Singular: only as a kind of thing, with a common noun right after it ("TTS systems"), never as the subject at the start.
+    if (!/[A-Za-z]/.test(sentence.slice(0, i).replace(/\[[a-z ]+\]/gi, ""))) return false;
+    const next = sentence.slice(i + m.text.length).match(/^\s+([a-z][a-z'-]*)/)?.[1];
+    return !!next && !NOT_A_NOUN_AFTER.has(next);
+  });
 }
 export function spokenProblem(sentence: string, src: SpokenSources): SpokenProblem | null {
   const s = sentence.replace(/\[[a-z][a-z ]*\]\s*/gi, "").trim();

@@ -36,3 +36,10 @@ export const haikuSameQuestion: SameQuestion = async (first, next) => {
   const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 20, abortSignal: AbortSignal.timeout(SAME_QUESTION_TIMEOUT_MS), experimental_telemetry: { isEnabled: true, functionId: "call.sameQuestion" }, prompt: sameQuestionPrompt(first, next) });
   return parseSameQuestion(text);
 };
+
+// What both call paths ask (routes/callLlm.ts, gptLive.ts thinkOnCall): Haiku, or a test's stand-in.
+let sameQuestionImpl: SameQuestion = haikuSameQuestion;
+export const callSameQuestion: SameQuestion = (first, next) => sameQuestionImpl(first, next);
+export function setSameQuestionForTest(f: SameQuestion | null): void {
+  sameQuestionImpl = f ?? haikuSameQuestion;
+}

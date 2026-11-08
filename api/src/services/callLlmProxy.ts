@@ -10,7 +10,7 @@
 // (the stream passes through untouched, no push needed).
 import { SpeakableStream } from "./speakable.js";
 import { stockSentence } from "../harness/stockLines.js";
-import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, offerNeedingPath, prepareSource, sourceCorpus, spokenProblem, type OfferKind, type SpokenSources } from "./offerGuard.js";
+import { HELD_LINE, HELD_OFFER_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, offerNeedingPath, prepareSource, sourceCorpus, spokenProblem, type OfferKind, type SpokenSources } from "./offerGuard.js";
 import { SAME_QUESTION_TIMEOUT_MS, type SameQuestion } from "./questionRead.js";
 import { memberStateSignal } from "./memberState.js";
 import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.js";
@@ -923,6 +923,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   }
   // A held offer always gets its answer: "Sure." with the booking held back would leave them thinking it's being done.
   const heldOffer = heldWhy.some((w) => w.startsWith("offer held: "));
+  // How much had been said when the held turn's retry started (a held offer's retry that adds nothing still owes them a plain no).
+  let spokenBeforeRetry = -1;
   if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer || !spokeSinceTools || heldOffer)) {
     const already = spokenLines.length ? ` You already said: "${spokenLines.join(" ")}". Carry on from it; don't repeat it.` : "";
     // A sentence held only for repeating what's done, asked or closed gets its own note (review of #368), never the "can't back" one.
@@ -930,6 +932,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     const note = moveOnly ? `What you were about to say repeated something already said, sent or closed in this exchange (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer what they last said, in your own words, without repeating it.${already}` : `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${heldWhy.some((w) => w.startsWith("offer held: ")) ? " Nothing on this call can book anything or make introductions: don't offer or promise it another way (later, by text, after the call). Say plainly it isn't something you can do from here." : ""}${already}`;
     const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
     inRetry = true;
+    spokenBeforeRetry = spokenLines.length;
     let rs: SpeakableStream | null = null;
     try {
       for await (const ev of deps.stream(retry)) {
@@ -972,8 +975,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (heldStock && !spokeAny) { const h = sayHeld(); if (h) yield chunk({ content: h }); }
   }
   // Last resort only (the retry was held back too, or failed): one plain line, never silence.
-  if ((blanked || heldEnd) && !spokeAny && finish !== "tool_calls") {
-    const line = heldEvent ? SAFE_LINE : HELD_LINE;
+  // A held offer (a booking, intros): never "Got it." (it sounds like a yes) and never the safe line (a promise), even after a "Sure.".
+  const offerUnanswered = heldOffer && spokenBeforeRetry >= 0 && spokenLines.length === spokenBeforeRetry;
+  if ((blanked || heldEnd) && (!spokeAny || offerUnanswered) && finish !== "tool_calls") {
+    const line = heldOffer ? HELD_OFFER_LINE : heldEvent ? SAFE_LINE : HELD_LINE;
     spokenLines.push(line);
     deps.onSpoken?.(line);
     deps.onLastResort?.(line);
