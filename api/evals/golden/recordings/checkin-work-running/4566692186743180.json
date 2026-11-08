@@ -1,0 +1,102 @@
+{
+  "hash": "4566692186743180",
+  "case": "checkin-work-running",
+  "recorded_at": "2026-11-08T00:42:58.460Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 2pm. Cue's daily search is looking for a rooftop venue for the Sequin AI launch party for the member; nothing else is pending. The member texted \"Just checking in\". Cue's text: \"\"\"Good to hear from you. St...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 2pm. Cue's daily search is looking for a rooftop venue for the Sequin AI launch party for the member; nothing else is pending. The member texted \"Just checking in\".\n\nCue's text:\n\"\"\"Good to hear from you. Still working the rooftop search for the Sequin launch, nothing back yet, but it's moving.\"\"\"\n\nDoes the text give presence (a warm hello back) AND mention the rooftop venue search for the Sequin AI launch party as the one thing from their world? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if both hold.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Good to hear from you\\\" (presence) + \\\"Still working the rooftop search for the Sequin launch\\\" (one item), no list or rundown.\"}",
+      "usage": {
+        "input_tokens": 290,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 157,
+        "output_tokens_details": {
+          "thinking_tokens": 93
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgpXtq4g6jNnFuvwvMZJL",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Eq8FCsQCCBMYAipAjN0r1oAWi5PggIrEpBQvzUO7xt/OuYb/TOfIyFFSTPj/JQ9mjkUP0Ea/9FW5A7MV+HAuLlUaiBYzyZZpXFTAUjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBkYu/1wbCAToIBBAAGgwC2ooDTzcF9MwEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAfAuX0UJ4c3KHSKZHt40FAIQqfCFSth0gObDxydrD83yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyQIkw+N5aDU3TjoAIaDPEBpY0lQt2SMJTh9yIw4sMUTtfdR8s0G+aUBqC2FYZVtntqf1mD5kExL02BMyKyRzEL7nqnTNTqLTIygxdUKpcCrJsiNNKWNs3TI3iVcdnQTEaZ5eWJt29evrkSlAo385ahX706HHYfxHBVGsgIsGIHQ87WjIrp5wmafZGuAi+peeqeLLuJd3X1Q9XyxPjbIDVn9t1o7CzvN2ObA4CdM+FBbuLtzkJphHMiNM0Djos7uOyCrXP5/tFFsnaYXXc8B4VLQfplmZS+f4qgjWHj4SZJYlzHLV6vA2RHZUhZjnWHMjxrnmMX73krl9vvhSk7jNDqu7xFGw2Opdeo9r3YSL6wRvENyq66GPV4AS+5LacIQfthpCpUukZDblxHsNWUz4zp//M5/xw8UFCysj8WyP5kXQPabULJWpiyGOKV12yIzUJeF6CrnhFTLEijXGgavwyqZvrUagCYGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Good to hear from you\\\" (presence) + \\\"Still working the rooftop search for the Sequin launch\\\" (one item), no list or rundown.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 290,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 157,
+          "output_tokens_details": {
+            "thinking_tokens": 93
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "4566692186743180",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
