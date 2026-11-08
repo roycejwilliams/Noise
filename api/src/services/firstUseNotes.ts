@@ -21,8 +21,22 @@ type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> }
 export const FIRST_USE_SOURCE = "first_use_note";
 export const MAKER_FIRST_USE_KEY = "first_use:makers";
 
-// An email draft ask (the makers' MAKER_ASK covers decks, docs, pages and PDFs, not email): only for the first-use note.
-export const EMAIL_DRAFT_ASK = /\b(write|draft|compose|put together|help me (write|with)|can you (write|draft)|could you (write|draft))\b[^.?!\n]{0,40}\b(e-?mails?)\b/i;
+// What the note is for: a request aimed at Cue to MAKE one ("can you draft an email to my landlord", "make me a deck for Friday", "help
+// me write a one-pager", "write an email for me"). Its own, narrower read than the decline rule's MAKER_ASK (harness/replyGrounding.ts,
+// unchanged): never a message about their own writing ("I need to write a resignation email tomorrow", "just finished my draft of the
+// email"), and never an ask to send or share something that already exists ("could you send me the doc from the event").
+const MAKE = String.raw`(?:make|build|draft|write|design|create|compose|put together|throw together)`;
+const THING = String.raw`(?:pitch ?decks?|slide ?decks?|decks?|slides|slideshows?|presentations?|documents?|docs?|pdfs?|one-?pagers?|write-?ups?|web ?pages?|landing pages?|pages?|e-?mails?)`;
+export const FIRST_USE_ASK: readonly RegExp[] = [
+  // "can you / could you / will you / would you (please) (help me) make ..."
+  new RegExp(String.raw`\b(?:can|could|will|would) you (?:please )?(?:help me )?${MAKE}\b[^.?!\n]{0,40}\b${THING}\b`, "i"),
+  // "help me write / help me with ..."
+  new RegExp(String.raw`\bhelp me (?:with|${MAKE})\b[^.?!\n]{0,40}\b${THING}\b`, "i"),
+  // "make me a deck", "draft me an email", "write me a one-pager"
+  new RegExp(String.raw`\b${MAKE} me\b[^.?!\n]{0,30}\b${THING}\b`, "i"),
+  // "write an email for me"
+  new RegExp(String.raw`\b${MAKE}\b[^.?!\n]{0,40}\b${THING}\b[^.?!\n]{0,20}\bfor me\b`, "i"),
+];
 
 // The tools that made what was removed, as Cue's action record holds them (co_facts source tool.<name>, written by
 // services/coFacts.ts recordToolAction and the ledger's tool rows, services/ledger.ts toolOutcomeRow).
@@ -61,9 +75,9 @@ export async function makerChangeTold(userId: string, db: Db = pool): Promise<bo
 export const MAKER_FIRST_USE_FACTS =
   "A change to say once, the first time it matters, which is now: until early November Cue made decks, pages, documents and email drafts for members, and this member was around then. Cue stopped making them so it can put that time into who they should meet. Say plainly, in your own words and in one or two short sentences, that this changed. Then offer what Cue does now: if they still need one made, Cue can look for someone they could meet who does that. Nothing is promised beyond the look. This is the only time: don't bring the change up again in later replies.";
 
-// Pure: whether this message is one the note is for.
-export function asksForRemovedMaker(message: string, makerAsk: RegExp): boolean {
-  return makerAsk.test(message) || EMAIL_DRAFT_ASK.test(message);
+// Pure: whether this message asks Cue to make one of what was removed (FIRST_USE_ASK).
+export function asksForRemovedMaker(message: string): boolean {
+  return FIRST_USE_ASK.some((r) => r.test(message));
 }
 
 // Pure: whether the note goes in this reply. Joined before the change, and not told yet. Unread (null) is no note: the reply still

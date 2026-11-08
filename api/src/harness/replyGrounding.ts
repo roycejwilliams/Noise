@@ -293,7 +293,7 @@ export async function gatherReplyFacts(
   // it changed and what Cue does now, for Cue to say in its own words. Noted every turn (given or not); recorded only once this reply went.
   {
     const F = await import("../services/firstUseNotes.js").catch(() => null);
-    const note = F && F.asksForRemovedMaker(theirMessage, MAKER_ASK) ? await F.makerFirstUseNote(userId).catch(() => null) : null;
+    const note = F && F.asksForRemovedMaker(theirMessage) ? await F.makerFirstUseNote(userId).catch(() => null) : null;
     if (note) addInstruction(rf, note);
     F?.noteMakerFirstUse(userId, !!note);
   }
