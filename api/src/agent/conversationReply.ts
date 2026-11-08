@@ -57,6 +57,48 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
 export function plainSetAsideOwed(o: { isVoice: boolean; scope: { scope: string } | null; sent: boolean; replies: number; linkDelivered: boolean; sendStopped: boolean; reacted?: boolean; text: string }): boolean {
   return !o.isVoice && !!o.scope && o.scope.scope !== "in" && o.sent && o.replies === 0 && !o.linkDelivered && !o.sendStopped && !o.reacted && o.text.trim().split(/\s+/).length >= 4;
 }
+// Pure: the run's closing plain text, when a reply already went this turn and that text says something the reply didn't (2026-11-08,
+// golden feedback-cue-mistake: Cue sent "Got it, that's on me to flag, just passed it to the team so they can fix it." with sendReply,
+// then wrote "If you want, I can look into their booking page or find the class another way." as plain text, which was dropped, so the
+// member never got the offer). Null when nothing went yet (the plain-text path below handles that, as before), on a voice turn, when
+// sends are stopped, when it's meta talk or too short, or when it repeats what went: most of its content words already sent, or one
+// holds the other. Never a repeat.
+const LEFTOVER_STOP = new Set("the and but for are was were you your they them their this that these those with from have has had will would can could should what when where which who how just about into some your i'm i've i'll it's that's don't won't can't not here there now then also really right".split(" "));
+const contentOf = (t: string) => t.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !LEFTOVER_STOP.has(w));
+export function leftoverAfterReply(o: { isVoice: boolean; sent: boolean; replies: number; sendStopped: boolean; text: string; sentMessages: string[] }): string | null {
+  const text = o.text.trim();
+  if (o.isVoice || !o.sent || o.replies < 1 || o.sendStopped || text.split(/\s+/).length < 4) return null;
+  const flat = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  const said = o.sentMessages.map(flat).filter(Boolean);
+  if (said.some((s) => s.includes(flat(text)) || flat(text).includes(s))) return null;
+  const mine = contentOf(text);
+  if (!mine.length) return null;
+  const sentWords = new Set(o.sentMessages.flatMap(contentOf));
+  if (mine.filter((w) => sentWords.has(w)).length / mine.length >= 0.6) return null;
+  return text;
+}
+// Sends the run's closing plain text after the reply when leftoverAfterReply passes it (and it isn't meta talk): through the turn's own
+// sendReply, so the grounding, the redraft and the record are the same as any reply's; the one-reply hold lets this one through once.
+// Returns whether it went. Logged as reply.leftover (sizes only).
+export async function sendLeftover(o: { tools: Record<string, any>; state: { sent: boolean; replyCount: number; sendStopped: boolean; sentMessages: string[]; leftoverOnce?: boolean }; isVoice: boolean; userId: string; text: string; dryRun: boolean }): Promise<boolean> {
+  const leftover = leftoverAfterReply({ isVoice: o.isVoice, sent: o.state.sent, replies: o.state.replyCount, sendStopped: o.state.sendStopped, text: o.text, sentMessages: o.state.sentMessages });
+  if (!leftover || looksLikeMetaReply(leftover)) return false;
+  const before = o.state.sentMessages.length;
+  o.state.leftoverOnce = true;
+  try {
+    await o.tools.sendReply.execute({ message: leftover }, { toolCallId: "leftover-text-reply", messages: [] });
+  } catch (err: any) {
+    console.error("conversationReply: sending the leftover plain text failed:", err?.message ?? err);
+  } finally {
+    o.state.leftoverOnce = false;
+  }
+  const went = o.state.sentMessages.length > before;
+  if (!o.dryRun) {
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 3, decision: "reply.leftover", userId: o.userId, outcome: went ? "act" : "skip", action: went ? "sent" : "not_sent", proposal: { chars: leftover.length } }).catch(() => {});
+  }
+  return went;
+}
 // Pure: when their message first arrived. A replay (a held or crashed turn run again) keeps the original time; a live turn uses when
 // the webhook got it (routes/sendblue.ts).
 export function firstArrival(replay: { receivedAt: Date } | null | undefined, arrivedAt: Date): Date {
@@ -614,6 +656,9 @@ ${TOOL_TURN_RULES(input.isVoice)}
       console.error("conversationReply: sending the plain-text set-aside failed:", err?.message ?? err),
     );
   }
+  // A reply went, and the run then wrote more plain text that says something new: it goes as its own text, through sendReply (grounded,
+  // redrafted and logged like any reply), once, past the one-reply hold only for this (leftoverAfterReply never passes a repeat).
+  await sendLeftover({ tools, state, isVoice: input.isVoice, userId: input.userId, text: agentRun?.text ?? "", dryRun: !!opts.dryRun });
   if (!state.sent && !state.sendStopped) {
     // What the agent did instead, so a fallback can be traced (2026-09-22).
     const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));

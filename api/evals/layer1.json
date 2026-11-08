@@ -288,6 +288,7 @@
     "evals/reply/usesItsFinds.ts",
     "evals/reply/shareGuide.ts",
     "evals/reply/oneReply.ts",
+    "evals/reply/leftoverText.ts",
     "evals/forget/removalLines.ts",
     "evals/forget/readers.ts",
     "evals/forget/removalLog.ts",
