@@ -49,13 +49,20 @@ import { capabilitySheet } from "./capabilities.js";
 import type { MemberKnowledge, KnowledgeSection } from "./memberKnowledge.js";
 import { nameFinder, namelessHistoryLine, stripAfterNames, WORD_NAMES } from "./memberSafeMemories.js";
 import { wordsZone } from "./memberTime.js";
+import { pictureEntries, PIC_TITLES, unreadLine, type PicSection } from "./knowledge/pictureEntries.js";
 import { forgets, guardText, type ForgottenRow, type Guarded } from "./whatCoKnows.js";
 
 // ---------------------------------------------------------------- shape
 
 export type Prov = "said" | "seen" | "did" | "inferred";
-export type SectionId = "words" | "middle" | "feelings" | "world" | "ledger" | "can";
+export type PictureSectionId = PicSection;
+export type SectionId = "words" | "middle" | "feelings" | "world" | "ledger" | "can" | PictureSectionId;
+// The six always-on sections, then the picture sections (step 6): opt-in, rendered only when they have something to say (an entry, or
+// "couldn't read"), and trimmed first when the whole snapshot is over its cap.
 export const SECTION_IDS: SectionId[] = ["words", "middle", "feelings", "world", "ledger", "can"];
+export const PICTURE_SECTION_IDS: PictureSectionId[] = ["transitions", "events", "people", "learned"];
+export const ALL_SECTION_IDS: SectionId[] = [...SECTION_IDS, ...PICTURE_SECTION_IDS];
+const isPicture = (id: SectionId): id is PictureSectionId => (PICTURE_SECTION_IDS as string[]).includes(id);
 export const SECTION_TITLES: Record<SectionId, string> = {
   words: "1. In their own words",
   middle: "2. What they're in the middle of",
@@ -63,8 +70,9 @@ export const SECTION_TITLES: Record<SectionId, string> = {
   world: "4. Their world now",
   ledger: "5. What Cue has done (newest first)",
   can: "6. What Cue can do",
+  ...(Object.fromEntries(((["transitions", "events", "people", "learned"]) as PicSection[]).map((id, i) => [id, `${7 + i}. ${PIC_TITLES[id]}`])) as Record<PicSection, string>),
 };
-export const SECTION_BUDGETS: Record<SectionId, number> = { words: 6000, middle: 8000, feelings: 3000, world: 5000, ledger: 12000, can: 2000 };
+export const SECTION_BUDGETS: Record<SectionId, number> = { words: 6000, middle: 8000, feelings: 3000, world: 5000, ledger: 12000, can: 2000, transitions: 900, events: 900, people: 900, learned: 1400 };
 export const HEADER_BUDGET = 500;
 export const TOTAL_CAP = 40_000;
 // An estimate (no tokenizer call in shadow): English text through Claude's tokenizer runs about 3.5 characters a token.
@@ -91,8 +99,8 @@ export type Built = {
   header: string;
   body: string;
   sections: BuiltSection[];
-  tokens: Record<SectionId | "header" | "total", number>;
-  chars: Record<SectionId | "header" | "total", number>;
+  tokens: Partial<Record<SectionId, number>> & Record<"header" | "total", number>;
+  chars: Partial<Record<SectionId, number>> & Record<"header" | "total", number>;
   compactions: Compaction[];
   overBudget: string[];
   // entries in = rendered + collapsed, per section (the size policy's assert).
@@ -140,7 +148,7 @@ export type SnapshotSources = {
 
 // The assembler's sections the snapshot reads. Not exchanges (the tail), not restraint (computed against the clock), not delivered
 // (the ledger section replaces it), not person (a model-built picture; its readers move onto the snapshot in step 7).
-export const SNAPSHOT_KNOWLEDGE: KnowledgeSection[] = ["goals", "asks", "carrying", "lessons", "corrections", "preferences", "claims", "limits"];
+export const SNAPSHOT_KNOWLEDGE: KnowledgeSection[] = ["goals", "asks", "carrying", "lessons", "corrections", "preferences", "claims", "limits", "transitions", "events", "people", "learned"];
 
 type Rows = (sql: string, args: unknown[]) => Promise<any[]>;
 const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).map((x: string) => x.trim()) : []);
@@ -309,13 +317,13 @@ const q = (s: string) => `"${clip(one(s), 240)}"`;
 
 // ---------------------------------------------------------------- pure: the entries
 
-type Raw = Omit<Entry, "text"> & { text: string; guard: Guarded | "none" | "words" };
+export type Raw = Omit<Entry, "text"> & { text: string; guard: Guarded | "none" | "words" };
 
 function entriesOf(s: SnapshotSources): Record<SectionId, Raw[]> {
   const z = s.zone;
   const k = s.knowledge;
   const p = s.profile;
-  const out: Record<SectionId, Raw[]> = { words: [], middle: [], feelings: [], world: [], ledger: [], can: [] };
+  const out: Record<SectionId, Raw[]> = { words: [], middle: [], feelings: [], world: [], ledger: [], can: [], transitions: [], events: [], people: [], learned: [] };
   const add = (sec: SectionId, e: Raw) => {
     if (one(e.text)) out[sec].push({ ...e, text: one(e.text) });
   };
@@ -359,6 +367,8 @@ function entriesOf(s: SnapshotSources): Record<SectionId, Raw[]> {
       guard: "thread",
     });
   }
+  // Goals unread (the guards couldn't be read): say so, never an empty list that reads as "no goals".
+  if (k.goalsUnread) add("middle", { id: "UnreadGoals", src: "unread:goals", date: null, prov: "seen", text: "Couldn't read their goals right now. That is not the same as having none: don't say they have no goals, and don't guess.", open: true, kind: "unread", guard: "none" });
   for (const g of k.goals) add("middle", { id: `G${g.hash.slice(0, 8)}`, src: `goal_states:${g.hash}`, date: DATE(g.verifiedAt, z), prov: g.source === "context" ? "inferred" : "said", text: `Goal (${g.state}${g.onFile ? "" : ", no longer on file"}): ${g.text}${g.reason ? ` [${g.reason}]` : ""}`, open: g.state === "active", kind: "goal", guard: "words" });
   for (const g of s.coGoals) {
     const open = !g.closedAt && g.status !== "closed" && g.status !== "declined";
@@ -413,8 +423,76 @@ function entriesOf(s: SnapshotSources): Record<SectionId, Raw[]> {
 
   // 6. What Cue can do
   s.capabilities.forEach((c, i) => add("can", { id: `X${i + 1}`, src: "capabilities", date: null, prov: "seen", text: c, open: false, kind: "capability", guard: "none" }));
+
+  const pic = pictureRaw(k, fencer(s.names, [s.profile?.firstName ?? k.identity.firstName ?? ""].filter(Boolean)));
+  for (const sec of PICTURE_SECTION_IDS) out[sec].push(...pic[sec]);
   return out;
 }
+
+// ---------------------------------------------------------------- the picture sections (7 to 10), shared by the text snapshot and the call
+
+// Pure: a function that takes linked members' names out of one string (the snapshot's fence: the same policy for text and calls).
+export function fencer(names: string[], ownNames: string[] = []): (t: string) => string {
+  const hits = linkedNameMatcher(names);
+  return (t) => fenceLine(t, hits, ownNames).text;
+}
+
+// Pure: the picture sections' entries from a knowledge read, in relevance order, unread and "more not shown" notes included. clean:
+// the fence over each of their own quotes (pictureEntries). What the older sections already say (the same lesson, correction, avoid
+// or availability) isn't said twice.
+export function pictureRaw(k: MemberKnowledge, clean: (t: string) => string): Record<PictureSectionId, Raw[]> {
+  const out: Record<PictureSectionId, Raw[]> = { transitions: [], events: [], people: [], learned: [] };
+  const add = (sec: PictureSectionId, e: Raw) => {
+    if (one(e.text)) out[sec].push({ ...e, text: one(e.text) });
+  };
+  const have = {
+    lesson: new Set(k.lessons.map((l) => l.text)),
+    correction: new Set(k.corrections.map((c) => `${c.field}|${c.was}|${c.now ?? ""}`)),
+    avoid: new Set(k.limits?.avoid ?? []),
+    availability: new Set(k.limits?.availability ? [k.limits.availability] : []),
+  };
+  const pic = pictureEntries(k, { skip: (kind, key) => have[kind].has(key), clean });
+  for (const e of pic.entries) add(e.section, { id: e.id, src: e.src, date: e.date, prov: e.prov, text: e.text, open: e.open, kind: e.kind, guard: "words" });
+  for (const sec of pic.unread) add(sec, { id: `Unread${sec[0].toUpperCase()}${sec.slice(1)}`, src: `unread:${sec}`, date: null, prov: "seen", text: unreadLine(sec), open: true, kind: "unread", guard: "none" });
+  for (const [sec, n] of Object.entries(pic.omitted) as [PictureSectionId, number][]) add(sec, { id: `More${sec[0].toUpperCase()}${sec.slice(1)}`, src: `omitted:${sec}`, date: null, prov: "seen", text: `${n} more not shown here (the section's own size limit).`, open: false, kind: "omitted", guard: "none" });
+  return out;
+}
+
+// Pure: the last word on one picture entry, the same for the text snapshot and a call: what they had Cue forget is out (a correction is
+// noted on the older wording), then the name fence over the whole line. stats counts what was taken out. Notes (unread, more not shown)
+// carry no words of theirs and pass through.
+export function pictureFinisher(o: { forgotten: ForgottenRow[]; hits: (t: string) => boolean; ownNames: string[]; stats?: { forgotten: number; redacted: number } }): (r: Raw) => Entry | null {
+  return (r) => {
+    let text: string | null = r.text;
+    if (o.forgotten.length && r.guard !== "none") text = r.guard !== "words" && forgets(text, o.forgotten, r.guard) ? null : guardText(text, o.forgotten);
+    if (text === null || !text.trim()) {
+      if (o.stats) o.stats.forgotten++;
+      return null;
+    }
+    const red = fenceLine(text, o.hits, o.ownNames);
+    if (o.stats) o.stats.redacted += red.n;
+    const { guard: _g, ...e } = r;
+    return { ...e, text: red.text };
+  };
+}
+
+// Pure: the picture sections fitted. finish: the last word on one entry (the snapshot's forgetting guard and name fence; a call's name
+// fence): null drops it. room: tokens the whole of them may take (the total cap's leftover); each is also held to its own budget.
+// Sections with nothing in them aren't built.
+export function fitPictureSections(raw: Record<PictureSectionId, Raw[]>, finish: (r: Raw) => Entry | null, room: number): BuiltSection[] {
+  const out: BuiltSection[] = [];
+  for (const id of PICTURE_SECTION_IDS) {
+    const entries = raw[id].flatMap((r) => { const e = finish(r); return e ? [e] : []; });
+    if (!entries.length) continue;
+    const sec = fitRanked(id, entries, Math.max(0, Math.min(SECTION_BUDGETS[id], room - 8)));
+    room -= sec.tokens + 2;
+    out.push(sec);
+  }
+  return out;
+}
+
+// Pure: a section as rendered text (the snapshot's own lines, for a call to read the same).
+export const renderSection = (x: Pick<BuiltSection, "title" | "entries" | "collapsed">) => sectionText(x.title, [...x.entries.map(lineOf), ...x.collapsed.map((c) => c.line)]);
 
 // ---------------------------------------------------------------- pure: size policy
 
@@ -422,7 +500,7 @@ export const lineOf = (e: Pick<Entry, "id" | "prov" | "date" | "text">) => `- [$
 const sectionText = (title: string, lines: string[]) => [`## ${title}`, ...lines].join("\n");
 
 // Pure: entries past the budget, oldest first, collapsed into one line per month (counts by kind, the source ids kept).
-function collapse(entries: Entry[]): Collapsed[] {
+function collapse(entries: Entry[], lead = "Earlier"): Collapsed[] {
   const byMonth = new Map<string, Entry[]>();
   for (const e of entries) {
     const m = e.date ? e.date.slice(0, 7) : "undated";
@@ -438,7 +516,7 @@ function collapse(entries: Entry[]): Collapsed[] {
       const from = dates[0] ?? null, to = dates[dates.length - 1] ?? null;
       const ids = es.map((e) => e.id);
       const span = from ? (from === to ? from : `${from}–${to}`) : "undated";
-      const line = `- [Earlier ${span}] ${Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, n]) => `${n} ${kind}`).join(", ")} [${ids[ids.length - 1]}…${ids[0]}, ${ids.length} entries]`;
+      const line = `- [${lead} ${span}] ${Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, n]) => `${n} ${kind}`).join(", ")} [${ids[ids.length - 1]}…${ids[0]}, ${ids.length} entries]`;
       return { from, to, count: es.length, counts, ids: es.map((e) => e.src), entryIds: ids, hashes: es.map((e) => hash8(e.text)), line, tokens: estTokens(line) };
     });
 }
@@ -480,6 +558,47 @@ export function fitSection(id: SectionId, entries: Entry[], budget = SECTION_BUD
   return { id, title, budget, entries: kept, collapsed: col, tokens, fullTokens, chars: text.length, overBudget: tokens > budget, sourceCount: entries.length };
 }
 
+// Pure: the entries past a ranked section's cut as ONE count line (counts by kind, the source ids kept), so a trim costs one line however
+// the entries spread over time.
+function collapseAll(entries: Entry[]): Collapsed[] {
+  if (!entries.length) return [];
+  const dates = entries.map((e) => e.date).filter((d): d is string => !!d).sort();
+  const counts: Record<string, number> = {};
+  for (const e of entries) counts[e.kind] = (counts[e.kind] ?? 0) + 1;
+  const from = dates[0] ?? null, to = dates[dates.length - 1] ?? null;
+  const ids = entries.map((e) => e.id);
+  const span = from ? (from === to ? from : `${from}–${to}`) : "undated";
+  const line = `- [Not shown ${span}] ${Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, n]) => `${n} ${kind}`).join(", ")} [${ids[ids.length - 1]}…${ids[0]}, ${ids.length} entries]`;
+  return [{ from, to, count: entries.length, counts, ids: entries.map((e) => e.src), entryIds: ids, hashes: entries.map((e) => hash8(e.text)), line, tokens: estTokens(line) }];
+}
+
+// Pure: a picture section within its budget, by relevance. The entries come in relevance order (open and in-flight first, then newest);
+// they are kept in that order while they fit, counting the real "Not shown" line the rest become, and the rest are collapsed into that
+// one line (counts in = rendered + collapsed, like fitSection). An unread line is never dropped (a silent "none" is the failure it
+// prevents), and neither is the "more not shown" note. Deterministic.
+export function fitRanked(id: SectionId, entries: Entry[], budget: number): BuiltSection {
+  const title = SECTION_TITLES[id];
+  const must = entries.filter((e) => e.kind === "unread" || e.kind === "omitted");
+  const ranked = entries.filter((e) => e.kind !== "unread" && e.kind !== "omitted");
+  const head = `## ${title}`.length;
+  let chars = head + must.reduce((n, e) => n + lineOf(e).length + 1, 0);
+  const kept: Entry[] = [];
+  for (let i = 0; i < ranked.length; i++) {
+    const add = lineOf(ranked[i]).length + 1;
+    const rest = collapseAll(ranked.slice(i + 1));
+    const note = rest.length ? rest[0].line.length + 1 : 0;
+    if (Math.ceil((chars + add + note) / CHARS_PER_TOKEN) > budget) break;
+    chars += add;
+    kept.push(ranked[i]);
+  }
+  const col = collapseAll(ranked.slice(kept.length));
+  const shown = [...must.filter((e) => e.kind === "unread"), ...kept, ...must.filter((e) => e.kind === "omitted")];
+  const text = sectionText(title, [...shown.map(lineOf), ...col.map((c) => c.line)]);
+  const tokens = estTokens(text);
+  const fullTokens = estTokens(sectionText(title, entries.map(lineOf)));
+  return { id, title, budget, entries: shown, collapsed: col, tokens, fullTokens, chars: text.length, overBudget: tokens > budget, sourceCount: entries.length };
+}
+
 // ---------------------------------------------------------------- pure: the build
 
 // Pure: the snapshot from its sources. Names out of every line, the guards on every line, each section fitted to its budget.
@@ -488,7 +607,7 @@ export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built
   let forgotten = 0, namesRedacted = 0;
   const hits = linkedNameMatcher(s.names);
   const ownNames = [s.profile?.firstName ?? s.knowledge.identity.firstName ?? ""].filter(Boolean);
-  const sections = SECTION_IDS.map((id) => {
+  const guarded = (id: SectionId): Entry[] => {
     const entries: Entry[] = [];
     for (const r of raw[id]) {
       let text: string | null = r.text;
@@ -505,10 +624,20 @@ export function buildSnapshot(s: SnapshotSources, o: { version: number }): Built
       const { guard: _g, ...e } = r;
       entries.push({ ...e, text: red.text });
     }
-    return fitSection(id, entries);
-  });
+    return entries;
+  };
+  const core = SECTION_IDS.map((id) => fitSection(id, guarded(id)));
   const firstName = s.profile?.firstName ?? s.knowledge.identity.firstName ?? null;
   const header = `# Cue's snapshot of ${firstName ?? "this member"} · v${o.version} · zone ${s.zone ?? "unknown"}`;
+  // The picture sections take what the total cap leaves after the header and the six always-on sections, each at most its own budget,
+  // in order; what doesn't fit is trimmed from the end of each (least relevant) first.
+  const room = TOTAL_CAP - estTokens([header, ...core.map((x) => renderSection(x))].join("\n\n"));
+  const stats = { forgotten: 0, redacted: 0 };
+  const finish = pictureFinisher({ forgotten: s.forgotten, hits, ownNames, stats });
+  const picture = fitPictureSections(Object.fromEntries(PICTURE_SECTION_IDS.map((id) => [id, raw[id]])) as Record<PictureSectionId, Raw[]>, finish, room);
+  forgotten += stats.forgotten;
+  namesRedacted += stats.redacted;
+  const sections = [...core, ...picture];
   const body = [header, ...sections.map((x) => sectionText(x.title, [...x.entries.map(lineOf), ...x.collapsed.map((c) => c.line)]))].join("\n\n");
   const tokens = Object.fromEntries([...sections.map((x) => [x.id, x.tokens]), ["header", estTokens(header)], ["total", estTokens(body)]]) as Built["tokens"];
   const chars = Object.fromEntries([...sections.map((x) => [x.id, x.chars]), ["header", header.length], ["total", body.length]]) as Built["chars"];
@@ -808,7 +937,7 @@ export type Pin = { body: string; version: number; usedAt: number; entries: Snap
 export type ReplySnapshot = { prefix: string; since: string[]; entries: SnapEntry[]; version: number; pinnedVersion: number; repinned: "none" | "ttl" | "changed" | "since_full" | null };
 
 const ENTRY_LINE = /^- \[([A-Z][A-Za-z0-9]*) (said|seen|did|inferred)(?: (\d{4}-\d{2}-\d{2}))?\] (.*)$/;
-const TITLE_SECTION = new Map<string, SectionId>(SECTION_IDS.map((id) => [`## ${SECTION_TITLES[id]}`, id]));
+const TITLE_SECTION = new Map<string, SectionId>(ALL_SECTION_IDS.map((id) => [`## ${SECTION_TITLES[id]}`, id]));
 
 // Pure: the entries of a rendered snapshot, each with its section and what the stored sections say about it (open, kind, receipt).
 // Collapsed "Earlier" lines are counts, not entries.

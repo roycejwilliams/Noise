@@ -2966,6 +2966,8 @@ export async function pullDispatch(registry: ProactiveRegistry, userId: string, 
   await withMember(userId, () => oneDispatchAtATime(userId, async () => { ran = true; await dispatchForUserInScope(registry, userId, opts); }));
   return ran;
 }
+// Pure: why a dispatch skips when their goals couldn't be read (never proceed as if they had none), else null.
+export const goalsUnreadSkip = (known: { goalsUnread?: boolean } | null) => (known?.goalsUnread ? "their goals couldn't be read, so nothing is picked or sent as if they had none" : null);
 async function oneDispatchAtATime(userId: string, fn: () => Promise<void>): Promise<void> {
   if (dispatchInFlight.has(userId)) return;
   dispatchInFlight.add(userId);
@@ -3109,6 +3111,11 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // As stored, for the code that parses the thread (repeat question, payload first); stamped in their zone for the model reads.
   const recent = known ? exchangeTranscript(known) : "";
   const recentStamped = known ? exchangeTranscript(known, { stamped: true }) : "";
+  // Their goals couldn't be read (the guards failed): skip, never proceed as if they had none.
+  if (goalsUnreadSkip(known)) {
+    if (!opts.dryRun) await recordSkipOnce(userId, "goals_unread", { layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: "goals_unread", reason: "their goals couldn't be read, so nothing is picked or sent as if they had none" });
+    return;
+  }
   // The whole exchange for what goes out now (services/exchangeRecord.ts, Royce 2026-11-03: what Cue already did and what they closed
   // carry into queued work, not only the next reply): what Cue sent in the thread and on file, what's open, what they closed lately at
   // their word. Read here, right before drafting. A read that fails leaves it out (drafts as before).

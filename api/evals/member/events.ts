@@ -216,9 +216,9 @@ check("end to end: another member's section holds only theirs", theirSec.events!
 
 // ---------------------------------------------------------------- not rendered into any prompt yet
 const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? walk(join(dir, f)) : f.endsWith(".ts") ? [join(dir, f)] : []));
-const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && !f.includes("services/knowledge/") && /\.events\b[^\n]*(?:knowledge|picture|\bk\b)|include:\s*\[[^\]]*"events"/.test(readFileSync(f, "utf8")));
-check("no other source file opts into or reads the events section (nothing renders it)", readers.length === 0);
-check("the snapshot render does not read it", !/\.events\b|eventsOmitted|"events"/.test(src("services/memberSnapshot.ts")));
+const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && !f.includes("services/knowledge/") && !/services\/(memberSnapshot|callContext)\.ts$/.test(f) && /\.events\b[^\n]*(?:knowledge|picture|\bk\b)|include:\s*\[[^\]]*"events"/.test(readFileSync(f, "utf8")));
+check("no source file reads the events section but the two renderers (step 6: the snapshot and the call context, through pictureEntries)", readers.length === 0);
+check("the snapshot renders it only through pictureEntries (it asks for it, and never reads .events itself)", /"events"/.test(src("services/memberSnapshot.ts")) && !/\.events\b|eventsOmitted/.test(src("services/memberSnapshot.ts")));
 check("the knowledge module is imported only by memberKnowledge", walk(root).filter((f) => !f.includes("services/knowledge/") && /knowledge\/events\.js/.test(readFileSync(f, "utf8"))).map((f) => f.split("/").pop()).join() === "memberKnowledge.ts");
 
 console.log(`member events: ${total - failed}/${total} passed`);

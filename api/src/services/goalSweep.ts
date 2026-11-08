@@ -115,10 +115,15 @@ export type GoalSweepDeps = {
 // (Phase A4: their goals with state, the kind of room they want, what they ruled out, what their asks already search, who they are)
 // and the active goals on file, in their own words (the record's text is stripped, which would change the goal's hash and orphan its
 // state; review of #134), chosen by the record's hash. A record that can't be read (a failed name read fails closed) throws: no plan.
+// Pure: a plan is never made from goals that couldn't be read (an empty list there means unread, not "no goals").
+export function requireGoalsRead(k: { goalsUnread?: boolean }): void {
+  if (k.goalsUnread) throw new Error("their goals couldn't be read");
+}
 export async function planInputs(row: any): Promise<{ goals: string[]; city: string | null; zone: string | null; firstName: string | null; direction: string | null; enjoys: string[] | null; specifics: string[] | null; record: import("./goalEdges.js").PlanRecord }> {
   const { PLAN_RECORD_LIMITS } = await import("./goalEdges.js");
   const { memberKnowledge } = await import("./memberKnowledge.js");
   const k = await memberKnowledge(row.user_id, { include: ["goals", "asks", "preferences", "limits", "person"] });
+  requireGoalsRead(k);
   if (!k.limits) throw new Error("their limits couldn't be read");
   const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
   return {

@@ -205,6 +205,8 @@ export type MemberKnowledge = {
   transitions?: Fact<Transition>[];
   // How many transitions the character budget left out (never silently).
   transitionsOmitted?: number;
+  // The transitions read failed, so the empty section means unread, not "no transitions".
+  transitionsUnread?: boolean;
   // Opt-in (include: ["learned"]): lessons, corrections and limits by relevance, each dated and linked to its source (knowledge/lessons.ts).
   // The default lessons, corrections and limits are unchanged, so the prompts that render them are too. [] otherwise.
   learnedLessons?: PictureLesson[];
@@ -231,6 +233,8 @@ export type MemberKnowledge = {
   // The live guards' read (their removals and corrections) failed, so exchanges and the rest came back unguarded. Said, never silent
   // (review of #354): a reader that would show more than it used to (a call's thread window) falls back to the old, shorter read.
   guardsUnread?: boolean;
+  // Set when goals were asked for and the guards couldn't be read: the empty goals mean unread, never "no goals". Readers skip or say so.
+  goalsUnread?: boolean;
 };
 
 export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"] as const;
@@ -253,7 +257,8 @@ export type MemberRules = {
 
 // ---------------------------------------------------------------- loaders (raw rows; injectable)
 
-export type RawProfile = { firstName: string | null; city: string | null; goals: string[] | null; intent: unknown; updatedAt: Date | null };
+// direction: their long-term direction, which the sweep reads as a goal (loopTools markGoal accepts it): a goal_states row for it is on file.
+export type RawProfile = { firstName: string | null; city: string | null; goals: string[] | null; intent: unknown; updatedAt: Date | null; direction?: string | null };
 export type RawAsk = { id: string; text: string; kind: string | null; createdAt: Date; lastMentionedAt: Date | null };
 export type RawSent = { label: string; url: string | null; kind: string | null; at: Date };
 export type RawLoop = { id: number; title: string; status: string; dueDate: string | null; source: string; detail: string | null; changedAt: Date; lastConfirmedAt: Date | null };
@@ -349,8 +354,8 @@ export const realKnowledgeDeps: KnowledgeDeps = {
   events: (userId) => loadEvents(userId, pool),
   people: (userId) => loadPeople(userId),
   profile: async (userId) => {
-    const r = (await rows(`SELECT u.first_name, cp.city, cp.goals, cp.intent, cp.updated_at FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]))[0];
-    return r ? { firstName: r.first_name ?? null, city: r.city ?? null, goals: Array.isArray(r.goals) ? r.goals.map(String) : null, intent: r.intent ?? null, updatedAt: dateOrNull(r.updated_at) } : null;
+    const r = (await rows(`SELECT u.first_name, cp.city, cp.goals, cp.intent, cp.long_term_direction, cp.updated_at FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]))[0];
+    return r ? { firstName: r.first_name ?? null, city: r.city ?? null, goals: Array.isArray(r.goals) ? r.goals.map(String) : null, intent: r.intent ?? null, direction: r.long_term_direction ? String(r.long_term_direction) : null, updatedAt: dateOrNull(r.updated_at) } : null;
   },
   zone: (userId) => memberZone(userId),
   // The same full name set memberSafe uses (linked matches, Co's records, introductions), read strictly (PR #118).
@@ -596,7 +601,13 @@ export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fac
     else add(e.text, { state: "stale", at, reason: e.status ? `marked ${e.status}` : null });
   }
   for (const g of profile?.goals ?? []) add(String(g), { state: "active", at: profile?.updatedAt ?? null });
-  for (const s of states) add(s.goal, { state: s.state, at: s.changedAt }, false);
+  // A goal that exists only in goal_states (it is no longer on file) is history, never current, whatever its stored state says.
+  // Their long-term direction is on file too (the sweep reads it as a goal and markGoal accepts it), so its state row is not "gone".
+  const direction = profile?.direction?.trim() ? goalHash(profile.direction.trim()) : null;
+  for (const s of states) {
+    if (direction && goalHash(s.goal.trim()) === direction) add(s.goal, { state: s.state, at: s.changedAt });
+    else add(s.goal, s.state === "active" ? { state: "stale", at: s.changedAt, reason: "no longer on file" } : { state: s.state, at: s.changedAt }, false);
+  }
   const rank = { active: 0, stale: 1, done: 2 } as const;
   return [...out.values()].sort((a, b) => rank[a.state] - rank[b.state]);
 }
@@ -835,8 +846,10 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
+  let transitionsFailed = false;
+  // The three picture reads are independent: they run together, not one after another (each is already held to fail alone).
   const [transitionsRaw, eventsRaw, peopleRaw] = await Promise.all([
-    skip("transitions", "transitions", () => (d.transitions ? d.transitions(userId) : Promise.resolve([] as RawTransition[])), [] as RawTransition[]),
+    skip("transitions", "transitions", () => (d.transitions ? d.transitions(userId).catch((err) => { transitionsFailed = true; throw err; }) : Promise.resolve([] as RawTransition[])), [] as RawTransition[]),
     skip("events", "events", () => (d.events ? d.events(userId) : Promise.resolve(null)), null as RawEvents | null),
     skip("people", "people", () => (d.people ? d.people(userId) : Promise.resolve(null as RawPerson[] | null)), null as RawPerson[] | null),
   ]);
@@ -867,7 +880,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   // loops, promise results) and its record of what it sent: each is written from their words, so a thing they had Cue forget
   // can't come back through one of them. A part that says it goes; a line that is only it goes.
   let guardsUnread = false;
-  const guards = ((["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) || on("transitions") || on("learned") || on("events") || on("people")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
+  const guards = ((["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) || on("goals") || on("transitions") || on("learned") || on("events") || on("people")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId).catch((err) => { guardsUnread = true; throw err; }), []) : [];
   const removed = guards.filter((r) => r.removed);
   const W = guards.length ? await import("./whatCoKnows.js") : null;
   const g = (t: string): string | null => (W && removed.length ? W.guardText(t, removed) : t);
@@ -880,7 +893,21 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   // What they have and what Cue sent first (offers): a document or a find named by the removed thing is left out.
   const keptOffers = W && removed.length ? withoutRemovedSent(offers, removed, W) : offers;
 
-  if (on("goals")) k.goals = goalsOf(profile, states);
+  if (on("goals")) {
+    // The same guards as every other section: a goal they had Cue forget is out, a corrected one carries its correction, and when the
+    // guards can't be read no goal is shown as current and goalsUnread says so (an empty list is unread, not "no goals").
+    const all = goalsOf(profile, states);
+    // A correction that TARGETS a goal (a goal ref, or a goals-field row about those words) takes it out of current: it stays as
+    // history (stale) with the correction. A correction to another field (city, job) only annotates the goal; the goal stays active.
+    const targets = (gl: Fact<Goal>) => guards.some((r) => !r.removed && r.now != null && (/^(goal|goals|long_term_direction|direction)$/i.test(r.field) || /^(goal:|profile:goals|profile:long_term_direction|profile:direction)/.test(r.ref)) && !!W && W.covers(r.old, gl.text));
+    if (guardsUnread) { k.goals = []; k.goalsUnread = true; }
+    else k.goals = W && guards.length ? all.flatMap((gl) => {
+      const text = W.guardText(gl.text, guards);
+      if (text === null || !text.trim()) return [];
+      const away = text !== gl.text && gl.state === "active" && targets(gl);
+      return [{ ...gl, text, state: away ? ("stale" as const) : gl.state, reason: away ? "corrected away" : gl.reason }];
+    }) : all;
+  }
   if (on("asks")) k.asks = asks.filter((a) => a.text.trim()).map((a) => ({ id: a.id, text: a.text.trim(), kind: a.kind === "help" ? "help" : "find", verifiedAt: latest(a.createdAt, a.lastMentionedAt) }));
   if (on("delivered")) k.delivered = mergeDelivered({ ledger: keptLedger, offers: keptOffers });
   if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, ledger: keptLedger, loops: keptLoops, promises: keptPromises, now, zone });
@@ -897,17 +924,21 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("exchanges")) k.exchanges = exchanges.flatMap((e) => { const content = W ? W.guardText(e.content, guards) : e.content; return content === null ? [] : [{ ...e, content }]; }).map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("transitions")) {
     // Fails closed: without the guards read nothing is returned (a removed transition must never come back from a failed read).
-    if (guardsUnread || !d.forgotten) k.transitions = [];
+    if (guardsUnread || !d.forgotten) { k.transitions = []; k.transitionsUnread = true; }
+    else if (transitionsFailed) { k.transitions = []; k.transitionsUnread = true; }
     else {
       const gone = (id: string) => removed.some((r) => r.ref === `thread:${id}`);
       const guarded = transitionsRaw.flatMap((t) => {
         const text = g(t.text);
         if (gone(t.id) || text === null || !text.trim()) return [];
-        const quote = g(t.quote);
-        const closedQuote = t.closedQuote ? g(t.closedQuote) : null;
+        // Their own quotes skip the final strip (they are their words), but a quote can name another member; it goes through the same
+        // strip as everything else here, on its own, so the entry stays and only the quote is cleaned.
+        const nm = (x: string | null) => (x == null ? x : safeMemory("member_knowledge", x, [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))]));
+        const quote = nm(g(t.quote));
+        const closedQuote = t.closedQuote ? nm(g(t.closedQuote)) : null;
         const corrections = t.corrections.flatMap((c) => {
           const was = g(c.was);
-          return was === null ? [] : [{ ...c, was, now: c.now === null ? null : g(c.now), quote: c.quote ? g(c.quote) : null }];
+          return was === null ? [] : [{ ...c, was, now: c.now === null ? null : g(c.now), quote: c.quote ? nm(g(c.quote)) : null }];
         });
         return [{ ...t, text, quote: quote ?? "", closedQuote, corrections }];
       });

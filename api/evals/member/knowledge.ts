@@ -81,6 +81,7 @@ const task = (o: Partial<CoTask> & { id: number; goal: string }): CoTask => ({
 const calls: string[] = [];
 let exchangeArgs: { limit: number; days: number } | null = null;
 const deps = (): Deps => ({
+  forgotten: async () => [],
   profile: async () => (calls.push("profile"), {
     firstName: "Jordan",
     city: "Oakland",

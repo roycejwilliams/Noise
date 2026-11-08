@@ -81,7 +81,7 @@ export const SUMMARY_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", 
 // preferences, limits and claims (2026-10-11, closing the call-memory gap; audit item 10): a call knew less than a text. It never saw
 // the room they've said they want, how what Co sent landed, the kinds they asked Co to stop suggesting, when they're free, or what
 // they've told Co that still holds, so a call could pitch a hackathon to someone who'd said "no more hackathons" by text.
-export const CALL_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "corrections", "exchanges", "lessons", "delivered", "carrying", "restraint", "preferences", "limits", "claims"];
+export const CALL_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "corrections", "exchanges", "lessons", "delivered", "carrying", "restraint", "preferences", "limits", "claims", "transitions", "events", "people", "learned"];
 
 // Pure: the record's fit sections for a call, in the same words the sweep and texts use (services/sweepFind.ts sweepPrompt). Strings
 // come from the layer, already stripped of other members' details; the caller strips them again with the call's own name set.
@@ -170,6 +170,26 @@ export function partsFromKnowledge(k: MemberKnowledge): Pick<ContextParts, "corr
     openAsks: k.asks.slice(0, 4).map((a) => `- ${a.text}`),
     recentTexts: k.exchanges.slice(-RECENT_TEXTS).reverse().map(exchangeLine),
   };
+}
+
+// The picture sections a call reads: the same entries the text snapshot carries (services/memberSnapshot.ts pictureRaw), fitted with
+// the same per-section budgets and the same "Not shown" line, through the same name fence (no names in either, for now). A quote with a
+// linked name is cleaned on its own and its entry stays. When the call's name lookup failed (names null) every entry that could carry
+// a name is left out and the "couldn't read" and "more not shown" notes stay: unread is never silently none.
+export async function pictureLinesForCall(k: MemberKnowledge, names: string[] | null, forgotten: import("./whatCoKnows.js").ForgottenRow[] | null = []): Promise<string[]> {
+  const S = await import("./memberSnapshot.js");
+  // Names or the removals unread: every entry that could carry a name or a removed thing is left out, the notes stay, and each section
+  // this read asked for says it couldn't be read.
+  const usable = !!names && !!forgotten;
+  const kk: MemberKnowledge = usable ? k : { ...k, guardsUnread: true, ...(k.events ? { eventsUnread: true } : {}), ...(k.people ? { peopleUnread: true } : {}), ...((k.learnedLessons || k.learnedCorrections || k.learnedLimits) ? { learnedUnread: true } : {}) };
+  const hits = names ? S.linkedNameMatcher(names) : () => false;
+  const own = [k.identity.firstName ?? ""].filter(Boolean);
+  const raw = S.pictureRaw(kk, names ? S.fencer(names, own) : (t) => t);
+  const done = S.pictureFinisher({ forgotten: forgotten ?? [], hits, ownNames: own });
+  const finish = (r: import("./memberSnapshot.js").Raw) => (r.kind !== "unread" && r.kind !== "omitted" && !usable ? null : done(r));
+  const sections = S.fitPictureSections(raw, finish, Number.POSITIVE_INFINITY);
+  if (!sections.length) return [];
+  return [`What Cue has on file about what they're going through, events, people and what it has learned (each line: [id, who said it, date]; "inferred" is Cue's own read, never what they said):`, ...sections.map((x) => S.renderSection(x))];
 }
 
 async function loadContextParts(userId: string, include: readonly KnowledgeSection[] = SUMMARY_KNOWLEDGE, deps: Partial<KnowledgeDeps> = {}, knowledge?: Promise<MemberKnowledge>): Promise<ContextParts> {
@@ -815,12 +835,18 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const { availabilityIsLimit } = await import("./availability.js");
   const { heldClaimsFrom } = await import("../harness/replyGrounding.js");
   const fitLines = await strip(callFitLines(k, (t, at) => keep(t, at), availabilityIsLimit, (kk) => heldClaimsFrom(kk, now)));
+  // The picture sections (transitions, events, people, what Cue learned): the snapshot's own entries, budgets, fence and wording
+  // (pictureLinesForCall), no name in them for now. Not run through the strip above: that one writes "Cue introduced them to <name>".
+  const pictureLines = await pictureLinesForCall(k, p.names, await import("./whatCoKnows.js").then((W) => W.forgottenRows(userId)).catch(() => null));
   const base = [
     rules,
     who ? `Who they are:\n${who}` : null,
     theirWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${theirWords.join("\n")}` : null,
     p.openAsks.length ? `What they're looking for right now:\n${p.openAsks.join("\n")}` : null,
     ...fitLines,
+    ...pictureLines,
+    // Goals unread: the call says so rather than reading an empty list as "no goals".
+    k.goalsUnread ? "Couldn't read their goals right now. That is not the same as having none: don't say they have no goals, and don't guess." : null,
     recap ? `Ongoing summary: ${recap}` : null,
     ...profileLines(p, (t) => keep(t)),
   ]

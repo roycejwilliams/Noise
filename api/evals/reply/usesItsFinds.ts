@@ -98,12 +98,12 @@ const turn = (gate: (d: string, findsWaiting?: () => boolean) => string = (d) =>
 }
 {
   const L = await import("../../src/agent/loopTools.js");
-  check("the line while a search runs names the thing itself in their terms, no verb in front, never a generic status line ('let me look')", /naming the thing itself, in the terms of what they asked/.test(L.WHILE_LOOKING) && /no verb or status phrasing in front/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
+  check("the line while a search runs is one short natural line saying what Cue is looking for in their terms, not a bare label and never a generic status line ('let me look')", /when a lookup is really starting, it will take a moment, and a word to them would help, give one short, natural line in your own voice that says what you're looking for, in their terms/.test(L.WHILE_LOOKING) && /Leave it empty when the answer will be quick or a line wouldn't help; it is never required and never filler/.test(L.WHILE_LOOKING) && /Not a bare label/.test(L.WHILE_LOOKING) && /Looking at what's on in SF this week/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
 }
 {
   // 2026-11-06 live test: "Co is looking: founder dinners before an investor meeting, good instinct".
   const L = await import("../../src/agent/loopTools.js");
-  check("the progress-line guidance forbids praise, a recap and machinery", /no compliment or praise/.test(L.WHILE_LOOKING) && /no recap of what they told you/.test(L.WHILE_LOOKING) && /no word about tools, searches or how it works/.test(L.WHILE_LOOKING) && !/friend who's into it/.test(L.WHILE_LOOKING));
+  check("the progress-line guidance forbids praise, a recap, machinery and anything implying a result", /No praise, no recap of what they said, no tools or machinery, and never anything that implies you've found something/.test(L.WHILE_LOOKING) && !/friend who's into it/.test(L.WHILE_LOOKING));
   const C = await import("../../src/services/capabilities.js");
   const use = C.toolUse("shareFinds");
   check("the caption guidance covers a find that isn't the form they asked for ('not a dinner, but...')", /isn't the form they asked for/.test(use) && /not a dinner, but/.test(use));

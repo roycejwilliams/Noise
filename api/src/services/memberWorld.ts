@@ -276,9 +276,11 @@ export function memberWorldFact(w: MemberWorld): string {
   const time = `Their time: ${w.clock.local} (${w.clock.part})${w.clock.zoneKnown ? "" : `, read in ${wordsZone(null)}: their zone isn't known`}.`;
   const held = w.withheld ? ` ${w.withheld} more not shown here, so never say there's nothing.` : "";
   const leadMark = " (a check-in's one item)";
+  // Late at night the world line is optional and soft (LATE_NIGHT_CARE), so its running part keeps the plain label.
+  const late = w.clock.hour >= 23 || w.clock.hour < 5;
   const parts = [
     w.waiting.length ? `Waiting on them${leadMark}: ${w.waiting.slice(0, 2).map((x) => x.fact).join("; ")}.` : w.withheld ? null : "Nothing waits on them (not a thing to say).",
-    w.running.length ? `Running${w.waiting.length ? " (background while something waits)" : leadMark}: ${w.running.slice(0, 3).map((x) => x.fact).join("; ")}${w.running.length > 3 ? `; ${w.running.length - 3} more` : ""}.` : w.withheld ? null : "Nothing is running (not a thing to say).",
+    w.running.length ? `Running${w.waiting.length ? (late ? " (background while something waits)" : " (background while something waits; a check-in leaves it out and names only what waits)") : leadMark}: ${w.running.slice(0, 3).map((x) => x.fact).join("; ")}${w.running.length > 3 ? `; ${w.running.length - 3} more` : ""}.` : w.withheld ? null : "Nothing is running (not a thing to say).",
     w.next ? `Next from Cue: ${w.next.fact}.` : null,
     // Live re-record of #310: Cue kept saying where it stands ("nothing yet on the venue"), so the rule spells out asking, not reporting.
     w.thread ? `Their thread (theirs to tell: ask, never report; ask them about it as a question, and never say where it stands, not even that nothing has come yet): ${w.thread.fact}.` : null,

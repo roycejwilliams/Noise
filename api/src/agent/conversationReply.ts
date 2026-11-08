@@ -249,7 +249,7 @@ async function holdReply(
   input: ConversationReplyInput & { resumeLater: NonNullable<ConversationReplyInput["resumeLater"]> },
   decision: Decision,
   opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number; stubEvents?: StubEvent[]; cutFirstReply?: boolean },
-): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
+): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move; holdLines?: string[] }> {
   if (!opts.dryRun) {
     const { recordDecision } = await import("../harness/core.js");
     await recordDecision({ layer: 3, decision: "brain.hold", userId: input.userId, outcome: "skip", action: "requeued", proposal: { why: decision.why, message: input.resolvedContent.slice(0, 200) } }).catch(() => {});
@@ -277,7 +277,7 @@ export function callOfferEligibleFor(input: Pick<ConversationReplyInput, "hasPen
 export async function runConversationReplyAgent(
   input: ConversationReplyInput,
   opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number; stubEvents?: StubEvent[]; cutFirstReply?: boolean } = {},
-): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
+): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move; holdLines?: string[] }> {
   const grounding: GroundingResult[] = [];
   let decision: Decision = input.decision ?? judgeText({ userId: input.userId, read: null, owed: !!input.replyOwed, safetyConcern: !!input.safetyConcern, clarify: null, turn: null });
   // A wait holds the send: nothing goes out now and no model runs. Never dropped: the reply is retried once through the turn's
@@ -403,8 +403,8 @@ export async function runConversationReplyAgent(
 
   const lastCoMessage = lastCoLine(input.recentConversation);
   // Real context on them: anything in their snapshot's first four sections (what they said, what they're in the middle of, how they
-  // feel, their world). The other two (what Cue did, what it can do) are there for everyone.
-  const hasContext = !!input.snapshot?.entries.some((e) => e.section === "words" || e.section === "middle" || e.section === "feelings" || e.section === "world");
+  // feel, their world; and the picture sections: transitions, events, people, what Cue learned). The other two (what Cue did, what it can do) are there for everyone.
+  const hasContext = !!input.snapshot?.entries.some((e) => e.kind !== "unread" && e.kind !== "omitted" && (e.section === "words" || e.section === "middle" || e.section === "feelings" || e.section === "world" || e.section === "transitions" || e.section === "events" || e.section === "people" || e.section === "learned"));
 
   // Split so the part that never changes (Co's voice and how it listens) is
   // cached on its own; the rest is this member and this moment (2026-09-23,
@@ -434,7 +434,7 @@ ${COACHING}`;
 
 ${name} is texting you. You already have their number, so never ask for it.
 
-What you already know about ${name} is Cue's snapshot of them above${input.snapshot ? "" : " (not available this turn: work from this thread and the facts below, and don't treat them as new)"}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation. Lines marked inferred are your own read, never something they said.${input.snapshot?.since.length ? `\nSince then (added after that snapshot):\n${input.snapshot.since.join("\n")}` : ""}
+What you already know about ${name} is Cue's snapshot of them above${input.snapshot ? "" : " (not available this turn: work from this thread and the facts below, and don't treat them as new)"}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation. Lines marked inferred are your own read, never something they said, and you say them tentatively (\"seems like\"), never as settled. A line saying you couldn't read something means you don't know right now, which is not the same as there being nothing.${input.snapshot?.since.length ? `\nSince then (added after that snapshot):\n${input.snapshot.since.join("\n")}` : ""}
 
 How ${name} may have been feeling: reads of their recent texts and calls, plus a frustration score from calls. Reads can be wrong: they shape how you say things, never what you claim, and their words outrank them.
 ${input.toneContext || "(nothing notable)"}
@@ -759,5 +759,5 @@ ${TOOL_TURN_RULES(input.isVoice)}
     const { recordDecision } = await import("../harness/core.js");
     await recordDecision({ layer: 3, decision: "turn.move", userId: input.userId, outcome: move === "quiet" ? "skip" : "act", action: move, proposal: { tools: toolsCalled, tried, worked } }).catch(() => {});
   }
-  return { sent: state.sent, offered, replyText: state.lastReplyText, grounding, toolsCalled, move };
+  return { sent: state.sent, offered, replyText: state.lastReplyText, grounding, toolsCalled, move, holdLines: [...(state.holdLines ?? [])] };
 }

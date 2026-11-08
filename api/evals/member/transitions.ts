@@ -145,7 +145,7 @@ check("fails closed when the guards can't be read", unread.transitions!.length =
 const noGuard = await MK.memberKnowledge("u1", { include: ["transitions"] }, { ...base([open1]), forgotten: undefined });
 check("fails closed when there is no guard read at all", noGuard.transitions!.length === 0);
 const strip = await read([row({ id: "m", text: "moving in with Maya's friend Maya Chen", quote: "moving in with Maya next month" })]);
-check("the name strip applies to what Cue writes, and their own words are kept", !/friend/.test(strip.transitions![0].text) && /their details aren't kept/.test(strip.transitions![0].text) && strip.transitions![0].quote === "moving in with Maya next month");
+check("the name strip applies to what Cue writes, and to their own quote on its own (the entry stays, the quote loses the name)", !/friend/.test(strip.transitions![0].text) && /their details aren't kept/.test(strip.transitions![0].text) && /their details aren't kept/.test(strip.transitions![0].quote ?? "") && !/next month/.test(strip.transitions![0].quote ?? "") && strip.transitions!.length === 1);
 check("the loader's failure gives an empty section, not a throw", (await read([], [], { transitions: async () => { throw new Error("x"); } })).transitions!.length === 0);
 
 // ---------------------------------------------------------------- loadTransitions with real rows (a fake database that applies the SQL's filters)
@@ -208,9 +208,9 @@ check("the thread kind column keeps its meaning (thread or commitment)", /kind T
 
 // ---------------------------------------------------------------- not rendered into any prompt yet
 const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? walk(join(dir, f)) : f.endsWith(".ts") ? [join(dir, f)] : []));
-const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && !f.endsWith("services/matchPicture.ts") && /\.transitions\b|"transitions"/.test(readFileSync(f, "utf8")));
-check("no other source file reads the transitions section (nothing renders it)", readers.length === 0);
-check("the snapshot render does not mention transitions", !/transition/i.test(src("services/memberSnapshot.ts")));
+const readers = walk(root).filter((f) => !f.endsWith("services/memberKnowledge.ts") && !f.endsWith("services/matchPicture.ts") && !/services\/(memberSnapshot|callContext)\.ts$|agent\/conversationReply\.ts$|services\/knowledge\/pictureEntries\.ts$/.test(f) && /\.transitions\b|"transitions"/.test(readFileSync(f, "utf8")));
+check("no source file reads the transitions section but the two renderers (step 6: the snapshot and the call context, through pictureEntries)", readers.length === 0);
+check("the snapshot renders it only through pictureEntries (it asks for it, and never reads .transitions itself)", /"transitions"/.test(src("services/memberSnapshot.ts")) && !/\.transitions\b/.test(src("services/memberSnapshot.ts")));
 
 console.log(`member transitions: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

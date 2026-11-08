@@ -76,7 +76,7 @@ for (const m of members) {
   const b = r.built;
   out.push({
     total: b.tokens.total,
-    sec: Object.fromEntries(S.SECTION_IDS.map((id) => [id, b.tokens[id]])),
+    sec: Object.fromEntries(S.SECTION_IDS.map((id) => [id, (b.tokens[id] ?? 0)])),
     ms: r.ms,
     compacted: Object.fromEntries(b.compactions.map((c) => [c.section, c.count])),
     over: b.overBudget,
