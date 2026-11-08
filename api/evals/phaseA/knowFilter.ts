@@ -30,6 +30,7 @@ const ago = (h: number) => new Date(NOW.getTime() - h * 3_600_000);
 type Deps = import("../../src/services/memberKnowledge.js").KnowledgeDeps;
 const seen: { corrections?: { limit: number; days: number | null } } = {};
 const deps = (o: Partial<Deps> = {}): Deps => ({
+  forgotten: async () => [],
   profile: async () => ({ firstName: "Jordan", city: "San Francisco", goals: ["meet other founders who aren't performing"], intent: [{ kind: "goal", text: "run a marathon", status: "resolved", created_at: ago(900).toISOString() }], updatedAt: ago(10) }),
   zone: async () => "America/Los_Angeles",
   linkedNames: async () => [],

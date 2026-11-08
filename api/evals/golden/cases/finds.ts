@@ -16,9 +16,8 @@ const ZONE = "America/Los_Angeles";
 const MEMBER = { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan" };
 const SF = JSON.parse(readFileSync(new URL("../fixtures/sf-events-2026-10-17.json", import.meta.url), "utf8")) as { events: { name: string; url: string; tier: 1 | 2; lines: string[] }[] };
 const URLS = new Set(SF.events.map((e) => e.url));
-const GENERIC_HOLD = /^(?:let me (?:look|check|see)|checking|one sec|on it|looking(?: now)?|give me a (?:sec|minute))\b/i;
 
-type Run = { sends: string[]; reply: string; tools: string[]; grounding: string[] };
+type Run = { sends: string[]; reply: string; tools: string[]; grounding: string[]; holds: string[] };
 async function reply(message: string, opts: { cutFirstReply?: boolean } = {}): Promise<Run> {
   const { runConversationReplyAgent } = await import("../../../src/agent/conversationReply.js");
   const G = await import("../../../src/harness/replyGrounding.js");
@@ -47,9 +46,9 @@ async function reply(message: string, opts: { cutFirstReply?: boolean } = {}): P
     const typed: Send[] = sends.map((text) => ({ kind: URLS.has(text.trim()) ? "find" : /got tangled up|taking me longer|couldn't get that one|didn't come through/i.test(text) ? "fallback" : "reply", text }));
     const tools: string[] = r.toolsCalled ?? [];
     noteReply({ text: String(r.replyText ?? ""), sends: typed, tools, kind: "find", facts: `${G.renderReplyFacts(facts)}\n${SF.events.map((e) => `${e.name} ${e.url} ${e.lines.join(" ")}`).join("\n")}`, theirLines: [message], coLines: [], firstName: MEMBER.firstName, findUrls: [...URLS], message, recent: "" });
-    return { sends, reply: String(r.replyText ?? ""), tools, grounding: (r.grounding ?? []).map((g: any) => g.outcome) };
+    return { sends, reply: String(r.replyText ?? ""), tools, grounding: (r.grounding ?? []).map((g: any) => g.outcome), holds: (r.holdLines ?? []).map((x: string) => x.trim()) };
   } catch (e: any) {
-    return { sends: [...sends, `ERROR ${String(e?.stack ?? e?.message).slice(0, 400)}`], reply: `ERROR ${e?.message}`, tools: [], grounding: [] };
+    return { sends: [...sends, `ERROR ${String(e?.stack ?? e?.message).slice(0, 400)}`], reply: `ERROR ${e?.message}`, tools: [], grounding: [], holds: [] };
   } finally {
     console.log = log;
   }
@@ -89,7 +88,13 @@ export const CASES: GoldenCase[] = [
       const found = SF.events.map((e) => ({ ...e, facts: "", match: {} as any, blocked: null }));
       const last = words[words.length - 1] ?? "";
       if (FG.unlinkedFinds(last, found, shared).length) misses.push(`the closing line names a find that wasn't sent with its link`);
-      if (r.sends[0] && !URLS.has(r.sends[0].trim()) && GENERIC_HOLD.test(r.sends[0].trim())) misses.push(`a generic holding line: "${r.sends[0]}"`);
+      // The hold line (if any went) is a natural line about what they asked: not stock (loopTools stockLine), and it never implies a result.
+      const L = await import("../../../src/agent/loopTools.js");
+      const IMPLIES_RESULT = /\b(found|here are|here's|got (?:some|a few|a couple)|a few|some great|came up with|turned up)\b/i;
+      for (const h of r.holds) {
+        if (L.stockLine(h, "Anything you have for me in SF?")) misses.push(`a stock holding line: "${h}"`);
+        if (IMPLIES_RESULT.test(h)) misses.push(`the holding line implies a result: "${h}"`);
+      }
       if (r.sends.some((s) => /got tangled up|taking me longer|couldn't get that one/i.test(s))) misses.push("the fallback line went out");
       return done(misses, r);
     },
@@ -105,7 +110,7 @@ export const CASES: GoldenCase[] = [
       const misses: string[] = [];
       if (r.sends.some((s) => /got tangled up|taking me longer|couldn't get that one|didn't come through/i.test(s))) misses.push("the fallback line went out");
       const lc = linkThenCaption(r.sends);
-      const words = r.sends.filter((s) => !/^https?:\/\//.test(s.trim()) && !GENERIC_HOLD.test(s.trim()));
+      const words = r.sends.filter((s) => !/^https?:\/\//.test(s.trim()) && !r.holds.includes(s.trim()));
       if (lc.links === 0 && words.length < 2) misses.push("nothing real went out after the cut (no finds, no redraft)");
       if (lc.uncaptioned.length) misses.push(`a link with no caption after it: ${lc.uncaptioned.join(", ")}`);
       if (!r.grounding.includes("stripped")) misses.push("the first reply wasn't cut (the test hook didn't run)");

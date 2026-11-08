@@ -163,7 +163,9 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("waiting on them leads, ahead of work that's running", w.lead?.kind === "question" && w.running.length === 1 && w.running[0].kind === "search_goal", w.lead);
   const fact = M.memberWorldFact(w);
   check("the fact names the find and its question once, marked as the check-in's one item", /Waiting on them \(a check-in's one item\): "Harbor Light Fellowship", which Cue sent Tue Oct 13, 5:30pm PDT asking "Worth a look before you decide on funding timing\?"; nothing from them on any channel since\./.test(fact) && fact.split("Harbor Light Fellowship").length === 2, fact);
-  check("running work is background while something waits", /Running \(background while something waits\): Cue's daily search for their goal: "a rooftop for the Sequin AI launch party"/.test(fact), fact);
+  check("running work is background while something waits (late at night, the plain label)", /Running \(background while something waits\): Cue's daily search for their goal: "a rooftop for the Sequin AI launch party"/.test(fact), fact);
+  const dayFact = M.memberWorldFact({ ...w, clock: { ...w.clock, hour: 14, part: "afternoon", local: "2:00 PM on Tuesday, October 13" } });
+  check("by day, with something waiting, the running part says a check-in leaves it out and names only what waits (golden 27: Cue named the search too)", /Running \(background while something waits; a check-in leaves it out and names only what waits\): Cue's daily search/.test(dayFact) && /Waiting on them \(a check-in's one item\)/.test(dayFact), dayFact);
   check("the fact is the one the reply check knows", M.WORLD_FACT.test(fact));
   const running = M.memberWorldFact(base({ exchange: QUIET }));
   check("with nothing waiting, running work is the check-in's one item", /Nothing waits on them \(not a thing to say\)\. Running \(a check-in's one item\): Cue's daily search/.test(running), running);
