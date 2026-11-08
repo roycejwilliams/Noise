@@ -201,7 +201,7 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   const PS = src("harness/proactive.ts");
   check("gates: a pull still passes opt-out, the closed-subject read, expiry, the day's find cap, the composer's caps and the send-time ledger (only hours, the window, the hold, spacing and the conversation are skipped)", /if \(opts\.pulled\) \(member\.holdUntil = null, \(member\.spaceUntil = null\)\);/.test(PS) && /midConversation: midConversation && !isSafetyFollowUp\(c\) && !opts\.pulled/.test(PS) && /skipHours: opts\.pulled/.test(PS) && !/pulled[^\n]*not_opted_out/.test(PS));
   check("gates: a pull that finds nothing doesn't hold the member's regular pick", /if \(!opts\.dryRun && !opts\.pulled\) await pool\.query\(\s*`INSERT INTO proactive_user_state \(user_id, hold_until\)/.test(PS));
-  check("gates: a hard day never means a member who asks gets nothing (the hard-day check skips a pulled one)", /if \(!opts\.pulled && hardDayHolds\(/.test(PS));
+  check("gates: a hard day never means a member who asks gets nothing (the hard-day check skips a pulled one)", /if \(!opts\.pulled && c\.type !== "announcement" && hardDayHolds\(/.test(PS));
   check("gates: the safety hold still holds finds for a pulled pick (candidateChecks is unchanged for it)", /state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer"/.test(PS));
   check("gates: the lock is taken atomically by the pull (no gap between checking and running), after a bounded wait", /export async function pullDispatch/.test(PS) && /ran = true; await dispatchForUserInScope/.test(PS) && /while \(P\.dispatchBusy\(userId\) && Date\.now\(\) < busyUntil\)/.test(src("harness/waiting.ts")));
   const W_SRC = src("harness/waiting.ts");
