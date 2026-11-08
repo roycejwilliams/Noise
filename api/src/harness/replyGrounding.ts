@@ -289,6 +289,14 @@ export async function gatherReplyFacts(
   if (RESEARCH_ASK.test(theirMessage)) addInstruction(rf, RESEARCH_RULE);
   // They ask for a deck, doc, page or PDF: Cue doesn't make those; the decline is guidance in its own words (services/coVoice.ts).
   if (MAKER_ASK.test(theirMessage)) addInstruction(rf, MAKER_DECLINE_RULE);
+  // The first time it matters, once (services/firstUseNotes.ts): for a member who was around when Cue made these, the neutral facts that
+  // it changed and what Cue does now, for Cue to say in its own words. Noted every turn (given or not); recorded only once this reply went.
+  {
+    const F = await import("../services/firstUseNotes.js").catch(() => null);
+    const note = F && F.asksForRemovedMaker(theirMessage, MAKER_ASK) ? await F.makerFirstUseNote(userId).catch(() => null) : null;
+    if (note) addInstruction(rf, note);
+    F?.noteMakerFirstUse(userId, !!note);
+  }
   // How they've told Co they like to be texted (services/textingStyle.ts).
   const style = await textingStyleFor(userId).catch(() => [] as string[]);
   if (style.length) addInstruction(rf, `How they've told you they like to be texted, follow it: ${style.join("; ")}.`);

@@ -1881,6 +1881,8 @@ export function sendblueRouter(io: Server): Router {
           }
           // The vague "less" ask counts as asked only once a reply carrying it actually went (services/memberPreferences.ts).
           if (ok) import("../services/memberPreferences.js").then((P) => P.confirmLessAsked(user.id)).catch(() => {});
+          // The first-use note (services/firstUseNotes.ts) counts as said only once a reply carrying it actually went.
+          if (ok) import("../services/firstUseNotes.js").then((F) => F.confirmMakerFirstUse(user.id)).catch((err: any) => console.error("firstUseNotes: recording the note failed (non-fatal; it may be said once more):", err?.message ?? err));
           if (ok) deliveredThisTurn.push(p.message);
           return ok;
         };
