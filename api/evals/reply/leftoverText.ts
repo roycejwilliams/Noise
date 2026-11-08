@@ -6,19 +6,20 @@ process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 process.env.DATABASE_URL ||= "postgres://ci:ci@127.0.0.1:1/ci";
 process.env.DOTENV_CONFIG_PATH = "/dev/null";
-import { readFileSync } from "node:fs";
 const T = await import("../../src/agent/conversationTools.js");
 const R = await import("../../src/agent/conversationReply.js");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 400)}` : ""}`); } };
 
 // The turn's sends: a fake sendReply that records what went (as the real one marks state), under the one-reply hold.
-function turn() {
-  const state = { leftoverOnce: false, sent: false, replyCount: 0, sendStopped: false, sentMessages: [] as string[], partialUnsent: null as string | null, laneNotes: [] as string[], workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+function turn(o: { reword?: (m: string) => string } = {}) {
+  const state = { leftoverOnce: false, draftsGiven: [] as string[], sent: false, replyCount: 0, sendStopped: false, linkDelivered: false, reacted: false, sentMessages: [] as string[], partialUnsent: null as string | null, laneNotes: [] as string[], workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   const went: string[] = [];
-  const tools: Record<string, any> = { sendReply: { execute: async ({ message }: { message: string }) => { went.push(message); state.sentMessages.push(message); state.sent = true; state.replyCount += 1; return { ok: true }; } } };
+  const callIds: string[] = [];
+  // What went is what the fact check leaves (reword stands in for it).
+  const tools: Record<string, any> = { sendReply: { execute: async ({ message }: { message: string }, call?: { toolCallId?: string }) => { const m = o.reword ? o.reword(message) : message; callIds.push(String(call?.toolCallId ?? "")); went.push(m); state.sentMessages.push(m); state.sent = true; state.replyCount += 1; return { ok: true }; } } };
   T.wrapSendsForOneReply(tools, state, () => false, true);
-  return { state, went, tools };
+  return { state, went, tools, callIds };
 }
 const FIRST = "Got it, that's on me to flag, just passed it to the team so they can fix it.";
 // The read, stubbed: what it was asked, and its answer for each leftover.
@@ -77,7 +78,40 @@ const OFFER = "I don't have another working link for the studio right now, so I 
   R.setLeftoverModelForTests(null);
 }
 check("never on a voice turn, when sends are stopped, or for a few words", R.leftoverAfterReply({ isVoice: true, sent: true, replies: 1, sendStopped: false, text: OFFER, sentMessages: [FIRST] }) === null && R.leftoverAfterReply({ isVoice: false, sent: true, replies: 1, sendStopped: true, text: OFFER, sentMessages: [FIRST] }) === null && R.leftoverAfterReply({ isVoice: false, sent: true, replies: 1, sendStopped: false, text: "Got it.", sentMessages: [FIRST] }) === null);
-check("the turn calls it after the run, before the nothing-went paths", (() => { const s = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8"); const i = s.indexOf("await sendLeftover({ tools, state,"); return i > 0 && i < s.indexOf("const plain = (agentRun?.text ?? \"\").trim();"); })());
+// The review of #421: the set-aside and the leftover are never both sent; a reworded draft still counts as said; no redraft dead end; 3s read.
+{
+  R.setLeftoverModelForTests(async () => '{"send": true, "why": "x"}');
+  // The reviewer's dentist / founder-dinner turn: the finds went (the turn is sent, no reply yet), the set-aside is the run's plain text.
+  const SET_ASIDE = "The dentist's not something I handle, but the founder dinners above are this week.";
+  const t = turn();
+  t.state.sent = true;
+  t.state.workSinceSend = true; // the finds that went (shareFinds is new for them)
+  const which = await R.sendPlainAfterRun({ tools: t.tools, state: t.state, isVoice: false, userId: "u", scope: { scope: "mixed" }, text: SET_ASIDE, theirMessage: "a dentist near the mission, and any founder dinners this week?", dryRun: true });
+  const again = await R.sendLeftover({ tools: t.tools, state: t.state, isVoice: false, userId: "u", text: SET_ASIDE, theirMessage: "x", dryRun: true });
+  check("set-aside, then the same text as the leftover: the set-aside goes once, nothing more", which === "set_aside" && JSON.stringify(t.went) === JSON.stringify([SET_ASIDE]) && !again, t.went);
+  // A draft the fact check reworded: the leftover saying the draft again is still a repeat.
+  const r = turn({ reword: (m) => (m.startsWith("I passed") ? "Passed along to the team." : m) });
+  await r.tools.sendReply.execute({ message: "I passed your note about the broken studio link to the team so they can fix the page." });
+  const rep = await R.sendLeftover({ tools: r.tools, state: r.state, isVoice: false, userId: "u", text: "I passed your note about the broken studio link to the team so they can fix the page.", theirMessage: "x", dryRun: true });
+  check("a leftover repeating a draft the fact check reworded is still a repeat (nothing sent)", !rep && r.went.length === 1, r.went);
+  // The leftover goes as the other after-run text: no redraft can be asked of it.
+  const c = turn();
+  await c.tools.sendReply.execute({ message: FIRST }, { toolCallId: "call-1" });
+  await R.sendLeftover({ tools: c.tools, state: c.state, isVoice: false, userId: "u", text: OFFER, theirMessage: THEIRS, dryRun: true });
+  check("the leftover is sent as plain-text-reply (canRedraft false: no finds or move redraft dead end)", c.callIds[1] === "plain-text-reply", c.callIds);
+  // Nothing went yet: the after-run step sends nothing; the nothing-went path is left as it was.
+  const n = turn();
+  check("nothing sent yet: the after-run step sends nothing (the existing plain-text path handles it)", (await R.sendPlainAfterRun({ tools: n.tools, state: n.state, isVoice: false, userId: "u", scope: { scope: "in" }, text: OFFER, theirMessage: THEIRS, dryRun: true })) === null && n.went.length === 0);
+  // A read that hangs: a failed read at LEFTOVER_READ_MS, nothing sent.
+  R.setLeftoverModelForTests(() => new Promise(() => {}));
+  const h = turn();
+  await h.tools.sendReply.execute({ message: FIRST });
+  const t0 = Date.now();
+  const hung = await R.sendLeftover({ tools: h.tools, state: h.state, isVoice: false, userId: "u", text: OFFER, theirMessage: THEIRS, dryRun: true });
+  const ms = Date.now() - t0;
+  check("the read is capped at 3s: a timeout sends nothing", R.LEFTOVER_READ_MS === 3000 && !hung && h.went.length === 1 && ms < 3600, ms);
+  R.setLeftoverModelForTests(null);
+}
 
 console.log(`leftover text: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

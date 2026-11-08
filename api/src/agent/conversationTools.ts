@@ -265,7 +265,9 @@ export const ONE_REPLY_NOTE = "Your reply already went out this turn and nothing
 // newsCount: every result that may open a second text counts up; a send that goes marks what came before it as said, never what arrived
 // while it was going out (a guard refusal landing during the send stays owed, review of #310).
 // leftoverOnce: the run's own closing plain text, checked as new (conversationReply.ts leftoverAfterReply), may go once after the reply.
-type SendState = { sent: boolean; sentMessages: string[]; partialUnsent: string | null; laneNotes: string[]; workSinceSend: boolean; sendsInFlight: number; extraSendsRefused: number; newsCount?: number; leftoverOnce?: boolean };
+// draftsGiven: every draft handed to sendReply this turn, as written (before the fact check reworded or cut it): a leftover that says
+// one of them again is a repeat even when what went out was reworded.
+type SendState = { sent: boolean; sentMessages: string[]; partialUnsent: string | null; laneNotes: string[]; workSinceSend: boolean; sendsInFlight: number; extraSendsRefused: number; newsCount?: number; leftoverOnce?: boolean; draftsGiven?: string[] };
 // Pure on its inputs: whether another sendReply may go this turn.
 export function anotherSendAllowed(state: SendState, answerOwed: boolean): boolean {
   const replied = state.sent || state.sendsInFlight > 0;
@@ -295,6 +297,7 @@ export function wrapSendsForOneReply(tools: Record<string, any>, state: SendStat
   const send = tools.sendReply?.execute;
   if (typeof send !== "function") return;
   tools.sendReply.execute = async (...args: any[]) => {
+    if (typeof args[0]?.message === "string" && args[0].message.trim()) (state.draftsGiven ??= []).push(args[0].message);
     // Checked and claimed before any await, so a second call in the same step sees the first.
     if (!anotherSendAllowed(state, answerOwed())) {
       state.extraSendsRefused += 1;
@@ -320,7 +323,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { leftoverOnce: false, safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+  const state = { leftoverOnce: false, draftsGiven: [] as string[], safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.

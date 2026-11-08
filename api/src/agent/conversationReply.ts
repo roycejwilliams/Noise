@@ -106,6 +106,8 @@ export function parseLeftoverVerdict(text: string): { send: boolean; why: string
     return null;
   }
 }
+// The read never holds the turn's end: past this it's a failed read, and nothing is sent.
+export const LEFTOVER_READ_MS = 3000;
 let leftoverModel: ((prompt: string) => Promise<string>) | null = null;
 export function setLeftoverModelForTests(f: ((prompt: string) => Promise<string>) | null): void {
   leftoverModel = f;
@@ -113,14 +115,17 @@ export function setLeftoverModelForTests(f: ((prompt: string) => Promise<string>
 export async function readLeftover(o: { userId: string; sent: string[]; theirMessage: string; leftover: string }): Promise<{ send: boolean; why: string; read: "model" | "failed" }> {
   const gen = leftoverModel ?? (async (p: string) => {
     const [{ generateText }, { anthropic }, { MODELS }, { withMember }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js"), import("../services/llmUsage.js")]);
-    return withMember(o.userId, () => generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 120, abortSignal: AbortSignal.timeout(8000), experimental_telemetry: { isEnabled: true, functionId: "reply.leftoverRead" }, prompt: p })).then((r) => r.text);
+    return withMember(o.userId, () => generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 120, abortSignal: AbortSignal.timeout(LEFTOVER_READ_MS), experimental_telemetry: { isEnabled: true, functionId: "reply.leftoverRead" }, prompt: p })).then((r) => r.text);
   });
-  const v = parseLeftoverVerdict(await gen(leftoverPrompt(o)).catch(() => ""));
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<string>((resolve) => { timer = setTimeout(() => resolve(""), LEFTOVER_READ_MS); });
+  const v = parseLeftoverVerdict(await Promise.race([gen(leftoverPrompt(o)).catch(() => ""), timeout]).finally(() => { if (timer) clearTimeout(timer); }));
   return v ? { ...v, read: "model" } : { send: false, why: "the read of whether it adds anything didn't answer, so it isn't sent", read: "failed" };
 }
 
-export async function sendLeftover(o: { tools: Record<string, any>; state: { sent: boolean; replyCount: number; sendStopped: boolean; sentMessages: string[]; leftoverOnce?: boolean }; isVoice: boolean; userId: string; text: string; theirMessage: string; dryRun: boolean }): Promise<boolean> {
-  const leftover = leftoverAfterReply({ isVoice: o.isVoice, sent: o.state.sent, replies: o.state.replyCount, sendStopped: o.state.sendStopped, text: o.text, sentMessages: o.state.sentMessages });
+export async function sendLeftover(o: { tools: Record<string, any>; state: { sent: boolean; replyCount: number; sendStopped: boolean; sentMessages: string[]; leftoverOnce?: boolean; draftsGiven?: string[] }; isVoice: boolean; userId: string; text: string; theirMessage: string; dryRun: boolean }): Promise<boolean> {
+  // A repeat of what went, or of any draft given to sendReply this turn (a draft the fact check reworded still counts).
+  const leftover = leftoverAfterReply({ isVoice: o.isVoice, sent: o.state.sent, replies: o.state.replyCount, sendStopped: o.state.sendStopped, text: o.text, sentMessages: [...o.state.sentMessages, ...(o.state.draftsGiven ?? [])] });
   if (!leftover || looksLikeMetaReply(leftover)) return false;
   // The model decides whether it adds anything; code only acts on a yes.
   const verdict = await readLeftover({ userId: o.userId, sent: o.state.sentMessages, theirMessage: o.theirMessage, leftover });
@@ -137,7 +142,9 @@ export async function sendLeftover(o: { tools: Record<string, any>; state: { sen
   const before = o.state.sentMessages.length;
   o.state.leftoverOnce = true;
   try {
-    await o.tools.sendReply.execute({ message: leftover }, { toolCallId: "leftover-text-reply", messages: [] });
+    // As the other text sent after the run ended ("plain-text-reply"): no redraft can follow it, so sendReply never asks for one (a
+    // finds or move redraft would be an ok:false nobody acts on); it goes after the fact check as written.
+    await o.tools.sendReply.execute({ message: leftover }, { toolCallId: "plain-text-reply", messages: [] });
   } catch (err: any) {
     console.error("conversationReply: sending the leftover plain text failed:", err?.message ?? err);
   } finally {
@@ -146,6 +153,22 @@ export async function sendLeftover(o: { tools: Record<string, any>; state: { sen
   const went = o.state.sentMessages.length > before;
   await record(went);
   return went;
+}
+// The run's closing plain text, after the run, when something already went (the nothing-went paths below are unchanged):
+//   - a mixed (or out) turn whose connection part went as finds, with the set-aside left in plain text and no reply sent: that text still
+//     goes, through sendReply (2026-11-06 live test: "a dentist near the mission, and any founder dinners this week?" got the two finds,
+//     and "The dentist's not something I handle" was written but never sent, because the finds had marked the turn sent);
+//   - otherwise, a reply went and the run then wrote more that says something new (sendLeftover). Never both: the set-aside IS that text.
+// Returns which went, if either.
+export async function sendPlainAfterRun(o: { tools: Record<string, any>; state: { sent: boolean; replyCount: number; sendStopped: boolean; sentMessages: string[]; linkDelivered: boolean; reacted: boolean; leftoverOnce?: boolean; draftsGiven?: string[] }; isVoice: boolean; userId: string; scope: { scope: string } | null; text: string; theirMessage: string; dryRun: boolean }): Promise<"set_aside" | "leftover" | null> {
+  const text = o.text.trim();
+  if (plainSetAsideOwed({ isVoice: o.isVoice, scope: o.scope, sent: o.state.sent, replies: o.state.replyCount, linkDelivered: o.state.linkDelivered, sendStopped: o.state.sendStopped, reacted: o.state.reacted, text }) && !looksLikeMetaReply(text)) {
+    await o.tools.sendReply.execute({ message: text }, { toolCallId: "plain-text-reply", messages: [] }).catch((err: any) =>
+      console.error("conversationReply: sending the plain-text set-aside failed:", err?.message ?? err),
+    );
+    return "set_aside";
+  }
+  return (await sendLeftover(o)) ? "leftover" : null;
 }
 // Pure: when their message first arrived. A replay (a held or crashed turn run again) keeps the original time; a live turn uses when
 // the webhook got it (routes/sendblue.ts).
@@ -699,14 +722,7 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // A mixed (or out) turn whose connection part went as finds, with the set-aside left in plain text and no reply sent: that text
   // still goes, through sendReply (2026-11-06 live test: "a dentist near the mission, and any founder dinners this week?" got the
   // two finds, and "The dentist's not something I handle" was written but never sent, because the finds had marked the turn sent).
-  if (plainSetAsideOwed({ isVoice: input.isVoice, scope: input.facts.turnScope ?? null, sent: state.sent, replies: state.replyCount, linkDelivered: state.linkDelivered, sendStopped: state.sendStopped, reacted: state.reacted, text: agentRun?.text ?? "" }) && !looksLikeMetaReply((agentRun?.text ?? "").trim())) {
-    await (tools.sendReply as any).execute({ message: (agentRun?.text ?? "").trim() }, { toolCallId: "plain-text-reply", messages: [] }).catch((err: any) =>
-      console.error("conversationReply: sending the plain-text set-aside failed:", err?.message ?? err),
-    );
-  }
-  // A reply went, and the run then wrote more plain text that says something new: it goes as its own text, through sendReply (grounded,
-  // redrafted and logged like any reply), once, past the one-reply hold only for this (leftoverAfterReply never passes a repeat).
-  await sendLeftover({ tools, state, isVoice: input.isVoice, userId: input.userId, text: agentRun?.text ?? "", theirMessage: input.resolvedContent, dryRun: !!opts.dryRun });
+  await sendPlainAfterRun({ tools, state, isVoice: input.isVoice, userId: input.userId, scope: input.facts.turnScope ?? null, text: agentRun?.text ?? "", theirMessage: input.resolvedContent, dryRun: !!opts.dryRun });
   if (!state.sent && !state.sendStopped) {
     // What the agent did instead, so a fallback can be traced (2026-09-22).
     const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));
