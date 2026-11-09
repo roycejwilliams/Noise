@@ -106,9 +106,18 @@ function getBrowser(): Promise<Browser> {
   if (idle) clearTimeout(idle);
   idle = setTimeout(() => void closeBrowser(), BROWSER_LIMITS.idleMs);
   idle.unref?.();
-  browser ??= import("playwright-core").then(({ chromium }) =>
-    chromium.launch({ executablePath: chromiumPath(), args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"] }),
-  );
+  if (!browser) {
+    const launching: Promise<Browser> = import("playwright-core").then(({ chromium }) =>
+      chromium.launch({ executablePath: chromiumPath(), args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"] }).then((b) => {
+        // A browser that crashed or was killed is never handed out again: the next use launches a fresh one.
+        b.on("disconnected", () => {
+          if (browser === launching) browser = null;
+        });
+        return b;
+      }),
+    );
+    browser = launching;
+  }
   browser.catch(() => {
     browser = null;
     failedAt = Date.now();
