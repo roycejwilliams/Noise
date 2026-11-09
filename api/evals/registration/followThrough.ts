@@ -59,5 +59,17 @@ check("a confirmed registration feeds the existing debrief as intent (acted), pe
   check("plan write: one upsert keyed on the registration, stated, with its status", said.length === 1 && /ON CONFLICT \(registration_id\)/.test(said[0].sql) && said[0].a[4] === "pending_approval" && said[0].a[2] === "2026-11-20", said);
 }
 
+// Forget an event's answer: it leaves the registration's answers and the plan's reason; the status stays.
+{
+  const W = await import("../../src/services/whatCoKnows.js");
+  const RG = await import("../../src/services/eventRegistration/registration.js");
+  const raw: any = { profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [],
+    signups: W.signupsOf([{ id: "00000000-0000-4000-8000-0000000000b2", event_name: "Founders Dinner", form, answers: { why: { value: "To meet climate investors.", source: "member" } } }], RG.FACTUAL_KINDS) };
+  const item = W.knownItems(raw).find((i) => i.group === "signupAnswers")!;
+  const said: { sql: string; a: any[] }[] = [];
+  const db: any = { query: async (sql: string, a: any[]) => { said.push({ sql, a }); return { rows: [], rowCount: 1 }; } };
+  await W.applyOne(db, "u", raw, item, "remove", null, "forget why I wanted to go");
+  check("forget an event's answer: off the registration and off the plan's reason, status untouched", said.some((x) => /answers = answers - \$3/.test(x.sql)) && said.some((x) => /UPDATE planned_event_mentions SET reason = NULL, reason_source = NULL/.test(x.sql)) && !said.some((x) => /registration_status|SET status/.test(x.sql)), said);
+}
 console.log(`${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
