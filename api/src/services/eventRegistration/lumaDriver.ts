@@ -121,10 +121,18 @@ export function formReadFrom(url: string, data: PageData, raw: RawForm | null, b
     signIn = /continue with email|email (?:me )?a code|we'?ll (?:email|send) you a code|sign in with email/i.test(text) ? "email_code" : "other";
   } else if (/registration (?:is )?closed|no longer accepting|event has ended|this event has passed/i.test(text)) gate = "closed";
   else if ((data.soldOut || /sold out|event (?:is )?full/i.test(text)) && action !== "waitlist") gate = "sold_out";
-  const fields: FormField[] = (raw?.fields ?? []).map((r) => {
+  let fields: FormField[] = (raw?.fields ?? []).map((r) => {
     const kind = classifyField({ label: r.label, type: r.combo ? "text" : r.type, autocomplete: r.autocomplete, name: r.name, options: r.options, required: r.required });
     return { id: fieldId(r), label: r.label.replace(/\s*\*\s*$/, "").trim(), kind, required: r.required, ...(r.options.length ? { options: r.options } : {}), ...(kind === "terms" && data.terms.length ? { termsText: data.terms.join("\n\n").slice(0, 2000) } : {}) };
   });
+  // Behind Luma's sign-in the form isn't visible yet; Luma requires a name and an email for every registration
+  // (help.luma.com/p/event-registration-process), so those are planned now and anything else the form shows after sign-in is asked then.
+  if (gate === "login" || gate === "verification") {
+    fields = [
+      { id: "name", label: "Name", kind: "name", required: true },
+      { id: "email", label: "Email", kind: "email", required: true },
+    ];
+  }
   return {
     url: canonicalEventUrl(url) ?? url,
     eventName: data.name,

@@ -335,6 +335,7 @@
     "evals/momentFit/today.ts",
     "evals/registration/core.ts",
     "evals/registration/core.ts",
-    "evals/registration/driver.ts"
+    "evals/registration/driver.ts",
+    "evals/registration/conversation.ts"
   ]
 }

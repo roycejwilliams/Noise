@@ -138,6 +138,21 @@ export function voiceReadReceipt(name: string, input: any): { answer: string } |
   return { answer: ["yes", "no", "stop", "explain"].includes(input?.answer) ? input.answer : "other" };
 }
 
+// Pure: what the log keeps of a registration tool's call (agent/registrationTools.ts): the registration id, which fields were answered
+// and how, and the event asked about. Never their message, an answer's value, an email or a code (Royce, 2026-11-09: never log the
+// email in plain decision rows; a code is never stored or logged). Null for any other tool.
+export const REGISTRATION_TOOLS: ReadonlySet<string> = new Set(["prepareEventRegistration", "saveRegistrationAnswers", "registerForEvent", "useRegistrationCode", "stopEventRegistration"]);
+export function registrationReceipt(name: string, input: any): Record<string, unknown> | null {
+  if (!REGISTRATION_TOOLS.has(name)) return null;
+  const out: Record<string, unknown> = {};
+  if (typeof input?.registrationId === "string") out.registrationId = input.registrationId.slice(0, 40);
+  if (typeof input?.event === "string") out.event = input.event.slice(0, 200);
+  if (Array.isArray(input?.answers)) out.answered = input.answers.map((a: any) => ({ fieldId: String(a?.fieldId ?? "").slice(0, 80), from: a?.from === "draft_as_shown" ? "draft_as_shown" : "their_words" }));
+  if (Array.isArray(input?.drafts)) out.drafted = input.drafts.map((d: any) => String(d?.fieldId ?? "").slice(0, 80));
+  if (typeof input?.fit === "string") out.fit = true;
+  return out;
+}
+
 export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCtx): T {
   const usedThisTurn = new Map<string, number>();
   const retried = new Set<string>();
@@ -170,6 +185,8 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       // their yes, the why, the refs (their hash part is made from the text) or a judge's words about it (forget-delete-spec.md §2.26).
       // A voiceRead call the same way: the answer read, never their words (voiceReadReceipt).
       const removal = removalReceipt(name, input) ?? voiceReadReceipt(name, input);
+      // A registration's log: ids and kinds only, never their message (it may hold their email or a sign-in code) or an answer's words.
+      const registrationLog = registrationReceipt(name, input);
       // Every outcome is also one row in the action ledger (services/ledger.ts), anchored on this decision row and written in the
       // background: what the call did (recordAs when it did only part), or for a removal or a voice read the tool's name only.
       const log = (receipt: Receipt, detail: Record<string, unknown> = {}) =>
@@ -184,13 +201,15 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
               reason: removal ? "" : String(input?.why ?? "").slice(0, 300),
               proposal: removal
                 ? { ability: ability.id, ...removal, ...(typeof detail.yesCheck === "string" ? { yesCheck: detail.yesCheck } : {}), ...("error" in detail ? { error: "not done" } : {}), ...(detail.threw ? { threw: true } : {}) }
-                : { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
+                : registrationLog
+                  ? { ability: ability.id, input: registrationLog, ...detail }
+                  : { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
             })
               .then((d) => {
                 let row;
                 try {
                   row = toolOutcomeRow({
-                    userId: ctx.userId, tool: name, receipt, input: removal ? null : (detail.recordAs ?? input), made: typeof detail.made === "string" ? detail.made : null,
+                    userId: ctx.userId, tool: name, receipt, input: removal ? null : registrationLog ?? (detail.recordAs ?? input), made: typeof detail.made === "string" ? detail.made : null,
                     decisionId: d.id, at: d.at ?? new Date(), background: input?.background === true,
                   });
                 } catch (err) {
@@ -268,7 +287,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
         if (rows.length) return refuse("limited", `${name} wasn't run: it was already done for ${input.personName}.`, "Already requested for this person. Don't ask again.");
       }
       if (ability.confirm) {
-        const yes = await confirmYes({ theirYes: input?.theirYes, message: ctx.resolvedContent, recent: ctx.recentExchange ?? null, userId: ctx.userId, ability: ability.can });
+        // A narrower scope when the ability has one (a registration's own question): their yes is read against exactly that.
+        const scoped = ability.confirmScope ? await ability.confirmScope(input, ctx.userId).catch(() => null) : null;
+        const yes = await confirmYes({ theirYes: input?.theirYes, message: ctx.resolvedContent, recent: ctx.recentExchange ?? null, userId: ctx.userId, ability: scoped ?? ability.can });
         if (!yes.ok) {
           const detail = { yesCheck: yes.kind, yesWhy: yes.why };
           // The quote wasn't their words: a clean retry with the right quote, never asking them again.
@@ -320,7 +341,8 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       // shareFinds: only the finds that went, through withRecordAs so the model's result is unchanged), so the lasting record never
       // says more than the turn's facts do. It's logged too, so the every-boot backfill rebuilds from it, never from the full ask
       // (review of #284).
-      const partial = !!result && typeof result === "object" ? (result.recordAs && typeof result.recordAs === "object" ? result.recordAs : (RECORD_AS.get(result) ?? null)) : null;
+      // A registration call is recorded by its ids and kinds only (registrationReceipt), never what was asked with it.
+      const partial = registrationLog ?? (!!result && typeof result === "object" ? (result.recordAs && typeof result.recordAs === "object" ? result.recordAs : (RECORD_AS.get(result) ?? null)) : null);
       const recordAs = partial ?? input;
       // person: the oncePerPerson key, so a later "Sarah" + "Kim" and "Sarah Kim" both find this row (2026-10-28).
       await log(failed ? "not_done" : "done", { ...(failed ? { error: refusalReason(result).slice(0, 200), ...(made ? { made } : {}) } : partial ? { recordAs: partial } : {}), ...(person ? { person } : {}) });
