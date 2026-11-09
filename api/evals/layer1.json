@@ -259,6 +259,8 @@
     "evals/goals/oneGoalNudge.ts",
     "evals/goals/retire.ts",
     "evals/sweepFind/queries.ts",
+    "evals/sweepFind/wellFormed.ts",
+    "evals/sweepFind/failedNotEmpty.ts",
     "evals/coldstart/rules.ts",
     "evals/proactive/memberState.ts",
     "evals/proactive/goalNudgeParked.ts",

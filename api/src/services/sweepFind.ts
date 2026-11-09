@@ -7,7 +7,7 @@
 // only, through the same gate as before (sold out, past, too far, the name and
 // any date on the thing's own record).
 import { anthropic } from "@ai-sdk/anthropic";
-import { generateText, stepCountIs, tool } from "ai";
+import { generateText, stepCountIs, tool, wrapLanguageModel } from "ai";
 import { z } from "zod";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
@@ -24,6 +24,7 @@ import { transientFailure } from "./searchFailure.js";
 import { mayBePrivateEvent, pageEventMatch, shareableRead } from "./eventPage.js";
 import { emptyTierCounts, tierKey, type TierCounts } from "./tierCounts.js";
 import { EXA_OFF, LUMA_API_OFF, NO_PLACE, TEST_ACCOUNT } from "./lumaViaExa.js";
+import { clip, wellFormedPrompt } from "./modelText.js";
 
 export const SWEEP_BUDGET = { steps: 7, allSourcesSteps: 9, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
 
@@ -54,6 +55,12 @@ export const SWEEP_SOURCES = [
 export type SweepSource = (typeof SWEEP_SOURCES)[number]["source"];
 // Pure: the tool the next step must call, or null when every place has been looked at (or too few steps are left to also keep).
 // skip: places this search leaves out by design (a goal its plan read as not tied to a place leaves out events: sweepSkips).
+// Pure: whether a sweep counts as having looked (searched): a search came back, or nothing stood in its way. A loop that failed before
+// any search came back looked nowhere (2026-11-09: a request the model API refused counted as an empty run on the hourly sweep and
+// moved the ask toward its backoff); what did come back before a later step failed still counts.
+export function ranClean(o: { searched: boolean; blocked: boolean; loopFailed: boolean }): boolean {
+  return o.searched || (!o.blocked && !o.loopFailed);
+}
 export function nextRequiredSource(called: ReadonlySet<SweepSource>, stepNumber: number, steps: number = SWEEP_BUDGET.allSourcesSteps, skip: ReadonlySet<SweepSource> = new Set()): (typeof SWEEP_SOURCES)[number]["tool"] | null {
   const missing = SWEEP_SOURCES.filter((s) => !called.has(s.source) && !skip.has(s.source));
   if (!missing.length || stepNumber >= steps - 2) return null;
@@ -83,11 +90,11 @@ export async function seenBefore(userId: string, askText: string, db: { query: (
     `SELECT proposal->'passedOver' AS passed, proposal->'keptBy' AS kept FROM harness_decisions
       WHERE decision = 'sweep.find' AND user_id = $1 AND proposal->>'ask' = $2 AND (proposal->>'allSources')::boolean IS TRUE
         AND created_at > NOW() - INTERVAL '14 days' ORDER BY created_at DESC LIMIT 14`,
-    [userId, askText.slice(0, 200)],
+    [userId, clip(askText, 200)],
   );
   const out = new Map<string, string>();
   for (const r of rows) for (const x of [...(Array.isArray(r.kept) ? r.kept : []), ...(Array.isArray(r.passed) ? r.passed : [])]) {
-    if (typeof x?.url === "string" && x.url && !out.has(x.url)) out.set(x.url, String(x.name ?? "").slice(0, 60));
+    if (typeof x?.url === "string" && x.url && !out.has(x.url)) out.set(x.url, clip(String(x.name ?? ""), 60));
   }
   return [...out].map(([url, name]) => ({ name, url }));
 }
@@ -111,7 +118,7 @@ export function passedOver(lookedAt: LookedAt[], keptUrls: Set<string>, reasons:
     .filter((l) => !keptUrls.has(l.url) && !seen.has(l.url) && seen.add(l.url))
     .sort((a, b) => order[a.source] - order[b.source] || Number(reasons.has(b.url)) - Number(reasons.has(a.url)))
     .slice(0, cap)
-    .map((l) => ({ source: l.source, name: l.name.slice(0, 80), url: l.url, why: (reasons.get(l.url) ?? "not kept").slice(0, 120), ...(l.query ? { query: l.query } : {}) }));
+    .map((l) => ({ source: l.source, name: clip(l.name, 80), url: l.url, why: clip(reasons.get(l.url) ?? "not kept", 120), ...(l.query ? { query: l.query } : {}) }));
 }
 
 // An X search that failed, said by kind and status only (never the response
@@ -175,7 +182,7 @@ export function sweepRecord(k: MemberKnowledge, askText: string): SweepRecord {
   const L = SWEEP_RECORD_LIMITS;
   const same = (a: string) => a.trim().toLowerCase() === askText.trim().toLowerCase();
   return {
-    person: (k.person?.text ?? "").slice(0, L.person),
+    person: clip(k.person?.text ?? "", L.person),
     goals: k.goals.filter((g) => g.state === "active").map((g) => g.text).slice(0, L.goals),
     goalsPast: k.goals.filter((g) => g.state !== "active").map((g) => g.text).slice(0, L.goals),
     otherAsks: k.asks.filter((a) => !same(a.text)).map((a) => a.text).slice(0, L.asks),
@@ -359,6 +366,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
     : [];
   let searched = false;
   let blocked = false;
+  // The search loop itself failed (a refused request, a model timeout): a failure, never "nothing found" (ranClean).
+  let loopFailed = false;
   const found = new Map<string, TierMatch>();
   const kept: TierMatch[] = [];
   let webQueries = 0;
@@ -391,7 +400,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         called.add("events");
         const bad = ledger.check("events", what);
         if (bad.length) {
-          sourceFailures.push(`events: query refused (${ledger.refusal(what, bad).slice(0, 160)})`);
+          sourceFailures.push(`events: query refused (${clip(ledger.refusal(what, bad), 160)})`);
           return { ok: false, error: ledger.refusal(what, bad) };
         }
         did.push(`events: ${what}${when ? `, ${when}` : ""}`);
@@ -443,7 +452,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           return [r.query];
         });
         if (!good.length) {
-          sourceFailures.push(`web: queries refused (${refusals.join(" ").slice(0, 160)})`);
+          sourceFailures.push(`web: queries refused (${clip(refusals.join(" "), 160)})`);
           return { ok: false, error: refusals.join(" ") };
         }
         const run = good.slice(0, SWEEP_BUDGET.webQueries - webQueries);
@@ -461,7 +470,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           blocked = true;
           // A null is a throw taskWebSearch didn't catch: unknown, so it isn't retried (only a failure that says it clears is).
           for (const r of all) placeFailed(places, "web", r?.note ?? "the web search threw");
-          sourceFailures.push(`web: the search failed (${[...new Set(all.map((r) => r?.note ?? "it threw"))].join(" ").slice(0, 160)})`);
+          sourceFailures.push(`web: the search failed (${clip([...new Set(all.map((r) => r?.note ?? "it threw"))].join(" "), 160)})`);
           return { ok: false, error: "Web search failed just now; nothing came back." };
         }
         const { checkVerified } = await import("./factCheck.js");
@@ -498,10 +507,10 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
       execute: async ({ query }) => {
         called.add("x");
         if (xSearches >= SWEEP_BUDGET.xSearches) return { ok: false, error: "No X searches left." };
-        const asked = query.trim().slice(0, 200);
+        const asked = clip(query.trim(), 200);
         const checked = ledger.checkOrLoosen("x", asked);
         if (checked.bad.length) {
-          sourceFailures.push(`x: query refused (${ledger.refusal(asked, checked.bad).slice(0, 160)})`);
+          sourceFailures.push(`x: query refused (${clip(ledger.refusal(asked, checked.bad), 160)})`);
           return { ok: false, error: ledger.refusal(asked, checked.bad) };
         }
         const q = checked.query;
@@ -545,8 +554,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         ledger.ran("x", q, posts.length, checked.loosenedFrom);
         searched = true;
         for (const p of posts) {
-          lookedAt.push({ source: "x", name: `${p.author ? `@${p.author}: ` : ""}${p.text.slice(0, 60)}`, url: p.url, query: q });
-          const post = { tier: 3, kind: "opportunity", source: "x", name: p.text.slice(0, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
+          lookedAt.push({ source: "x", name: `${p.author ? `@${p.author}: ` : ""}${clip(p.text, 60)}`, url: p.url, query: q });
+          const post = { tier: 3, kind: "opportunity", source: "x", name: clip(p.text, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
           found.set(p.url, post);
           // The page a post points to can be kept in its place, with the post as
           // its evidence. It's a web page to the gate (only x.com/i/status links
@@ -557,7 +566,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
           }
         }
         return {
-          posts: posts.map((p) => ({ link: p.url, by: p.author ? `@${p.author}` : undefined, text: p.text.slice(0, 600), links: p.links.length ? p.links : undefined })),
+          posts: posts.map((p) => ({ link: p.url, by: p.author ? `@${p.author}` : undefined, text: clip(p.text, 600), links: p.links.length ? p.links : undefined })),
           note: posts.length ? undefined : "No posts for that this week.",
         };
       },
@@ -571,8 +580,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         const { readPageText } = await import("./webOpportunitySearch.js");
         const text = await readPageText(url).catch(() => null);
         const m = found.get(url) as any;
-        if (text && m && m.tier === 3) m.evidence = `${m.evidence ?? ""} ${text.slice(0, 3000)}`;
-        return text ? { text: text.slice(0, 5000) } : { ok: false, error: "Couldn't read it." };
+        if (text && m && m.tier === 3) m.evidence = `${m.evidence ?? ""} ${clip(text, 3000)}`;
+        return text ? { text: clip(text, 5000) } : { ok: false, error: "Couldn't read it." };
       },
     }),
     keep: tool({
@@ -598,7 +607,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         // Its date, kept with it when its own text shows that day (shownDate), so a find that waits for its tier's slot stays while it's
         // fresh instead of closing as "its page didn't say when" (Royce, 2026-10-15).
         const day = m.tier === 3 && !(m as any).statedDates?.start ? shownDate(date, `${m.name} ${m.reason ?? ""} ${(m as any).evidence ?? ""}`, opts.today ?? localDay(new Date(), opts.timezone ?? null)) : null;
-        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), ...(day ? { statedDates: { start: day } } : {}), whyItFits: why.trim(), fits: true, rightKind: true, ...(fit ? { taste: fit } : {}), ...(audience && audience.trim() ? { audience: audience.trim().slice(0, 60) } : {}) } as TierMatch);
+        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), ...(day ? { statedDates: { start: day } } : {}), whyItFits: why.trim(), fits: true, rightKind: true, ...(fit ? { taste: fit } : {}), ...(audience && audience.trim() ? { audience: clip(audience.trim(), 60) } : {}) } as TierMatch);
         return { ok: true };
       },
     }),
@@ -613,7 +622,8 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   };
   try {
     await generateText({
-      model: anthropic(MODELS.sonnet),
+      // Every string in each step's request made well formed (modelText.ts): a lone surrogate from a cut anywhere would fail the call.
+      model: wrapLanguageModel({ model: anthropic(MODELS.sonnet), middleware: wellFormedPrompt }),
       maxOutputTokens: 4000,
       providerOptions: { anthropic: { effort: "low" } },
       tools,
@@ -634,6 +644,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
     });
   } catch (err: any) {
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
+    loopFailed = true;
     sourceFailures.push(`the search loop failed (${String(err?.message ?? err).slice(0, 120)})`);
     // The loop itself failed: every place it hadn't reached yet failed the way the loop did (a model timeout clears; a refused key doesn't).
     for (const s of SWEEP_SOURCES) if (!called.has(s.source) && !skips.has(s.source)) placeFailed(places, s.source, String(err?.message ?? err));
@@ -685,6 +696,6 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   for (const o of limits.out) tierCounts[tierKey((o.match as any).tier)].dropped++;
   for (const m of gated) tierCounts[tierKey((m as any).tier)].kept++;
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
-  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy, ...(opts.allSources ? { allSources: true } : {}), ...(sourceFailures.length ? { sourceFailures } : {}), ...(exaAdded.length ? { exaAdded } : {}) } }).catch(() => {});
-  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures, ...(report.outages.length ? { outages: report.outages } : {}), ...(report.lasting.length ? { lasting: report.lasting } : {}), ...(unverified ? { unverified } : {}), tiers: tierCounts } }; // mood: carries the read
+  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: clip(c.askText, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy, ...(opts.allSources ? { allSources: true } : {}), ...(sourceFailures.length ? { sourceFailures } : {}), ...(exaAdded.length ? { exaAdded } : {}) } }).catch(() => {});
+  return { matches: gated, did, searched: ranClean({ searched, blocked, loopFailed }), frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures, ...(report.outages.length ? { outages: report.outages } : {}), ...(report.lasting.length ? { lasting: report.lasting } : {}), ...(unverified ? { unverified } : {}), tiers: tierCounts } }; // mood: carries the read
 }
