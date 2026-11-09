@@ -565,9 +565,6 @@ export type ThinkOptions = {
   exchange?: ((call: LiveCall) => Promise<import("./exchangeRecord.js").ExchangeRecord | null>) | null;
   // The read of their latest words the sentence check waits for (exchangeRecord.ts readCallTurn); the real Haiku read when not given.
   callRead?: (i: import("./exchangeRecord.js").CallReadInput) => Promise<import("./exchangeRecord.js").CallTurnRead | null>;
-  // Cue's end_call on this exchange already passed the closing read (runCallLlm's closed fact) and is pending, or was held by the bridge
-  // only because they spoke after the goodbye (gptLiveBridge.ts): the close still stands for this turn, on that fact.
-  closedEarlier?: boolean;
   // That end was held because they spoke after the goodbye: this turn decides again, told so (END_HELD_NOTE).
   endHeld?: boolean;
 };
@@ -591,7 +588,7 @@ export const cachedCallExchange = (call: LiveCall, now = Date.now()): Promise<im
 // understand it on its own"; several commentary appends may share one delegation id). Returning false stops the answer there (the
 // caller moved on): the rest isn't generated. Never on a call that has touched their safety (safetyCall over the request): there the
 // whole answer is read first, as before, so a crisis line goes out word for word (sayExactly). Never on a closing turn either (their
-// goodbye, or their reply to Cue's: callClosing, the read that lets end_call through), where Claude may end the call and its words then
+// goodbye, or their reply to Cue's: callClosing), where Claude is likeliest to end the call and its words then
 // go unsaid (review of #345: in a real stream the text comes hundreds of ms before end_call). streamed says which way this turn went.
 export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: Upstream, onDropped?: (sentence: string, why: string) => void, guard?: MessageGuard, voiceLine?: (callKey: string, req: OaiRequest) => Promise<string | null>, onSentence?: (text: string) => boolean, o: ThinkOptions = {}) {
   const req = delegationRequest(call, turns);
@@ -608,12 +605,12 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   // cap note on a safety turn: nothing pulls it back to an earlier answer.
   const X = exchange ? await import("./exchangeRecord.js") : null;
   const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : "", !safety0 ? (windDownSignal(req) ? WIND_DOWN_NOTE : agreedBriefly(req) ? AGREED_NOTE : "") : "", X ? X.callTurnNote(exchange) ?? "" : "", !safety0 ? openersNote(callOpeners(turns)) : "", o.endHeld && !safety0 ? END_HELD_NOTE : ""].filter(Boolean);
-  const streamed = !!onSentence && !safety0 && !callClosing(req) && !o.closedEarlier;
+  const streamed = !!onSentence && !safety0 && !callClosing(req) && !o.endHeld;
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
   const ran: string[] = [];
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange, callRead: o.callRead ?? ((i) => import("./exchangeRecord.js").then((X) => X.readCallTurn(i))) } : {}), onCapped: o.onCapped, closedEarlier: !!o.closedEarlier && !safety0, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead, sameQuestion: o.sameQuestion ?? ((a, b) => import("./questionRead.js").then((m) => m.callSameQuestion(a, b))) })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange, callRead: o.callRead ?? ((i) => import("./exchangeRecord.js").then((X) => X.readCallTurn(i))) } : {}), onCapped: o.onCapped, endGuardedByCaller: !safety0, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead, sameQuestion: o.sameQuestion ?? ((a, b) => import("./questionRead.js").then((m) => m.callSameQuestion(a, b))) })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") {
       text += d.content;
