@@ -201,7 +201,7 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   const PS = src("harness/proactive.ts");
   check("gates: a pull still passes opt-out, the closed-subject read, expiry, the day's find cap, the composer's caps and the send-time ledger (only hours, the window, the hold, spacing and the conversation are skipped)", /if \(opts\.pulled\) \(member\.holdUntil = null, \(member\.spaceUntil = null\)\);/.test(PS) && /midConversation: midConversation && !isSafetyFollowUp\(c\) && !opts\.pulled/.test(PS) && /skipHours: opts\.pulled/.test(PS) && !/pulled[^\n]*not_opted_out/.test(PS));
   check("gates: a pull that finds nothing doesn't hold the member's regular pick", /if \(!opts\.dryRun && !opts\.pulled\) await pool\.query\(\s*`INSERT INTO proactive_user_state \(user_id, hold_until\)/.test(PS));
-  check("gates: a hard day never means a member who asks gets nothing (the hard-day check skips a pulled one)", /if \(!opts\.pulled && c\.type !== "announcement" && hardDayHolds\(/.test(PS));
+  check("gates: a hard day never means a member who asks gets nothing (a pull on a hard day holds only a check-in)", /if \(opts\.pulled && heldForMood\(state\) && candidateClass\(c\.type, opts\.answering \?\? isAnswering\(c\), c\.payload\) === "checkin"\) \{/.test(PS) && !/hardDayHolds\(/.test(PS));
   check("gates: the safety hold still holds finds for a pulled pick (candidateChecks is unchanged for it)", /state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer"/.test(PS));
   check("gates: the lock is taken atomically by the pull (no gap between checking and running), after a bounded wait", /export async function pullDispatch/.test(PS) && /ran = true; await dispatchForUserInScope/.test(PS) && /while \(P\.dispatchBusy\(userId\) && Date\.now\(\) < busyUntil\)/.test(src("harness/waiting.ts")));
   const W_SRC = src("harness/waiting.ts");
@@ -283,7 +283,7 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   // 2. hard day and team hold
   const hard = { needsCare: true, moodHold: { state: "held", hold: true, heldHours: 2 } };
   const hd = ev(base(hard));
-  check("2: on a hard day a pull delivers only what they asked for (finds, intro asks and check-ins held)", held(hd, profileFind).includes("hard_day") && held(hd, checkin).includes("hard_day") && !held(hd, asked).includes("hard_day") && !held(hd, askedFind).includes("hard_day"), held(hd, profileFind));
+  check("2: on a hard day a pull delivers what they asked for and what's waiting (2026-11-09: only a check-in is held)", !held(hd, profileFind).includes("hard_day") && held(hd, checkin).includes("hard_day") && !held(hd, asked).includes("hard_day") && !held(hd, askedFind).includes("hard_day"), held(hd, profileFind));
   const th = ev(base(), { teamHold: true });
   check("2: under the team hold a pull delivers only what they asked for", held(th, profileFind).includes("team_hold") && held(th, checkin).includes("team_hold") && !held(th, asked).includes("team_hold") && !held(th, askedFind).includes("team_hold"));
   check("2: the dispatch reads the team hold for a pull, failing closed", /G\.teamHoldNow\(userId, new Date\(\)\)/.test(src("harness/proactive.ts")) && /\.catch\(\(\) => true\);\n\}/.test(src("harness/notifyGate.ts")));

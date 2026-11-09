@@ -285,8 +285,12 @@ const ELI_READS = { "857": "t-partners", task1108: "t-partners", "859": "t-partn
   const t0 = pt("2026-11-03T09:00:00");
   const ends = pt("2026-11-03T18:00:00");
   const s = await simulateB({ candidates: [cand("event_offer", { id: "hd-1", arrives: t0, expiresAt: ends, payload: { askId: "profile", fromProfile: true, picked: true, match: { tier: 2 } } }), cand("companion", { id: "hd-2", arrives: t0, expiresAt: pt("2026-11-06T09:00:00"), payload: { threadId: "t-x" } })], from: pt("2026-11-03T08:55:00"), to: pt("2026-11-04T12:00:00"), lastInboundAt: pt("2026-11-03T08:00:00"), joinedAt: pt("2026-10-01T10:00:00"), needsCare: true, b: { threads: [], reads: {} } });
-  check("B, hard day: a find Cue started that ends during the hold is dropped as expired, never sent late", s.expired.includes("hd-1") && !s.sends.some((x) => [x.lead, ...x.riding].some((c) => c.id === "hd-1")) && !!s.held.get("hd-1")?.has("hard_day"));
-  check("B, hard day: companionship still went", s.sends.some((x) => x.lead.id === "hd-2"));
+  // 2026-11-09 (Royce): no class hold on a hard day. The find competes in the pick like any find (the dispatch's send-time read then
+  // judges it, told of the hard stretch: evals/proactive/hardDayJudged.ts), so it can go before it ends instead of expiring held.
+  check("B, hard day: a find Cue started isn't held by its class (it competes, and is read at send time)", !s.held.get("hd-1")?.has("hard_day") && (s.sends.some((x) => [x.lead, ...x.riding].some((c) => c.id === "hd-1")) || s.expired.includes("hd-1")));
+  // The find ends that evening, so it goes ahead of a companion text that can wait (the expiring-find rule) and takes the day's one
+  // unrequested slot; the companion text is never held by the hard day itself.
+  check("B, hard day: the expiring find went that day, and companionship is never held by the hard day", s.sends.some((x) => x.lead.id === "hd-1") && !s.held.get("hd-2")?.has("hard_day"));
 }
 
 // ================================================================ 2. a burst of three sources inside the window is one send
