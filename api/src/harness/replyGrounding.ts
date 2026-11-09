@@ -55,7 +55,7 @@ import { CO_TEXT_CHANNEL, CO_VOICE, MAKER_DECLINE_RULE } from "../services/coVoi
 import { recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
-import { checkNoEmotionLabel } from "./emotion.js";
+import { checkNoEmotionLabel, isHardRead } from "./emotion.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { arrivalDenial, recordSaysNothingReadable } from "../services/inboundFile.js";
 import { failureInView, isFailureFact, isFailureReportFact, reportFactBacks } from "../services/turnFailure.js";
@@ -669,10 +669,12 @@ export function todayFact(zone: string | null | undefined, now: Date = new Date(
   return `Today is ${DateTime.fromJSDate(now).setZone(wordsZone(z)).toFormat("cccc, LLLL d, yyyy")} (their local time, ${z ?? `${wordsZone(null)}; their own zone isn't known`}).`;
 }
 
-// Pure: a heavy moment in this message: they're struggling, or a strong hard feeling right now.
+// Pure: a heavy moment in this message: they're struggling, or a strong hard feeling right now. Hard by the read's own rule
+// (harness/emotion.ts isHardRead): their own distress, felt now; never a concern they're working through, someone else's feeling, a
+// recounted or hypothetical one, or an unsure read, however strong. An old read without a kind counts when high, as before.
 export function heavyMoment(e: EmotionalContext | null | undefined): boolean { // mood: the read; decisions take it only through heavyHold
   if (!e) return false;
-  return !!e.needsCare || (!!e.current && e.current.intensity === "high" && e.current.valence === "negative"); // mood: the read; decisions take it only through heavyHold
+  return !!e.needsCare || (!!e.current && e.current.intensity === "high" && isHardRead(e.current)); // mood: the read; decisions take it only through heavyHold
 }
 // Pure: whether a heavy moment holds an offer back this reply (the door, the cold-start question, a document offer): timing only, never
 // cancelled (Royce, 2026-10-19: "feelings change timing and tone, never cancel"). Each stays owed and comes up in a later reply once

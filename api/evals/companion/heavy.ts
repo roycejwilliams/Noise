@@ -30,7 +30,11 @@ const sig = (o: Partial<any> = {}) => ({ source: "text", emotion: "distress", in
 // ---- what counts
 check("one high negative reading about their life is an episode", pickEpisode([sig()], night, TZ) !== null);
 check("a single medium reading is an everyday complaint, not an episode", pickEpisode([sig({ intensity: "medium" })], night, TZ) === null);
-check("two medium readings together are an episode", pickEpisode([sig({ intensity: "medium", at: hoursBefore(3) }), sig({ intensity: "medium", at: hoursBefore(1) })], night, TZ) !== null);
+check("two medium distress readings together are an episode", pickEpisode([sig({ intensity: "medium", readKind: "distress", at: hoursBefore(3) }), sig({ intensity: "medium", readKind: "distress", at: hoursBefore(1) })], night, TZ) !== null);
+// 2026-11-09: a medium read counts only when the read judged it distress (harness/emotion.ts isHardRead); an old one without a kind,
+// or a concern they're working through, is not "something hard they shared".
+check("two medium readings without a kind are not an episode", pickEpisode([sig({ intensity: "medium", at: hoursBefore(3) }), sig({ intensity: "medium", at: hoursBefore(1) })], night, TZ) === null);
+check("two medium concern readings are not an episode", pickEpisode([sig({ intensity: "medium", readKind: "concern", at: hoursBefore(3) }), sig({ intensity: "medium", readKind: "concern", at: hoursBefore(1) })], night, TZ) === null);
 check("a low reading is never an episode", pickEpisode([sig({ intensity: "low" }), sig({ intensity: "low", at: hoursBefore(2) })], night, TZ) === null);
 check("a positive reading is not an episode", pickEpisode([sig({ valence: "positive" })], night, TZ) === null);
 check("frustration with Cue is not their life", pickEpisode([sig({ target: "co" })], night, TZ) === null);

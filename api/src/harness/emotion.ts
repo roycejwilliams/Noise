@@ -45,7 +45,9 @@ export type EmotionTarget = "co" | "life";
 //   readKind "distress": they're hurting or not coping. "concern": they're working something through and holding steady (a decision,
 //            a risk, a person, a practical or business worry). "unsure": the model can't tell which; never hard on its own.
 //            "settled": their own word that they're okay or just thinking ("I'm fine, just thinking"): it corrects an earlier read
-//            (summarizeSignals), and is set only by says_okay, never chosen as a kind.
+//            (summarizeSignals), and is set only by says_okay, never chosen as a kind. Distress always wins over says_okay: "I'm fine,
+//            I just don't see the point of anything" stays distress (review of #430). Their word clears a medium distress read before it,
+//            never a high one (summarizeSignals).
 //   feltBy   "member", or "other" when they're describing someone else's feeling.
 //   framing  "own" (they feel it now), "quoted" (recounted or repeated), "hypothetical" (an if).
 // Only distress that is the member's own, felt now, is a hard read (isHardRead). Every read keeps its intensity and valence, so tone
@@ -63,14 +65,15 @@ export const EMOTION_READ_GUIDE = `For a feeling, read who feels it and how, not
 "felt_by": "member" when it's their own feeling (their worry for someone else is theirs too), "other" when they're describing what someone else feels ("my co-founder is panicking").
 "framing": "own" when they feel it now, "quoted" when they're recounting or repeating it ("she said I seemed stressed", "I was a wreck last year"), "hypothetical" when it's an if ("I'd be crushed if it fell through").
 "kind", for a negative or mixed feeling: "distress" when they're hurting or not coping (grief, overwhelm, feeling low or hopeless, panic, being hurt, a crisis, a struggle that has gone on for a while); "concern" when they're working something through and holding steady (weighing a decision or a risk, unsure about a person, a plan or a deal, a practical or business worry); "unsure" when you can't tell which. Judge how they're holding up, not how big the stakes are: "the deal could sink the company, but I've got a plan" is concern; "I haven't slept in days and I can't stop crying" is distress. Anything about their safety is distress. null when the feeling is positive.
-"says_okay" (beside "emotion", even when "emotion" is null): true when the latest message tells Cue they're okay, not upset, or just thinking it through ("I'm fine, just thinking", "honestly I'm not stressed about it"), even if they still name a worry, and you believe them; "fine" after bad news, or "I'm fine" with signs they aren't, is false. Otherwise false.`;
+"says_okay" (beside "emotion", even when "emotion" is null): true when the latest message tells Cue they're okay, not upset, or just thinking it through ("I'm fine, just thinking", "honestly I'm not stressed about it"), even if they still name a worry, and you believe them; "fine" after bad news, or "I'm fine" with signs they aren't ("I'm fine, I just can't see why I'd bother anymore"), is false, and that message's kind is distress. Otherwise false.`;
 // Pure: the read's base fields plus what it understood (EMOTION_READ_GUIDE). raw: the model's emotion object; saysOkay: its says_okay.
-// Their word that they're okay makes the read "settled" (a read with no feeling becomes a low "okay" one, so the correction is kept).
+// Their word that they're okay makes the read "settled" (a read with no feeling becomes a low "okay" one, so the correction is kept),
+// unless the model read distress: then it stays distress, whatever they said about being fine.
 export function withReadFields(base: NonNullable<TextEmotion> | null, raw: any, saysOkay: unknown): TextEmotion {
   const okay = saysOkay === true;
   if (!base) return okay ? { emotion: "okay", intensity: "low", valence: "mixed", about: null, target: "life", readKind: "settled", feltBy: "member", framing: "own" } : null;
   const modelKind = raw?.kind === "distress" || raw?.kind === "concern" || raw?.kind === "unsure" ? (raw.kind as EmotionKind) : null;
-  const kind: EmotionKind | null = okay && base.target === "life" ? "settled" : base.valence === "positive" ? null : modelKind;
+  const kind: EmotionKind | null = modelKind === "distress" && base.valence !== "positive" ? "distress" : okay && base.target === "life" ? "settled" : base.valence === "positive" ? null : modelKind;
   return { ...base, readKind: kind, feltBy: parseFeltBy(raw?.felt_by), framing: parseFraming(raw?.framing) };
 }
 
@@ -358,11 +361,12 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   // with Co from frustration with life, and needsCare holds some check-ins
   // (review of #61). Co still sees it as a call moment, with their words.
   // Nor does a concern they're working through, someone else's feeling, a recounted or hypothetical one, or an unsure read: isHardRead.
-  const recentNeg = sorted.find((s) => isHardRead(s) && age(s) <= 24 * HOUR);
-  // Their own word since that they're okay corrects it. The same time counts: a call's lines land together, and a call keeps a settled
-  // line only when it came after the call's worries (callEmotionMoments); a text read is one kind, never both.
-  const settledAfter = recentNeg ? sorted.some((s) => s !== recentNeg && s.readKind === "settled" && s.at >= recentNeg.at) : false;
-  const positiveAfter = recentNeg ? settledAfter || sorted.some((s) => s.valence === "positive" && !isScoreBasis(s.basis) && s.at > recentNeg.at) : false;
+  // Their own word since that they're okay (a settled read at or after it; a call's lines land together, and a call keeps a settled
+  // line only when it came after the call's worries, callEmotionMoments) corrects a medium distress read, never a high one: a high
+  // distress read the same day stands whatever they say after it (review of #430).
+  const corrected = (h: EmotionSignal) => h.intensity !== "high" && sorted.some((s) => s !== h && s.readKind === "settled" && s.at >= h.at);
+  const recentNeg = sorted.find((s) => isHardRead(s) && age(s) <= 24 * HOUR && !corrected(s));
+  const positiveAfter = recentNeg ? sorted.some((s) => s.valence === "positive" && !isScoreBasis(s.basis) && s.at > recentNeg.at) : false;
   const saidOkay = sorted.find((s) => s.readKind === "settled" && age(s) <= 24 * HOUR && sorted.some((n) => n !== s && n.valence === "negative" && n.intensity !== "low" && !isScoreBasis(n.basis) && n.at <= s.at && age(n) <= 24 * HOUR));
   // The hard stretch recentNeg belongs to (hardStretchSince). getEmotionalContext reads it again from its own window, so a member with
   // more than a hundred reads in it still reaches the cap.
@@ -393,7 +397,8 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
     needsCare: !!recentNeg && !positiveAfter,
     hardAt: recentNeg && !positiveAfter ? recentNeg.at : null,
     hardSince: recentNeg && !positiveAfter ? hardSince : null,
-    saidOkayAt: saidOkay?.at ?? null,
+    // Only when it left no hard read standing: "take their word" never sits beside a high distress read it couldn't clear.
+    saidOkayAt: recentNeg && !positiveAfter ? null : saidOkay?.at ?? null,
     // at: the latest frustration read; reads: every one in the window, newest first (timestamps only; services/moodHold.ts, the
     // frustration hold's one capped wait).
     withCo: { frustrated: coNeg.length > 0 && !coPositiveAfter, about: coNeg[0]?.about ?? null, count: coNeg.length, at: coNeg[0]?.at ?? null, reads: aboutCo.filter((s) => s.valence === "negative" && s.intensity !== "low").map((s) => s.at) },
