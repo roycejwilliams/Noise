@@ -1051,6 +1051,8 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
         `UPDATE event_registrations SET answers = answers - $3::text, scope = $4::jsonb, ask_text = $5, drafts = $6::jsonb, outcome = $7::jsonb, updated_at = NOW() WHERE user_id = $1 AND id = $2::uuid AND answers ? $3::text`,
         [userId, a, x.fieldId, scrubbed.scope == null ? null : JSON.stringify(scrubbed.scope), scrubbed.askText, JSON.stringify(scrubbed.drafts), scrubbed.outcome == null ? null : JSON.stringify(scrubbed.outcome)],
       );
+      // An event's own answer is also the reason on that event's plan (services/eventRegistration/followThrough.ts): it goes there too.
+      if (!x.factual) await db.query(`UPDATE planned_event_mentions SET reason = NULL, reason_source = NULL WHERE user_id = $1 AND registration_id = $2::uuid`, [userId, a]);
       return { ref: item.ref, source: "signup", was: x.factual ? `${x.label}: ${x.value}` : `an answer for ${g.event}`, now: null };
     }
     case "summary": {

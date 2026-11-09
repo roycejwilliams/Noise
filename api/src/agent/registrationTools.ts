@@ -330,8 +330,8 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
     ctx.facts?.add("did_this_turn", `Registration for ${c.eventName}: Luma's own page already shows ${state.replace(/_/g, " ")}; nothing was submitted again.`);
     return { ok: true, status: to, ...said(C.outcomeLine(c, to === "already_registered" ? "already_registered" : (state as any))) };
   }
-  // Part 4 hooks the plan record here (services/eventRegistration/followThrough.ts); null until then.
-  const planHook: ((r: R.RegistrationRecord) => Promise<unknown>) | null = null;
+  // What Luma already holds becomes a plan in their picture too (services/eventRegistration/followThrough.ts), never attendance.
+  const planHook: ((r: R.RegistrationRecord) => Promise<unknown>) | null = async (r) => (await import("../services/eventRegistration/followThrough.js")).recordRegistrationPlan(userId, r, q);
 
   // The event they mean: a find Cue sent them, by its link or its name, resolved to its Luma page.
   async function findFor(event: string): Promise<{ find: SentFind; url: string } | { error: string }> {
