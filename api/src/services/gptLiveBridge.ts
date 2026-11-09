@@ -328,7 +328,6 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       pendingEnd = null;
       d.record({ layer: 8, decision: "call.end_refused", userId: call!.userId, outcome: "skip", action: "member_spoke_after", proposal: { provider: "gpt-live", sessionId, redecide: true } });
     }
-    const closedEarlier = !!held || !!pendingEnd;
     let dropped = 0, error = false;
     // Each of Cue's tools this turn: its name, time and how it came back (no words), for the latency record.
     const toolRuns: { name: string; ms: number; outcome: "done" | "not_done" | "still_running" }[] = [];
@@ -402,7 +401,6 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       carry: carry.splice(0),
       onCapped: (unsaid) => { carry = unsaid; },
       onTool: (t) => { toolRuns.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" }); },
-      closedEarlier,
       endHeld: !!held,
     }).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false, streamed: false, stopped: false, ran: [] as string[], tools: false }; });
     const streamed = out.streamed || appends > 0 || !!exactRest;

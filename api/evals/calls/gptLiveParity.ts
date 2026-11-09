@@ -239,28 +239,56 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   m.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 30 } });
   check("...recorded as ended by goodbye", m.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "goodbye");
 
-  // 11-07: "Cool. I appreciate it. Thank" / Cue "Sure thing" / "you". The "you" is the end of their thanks (200 ms, one word): an end
-  // decided on that exchange isn't held by it, so it ends after the first goodbye with no second one. (Whether a thanks alone lets
-  // end_call through is the closing read's call, runCallLlm callClosing, unchanged here.)
+  // 11-07: "Cool. I appreciate it. Thank" / Cue "Sure thing" / "you" / Cue's goodbye / "Cool". Cue's thinking decides the call is over
+  // (Royce, 2026-11-09: no word-reading hold on the end); the "you" is the end of their thanks (200 ms, one word), and "Cool" well after
+  // the goodbye holds the end until their turn decides again.
   const f1107: import("../../src/services/gptLive.js").Frag[] = [
     { who: "member", text: "Cool. I appreciate it. Thank", startMs: 0, endMs: 1500 },
-    { who: "cue", text: "Sure thing. Talk again soon.", startMs: 1600, endMs: 3200 },
+    { who: "cue", text: "Sure thing", startMs: 1600, endMs: 2000 },
     { who: "member", text: "you", startMs: 1700, endMs: 1900 },
   ];
   const a1107 = B.memberAfter(f1107, 1600);
-  check("the 11-07 sequence: the trailing \"you\" is the end of their thanks, so the guard lets the end through after the first goodbye", a1107.newAt === null && a1107.tail === true && B.endGuard({ cueLast: { text: "Sure thing. Talk again soon.", startMs: 1600 }, memberAfterMs: a1107.newAt, memberHeardAgoMs: 5000, graceMs: 2000 }) === null, a1107);
-  check("...but \"Cool\" well after that goodbye (a gap past 1.2 s) is new words: held, and decided again on their next turn", B.memberAfter([...f1107, { who: "member", text: "Cool", startMs: 4000, endMs: 4300 }], 1600).newAt === 4000);
-  // On the bridge: the end goes through with the "you" after Cue's goodbye, and nothing more is said.
+  check("the 11-07 \"you\" is the end of their thanks (timing and length), not new words", a1107.newAt === null && a1107.tail === true, a1107);
   const e = bridge({ answer: () => "|END", endGraceMs: 30 });
   await start(e, "live_1107");
-  frag(e, "member", "Okay, bye. Thanks so", 0, 1500);
+  frag(e, "member", "Cool. I appreciate it. Thank", 0, 1500);
   e.ai.in({ type: "session.delegation.created", offset_ms: 1500, delegation: { id: "e71", target: "client" } });
   await sleep(40);
-  frag(e, "cue", "Sure thing. Talk again soon.", 1600, 3200);
-  frag(e, "member", "much", 1700, 1900);
+  frag(e, "cue", "Sure thing", 1600, 2000);
+  frag(e, "member", "you", 1700, 1900);
+  frag(e, "cue", ". I'm glad you picked up. Talk again soon.", 2000, 4500);
+  frag(e, "member", "Cool", 5000, 5300);
+  await sleep(120);
+  check("the 11-07 sequence: the thinking's end on their thanks goes through (no \"they haven't said goodbye\" hold); the late \"Cool\" holds it", e.records.some((r) => r.decision === "call.end_refused" && r.action === "member_spoke_after") && !e.records.some((r) => r.decision === "call.offer_unsourced" && /end_call/.test(r.proposal?.sentence ?? "")) && e.ai.of("session.close").length === 0, e.records.filter((r) => /end_|offer_unsourced/.test(r.decision)).map((r) => [r.decision, r.action]));
+  e.ai.in({ type: "session.delegation.created", offset_ms: 5300, delegation: { id: "e72", target: "client" } });
   await sleep(150);
-  check("...on the bridge: a goodbye whose last word lands after Cue's goodbye still ends the call, with no second goodbye sent", e.ai.of("session.close").length === 1 && refusedWith(e).length === 0 && e.ai.of("session.commentary.append").length === 0, refusedWith(e));
-  e.tw.close();
+  check("...their \"Cool\" turn decides again and ends the call after the first goodbye, with nothing more said", e.ai.of("session.close").length === 1 && e.ai.of("session.commentary.append").length === 0 && JSON.stringify(e.reqs[1]?.messages ?? []).includes(G.END_HELD_NOTE));
+  e.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 40 } });
+  check("...recorded as ended by goodbye", e.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "goodbye");
+
+  // Cue still can't hang up after its own question, or while they're speaking.
+  const ask = bridge({ answer: () => "|END", endGraceMs: 30 });
+  await start(ask, "live_ask");
+  frag(ask, "member", "I've been thinking about the move a lot.", 0, 2000);
+  ask.ai.in({ type: "session.delegation.created", offset_ms: 2000, delegation: { id: "k1", target: "client" } });
+  await sleep(40);
+  frag(ask, "cue", "What's pulling you toward Oakland?", 2100, 3500);
+  await sleep(150);
+  check("Cue's thinking ends mid-call right after its own question: refused (cue_asked), the call stays open", ask.ai.of("session.close").length === 0 && refusedWith(ask).join() === "cue_asked", refusedWith(ask));
+  ask.tw.close();
+  const talking = bridge({ answer: () => "|END", endGraceMs: 60 });
+  await start(talking, "live_talking");
+  frag(talking, "member", "Okay, bye.", 0, 800);
+  talking.ai.in({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "t1", target: "client" } });
+  await sleep(40);
+  frag(talking, "cue", "Bye, Jordan.", 900, 1500);
+  for (let i = 0; i < 6; i++) { frag(talking, "member", i ? "and" : "Actually", 1300 + i * 300, 1500 + i * 300); await sleep(30); }
+  check("while they're still speaking (words keep arriving), the call never closes", talking.ai.of("session.close").length === 0);
+  await sleep(150);
+  check("...and once they stop, words after the goodbye hold it (member_spoke_after)", talking.ai.of("session.close").length === 0 && refusedWith(talking).join() === "member_spoke_after", refusedWith(talking));
+  talking.tw.close();
+  check("endGuard: they're speaking now (heard within the grace) refuses", B.endGuard({ cueLast: { text: "Bye, Jordan.", startMs: 900 }, memberAfterMs: null, memberHeardAgoMs: 10, graceMs: 2000 }) === "member_speaking");
+  check("the closing read no longer holds GPT-Live's end_call (except on a safety turn); the ElevenLabs path keeps it", /endGuardedByCaller: !safety0/.test(src("services/gptLive.ts")) && /closed: callClosing\(b\) \|\| !!deps\.endGuardedByCaller,/.test(src("services/callLlmProxy.ts")) && !/endGuardedByCaller/.test(src("routes/callLlm.ts")));
 
   // A real new sentence after Cue's goodbye still refuses: quick but longer than three words, or short after a real gap.
   for (const [label, text, s] of [["four words or more, even within the gap", "one more thing, actually wait", 1300], ["two words after a gap past 1.2 s", "Wait, actually", 2400]] as [string, string, number][]) {
