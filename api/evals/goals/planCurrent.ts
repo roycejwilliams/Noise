@@ -137,7 +137,7 @@ const searched = (fp: { plan: any }) => (fp.plan ? goalItemsFromPlan(fp.plan, (e
   const newer = [...GOALS, "learn to sail in the bay"];
   const fo = await floorGoalPlan({ user_id: "u1" }, day("2026-10-14"), world({ goals: newer, stored: stored(GOALS, day("2026-10-01")), modelFails: true }).deps);
   check("a failed rebuild searches the old plan and names the goals it doesn't hold (each a failed item, retried)", fo.how === "fallback" && JSON.stringify(fo.uncovered) === JSON.stringify(["learn to sail in the bay"]) && searched(fo).length === 3, fo);
-  check("pin: uncovered goals become error items on the floor", /for \(const g of fp\?\.uncovered \?\? \[\]\) items\.push\(\{ kind: "goal", id: goalHash\(g\), text: g\.slice\(0, 160\), status: "error"/.test(readFileSync(new URL("../../src/services/dailySweep.ts", import.meta.url), "utf8")));
+  check("pin: uncovered goals become error items on the floor", /for \(const g of fp\?\.uncovered \?\? \[\]\) items\.push\(\{ kind: "goal", id: goalHash\(g\), text: itemText\(g\), status: "error"/.test(readFileSync(new URL("../../src/services/dailySweep.ts", import.meta.url), "utf8")));
   // 7. A reused plan drops a goal whose window has passed since.
   const withUntil = stored(GOALS, day("2026-10-12"), { derived: [{ goal: GOALS[2], until: "2026-10-13" }, { goal: GOALS[0], until: null }] });
   const re = await floorGoalPlan({ user_id: "u1" }, day("2026-10-14"), world({ stored: withUntil }).deps);
