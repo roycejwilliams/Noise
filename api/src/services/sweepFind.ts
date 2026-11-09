@@ -412,7 +412,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         ]).catch((err) => {
           blocked = true;
           placeFailed(places, "events", String(err?.message ?? err));
-          sourceFailures.push(`events: the search failed (${String(err?.message ?? err).slice(0, 120)})`);
+          sourceFailures.push(`events: the search failed (${clip(String(err?.message ?? err), 120)})`);
           throw err;
         });
         // Part of it failed (the feed, the calendar, Exa): said on the item (review of #293: a timed-out feed came back as an empty one).
@@ -645,7 +645,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
   } catch (err: any) {
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
     loopFailed = true;
-    sourceFailures.push(`the search loop failed (${String(err?.message ?? err).slice(0, 120)})`);
+    sourceFailures.push(`the search loop failed (${clip(String(err?.message ?? err), 120)})`);
     // The loop itself failed: every place it hadn't reached yet failed the way the loop did (a model timeout clears; a refused key doesn't).
     for (const s of SWEEP_SOURCES) if (!called.has(s.source) && !skips.has(s.source)) placeFailed(places, s.source, String(err?.message ?? err));
   }

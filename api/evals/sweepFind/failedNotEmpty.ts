@@ -9,6 +9,7 @@ const SF = await import("../../src/services/sweepFind.js");
 const E = await import("../../src/services/eventSurfacingSweep.js");
 const D = await import("../../src/services/dailySweep.js");
 const R = await import("../../src/harness/devReview.js");
+const MT = await import("../../src/services/modelText.js");
 
 let total = 0;
 let failed = 0;
@@ -49,6 +50,36 @@ const check = (label: string, ok: boolean, detail = "") => {
   check("today's own earlier records never count as another day", D.failingStreaks("2026-11-08", ["ask:a1"], [{ day: "2026-11-08", items: [item("ask", "a1", "error")] }]).get("ask:a1") === 1);
   const ds = fs.readFileSync(new URL("../../src/services/dailySweep.ts", import.meta.url), "utf8");
   check("flagged only after the day's last retry, never on an on-demand run", /if \(last && base\.trigger !== "manual"\) await flagFailingAgain\(/.test(ds));
+}
+
+// ---- manual runs and missed days (review of #429)
+{
+  const item = (kind: string, id: string, status: string) => ({ kind, id, status });
+  const withManual = D.failingStreaks("2026-11-08", ["ask:a1"], [
+    { day: "2026-11-07", items: [item("ask", "a1", "searched")], trigger: "manual" }, // an on-demand run never stands for the day
+    { day: "2026-11-07", items: [item("ask", "a1", "error")] },
+  ]);
+  check("an on-demand run is never the day's record (it can't end or start a run of days)", withManual.get("ask:a1") === 2, JSON.stringify([...withManual]));
+  const missed = D.failingStreaks("2026-11-08", ["ask:a1"], [{ day: "2026-11-07", items: [], action: "missed" }, { day: "2026-11-06", items: [item("ask", "a1", "error")] }]);
+  check("a day whose last record is missed ends the run (nothing was searched that day, so it isn't a failed search)", missed.get("ask:a1") === 1);
+  const ds = fs.readFileSync(new URL("../../src/services/dailySweep.ts", import.meta.url), "utf8");
+  check("the history read leaves on-demand runs out in SQL too", /AND COALESCE\(proposal->>'trigger', ''\) <> 'manual' ORDER BY created_at DESC`,\n    \[userId, day\],/.test(ds));
+}
+
+// ---- the sweep.daily record (jsonb) never carries half a pair (review of #429)
+{
+  const lone = (v: unknown): boolean => (typeof v === "string" ? MT.hasLoneSurrogate(v) : Array.isArray(v) ? v.some(lone) : v && typeof v === "object" ? Object.values(v).some(lone) : false) || /\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f])/i.test(typeof v === "object" ? JSON.stringify(v) : "");
+  const ask = `${"x".repeat(D.ITEM_TEXT_CHARS - 1)}🚀 an engineer to build with`;
+  check("the old cut would leave half a pair at the boundary (the case, reproduced)", /[\uD800-\uDBFF]$/.test(ask.slice(0, D.ITEM_TEXT_CHARS)));
+  const b = { kind: "ask" as const, id: "a1", text: D.itemText(ask) };
+  const rec = D.searchedItem(b, { sources: { events: true, web: true, x: true, failures: [] }, found: 0, pooled: 0, queued: 0, outcome: "empty" });
+  const proposal = { day: "2026-11-08", items: [rec, { ...b, status: "error", why: "it looked nowhere" }], totals: D.dailySummary([rec]).totals };
+  check("an emoji at the boundary: the item's words go into the jsonb record whole-only", b.text.length === D.ITEM_TEXT_CHARS - 1 && !lone(proposal), JSON.stringify(b.text.slice(-3)));
+  const ds = fs.readFileSync(new URL("../../src/services/dailySweep.ts", import.meta.url), "utf8");
+  check("every ask and goal text on the record is cut by itemText, and no code-unit cut of text is left in the daily sweep", (ds.match(/itemText\(/g) ?? []).length >= 6 && !/(ask_text \?\? ""\)|askText|\bg|g\.goal|i\.text|join\("[^"]*"\)|why \?\? ""\)|reason \?\? ""\)|reason|message \?\? err\))\.slice\(0, \d{2,}\)/.test(ds));
+  check("the repeated-failure record's words are clipped too", /text: itemText\(i\.text\), why: i\.why \?\? null/.test(ds) && /reason: clip\(repeated\.map/.test(ds));
+  const sf = fs.readFileSync(new URL("../../src/services/sweepFind.ts", import.meta.url), "utf8");
+  check("the loop-failure message is clipped", /the search loop failed \(\$\{clip\(String\(err\?\.message \?\? err\), 120\)\}\)/.test(sf));
 }
 
 // ---- where the team sees it

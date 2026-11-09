@@ -23,22 +23,29 @@ import { memberZone } from "./memberTime.js";
 import { restingToday } from "./goalCadence.js";
 import { outsideAsk, searchPartOf } from "./askKind.js";
 import { emptyTierCounts, type TierCounts } from "./tierCounts.js";
+import { clip } from "./modelText.js";
 
 export const DAILY_SWEEP_HOUR = 9;
 // A failed day is run again on a later hour, at most this many failed runs a day.
 export const DAILY_SWEEP_ERRORS_PER_DAY = 3;
 export const DAILY_SWEEP_CONCURRENCY = 3;
+// An ask's or goal's words as the sweep.daily record keeps them: cut on a code point (modelText.ts clip), so an emoji at the cut never
+// leaves half a pair that Postgres jsonb refuses (a refused record throws writeDaily and the member's floor runs again next hour).
+export const ITEM_TEXT_CHARS = 160;
+export const itemText = (s: string): string => clip(s, ITEM_TEXT_CHARS);
 // A search that fails day after day loses those days quietly (2026-11-05 to 11-08: one member's ask failed every retry four days running
 // and nothing said so). After the day's last retry, an ask or goal that has now failed this many days in a row is flagged
 // (sweep.failing_again): the dev review's "what broke" and the team's /sweeps page show it. A failure is never an empty run.
 export const SWEEP_FAILING_DAYS = 2;
 // Pure: for each item key ("ask:<id>", "goal:<id>") that failed today, how many calendar days in a row it has failed, today included.
-// earlier: earlier days' sweep.daily records, newest first; a day counts by its own last record (a later retry that searched it wins).
-// A day with no record (tapered, or nothing ran) ends the run of days.
-export function failingStreaks(today: string, failedKeys: string[], earlier: { day: string; items: { kind?: string; id?: string; status?: string }[] }[]): Map<string, number> {
+// earlier: earlier days' sweep.daily records, newest first; a day counts by its own last 9am-floor record (a later retry that searched it
+// wins). An on-demand run (trigger "manual", scripts/sweepNow.ts) is never the day's record, the way floorDoneToday's reads leave it out.
+// A day with no record (tapered, or nothing ran) ends the run of days, and so does a day whose last record is "missed" (the floor never
+// ran in its window): that day nothing was searched, so it isn't a failed search, and the flag is about searches that failed.
+export function failingStreaks(today: string, failedKeys: string[], earlier: { day: string; items: { kind?: string; id?: string; status?: string }[]; trigger?: string | null; action?: string | null }[]): Map<string, number> {
   const lastOfDay = new Map<string, Map<string, string>>();
   for (const r of earlier) {
-    if (!r?.day || r.day >= today || lastOfDay.has(r.day)) continue;
+    if (!r?.day || r.day >= today || r.trigger === "manual" || lastOfDay.has(r.day)) continue;
     lastOfDay.set(r.day, new Map((Array.isArray(r.items) ? r.items : []).map((i) => [`${i.kind}:${i.id}`, String(i.status ?? "")])));
   }
   const out = new Map<string, number>();
@@ -58,14 +65,15 @@ async function flagFailingAgain(userId: string, day: string, items: ItemResult[]
   const failedToday = items.filter((i) => i.status === "error");
   if (!failedToday.length) return;
   const { rows } = await pool.query(
-    `SELECT proposal->>'day' AS day, proposal->'items' AS items FROM harness_decisions
-      WHERE decision = 'sweep.daily' AND user_id = $1 AND created_at > NOW() - INTERVAL '14 days' AND proposal->>'day' < $2 ORDER BY created_at DESC`,
+    `SELECT proposal->>'day' AS day, proposal->'items' AS items, proposal->>'trigger' AS trigger, action FROM harness_decisions
+      WHERE decision = 'sweep.daily' AND user_id = $1 AND created_at > NOW() - INTERVAL '14 days' AND proposal->>'day' < $2
+        AND COALESCE(proposal->>'trigger', '') <> 'manual' ORDER BY created_at DESC`,
     [userId, day],
   );
   const streaks = failingStreaks(day, failedToday.map((i) => `${i.kind}:${i.id}`), rows);
-  const repeated = failedToday.map((i) => ({ kind: i.kind, id: i.id, text: i.text.slice(0, 160), why: i.why ?? null, days: streaks.get(`${i.kind}:${i.id}`) ?? 1 })).filter((i) => i.days >= SWEEP_FAILING_DAYS);
+  const repeated = failedToday.map((i) => ({ kind: i.kind, id: i.id, text: itemText(i.text), why: i.why ?? null, days: streaks.get(`${i.kind}:${i.id}`) ?? 1 })).filter((i) => i.days >= SWEEP_FAILING_DAYS);
   if (!repeated.length) return;
-  await recordDecision({ layer: 5, decision: "sweep.failing_again", userId, outcome: "skip", action: "error", reason: repeated.map((i) => `${i.kind} "${i.text.slice(0, 60)}" failed ${i.days} days in a row: ${String(i.why ?? "").slice(0, 200)}`).join(" | ").slice(0, 800), proposal: { day, items: repeated } });
+  await recordDecision({ layer: 5, decision: "sweep.failing_again", userId, outcome: "skip", action: "error", reason: clip(repeated.map((i) => `${i.kind} "${clip(i.text, 60)}" failed ${i.days} days in a row: ${clip(String(i.why ?? ""), 200)}`).join(" | "), 800), proposal: { day, items: repeated } });
 }
 
 // Members a sweep is working on right now (this process: co-test runs one). The hourly ask sweep and this one both claim a member
@@ -189,7 +197,7 @@ export function searchedItem<B extends { kind: "ask" | "goal"; id: string; text:
     ...b,
     ...(rep.place ? { place: rep.place } : {}),
     status: outages.length ? "incomplete" : "searched",
-    ...(outages.length ? { why: `${outages.join(", ")} failed or timed out: ${rep.sources.failures.join(" | ").slice(0, 240)}`, outages } : {}),
+    ...(outages.length ? { why: `${outages.join(", ")} failed or timed out: ${clip(rep.sources.failures.join(" | "), 240)}`, outages } : {}),
     sources: { events: rep.sources.events, web: rep.sources.web, x: rep.sources.x },
     failures: rep.sources.failures,
     ...(rep.sources.lasting?.length ? { placesDown: rep.sources.lasting } : {}),
@@ -250,8 +258,8 @@ export function goalItemsFromPlan(plan: any, searchText: (edge: any) => string |
     const s = searchText(e);
     out.push({ goal: String(e.goal ?? ""), search: s, why: s ? null : "its plan has nothing findable to search", ...(typeof e.placeBound === "boolean" ? { placeBound: e.placeBound } : {}) });
   }
-  for (const p of Array.isArray(plan?.passed) ? plan.passed : []) out.push({ goal: String(p.goal ?? ""), search: null, why: `nothing findable to search: ${String(p.why ?? "").slice(0, 160)}` });
-  for (const a of Array.isArray(plan?.setAside) ? plan.setAside : []) out.push({ goal: String(a.goal ?? ""), search: null, why: `set aside (${a.state ?? "not active"}): ${String(a.reason ?? "").slice(0, 160)}` });
+  for (const p of Array.isArray(plan?.passed) ? plan.passed : []) out.push({ goal: String(p.goal ?? ""), search: null, why: `nothing findable to search: ${clip(String(p.why ?? ""), 160)}` });
+  for (const a of Array.isArray(plan?.setAside) ? plan.setAside : []) out.push({ goal: String(a.goal ?? ""), search: null, why: `set aside (${a.state ?? "not active"}): ${clip(String(a.reason ?? ""), 160)}` });
   return out.filter((g) => g.goal);
 }
 
@@ -315,7 +323,7 @@ export async function floorGoalPlan(row: any, now: Date, deps?: FloorPlanDeps, o
   try {
     [inputs, states] = await Promise.all([d.inputs(row), d.states(userId)]);
   } catch (err: any) {
-    return fallback("record_unreadable", `their goals couldn't be read for the plan (${String(err?.message ?? err).slice(0, 120)})`);
+    return fallback("record_unreadable", `their goals couldn't be read for the plan (${clip(String(err?.message ?? err), 120)})`);
   }
   const live = GE.liveGoals(inputs.goals, inputs.direction, states);
   // No live goals: nothing to search, and no old plan is searched in their place.
@@ -356,7 +364,7 @@ export function floorGoalDecision(g: { search: string | null; why: string | null
   if (!o.states) return { status: "error", why: `its state couldn't be read${o.statesError ? `: ${o.statesError}` : ""}` };
   if (o.gateError) return { status: "error", why: o.gateError };
   const st = o.states.get(o.goalId);
-  if (st && st.state !== "active") return { status: "skipped", why: `set aside since its plan (${st.state}: ${st.reason.slice(0, 120)})` };
+  if (st && st.state !== "active") return { status: "skipped", why: `set aside since its plan (${st.state}: ${clip(st.reason, 120)})` };
   // A goal whose one recheck got no answer is searched weekly, on its own day, not daily: less spend, never dropped (goalEdges.ts
   // restingToday; a signal from them clears the ask and the daily search is back).
   if (o.now && st && restingToday(st, o.goalId, o.now)) return { status: "skipped", why: "weekly: no answer to its recheck yet, so it is searched once a week (less contact, not dropped)" };
@@ -449,7 +457,7 @@ export async function runDailySweepAll(run: <T>(items: T[], limit: number, fn: (
         // Anything that escaped the member's run is that member's failed day (their day, not Pacific's), retried on a later hour.
         console.error(`Daily sweep failed for ${row.user_id}:`, err?.message ?? err);
         const zone = await memberZone(String(row.user_id)).catch(() => null);
-        await recordDecision({ layer: 5, decision: "sweep.daily", userId: row.user_id, outcome: "skip", action: "error", reason: `the run failed: ${String(err?.message ?? err).slice(0, 300)}`, proposal: { day: dailySweepWindow(now, zone).day, items: [] } });
+        await recordDecision({ layer: 5, decision: "sweep.daily", userId: row.user_id, outcome: "skip", action: "error", reason: `the run failed: ${clip(String(err?.message ?? err), 300)}`, proposal: { day: dailySweepWindow(now, zone).day, items: [] } });
       });
     });
   } finally {
@@ -524,8 +532,8 @@ export async function runDailySweepNow(userId: string, now = new Date()): Promis
   try {
     await sweepMember(row, userId, now, base, [], 0);
   } catch (err: any) {
-    await recordDecision({ layer: 5, decision: "sweep.daily", userId, outcome: "skip", action: "error", reason: `the on-demand run failed: ${String(err?.message ?? err).slice(0, 300)}`, proposal: { ...base, items: [] } });
-    return { ran: false, why: `failed: ${String(err?.message ?? err).slice(0, 200)}` };
+    await recordDecision({ layer: 5, decision: "sweep.daily", userId, outcome: "skip", action: "error", reason: `the on-demand run failed: ${clip(String(err?.message ?? err), 300)}`, proposal: { ...base, items: [] } });
+    return { ran: false, why: `failed: ${clip(String(err?.message ?? err), 200)}` };
   } finally {
     releaseMember(userId);
   }
@@ -549,7 +557,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     try {
       await E.attemptEventSurfacing({ ...cand, allSources: true, onReport: (x) => { rep = x; } });
     } catch (err: any) {
-      items.push({ ...b, status: "error", why: `the search failed: ${String(err?.message ?? err).slice(0, 200)}` });
+      items.push({ ...b, status: "error", why: `the search failed: ${clip(String(err?.message ?? err), 200)}` });
       return;
     }
     const r = rep as import("./eventSurfacingSweep.js").SurfacingReport | null;
@@ -559,7 +567,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     // Its place couldn't be resolved this run (a geocoder down, no hit): incomplete, so a later hour tries again; nothing searched.
     if (r?.placeRetry) { items.push({ ...b, status: "incomplete", why: `place: ${r.placeRetry}`, outages: ["place"] }); return; }
     if (searchFailed(r)) {
-      items.push({ ...b, status: "error", why: `it looked nowhere: ${(r?.sources.failures ?? ["the search returned without a report"]).join(" | ").slice(0, 300)}`, ...(r ? { failures: r.sources.failures } : {}) });
+      items.push({ ...b, status: "error", why: `it looked nowhere: ${clip((r?.sources.failures ?? ["the search returned without a report"]).join(" | "), 300)}`, ...(r ? { failures: r.sources.failures } : {}) });
       return;
     }
     items.push(mergeRetried(searchedItem(b, r!), retried.get(`${b.kind}:${b.id}`)));
@@ -573,7 +581,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
   );
   const askHold = asks.length ? await sweepHold(userId, "ask", now).catch(() => ["their send gates couldn't be read"]) : [];
   for (const a of asks) {
-    const b = { kind: "ask" as const, id: String(a.id), text: String(a.ask_text ?? "").slice(0, 160) };
+    const b = { kind: "ask" as const, id: String(a.id), text: itemText(String(a.ask_text ?? "")) };
     const prior = done.get(`ask:${b.id}`);
     if (prior) { items.push(prior); continue; } // searched in an earlier run today: carried, not searched again
     if (askHold.length) { items.push({ ...b, status: "skipped", why: `held: ${askHold.join(", ")}` }); continue; }
@@ -603,7 +611,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     const part = searchPartOf(askText, a);
     if (part === null) { items.push({ ...b, status: "skipped", why: "a mixed ask with no clean connection part: nothing searched" }); continue; }
     askText = part;
-    const searchB = askText === String(a.ask_text ?? "") ? b : { ...b, searchedPart: askText.slice(0, 160) };
+    const searchB = askText === String(a.ask_text ?? "") ? b : { ...b, searchedPart: itemText(askText) };
     await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `ask:${a.id}`, text: String(a.ask_text ?? ""), createdAt: a.created_at ? new Date(a.created_at) : null } });
   }
 
@@ -615,21 +623,21 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
   // No plan could be had (the build failed and there was none before): each goal is a failed item, never a quiet skip, so the day is
   // retried on a later hour.
   if (fp && !fp.plan && fp.failed) {
-    if (fp.live.length) for (const g of fp.live) items.push({ kind: "goal", id: goalHash(g), text: g.slice(0, 160), status: "error", why: fp.failed });
+    if (fp.live.length) for (const g of fp.live) items.push({ kind: "goal", id: goalHash(g), text: itemText(g), status: "error", why: fp.failed });
     else items.push({ kind: "goal", id: "goals", text: "their goals", status: "error", why: fp.failed });
   }
   // Searched from an old plan because the rebuild failed: the goals it doesn't hold are failed items, retried.
-  for (const g of fp?.uncovered ?? []) items.push({ kind: "goal", id: goalHash(g), text: g.slice(0, 160), status: "error", why: `${fp?.note ?? "the plan build failed"}; this goal isn't in that plan` });
+  for (const g of fp?.uncovered ?? []) items.push({ kind: "goal", id: goalHash(g), text: itemText(g), status: "error", why: `${fp?.note ?? "the plan build failed"}; this goal isn't in that plan` });
   // Only what isn't a send-set timer holds the goal search (proactive.ts SWEEP_BLOCKERS.floor_goal): a weekly cap or an unanswered pause
   // gates the send, and the finds wait in the pool for it.
   // A gate that can't be read is an error, retried, never a quiet skip (review of the tier PR).
   let gateError: string | null = null;
-  const goalHold = planned.some((g) => g.search) ? await sweepHold(userId, "floor_goal", now).catch((err: any) => { gateError = `their send gates couldn't be read: ${String(err?.message ?? err).slice(0, 120)}`; return [] as string[]; }) : [];
+  const goalHold = planned.some((g) => g.search) ? await sweepHold(userId, "floor_goal", now).catch((err: any) => { gateError = `their send gates couldn't be read: ${clip(String(err?.message ?? err), 120)}`; return [] as string[]; }) : [];
   // A goal set aside since the plan was made (the goal recheck's idle, services/goalRecheck.ts, or done) isn't searched off that plan.
   let statesError: string | null = null;
-  const states = planned.some((g) => g.search) ? await goalStates(userId).catch((err: any) => { statesError = String(err?.message ?? err).slice(0, 120); return null; }) : new Map();
+  const states = planned.some((g) => g.search) ? await goalStates(userId).catch((err: any) => { statesError = clip(String(err?.message ?? err), 120); return null; }) : new Map();
   for (const g of planned) {
-    const b = { kind: "goal" as const, id: goalHash(g.goal), text: g.goal.slice(0, 160) };
+    const b = { kind: "goal" as const, id: goalHash(g.goal), text: itemText(g.goal) };
     const prior = done.get(`goal:${b.id}`);
     if (prior) { items.push(prior); continue; }
     const decide = floorGoalDecision(g, { states, statesError, gateError, hold: goalHold, goalId: b.id, now });
@@ -642,20 +650,20 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
   const proposal = { ...base, items, totals, picker, ...(o.quiet ? { heldQuiet: true, note: "tapered search day: what was found is held for when they write" } : {}), ...(fp ? { goalPlan: { how: fp.how, why: fp.why } } : {}), ...(goalNote ? { goalNote } : {}), ...(asks.length || planned.length || goals.length ? {} : { note: "no open asks and no active goals: nothing to search" }) };
   // An incomplete item (a place failed or timed out) gets the day retried while retries remain (incompleteRetry), the same way as an error.
   const retryIncomplete = incompleteRetry(items, errorsToday, base.trigger === "manual");
-  const incompleteLines = items.filter((i) => i.status === "incomplete").map((i) => `${i.kind} "${i.text.slice(0, 60)}" incomplete: ${i.why}`);
-  const failed = [...items.filter((i) => i.status === "error").map((i) => `${i.kind} "${i.text.slice(0, 60)}": ${i.why}`), ...(retryIncomplete === "retry" ? incompleteLines : [])];
+  const incompleteLines = items.filter((i) => i.status === "incomplete").map((i) => `${i.kind} "${clip(i.text, 60)}" incomplete: ${i.why}`);
+  const failed = [...items.filter((i) => i.status === "error").map((i) => `${i.kind} "${clip(i.text, 60)}": ${i.why}`), ...(retryIncomplete === "retry" ? incompleteLines : [])];
   // Searched in part counts here: what it found is in the pool.
   const searchedAny = totals.asksSearched + totals.goalsSearched + totals.incomplete > 0;
   if (failed.length) {
     const last = errorsToday + 1 >= DAILY_SWEEP_ERRORS_PER_DAY;
-    await writeDaily(userId, "skip", "error", `${failed.join(" | ").slice(0, 800)}${last ? " (the day's last retry: no more runs today)" : " (run again next hour)"}`, proposal);
+    await writeDaily(userId, "skip", "error", `${clip(failed.join(" | "), 800)}${last ? " (the day's last retry: no more runs today)" : " (run again next hour)"}`, proposal);
     // The day is lost for what failed: one that failed on the days before it too is flagged (SWEEP_FAILING_DAYS).
     if (last && base.trigger !== "manual") await flagFailingAgain(userId, base.day, items).catch((err: any) => console.error(`Daily sweep: the repeated-failure read failed for ${userId} (non-fatal):`, err?.message ?? err));
     // What did get searched is in the pool: the picker still runs for it.
     if (searchedAny && !o.quiet) await sendMorningFinds(userId, base.day);
     return;
   }
-  const stillIncomplete = retryIncomplete === "last" ? `still incomplete${base.trigger === "manual" ? "" : " after the day's retries"}: ${incompleteLines.join(" | ")}`.slice(0, 600) : null;
+  const stillIncomplete = retryIncomplete === "last" ? clip(`still incomplete${base.trigger === "manual" ? "" : " after the day's retries"}: ${incompleteLines.join(" | ")}`, 600) : null;
   await writeDaily(userId, searchedAny ? "act" : "skip", action, searchedAny ? [goalNote, stillIncomplete].filter(Boolean).join("; ") || null : [(proposal as any).note, goalNote].filter(Boolean).join("; ") || "nothing searched; each item says why", proposal);
   // The sweep discovers, the picker decides (sweepShadow.ts runPickerAfterSweep): right after, for what this run put in the pool.
   // While quiet, what was found is held in the backlog: it competes in the first full morning after they write (never dumped at once).
@@ -710,7 +718,7 @@ async function sendMorningFinds(userId: string, day: string): Promise<void> {
   } catch (err: any) {
     // Can't tell how they've been answering: no morning text today (their picks wait under the normal pacing), and it's said.
     console.error(`Daily sweep: reading the morning pace failed for ${userId} (non-fatal):`, err?.message ?? err);
-    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "error", reason: `the pace couldn't be read: ${String(err?.message ?? err).slice(0, 200)}`, proposal: { day } });
+    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "error", reason: `the pace couldn't be read: ${clip(String(err?.message ?? err), 200)}`, proposal: { day } });
     return;
   }
   if (!pace.send) {
@@ -739,7 +747,7 @@ async function sendMorningFinds(userId: string, day: string): Promise<void> {
     await P.dispatchForUser(R.proactiveRegistry, userId);
   } catch (err: any) {
     console.error(`Daily sweep: sending the morning finds failed for ${userId} (non-fatal, the next send run tries again):`, err?.message ?? err);
-    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "error", reason: String(err?.message ?? err).slice(0, 300), proposal: { day, finds: rowCount } });
+    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "error", reason: clip(String(err?.message ?? err), 300), proposal: { day, finds: rowCount } });
   }
 }
 
