@@ -88,7 +88,7 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   all = [...Array.from({ length: 200 }, (_, i) => hardSig(i * (25 / 60))), goodSig(10.2)];
   const broken = await E.getEmotionalContext("u-jordan", NOW);
   check("the stretch's own read still stops at a positive read between two hard ones", Math.abs(NOW.getTime() - broken.hardSince!.getTime()) <= 10.2 * HOUR, broken.hardSince);
-  check("the stretch read is bounded by time and asks for no words", /created_at > \$2::timestamptz - make_interval\(hours => \$3\)/.test(src("harness/emotion.ts")) && /SELECT source, intensity, valence, about, target, basis, created_at FROM emotion_signals/.test(src("harness/emotion.ts")) && E.STRETCH_LOOKBACK_HOURS >= MH.MOOD_HOLD_CAP_HOURS + 24);
+  check("the stretch read is bounded by time and asks for no words", /created_at > \$2::timestamptz - make_interval\(hours => \$3\)/.test(src("harness/emotion.ts")) && /SELECT source, intensity, valence, read_kind, felt_by, framing, about, target, basis, created_at FROM emotion_signals/.test(src("harness/emotion.ts")) && E.STRETCH_LOOKBACK_HOURS >= MH.MOOD_HOLD_CAP_HOURS + 24);
   (pool as any).query = realQuery;
 }
 

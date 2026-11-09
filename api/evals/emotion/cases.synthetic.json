@@ -180,6 +180,9 @@
         "valence": "negative",
         "about": "moving to SF",
         "target": "life",
+        "readKind": "distress",
+        "feltBy": "member",
+        "framing": "own",
         "hoursAgo": 6
       },
       {

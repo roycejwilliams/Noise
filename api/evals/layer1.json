@@ -138,6 +138,7 @@
     "evals/calls/cues.ts",
     "evals/calls/turnTaking.ts",
     "evals/emotion/callRules.ts",
+    "evals/emotion/hardStretch.ts",
     "evals/emotion/labels.ts",
     "evals/voiceRead/rules.ts",
     "evals/voiceRead/servers.ts",
