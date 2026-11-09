@@ -71,5 +71,17 @@ check("a confirmed registration feeds the existing debrief as intent (acted), pe
   await W.applyOne(db, "u", raw, item, "remove", null, "forget why I wanted to go");
   check("forget an event's answer: off the registration and off the plan's reason, status untouched", said.some((x) => /answers = answers - \$3/.test(x.sql)) && said.some((x) => /UPDATE planned_event_mentions SET reason = NULL, reason_source = NULL/.test(x.sql)) && !said.some((x) => /registration_status|SET status/.test(x.sql)), said);
 }
+// Every other reader of the plan record: pending or waitlisted is never "going".
+{
+  const TL = await import("../../src/services/timeline.js");
+  const CR = await import("../../src/services/callReason.js");
+  check("timeline: pending reads as not confirmed, never 'going'", /host hasn't approved them yet: not confirmed/.test(TL.planTimelineWhat({ event_name_raw: "Founders Dinner", provenance: "stated", registration_status: "pending_approval" })) && !/they said they're going/.test(TL.planTimelineWhat({ event_name_raw: "Founders Dinner", provenance: "stated", registration_status: "pending_approval" })));
+  check("timeline: waitlisted reads as not confirmed", /on the waitlist: not confirmed/.test(TL.planTimelineWhat({ event_name_raw: "Pitch Night", provenance: "stated", registration_status: "waitlisted" })));
+  check("timeline: a registered plan and a plain stated plan still read as going", /they said they're going/.test(TL.planTimelineWhat({ event_name_raw: "Demo Night", provenance: "stated", registration_status: "registered" })) && /they said they're going/.test(TL.planTimelineWhat({ event_name_raw: "Demo Night", provenance: "stated" })));
+  check("timeline and call reason read the registration status", /provenance, registration_status FROM planned_event_mentions/.test(src("services/timeline.ts")) && /provenance, registration_status FROM planned_event_mentions/.test(src("services/callReason.ts")));
+  const base: any = { now: new Date("2026-11-18T18:00:00Z"), zone: "America/Los_Angeles", kind: null, nudges: [], threads: [], claims: [], milestones: [], coWork: [], recentReasonKeys: [] };
+  const say = (registration?: string) => JSON.stringify(CR.callReasonFor({ ...base, plans: [{ name: "Founders Dinner", date: "2026-11-20", stated: true, ...(registration ? { registration } : {}) }] }));
+  check("call reason: a pending or waitlisted plan is never a 'they said they're going' reason", !/Founders Dinner/.test(say("pending_approval")) && !/Founders Dinner/.test(say("waitlisted")) && /they said they're going/.test(say("registered")), { pending: say("pending_approval").slice(0, 300), registered: say("registered").slice(0, 300) });
+}
 console.log(`${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
