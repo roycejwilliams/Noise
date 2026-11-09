@@ -4,6 +4,8 @@ import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
+import { catchCode } from "../services/eventRegistration/codeChallenge.js";
+import { registrationLive } from "../services/eventRegistration/approvals.js";
 import { noteTraceUser, traceTurn, withTraceUser } from "../services/llmTraceText.js";
 import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
@@ -606,6 +608,15 @@ export function sendblueRouter(io: Server): Router {
       };
       // This text joined the hold behind a held STOP or START of theirs; the drain answers them all, in order.
       let deferred = false;
+      // A Luma code for an event signup waiting on one (services/eventRegistration/codeChallenge.ts, 2026-11-09): caught here, before
+      // the delivery is saved, held, stamped, threaded or read, so the code is never stored, logged, traced or shown to a model. Only
+      // while this member has an active code challenge, and only a text that is just a code: anything else flows exactly as it came.
+      // The text is replaced by a placeholder for everything below; the code is used once in memory and dropped.
+      const regCode =
+        !replay && lockKey && !req.body?.is_outbound && req.body?.type !== "typing" && registrationLive()
+          ? await catchCode(lockKey, req.body?.content).catch(() => null)
+          : null;
+      if (regCode) req.body.content = regCode.placeholder;
       if (!replay && typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
         // Already waiting in the hold (its first delivery couldn't be saved): this is the same text again, and its first handler or
         // the drain answers it. Checked first, since the database may be the thing that can't tell.
@@ -652,6 +663,18 @@ export function sendblueRouter(io: Server): Router {
         // Nothing saved means nothing to replay (2026-10-28: both writes failed silently while the database was unreachable, and the
         // text was lost). It waits in the hold until this handler finishes, then for the database.
         if (saveFailed && holdable) held = holdInbound(handle, req.body, arrivedAt, true);
+      }
+      // The caught code goes to the signup waiting on it, under their phone's lock, instead of an ordinary reply: their line is kept as
+      // the placeholder, and Cue's next line (the outcome, or what's next) is sent and logged like any reply.
+      if (regCode && lockKey) {
+        await withPhoneLock(lockKey, async () => {
+          const R = await import("../agent/registrationTools.js");
+          await logTextExchangeRow(regCode.userId, `User said: ${regCode.placeholder}`);
+          const out = await R.continueWithCode({ userId: regCode.userId, resolvedContent: regCode.placeholder, messageArrivedAt: arrivedAt.getTime() }, R.realRegistrationEnv, regCode.registrationId, regCode.code);
+          if (out.text) await sendAndLog(regCode.userId, lockKey, out.text);
+        }).catch((err: any) => console.error("registration code: handling failed (non-fatal):", err?.message ?? err));
+        if (typeof handle === "string" && handle) await pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1`, [handle]).catch(() => {});
+        return;
       }
 
       // Stamped here, before withPhoneLock, not inside run() below. Once a

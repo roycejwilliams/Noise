@@ -413,9 +413,12 @@ const EDGES: Record<Status, Status[]> = {
   awaiting_yes: ["submitting", "awaiting_yes", "needs_answers", "needs_member_code", "needs_member_step", "blocked", "withdrawn", "inspected"],
   // A sign-in or a code step in the middle of the submit pauses it; their code resumes the same session.
   submitting: ["registered", "pending_approval", "waitlisted", "already_registered", "failed", "blocked", "uncertain", "needs_member_code", "needs_member_step", "needs_answers", "awaiting_yes"],
-  needs_member_code: ["submitting", "needs_member_code", "needs_answers", "awaiting_yes", "blocked", "withdrawn", "inspected"],
-  needs_member_step: ["submitting", "needs_member_step", "needs_answers", "awaiting_yes", "blocked", "withdrawn", "inspected"],
-  uncertain: ["registered", "pending_approval", "waitlisted", "already_registered", "failed", "uncertain", "submitting"],
+  // Luma's own page (read signed in) can settle it without a submit; a reconcile that can't tell goes back to uncertain.
+  needs_member_code: ["submitting", "needs_member_code", "needs_answers", "awaiting_yes", "blocked", "withdrawn", "inspected", "uncertain", "registered", "pending_approval", "waitlisted", "already_registered"],
+  // Luma's own page (read signed in) can settle it without a submit; a reconcile that can't tell goes back to uncertain.
+  needs_member_step: ["submitting", "needs_member_step", "needs_answers", "awaiting_yes", "blocked", "withdrawn", "inspected", "uncertain", "registered", "pending_approval", "waitlisted", "already_registered"],
+  // A reconcile read signs in with their emailed code first (needs_member_code), then settles or, only if not registered, submits.
+  uncertain: ["registered", "pending_approval", "waitlisted", "already_registered", "failed", "uncertain", "submitting", "needs_member_code"],
   registered: [],
   already_registered: [],
   // A pending request or a waitlist spot can be confirmed later (a reconcile read).

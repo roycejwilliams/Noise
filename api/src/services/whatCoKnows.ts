@@ -82,8 +82,8 @@ import { voiceReadKnownLine } from "./voiceReadConsent.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace" | "event" | "plan" | "summary";
-export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting" | "reach" | "notes";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file" | "photo" | "place" | "window" | "free" | "grant" | "pref" | "pair" | "knows" | "cond" | "waiting" | "pace" | "event" | "plan" | "summary" | "signup";
+export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files" | "waiting" | "reach" | "notes" | "signupDetails" | "signupAnswers";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
   work: "Your work",
@@ -96,8 +96,11 @@ export const GROUP_TITLES: Record<KnownGroup, string> = {
   reach: "Paused for now",
   // Neutral label (Royce 11-06: Cue phrases what it says about these; this title is only shown verbatim where a label is).
   notes: "Daily notes",
+  // Event signups (services/eventRegistration): the details they gave for signing up, kept apart from the answers they gave one event.
+  signupDetails: "Details you gave for event signups",
+  signupAnswers: "Your answers on event signups",
 };
-const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "reach", "notes", "files"];
+const GROUP_ORDER: KnownGroup[] = ["where", "work", "after", "waiting", "mind", "likes", "said", "reach", "notes", "signupDetails", "signupAnswers", "files"];
 
 // One thing Co holds, from one source row. ref is stable across turns (an id, a field, or a hash of the text).
 export type KnownItem = { ref: string; source: KnownSource; group: KnownGroup; text: string; theirWords: string | null; canCorrect: boolean };
@@ -209,6 +212,10 @@ export type RawKnown = {
   // their removals, newest first, their side only (the name strip ran when each was written and runs again on the way out). Ruling 5:
   // visible knowledge is all of it. Removing one deletes its text and keeps the day's stamp, so the job never writes that day again.
   daySummaries?: { day: string; summary: string }[];
+  // What they gave for event signups (event_registrations.answers), per registration: factual details (company, role, a chosen email...)
+  // apart from answers written for that one event (why they want to go, a custom question). Removable one by one: removing an answer
+  // takes it off the record and leaves the registration and its status as they are.
+  signups?: { id: string; event: string; answers: { fieldId: string; label: string; value: string; factual: boolean; drafted: boolean }[] }[];
 };
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
@@ -292,6 +299,15 @@ export function knownItems(r: RawKnown): KnownItem[] {
   // Each daily note as "<date>: <summary>" (a neutral label; Cue phrases it). A blank one is never a line. Shown whole (a summary is at
   // most daySummaries.ts SUMMARY.maxSummaryChars), not cut at the usual 240, so nothing of it is hidden.
   for (const d of r.daySummaries ?? []) if (/^\d{4}-\d{2}-\d{2}$/.test(d.day) && String(d.summary ?? "").trim()) add(`summary:${d.day}`, "summary", "notes", `${d.day}: ${String(d.summary).trim()}`, null, true, 1000);
+  // Neutral labels; Cue phrases them. A factual detail names what it is; an event's answer names the event and the question, and says
+  // when the words were Cue's draft they approved.
+  for (const g of r.signups ?? []) {
+    for (const x of g.answers) {
+      const ref = `signup:${g.id}:${hashOf(x.fieldId)}`;
+      if (x.factual) add(ref, "signup", "signupDetails", `${x.label}: ${x.value} (given for ${g.event})`, null, false);
+      else add(ref, "signup", "signupAnswers", `for ${g.event}, "${x.label}": ${x.value}${x.drafted ? " (Cue's draft you approved)" : ""}`, null, false, 600);
+    }
+  }
   return out;
 }
 
@@ -629,6 +645,8 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
      LIMIT 80`,
     [userId],
   ).catch(() => [] as any[]);
+  // Their event signups' saved answers (services/eventRegistration/registrationStore.ts): their own rows only.
+  const signupRows = await q(`SELECT id, event_name, form, answers FROM event_registrations WHERE user_id = $1 AND answers <> '{}'::jsonb ORDER BY updated_at DESC LIMIT 20`, [userId]).catch(() => [] as any[]);
   const freeRows = await import("./wantWhen.js").then(async (WW) => {
     const { localDay } = await import("./memberTime.js");
     return (await WW.freeTimesOf(userId, localDay(new Date(), zone ?? null), db as any)).map((f) => ({ id: f.id, text: WW.describeFreeTime(f), quote: f.quote }));
@@ -679,8 +697,27 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     // Read through the same stamp and guard check the reply's block uses (daySummaries.ts visibleSummaries): a note built on a line they
     // since removed is never shown. Unreadable (or the guards unreadable): this group is left out, the rest of the view still reads.
     daySummaries: await import("./daySummaries.js").then((D) => D.visibleSummaries(userId, db)).catch(() => [] as { day: string; summary: string }[]),
+    signups: await import("./eventRegistration/registration.js").then((RG) => signupsOf(signupRows, RG.FACTUAL_KINDS)),
     pairOutcomes: (Array.isArray(pairRows) ? pairRows : []).map((r: any) => ({ id: String(r.id), side: r.side === "a" ? ("a" as const) : ("b" as const), eventName: r.event_name ? String(r.event_name) : null, evidence: r.ev && typeof r.ev === "object" ? r.ev : {}, note: r.note ? String(r.note) : null })),
   };
+}
+
+// Pure: their saved signup answers, per registration, factual details apart from event answers.
+export function signupsOf(rows: any[], factualKinds: ReadonlySet<string>): NonNullable<RawKnown["signups"]> {
+  return (Array.isArray(rows) ? rows : []).map((r: any) => {
+    const form = typeof r.form === "string" ? JSON.parse(r.form) : r.form;
+    const answers = (typeof r.answers === "string" ? JSON.parse(r.answers) : r.answers) ?? {};
+    const fields: any[] = Array.isArray(form?.fields) ? form.fields : [];
+    const event = String(r.event_name ?? form?.eventName ?? "an event").slice(0, 120);
+    return {
+      id: String(r.id),
+      event,
+      answers: Object.entries(answers as Record<string, any>).filter(([, a]) => typeof a?.value === "string" && a.value.trim()).map(([fieldId, a]) => {
+        const f = fields.find((x) => x?.id === fieldId);
+        return { fieldId, label: String(f?.label ?? fieldId).slice(0, 120), value: String(a.value).slice(0, 600), factual: !!f && factualKinds.has(f.kind), drafted: a.source === "draft_approved" };
+      }),
+    };
+  }).filter((g) => g.answers.length);
 }
 
 // Pure: " · searching <the place on the map>", when it says more than their own word for it ("Bay Area" -> "San Francisco Bay Area,
@@ -983,6 +1020,16 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       await db.query(`UPDATE event_presence SET met_someone_at = NULL, met_quote = NULL WHERE user_id = $1 AND event_api_id = $2`, [userId, a]);
       return { ref: item.ref, source: "event", was, now: null };
     }
+    case "signup": {
+      // One saved answer on one signup: taken off that registration's record. The registration, its status and its outcome stay as
+      // they are (what was already sent to the host was sent; Cue just no longer keeps the answer).
+      const g = (raw.signups ?? []).find((x) => x.id === a);
+      const x = g?.answers.find((y) => hashOf(y.fieldId) === b);
+      if (!g || !x) return { why: "it's no longer on file" };
+      if (action === "correct") return { why: "a signup answer can only be removed; a new one is given at the next signup" };
+      await must(`UPDATE event_registrations SET answers = answers - $3::text, updated_at = NOW() WHERE user_id = $1 AND id = $2::uuid AND answers ? $3::text`, [userId, a, x.fieldId]);
+      return { ref: item.ref, source: "signup", was: x.factual ? `${x.label}: ${x.value}` : `an answer for ${g.event}`, now: null };
+    }
     case "summary": {
       // One of Cue's daily notes (services/daySummaries.ts), removed or corrected ("not that"): either way the note goes. Its text is
       // deleted and the row stays only as the day's fingerprint (status 'removed', its stamp), so the job never writes that day again
@@ -1025,7 +1072,7 @@ export function fieldFor(ref: string): string {
   if (kind === "pace") return "a kind of message Cue had paused";
   if (kind === "pref") return "a rule they set for how Cue treats them";
   if (kind === "grant") return a === "voice_read" ? "their yes to Cue listening to how they sound on calls" : "their calendar connection";
-  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them", plan: "an event they planned", event: "an event they were at", summary: "a daily note Cue wrote about one of their days" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", ask: "what Cue looks out for", cond: "a condition they put on one of their wants", avoid: "what they don't want suggested", photo: "a photo they sent", pair: "how an introduction went for them", knows: "someone they already know", waiting: "something Cue was holding for them", plan: "an event they planned", event: "an event they were at", summary: "a daily note Cue wrote about one of their days", signup: "an answer they gave for an event signup" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -1224,7 +1271,7 @@ export function removalLog(kind: string, correctionId: unknown, at: Date = new D
 }
 // Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
 // made up, which could be the thing itself) is logged as "an item", never as given.
-const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting", "pace", "event", "plan", "summary"]);
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "pref", "claim", "thread", "taste", "ask", "avoid", "file", "photo", "pair", "knows", "cond", "waiting", "pace", "event", "plan", "summary", "signup"]);
 export function logKind(ref: string): string {
   const [kind, a = ""] = String(ref ?? "").split(":");
   if (!LOG_KINDS.has(kind)) return "an item";
