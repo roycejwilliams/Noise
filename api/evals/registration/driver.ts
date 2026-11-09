@@ -249,6 +249,42 @@ if (browser) {
     await D.closeAllHeld();
     check("held: shutdown closes every held session", closed === 4 && D.heldCount() === 0);
   }
+  {
+    // The real shared browser (browserRead.ts sharedBrowser / closeBrowser), not an injected one: its idle close never ends a page held
+    // for a code, and when it goes away the held sessions are dropped and reported.
+    const B = await import("../../src/services/browserRead.js");
+    const savedIdle = B.BROWSER_LIMITS.idleMs;
+    (B.BROWSER_LIMITS as any).idleMs = 300;
+    const shared = D.lumaDriver({ browser: B.sharedBrowser, slot: B.browserSlot, fixtures: fixtureMap([{ slug: "members-mixer", name: "Members Mixer", signIn: { code: "482913" } }]) });
+    try {
+      const s = await shared.open(fixtureUrl({ slug: "members-mixer" }));
+      await s.read();
+      const st = await s.startSignIn("jordan@example.com");
+      D.holdSession("reg-idle", s);
+      await new Promise((r) => setTimeout(r, 1_500)); // five idle periods
+      const back = D.takeHeldSession("reg-idle");
+      const entered = back ? await back.enterCode("482913").catch((e) => ({ ok: false, detail: String(e?.message ?? e) })) : { ok: false, detail: "not held" };
+      check("held past the shared browser's idle time: the page is still open and takes the code", st.ok && entered.ok, { st, entered });
+      await back?.close();
+      const lost: string[][] = [];
+      D.onHeldLost((ids) => lost.push(ids));
+      const s2 = await shared.open(fixtureUrl({ slug: "members-mixer" }));
+      await s2.read();
+      await s2.startSignIn("jordan@example.com");
+      D.holdSession("reg-gone", s2);
+      (B.BROWSER_LIMITS as any).idleMs = savedIdle;
+      await B.closeBrowser();
+      await new Promise((r) => setTimeout(r, 300));
+      check("the shared browser closing drops its held sessions and reports them (the caller expires those registrations)", lost.some((ids) => ids.includes("reg-gone")) && !D.isHeld("reg-gone"), lost);
+      await s2.close();
+    } catch (err: any) {
+      if (/Executable doesn't exist|Failed to launch/i.test(String(err?.message))) console.log("SKIP shared-browser hold checks: browserRead couldn't launch here");
+      else check("shared-browser hold checks ran", false, String(err?.message ?? err));
+    } finally {
+      (B.BROWSER_LIMITS as any).idleMs = savedIdle;
+      await B.closeBrowser();
+    }
+  }
   check("page slots: every session released", open === 0, open);
   await browser.close();
 }
