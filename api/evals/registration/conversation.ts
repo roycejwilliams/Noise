@@ -54,9 +54,14 @@ check("not a code: a time, money, a zip, an address, a phone number, a sentence"
   check("visible: a factual detail and an event answer, in separate groups", detail?.text === "What company do you work for?: Northwind (given for Founders Dinner)" && answer?.text === `for Founders Dinner, "Why do you want to attend?": To meet climate investors. (Cue's draft you approved)`, items);
   check("visible: both groups have their own titles", W.GROUP_TITLES.signupDetails === "Details you gave for event signups" && W.GROUP_TITLES.signupAnswers === "Your answers on event signups");
   const said: { sql: string; a: any[] }[] = [];
-  const db: any = { query: async (sql: string, a: any[]) => { said.push({ sql, a }); return { rows: [], rowCount: 1 }; } };
+  // The registration still repeats the answer in the scope its yes was read against, the ask that showed it, and Cue's draft of it.
+  const kept = { scope: { shares: [{ label: "What company do you work for?", value: "Northwind" }, { label: "Why do you want to attend?", value: "To meet climate investors." }], agrees: [] }, ask_text: `Founders Dinner is on Fri. I'd use your company (Northwind), with this answer: "Why do you want to attend?": "To meet climate investors.". Want me to register you for this event using these details and answers?`, drafts: [{ fieldId: "w", text: "To meet climate investors.", basis: "x" }] };
+  const db: any = { query: async (sql: string, a: any[]) => { said.push({ sql, a }); return /^SELECT scope, ask_text, drafts/.test(sql) ? { rows: [kept], rowCount: 1 } : { rows: [], rowCount: 1 }; } };
   const out: any = await W.applyOne(db, "u", raw, answer!, "remove", null, "forget my answer for the founders dinner");
-  check("forget: removes that one answer from the registration's record, and nothing else", out?.now === null && said.length === 1 && /UPDATE event_registrations SET answers = answers - \$3::text/.test(said[0].sql) && said[0].a[2] === "w", { out, said });
+  const upd = said.find((x) => /UPDATE event_registrations SET answers = answers - \$3::text/.test(x.sql));
+  check("forget: removes that one answer from the registration's record", out?.now === null && !!upd && upd.a[2] === "w", { out, said });
+  check("forget: the removed value is scrubbed from the scope, the ask's text and the draft (removed is deleted), the other answer kept", !!upd && !String(upd.a[3]).includes("To meet climate investors.") && String(upd.a[3]).includes("Northwind") && !String(upd.a[4]).includes("To meet climate investors.") && String(upd.a[4]).includes("[removed]") && JSON.parse(String(upd.a[5])).length === 0, upd?.a);
+  check("forget: the scope's fingerprint (its hash) is kept", !!upd && !/scope_hash/.test(upd.sql));
   check("forget: the registration's status is left as it is", !/status/.test(said[0].sql));
   check("a signup answer can only be removed, not rewritten", !!(await W.applyOne(db, "u", raw, detail!, "correct", "Acme", "change it to Acme") as any).why);
 }
@@ -94,6 +99,31 @@ check("guard: a registration call's decision row drops their message", /registra
 check("fit: a claim from the event page passes", C.fitProblem("It's a small founders dinner with 40 guests.", "Founders Dinner\n40 guests going") === null);
 check("fit: an unbacked attendee claim fails (never guessed)", C.fitProblem("Two attendees run community products.", "Founders Dinner on Fri") !== null);
 check("fit: a name the page doesn't have fails (never private member info)", C.fitProblem("Maya from your last dinner is going.", "Founders Dinner, 40 guests going") !== null);
+
+// ---- a held page that breaks while their code goes in: they always get a line, and the record expires by its stage
+{
+  const SS = await import("../../src/services/eventRegistration/registrationStore.js");
+  const DD = await import("../../src/services/eventRegistration/lumaDriver.js");
+  const { q: q2, rows: rows2 } = fakeRegistrations();
+  const U2 = "00000000-0000-4000-8000-0000000c2222";
+  const broken: any = { enterCode: async (c: string) => { throw new Error(`page closed while typing ${c}`); }, close: async () => {} };
+  const env2: any = { q: q2, driver: async () => { throw new Error("unused"); }, facts: async () => ({ email: { value: "jordan@example.com", source: "account" } }), theirWords: async () => "", sentFinds: async () => [], resolve: { expand: async () => null, readPage: async () => null }, latestFromThemAt: async () => null, codeSources: [], liveSubmit: true, redactCode: async () => {}, hold: (id: string, ss: any) => DD.holdSession(id, ss), takeHeld: (id: string) => DD.takeHeldSession(id), now: () => new Date() };
+  const stage = async (slug: string, detail: string) => {
+    const r = await SS.openRegistration(U2, { eventKey: `luma:${slug}`, eventUrl: `https://luma.com/${slug}`, itemKey: null, eventName: "Night Market" }, q2);
+    await SS.moveRegistration(U2, r.id, "awaiting_yes", { askKind: "submit", scopeHash: "h" }, q2);
+    await SS.moveRegistration(U2, r.id, "needs_member_code", { outcome: { state: "uncertain", link: `https://luma.com/${slug}`, linkKind: "event_page", detail, at: "x" } }, q2);
+    DD.holdSession(r.id, broken);
+    const out = await T.continueWithCode({ userId: U2, resolvedContent: CC.CODE_PLACEHOLDER }, env2, r.id, "314159");
+    return { out, status: rows2.find((x) => x.id === r.id)?.status };
+  };
+  const a = await stage("night-market", "sign_in");
+  check("code entry breaks before a submit: the member gets the existing timeout line and the signup starts over", a.out.text?.startsWith("The signup page timed out while I waited for the code, so nothing was submitted.") === true && a.status === "inspected", a);
+  const b = await stage("night-market-2", "after_submit");
+  check("code entry breaks after a submit: the existing after-submit timeout line, and it's uncertain", b.out.text?.startsWith("The page timed out before I could enter the code, so the signup for Night Market isn't confirmed.") === true && b.status === "uncertain", b);
+  check("a lost browser expires its waiting registrations by stage: after a submit or while reconciling uncertain, else back to the start", /CASE WHEN outcome->>'detail' IN \('after_submit', 'reconcile'\) THEN 'uncertain' ELSE 'inspected' END/.test(SS.EXPIRE_LOST_SQL) && /status IN \('needs_member_code', 'needs_member_step'\)/.test(SS.EXPIRE_LOST_SQL));
+  check("the real environment wires lost holds to that expiry", /onHeldLost\(\(ids\) => \{ for \(const id of ids\) void S\.expireLostHold\(id\)/.test(src("agent/registrationTools.ts")));
+  check("neither line nor record carries the code", !JSON.stringify([a, b, rows2]).includes("314159"));
+}
 
 // ---- the browser flows
 let browser: Browser | null = null;
@@ -282,7 +312,7 @@ if (browser) {
     const p = await turn("did it go through?").run("prepareEventRegistration", { event: "Slow Event" });
     check("uncertain: asking again offers a retry, never resubmits on its own", p.status === "uncertain" && submitted.filter((u) => /slow-event/.test(u)).length === 1, p);
     const y3 = await turn("yes", p.sendThisWordForWord).run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
-    check("uncertain: a yes to the retry is necessary, not sufficient: Luma's own state is read first (signed in), nothing submitted yet", y3.waiting === "code" && y3.sendThisWordForWord === "Before I try again, I'll check with Luma whether the first one went through. Luma sent a sign-in code to jordan@example.com. What's the code? I'll use it once and won't keep it." && submitted.filter((u) => /slow-event/.test(u)).length === 1, { y3, submitted });
+    check("uncertain: a yes to the retry is necessary, not sufficient: Luma's own state is read first (signed in), nothing submitted yet", y3.waiting === "code" && y3.sendThisWordForWord === "Before I try again, I'll check with Luma whether the first one went through. Luma sent a sign-in code to jordan@example.com. What's the code? I'll use it for this signup. Cue won't save the code." && submitted.filter((u) => /slow-event/.test(u)).length === 1, { y3, submitted });
     const c = await codeTurn("135790", r.registrationId);
     check("reconcile shows not registered: the one retry goes (attempt 2), and its own unknown result is uncertain again", submitted.filter((u) => /slow-event/.test(u)).length === 2 && recOf("slow-event").status === "uncertain" && /didn't confirm it/.test(c.text ?? ""), { c, submitted, status: recOf("slow-event").status });
   }
@@ -331,7 +361,7 @@ if (browser) {
     const r = await turn("sign me up for members mixer").run("prepareEventRegistration", { event: "Members Mixer" });
     check("login required: not a stop; the submit question first", r.ask === "submit", r);
     const y = await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
-    check("login: authorized email can't (none exists), so the member is asked for the code", y.waiting === "code" && y.sendThisWordForWord === "Luma sent a sign-in code to jordan@example.com. What's the code? I'll use it once and won't keep it." && recOf("members-mixer").status === "needs_member_code", y);
+    check("login: authorized email can't (none exists), so the member is asked for the code", y.waiting === "code" && y.sendThisWordForWord === "Luma sent a sign-in code to jordan@example.com. What's the code? I'll use it for this signup. Cue won't save the code." && recOf("members-mixer").status === "needs_member_code", y);
     check("a message that isn't a code is never caught (it flows to the ordinary reply)", CC.codeOnlyMessage("one sec") === null);
     const cr = await codeTurn("482913", r.registrationId);
     const c = cr.result as any;

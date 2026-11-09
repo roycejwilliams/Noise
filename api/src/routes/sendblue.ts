@@ -613,7 +613,7 @@ export function sendblueRouter(io: Server): Router {
       // while this member has an active code challenge, and only a text that is just a code: anything else flows exactly as it came.
       // The text is replaced by a placeholder for everything below; the code is used once in memory and dropped.
       const regCode =
-        !replay && lockKey && !req.body?.is_outbound && req.body?.type !== "typing" && registrationLive()
+        !replay && lockKey && !req.body?.is_outbound && req.body?.type !== "typing" && req.body?.message_type !== "group" && !req.body?.group_id && registrationLive()
           ? await catchCode(lockKey, req.body?.content).catch(() => null)
           : null;
       if (regCode) req.body.content = regCode.placeholder;

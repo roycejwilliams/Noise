@@ -170,6 +170,16 @@ export async function recordOutcome(userId: string, id: string, outcome: Outcome
   return moveRegistration(userId, id, to, { outcome }, q);
 }
 
+// A registration whose held page was lost (its browser went away): before a submit it starts over (inspected); after one, or while
+// reconciling one, it is uncertain. Only from a waiting-on-the-member state; anything that moved on is left alone.
+export const EXPIRE_LOST_SQL = `UPDATE event_registrations
+  SET status = CASE WHEN outcome->>'detail' IN ('after_submit', 'reconcile') THEN 'uncertain' ELSE 'inspected' END, updated_at = NOW()
+  WHERE id = $1::uuid AND status IN ('needs_member_code', 'needs_member_step')`;
+export async function expireLostHold(registrationId: string, q?: Q): Promise<boolean> {
+  const r = await db(q).query(EXPIRE_LOST_SQL, [registrationId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 // Their registrations that ended up on a guest list (registered) or waiting on the host or a spot: what follow-through reads.
 export async function registrationsForFollowThrough(userId: string, q?: Q): Promise<{ eventKey: string; eventUrl: string; itemKey: string | null; status: Status; at: Date }[]> {
   const { rows } = await db(q).query(

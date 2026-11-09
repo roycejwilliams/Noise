@@ -97,14 +97,14 @@ After their answers, the next message is the submit question (section 1), never 
 
 ## 3. Codes (Luma's emailed sign-in code)
 
-The code they text back is caught before the ordinary reply, used once, and never kept.
+The code they text back is caught before the ordinary reply and used once. Nothing on Cue's side saves it: `evals/registration/codeNeverKept.ts` drives the real inbound handler with a fresh random code and finds it in no database write, log line, send, embedding or outside call. What Cue can't control: Sendblue and iMessage keep the message on their side, which is why the line says "Cue won't save the code" (Royce, 2026-11-09).
 
 - Signing in is needed before the signup (no email access exists, so they're asked):
-  > Luma sent a sign-in code to {email}. What's the code? I'll use it once and won't keep it.
+  > Luma sent a sign-in code to {email}. What's the code? I'll use it for this signup. Cue won't save the code.
 - Luma asks for a code after the submit:
-  > Luma sent a code to {email} to confirm the signup. What's the code? I'll use it once and won't keep it.
+  > Luma sent a code to {email} to confirm the signup. What's the code? I'll use it for this signup. Cue won't save the code.
 - Before any retry of an unconfirmed submit, to read Luma's own state for them:
-  > Before I try again, I'll check with Luma whether the first one went through. Luma sent a sign-in code to {email}. What's the code? I'll use it once and won't keep it.
+  > Before I try again, I'll check with Luma whether the first one went through. Luma sent a sign-in code to {email}. What's the code? I'll use it for this signup. Cue won't save the code.
 - The page didn't take the code:
   > That code didn't go through. Could you check the latest email from Luma and send the code again?
 - Luma wants a step only they can take in their email (a link instead of a code):

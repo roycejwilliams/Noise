@@ -65,8 +65,14 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
 }
 
 // Their emailed code, caught before the ordinary reply (routes/sendblue.ts): entered once in the held session, and the line to send.
+// Never throws and always has a line to send: their text was already taken in place of an ordinary reply.
 export async function continueWithCode(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => Promise<RegistrationEnv>), registrationId: string, code: string): Promise<{ text: string | null; result: Record<string, unknown> }> {
-  const result = await registrationFlow(ctx, envIn, () => {}).withCode(registrationId, code);
+  let result: Record<string, unknown>;
+  try {
+    result = await registrationFlow(ctx, envIn, () => {}).withCode(registrationId, code);
+  } catch {
+    result = { ok: false, sendThisWordForWord: C.sessionExpired({ eventName: "the event", when: null, email: "your email", link: "" }, false) };
+  }
   return { text: typeof result.sendThisWordForWord === "string" ? result.sendThisWordForWord : null, result };
 }
 
@@ -208,7 +214,33 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
     return { ok: true, waiting: "code", ...said(when === "reconcile" ? C.reconcileCodeAsk(c) : C.codeAsk(c, when)) };
   }
 
+  // A held page that broke while their code went in (the browser died, the page closed): the session is released and the record
+  // expires by stage, and they always get a line back (their text was already taken in place of an ordinary reply).
+  async function expired(rec: R.RegistrationRecord, c: C.Ctx): Promise<Record<string, unknown>> {
+    const now = (await S.registrationById(userId, rec.id, q).catch(() => null)) ?? rec;
+    if (now.status === "submitting") {
+      await S.moveRegistration(userId, rec.id, "uncertain", {}, q).catch(() => null);
+      return { ok: false, ...said(C.outcomeLine(c, "uncertain")) };
+    }
+    if (R.FINAL.has(now.status)) return { ok: true, ...said(C.outcomeLine(c, now.status as any, { link: now.outcome?.link ?? rec.eventUrl })) };
+    const detail = rec.outcome?.detail;
+    const submitted = detail === "after_submit";
+    const reconciling = detail === "reconcile";
+    await S.moveRegistration(userId, rec.id, submitted || reconciling ? "uncertain" : "inspected", {}, q).catch(() => null);
+    return { ok: false, ...said(reconciling ? C.cannotConfirm(c) : C.sessionExpired(c, submitted)) };
+  }
+
   async function useCode(rec: R.RegistrationRecord, session: RegistrationSession, code: string, c: C.Ctx): Promise<Record<string, unknown>> {
+    try {
+      return await useCodeIn(rec, session, code, c);
+    } catch {
+      // Never the error's text in a log line or a reply: it can carry what the page echoed.
+      await session.close().catch(() => {});
+      return expired(rec, c);
+    }
+  }
+
+  async function useCodeIn(rec: R.RegistrationRecord, session: RegistrationSession, code: string, c: C.Ctx): Promise<Record<string, unknown>> {
     const r = await session.enterCode(code);
     if (!r.ok) {
       env.hold(rec.id, session);
@@ -462,9 +494,11 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
   async function withCode(registrationId: string, code: string): Promise<Record<string, unknown>> {
     await ready();
     const rec = await S.registrationById(userId, registrationId, q);
-    if (!rec || rec.status !== "needs_member_code") return { ok: false, error: "No signup is waiting on a code." };
+    if (!rec) return { ok: false, error: "No signup is waiting on a code." };
     const facts = await factsFor(rec);
     const c = ctxFor(rec, null, facts);
+    // It moved on since the code was caught (settled, expired): they still get the line for where it stands.
+    if (rec.status !== "needs_member_code") return expired(rec, c);
     const session = env.takeHeld(rec.id);
     if (!session) {
       const submitted = rec.outcome?.detail === "after_submit";
@@ -483,10 +517,11 @@ async function R_codeFrom(rec: R.RegistrationRecord, env: RegistrationEnv) {
   return codeFromSources(rec.userId, new Date(env.now().getTime() - 10 * 60_000), env.codeSources);
 }
 
+let lostHooked = false;
 // The real dependencies. Every read is bound to this member.
 export async function realRegistrationEnv(): Promise<RegistrationEnv> {
   const { default: pool } = await import("../db/db.js");
-  const { lumaDriver, holdSession, takeHeldSession } = await import("../services/eventRegistration/lumaDriver.js");
+  const { lumaDriver, holdSession, takeHeldSession, onHeldLost } = await import("../services/eventRegistration/lumaDriver.js");
   const { realResolveDeps } = await import("../services/eventRegistration/lumaFromFind.js");
   const { DEFAULT_CODE_SOURCES } = await import("../services/eventRegistration/codeSources.js");
   const { LUMA_LIVE_SUBMIT_APPROVED } = await import("../services/eventRegistration/approvals.js");
@@ -528,7 +563,14 @@ export async function realRegistrationEnv(): Promise<RegistrationEnv> {
         [userId, code],
       );
     },
-    hold: (id, s) => holdSession(id, s),
+    hold: (id, s) => {
+      // A browser that goes away loses the pages held on it: those registrations expire by stage (registrationStore.ts expireLostHold).
+      if (!lostHooked) {
+        lostHooked = true;
+        onHeldLost((ids) => { for (const id of ids) void S.expireLostHold(id).catch(() => {}); });
+      }
+      return holdSession(id, s);
+    },
     takeHeld: (id) => takeHeldSession(id),
     now: () => new Date(),
   };
