@@ -154,7 +154,8 @@ export function deliveredItems<T>(lead: T, extras: { candidate: T; messages: str
 }
 
 // Pure: a possible intro (harness/door.ts doorBand's intro band): matching comes first, so the defaults, the back-off and the one-thread
-// day never hold it. Their own rules still time it; on a hard day it goes to the send-time read like any offer (harness/momentFit.ts).
+// day never hold it. Their own rules still time it. On a hard day an event_match_nudge, or an intro ask Cue sends at the door, goes to
+// the send-time read like any offer (harness/momentFit.ts hardDayRead); network_tease is requested and intro_nudge keeps its own rules.
 export const INTRO_ITEM_TYPES: ReadonlySet<string> = new Set(["network_tease", "event_match_nudge", "intro_nudge"]);
 export function isPossibleIntro(c: Item): boolean {
   return INTRO_ITEM_TYPES.has(c.type) || (c.payload as { intro?: boolean } | null)?.intro === true;

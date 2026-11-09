@@ -11,6 +11,7 @@ delete process.env.PROACTIVE_PAUSED;
 delete process.env.PROACTIVE_PAUSED_TYPES;
 import { readFileSync } from "fs";
 const { DateTime } = await import("luxon");
+const MF = await import("../../src/harness/momentFit.js");
 const PR = await import("../../src/harness/proactive.js");
 const W = await import("../../src/harness/waiting.js");
 const A = await import("../../src/harness/attention.js");
@@ -201,7 +202,7 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   const PS = src("harness/proactive.ts");
   check("gates: a pull still passes opt-out, the closed-subject read, expiry, the day's find cap, the composer's caps and the send-time ledger (only hours, the window, the hold, spacing and the conversation are skipped)", /if \(opts\.pulled\) \(member\.holdUntil = null, \(member\.spaceUntil = null\)\);/.test(PS) && /midConversation: midConversation && !isSafetyFollowUp\(c\) && !opts\.pulled/.test(PS) && /skipHours: opts\.pulled/.test(PS) && !/pulled[^\n]*not_opted_out/.test(PS));
   check("gates: a pull that finds nothing doesn't hold the member's regular pick", /if \(!opts\.dryRun && !opts\.pulled\) await pool\.query\(\s*`INSERT INTO proactive_user_state \(user_id, hold_until\)/.test(PS));
-  check("gates: a hard day never means a member who asks gets nothing (a pull on a hard day holds only a check-in)", /if \(opts\.pulled && heldForMood\(state\) && candidateClass\(c\.type, opts\.answering \?\? isAnswering\(c\), c\.payload\) === "checkin"\) \{/.test(PS) && !/hardDayHolds\(/.test(PS));
+  check("gates: a hard day never means a member who asks gets nothing (a hard-day pull holds only what isn't a find, an offer or theirs)", /if \(opts\.pulled && heldForMood\(state\) && isUnrequested\(pullCls\) && !STR\.hardDayRead\(pullCls, c\.type, c\.payload\)\) \{/.test(PS) && !/hardDayHolds\(/.test(PS));
   check("gates: the safety hold still holds finds for a pulled pick (candidateChecks is unchanged for it)", /state\.safetyHold && \(PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer"/.test(PS));
   check("gates: the lock is taken atomically by the pull (no gap between checking and running), after a bounded wait", /export async function pullDispatch/.test(PS) && /ran = true; await dispatchForUserInScope/.test(PS) && /while \(P\.dispatchBusy\(userId\) && Date\.now\(\) < busyUntil\)/.test(src("harness/waiting.ts")));
   const W_SRC = src("harness/waiting.ts");
@@ -283,7 +284,13 @@ const doorRow = (cls: "requested" | "unsolicited" | "checkin", messages: string[
   // 2. hard day and team hold
   const hard = { needsCare: true, moodHold: { state: "held", hold: true, heldHours: 2 } };
   const hd = ev(base(hard));
-  check("2: on a hard day a pull delivers what they asked for and what's waiting (2026-11-09: only a check-in is held)", !held(hd, profileFind).includes("hard_day") && held(hd, checkin).includes("hard_day") && !held(hd, asked).includes("hard_day") && !held(hd, askedFind).includes("hard_day"), held(hd, profileFind));
+  check("2: on a hard day a pull delivers what they asked for and the finds waiting (2026-11-09); a check-in is held", !held(hd, profileFind).includes("hard_day") && held(hd, checkin).includes("hard_day") && !held(hd, asked).includes("hard_day") && !held(hd, askedFind).includes("hard_day"), held(hd, profileFind));
+  // Review of #431: the pull widens only to finds and offers (each still judged by the send-time read); an announcement and an intro
+  // nudge keep their own rules on a hard day, and a pull never carries them past it.
+  const announcement = c("announcement", { key: "a" }), introNudge = c("intro_nudge", { threadId: "t" });
+  const hdMore = PR.evaluateCandidates({ candidates: [announcement, introNudge, profileFind, asked], ...base(hard) } as any, { ignorePacing: true, pulled: true });
+  check("2: a hard-day pull still holds an announcement and an intro nudge (not finds or offers)", held(hdMore, announcement).includes("hard_day") && held(hdMore, introNudge).includes("hard_day") && !held(hdMore, profileFind).includes("hard_day"), [held(hdMore, announcement), held(hdMore, introNudge)]);
+  check("2: the finds a hard-day pull delivers still go to the send-time read (never past it); what they asked for doesn't", MF.momentFitApplies(G.candidateClass(profileFind.type, PR.isAnswering(profileFind), profileFind.payload), profileFind.payload, { pulled: true, type: profileFind.type, hardDay: true }) && !MF.momentFitApplies(G.candidateClass(askedFind.type, PR.isAnswering(askedFind), askedFind.payload), askedFind.payload, { pulled: true, type: askedFind.type, hardDay: true }) && !MF.momentFitApplies("unsolicited", {}, { pulled: true, type: "announcement", hardDay: true }));
   const th = ev(base(), { teamHold: true });
   check("2: under the team hold a pull delivers only what they asked for", held(th, profileFind).includes("team_hold") && held(th, checkin).includes("team_hold") && !held(th, asked).includes("team_hold") && !held(th, askedFind).includes("team_hold"));
   check("2: the dispatch reads the team hold for a pull, failing closed", /G\.teamHoldNow\(userId, new Date\(\)\)/.test(src("harness/proactive.ts")) && /\.catch\(\(\) => true\);\n\}/.test(src("harness/notifyGate.ts")));
