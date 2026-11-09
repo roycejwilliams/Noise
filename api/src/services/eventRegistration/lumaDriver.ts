@@ -40,8 +40,9 @@ const REGISTER_BUTTON = /^(register|request to join|join waitlist|rsvp|one-click
 export type LumaDeps = {
   browser: () => Promise<Browser>;
   slot: () => Promise<() => void>;
-  // Tests: every request is answered from these (url → html) and anything else is refused; submit works only here.
-  fixtures?: Record<string, string>;
+  // Tests: every request is answered from these (url → html, or a function standing in for Luma's server) and anything else is
+  // refused; submit works only here.
+  fixtures?: Record<string, string> | ((url: URL) => { body: string; contentType?: string } | undefined);
   // Live reads: whether a host resolves to public addresses (browserRead.ts publicHostChecker).
   publicHost?: (host: string) => Promise<boolean>;
 };
@@ -178,18 +179,51 @@ const READ_FORM_JS = String.raw`(() => {
   return { fields, text, submitLabel: submit ? submit.innerText.trim() : null, codeBox, signInForm, captcha };
 })()`;
 
+// Pure: what a signed-in event page says Luma holds for this guest. "not_registered" only when the page offers its register button and
+// says none of the guest states; anything else it can't tell is "unknown" (never read as not registered).
+export function ownStateFrom(text: string, registerButton: boolean): { state: "registered" | "pending_approval" | "waitlisted" | "not_registered" | "unknown"; why: string } {
+  const t = String(text ?? "").replace(/[’]/g, "'").replace(/\s+/g, " ");
+  if (/pending approval|request (?:has been |was )?(?:sent|submitted)|waiting (?:for|on) (?:the )?host/i.test(t)) return { state: "pending_approval", why: "the page shows their request pending" };
+  if (/you're on the waitlist|you're waitlisted|on the wait ?list/i.test(t)) return { state: "waitlisted", why: "the page shows them on the waitlist" };
+  if (/you're going|you're registered|you're in\b|you have already registered|registration confirmed/i.test(t)) return { state: "registered", why: "the page shows them registered" };
+  if (registerButton) return { state: "not_registered", why: "signed in, the page offers registration and shows no registration for them" };
+  return { state: "unknown", why: "the page shows neither a registration nor a way to register" };
+}
+
 // ---------------------------------------------------------------- held sessions (in memory only)
 
 // A session waiting on the member (their emailed code), by registration id. In memory only: a restart drops it (the member is asked to
 // start the sign-in again; nothing about it is ever written down). Closed when used, when it times out, or past heldMax.
 const held = new Map<string, { session: RegistrationSession; until: number }>();
+// Expired holds are closed by a timer (not only when the next one is held), and every hold is closed when the process shuts down.
+let sweeper: NodeJS.Timeout | null = null;
+export function sweepHeld(now = Date.now()): number {
+  let closed = 0;
+  for (const [k, v] of held) if (v.until < now) { held.delete(k); void v.session.close(); closed++; }
+  if (!held.size && sweeper) { clearInterval(sweeper); sweeper = null; }
+  return closed;
+}
+export async function closeAllHeld(): Promise<void> {
+  const all = [...held.values()];
+  held.clear();
+  await Promise.all(all.map((h) => h.session.close().catch(() => {})));
+}
+let shutdownHooked = false;
 export function holdSession(registrationId: string, session: RegistrationSession, now = Date.now()): boolean {
-  for (const [k, v] of held) if (v.until < now) { held.delete(k); void v.session.close(); }
+  sweepHeld(now);
   if (!held.has(registrationId) && held.size >= LUMA_LIMITS.heldMax) return false;
-  held.get(registrationId)?.session !== session && held.get(registrationId)?.session.close();
+  const before = held.get(registrationId)?.session;
+  if (before && before !== session) void before.close();
   held.set(registrationId, { session, until: now + LUMA_LIMITS.heldMs });
+  if (!sweeper) { sweeper = setInterval(() => sweepHeld(), 60_000); sweeper.unref?.(); }
+  if (!shutdownHooked) {
+    shutdownHooked = true;
+    void import("../shutdown.js").then((S) => S.onShutdown(() => closeAllHeld())).catch(() => {});
+  }
   return true;
 }
+// Whether a session is held for this registration now (an active code challenge), without taking it.
+export const isHeld = (registrationId: string, now = Date.now()) => (held.get(registrationId)?.until ?? 0) >= now;
 export function takeHeldSession(registrationId: string, now = Date.now()): RegistrationSession | null {
   const h = held.get(registrationId);
   if (!h) return null;
@@ -222,6 +256,9 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
   let context: BrowserContext | null = null;
   let page: Page;
   let mode: "read" | "submit" = "read";
+  // Signed in with their emailed code in this session (Luma's own sign-in): only then can the page say what Luma holds for their email.
+  let signInStarted = false;
+  let signedIn = false;
   let released = false;
   const free = () => { if (!released) { released = true; release(); } };
   try {
@@ -233,9 +270,14 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
       try { u = new URL(req.url()); } catch { return route.abort(); }
       const host = u.hostname.toLowerCase();
       if (fixtureMode) {
-        const key = `${u.origin}${u.pathname}`.replace(/\/+$/, "");
-        const html = deps.fixtures![key];
-        return html !== undefined && req.method() === "GET" ? route.fulfill({ status: 200, contentType: "text/html", body: html }) : route.abort();
+        if (req.method() !== "GET") return route.abort();
+        const f = deps.fixtures!;
+        if (typeof f === "function") {
+          const r = f(u);
+          return r ? route.fulfill({ status: 200, contentType: r.contentType ?? "text/html", body: r.body }) : route.abort();
+        }
+        const html = f[`${u.origin}${u.pathname}`.replace(/\/+$/, "")];
+        return html !== undefined ? route.fulfill({ status: 200, contentType: "text/html", body: html }) : route.abort();
       }
       if (u.protocol !== "https:" || ["image", "font", "media"].includes(req.resourceType())) return route.abort();
       // Reading: GETs only, so nothing can register anyone. Submitting: a POST may go to Luma's own hosts only.
@@ -302,12 +344,21 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
       return formReadFrom(url, data, await raw(), button);
     },
     async startSignIn(email) {
+      // Not behind a sign-in wall: Luma's own "Sign In" opens the same emailed-code sign-in (for a reconcile read).
+      if (!(await page.locator("[role=dialog] input[type=email]").count().catch(() => 0))) {
+        const signIn = page.getByRole("button", { name: /^sign in$/i }).first();
+        if (await signIn.count().catch(() => 0)) {
+          await signIn.click({ timeout: 5_000 }).catch(() => {});
+          await page.waitForTimeout(fixtureMode ? 150 : LUMA_LIMITS.settleMs);
+        }
+      }
       const box = page.locator("[role=dialog] input[type=email], [role=dialog] input[autocomplete=email]").first();
       if (!(await box.count())) return { ok: false, detail: "the sign-in form has no email box" };
       await box.fill(email);
       const go = page.locator("[role=dialog] button[type=submit]").first();
       if (!submitAllowed(fixtureMode)) return { ok: false, detail: "signing in on a live page isn't approved yet" };
       mode = "submit";
+      signInStarted = true;
       await go.click({ timeout: 5_000 });
       await page.waitForTimeout(fixtureMode ? 150 : LUMA_LIMITS.settleMs);
       const r = await raw();
@@ -324,7 +375,9 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
       if (await go.count()) await go.click({ timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(fixtureMode ? 150 : LUMA_LIMITS.settleMs);
       const after = await raw();
-      return after.codeBox ? { ok: false, detail: "the page didn't take the code" } : { ok: true };
+      if (after.codeBox) return { ok: false, detail: "the page didn't take the code" };
+      if (signInStarted) signedIn = true;
+      return { ok: true };
     },
     async fill(values, agreed) {
       for (const [id, value] of Object.entries(values)) {
@@ -351,16 +404,33 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
     async submit() {
       if (!submitAllowed(fixtureMode)) throw new LiveSubmitDisabled();
       mode = "submit";
-      const go = page.locator("[role=dialog] button[type=submit]").first();
-      if (!(await go.count())) return { state: "failed", detail: "the form has no submit button", link: url, linkKind: "event_page" };
-      await go.click({ timeout: 5_000 });
-      const until = Date.now() + (fixtureMode ? 1_500 : LUMA_LIMITS.resultMs);
-      let r = await resultNow();
-      while (r.state === "unknown" && Date.now() < until) {
-        await page.waitForTimeout(LUMA_LIMITS.pollMs);
-        r = await resultNow();
+      // Whether the click happened decides what a crash means: before it, nothing was sent; after it, the result is unknown.
+      let clicked = false;
+      try {
+        const go = page.locator("[role=dialog] button[type=submit]").first();
+        if (!(await go.count())) return { state: "failed", detail: "the form has no submit button", link: url, linkKind: "event_page" };
+        await go.click({ timeout: 5_000, noWaitAfter: true, trial: true });
+        clicked = true;
+        await go.click({ timeout: 5_000 });
+        const until = Date.now() + (fixtureMode ? 1_500 : LUMA_LIMITS.resultMs);
+        let r = await resultNow();
+        while (r.state === "unknown" && Date.now() < until) {
+          await page.waitForTimeout(LUMA_LIMITS.pollMs);
+          r = await resultNow();
+        }
+        return r;
+      } catch (err: any) {
+        throw Object.assign(err instanceof Error ? err : new Error(String(err)), { clicked });
       }
-      return r;
+    },
+    async ownState() {
+      // What Luma itself shows for their email on this event: only meaningful once signed in with their code in this session.
+      if (!signedIn) return { state: "unknown", why: "not signed in to Luma in this session" };
+      await page.reload({ waitUntil: "domcontentloaded", timeout: LUMA_LIMITS.pageMs });
+      await page.waitForTimeout(fixtureMode ? 150 : LUMA_LIMITS.settleMs);
+      const text = await page.evaluate(() => document.body.innerText ?? "").catch(() => "");
+      const button = await page.getByRole("button", { name: REGISTER_BUTTON }).count().catch(() => 0);
+      return ownStateFrom(text, button > 0);
     },
     async readResult() {
       return resultNow();

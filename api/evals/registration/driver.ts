@@ -170,6 +170,85 @@ if (browser) {
     }
     check("live page: submit refused while LUMA_LIVE_SUBMIT_APPROVED is false", threw);
   }
+
+  // ---- runtime: isolation between members, Luma's own state when signed in, crashes, held sessions
+  {
+    const iso1 = await browser.newContext();
+    const iso2 = await browser.newContext();
+    const route = (c: typeof iso1) => c.route("**/*", (r) => { const k = r.request().url().replace(/\/+$/, ""); return fixtures[k] !== undefined ? r.fulfill({ status: 200, contentType: "text/html", body: fixtures[k] }) : r.abort(); });
+    await route(iso1); await route(iso2);
+    const p1 = await iso1.newPage(); const p2 = await iso2.newPage();
+    await p1.goto(fixtureUrl({ slug: "basic-free" })); await p2.goto(fixtureUrl({ slug: "basic-free" }));
+    await p1.evaluate(() => { document.cookie = "fx_email=jordan%40example.com; path=/"; localStorage.setItem("who", "jordan"); sessionStorage.setItem("who", "jordan"); });
+    const seen = await p2.evaluate(() => ({ cookie: document.cookie, local: localStorage.getItem("who"), session: sessionStorage.getItem("who") }));
+    check("isolation: a cookie and storage set in one member's context are not in another's (the driver opens one context per member and event)", seen.cookie === "" && seen.local === null && seen.session === null, seen);
+    await iso1.close(); await iso2.close();
+    check("isolation: the driver makes a fresh context per session and never reuses or stores one", /browser\.newContext\(\{ userAgent: UA/.test(fs.readFileSync(new URL("../../src/services/eventRegistration/lumaDriver.ts", import.meta.url), "utf8")) && !/storageState/.test(fs.readFileSync(new URL("../../src/services/eventRegistration/lumaDriver.ts", import.meta.url), "utf8")));
+  }
+  {
+    // Luma's own state for their email (the external duplicate check), through a stand-in server that keeps registrations across sessions.
+    const list: Fixture[] = [{ slug: "lost-reply", name: "Lost Reply Night", result: "timeout", lost: true, loginCode: "246810" }, { slug: "never-got", name: "Never Got It", result: "timeout", loginCode: "135790" }];
+    const srv = (await import("./fixtures.js")).fixtureServer(list);
+    const d2 = D.lumaDriver({ ...deps, fixtures: srv.fn });
+    const facts2: R.MemberFacts = { first_name: { value: "Jordan", source: "account" }, last_name: { value: "Ellis", source: "account" }, email: { value: "jordan@example.com", source: "account" } };
+    const s1 = await d2.open(fixtureUrl({ slug: "lost-reply" }));
+    const plan = R.planFill(await s1.read(), facts2);
+    await s1.fill(Object.fromEntries(plan.fill.map((x) => [x.fieldId, x.value])), []);
+    const r1 = await s1.submit();
+    await s1.close();
+    check("lost response: the page never answers (unknown), though Luma's server kept it", r1.state === "unknown" && srv.registrations("lost-reply").length === 1, { r1, held: srv.registrations("lost-reply") });
+    const s2 = await d2.open(fixtureUrl({ slug: "lost-reply" }));
+    check("own state: unknown until signed in (a fresh session can't see their registration)", (await s2.ownState()).state === "unknown");
+    const st = await s2.startSignIn("jordan@example.com");
+    const ok = st.ok && (await s2.enterCode("246810")).ok;
+    const own = await s2.ownState();
+    check("reconcile: signed in with their code, Luma's page shows them registered, so nothing is submitted again", ok && own.state === "registered", { st, own });
+    await s2.close();
+    const s3 = await d2.open(fixtureUrl({ slug: "never-got" }));
+    await s3.startSignIn("jordan@example.com");
+    await s3.enterCode("135790");
+    const own3 = await s3.ownState();
+    check("reconcile: signed in, no registration and a register button: not registered (the only state a retry may follow)", own3.state === "not_registered", own3);
+    await s3.close();
+    check("own state, pure: a page with neither a state nor a register button is unknown, never 'not registered'", D.ownStateFrom("Something else entirely", false).state === "unknown" && D.ownStateFrom("You're Going", false).state === "registered" && D.ownStateFrom("Pending Approval", true).state === "pending_approval");
+  }
+  {
+    // The browser dies mid-session: the error says whether the submit click happened, and the page slot is released.
+    const solo = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    let slots = 0;
+    const d3 = D.lumaDriver({ browser: async () => solo, slot: async () => { slots++; return () => { slots--; }; }, fixtures });
+    const s = await d3.open(fixtureUrl({ slug: "basic-free" }));
+    await s.read();
+    await solo.close();
+    let err: any = null;
+    try { await s.submit(); } catch (e) { err = e; }
+    await s.close();
+    check("crash before the click: the error says nothing was clicked (nothing sent)", !!err && err.clicked === false, { msg: String(err?.message).slice(0, 80), clicked: err?.clicked });
+    check("crash: the page slot is released", slots === 0, slots);
+    // The shared browser is replaced after a crash, never handed out dead.
+    const B = await import("../../src/services/browserRead.js");
+    const b1 = await B.sharedBrowser().catch(() => null);
+    if (b1) {
+      await b1.close();
+      await new Promise((r) => setTimeout(r, 200));
+      const b2 = await B.sharedBrowser().catch(() => null);
+      check("shared browser: after it dies, the next use launches a fresh one", !!b2 && b2 !== b1 && b2.isConnected(), { same: b2 === b1 });
+      await B.closeBrowser();
+    } else console.log("SKIP shared browser restart: browserRead couldn't launch here");
+  }
+  {
+    // Held sessions: expired ones are closed by the sweep, and all are closed at shutdown.
+    let closed = 0;
+    const fake = (): any => ({ close: async () => { closed++; } });
+    const t0 = Date.now();
+    check("held: a session is held for its code", D.holdSession("reg-a", fake(), t0) && D.isHeld("reg-a", t0));
+    D.holdSession("reg-b", fake(), t0);
+    check("held: at most three at once", D.holdSession("reg-c", fake(), t0) && !D.holdSession("reg-d", fake(), t0));
+    check("held: an expired hold is closed by the sweep", D.sweepHeld(t0 + D.LUMA_LIMITS.heldMs + 1) === 3 && closed === 3 && !D.isHeld("reg-a", t0 + D.LUMA_LIMITS.heldMs + 1));
+    D.holdSession("reg-e", fake(), t0);
+    await D.closeAllHeld();
+    check("held: shutdown closes every held session", closed === 4 && D.heldCount() === 0);
+  }
   check("page slots: every session released", open === 0, open);
   await browser.close();
 }
