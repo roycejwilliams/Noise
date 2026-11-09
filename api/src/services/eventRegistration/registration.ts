@@ -69,6 +69,9 @@ export type FormRead = {
   // Who the event's own description says it is for, or what it requires to attend ("open to Stanford students and affiliates", "21+",
   // "invite only"), as its own sentences: put in front of the member as a fact to confirm. Cue never judges whether they qualify.
   restrictions?: string[];
+  // The event's start (ISO) and zone, as the page's own data gives them (for the plan's date).
+  startAt?: string | null;
+  zone?: string | null;
   // How the page signs a guest in, when it asks: Luma's email code (the member reads it from their inbox), or anything else.
   signIn?: "email_code" | "other" | null;
   // The form continues on another step ("Next", "Continue"): what that step asks is read only after this one is filled.

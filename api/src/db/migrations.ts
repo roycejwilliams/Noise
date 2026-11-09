@@ -3338,4 +3338,11 @@ export async function concurrencyMigrations(): Promise<void> {
   await import("../services/eventRegistration/registrationStore.js")
     .then(({ REGISTRATION_TABLE_SQL }) => pool.query(REGISTRATION_TABLE_SQL))
     .catch((err: Error) => console.error("event_registrations init failed:", err));
+  // A registration's outcome as a plan (services/eventRegistration/followThrough.ts): the plan row carries the registration it came from,
+  // the page's status and the reason they approved for that event. Nullable; existing rows are untouched. Registration rows carry no
+  // embedding, so the cross-member overlap match (services/eventMatching.ts) never reads them.
+  await pool
+    .query(`ALTER TABLE planned_event_mentions ADD COLUMN IF NOT EXISTS registration_id UUID, ADD COLUMN IF NOT EXISTS registration_status TEXT, ADD COLUMN IF NOT EXISTS reason TEXT, ADD COLUMN IF NOT EXISTS reason_source TEXT`)
+    .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS planned_event_mentions_registration ON planned_event_mentions (registration_id) WHERE registration_id IS NOT NULL`))
+    .catch((err: Error) => console.error("planned_event_mentions registration columns failed:", err));
 }

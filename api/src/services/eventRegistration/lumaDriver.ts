@@ -137,6 +137,8 @@ export function formReadFrom(url: string, data: PageData, raw: RawForm | null, b
     url: canonicalEventUrl(url) ?? url,
     eventName: data.name,
     when: whenOf(data),
+    startAt: data.startAt,
+    zone: data.zone,
     action: gate === "captcha" && !button ? "none" : action,
     tickets: data.ticketTypes.length > 1 ? data.ticketTypes : [],
     priceText: priceTextOf(data),

@@ -4,6 +4,7 @@ import type { Q } from "../../src/services/eventRegistration/registrationStore.j
 
 export function fakeRegistrations(now: () => Date = () => new Date()) {
   const rows: any[] = [];
+  const plans: any[] = [];
   let n = 0;
   const parse = (v: unknown) => (typeof v === "string" && /^[[{]/.test(v) ? JSON.parse(v) : v);
   const q: Q = {
@@ -20,6 +21,13 @@ export function fakeRegistrations(now: () => Date = () => new Date()) {
       if (/SELECT \* FROM event_registrations WHERE user_id = \$1 AND event_key = \$2/.test(sql)) return { rows: rows.filter((r) => r.user_id === a[0] && r.event_key === a[1]) };
       if (/SELECT form, answers FROM event_registrations/.test(sql)) return { rows: rows.filter((r) => r.user_id === a[0] && r.id !== a[1] && r.form) };
       if (/SELECT event_key, event_url, item_key, status, updated_at FROM event_registrations/.test(sql)) return { rows: rows.filter((r) => r.user_id === a[0] && (a[1] as string[]).includes(r.status)) };
+      if (/INSERT INTO planned_event_mentions/.test(sql)) {
+        const p = plans.find((x) => x.registration_id === a[3]);
+        const row = { user_id: a[0], event_name_raw: a[1], event_date: a[2], provenance: "stated", quote: null, registration_id: a[3], registration_status: a[4], reason: a[5], reason_source: a[6], embedding: null };
+        if (p) Object.assign(p, { registration_status: a[4], event_date: a[2], reason: a[5], reason_source: a[6] });
+        else plans.push(row);
+        return { rows: [] };
+      }
       const r = rows.find((x) => x.id === a[0] && x.user_id === a[1]);
       if (/SET status = 'submitting'/.test(sql)) {
         if (!r || r.ask_kind !== "submit") return { rows: [] };
@@ -39,5 +47,5 @@ export function fakeRegistrations(now: () => Date = () => new Date()) {
       throw new Error(`fake store: unexpected SQL ${sql.slice(0, 80)}`);
     },
   };
-  return { q, rows };
+  return { q, rows, plans };
 }
