@@ -57,8 +57,9 @@ export function hardDayLineFor(o: { held: boolean; on: boolean; cls: SendClass; 
 }
 export function momentFitApplies(cls: SendClass, payload: unknown, o: { pulled?: boolean; type?: string; hardDay?: boolean } = {}): boolean {
   if (o.type === "announcement") return !o.pulled;
-  // A find or an offer Cue started, while the hard-day read is on (hardDay: needsCare): judged, never held by its class.
-  if (o.hardDay && !o.pulled && hardDayRead(cls, o.type, payload)) return true;
+  // A find or an offer Cue started, while the hard-day read is on (hardDay: needsCare): judged, never held by its class. In a pull too:
+  // the pull delivers it past the hard day's class hold, never past this read (review of #431).
+  if (o.hardDay && hardDayRead(cls, o.type, payload)) return true;
   // The text after a call (Royce, 2026-11-09): Cue's own next thought, not something they asked to receive, so it is judged like any
   // optional message. A call ending is not a reason on its own to text. One that carries a correction Cue owes from the call is not
   // optional and skips the read (harness/proactive.ts carriesCallCorrection); a held recap is closed without a draft.

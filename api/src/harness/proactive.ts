@@ -901,10 +901,12 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (heldForMood(state) && HOLD_WHILE_STRUGGLING.has(c.type)) {
     checks.push({ name: "emotional_timing", pass: false, reason: `they've been struggling in the last day; this waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
-  // A pull on a hard day: a check-in Cue started stays held, bounded by the same cap as the hold itself (heldForMood). Their pull asked
-  // for what's waiting, so the finds and offers in it go (2026-11-09: a hard day never switches off the connection side).
-  if (opts.pulled && heldForMood(state) && candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload) === "checkin") {
-    checks.push({ name: "hard_day", pass: false, reason: `a hard day: a pull delivers what they asked for and what's waiting for them; a check-in waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
+  // A pull on a hard day delivers what they asked for, and the finds and offers waiting for them, each judged by the send-time read as
+  // usual (2026-11-09: a hard day never switches off the connection side; harness/momentFit.ts hardDayRead). Anything else Cue started (a
+  // check-in, an announcement, an intro nudge, a product note) keeps its rule: held, bounded by the same cap as the hold (heldForMood).
+  const pullCls = candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload);
+  if (opts.pulled && heldForMood(state) && isUnrequested(pullCls) && !STR.hardDayRead(pullCls, c.type, c.payload)) {
+    checks.push({ name: "hard_day", pass: false, reason: `a hard day: a pull delivers what they asked for and the finds and offers waiting for them; the rest waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
   // No class hold on a hard day for a find or an offer Cue starts (Royce, 2026-11-08 for announcements; 2026-11-09 for finds and offers:
   // "a hard-day read is a reason to be more thoughtful, not a blanket reason to go silent"). Each one goes to the send-time read, told of
