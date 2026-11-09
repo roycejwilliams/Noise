@@ -10,4 +10,10 @@ export const LUMA_LIVE_SUBMIT_APPROVED = false as boolean;
 // mentions registering (its sheet still says it can't register them), so no prompt changes.
 export const REGISTRATION_COPY_APPROVED = false as boolean;
 
-export const registrationLive = (o: { submit?: boolean; copy?: boolean } = {}) => (o.submit ?? LUMA_LIVE_SUBMIT_APPROVED) && (o.copy ?? REGISTRATION_COPY_APPROVED);
+// Tests only (never read from the environment): a layer 1 test drives the live paths with this, the way setYesJudgeForTests stands in
+// for the yes read. Nothing in src sets it.
+let liveForTests: boolean | null = null;
+export function setRegistrationLiveForTests(v: boolean | null): void {
+  liveForTests = v;
+}
+export const registrationLive = (o: { submit?: boolean; copy?: boolean } = {}) => liveForTests ?? ((o.submit ?? LUMA_LIVE_SUBMIT_APPROVED) && (o.copy ?? REGISTRATION_COPY_APPROVED));

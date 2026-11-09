@@ -77,8 +77,8 @@ export const revealedLead = (n: number) => (n === 1 ? "Signing in showed one mor
 
 export const codeAsk = (c: Ctx, when: "sign_in" | "after_submit") =>
   when === "sign_in"
-    ? `Luma sent a sign-in code to ${c.email}. What's the code? I'll use it once and won't keep it.`
-    : `Luma sent a code to ${c.email} to confirm the signup. What's the code? I'll use it once and won't keep it.`;
+    ? `Luma sent a sign-in code to ${c.email}. What's the code? I'll use it for this signup. Cue won't save the code.`
+    : `Luma sent a code to ${c.email} to confirm the signup. What's the code? I'll use it for this signup. Cue won't save the code.`;
 export const codeAgain = "That code didn't go through. Could you check the latest email from Luma and send the code again?";
 export const memberStepAsk = () => "Luma wants you to confirm from your email before the signup goes through. Tell me once you have, and I'll check the page.";
 export const sessionExpired = (c: Ctx, submitted: boolean) =>
@@ -109,7 +109,7 @@ export function outcomeLine(c: Ctx, state: "registered" | "pending_approval" | "
 }
 
 // Before any retry: Luma's own page is read signed in as them, so it needs the code Luma emails them.
-export const reconcileCodeAsk = (c: Ctx) => `Before I try again, I'll check with Luma whether the first one went through. Luma sent a sign-in code to ${c.email}. What's the code? I'll use it once and won't keep it.`;
+export const reconcileCodeAsk = (c: Ctx) => `Before I try again, I'll check with Luma whether the first one went through. Luma sent a sign-in code to ${c.email}. What's the code? I'll use it for this signup. Cue won't save the code.`;
 // The reconcile couldn't tell: nothing is sent again.
 export const cannotConfirm = (c: Ctx) => `I couldn't confirm whether the signup for ${ev(c)} went through, so I won't submit it again. Luma's confirmation email to ${c.email}, or the event page when you're signed in, will show it.\n${c.link}`;
 export const retryAsk = (c: Ctx) => `Still nothing confirming ${ev(c)}. Want me to submit it once more? If the first one went through, Luma should say you're already registered.`;

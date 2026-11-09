@@ -702,6 +702,20 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
   };
 }
 
+// Pure: a removed signup answer taken out of everything that repeats it: the scope's shared values, the ask's text, Cue's drafts.
+export const REMOVED_MARK = "[removed]";
+export function scrubSignupValue(r: { scope: any; askText: string | null; drafts: any }, fieldId: string, value: string): { scope: any; askText: string | null; drafts: any[] } {
+  const v = String(value ?? "");
+  const cut = (t: unknown) => (typeof t === "string" && v ? t.split(v).join(REMOVED_MARK) : t);
+  const scope = typeof r.scope === "string" ? JSON.parse(r.scope) : r.scope;
+  const drafts = typeof r.drafts === "string" ? JSON.parse(r.drafts) : r.drafts;
+  return {
+    scope: scope && typeof scope === "object" ? { ...scope, shares: (Array.isArray(scope.shares) ? scope.shares : []).map((s: any) => (s?.value === v ? { ...s, value: REMOVED_MARK } : { ...s, value: cut(s?.value) })) } : scope ?? null,
+    askText: (cut(r.askText) as string | null) ?? null,
+    drafts: (Array.isArray(drafts) ? drafts : []).filter((d: any) => d?.fieldId !== fieldId && !(v && String(d?.text ?? "").includes(v))),
+  };
+}
+
 // Pure: their saved signup answers, per registration, factual details apart from event answers.
 export function signupsOf(rows: any[], factualKinds: ReadonlySet<string>): NonNullable<RawKnown["signups"]> {
   return (Array.isArray(rows) ? rows : []).map((r: any) => {
@@ -1027,7 +1041,14 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const x = g?.answers.find((y) => hashOf(y.fieldId) === b);
       if (!g || !x) return { why: "it's no longer on file" };
       if (action === "correct") return { why: "a signup answer can only be removed; a new one is given at the next signup" };
-      await must(`UPDATE event_registrations SET answers = answers - $3::text, updated_at = NOW() WHERE user_id = $1 AND id = $2::uuid AND answers ? $3::text`, [userId, a, x.fieldId]);
+      // Removed is deleted (ruling B): the value also leaves the scope their yes was read against, the ask that showed it, and any
+      // draft of it. The scope's hash stays as its fingerprint (a later submit then sees a change and asks again).
+      const kept = (await db.query(`SELECT scope, ask_text, drafts FROM event_registrations WHERE user_id = $1 AND id = $2::uuid`, [userId, a])).rows?.[0] ?? {};
+      const scrubbed = scrubSignupValue({ scope: kept.scope ?? null, askText: kept.ask_text ?? null, drafts: kept.drafts ?? [] }, x.fieldId, x.value);
+      await must(
+        `UPDATE event_registrations SET answers = answers - $3::text, scope = $4::jsonb, ask_text = $5, drafts = $6::jsonb, updated_at = NOW() WHERE user_id = $1 AND id = $2::uuid AND answers ? $3::text`,
+        [userId, a, x.fieldId, scrubbed.scope == null ? null : JSON.stringify(scrubbed.scope), scrubbed.askText, JSON.stringify(scrubbed.drafts)],
+      );
       return { ref: item.ref, source: "signup", was: x.factual ? `${x.label}: ${x.value}` : `an answer for ${g.event}`, now: null };
     }
     case "summary": {
