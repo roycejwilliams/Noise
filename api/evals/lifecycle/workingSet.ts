@@ -278,7 +278,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const dup = W.applyChange([ev("A"), ev("A")], { remove: new Set(), replace: new Map([[k(ev("A").match), { ...ev("A"), unread: { days: [TODAY], why: "unknown" } }]]) }, k);
   check("two items under one key are replaced once, not copied", dup.length === 1);
   const sf = src("services/sweepFind.ts");
-  check("an ask whose queries are refused or that searches nothing still counts its run; an outage doesn't", /searched: searched \|\| !blocked/.test(sf) && (sf.match(/blocked = true;/g) ?? []).length === 5);
+  check("an ask whose queries are refused or that searches nothing still counts its run; an outage doesn't", /searched: ranClean\(\{ searched, blocked, loopFailed \}\)/.test(sf) && /return o\.searched \|\| \(!o\.blocked && !o\.loopFailed\);/.test(sf) && (sf.match(/blocked = true;/g) ?? []).length === 5);
   check("a goal set aside only when the change really happened", /const changed = await deps\.setState\([\s\S]{0,120}\.catch\(\(\) => false\);\s*if \(changed !== false\) \{\s*setAside\.push/.test(src("services/goalEdges.ts")));
 }
 

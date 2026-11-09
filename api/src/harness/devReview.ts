@@ -92,6 +92,7 @@ export type FlagType =
   | "cold_start_miss"
   | "goal_read_failed"
   | "goals_starved"
+  | "search_failing"
   | "call_flagged"
   | "elevenlabs_delete_stuck"
   | "call_never_started"
@@ -108,6 +109,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   cold_start_miss: "New member's sweep found nothing for them",
   goal_read_failed: "Goal sweep couldn't read their goals (whole or in part)",
   goals_starved: "Goal finds starved while asks took every slot",
+  search_failing: "An ask or goal's daily search failed days in a row (lost days, not empty ones)",
   search_sent_nothing: "Search sent nothing",
   found_but_turned_away: "Search found real ones but turned all away",
   stretch_send: "Sent a near-miss with a caveat",
@@ -234,6 +236,8 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     // The goal sweep's read of their goals didn't come back whole (services/goalEdges.ts, 2026-10-09: a cut-off read used to log as "searching").
     if (d.decision === "goal_sweep.plan" && (d.action === "read_failed" || d.action === "read_cut_off"))
       add(d, "goal_read_failed", d.action === "read_failed" ? "high" : "medium", `${d.action === "read_failed" ? "no goals read" : `${p.goalsRead ?? "?"} of ${p.goalsLive ?? "?"} goals read`}${p.searching ? "; searched the rest of what it had" : "; nothing searched from their goals"}`, d.reason ?? "no reason logged", !!d.reason);
+    // The same ask or goal failed its daily search SWEEP_FAILING_DAYS days in a row or more (services/dailySweep.ts, 2026-11-09).
+    if (d.decision === "sweep.failing_again") for (const i of Array.isArray(p.items) ? p.items : []) add(d, "search_failing", "high", `${i.kind ?? "item"} "${String(i.text ?? "?").slice(0, 80)}" failed ${i.days ?? "?"} days in a row`, String(i.why ?? d.reason ?? "no reason logged"), !!(i.why || d.reason));
     if (d.decision === "sweep.goals_starved") add(d, "goals_starved", "medium", `${p.days ?? "?"} days with no goal find, ${p.askSends ?? "?"} ask finds sent, ${p.activeGoals ?? "?"} active goals`, d.reason ?? "no reason logged", !!d.reason);
     if (d.decision === "turn.latency" && Array.isArray(d.checks) && d.checks.some((c: any) => c.pass === false)) {
       const secs = Math.round((p.ms ?? 0) / 1000);

@@ -28,6 +28,45 @@ export const DAILY_SWEEP_HOUR = 9;
 // A failed day is run again on a later hour, at most this many failed runs a day.
 export const DAILY_SWEEP_ERRORS_PER_DAY = 3;
 export const DAILY_SWEEP_CONCURRENCY = 3;
+// A search that fails day after day loses those days quietly (2026-11-05 to 11-08: one member's ask failed every retry four days running
+// and nothing said so). After the day's last retry, an ask or goal that has now failed this many days in a row is flagged
+// (sweep.failing_again): the dev review's "what broke" and the team's /sweeps page show it. A failure is never an empty run.
+export const SWEEP_FAILING_DAYS = 2;
+// Pure: for each item key ("ask:<id>", "goal:<id>") that failed today, how many calendar days in a row it has failed, today included.
+// earlier: earlier days' sweep.daily records, newest first; a day counts by its own last record (a later retry that searched it wins).
+// A day with no record (tapered, or nothing ran) ends the run of days.
+export function failingStreaks(today: string, failedKeys: string[], earlier: { day: string; items: { kind?: string; id?: string; status?: string }[] }[]): Map<string, number> {
+  const lastOfDay = new Map<string, Map<string, string>>();
+  for (const r of earlier) {
+    if (!r?.day || r.day >= today || lastOfDay.has(r.day)) continue;
+    lastOfDay.set(r.day, new Map((Array.isArray(r.items) ? r.items : []).map((i) => [`${i.kind}:${i.id}`, String(i.status ?? "")])));
+  }
+  const out = new Map<string, number>();
+  for (const key of failedKeys) {
+    let n = 1;
+    let day = DateTime.fromISO(today).minus({ days: 1 }).toISODate()!;
+    while (lastOfDay.get(day)?.get(key) === "error") {
+      n++;
+      day = DateTime.fromISO(day).minus({ days: 1 }).toISODate()!;
+    }
+    out.set(key, n);
+  }
+  return out;
+}
+// After the day's last failed retry: the items that have failed SWEEP_FAILING_DAYS days in a row or more, recorded once for the day.
+async function flagFailingAgain(userId: string, day: string, items: ItemResult[]): Promise<void> {
+  const failedToday = items.filter((i) => i.status === "error");
+  if (!failedToday.length) return;
+  const { rows } = await pool.query(
+    `SELECT proposal->>'day' AS day, proposal->'items' AS items FROM harness_decisions
+      WHERE decision = 'sweep.daily' AND user_id = $1 AND created_at > NOW() - INTERVAL '14 days' AND proposal->>'day' < $2 ORDER BY created_at DESC`,
+    [userId, day],
+  );
+  const streaks = failingStreaks(day, failedToday.map((i) => `${i.kind}:${i.id}`), rows);
+  const repeated = failedToday.map((i) => ({ kind: i.kind, id: i.id, text: i.text.slice(0, 160), why: i.why ?? null, days: streaks.get(`${i.kind}:${i.id}`) ?? 1 })).filter((i) => i.days >= SWEEP_FAILING_DAYS);
+  if (!repeated.length) return;
+  await recordDecision({ layer: 5, decision: "sweep.failing_again", userId, outcome: "skip", action: "error", reason: repeated.map((i) => `${i.kind} "${i.text.slice(0, 60)}" failed ${i.days} days in a row: ${String(i.why ?? "").slice(0, 200)}`).join(" | ").slice(0, 800), proposal: { day, items: repeated } });
+}
 
 // Members a sweep is working on right now (this process: co-test runs one). The hourly ask sweep and this one both claim a member
 // before searching, and skip one that's taken, so the two never search one member's asks at once.
@@ -610,6 +649,8 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
   if (failed.length) {
     const last = errorsToday + 1 >= DAILY_SWEEP_ERRORS_PER_DAY;
     await writeDaily(userId, "skip", "error", `${failed.join(" | ").slice(0, 800)}${last ? " (the day's last retry: no more runs today)" : " (run again next hour)"}`, proposal);
+    // The day is lost for what failed: one that failed on the days before it too is flagged (SWEEP_FAILING_DAYS).
+    if (last && base.trigger !== "manual") await flagFailingAgain(userId, base.day, items).catch((err: any) => console.error(`Daily sweep: the repeated-failure read failed for ${userId} (non-fatal):`, err?.message ?? err));
     // What did get searched is in the pool: the picker still runs for it.
     if (searchedAny && !o.quiet) await sendMorningFinds(userId, base.day);
     return;
@@ -768,6 +809,11 @@ function rollupFloorDay(records: { outcome: string; action: string; reason: stri
   return dayOver ? { status: "silent", detail: "no record at all for this day: the sweep never ran for them", ...counts } : { status: "not yet", detail: "9am has passed and it hasn't run yet; it runs at the top of the hour", ...counts };
 }
 
+// Pure: the /sweeps line for a day's repeated failures (sweep.failing_again items), by kind and id with the days in a row; null for none.
+export function failingAgainNote(items: unknown): string | null {
+  const list = Array.isArray(items) ? items : [];
+  return list.length ? `failing ${SWEEP_FAILING_DAYS}+ days in a row: ${list.map((i: any) => `${i.kind} ${String(i.id ?? "").slice(0, 8)} (${i.days ?? "?"} days)`).join(", ")}` : null;
+}
 export async function dailySweepRollup(days = 14, now = new Date()): Promise<RollupRow[]> {
   const { rows: members } = await pool.query(`SELECT u.id, u.first_name, u.last_name FROM users u WHERE u.archived_at IS NULL AND u.phone_number IS NOT NULL AND u.phone_number NOT LIKE '%#%' AND u.invite_verified = true ORDER BY u.created_at`);
   const { rows: recs } = await pool.query(
@@ -781,6 +827,11 @@ export async function dailySweepRollup(days = 14, now = new Date()): Promise<Rol
   // Picker claim checks that couldn't run (services/sweepShadow.ts): counted per member per day on the team list.
   const { rows: checkFails } = await pool.query(
     `SELECT user_id, proposal->>'day' AS day, COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'picker.claim_check_failed' AND created_at > NOW() - ($1 || ' days')::interval GROUP BY 1, 2`,
+    [String(days + 1)],
+  ).catch(() => ({ rows: [] as any[] }));
+  // An ask or goal that failed SWEEP_FAILING_DAYS days in a row or more (flagFailingAgain): by kind and id, never the member's words.
+  const { rows: failingAgain } = await pool.query(
+    `SELECT user_id, proposal->>'day' AS day, proposal->'items' AS items FROM harness_decisions WHERE decision = 'sweep.failing_again' AND created_at > NOW() - ($1 || ' days')::interval`,
     [String(days + 1)],
   ).catch(() => ({ rows: [] as any[] }));
   // Days before the first record anywhere are before this existed: not shown as silent.
@@ -799,7 +850,9 @@ export async function dailySweepRollup(days = 14, now = new Date()): Promise<Rol
       const started = i > 0 || local.hour >= DAILY_SWEEP_HOUR;
       const r = rollupDay(mine, sends, dayOver, started);
       const fails = checkFails.find((f: any) => f.user_id === m.id && f.day === day)?.n ?? 0;
-      out.push({ day, userId: m.id, name: [m.first_name, m.last_name].filter(Boolean).join(" ") || "(no name)", ...r, ...(fails ? { detail: `${r.detail} · picker claim checks that couldn't run: ${fails}` } : {}) });
+      const again = failingAgainNote(failingAgain.find((f: any) => f.user_id === m.id && f.day === day)?.items);
+      const detail = [r.detail, fails ? `picker claim checks that couldn't run: ${fails}` : null, again].filter(Boolean).join(" · ");
+      out.push({ day, userId: m.id, name: [m.first_name, m.last_name].filter(Boolean).join(" ") || "(no name)", ...r, detail });
     }
   }
   return out.sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : a.name.localeCompare(b.name)));
