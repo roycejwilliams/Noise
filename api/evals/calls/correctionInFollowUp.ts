@@ -230,7 +230,8 @@ try {
   prompts = [];
   reply = (p) => (p.includes("carries a correction") ? "SKIP" : "Eight is a good number. Who's the anchor guest?");
   const r = await quiet(() => registry.post_call.draft(candidate, { userId: USER, firstName: "Jordan", phoneNumber: "+15550000000", city: null, timezone: null }));
-  check("a correction never costs them the follow-up: redrafted as today's, nothing carried", "messages" in r && !("meta" in r && r.meta) && prompts.length === 2 && !/carries a correction/.test(prompts[1]), { r, n: prompts.length });
+  // 2026-11-09 (review of #423): it is first tried as the correction alone; only when that is empty too is the follow-up redrafted as today's.
+  check("a correction never costs them the follow-up: the correction alone first, then redrafted as today's, nothing carried", "messages" in r && !("meta" in r && r.meta) && prompts.length === 3 && prompts[1].includes(PC.CORRECTION_ALONE) && !/carries a correction/.test(prompts[2]), { r, n: prompts.length });
   // F1 the whole way: a search on the call found the supper, and a link was sent on it. The reflection is told what was done; the
   // Tartine correction never rides; the SKIP retry keeps the done list.
   reset();
@@ -252,7 +253,7 @@ try {
   prompts = [];
   reply = (p) => (p.includes("carries a correction") ? "SKIP" : "Eight is a good number. Who's the anchor guest?");
   await quiet(() => registry.post_call.draft(candidate, { userId: USER, firstName: "Jordan", phoneNumber: "+15550000000", city: null, timezone: null }));
-  check("the SKIP retry carries the done list (only the correction drops)", prompts.length === 2 && !/carries a correction/.test(prompts[1]) && /done_on_the_call_already_never_mention_resend_or_offer_again: [^\n]*the link to Rooftop Jazz Night/.test(prompts[1]), prompts.length);
+  check("the SKIP retry carries the done list (only the correction drops)", prompts.length === 3 && !/carries a correction/.test(prompts[2]) && /done_on_the_call_already_never_mention_resend_or_offer_again: [^\n]*the link to Rooftop Jazz Night/.test(prompts[2]), prompts.length);
   // The done list can't be read: no correction rides.
   store.ledger = "fail";
   prompts = [];

@@ -1112,7 +1112,8 @@ export const proactiveRegistry: ProactiveRegistry = {
       const r = await draftPostCall(c.userId, person.firstName, c.payload.followUpId);
       // The call corrections this draft was written with ride to onSent, so only those are marked delivered.
       // Its SKIP is a judgment about the content (POST_CALL_TASK: the call already landed it, the texts since covered it, or there's
-      // nothing to add), so it is a fit skip: never a mood wait, and never the mood fallback line in its place (Royce, 2026-11-09:
+      // nothing to add), so it is a fit skip: never a mood wait (harness/proactive.ts firstDraftMoodWait excludes POST_CALL_SKIP), and
+      // never the mood fallback line in its place (Royce, 2026-11-09:
       // a hard day doesn't justify an automatic comforting text).
       return r ? { messages: [r.text], text: r.text, rules: r.rules, ...(r.corrections.length ? { meta: { callCorrectionIds: r.corrections.map((x) => x.id) } } : {}) } : skip(POST_CALL_SKIP);
     },

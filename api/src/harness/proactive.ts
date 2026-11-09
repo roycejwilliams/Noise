@@ -430,9 +430,13 @@ export function firstMoodWait(c: Pick<Candidate, "payload">, s: Pick<PickState, 
 // SKIP waits: a skip code decided (the state changed, Cue owns the thread, a guard) is never a mood. Past its wait, a SKIP while they're
 // still struggling sends the approved fallback line instead (moodFallbackDecision); otherwise it's a normal skip.
 const MODEL_SKIP = /^model chose SKIP/;
+// The post-call text's SKIP (jobs/postCallFollowUp.ts POST_CALL_TASK, 2026-11-09): "nothing to add" is a judgment about the content, so
+// it is never a mood wait (no paid redraft) and never the fallback line; on a hard day that silence stays silence.
+export const POST_CALL_SKIP = "model chose SKIP: nothing to add after the call that it or the texts since didn't already cover";
 // Pure: whether this skip is the draft's one mood wait.
 export function firstDraftMoodWait(c: Pick<Candidate, "payload">, skip: string, s: Pick<PickState, "needsCare" | "moodHold">): boolean {
   const p = (c.payload ?? {}) as { moodDraftSkipAt?: string; moodSkipAt?: string };
+  if (skip === POST_CALL_SKIP) return false;
   return MODEL_SKIP.test(skip) && heldForMood(s) && !p.moodDraftSkipAt && !p.moodSkipAt;
 }
 // Pure: a draft-skip wait (null: none). Held while the hard day's hold is on and the wait is under the cap; released when they're okay

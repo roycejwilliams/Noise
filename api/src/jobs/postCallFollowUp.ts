@@ -149,7 +149,10 @@ async function owedCorrections(userId: string, transcript: string, k: MemberKnow
 }
 
 // Model-facing (never a line the member reads as is): how the follow-up carries a correction. A principle, no examples.
-export const CALL_CORRECTION_TASK = `This text also carries a correction, once. On the call you said something that doesn't hold (what_you_said_on_the_call_that_was_wrong, with why). Take it back in your own voice, plainly and briefly: make clear which thing it was so they recognize it, say it doesn't hold, and if it changes what they might do, say that much. Put it first or weave it into the follow-up, whichever reads more naturally; the follow-up itself still goes as above. Own it lightly as yours: no apology spiral, never how you found out, and never mention checks, records, notes, reviews or anything behind the scenes. Refer to it by what it was about; never repeat its made-up specifics (names, days, times, numbers) as if they could still hold, and never put anything in its place that CONFIRMED_FACTS doesn't have. This is the one place you may bring up your own words from the call. If you would SKIP the follow-up, SKIP.`;
+export const CALL_CORRECTION_TASK = `This text also carries a correction, once. On the call you said something that doesn't hold (what_you_said_on_the_call_that_was_wrong, with why). Take it back in your own voice, plainly and briefly: make clear which thing it was so they recognize it, say it doesn't hold, and if it changes what they might do, say that much. Put it first or weave it into the follow-up, whichever reads more naturally; the follow-up itself still goes as above. Own it lightly as yours: no apology spiral, never how you found out, and never mention checks, records, notes, reviews or anything behind the scenes. Refer to it by what it was about; never repeat its made-up specifics (names, days, times, numbers) as if they could still hold, and never put anything in its place that CONFIRMED_FACTS doesn't have. This is the one place you may bring up your own words from the call. Never SKIP a text that carries a correction: if there's no follow-up worth sending, send the correction on its own.`;
+// Model-facing: the one retry when a correcting draft still came back empty (2026-11-09 review of #423: silence is valid for the
+// follow-up, never for a correction Cue owes). Only the correction, phrased by Cue from what_you_said_on_the_call_that_was_wrong.
+export const CORRECTION_ALONE = `This time send only the correction, on its own, in a sentence or two: no follow-up, no question.`;
 
 // The sections the post-call text reads from the layer.
 export const POST_CALL_SECTIONS = ["delivered", "carrying", "lessons", "corrections", "claims", "restraint", "exchanges"] as const;
@@ -227,7 +230,7 @@ What you say about them comes only from what THEY said on the call (never Cue's 
 Never announce or imply that you were thinking about it or took time with it ("Been thinking about", "Still turning over", "Kept thinking"); just say it. Call the product Cue, never "Compatible" or "Noise", even if they did. Anything Cue said on the call it would send, find or look into arrives in its own message when it's real (Royce, 2026-10-08: silence until there's something real, then one message): never mention it here, not that it's coming, not that you're on it, not that nothing turned up. Write about something else they said. Never narrate your own state or process ("starting", "working on", "on it", "looking into", "in progress"), and never make sending their own thing depend on your judgment ("once it's worth sending", "nothing good enough"). Write straight to them as "you", never their name in the third person. ${CHECKIN_TONE} Reread it before you answer: it has to make complete sense to someone reading it cold. Never recap the whole call, never mention scheduling or logistics. If the transcript has nothing real from them (for example Cue did all the talking), return SKIP.`;
 
 // The reason a post-call SKIP is recorded with. It names why, so the dispatch reads it as a fit skip (harness/proactive.ts FIT_SKIP).
-export const POST_CALL_SKIP = "model chose SKIP: nothing to add after the call that it or the texts since didn't already cover";
+export { POST_CALL_SKIP } from "../harness/proactive.js";
 
 // Code backs the task's one hard line (a draft's checks, harness/proactive.ts checkDraft): a text after a call never offers to
 // introduce or connect them with someone. Advice to talk to someone they named ("talk to your cofounder first") passes.
@@ -246,6 +249,8 @@ export async function draftPostCallText(
   doneOnCall: string[] = [],
   // What this call's audit found Cue got wrong on it, to take back once in this text (owedCorrections). None: the request is today's.
   corrections: CallCorrection[] = [],
+  // The retry that carries the correction alone (CORRECTION_ALONE), after a correcting draft came back empty.
+  alone = false,
 ): Promise<{ text: string; rules: OutputRules; corrections: CallCorrection[] } | null> {
   const correcting = corrections.length > 0;
   const text = await draftProactive({
@@ -267,10 +272,16 @@ export async function draftPostCallText(
     maxSentences: correcting ? 4 : 3,
     // The call that just ended is fresh: what THEY said in it can back a day. The background is only who they are.
     freshKeys: ["call_transcript"],
-    task: `${POST_CALL_TASK}${correcting ? `\n\n${CALL_CORRECTION_TASK}` : ""}${knowledge ? `\n\n${postCallKnowledgeSection(knowledge)}` : ""}`,
+    task: `${POST_CALL_TASK}${correcting ? `\n\n${CALL_CORRECTION_TASK}` : ""}${alone ? `\n\n${CORRECTION_ALONE}` : ""}${knowledge ? `\n\n${postCallKnowledgeSection(knowledge)}` : ""}`,
   });
-  // A correction never costs them their follow-up: a draft with one that came back empty (SKIP, or a specific it couldn't back) is
-  // written once more exactly as today's, and the correction waits for the next text.
+  // A correction is never dropped by a SKIP (review of #423): a correcting draft that came back empty is written once more as the
+  // correction alone. Only if that also fails (a specific it couldn't back) does it fall back to today's follow-up, the correction
+  // waiting for the next text, as before.
+  if (!text && correcting && !alone) {
+    const only = await draftPostCallText(firstName, transcript, contextSummary, promiseResults, claims, confirmationSent, knowledge, doneOnCall, corrections, true);
+    if (only) return only;
+  }
+  if (!text && correcting && alone) return null;
   if (!text && correcting) return draftPostCallText(firstName, transcript, contextSummary, promiseResults, claims, confirmationSent, knowledge, doneOnCall);
   if (!text) return null;
   return { text, rules: correcting ? { maxSentences: 4, maxChars: 460, forbidden: [POST_CALL_NO_INTRO] } : { maxSentences: 3, maxChars: 360, forbidden: [POST_CALL_NO_INTRO] }, corrections };
