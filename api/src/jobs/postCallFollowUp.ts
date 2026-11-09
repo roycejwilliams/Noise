@@ -6,10 +6,11 @@ import { DateTime } from "luxon";
 import { KINDS } from "../services/factLabels.js";
 import { memberKnowledge, memberRules, type MemberKnowledge } from "../services/memberKnowledge.js";
 import { localStamp } from "../services/memberTime.js";
+import { CHECKIN_TONE } from "../services/coVoice.js";
 import { callCorrectionsFor, correctionFact, planCarry, retireCallCorrections, saidDay, uncorrectedClaims, type CallCorrection } from "../harness/callGrounding.js";
 import type { DoneItem, FoundOnCall } from "../services/callLedger.js";
 
-// Relationship text after a call: one real thought from what they said.
+// Relationship text after a call: one real thought from what they said, or nothing (POST_CALL_TASK, 2026-11-09).
 //
 // Layer 7 (2026-09-14): the old job waited a random 2h-2d, then sent on its
 // own, and live that meant four texts in one 9-second burst, 3-5 days late.
@@ -203,6 +204,35 @@ export function postCallKnowledgeSection(k: MemberKnowledge): string {
 // queue as a post_call candidate with payload.recapHeldAt: isHeldRecap lets the registry close it without a draft.
 export const isHeldRecap = (c: { type: string; payload: unknown }) => c.type === "post_call" && !!(c.payload as { recapHeldAt?: string } | null)?.recapHeldAt;
 
+// Model-facing: what the text after a call is for (Royce, 2026-11-09, considered follow-through). Cue works out what they actually
+// asked or struggled with and what they wanted from the call, then sends the one thing that helps them move: its own grounded take,
+// a next step that's theirs, a reflection when they mostly needed to say it, or nothing. Venting and wanting help aren't separate
+// boxes; the human moment comes first. A tentative read is theirs to correct; a deeper problem they never voiced is never named.
+// No person, event, community or introduction is suggested here: none of those could be checked for fit or currency from this
+// draft's facts, and each reaches them through its own checked path (matching with both yeses, a look-out's verified find).
+export const POST_CALL_TASK = `You just got off a call with them. Before you write, work out from what THEY said on the call: what they actually asked about or struggled with, what they wanted from talking it through (to be heard, to think out loud, or help to move), and whether the call already got them there. What you know about them from before may shape your thinking where it changes the answer.
+
+Then send the one thing a thoughtful friend who was really listening would send now, or nothing. It can be:
+- your own grounded take on what they're weighing, or one next step that's theirs to take, when they wanted help or were stuck on a real decision or problem and the call didn't already land it. A take is enough on its own; a question is optional.
+- a short reflection of what stood out to them, when they mostly needed to say it. Receive it; no advice they didn't ask for.
+- a question that picks up a thread they left open, or where they said they'd carry on by text.
+- nothing. If the call already landed what helps, if your texts with them since the call already covered it, or if all you'd do is say back what they said, return SKIP. Silence is a fine answer.
+
+These aren't separate boxes: someone can be upset and still want a way forward. Receive what they felt first, in a few of your own words, then the take if they want one. Never push a solution at someone who only wanted to be heard, and never hold back a useful one from someone who clearly wanted it. Never send a bare question.
+
+If you read something under what they said, offer it tentatively, as yours to be corrected, and only from what they actually said. Never name a deeper problem, motive or feeling they didn't express.
+
+What you say about them comes only from what THEY said on the call (never Cue's own lines, never background they didn't say on the call): what you knew before can shape your take, but never restate it as something they said. Never credit them with a question that was Cue's. Advice is a thought, not an order: plain words, no lists, no lecturing, specific to them, never a line that would fit anyone. Don't steer it toward meeting someone or going to an event unless that's what they were asking about, and never name or suggest a specific person, event, community or introduction here. Don't offer to keep an eye out, watch for, or look for anything.
+
+Never announce or imply that you were thinking about it or took time with it ("Been thinking about", "Still turning over", "Kept thinking"); just say it. Call the product Cue, never "Compatible" or "Noise", even if they did. Anything Cue said on the call it would send, find or look into arrives in its own message when it's real (Royce, 2026-10-08: silence until there's something real, then one message): never mention it here, not that it's coming, not that you're on it, not that nothing turned up. Write about something else they said. Never narrate your own state or process ("starting", "working on", "on it", "looking into", "in progress"), and never make sending their own thing depend on your judgment ("once it's worth sending", "nothing good enough"). Write straight to them as "you", never their name in the third person. ${CHECKIN_TONE} Reread it before you answer: it has to make complete sense to someone reading it cold. Never recap the whole call, never mention scheduling or logistics. If the transcript has nothing real from them (for example Cue did all the talking), return SKIP.`;
+
+// The reason a post-call SKIP is recorded with. It names why, so the dispatch reads it as a fit skip (harness/proactive.ts FIT_SKIP).
+export const POST_CALL_SKIP = "model chose SKIP: nothing to add after the call that it or the texts since didn't already cover";
+
+// Code backs the task's one hard line (a draft's checks, harness/proactive.ts checkDraft): a text after a call never offers to
+// introduce or connect them with someone. Advice to talk to someone they named ("talk to your cofounder first") passes.
+export const POST_CALL_NO_INTRO = { pattern: /\b(?:introduce you|intro you|an? intro(?:duction)? (?:to|with)|connect you (?:with|to)|put you in touch|match you (?:with|to))\b/i, reason: "a person or introduction suggested after a call can't be checked for fit here; matching reaches them through its own double opt-in" };
+
 export async function draftPostCallText(
   firstName: string,
   transcript: string,
@@ -237,13 +267,13 @@ export async function draftPostCallText(
     maxSentences: correcting ? 4 : 3,
     // The call that just ended is fresh: what THEY said in it can back a day. The background is only who they are.
     freshKeys: ["call_transcript"],
-    task: `You just got off a call with them. Text the follow-up a thoughtful friend who was really listening would send, and trust your gut on which kind fits this call best. It can be a follow-up question that picks up a thread they left open (or where they said they'd carry on by text), a piece of kind, concrete advice if they were stuck, weighing a decision, or venting, or a short reflection of what stood out to them with one question that shows you got it. Whatever you choose, start with a few of your own words that show you heard them, then the question or the advice; never send a bare question. Don't offer to keep an eye out, watch for, or look for anything. Send the one a friend would most likely send; a real follow-up every time, not a summary. Use only what THEY said on the call (never Cue's own lines, never background they didn't say on the call), and never credit them with a question that was Cue's. When they were stuck or weighing a decision, lean toward giving one concrete, kind thought that helps them see a way forward, and let a question be optional. Advice is a thought, not an order: plain words, no lists, no lecturing. Never announce that you were thinking about it ("Been thinking about", "Still turning over", "Kept thinking"); just say it. Call the product Cue, never "Compatible" or "Noise", even if they did. Anything Cue said on the call it would send, find or look into arrives in its own message when it's real (Royce, 2026-10-08: silence until there's something real, then one message): never mention it here, not that it's coming, not that you're on it, not that nothing turned up. Write about something else they said. Never narrate your own state or process ("starting", "working on", "on it", "looking into", "in progress"), and never make sending their own thing depend on your judgment ("once it's worth sending", "nothing good enough"). Write straight to them as "you", never their name in the third person. Reread it before you answer: it has to make complete sense to someone reading it cold. Never recap the whole call, never mention scheduling or logistics. If the transcript has nothing real from them (for example Cue did all the talking), return SKIP.${correcting ? `\n\n${CALL_CORRECTION_TASK}` : ""}${knowledge ? `\n\n${postCallKnowledgeSection(knowledge)}` : ""}`,
+    task: `${POST_CALL_TASK}${correcting ? `\n\n${CALL_CORRECTION_TASK}` : ""}${knowledge ? `\n\n${postCallKnowledgeSection(knowledge)}` : ""}`,
   });
   // A correction never costs them their follow-up: a draft with one that came back empty (SKIP, or a specific it couldn't back) is
   // written once more exactly as today's, and the correction waits for the next text.
   if (!text && correcting) return draftPostCallText(firstName, transcript, contextSummary, promiseResults, claims, confirmationSent, knowledge, doneOnCall);
   if (!text) return null;
-  return { text, rules: correcting ? { maxSentences: 4, maxChars: 460 } : { maxSentences: 3, maxChars: 360 }, corrections };
+  return { text, rules: correcting ? { maxSentences: 4, maxChars: 460, forbidden: [POST_CALL_NO_INTRO] } : { maxSentences: 3, maxChars: 360, forbidden: [POST_CALL_NO_INTRO] }, corrections };
 }
 
 // The call corrections a post-call text that went out was drafted with (its draft's meta), marked delivered. Nothing else is touched:

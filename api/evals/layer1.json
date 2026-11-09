@@ -184,6 +184,7 @@
     "evals/calls/callTasks.ts",
     "evals/calls/callEvals.ts",
     "evals/calls/postCall.ts",
+    "evals/followThrough/postCallTake.ts",
     "evals/proactive/pause.ts",
     "evals/testmember/simGuard.ts",
     "evals/asks/lifecycle.ts",

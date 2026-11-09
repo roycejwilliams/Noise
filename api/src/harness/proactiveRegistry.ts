@@ -19,7 +19,7 @@ import { solicitationGoals } from "../agent/eventAskSolicitation.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
-import { draftPostCall, isHeldRecap, markCarriedCorrections, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
+import { draftPostCall, isHeldRecap, markCarriedCorrections, markPostCallDropped, markPostCallSent, POST_CALL_SKIP } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
@@ -1111,7 +1111,10 @@ export const proactiveRegistry: ProactiveRegistry = {
       if (isHeldRecap(c)) return skip("recap offers are no longer made");
       const r = await draftPostCall(c.userId, person.firstName, c.payload.followUpId);
       // The call corrections this draft was written with ride to onSent, so only those are marked delivered.
-      return r ? { messages: [r.text], text: r.text, rules: r.rules, ...(r.corrections.length ? { meta: { callCorrectionIds: r.corrections.map((x) => x.id) } } : {}) } : skip("model chose SKIP");
+      // Its SKIP is a judgment about the content (POST_CALL_TASK: the call already landed it, the texts since covered it, or there's
+      // nothing to add), so it is a fit skip: never a mood wait, and never the mood fallback line in its place (Royce, 2026-11-09:
+      // a hard day doesn't justify an automatic comforting text).
+      return r ? { messages: [r.text], text: r.text, rules: r.rules, ...(r.corrections.length ? { meta: { callCorrectionIds: r.corrections.map((x) => x.id) } } : {}) } : skip(POST_CALL_SKIP);
     },
     async onSent(c, _p, messages, meta) {
       if (isHeldRecap(c)) return;
