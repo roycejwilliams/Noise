@@ -28,6 +28,7 @@ import type { Browser, BrowserContext, Page } from "playwright-core";
 import { DateTime } from "luxon";
 import { classifyField, readResultText, canonicalEventUrl, type FormField, type FormRead, type Ticket } from "./registration.js";
 import type { RegistrationDriver, RegistrationSession, SubmitRead } from "./drivers.js";
+import { keepBrowserWhile } from "../browserRead.js";
 
 import { LUMA_LIVE_SUBMIT_APPROVED } from "./approvals.js";
 export { LUMA_LIVE_SUBMIT_APPROVED };
@@ -209,6 +210,22 @@ export async function closeAllHeld(): Promise<void> {
   await Promise.all(all.map((h) => h.session.close().catch(() => {})));
 }
 let shutdownHooked = false;
+// Told when held sessions are lost because their browser went away (crashed, killed, closed): the registrations waiting on them are
+// expired by the caller (before a submit: start over; after one: uncertain). Their pages are gone, so nothing is closed here.
+const lostListeners = new Set<(registrationIds: string[]) => void>();
+export function onHeldLost(fn: (registrationIds: string[]) => void): void {
+  lostListeners.add(fn);
+}
+export function dropHeldFor(session: RegistrationSession): string[] {
+  const ids = [...held.entries()].filter(([, h]) => h.session === session).map(([id]) => id);
+  for (const id of ids) held.delete(id);
+  if (ids.length) for (const fn of lostListeners) { try { fn(ids); } catch {} }
+  return ids;
+}
+// The shared browser's idle close (browserRead.ts, 2 minutes) never ends a page held for their code (up to 10 minutes).
+// Nor ends a registration page that is open right now (reading or submitting).
+let openPages = 0;
+keepBrowserWhile(() => held.size > 0 || openPages > 0);
 export function holdSession(registrationId: string, session: RegistrationSession, now = Date.now()): boolean {
   sweepHeld(now);
   if (!held.has(registrationId) && held.size >= LUMA_LIMITS.heldMax) return false;
@@ -220,6 +237,7 @@ export function holdSession(registrationId: string, session: RegistrationSession
     shutdownHooked = true;
     void import("../shutdown.js").then((S) => S.onShutdown(() => closeAllHeld())).catch(() => {});
   }
+
   return true;
 }
 // Whether a session is held for this registration now (an active code challenge), without taking it.
@@ -261,6 +279,9 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
   let signedIn = false;
   let released = false;
   const free = () => { if (!released) { released = true; release(); } };
+  let counted = true;
+  openPages++;
+  const uncount = () => { if (counted) { counted = false; openPages--; } };
   try {
     const browser = await deps.browser();
     context = await browser.newContext({ userAgent: UA, locale: "en-US", viewport: { width: 1280, height: 900 } });
@@ -291,9 +312,13 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
   } catch (err) {
     await context?.close().catch(() => {});
     free();
+    uncount();
     throw err;
   }
   const ctx = context!;
+  // The browser going away (a crash, a kill, a close) loses this page: if it's held for their code, it's dropped and reported.
+  const theBrowser = ctx.browser();
+  const onGone = () => dropHeldFor(session);
   let button: string | null = null;
   let data: PageData = pageDataFrom(null);
 
@@ -439,10 +464,13 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
       return page.evaluate(() => document.body.innerText ?? "").catch(() => "");
     },
     async close() {
+      theBrowser?.off("disconnected", onGone);
       await ctx.close().catch(() => {});
       free();
+      uncount();
     },
   };
+  theBrowser?.on("disconnected", onGone);
   // A page held for the member's code doesn't keep a page slot from everyone else's reads.
   const hold = session.startSignIn;
   session.startSignIn = async (email) => {

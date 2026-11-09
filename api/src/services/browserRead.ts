@@ -102,10 +102,22 @@ async function slot(): Promise<() => void> {
   };
 }
 
-function getBrowser(): Promise<Browser> {
+// Something that must keep the shared browser open past its idle time (a registration's page held for the member's emailed code,
+// eventRegistration/lumaDriver.ts): while any says so, the idle close waits and checks again.
+const keepers = new Set<() => boolean>();
+export function keepBrowserWhile(keep: () => boolean): void {
+  keepers.add(keep);
+}
+function armIdle(): void {
   if (idle) clearTimeout(idle);
-  idle = setTimeout(() => void closeBrowser(), BROWSER_LIMITS.idleMs);
+  idle = setTimeout(() => {
+    if ([...keepers].some((k) => { try { return k(); } catch { return false; } })) return armIdle();
+    void closeBrowser();
+  }, BROWSER_LIMITS.idleMs);
   idle.unref?.();
+}
+function getBrowser(): Promise<Browser> {
+  armIdle();
   if (!browser) {
     const launching: Promise<Browser> = import("playwright-core").then(({ chromium }) =>
       chromium.launch({ executablePath: chromiumPath(), args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"] }).then((b) => {
