@@ -303,6 +303,40 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
     check(`a real new sentence after Cue's goodbye (${label}): refused (member_spoke_after), the call stays open`, n.ai.of("session.close").length === 0 && refusedWith(n).join() === "member_spoke_after", refusedWith(n));
     n.tw.close();
   }
+  // Review of #427: a short real "wait" right after Cue's goodbye (within 1.2 s of their own goodbye, three words or fewer) is new words,
+  // never the end of their goodbye: only words starting within goodbyeOverlapMs of Cue's line starting can be that.
+  for (const w of ["Oh wait", "Hold on", "One more thing"]) {
+    const n = bridge({ answer: () => "|END", endGraceMs: 30 });
+    await start(n, "live_wait");
+    frag(n, "member", "Okay, bye.", 0, 800);
+    n.ai.in({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "w1", target: "client" } });
+    await sleep(40);
+    frag(n, "cue", "Bye, Jordan.", 900, 1600);
+    frag(n, "member", w, 1900, 2400);
+    await sleep(150);
+    check(`"${w}" about 1 s after Cue's goodbye: refused (member_spoke_after), the call stays open`, n.ai.of("session.close").length === 0 && refusedWith(n).join() === "member_spoke_after", refusedWith(n));
+    n.tw.close();
+  }
+  check("memberAfter: the same short words are the end of their goodbye only when they start within goodbyeOverlapMs of Cue's line", B.memberAfter([{ who: "member", text: "Okay, bye.", startMs: 0, endMs: 800 }, { who: "member", text: "Oh wait", startMs: 1900, endMs: 2400 }], 900).newAt === 1900 && B.memberAfter([{ who: "member", text: "Bye. Have a good", startMs: 0, endMs: 1000 }, { who: "member", text: "one", startMs: 1300, endMs: 1500 }], 1100).newAt === null);
+
+  // Review of #427: a held end lapses (heldEndMs). A turn long after carries no note, and an end there needs a fresh goodbye.
+  check("the hold lapses after a named few seconds", G.GPT_LIVE.heldEndMs === 6000);
+  const stale = bridge({ answer: () => "|END", endGraceMs: 30, heldEndMs: 50, endWaitMs: 80 });
+  await start(stale, "live_stale");
+  frag(stale, "member", "Okay bye.", 0, 800);
+  stale.ai.in({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "h1", target: "client" } });
+  await sleep(40);
+  frag(stale, "cue", "Bye, Jordan.", 1000, 1600);
+  frag(stale, "member", "Cool, cheers.", 3000, 3500);
+  await sleep(120);
+  check("stale hold: their words after the goodbye hold the end", refusedWith(stale).join() === "member_spoke_after" && stale.ai.of("session.close").length === 0, refusedWith(stale));
+  await sleep(80); // past heldEndMs
+  frag(stale, "member", "Anyway, about the lease in Oakland.", 33000, 35000);
+  stale.ai.in({ type: "session.delegation.created", offset_ms: 35000, delegation: { id: "h2", target: "client" } });
+  await sleep(200);
+  check("...a turn 30 s later carries no held-end note", stale.reqs.length === 2 && !JSON.stringify(stale.reqs[1].messages).includes(G.END_HELD_NOTE));
+  check("...and its end needs a fresh goodbye: with none said, it's dropped (no_goodbye), never a hang-up on the old one", stale.ai.of("session.close").length === 0 && refusedWith(stale).join() === "member_spoke_after,no_goodbye", refusedWith(stale));
+  stale.tw.close();
   // A question from Cue still refuses, stray word or not.
   const q = bridge({ answer: () => "|END", endGraceMs: 30 });
   await start(q, "live_q2");

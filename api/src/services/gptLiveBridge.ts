@@ -59,6 +59,7 @@ export type LiveDeps = {
   silenceEndMs: number;
   endGraceMs: number;
   endWaitMs: number;
+  heldEndMs: number;
   openWaitMs: number;
   wordsSettleMs: number;
   amdHoldMs: number;
@@ -98,6 +99,7 @@ const defaults = (): LiveDeps => ({
   silenceEndMs: GPT_LIVE.silenceEndMs,
   endGraceMs: GPT_LIVE.endGraceMs,
   endWaitMs: GPT_LIVE.endWaitMs,
+  heldEndMs: GPT_LIVE.heldEndMs,
   openWaitMs: GPT_LIVE.openWaitMs,
   wordsSettleMs: GPT_LIVE.wordsSettleMs,
   amdHoldMs: GPT_LIVE.amdHoldMs,
@@ -134,9 +136,11 @@ export function endGuard(o: { cueLast: { text: string; startMs: number } | null;
 // Pure: what they said after afterMs on the transcript timeline, on timing and length only (Royce, 10-31: never code reading their words
 // for a goodbye). Their fragments chain into one utterance while each starts within continuationGapMs of the previous one's end. An
 // utterance begun before afterMs whose words after it are continuationMaxWords or fewer is only that utterance's end (speech recognition
-// split "Bye. Have a good" / "one" around Cue's "You too", 2026-11-09), and a listening sound is nothing new either.
+// split "Bye. Have a good" / "one" around Cue's "You too", 2026-11-09), and a listening sound is nothing new either. Such an end must
+// start no later than goodbyeOverlapMs after Cue's line started (lineMs; the real splits were ~100-200 ms): words that begin clearly
+// after Cue's goodbye started ("Oh wait", "Hold on") are always new, however short (review of #427).
 // newAt: where the first new words after afterMs start (null: none). tail: some of their words after afterMs were only such an end.
-export function memberAfter(frags: Frag[], afterMs: number, gapMs: number = GPT_LIVE.continuationGapMs, maxWords: number = GPT_LIVE.continuationMaxWords): { newAt: number | null; tail: boolean } {
+export function memberAfter(frags: Frag[], afterMs: number, lineMs: number = afterMs, gapMs: number = GPT_LIVE.continuationGapMs, maxWords: number = GPT_LIVE.continuationMaxWords, windowMs: number = GPT_LIVE.goodbyeOverlapMs): { newAt: number | null; tail: boolean } {
   const theirs = frags.filter((f) => f.who === "member" && f.text.trim()).sort((a, b) => a.startMs - b.startMs);
   let tail = false;
   for (let i = 0; i < theirs.length; ) {
@@ -148,7 +152,7 @@ export function memberAfter(frags: Frag[], afterMs: number, gapMs: number = GPT_
     if (!after.length) continue;
     const text = after.map((f) => f.text.trim()).join(" ");
     if (listeningSound(text)) continue;
-    if (after.length < u.length && text.split(/\s+/).filter(Boolean).length <= maxWords) { tail = true; continue; }
+    if (after.length < u.length && after[0].startMs <= lineMs + windowMs && text.split(/\s+/).filter(Boolean).length <= maxWords) { tail = true; continue; }
     return { newAt: after[0].startMs, tail };
   }
   return { newAt: null, tail };
@@ -182,7 +186,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   // closing turn's goodbye may start; seenMs: how far into their words the deciding turn had heard (what it heard never holds the end).
   let pendingEnd: { at: number; fromMs: number; seenMs: number } | null = null;
   // An end held because they spoke after the goodbye: their next delegated turn decides again with it (END_HELD_NOTE).
-  let heldEnd: { fromMs: number } | null = null;
+  let heldEnd: { fromMs: number; at: number } | null = null; // at: wall clock of the hold (it lapses after heldEndMs)
   let memberHeardAt: number | null = null; // wall clock of their last transcript fragment
   const heardAt = new WeakMap<Frag, number>(); // wall clock each of their fragments arrived
   let voicemailAt: number | null = null; // when GPT-Live was told to leave a message (Twilio's AMD heard a machine)
@@ -321,9 +325,10 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const seenUpTo = Math.max(offsetMs, ...turns.filter((t) => t.who === "member").map((t) => t.startMs));
     // An end held because they spoke after the goodbye, or one still pending when they've said something new since it was decided
     // (not just the end of the utterance it heard): this turn decides again, told why. A pending end otherwise stands for this turn.
-    let held = heldEnd;
+    // A hold older than heldEndMs has lapsed: this turn is a fresh one, and any end it makes needs a goodbye of its own.
+    let held: { fromMs: number } | null = heldEnd && d.now() - heldEnd.at <= d.heldEndMs ? heldEnd : null;
     heldEnd = null;
-    if (!held && pendingEnd && memberAfter(frags, pendingEnd.seenMs + 1).newAt != null) {
+    if (!held && pendingEnd && memberAfter(frags, Math.max(cueLatest, pendingEnd.seenMs + 1), cueLatest >= 0 ? cueLatest : pendingEnd.seenMs + 1).newAt != null) {
       held = { fromMs: pendingEnd.fromMs };
       pendingEnd = null;
       d.record({ layer: 8, decision: "call.end_refused", userId: call!.userId, outcome: "skip", action: "member_spoke_after", proposal: { provider: "gpt-live", sessionId, redecide: true } });
@@ -542,12 +547,12 @@ export function handleGptLiveStream(twilio: SocketLike): void {
           // Their words after Cue's last line started that the deciding turn hadn't heard, less the split-off end of an utterance begun
           // before it (memberAfter: timing and length only). Such an end isn't them speaking now either.
           const from = Math.max(cueLast?.startMs ?? 0, pend.seenMs + 1);
-          const after = memberAfter(frags, from);
+          const after = memberAfter(frags, from, cueLast?.startMs ?? from);
           const heardLast = frags.reduce<number | null>((m, f) => (f.who === "member" && (after.newAt != null || f.startMs < from) ? Math.max(m ?? 0, heardAt.get(f) ?? 0) : m), null);
           const why = endGuard({ cueLast, memberAfterMs: after.newAt, memberHeardAgoMs: heardLast == null ? null : now - heardLast, graceMs: d.endGraceMs });
           pendingEnd = null;
           // Held because they spoke: their next delegated turn decides again (never dropped silently).
-          if (why === "member_spoke_after" || why === "member_speaking") heldEnd = { fromMs: pend.fromMs };
+          if (why === "member_spoke_after" || why === "member_speaking") heldEnd = { fromMs: pend.fromMs, at: now };
           if (why) return d.record({ layer: 8, decision: "call.end_refused", userId: call.userId, outcome: "skip", action: why, proposal: { provider: "gpt-live", sessionId } });
           close("goodbye", "goodbye");
         }, Math.max(10, Math.min(500, Math.floor(Math.min(d.endGraceMs, d.silenceEndMs) / 4))));
