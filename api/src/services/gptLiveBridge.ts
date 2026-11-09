@@ -23,7 +23,7 @@ import type { OaiRequest } from "./callLlmProxy.js";
 import { isVoicemailGreeting } from "../harness/callGate.js";
 import { anthropicStream, SAFETY_LINE, safetyCall } from "./callLlmProxy.js";
 import { stripCues } from "./voiceCues.js";
-import { cachedCallExchange, delegationRequest, failClassOf, liveCallTools, type ThinkOptions, type LiveToolsFor, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, heldOpeningNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
+import { cachedCallExchange, delegationRequest, failClassOf, hasWords, liveCallTools, type ThinkOptions, type LiveToolsFor, GPT_LIVE, gptLiveVoice, listeningSound, markCall, onAmd, openSessions, OPEN_NO_STOCK, OPEN_NOW, heldOpeningNote, VOICEMAIL_NOW, replyGaps, sayExactly, sessionStart, takeLiveLink, thinkOnCall, turnsFrom, WRAP_UP, writeMinutes, type FailClass, type Frag, type LiveCall, type LiveTurn, type MessageGuard, type Upstream } from "./gptLive.js";
 import { twilioSignatureFor, type SocketLike } from "./mediaStreamBridge.js";
 
 // Twilio's signature on the stream's handshake, over the stream URL (wss://, or its https:// form), with TWILIO_AUTH. Fails closed.
@@ -131,6 +131,29 @@ export function endGuard(o: { cueLast: { text: string; startMs: number } | null;
   return null;
 }
 
+// Pure: what they said after afterMs on the transcript timeline, on timing and length only (Royce, 10-31: never code reading their words
+// for a goodbye). Their fragments chain into one utterance while each starts within continuationGapMs of the previous one's end. An
+// utterance begun before afterMs whose words after it are continuationMaxWords or fewer is only that utterance's end (speech recognition
+// split "Bye. Have a good" / "one" around Cue's "You too", 2026-11-09), and a listening sound is nothing new either.
+// newAt: where the first new words after afterMs start (null: none). tail: some of their words after afterMs were only such an end.
+export function memberAfter(frags: Frag[], afterMs: number, gapMs: number = GPT_LIVE.continuationGapMs, maxWords: number = GPT_LIVE.continuationMaxWords): { newAt: number | null; tail: boolean } {
+  const theirs = frags.filter((f) => f.who === "member" && f.text.trim()).sort((a, b) => a.startMs - b.startMs);
+  let tail = false;
+  for (let i = 0; i < theirs.length; ) {
+    const u = [theirs[i]];
+    let end = theirs[i].endMs;
+    while (i + 1 < theirs.length && theirs[i + 1].startMs - end <= gapMs) { i++; u.push(theirs[i]); end = Math.max(end, theirs[i].endMs); }
+    i++;
+    const after = u.filter((f) => f.startMs >= afterMs);
+    if (!after.length) continue;
+    const text = after.map((f) => f.text.trim()).join(" ");
+    if (listeningSound(text)) continue;
+    if (after.length < u.length && text.split(/\s+/).filter(Boolean).length <= maxWords) { tail = true; continue; }
+    return { newAt: after[0].startMs, tail };
+  }
+  return { newAt: null, tail };
+}
+
 export function handleGptLiveStream(twilio: SocketLike): void {
   const d: LiveDeps = { ...defaults(), ...(override ?? {}) };
   let call: LiveCall | null = null;
@@ -155,9 +178,13 @@ export function handleGptLiveStream(twilio: SocketLike): void {
   let quiet: ReturnType<typeof setInterval> | null = null;
   let lastHeard = t0; // the last words either side said (transcripts), for the silence and goodbye ends
   let safetyMoment = false; // a delegated answer on this call carried a crisis or safety line (out.exact)
-  // Cue's thinking called end_call: hang up once its goodbye has played and endGraceMs passed, if endGuard allows.
-  let pendingEnd: { at: number; fromMs: number } | null = null;
+  // Cue's thinking called end_call: hang up once its goodbye has played and endGraceMs passed, if endGuard allows. fromMs: where this
+  // closing turn's goodbye may start; seenMs: how far into their words the deciding turn had heard (what it heard never holds the end).
+  let pendingEnd: { at: number; fromMs: number; seenMs: number } | null = null;
+  // An end held because they spoke after the goodbye: their next delegated turn decides again with it (END_HELD_NOTE).
+  let heldEnd: { fromMs: number } | null = null;
   let memberHeardAt: number | null = null; // wall clock of their last transcript fragment
+  const heardAt = new WeakMap<Frag, number>(); // wall clock each of their fragments arrived
   let voicemailAt: number | null = null; // when GPT-Live was told to leave a message (Twilio's AMD heard a machine)
   let voicemailMs = 0; // where the session's transcript timeline was then: Cue's words after it are the message
   // Outbound: when a person was confirmed on the line (AMD's human verdict, or their real words once settled); inbound: from the start.
@@ -286,8 +313,22 @@ export function handleGptLiveStream(twilio: SocketLike): void {
     const waitMs = d.now() - at;
     const waitAddedWords = memberEnd() > memberEndBefore;
     const turns = turnsFrom(frags);
-    const theirTurnEnd = turns.filter((t) => t.who === "member").reduce((m, t) => Math.max(m, t.endMs), 0);
+    // Their turn ends where their utterance did: a split-off end of it after Cue's latest line (memberAfter) is still that utterance.
+    const cueLatest = frags.reduce((m, f) => (f.who === "cue" ? Math.max(m, f.startMs) : m), -1);
+    const split = cueLatest >= 0 ? memberAfter(frags, cueLatest) : null;
+    const splitEnd = !!split && split.newAt == null && split.tail;
+    const theirTurnEnd = frags.reduce((m, f) => (f.who === "member" && (!splitEnd || f.startMs < cueLatest) ? Math.max(m, f.endMs) : m), 0);
     const seenUpTo = Math.max(offsetMs, ...turns.filter((t) => t.who === "member").map((t) => t.startMs));
+    // An end held because they spoke after the goodbye, or one still pending when they've said something new since it was decided
+    // (not just the end of the utterance it heard): this turn decides again, told why. A pending end otherwise stands for this turn.
+    let held = heldEnd;
+    heldEnd = null;
+    if (!held && pendingEnd && memberAfter(frags, pendingEnd.seenMs + 1).newAt != null) {
+      held = { fromMs: pendingEnd.fromMs };
+      pendingEnd = null;
+      d.record({ layer: 8, decision: "call.end_refused", userId: call!.userId, outcome: "skip", action: "member_spoke_after", proposal: { provider: "gpt-live", sessionId, redecide: true } });
+    }
+    const closedEarlier = !!held || !!pendingEnd;
     let dropped = 0, error = false;
     // Each of Cue's tools this turn: its name, time and how it came back (no words), for the latency record.
     const toolRuns: { name: string; ms: number; outcome: "done" | "not_done" | "still_running" }[] = [];
@@ -320,7 +361,7 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       burst = null;
       const text = spoken(pending);
       pending = "";
-      if (!text || cut || finished || voicemailAt != null) return;
+      if (!hasWords(text) || cut || finished || voicemailAt != null) return;
       if (movedOn()) { cut = true; return; }
       if (sentChars + text.length > GPT_LIVE.commentaryMaxChars) return;
       sentChars += text.length;
@@ -361,6 +402,8 @@ export function handleGptLiveStream(twilio: SocketLike): void {
       carry: carry.splice(0),
       onCapped: (unsaid) => { carry = unsaid; },
       onTool: (t) => { toolRuns.push({ name: t.name, ms: t.ms, outcome: t.timedOut ? "still_running" : (t.result as any)?.ok === false ? "not_done" : "done" }); },
+      closedEarlier,
+      endHeld: !!held,
     }).catch((err: any) => { error = true; d.log(`gpt-live: delegation ${id} failed: ${err?.message ?? err}`); return { text: "", timing: null, safety: false, exact: false, endCall: false, streamed: false, stopped: false, ran: [] as string[], tools: false }; });
     const streamed = out.streamed || appends > 0 || !!exactRest;
     // The last sentences, written together at the end: sent now, unless the thinking ended the call (its goodbye is GPT-Live's own).
@@ -402,7 +445,8 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         firstSendMs ??= d.now() - at;
       } else if (!out.text && !appends) send(ai, noAnswer);
     }
-    if (out.endCall && !finished && !movedNow && !onVoicemail) pendingEnd = { at: d.now(), fromMs };
+    // A re-decided end keeps the goodbye already said (held.fromMs); an end on top of a pending one keeps the earlier goodbye.
+    if (out.endCall && !finished && !movedNow && !onVoicemail) pendingEnd = { at: d.now(), fromMs: held ? held.fromMs : Math.min(fromMs, pendingEnd?.fromMs ?? fromMs), seenMs: seenUpTo };
     if (error) d.record({ layer: 8, decision: "call.turn_health", userId: c.userId, outcome: "skip", action: "error", proposal: { provider: "gpt-live", slow: false, error: true } });
     // firstSendMs: from the handover to the first words of the answer reaching GPT-Live (streamed), the number the caller waits on.
     d.record({ layer: 8, decision: "call.turn_latency", userId: c.userId, outcome: "act", action: "gpt_live", proposal: { provider: "gpt-live", sessionId, waitMs, lagMs, waitAddedWords, firstTokenMs: out.timing?.upstreamFirstTokenMs ?? null, firstSentenceMs: out.timing?.firstSentenceMs ?? null, firstSendMs, totalMs: d.now() - at, chars: out.text.length, streamed, appends, dropped, stale, error, exact: !!out.exact, heldMs, noteSkipped, endAfterText: out.endCall && appends > 0, toolsOffered: !!out.tools, tools: toolRuns, toolMs: toolRuns.reduce((a, x) => a + x.ms, 0) } });
@@ -497,9 +541,15 @@ export function handleGptLiveStream(twilio: SocketLike): void {
           }
           if (now - lastHeard < d.endGraceMs) return;
           const cueLast = [...turns].reverse().find((t) => t.who === "cue") ?? null;
-          const memberAfter = turns.filter((t) => t.who === "member" && !listeningSound(t.text)).reduce<number | null>((m, t) => Math.max(m ?? -1, t.startMs), null);
-          const why = endGuard({ cueLast, memberAfterMs: memberAfter, memberHeardAgoMs: memberHeardAt == null ? null : now - memberHeardAt, graceMs: d.endGraceMs });
+          // Their words after Cue's last line started that the deciding turn hadn't heard, less the split-off end of an utterance begun
+          // before it (memberAfter: timing and length only). Such an end isn't them speaking now either.
+          const from = Math.max(cueLast?.startMs ?? 0, pend.seenMs + 1);
+          const after = memberAfter(frags, from);
+          const heardLast = frags.reduce<number | null>((m, f) => (f.who === "member" && (after.newAt != null || f.startMs < from) ? Math.max(m ?? 0, heardAt.get(f) ?? 0) : m), null);
+          const why = endGuard({ cueLast, memberAfterMs: after.newAt, memberHeardAgoMs: heardLast == null ? null : now - heardLast, graceMs: d.endGraceMs });
           pendingEnd = null;
+          // Held because they spoke: their next delegated turn decides again (never dropped silently).
+          if (why === "member_spoke_after" || why === "member_speaking") heldEnd = { fromMs: pend.fromMs };
           if (why) return d.record({ layer: 8, decision: "call.end_refused", userId: call.userId, outcome: "skip", action: why, proposal: { provider: "gpt-live", sessionId } });
           close("goodbye", "goodbye");
         }, Math.max(10, Math.min(500, Math.floor(Math.min(d.endGraceMs, d.silenceEndMs) / 4))));
@@ -529,7 +579,9 @@ export function handleGptLiveStream(twilio: SocketLike): void {
         }
         lastHeard = d.now();
         if (member) memberHeardAt = d.now();
-        frags.push({ who: member ? "member" : "cue", text: m.delta, startMs: Number(m.start_ms) || 0, endMs: Number(m.end_ms) || 0 });
+        const frag: Frag = { who: member ? "member" : "cue", text: m.delta, startMs: Number(m.start_ms) || 0, endMs: Number(m.end_ms) || 0 };
+        frags.push(frag);
+        if (member) heardAt.set(frag, d.now());
         if (!member) { memberRun = ""; cleared = false; return; }
         memberRun += m.delta;
         // Two words or more, and not a "yeah" or "mm": they're taking the turn.

@@ -59,6 +59,11 @@ export const GPT_LIVE = {
   amdTimeoutSecs: 30,
   amdHoldMs: 32_000,
   goodbyeOverlapMs: 500, // GPT-Live's goodbye may start this much before the end of their turn and still be the goodbye
+  // Speech recognition splits one utterance ("Have a good" / "one", 2026-11-09): a fragment of theirs starting within this of their previous
+  // fragment's end is the same utterance, and its tail after Cue's line started counts as that utterance's end when it is this many words
+  // or fewer (gptLiveBridge.ts memberAfter). Timing and length only: never what the words say.
+  continuationGapMs: 1200,
+  continuationMaxWords: 3,
   wrapUpMs: 60_000, // how long before a session's cap GPT-Live is asked to wrap up
   guardCacheMs: 20_000, // the live guards are read at most this often per call, as on the ElevenLabs proxy
   preflightTimeoutMs: 3000, // the outbound check of OpenAI's key before dialing
@@ -237,9 +242,11 @@ Do not guess the result while waiting. Never name an event, place, time or perso
 export type OpeningContext = { timeOfDay: string | null; reason: string | null; firstCall?: boolean; theirWords?: string | null; inviter?: string | null; thread?: string | null; askedBy?: CallAskedBy | null };
 // Outbound (review of #333): whoever picks up usually speaks first, so GPT-Live waits for them (the bridge opens it after openWaitMs if
 // nothing comes, or on AMD's human verdict).
-export const OPEN_WHEN_THEY_ANSWER = "When they answer, open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
-export const OPEN_IN_OWN_WORDS = "When the call connects, you speak first: open in your own words, briefly, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
-export const OPEN_NOW = "The call just connected. Open it now, in your own words.";
+export const OPEN_WHEN_THEY_ANSWER = "When they answer, open with one short greeting, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
+export const OPEN_IN_OWN_WORDS = "When the call connects, you speak first: open with one short greeting, the way someone who knows them would, then let them talk. Never a set greeting, and never the background below read out.";
+// One greeting (2026-11-09: an outbound call opened "Morning Royce." then "Hi."): the voice may already have answered their hello by the time
+// this arrives (gptLiveBridge.ts openNow), so it's told not to greet twice. The voice paraphrases a greeting; exact words would need playback.
+export const OPEN_NOW = "The call just connected. Open it now with one short greeting in your own words; if you've already greeted them or answered their hello, don't greet again. Never \"I'm here with you\".";
 // The ElevenLabs opener writer's own rule, copied word for word (the 10-31 smoke opened with "I've been thinking about you").
 export const OPEN_NO_STOCK = `No "how are you", no "good to hear your voice", no "I remember", no "I was thinking about you".`;
 // Royce's 2026-11-04 call review: three calls opened "what's on your mind tonight?", "what's driving your thoughts right now?" and "I'm here,
@@ -319,12 +326,12 @@ export function liveInstructions(o: { firstName: string; direction: "inbound" | 
 // For Claude behind GPT-Live (OpenAI's "Voice conversation context" section, in Cue's terms). How long an answer runs (2026-11-02: the
 // 10-31 delegated answers ran p50 ~400 characters, ~70 words, ~25 s spoken; 2 of 3 GPT-Live calls failed short_spoken_replies) follows
 // OpenAI's delegation guide ("Keep answers concise ... Avoid long explanations"): guidance, never a cap in code.
-export const BACKEND_FEEL = `Ask when the answer helps, one question at a time, and never the same question again in other words. A reaction or an opinion can be enough: don't add a question just to keep the call going, and never hold back one you need. Don't re-ask what they already answered: if something necessary is missing, ask only for that gap; if they decline or move on, respect it, and carry their corrections forward. Match the moment: if they're with other people, just saying hi, or short on time, keep it light and brief, with no deep questions. When they ask for your read on themselves or a decision, give an opinion and the reason for it, and leave room for them to disagree; never state their feelings or motives as fact. "Hello?" can mean they didn't hear you, want your attention, or think the line dropped: briefly say you're here and answer what was unclear; don't repeat your last point by default and don't assume they're done. Short agreements, thanks and "I'm good" are read in context, not goodbyes ("I'm good" after "how are you?" is an answer). When they clearly want to wrap up, or ask you to end the call, give one brief close with no new question (an explicit request to end needs no confirmation), and if they speak again while you're closing, listen and answer. Don't invent a takeaway or a promise to fill the closing line: commit to a next step only if it will really be kept (the after-call read keeps what you commit to), and a goodbye is not proof their request is done. Where you left off with them, when given, is background only: bring it up only if it fits and is fine to say aloud, never assume it still holds, and let a quick hi stay a quick hi.`;
+export const BACKEND_FEEL = `Ask when the answer helps, one question at a time, and never the same question again in other words. One question per turn: if there are options, name them in a statement and let them pick, never a string of questions. No generic coaching questions ("what's the first thing that caught your attention?"): ask about the specific thing they said. A practical question gets a practical answer, not a question about how they feel. A reaction or an opinion can be enough: don't add a question just to keep the call going, and never hold back one you need. Don't re-ask what they already answered: if something necessary is missing, ask only for that gap; if they decline or move on, respect it, and carry their corrections forward. Match the moment: if they're with other people, just saying hi, or short on time, keep it light and brief, with no deep questions. When they ask for your read on themselves or a decision, give an opinion and the reason for it, and leave room for them to disagree; never state their feelings or motives as fact. "Hello?" can mean they didn't hear you, want your attention, or think the line dropped: briefly say you're here and answer what was unclear; don't repeat your last point by default and don't assume they're done. Short agreements, thanks and "I'm good" are read in context, not goodbyes ("I'm good" after "how are you?" is an answer). When they clearly want to wrap up, or ask you to end the call, give one brief close with no new question (an explicit request to end needs no confirmation), and if they speak again while you're closing, listen and answer. Don't invent a takeaway or a promise to fill the closing line: commit to a next step only if it will really be kept (the after-call read keeps what you commit to), and a goodbye is not proof their request is done. Where you left off with them, when given, is background only: bring it up only if it fits and is fine to say aloud, never assume it still holds, and let a quick hi stay a quick hi.`;
 // 2026-11-07 call review: the member said "I don't know" about what another member wants, and Cue declared "It's a values mismatch",
 // then asked the same thing twice. Text has the same line (services/coVoice.ts VOICE_OTHERS). Guidance only.
 export const BACKEND_OTHERS = `${OTHERS_LINE} ${NO_GRADING_LINE}`;
 export const BACKEND_NOTE = `# How this call runs
-This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. When it takes several steps, say the first few as short complete steps and stop there so they can say go on; never leave a step, a condition or a safety instruction half said. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. What you can do on this call, if anything, is in the note that comes with each turn. When they clearly are wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual. ${BACKEND_FEEL} ${BACKEND_OTHERS}`;
+This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. When it takes several steps, say the first few as short complete steps and stop there so they can say go on; never leave a step, a condition or a safety instruction half said. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. What you can do on this call, if anything, is in the note that comes with each turn. When they clearly are wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual. Once they've said goodbye and the voice has said its goodbye, a stray trailing word or a "you too", "cool" or "thanks" isn't new conversation: end the call the same way and write nothing. Never add a second goodbye line. ${BACKEND_FEEL} ${BACKEND_OTHERS}`;
 
 // Everything one GPT-Live call needs, built by the TwiML route for the verified caller only.
 export type LiveCall = { userId: string; callSid: string | null; firstName: string; direction: "inbound" | "outbound"; callKey: string; voiceOn: boolean; instructions: string; backendSystem: string; opening: OpeningContext; given: { firstName: string; contextSummary: string; findsNow: string; rightNow: string }; capMs?: number; budgetLimited?: boolean };
@@ -423,7 +430,11 @@ export function replyGaps(turns: LiveTurn[]): number[] {
 // Ending the call is Cue's decision (Royce, 2026-10-31: Cue decides, code guards; never code reading their words for a goodbye). GPT-Live
 // can't call a function (OpenAI rejects session.tools: "Unknown parameter"), so the decision is the thinking's: goodbyes are delegated,
 // and Claude has this one tool. The bridge hangs up after Cue's goodbye has played, guarded on facts only (gptLiveBridge.ts endGuard).
-export const END_CALL_RULE = "End the phone call. Use it only after they have clearly wrapped up and the voice has already said its goodbye: never mid-thought, never after a question, never during an emotional moment. Write nothing with it: the voice's goodbye is the last word.";
+export const END_CALL_RULE = "End the phone call. Use it only after they have clearly wrapped up and the voice has already said its goodbye: never mid-thought, never after a question, never during an emotional moment. An agreement or thanks alone isn't a goodbye unless it follows one; after both goodbyes, a stray trailing word or a \"you too\", \"cool\" or \"thanks\" isn't new conversation, so use it then. Write nothing with it and never a second goodbye: the voice's goodbye is the last word.";
+// The bridge held Cue's end because they spoke after the goodbye (gptLiveBridge.ts endGuard): the next turn decides again, told so.
+export const END_HELD_NOTE = "(Cue's note, not their words.) You ended the call a moment ago, but it was held because they spoke after the goodbye. Decide again with what they just said: if they're still only closing, use your tool that ends the call and write nothing; if they said something new, answer it and don't end the call.";
+// Pure: an answer with something to say. A bare "." or "," (2026-11-09: the thinking answered a stray "one" with ".") is no answer.
+export const hasWords = (t: string): boolean => /[\p{L}\p{N}]/u.test(t);
 export const END_CALL_TOOL = { type: "function", function: { name: "end_call", description: END_CALL_RULE, parameters: { type: "object", properties: {} } } };
 export function delegationRequest(call: LiveCall, turns: LiveTurn[]): OaiRequest {
   return { messages: [{ role: "system", content: call.backendSystem }, ...turns.map((t) => ({ role: t.who === "member" ? "user" : "assistant", content: t.text }))], tools: [END_CALL_TOOL], stream: true, temperature: AGENT_DEFAULTS.temperature };
@@ -554,6 +565,11 @@ export type ThinkOptions = {
   exchange?: ((call: LiveCall) => Promise<import("./exchangeRecord.js").ExchangeRecord | null>) | null;
   // The read of their latest words the sentence check waits for (exchangeRecord.ts readCallTurn); the real Haiku read when not given.
   callRead?: (i: import("./exchangeRecord.js").CallReadInput) => Promise<import("./exchangeRecord.js").CallTurnRead | null>;
+  // Cue's end_call on this exchange already passed the closing read (runCallLlm's closed fact) and is pending, or was held by the bridge
+  // only because they spoke after the goodbye (gptLiveBridge.ts): the close still stands for this turn, on that fact.
+  closedEarlier?: boolean;
+  // That end was held because they spoke after the goodbye: this turn decides again, told so (END_HELD_NOTE).
+  endHeld?: boolean;
 };
 // How long a turn waits for the call's record before going on without it (fails open: no record, the call as before).
 export const CALL_EXCHANGE_WAIT_MS = 400;
@@ -591,13 +607,13 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
   // After their words, past the cache breakpoint (runCallLlm turnNotes): the call's system prompt stays the same every turn. Never the
   // cap note on a safety turn: nothing pulls it back to an earlier answer.
   const X = exchange ? await import("./exchangeRecord.js") : null;
-  const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : "", !safety0 ? (windDownSignal(req) ? WIND_DOWN_NOTE : agreedBriefly(req) ? AGREED_NOTE : "") : "", X ? X.callTurnNote(exchange) ?? "" : "", !safety0 ? openersNote(callOpeners(turns)) : ""].filter(Boolean);
-  const streamed = !!onSentence && !safety0 && !callClosing(req);
+  const turnNotes = [!tools ? NOTHING_ON_THIS_CALL : "", o.carry?.length && !safety0 ? capNote(o.carry) : "", !safety0 ? (windDownSignal(req) ? WIND_DOWN_NOTE : agreedBriefly(req) ? AGREED_NOTE : "") : "", X ? X.callTurnNote(exchange) ?? "" : "", !safety0 ? openersNote(callOpeners(turns)) : "", o.endHeld && !safety0 ? END_HELD_NOTE : ""].filter(Boolean);
+  const streamed = !!onSentence && !safety0 && !callClosing(req) && !o.closedEarlier;
   let text = "";
   let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
   let endCall = false, stopped = false;
   const ran: string[] = [];
-  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange, callRead: o.callRead ?? ((i) => import("./exchangeRecord.js").then((X) => X.readCallTurn(i))) } : {}), onCapped: o.onCapped, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead, sameQuestion: o.sameQuestion ?? ((a, b) => import("./questionRead.js").then((m) => m.callSameQuestion(a, b))) })) {
+  for await (const c of runCallLlm(req, { stream: (r) => upstream(r, call.userId), clean: true, tools, jobClaims: true, turnNotes, ...(exchange !== undefined ? { exchange, callRead: o.callRead ?? ((i) => import("./exchangeRecord.js").then((X) => X.readCallTurn(i))) } : {}), onCapped: o.onCapped, closedEarlier: !!o.closedEarlier && !safety0, onTool: (t) => { ran.push(t.name); o.onTool?.(t); }, onFirstText: (t) => (timing = t), onDropped, voiceRead, sameQuestion: o.sameQuestion ?? ((a, b) => import("./questionRead.js").then((m) => m.callSameQuestion(a, b))) })) {
     const d = c.choices[0].delta as { content?: unknown; tool_calls?: { function?: { name?: string } }[] };
     if (typeof d.content === "string") {
       text += d.content;
@@ -605,7 +621,8 @@ export async function thinkOnCall(call: LiveCall, turns: LiveTurn[], upstream: U
     }
     if (d.tool_calls?.some((t) => t.function?.name === "end_call")) endCall = true;
   }
-  const said = voiceCap(stripCues(text).replace(/\s+/g, " ").trim());
+  // Only punctuation (a bare "." or ","; hasWords): no answer, never spoken.
+  const said = voiceCap(stripCues(text).replace(/\s+/g, " ").trim().replace(/^[^\p{L}\p{N}]+$/u, ""));
   const safety = safetyCall(req) || (!!said && safetyCall({ ...req, messages: [...req.messages, { role: "assistant", content: said }] }));
   // Said exactly only when this answer itself carries a crisis or safety line (review of #330: safetyCall reads the whole call, so after
   // one safety mention every later answer went out word for word, "what's on for Friday?" included).
