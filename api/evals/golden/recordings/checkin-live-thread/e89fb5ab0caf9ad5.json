@@ -1,7 +1,7 @@
 {
   "hash": "e89fb5ab0caf9ad5",
   "case": "checkin-live-thread",
-  "recorded_at": "2026-11-09T18:08:04.181Z",
+  "recorded_at": "2026-11-09T20:39:04.687Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,16 +1940,16 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Nothing back from the Hayes Valley place yet. I'll let you know the second it comes in.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Nothing back from the venue yet. I'll let you know the moment it lands.\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 34891,
+        "cache_creation_input_tokens": 4430,
+        "cache_read_input_tokens": 30461,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 4430,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 78,
+        "output_tokens": 72,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -1959,16 +1959,16 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoQ8YxPCGXnkc6KitCW",
+        "id": "msg_011Cgszv2f7o5v96WqHLTbYk",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "tool_use",
-            "id": "toolu_019VkXc4L6jff14nTXLB1NBe",
+            "id": "toolu_01FFFQh3bC7mABdvrjCG7z9N",
             "name": "sendReply",
             "input": {
-              "message": "Nothing back from the Hayes Valley place yet. I'll let you know the second it comes in."
+              "message": "Nothing back from the venue yet. I'll let you know the moment it lands."
             },
             "caller": {
               "type": "direct"
@@ -1981,13 +1981,13 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 34891,
+          "cache_creation_input_tokens": 4430,
+          "cache_read_input_tokens": 30461,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 4430,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 78,
+          "output_tokens": 72,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

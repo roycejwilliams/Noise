@@ -1,7 +1,7 @@
 {
   "hash": "2c62a6ddee5da942",
   "case": "checkin-tell-me-more",
-  "recorded_at": "2026-11-09T18:08:30.738Z",
+  "recorded_at": "2026-11-09T20:39:21.285Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,18 +1940,18 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"It's an 8 week fellowship for full time founders, $75K on incorporation, second cohort applications are open now through Dec 15.\"}]",
+      "text": "It's for full-time founders, $75K on incorporation, and applications close Dec 15 for the second cohort.",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 35232,
+        "cache_creation_input_tokens": 4772,
+        "cache_read_input_tokens": 30460,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 4772,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 148,
+        "output_tokens": 37,
         "output_tokens_details": {
-          "thinking_tokens": 57
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,42 +1959,30 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoS38pbQYESnHH6cNGe",
+        "id": "msg_011CgszwES587VCXrMJcvyDC",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "Eu8ECs0CCBMYAipADPKD7DSnJ49SabmksGiHDFPcowqlSnZo9a7rT2Qish5pEihyvBDBAt1VSSYjELi7xGiYqtvGTGHGVrl5TRx+RzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBnpjI1wbCAUMIBxAAGhUBJCABNUABTVMCOeIDTzcFKM4EJq0gBDIEEnHPJToEX1GYLUIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiC4It/2/L1q4Unv849FdmlBnLLi1dQrZkKT4cVVDgJmHSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyBK2Bu3l8tgzmIYtsaDMUj0zZ15nOXJ1Fm7SIwLoovxP+w8UzBauEGLpTeIZeZKERrMsZ16IySTqSTOIkf1AkUEPomxIemFWst7xXZKs4BgHbQix+ywcDQ0nHqamRT8TteMf5/TC6HKOQk2eCiwMpIIV2W/cgUol9Tn2T2eelx1j6diyECLL1S6ptaA3Vv/P9lNT7VJLk/AF2xPd8JU4e7C2MmkYhsk5TEV8MlpKn2CMwASLCiPqU07qXk/L6Huv5rlYyWBT7Ep07FVEtkaobJ1tXaDyS2IZpL2tnNl1bMprGb+vfny4vox6HtQLN207pMcwJFJoV9KDrgZysxK8hfcNHb5p9LgwvWwNGfPRUps2qzdw4gVeetCQxq03MYAQ=="
-          },
-          {
-            "type": "tool_use",
-            "id": "toolu_01CSvsKS5z5XwwG7DQ2insDh",
-            "name": "sendReply",
-            "input": {
-              "message": "It's an 8 week fellowship for full time founders, $75K on incorporation, second cohort applications are open now through Dec 15."
-            },
-            "caller": {
-              "type": "direct"
-            }
+            "type": "text",
+            "text": "It's for full-time founders, $75K on incorporation, and applications close Dec 15 for the second cohort."
           }
         ],
         "container": null,
-        "stop_reason": "tool_use",
+        "stop_reason": "end_turn",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 35232,
+          "cache_creation_input_tokens": 4772,
+          "cache_read_input_tokens": 30460,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 4772,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 148,
+          "output_tokens": 37,
           "output_tokens_details": {
-            "thinking_tokens": 57
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

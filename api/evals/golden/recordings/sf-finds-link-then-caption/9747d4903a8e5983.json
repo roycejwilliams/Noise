@@ -1,7 +1,7 @@
 {
   "hash": "9747d4903a8e5983",
   "case": "sf-finds-link-then-caption",
-  "recorded_at": "2026-11-09T18:09:36.172Z",
+  "recorded_at": "2026-11-09T20:40:18.696Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use searchEvents {\"what\":\"general events, varied\",\"when\":\"this week\",\"city\":\"San Francisco\",\"whileLooking\":\"Taking a look at what's on in SF this week.\",\"why\":\"Jordan asked broadly what's happening in SF\"}]",
+      "text": "[tool_use searchEvents {\"what\":\"anything interesting this week\",\"city\":\"San Francisco\",\"when\":\"this week\",\"whileLooking\":\"Taking a look at what's on in SF this week.\",\"why\":\"Jordan asked broadly what's around in SF\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 4235,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 4235,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 199,
+        "output_tokens": 198,
         "output_tokens_details": {
-          "thinking_tokens": 22
+          "thinking_tokens": 20
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,25 +1959,25 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoWVtGH4bLCci3CLEwh",
+        "id": "msg_011Cgt11Mmhi8Q9tGz98LSgq",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EuwDCs0CCBMYAipA38h9Rtv3LtPv5buGuWZs+zbOn8XLivTUH5vbP/UfiNRoYOSYCEC010xWI0ssOXvHQejv8gzopnsLQRItxWzuSDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB3pjI1wbCAUMIBxAAGhUBJCABc/0B/FwCOeIDTzcFzVsEJq0gBDIEEnHPJToECvB8w0IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCMkA59wiQN2qMOoYIYy/bewF0o3SSdiBXp/vCw8ejcqyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwRlmZiQhGUqe/45UgaDDYVT4y7/eM/3IAt/CIwDcdodwWl6sS1vANkUkaYR+UM5+Pyhbj6VlK/lxrFWet+nRsbX8PnY6G2pMNJtIF1KkzfLofUiqRxv7ttYeOwKZ9RU5xPM0BUaeW2+qMEzJRJp6bb7ipTjNHuESK6+Q0M+83g4wSgfI25PdclRFl6B/s1FeEchbamAl3pgixAGAE="
+            "signature": "EvMDCs0CCBMYAipAqvA0gf9PorT2l1jIIhOwH+3fJaT1qjmoqQobqfkf1y2HU1SPsnoNUGUUOlMtae+zDzUWwOYDspxzUOxQpvgkWjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBsd/I1wbCAUMIBxAAGhUBJCABc/0B/FwCOeIDTzcFzVsEJq0gBDIEEnHPJToECvB8w0IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCMkA59wiQN2qMOoYIYy/bewF0o3SSdiBXp/vCw8ejcqyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzxR63ePeRmUp9Pr98aDLC2/D2QyT2y1r1WYSIwgfevfuCgZfHByyIumNEJ8KIoKkYaaXxeQueMlOU1mE8VTfrXfIXJKt05O7GBOFPYKlPx8jXHoPMZRUvUVXlmMIldZUnyCjaxEy6YDpvixOXr1ktQC4vyEtFldiAuxtOVfGgrofV8389UppbOVbIsh1w+X0K2kdWP5PYZ46kojNZvVoyXARgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01FHR3zcZtXgR5bPuuZCZFvW",
+            "id": "toolu_01NsbWC6ZQegSqdvzFvYnouy",
             "name": "searchEvents",
             "input": {
-              "what": "general events, varied",
-              "when": "this week",
+              "what": "anything interesting this week",
               "city": "San Francisco",
+              "when": "this week",
               "whileLooking": "Taking a look at what's on in SF this week.",
-              "why": "Jordan asked broadly what's happening in SF"
+              "why": "Jordan asked broadly what's around in SF"
             },
             "caller": {
               "type": "direct"
@@ -1996,9 +1996,9 @@
             "ephemeral_5m_input_tokens": 4235,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 199,
+          "output_tokens": 198,
           "output_tokens_details": {
-            "thinking_tokens": 22
+            "thinking_tokens": 20
           },
           "service_tier": "standard",
           "inference_geo": "global",

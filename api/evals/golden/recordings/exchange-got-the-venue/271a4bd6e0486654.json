@@ -1,7 +1,7 @@
 {
   "hash": "271a4bd6e0486654",
   "case": "exchange-got-the-venue",
-  "recorded_at": "2026-11-09T18:12:51.536Z",
+  "recorded_at": "2026-11-09T20:43:29.870Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use reactInsteadOfReplying {\"reaction\":\"🥂\",\"why\":\"They booked the venue, dinner is locked in\"}]",
+      "text": "[tool_use noteReaction {\"item\":\"private dining room for twelve near Hayes Valley\",\"reaction\":\"went_liked\",\"quote\":\"got the venue! booked the back room at Fern\",\"note\":\"booked Fern's back room instead\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 4674,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 4674,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 133,
+        "output_tokens": 202,
         "output_tokens_details": {
-          "thinking_tokens": 38
+          "thinking_tokens": 46
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,22 +1959,24 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsomF5CFy4C1mMy4X7Ek",
+        "id": "msg_011Cgt1FUYsrxJt7XrHJ3zyG",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EpcECs0CCBMYAipAY/xRF9IithNcbYwJh3hxhKOPkr/rHF8bxCzOeq9EO0RZ2rwkSDHC8NEVRDz4ddFJwx85tyBK3s8V4jSiRGqkRDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBoprI1wbCAUMIBxAAGhUBJCABNUABhpMCOeIDTzcFXsEEJq0gBDIEEnHPJToE++r1zkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBTe3PfhnRunWL9NXkUg6vvtQxrF2zEuXh+rVBfYawI/yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyzqIXG0abQfYgEv90aDEM/jCzNyO0RLhUnzyIwI8Oma67sU9hnpEqaJMAKmYJU6/8p2cJkApqTewYalNFS4HGj3qQLwGho4L9Q2TGtKnfgic/YKf2lJn7M4uK1KVSybm61Dd4tLTalxSUWg0QG4NeQ3poYaplG4E/R8SS8AL93f3aS6Y3q/FR3qwhMRcPNxZ0mGyuIUqjXZUCITD4TVRCx0Pegbkh+TSi6A5j/qUZRODmvMU0wflJCqkDK3Ab2R/g/sImR3xgB"
+            "signature": "ErUECs0CCBMYAipAKaPb8O+UFqYdWasxdDDfkY9iaOSVvAZUbofxZ70FjU0lmFb5bsT9QkhJ8xNH1+6qGZBnwYaKaLkjulntsjNrSTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB8ODI1wbCAUMIBxAAGhUBJCABNUABhpMCOeIDTzcFXsEEJq0gBDIEEnHPJToE++r1zkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBTe3PfhnRunWL9NXkUg6vvtQxrF2zEuXh+rVBfYawI/yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgy3JCmbXx5r24nYwdoaDDr7uV7S0kCgk7tNSyIw3KIzNaStC0q+ZonbY+j0K0HHsJkWkZj8scJdsvFP07Mn/+I9wX0LyiVlPk+R3npJKpQBoWp+S2FK8TYM055VX6yKImZQg6NwEOwrQUFLcID2I8SzUg3R9MBaZzoRL4flUfbK9pb30TSKQ4VBFdwac3+BA+EGMh56ro/NSmSt5UPn+mdJ3vQUQucoB6HBi7/BB9y8SJg0MijvcgXgYElbdwd4IwAgR7vPkl1hNpZ02sU49Zqmhtk81DkYlrLHVKxb+7M4VLf2vxgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01JevKPK1LQVYGVEQizev1xC",
-            "name": "reactInsteadOfReplying",
+            "id": "toolu_01MuwcNhvzWwQNEyHYBtGqAm",
+            "name": "noteReaction",
             "input": {
-              "reaction": "🥂",
-              "why": "They booked the venue, dinner is locked in"
+              "item": "private dining room for twelve near Hayes Valley",
+              "reaction": "went_liked",
+              "quote": "got the venue! booked the back room at Fern",
+              "note": "booked Fern's back room instead"
             },
             "caller": {
               "type": "direct"
@@ -1993,9 +1995,9 @@
             "ephemeral_5m_input_tokens": 4674,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 133,
+          "output_tokens": 202,
           "output_tokens_details": {
-            "thinking_tokens": 38
+            "thinking_tokens": 46
           },
           "service_tier": "standard",
           "inference_geo": "global",

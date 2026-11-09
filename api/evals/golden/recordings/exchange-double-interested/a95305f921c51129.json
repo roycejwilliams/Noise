@@ -1,7 +1,7 @@
 {
   "hash": "a95305f921c51129",
   "case": "exchange-double-interested",
-  "recorded_at": "2026-11-09T18:12:35.373Z",
+  "recorded_at": "2026-11-09T20:43:12.993Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use searchEvents {\"what\":\"low key event\",\"when\":\"Wednesday night\",\"whileLooking\":\"Looking at what's low key on Wednesday in SF.\"}]",
+      "text": "[tool_use searchEvents {\"what\":\"low key, casual event\",\"when\":\"Wednesday night\",\"whileLooking\":\"Looking at what's low key on Wednesday.\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 7338,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 7338,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 142,
+        "output_tokens": 144,
         "output_tokens_details": {
-          "thinking_tokens": 21
+          "thinking_tokens": 23
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,23 +1959,23 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgsok699zoxHTCrygFYga",
+        "id": "msg_011Cgt1EFpPPEveCduLCTLP2",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EucDCs0CCBMYAipAOF3AglXWrDLqrpxzoXLWTUzi/acQj8QcSGc1fwWPoOERcXUqewyQKKnBWTjpb/GiaPzu3L+T+ZX5GfmuhQ+cKDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBkprI1wbCAUMIBxAAGhUBJCABysAB8wQCOeIDTzcFzVsEJq0gBDIEEnHPJToEr1Ax3UIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAP+C7Zihm2nt1JnsFgzyFhVW6xbp2T6kE9Vf3ajnoUViIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxkeVpULPFFD9dVDhUaDN1ymf5L/CaMdE1pfSIw2RCc03HFkSjpjxby7mCenD/DHOgBlyREwHwRHNrwmYAh4LiAxzxcdJiCeM9TYqysKkc1TaF9D4QnEjIK43QsjKDI7oGvfRFZFM0LGbRrnYM03PKHjoJjMw0oMFkKaFdaVVr3RCsUJhxzTKNCPXVpMxw4ojgveRB/ZRgB"
+            "signature": "EvkDCs0CCBMYAipApvXZLKUSBYEFTQfflBvBigc0y+JSax0eGe2NGRyN9dda4tI+BnqSzaLdYzfK/Z0PLP6g5sNE8phTLzHNAxYshjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB4ODI1wbCAUMIBxAAGhUBJCABysAB8wQCOeIDTzcFzVsEJq0gBDIEEnHPJToEr1Ax3UIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAP+C7Zihm2nt1JnsFgzyFhVW6xbp2T6kE9Vf3ajnoUViIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgymeFtFQhWdZtLwfhYaDDROxFxd0D0KfJb23iIw+CHtBSM9Y/sGP74YNXUH0UwIhDhDsboNX+Ne6zu41WpoHOS8YwvufUzKp6U7zD5KKlmlT3ZoywHwmrRMSTANQcbV1Hh7ETPlcsbLQtcZM1FPGlK/3bP/gm3eV5nmBmyDF+J2LtDcMhPxDlh7PzT6SRCEqCu6XdKHMoWFdmDTO3hLRBOzeyPRPo5mIRgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01LvnhvHrz1UuReEytJWUdBy",
+            "id": "toolu_012YCwbNh7uQSrDzTDjhHLtt",
             "name": "searchEvents",
             "input": {
-              "what": "low key event",
+              "what": "low key, casual event",
               "when": "Wednesday night",
-              "whileLooking": "Looking at what's low key on Wednesday in SF."
+              "whileLooking": "Looking at what's low key on Wednesday."
             },
             "caller": {
               "type": "direct"
@@ -1994,9 +1994,9 @@
             "ephemeral_5m_input_tokens": 7338,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 142,
+          "output_tokens": 144,
           "output_tokens_details": {
-            "thinking_tokens": 21
+            "thinking_tokens": 23
           },
           "service_tier": "standard",
           "inference_geo": "global",

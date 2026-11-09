@@ -1,7 +1,7 @@
 {
   "hash": "de892dc8c6fad5c8",
   "case": "hey-cue",
-  "recorded_at": "2026-11-09T18:08:56.756Z",
+  "recorded_at": "2026-11-09T20:39:47.161Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 4325,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 85,
+        "output_tokens": 76,
         "output_tokens_details": {
-          "thinking_tokens": 22
+          "thinking_tokens": 13
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,18 +1959,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoThau1iFuwLqTffE5T",
+        "id": "msg_011Cgszy9g829HcchBnSwfSM",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "Eu4DCs0CCBMYAipA3GLMGhbqUiv314mLRyje9PwIxWS5DEdn7vLyzm/4h7pzOkyOuS1rlcWCghLC/vPBs7E3WviAC1BtTrVcAhNqXDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBtJjI1wbCAUMIBxAAGhUBJCABc/0B8u0COeIDTzcFDcMEJq0gBDIEEnHPJToEqh8dF0IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA/z/fLo7eoQfpxavY1xJ8uO2LFNjP3fbjzhx5CM34LTiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzTrA9IzGFbJ0wlGbMaDA2hKG0+RgHg8r5SPSIwAYEBEmeTPFcJqDd3DKiqkkqzY0HkUaBJ4KSwCYHKDUM0zTso/Q4lrTbu9a2DGEpwKk4r4vlducVn2RvosoYdgv4Ws9j/IsVEJWfvid0TbDszgBDnjx4oZIzscgkK6KmygjgCIJrFrKN2p29NeBj55dterbVpCmpAe5Kpe+K1JjcYAQ=="
+            "signature": "EtgDCs0CCBMYAipAnWVMXxc74/jAGpuZujMOvYwrKPV58rx0o1wwlgJM+U4oxkc2Don2IgtW6xHS3qpV06vs4h4xFg2ZSE60jLyBVTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBkt/I1wbCAUMIBxAAGhUBJCABc/0B8u0COeIDTzcFDcMEJq0gBDIEEnHPJToEqh8dF0IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA/z/fLo7eoQfpxavY1xJ8uO2LFNjP3fbjzhx5CM34LTiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwfTMO7hcrKmMEtnqMaDHVfdvKrzt+HvtpdUiIwo9+iJw3PJbJ73MkRgXR/MTsSotsHvLvSfQbCrwoCMZk7fAJUY2yyozl+yFHjZ9puKjgsNfkL5W8XMg7NCzgU8NZmcRozYk8JcOp3zs+U1ovIFoi40X5WppRosm6qRymVaoFXGYOiTK3jdxgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01HGE9mzA5H4NiGt8tTC2mzY",
+            "id": "toolu_01Hx1YvM5rYPr9LBwzckjKdZ",
             "name": "sendReply",
             "input": {
               "message": "Hey Jordan. What's on your mind?"
@@ -1992,9 +1992,9 @@
             "ephemeral_5m_input_tokens": 4325,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 85,
+          "output_tokens": 76,
           "output_tokens_details": {
-            "thinking_tokens": 22
+            "thinking_tokens": 13
           },
           "service_tier": "standard",
           "inference_geo": "global",

@@ -1,7 +1,7 @@
 {
   "hash": "25a63504564630e9",
   "case": "running-work",
-  "recorded_at": "2026-11-09T18:05:54.725Z",
+  "recorded_at": "2026-11-09T20:36:46.865Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Live jazz nights in SF worth taking a date to. I check each morning and only text if something real turns up.\"}]",
+      "text": "Live jazz nights in SF that'd be good for a date, specifically. I check every morning and text you if something real turns up.",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 34678,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 34678,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 92,
+        "output_tokens": 40,
         "output_tokens_details": {
-          "thinking_tokens": 11
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,29 +1959,17 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoEaEmVE5vAoKBhiVSp",
+        "id": "msg_011CgszjqDFi8cZnMa8HH5hJ",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EsYDCs0CCBMYAipAVXl3RaEP3csX2qCYEOhQ2qxb+2ItjcYlKkxK3gudjXgFcpez6P5NzePF8DwoPOfy0FFqNa6dAcXwKtMEiApjQzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBgpfI1wbCAUMIBxAAGhUBJCABc/0BJE8COeIDTzcFdVMEJq0gBDIEEnHPJToEwXWdi0IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAMy+cT6TIhd5nY+CL/BNi7DMhH9y2vISQ2aDDUbav2ACIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyweOjM8LJ5JLKL3RcaDOH5eBlC6N8qTNlUWCIwHqz++/CSEwFq+zpu9r6jNdKlJcoWi68pAm+U1ljMYWcjJX0TIbRN4xCkAYpHG0dxKiax1NcWIWVphX7aG6R6SruIX1hjVwduJt+xQr0w+EAah384N5aulhgB"
-          },
-          {
-            "type": "tool_use",
-            "id": "toolu_01K6SCTpyq5DYDZMsfx1isyr",
-            "name": "sendReply",
-            "input": {
-              "message": "Live jazz nights in SF worth taking a date to. I check each morning and only text if something real turns up."
-            },
-            "caller": {
-              "type": "direct"
-            }
+            "type": "text",
+            "text": "Live jazz nights in SF that'd be good for a date, specifically. I check every morning and text you if something real turns up."
           }
         ],
         "container": null,
-        "stop_reason": "tool_use",
+        "stop_reason": "end_turn",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
@@ -1992,9 +1980,9 @@
             "ephemeral_5m_input_tokens": 34678,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 92,
+          "output_tokens": 40,
           "output_tokens_details": {
-            "thinking_tokens": 11
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

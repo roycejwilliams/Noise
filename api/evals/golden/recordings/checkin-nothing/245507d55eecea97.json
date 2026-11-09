@@ -1,7 +1,7 @@
 {
   "hash": "245507d55eecea97",
   "case": "checkin-nothing",
-  "recorded_at": "2026-11-09T18:07:33.482Z",
+  "recorded_at": "2026-11-09T20:38:35.764Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Hey. Nothing on my end right now, just good to hear from you. What's on your mind?\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Hey. Nothing on my end right now, how's it going with you?\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 7328,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 7328,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 110,
+        "output_tokens": 98,
         "output_tokens_details": {
-          "thinking_tokens": 33
+          "thinking_tokens": 29
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,21 +1959,21 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoMq6RL9MiDiiHykoek",
+        "id": "msg_011CgszssLUMoobTq2p7zE9R",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EoMECs0CCBMYAipAeruJ+UPu8Wq/2y3dV/cxm65lllBDL4dFgymtTd4/JRdTidERIEcHReB7XzOJZo068UpDNT3B2xgvn3RWlVtO6DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB5JfI1wbCAUMIBxAAGhUBJCABU70BxvsCOeIDTzcFh0gEJq0gBDIEEnHPJToELPeg4UIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBsEJefd/ghngQmrFMdZvAJN2CwLuCIy6WBt2wDTe5LrCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwYDJEu6hbdr5RP5lcaDDLqTKtrm6FjkeT5bCIwlUcDw6Gl6f/snKgj/621MZ/4wyO3t+tLmdf67dM3UUCclatsqkp/rZRi+oaVDb9RKmMa7hgSuAFjH+J/68FONQJut/D0uPkYjd6Yll6Hlaa/ukmJyMSuiCYE73vH3s52SvAGI5pFMC6MX38bxjACtiYujQohHRYd4uzcSIiXW6ZQRLzcWT80FJdzh7bh8hkU2RhrLHEYAQ=="
+            "signature": "EoEECs0CCBMYAipAs1RIy3+BkDJgxmf4qOeM/MzohIFcQ2cCxwPRQ4RBbw8qL1s8H94y3xIyKQ9BpoiKuFJ5H074zAF6wu/UG2rmwDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBy97I1wbCAUMIBxAAGhUBJCABU70BxvsCOeIDTzcFh0gEJq0gBDIEEnHPJToELPeg4UIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBsEJefd/ghngQmrFMdZvAJN2CwLuCIy6WBt2wDTe5LrCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwBwckbZfkKILJNW1IaDDh5/Ze3mgjQ2jSEjiIwRLNqQkyXDjkp5B2n+IGZEXVXxL4xFWg1y8cfyy0O/bGDCvv8w8lEUN8I4LByuVccKmG9pgiJNJRO+/rMLjIhoRmB7rhcz6bw8GF1NkJVdM69bnIfQbzwUmeyS4qlhtUZ0clRpgXRBnPwCSwxO8xJ9nsIg6fKneqlxkXL8A0CCo92XzZO9wD3eMEh1jJkTQXo1Pk6GAE="
           },
           {
             "type": "tool_use",
-            "id": "toolu_01Aw9XpL6JGFYQR7MnsHkFPz",
+            "id": "toolu_01LQHvRr2UYQ6KbzYFwTwJ1R",
             "name": "sendReply",
             "input": {
-              "message": "Hey. Nothing on my end right now, just good to hear from you. What's on your mind?"
+              "message": "Hey. Nothing on my end right now, how's it going with you?"
             },
             "caller": {
               "type": "direct"
@@ -1992,9 +1992,9 @@
             "ephemeral_5m_input_tokens": 7328,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 110,
+          "output_tokens": 98,
           "output_tokens_details": {
-            "thinking_tokens": 33
+            "thinking_tokens": 29
           },
           "service_tier": "standard",
           "inference_geo": "global",

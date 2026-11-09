@@ -1,0 +1,97 @@
+{
+  "hash": "c1961ba99074cf1f",
+  "case": "complete-moment",
+  "recorded_at": "2026-11-09T20:42:46.968Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\" Cue's text: \"\"\"Full budget approved, no cuts. That's...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\"\n\nCue's text:\n\"\"\"Full budget approved, no cuts. That's a great outcome, and the pricing slide held exactly like you said it would.\"\"\"\n\nIs the text a short, warm close that fits this exact moment (the budget, the pricing slide or the sleep), with no question and nothing asked of him? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Full budget approved, no cuts\\\" and \\\"pricing slide held exactly like you said\\\" close warmly on the exact outcome, no question asked\"}",
+      "usage": {
+        "input_tokens": 234,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 66,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgt1CQwFqizxgSS59DUAs",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Full budget approved, no cuts\\\" and \\\"pricing slide held exactly like you said\\\" close warmly on the exact outcome, no question asked\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 234,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 66,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "c1961ba99074cf1f",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

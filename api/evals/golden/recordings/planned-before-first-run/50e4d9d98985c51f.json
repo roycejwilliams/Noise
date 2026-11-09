@@ -1,7 +1,7 @@
 {
   "hash": "50e4d9d98985c51f",
   "case": "planned-before-first-run",
-  "recorded_at": "2026-11-09T18:06:36.559Z",
+  "recorded_at": "2026-11-09T20:37:34.794Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Yep, it's live. Checking every morning for a quiet Hayes Valley cocktail spot that works for your 8.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Yep, live since this morning. It searches daily and I'll text you the moment a good spot turns up.\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 4369,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 4369,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 97,
+        "output_tokens": 102,
         "output_tokens_details": {
-          "thinking_tokens": 10
+          "thinking_tokens": 23
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,21 +1959,21 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoHeCTkGhDYiuGT2paT",
+        "id": "msg_011CgszoLxFYVuHS7jjcy5tN",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EsUDCs0CCBMYAipAmlrl/FfcfT2k+umT6q2yoQp65mgad2peuXAWZfAzEq4pNIcFC0tX8E0iiFZeLECsbPlXknjB0AGb20cN1C3cETIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBq5fI1wbCAUMIBxAAGhUBJCABc/0B11ECOeIDTzcFh0gEJq0gBDIEEnHPJToELfgS90IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBUn668LROgZvNDf725xfjenzQK+tCw7lRNd6ST5PYLcyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyvl/NpOUrn6OX5GQ0aDAfz3G7s72A9iyP1HyIwygmH54I8JakqdX/Argyuo5r2BfiAh6mq59zw038W5z3YU1yoEoP3X97WONKw4I+WKiU0fNdBYxdwrVJ2tzQ1tggxiTLtIdbtUqyKBUkzZdxrfxLfjv/nGAE="
+            "signature": "Eu0DCs0CCBMYAipACdJRBjqYrCSkvutXVz3S4uva1NkGbzBwVkTTRwsokS0gbfNPZktBrZ6iAE/csEPmu6kr3NEFVFT1Ql7Ai+zLKzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBjt7I1wbCAUMIBxAAGhUBJCABc/0B11ECOeIDTzcFh0gEJq0gBDIEEnHPJToELfgS90IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBUn668LROgZvNDf725xfjenzQK+tCw7lRNd6ST5PYLcyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgySD+I7DyAdBh8SCRcaDABEXmuTvs+Pz/iJuSIw6O/qKdMQhOhpzWmUkM37h+7AXCmddmkWAJFhL9UpdkXEqLhiC783c63+j7OhgrttKk2z6lR4aPE4X7Qyg/BKbSbHlrhYGGY+aJfrhJgxu7ZkXem9wHbX1fIr3K9/xLk0MOQiJZyJD++5I9ER9tKJj9S9lYpm43nJ+zHF0JWtSRgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01RxqFba1BWWxLLFqg3dPnFr",
+            "id": "toolu_019PafP5rAW3Ehi2atDezZte",
             "name": "sendReply",
             "input": {
-              "message": "Yep, it's live. Checking every morning for a quiet Hayes Valley cocktail spot that works for your 8."
+              "message": "Yep, live since this morning. It searches daily and I'll text you the moment a good spot turns up."
             },
             "caller": {
               "type": "direct"
@@ -1992,9 +1992,9 @@
             "ephemeral_5m_input_tokens": 4369,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 97,
+          "output_tokens": 102,
           "output_tokens_details": {
-            "thinking_tokens": 10
+            "thinking_tokens": 23
           },
           "service_tier": "standard",
           "inference_geo": "global",

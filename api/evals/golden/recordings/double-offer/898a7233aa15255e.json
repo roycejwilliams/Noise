@@ -1,7 +1,7 @@
 {
   "hash": "898a7233aa15255e",
   "case": "double-offer",
-  "recorded_at": "2026-11-09T18:06:19.418Z",
+  "recorded_at": "2026-11-09T20:37:20.693Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 58,
+        "output_tokens": 5,
         "output_tokens_details": {
-          "thinking_tokens": 53
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,15 +54,10 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgsoGSiPGee9N2n2otJMk",
+        "id": "msg_011CgsznQ3m1EbcxJ6HVpRco",
         "type": "message",
         "role": "assistant",
         "content": [
-          {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "CAQSmQYKEAgTGAI4AUIIdGhpbmtpbmcSDB17QeICey3Ml/wb1hoMLHoX9KH0rm+g9tyUIjAPwt57BHFJBVWhvNmhYTXFfTqTSWOc4xJx1Y6IOeIv2kvmlHuQvmRBaIgvWX+b+NoqtgV1QeNaCLfj9jdPswvJehOxuKiyP1ayFUTgwtc8tT7AVMBjXfY5o6xTdn3IDdNvC1RblpqMsS3m5MPE/hppZRqtxbyQOpYuxxpEAgqbwX8QDPLTjqsCOPvSdYJAcYg69mNM5rTUYspzs97uvlWb98A4GgUoUCSiF+l0KNvmiezbsYFNphtBOAa37/eMkLR217gMZCUTYj7sAwD3BSYkif9Gza9ca4kX4j0U4fhaDxGlNThOOS7HdMguLaSlSoRP41htgaoUZUM8uBgpz0G+Dxga1cvo4NlfJRAs/nq8gACCOLsqQLQwv8K/A9Ad6uh0DobV7Od/Qiwfxl29+Dd64HbxV1FqkN6P2MEBIAskDvetd0dXx0v2osVXBx7iy8fZ9cavy2sGl7AkmmKdkF/nho1z9ArVlLj4jpWJ+2Gr2fE4O5nDkquVHLf3EWbSKisDuUugJvrT9kKdpXY5keY4r/v4b/1Ve20AWY+LfNPXe3zNi3uDtrHUDS9ZXEQBbhY5jX7vXKFRQwI/gjMtHlANdSdYKl8CDQKI5OYOQ1edKhH9BvdnEiPnmi/4kCEXiCZkA93kaJ4GJwp1Gf4iWSpc7+u7P7V2LwTNldWK7n931gFXzrl8TIMD3vRLKtZkFxPBtrjD9DC18rsGBjZ9tzishSL9oiaEjPWbJg2/jCtelwUIXpbzq70sgTpY/6twYOo6iWs4XfmENkNzePOjIbHfnoC5MyKBcmNbT01VYERTt2hULvvqg32Pgtzdw79fB7J9hRss3qn7RVClsgNLncHsc/eg14BslKuNHpZqsFlZbaNuiWPSKhB+QWQK8+6l12ZFy61rAH93H3y1laHbYwWQCyIbROtR0hGhuba4Lodi1pNDBW1hy3r3MH+MMCFQJ3s/qOfBAGEyMuyFOnCa9G6drpUA925DlsnkGAE="
-          },
           {
             "type": "text",
             "text": "Yes"
@@ -80,9 +75,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 58,
+          "output_tokens": 5,
           "output_tokens_details": {
-            "thinking_tokens": 53
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

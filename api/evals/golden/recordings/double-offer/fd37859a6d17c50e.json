@@ -1,7 +1,7 @@
 {
   "hash": "fd37859a6d17c50e",
   "case": "double-offer",
-  "recorded_at": "2026-11-09T18:06:13.900Z",
+  "recorded_at": "2026-11-09T20:37:13.558Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "I meant nobody's actively searching for pilates studios for you right now, I'd only saved it. Want me to kick that off?",
+      "text": "I meant nobody's actively searching for a pilates studio right now, it's just sitting on my list. Want me to kick it off?",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 3927,
@@ -1949,7 +1949,7 @@
           "ephemeral_5m_input_tokens": 3927,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 41,
+        "output_tokens": 42,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -1959,13 +1959,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoG1uP13tS347K4gqjj",
+        "id": "msg_011CgszmqYuHXB89VeEMY3Ed",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "I meant nobody's actively searching for pilates studios for you right now, I'd only saved it. Want me to kick that off?"
+            "text": "I meant nobody's actively searching for a pilates studio right now, it's just sitting on my list. Want me to kick it off?"
           }
         ],
         "container": null,
@@ -1980,7 +1980,7 @@
             "ephemeral_5m_input_tokens": 3927,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 41,
+          "output_tokens": 42,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

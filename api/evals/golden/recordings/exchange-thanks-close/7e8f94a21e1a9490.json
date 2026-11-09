@@ -1,7 +1,7 @@
 {
   "hash": "7e8f94a21e1a9490",
   "case": "exchange-thanks-close",
-  "recorded_at": "2026-11-09T18:12:45.258Z",
+  "recorded_at": "2026-11-09T20:43:23.513Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use reactInsteadOfReplying {\"reaction\":\"👍\",\"why\":\"Simple acknowledgment, thread closing\"}]",
+      "text": "[tool_use reactInsteadOfReplying {\"reaction\":\"👍\",\"why\":\"Simple acknowledgment, closing the thread\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 4393,
@@ -1949,7 +1949,7 @@
           "ephemeral_5m_input_tokens": 4393,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 92,
+        "output_tokens": 93,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -1959,17 +1959,17 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsokrPSrkgYLqteAZPbe",
+        "id": "msg_011Cgt1F7Fxm5mGqFfJmupFk",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "tool_use",
-            "id": "toolu_01UVrDVwQzm2tbYoaoLRhq1C",
+            "id": "toolu_01VzrgDqZ9NB9oDY28C6Eqag",
             "name": "reactInsteadOfReplying",
             "input": {
               "reaction": "👍",
-              "why": "Simple acknowledgment, thread closing"
+              "why": "Simple acknowledgment, closing the thread"
             },
             "caller": {
               "type": "direct"
@@ -1988,7 +1988,7 @@
             "ephemeral_5m_input_tokens": 4393,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 92,
+          "output_tokens": 93,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

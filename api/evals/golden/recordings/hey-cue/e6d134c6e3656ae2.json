@@ -1,7 +1,7 @@
 {
   "hash": "e6d134c6e3656ae2",
   "case": "hey-cue",
-  "recorded_at": "2026-11-09T18:08:58.027Z",
+  "recorded_at": "2026-11-09T20:39:48.554Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -124,7 +124,7 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoU6uqptu4yL3hPVDyS",
+        "id": "msg_011CgszyFDFZqsaxmFb6yj1E",
         "type": "message",
         "role": "assistant",
         "content": [

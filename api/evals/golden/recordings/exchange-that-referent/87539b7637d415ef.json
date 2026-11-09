@@ -1,7 +1,7 @@
 {
   "hash": "87539b7637d415ef",
   "case": "exchange-that-referent",
-  "recorded_at": "2026-11-09T18:47:02.721Z",
+  "recorded_at": "2026-11-09T20:43:45.582Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,18 +1940,18 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"8pm Thursday.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"8pm Thursday at the pier.\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 35025,
-        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 4565,
+        "cache_read_input_tokens": 30460,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 35025,
+          "ephemeral_5m_input_tokens": 4565,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 74,
+        "output_tokens": 77,
         "output_tokens_details": {
-          "thinking_tokens": 19
+          "thinking_tokens": 18
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,21 +1959,21 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsrNWhmHVcNKUJtj5uyg",
+        "id": "msg_011Cgt1GjmSztaKfgmyBNsEn",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EtkDCs0CCBMYAipAHGbtil0tENyx2nJRl9NNUswvVo52LY2HjxKljHv+tSW8tmxkvm9Fr4dZIaRTe3gYAc80JdFhZyodoTxACgvYtjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBpqrI1wbCAUMIBxAAGhUBJCABysABzGcCOeIDTzcFh0gEJq0gBDIEEnHPJToEhQ7s2kIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBQXYz60hDjLYHQsI8mD2OJHQrpFtrOt/5DIK8ansjiQyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgysdYY26xqs3faS4n8aDDkcbAht62gu1crjmSIwibzDk00pM3uBktDLW0fCZgNISxDb76skZQNllfMQOJZVWnukMdA8hQxffYq5tSeDKjnpGJy62c5ApnS0X5FwKGAqdheqXB5kFPYjxhrIYd02cRRtTSzbvvGRAg/In8Y/xprvpNufXEfUOfkYAQ=="
+            "signature": "Es8DCs0CCBMYAipAPDEnsrz25QKRZcNkCfVGQfvpwYFUrC442LYiNqHQfcUcfBV5dOgs/H2OC8J8ZJSl0kHlNdeArkL7ADx/xsLrQjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBgeHI1wbCAUMIBxAAGhUBJCABysABzGcCOeIDTzcFh0gEJq0gBDIEEnHPJToEhQ7s2kIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBQXYz60hDjLYHQsI8mD2OJHQrpFtrOt/5DIK8ansjiQyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzsrP+Bf/kNiZuTETkaDHU2RgT0sK6CxaWZKCIwrr3DuINgmWAHSPi5rG0SRwetd4kSvh+YGaaRoxpl/D8Nr3vi9OPlNQHXLh+PCnszKi/AyJoM77nlIi/pgdAUbPy7BRdhoAI92+HuL/waHMPlEkrs0IE4yLxL2d7Z3OOEuBgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01HUws9iTidTVm2aWuFSa4F4",
+            "id": "toolu_01PBtSQeqrcV6foUPo1fh48q",
             "name": "sendReply",
             "input": {
-              "message": "8pm Thursday."
+              "message": "8pm Thursday at the pier."
             },
             "caller": {
               "type": "direct"
@@ -1986,15 +1986,15 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 35025,
-          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 4565,
+          "cache_read_input_tokens": 30460,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 35025,
+            "ephemeral_5m_input_tokens": 4565,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 74,
+          "output_tokens": 77,
           "output_tokens_details": {
-            "thinking_tokens": 19
+            "thinking_tokens": 18
           },
           "service_tier": "standard",
           "inference_geo": "global",

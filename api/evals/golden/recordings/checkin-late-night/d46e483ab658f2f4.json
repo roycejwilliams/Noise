@@ -1,7 +1,7 @@
 {
   "hash": "d46e483ab658f2f4",
   "case": "checkin-late-night",
-  "recorded_at": "2026-11-09T18:07:42.706Z",
+  "recorded_at": "2026-11-09T20:38:53.662Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,18 +1940,18 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"All good here. It's pretty late, Noor, go get some rest.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Good to hear. It's late there, go easy tonight, we can catch up more tomorrow.\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 4853,
-        "cache_read_input_tokens": 30460,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 35313,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 4853,
+          "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 93,
+        "output_tokens": 98,
         "output_tokens_details": {
-          "thinking_tokens": 24
+          "thinking_tokens": 20
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,21 +1959,21 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoNXEeskne8HapzEnEG",
+        "id": "msg_011CgszuA9nNJPJWMQcw8r5Y",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EvIDCs0CCBMYAipAHsyJgP6xxjtxIYphsi+GPyciop6k03mXCnGpCgTIlnqGL+I7Bps8fqJ7ATsz6w4ONRdTEZT3FMuXyxd+CWObgzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB7pfI1wbCAUMIBxAAGhUBJCABNUABM0cCOeIDTzcFKM4EJq0gBDIEEnHPJToE298pFkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBCTVP52pTjoSIaaY7tzuILTeNGwpsCjgDglSFPkSOZtSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgztvvsLebu8Eiim1SEaDFjfEC1qLpXgINxIPCIwJu4l0AaSTKeWAxcolvY2FQ6c/CvBLt+aTyOPivOOBO0ZEU6+b9IzLo3MM+4YrWYgKlLfCO6Tge5P4VDPtwQEfJeEAl+Vk3T7IK9muZhvQOpKr3BJxLTlhbDcNBvfChyI0M9Heq0AO8zOPYnEwXDSV0fTSmbtCKre7CcziUOcoC3sL4z8GAE="
+            "signature": "Et8DCs0CCBMYAipA5evflyfyHZ8tMbsK4AVgrk9Lk1nywA82hMg0fH+WNyz/IEttfzIiRk1ZrnXWRNjx34+88jG7hjNXwKAhPtSLvTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB3N7I1wbCAUMIBxAAGhUBJCABNUABM0cCOeIDTzcFKM4EJq0gBDIEEnHPJToE298pFkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBCTVP52pTjoSIaaY7tzuILTeNGwpsCjgDglSFPkSOZtSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyNAGsRtMVy1HJLuo0aDKbQd210Ad0b4Z8FTyIwMqZn4WwuC+sYZupUJp7w+YwJYoAdGs+4HqSC+DVBs8vtStvNqXirgsdBm0FIzo+XKj9afkZBSzb1s/qAGOHm5Y2usLxhP31G8YNg/Tlv1nIK5tct0tp2glp8WE1aoV9jVSvCxZVY9gPIIqQPAblbuzAYAQ=="
           },
           {
             "type": "tool_use",
-            "id": "toolu_01CPLFzVXZvs3eKQLALKsZW1",
+            "id": "toolu_01NiME6xAxEBvqVEAUskLPFh",
             "name": "sendReply",
             "input": {
-              "message": "All good here. It's pretty late, Noor, go get some rest."
+              "message": "Good to hear. It's late there, go easy tonight, we can catch up more tomorrow."
             },
             "caller": {
               "type": "direct"
@@ -1986,15 +1986,15 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 4853,
-          "cache_read_input_tokens": 30460,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 35313,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 4853,
+            "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 93,
+          "output_tokens": 98,
           "output_tokens_details": {
-            "thinking_tokens": 24
+            "thinking_tokens": 20
           },
           "service_tier": "standard",
           "inference_geo": "global",
