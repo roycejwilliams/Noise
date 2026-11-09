@@ -47,7 +47,7 @@ const draftWith = async (answer: string, transcript: string) => {
   check("the check-in tone rides (no grading, no required question, real quotes only)", t.includes(CHECKIN_TONE));
   check("what's stated about them is still only what they said on the call (the 10-06 guard stays)", /What you say about them comes only from what THEY said on the call/.test(t) && /never restate it as something they said/.test(t));
   check("the old 'a real follow-up every time' is gone (silence is valid now)", !/a real follow-up every time/.test(t));
-  check("the draft is given the task, with the correction and the member's picture after it as before", /task: `\$\{POST_CALL_TASK\}\$\{correcting \? `\\n\\n\$\{CALL_CORRECTION_TASK\}` : ""\}\$\{knowledge \? `\\n\\n\$\{postCallKnowledgeSection\(knowledge\)\}` : ""\}`/.test(src("jobs/postCallFollowUp.ts")));
+  check("the draft is given the task, with the correction and the member's picture after it as before", /task: `\$\{POST_CALL_TASK\}\$\{correcting \? `\\n\\n\$\{CALL_CORRECTION_TASK\}` : ""\}\$\{alone \? `\\n\\n\$\{CORRECTION_ALONE\}` : ""\}\$\{knowledge \? `\\n\\n\$\{postCallKnowledgeSection\(knowledge\)\}` : ""\}`/.test(src("jobs/postCallFollowUp.ts")));
 }
 
 // ---------------------------------------------------------------- 2. a worthwhile later contribution goes, through the usual checks
@@ -71,9 +71,9 @@ const draftWith = async (answer: string, transcript: string) => {
   check("on a hard day, a post-call SKIP never becomes the automatic fallback line", after.send === false && /fit skip/.test((after as { why: string }).why), after);
   const bare = P.moodFallbackDecision({ candidate: { type: "post_call", payload: { moodDraftSkipAt: "2026-11-09T12:00:00Z" } }, skip: "model chose SKIP", state, hardSince });
   check("(the bare SKIP it used to record would have sent that line: the change is what stops it)", bare.send === true, bare);
-  // Known and kept: the dispatch's one mood wait (firstDraftMoodWait) still applies to a reasoned SKIP, so a post-call SKIP on a hard
-  // day is drafted once more later (bounded by the 24h expiry); a second SKIP is dropped, never replaced by the fallback line.
-  check("(its one mood wait still applies: one later redraft, then silence)", P.firstDraftMoodWait({ payload: {} }, PC.POST_CALL_SKIP, state) === true);
+  check("and no mood wait either: a 'nothing to add' on a hard day stays silent, with no paid redraft", P.firstDraftMoodWait({ payload: {} }, PC.POST_CALL_SKIP, state) === false);
+  check("(other check-ins' bare SKIP keep their one mood wait)", P.firstDraftMoodWait({ payload: {} }, "model chose SKIP", state) === true);
+  check("the post-call skip reason is one constant, shared by the draft and the dispatch", PC.POST_CALL_SKIP === P.POST_CALL_SKIP);
 }
 
 // ---------------------------------------------------------------- 4. a suggestion whose fit can't be verified isn't sent as a claim
@@ -93,6 +93,22 @@ const draftWith = async (answer: string, transcript: string) => {
     try { return await PC.draftPostCallText("Jordan", STUCK, "", [], { theySaid: [], coInferred: [] }, null, null, [], [{ id: "c1", quote: "the dinner is Friday", type: "invented_fact", note: null, callKey: null, source: "audit", deliveredAt: null }]); } finally { P.setProactiveModelForTests(null); }
   })();
   check("the guard rides a text that carries a correction too", !!withCorrection && withCorrection.rules.forbidden?.includes(PC.POST_CALL_NO_INTRO) === true, withCorrection?.rules);
+}
+
+// ---------------------------------------------------------------- 5. a correction Cue owes is never dropped by a SKIP (review of #423)
+{
+  const correction = { id: "c1", quote: "the dinner is Friday", type: "invented_fact" as const, note: "they never gave a day", callKey: null, source: "audit" as const, deliveredAt: null };
+  const seen: string[] = [];
+  const answers = ["SKIP", "One thing from the call: I said the dinner was set for a day, and you never gave one, so don't hold onto that."];
+  P.setProactiveModelForTests(async (p) => { seen.push(p); return answers.shift() ?? "SKIP"; });
+  const r = await PC.draftPostCallText("Jordan", VENT, "", [], { theySaid: [], coInferred: [] }, null, null, [], [correction]).finally(() => P.setProactiveModelForTests(null));
+  check("correction + model SKIP: the correction is still sent, on its own", r?.text === "One thing from the call: I said the dinner was set for a day, and you never gave one, so don't hold onto that." && r.corrections.length === 1 && r.corrections[0].id === "c1", r);
+  check("the retry asks for the correction alone, phrased by Cue from the correction facts", seen.length === 2 && seen[1].includes(PC.CORRECTION_ALONE) && /what_you_said_on_the_call_that_was_wrong/.test(seen[1]) && !seen[0].includes(PC.CORRECTION_ALONE));
+  check("the correction task no longer allows a SKIP", !/If you would SKIP the follow-up, SKIP\./.test(PC.CALL_CORRECTION_TASK) && /Never SKIP a text that carries a correction: if there's no follow-up worth sending, send the correction on its own\./.test(PC.CALL_CORRECTION_TASK));
+  const seen2: string[] = [];
+  P.setProactiveModelForTests(async (p) => { seen2.push(p); return "SKIP"; });
+  const r2 = await PC.draftPostCallText("Jordan", VENT, "", [], { theySaid: [], coInferred: [] }, null, null, [], [correction]).finally(() => P.setProactiveModelForTests(null));
+  check("only if the correction alone also comes back empty does it fall back to today's follow-up (the correction waits, as before)", r2 === null && seen2.length === 3 && !/what_you_said_on_the_call_that_was_wrong/.test(seen2[2]), seen2.length);
 }
 
 console.log(`post-call take: ${total - failed}/${total} passed`);
