@@ -67,7 +67,7 @@ import { candidateClass, memberRuleCheck, memberRuleGate, MEMBER_RULE, PROACTIVE
 import type { Preference } from "../services/memberPreferences.js";
 import { BAND_NAME, deferredDoorExpiry, doorBand, doorRoute, enterDoor, gatherUntil, isDoorType, topBand, type Band, type DoorType } from "./door.js";
 import { closedReason, closedSubjectFor, droppedClosedDecision, loadClosedSubjects, subjectRefs, type ClosedSet, type ClosedSubject } from "./closedSubject.js";
-import { attentionChecks, deliveredItems, SEND_TIME, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, hardDayHolds, introHeldExpiry, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
+import { attentionChecks, deliveredItems, SEND_TIME, dropRepeatInterest, feelingCheck, feelingCheckApplies, foldPlan, isPossibleIntro, isUnrequested, NO_ASSERTED_FEELING, readThreads, threadReadDue, threadRiders, withoutPhrase, type AttentionState, type FeelingCheck } from "./attention.js";
 
 // How soon a check-in whose feeling read couldn't answer is tried again (harness/attention.ts feelingCheck infra).
 export const FEELING_READ_RETRY_MINUTES = 30;
@@ -901,19 +901,14 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (heldForMood(state) && HOLD_WHILE_STRUGGLING.has(c.type)) {
     checks.push({ name: "emotional_timing", pass: false, reason: `they've been struggling in the last day; this waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
-  // On a hard day only companionship goes (Royce, 2026-11-02, notification grouping item 8, harness/attention.ts hardDayHolds): a find
-  // or an offer Cue starts on its own waits until they're okay, at most the hold's cap (heldForMood). Timing only, never dropped for it.
-  // What they asked for (an answer to their ask, a delivery) still goes, as the 09-18 rule had it ("we can't isolate them").
-  // A pull on a hard day delivers only what they asked for themselves: every item Cue started (a find, an offer, an intro ask, a check-in)
-  // stays held, bounded by the same cap as the hold itself (heldForMood).
-  if (opts.pulled && heldForMood(state) && isUnrequested(candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload))) {
-    checks.push({ name: "hard_day", pass: false, reason: `a hard day: a pull delivers only what they asked for; the rest waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
+  // A pull on a hard day: a check-in Cue started stays held, bounded by the same cap as the hold itself (heldForMood). Their pull asked
+  // for what's waiting, so the finds and offers in it go (2026-11-09: a hard day never switches off the connection side).
+  if (opts.pulled && heldForMood(state) && candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload) === "checkin") {
+    checks.push({ name: "hard_day", pass: false, reason: `a hard day: a pull delivers what they asked for and what's waiting for them; a check-in waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
   }
-  // An update announcement isn't held by class on a hard day (2026-11-08): the send-time read judges it, told of the hard stretch
-  // (harness/momentFit.ts momentFitApplies, hardDay).
-  if (!opts.pulled && c.type !== "announcement" && hardDayHolds({ cls: candidateClass(c.type, opts.answering ?? isAnswering(c), c.payload), purpose: PROACTIVE_PURPOSE_MAP[c.type], payload: c.payload, held: heldForMood(state) })) {
-    checks.push({ name: "hard_day", pass: false, reason: `a hard day: only companionship goes; a find or an offer Cue starts waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
-  }
+  // No class hold on a hard day for a find or an offer Cue starts (Royce, 2026-11-08 for announcements; 2026-11-09 for finds and offers:
+  // "a hard-day read is a reason to be more thoughtful, not a blanket reason to go silent"). Each one goes to the send-time read, told of
+  // the hard stretch (harness/momentFit.ts momentFitApplies, hardDayRead), which decides send, wait or drop for that message.
   if (draftWaitRead(c, state)?.hold) {
     checks.push({ name: "mood_draft_wait", pass: false, reason: `its draft was skipped while they were struggling; it's written again once they're okay, at most ${MOOD_HOLD_CAP_HOURS}h after` });
   }
@@ -3057,13 +3052,6 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     if (due.length) await readThreads({ userId, items: due, threads: threads.map((t) => ({ id: t.id, text: t.text })), write: !opts.dryRun }).catch(() => null);
   }
   const ev = evaluateCandidates(state, opts);
-  // A possible intro a hard day holds waits, never expires inside the hold (review of #367: matching first): its valid-until moves to a
-  // day past now while it's held, which the hold's own cap bounds.
-  if (!opts.dryRun) for (const p of ev.perCandidate) {
-    if (!isPossibleIntro(p.candidate) || !p.checks.some((k) => k.name === "hard_day" && !k.pass)) continue;
-    const to = introHeldExpiry(p.candidate.expiresAt, state.now);
-    if (to) await pool.query(`UPDATE proactive_candidates SET expires_at = $2, updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [p.candidate.id, to]).catch(() => {});
-  }
   // Each mood hold and release, once (services/moodHold.ts): the rule, the kind, the candidate's id; never member text.
   if (!opts.dryRun) for (const p of ev.perCandidate) {
     const ref = `${userId}:${p.candidate.id}`;
@@ -3426,7 +3414,12 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // obligations never come through here. A check-in that waited is judged again on its kept draft first, and only drafted fresh once
   // the verdict is send. The send lock holds anything of theirs newer than this context's read (contextAt).
   const moment = (() => {
-    const applies = !opts.dryRun && !composed && STR.momentFitApplies(candidateClass(c.type, isAnswering(c), c.payload), c.payload, { pulled: opts.pulled, type: c.type });
+    // A find or an offer Cue started is read while the hard-day read is on (needsCare, past the hold's cap too: a fresh judgment, never an
+    // automatic release); a find bundle is judged on its composed text.
+    const cls = candidateClass(c.type, isAnswering(c), c.payload);
+    const hardDayOn = !!state.needsCare; // mood: carries the read to the send-time judgment (momentFit), which decides; never a hold
+    const hardDayLine = STR.hardDayLineFor({ held: heldForMood(state), on: hardDayOn, cls, type: c.type, payload: c.payload }); // mood: carries the read as the read's context line
+    const applies = !opts.dryRun && STR.momentFitApplies(cls, c.payload, { pulled: opts.pulled, type: c.type, hardDay: hardDayOn });
     const pay = (c.payload ?? {}) as { momentWaits?: number; momentUnread?: number; momentDraft?: string };
     const judge = async (message: string, checks: GateCheck[]): Promise<boolean> => {
       const zoneNow = known?.identity.zone ?? person.timezone;
@@ -3434,7 +3427,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
       // The read is told while the capped hard-day hold is on (2026-11-08 announcements, 2026-11-09 every message it covers): more
       // thought about this message now, never a blanket no. It also sees Cue's other messages waiting for them (loadQueuedFor).
       const queued = await STR.loadQueuedFor(pool, userId, c.id);
-      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date(), kind: c.type, hardDay: heldForMood(state), queued });
+      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date(), kind: c.type, hardDay: hardDayLine, queued });
       const waits = Number(pay.momentWaits ?? 0), unread = Number(pay.momentUnread ?? 0);
       const act = STR.momentAction(v, { waits, unread }, new Date());
       await recordDecision(STR.momentDecision({ userId, candidateId: c.id, kind: c.type, targetKey: c.targetKey, v, action: act, waits, unread })).catch(() => {});

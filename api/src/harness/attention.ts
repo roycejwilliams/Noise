@@ -16,8 +16,8 @@
 //   7  defaults  With no rule of their own: the first day is quiet; at most 1 unrequested message a day, 2 when they reply often
 //                (repliesOften); no Cue-started call and Cue-started text on the same day. A member's own rule about how often always
 //                wins over these, in both directions (memberSetsFrequency); their rule itself is enforced by harness/notifyGate.ts.
-//   8  state     On a hard day (the existing mood hold, services/moodHold.ts, bounded by its cap), only companionship goes: finds and
-//                offers Cue starts wait. A check-in never asserts a feeling the member didn't share: Cue's own draft is read against
+//   8  state     On a hard day finds and offers Cue starts go to the send-time read (2026-11-09: judged per message, never a class
+//                hold; harness/momentFit.ts). A check-in never asserts a feeling the member didn't share: Cue's own draft is read against
 //                their own words (feelingCheck).
 //
 //  10  send time Learned from the hour they usually write back (their own inbound times, no new store): an unrequested text waits for those
@@ -154,17 +154,10 @@ export function deliveredItems<T>(lead: T, extras: { candidate: T; messages: str
 }
 
 // Pure: a possible intro (harness/door.ts doorBand's intro band): matching comes first, so the defaults, the back-off and the one-thread
-// day never hold it. Their own rules and a hard day still time it (it waits, never dropped: introHeldExpiry).
+// day never hold it. Their own rules still time it; on a hard day it goes to the send-time read like any offer (harness/momentFit.ts).
 export const INTRO_ITEM_TYPES: ReadonlySet<string> = new Set(["network_tease", "event_match_nudge", "intro_nudge"]);
 export function isPossibleIntro(c: Item): boolean {
   return INTRO_ITEM_TYPES.has(c.type) || (c.payload as { intro?: boolean } | null)?.intro === true;
-}
-// Pure: an intro held by a hard day never expires inside the hold: its valid-until moves to at least a day past now (the hold itself is
-// bounded by its cap, so this is too). Null: nothing to move.
-export function introHeldExpiry(expiresAt: Date | null, now: Date): Date | null {
-  if (!expiresAt) return null;
-  const floor = now.getTime() + DAY;
-  return expiresAt.getTime() < floor ? new Date(floor) : null;
 }
 
 // ---------------------------------------------------------------- 6 and 7. back-off and the defaults
@@ -351,15 +344,9 @@ export function sendTimeCheck(o: { now: Date; zone: string | null; cls: SendClas
 
 // ---------------------------------------------------------------- 8. their state
 
-// Pure: on a hard day only companionship goes. A find or an offer Cue starts waits (a check-in, and anything they asked for, never do).
-// held: the mood hold as the pick reads it (proactive.ts heldForMood: bounded by the hold's cap) or a safety hold.
-export function hardDayHolds(o: { cls: SendClass; purpose: string | null | undefined; payload: unknown; held: boolean }): boolean {
-  if (!o.held || !isUnrequested(o.cls)) return false;
-  if ((o.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true) return false;
-  if (o.cls === "checkin") return false;
-  // A door text Cue's own look-out wrote is a find, whatever its path's purpose says.
-  return o.purpose !== "companion" || (o.payload as { door?: boolean } | null)?.door === true;
-}
+// No class hold on a hard day (Royce, 2026-11-09, replacing the 2026-11-02 "only companionship goes"): a find or an offer Cue starts
+// goes to the send-time read, told of the hard stretch (harness/momentFit.ts momentFitApplies, hardDayRead), which judges whether this
+// message helps them now. Check-ins and nudges keep their own capped wait (proactive.ts HOLD_WHILE_STRUGGLING); safety holds are apart.
 
 // Pure (item 6): the interest question never goes twice in a row unanswered. When Cue's last message closed with it and they haven't
 // written since, this one goes without its closing question.

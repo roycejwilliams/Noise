@@ -32,6 +32,7 @@
     "evals/proactive/cadence.ts",
     "evals/proactive/door.ts",
     "evals/proactive/attention.ts",
+    "evals/proactive/hardDayJudged.ts",
     "evals/proactive/pullAndSendTime.ts",
     "evals/preferences/capture.ts",
     "evals/preferences/enforce.ts",

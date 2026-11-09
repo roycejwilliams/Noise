@@ -7,6 +7,7 @@ const A = await import("../../src/harness/attention.js");
 const PR = await import("../../src/harness/proactive.js");
 const G = await import("../../src/harness/notifyGate.js");
 const CG = await import("../../src/harness/callGate.js");
+const MF = await import("../../src/harness/momentFit.js");
 type Candidate = import("../../src/harness/proactive.js").Candidate;
 type Preference = import("../../src/services/memberPreferences.js").Preference;
 type Counted = import("../../src/harness/notifyGate.js").Counted;
@@ -174,13 +175,15 @@ const names = (ks: { name: string; pass: boolean }[]) => ks.filter((k) => !k.pas
   const ev = PR.evaluateCandidates({ ...base, ...held, candidates: [profileFind, askFind, companion, intro, lookout] } as any);
   const ok = (id: string) => ev.eligible.some((c) => c.id === id);
   const why = (id: string) => ev.perCandidate.find((p) => p.candidate.id === id)!.checks.filter((k) => !k.pass).map((k) => k.name);
-  check("hard day: a find Cue started waits", !ok("h1") && why("h1").includes("hard_day"));
-  check("hard day: an offer Cue started waits, and a look-out's find too", why("h4").includes("hard_day") && why("h5").includes("hard_day"));
+  // 2026-11-09 (Royce): a hard day is a reason to be more thoughtful, never a class hold. Finds and offers Cue starts stay in the pick and
+  // go to the send-time read (harness/momentFit.ts), which judges each one (evals/proactive/hardDayJudged.ts).
+  check("hard day: a find Cue started isn't held by its class (it goes to the send-time read)", !why("h1").includes("hard_day"));
+  check("hard day: nor an offer Cue started, nor a look-out's find", !why("h4").includes("hard_day") && !why("h5").includes("hard_day"));
   check("hard day: companionship goes", ok("h3"));
   check("hard day: what they asked for still goes (an answer to their ask)", ok("h2"));
   const ev2 = PR.evaluateCandidates({ ...base, ...capped, candidates: [profileFind] } as any);
-  check("hard day: bounded by the hold's cap (timing only): at the cap the find competes again", ev2.eligible.some((c) => c.id === "h1"));
-  check("hard day: a safety follow-up is never held by it", !A.hardDayHolds({ cls: "checkin", purpose: "companion", payload: { safetyFollowUp: true }, held: true }) && !A.hardDayHolds({ cls: "unsolicited", purpose: "offer", payload: { safetyFollowUp: true }, held: true }));
+  check("hard day: at the cap the find still competes (and is still read: momentFit hardDay is needsCare)", ev2.eligible.some((c) => c.id === "h1"));
+  check("hard day: a safety follow-up is never read for it", !MF.hardDayRead("checkin", "companion", { safetyFollowUp: true }) && !MF.hardDayRead("unsolicited", "event_offer", { safetyFollowUp: true }));
   // A check-in never asserts a feeling they didn't share: Cue's own draft, against their own words only.
   const ELI_DRAFT = "Still thinking about the technical partner and community organizer search. Both still open, both still heavy. How's that sitting with you today?";
   const ELI_WORDS = ["finding people I can potentially partner with to build this, and also finding community organizers. They're both pressing."];
@@ -204,9 +207,7 @@ const names = (ks: { name: string; pass: boolean }[]) => ks.filter((k) => !k.pas
   check("intro: an intro ask Cue sends to the other side reads none of the defaults, the back-off or the one-thread day", checksFor({ item: introAsk, att: busy, joinedAt: pt("2026-11-03T09:00:00") }).length === 0 && checksFor({ item: nudge, att: busy }).length === 0);
   check("intro: a find on the same day still does (only intros are exempt)", names(checksFor({ item: find("profile"), att: busy })).length > 0);
   const evI = PR.evaluateCandidates({ now: NOW, timezone: ZONE, optedOut: false, sends: [], lastInboundAt: pt("2026-11-03T08:00:00"), joinedAt: OLD_MEMBER, needsCare: true, moodHold: { state: "held", hold: true, heldHours: 2 }, memberRules: { prefs: [], sent: busy.sent }, attention: busy, candidates: [introAsk] } as any);
-  check("intro: a hard day still times it (it waits)", evI.perCandidate[0].checks.some((k) => k.name === "hard_day" && !k.pass));
-  check("intro: held by a hard day, it never expires inside the hold (valid-until moves to a day past now)", A.introHeldExpiry(pt("2026-11-03T15:00:00"), NOW)?.getTime() === NOW.getTime() + 24 * HOUR && A.introHeldExpiry(pt("2026-11-09T15:00:00"), NOW) === null);
-  check("intro: the dispatch moves it while a hard day holds it", /if \(!isPossibleIntro\(p\.candidate\) \|\| !p\.checks\.some\(\(k\) => k\.name === "hard_day" && !k\.pass\)\) continue;\n    const to = introHeldExpiry\(p\.candidate\.expiresAt, state\.now\);/.test(src("harness/proactive.ts")));
+  check("intro: a hard day doesn't hold it (2026-11-09: the send-time read judges it)", !evI.perCandidate[0].checks.some((k) => k.name === "hard_day" && !k.pass) && MF.momentFitApplies("unsolicited", { door: true, intro: true }, { type: "direct_ask", hardDay: true }));
   // The feeling read: never a safety follow-up or a heavy-moment check-in; a read that can't answer waits, never counted.
   check("feeling: never read on a safety follow-up or the check-in after a heavy or hard moment", !A.feelingCheckApplies("checkin", { safetyFollowUp: true }) && !A.feelingCheckApplies("checkin", { heavy: { endedAt: "x" } }) && !A.feelingCheckApplies("checkin", { hardMoment: true }) && A.feelingCheckApplies("checkin", { threadId: "t" }) && !A.feelingCheckApplies("unsolicited", {}));
   const down = await A.feelingCheck({ userId: "u", draft: "x", ownWords: ["y"], generate: async () => { throw new Error("down"); } });
@@ -247,7 +248,7 @@ const names = (ks: { name: string; pass: boolean }[]) => ks.filter((k) => !k.pas
   const B_CHECKS = ["first_day_quiet", "default_daily", "call_text_same_day", "quiet_backoff", "thread_today", "hard_day", "attention_unread"];
   check("requested: on a first day, at the cap, after a call, after silence, on another thread and a hard day, the answer to their ask isn't held by B", !why("q1").some((n) => B_CHECKS.includes(n)), why("q1"));
   check("requested: nor a delivery they asked for at the door", !why("q2").some((n) => B_CHECKS.includes(n)), why("q2"));
-  check("requested: while what Cue started is held by every one of them", ["first_day_quiet", "default_daily", "call_text_same_day", "thread_today", "hard_day"].every((n) => why("q3").includes(n)), why("q3"));
+  check("requested: while what Cue started is held by every one of them (a hard day: read at send time, not held)", ["first_day_quiet", "default_daily", "call_text_same_day", "thread_today"].every((n) => why("q3").includes(n)) && !why("q3").includes("hard_day"), why("q3"));
   check("requested: a failed read holds only what Cue starts", (() => { const e = PR.evaluateCandidates({ ...state, needsCare: false, joinedAt: null, attention: null } as any); const w = (id: string) => e.perCandidate.find((p) => p.candidate.id === id)!.checks.filter((k) => !k.pass).map((k) => k.name); return w("q3").includes("attention_unread") && !w("q1").includes("attention_unread") && !w("q2").includes("attention_unread"); })());
   check("requested: a pure state without the attention read runs none of it (the existing tests' states)", !PR.evaluateCandidates({ ...state, needsCare: false, joinedAt: null, attention: undefined } as any).perCandidate.some((p) => p.checks.some((k) => B_CHECKS.includes(k.name))));
   check("requested: the fold never covers a requested delivery or a requested find", A.foldPlan({ included: [find("ask-1", {}, { id: "q0" })], pending: [doorReq, askFind], classOf: (x) => G.candidateClass(x.type, PR.isAnswering(x), x.payload) }).length === 0);

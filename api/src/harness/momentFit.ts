@@ -36,8 +36,29 @@ export type MomentVerdict = { verdict: "send" | "wait" | "drop"; why: string; re
 // Pure: which sends the moment read covers: Cue's optional check-ins, and update announcements (2026-11-08: an announcement is judged
 // right before it goes instead of being held by class on a hard day; the read is told of the hard stretch, momentPrompt hardDay).
 // An announcement a member pulled ("anything for me?") is theirs to have asked for, and isn't read.
-export function momentFitApplies(cls: SendClass, payload: unknown, o: { pulled?: boolean; type?: string } = {}): boolean {
+// Finds and offers Cue starts (Royce, 2026-11-09: "a hard-day read is a reason to be more thoughtful, not a blanket reason to go silent";
+// "mood shouldn't stop the sweeps from running or evaluating possible fits. It should inform whether a particular find is worth bringing
+// to the member now"): no class hold on a hard day; while the hard-day read is on (needsCare, before or after the hold's 48h cap) each one
+// is judged here, told of the hard stretch. At the cap that is a fresh judgment, never an automatic release. What they asked for (an
+// answer to their ask, a delivery: class "requested") never comes through here and keeps its own timing. Check-ins and Cue's companion
+// texts are unchanged (read as before), and so are the check-ins and nudges that wait out a hard day (proactive.ts HOLD_WHILE_STRUGGLING).
+export const HARD_DAY_READ_TYPES: ReadonlySet<string> = new Set(["event_offer", "event_match_nudge", "bounce_proposal", "bounce_calendar_offer", "co_event", "direct_ask", "search_result"]);
+// Pure: a find or an offer Cue started that the moment read judges on a hard day (a text at the door that Cue's own look-out wrote, too).
+export function hardDayRead(cls: SendClass, type: string | undefined, payload: unknown): boolean {
+  const p = (payload ?? {}) as { safetyFollowUp?: boolean; door?: boolean };
+  if (cls !== "unsolicited" || p.safetyFollowUp === true) return false;
+  return HARD_DAY_READ_TYPES.has(String(type ?? "")) || p.door === true;
+}
+// Pure: whether the read is told of the hard stretch (HARD_DAY_LINE). held: the capped hold (proactive.ts heldForMood), as every read
+// had it; on: the hard-day read itself (needsCare): a find or an offer read past the hold's cap still hears it, so its fresh judgment
+// knows why it is being judged.
+export function hardDayLineFor(o: { held: boolean; on: boolean; cls: SendClass; type?: string; payload: unknown }): boolean {
+  return o.held || (o.on && hardDayRead(o.cls, o.type, o.payload));
+}
+export function momentFitApplies(cls: SendClass, payload: unknown, o: { pulled?: boolean; type?: string; hardDay?: boolean } = {}): boolean {
   if (o.type === "announcement") return !o.pulled;
+  // A find or an offer Cue started, while the hard-day read is on (hardDay: needsCare): judged, never held by its class.
+  if (o.hardDay && !o.pulled && hardDayRead(cls, o.type, payload)) return true;
   // The text after a call (Royce, 2026-11-09): Cue's own next thought, not something they asked to receive, so it is judged like any
   // optional message. A call ending is not a reason on its own to text. One that carries a correction Cue owes from the call is not
   // optional and skips the read (harness/proactive.ts carriesCallCorrection); a held recap is closed without a draft.
