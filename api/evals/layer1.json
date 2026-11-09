@@ -331,6 +331,7 @@
     "evals/loop/offerDue.ts",
     "evals/docs/readDocument.ts",
     "evals/capabilities/directAsk.ts",
-    "evals/member/matchPicture.ts"
+    "evals/member/matchPicture.ts",
+    "evals/momentFit/today.ts"
   ]
 }
