@@ -6,6 +6,7 @@ import { DateTime } from "luxon";
 import { isStated } from "../services/provenance.js";
 import { followUpEvidence, PRESUMES_THEY_WENT } from "../services/followUpEvidence.js";
 import pool from "../db/db.js";
+import { notToTeammate } from "../services/teamLines.js";
 import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
 import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type Person, type ProactiveRegistry, type TypeSpec } from "./proactive.js";
@@ -367,6 +368,26 @@ const doorEntry: TypeSpec = {
   },
 };
 
+// The last companion check-in on this thread (either queue's key), and whether a text or call of theirs came after it. null: the read
+// failed (threadChase holds the check-in). row null: none went.
+async function threadLastCheckin(userId: string, threadId: string): Promise<{ row: { sentAt: Date; message: string | null } | null; theirSince: boolean } | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT sent_at, message FROM proactive_sends WHERE user_id = $1 AND type = 'companion' AND (target_key LIKE $2 OR target_key LIKE $3) ORDER BY sent_at DESC LIMIT 1`,
+      [userId, `companion:thread:${threadId}:%`, `companion:reflection:${threadId}:%`],
+    );
+    if (!rows[0]) return { row: null, theirSince: false };
+    const sentAt = new Date(rows[0].sent_at);
+    const { rows: since } = await pool.query(
+      `SELECT 1 FROM co_memories WHERE user_id = $1 AND created_at > $2 AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()})) LIMIT 1`,
+      [userId, sentAt],
+    );
+    return { row: { sentAt, message: rows[0].message ?? null }, theirSince: since.length > 0 };
+  } catch {
+    return null;
+  }
+}
+
 export const proactiveRegistry: ProactiveRegistry = {
   event_offer: {
     // A reminder rides alone and is drafted here; every other offer goes out through the bundle composer (harness/bundleComposer.ts),
@@ -532,9 +553,19 @@ export const proactiveRegistry: ProactiveRegistry = {
       const { coOwns, ownedWorkFor } = await import("./memberThreads.js");
       const owned = await ownedWorkFor(c.userId);
       if (c.payload.thread && coOwns(c.payload.thread.text, owned)) return skip("Cue owns this thread: an open task delivers it");
+      // Once per problem, no chasing (agent/companionCheckin.ts threadChase): the last check-in on this thread, and whether anything of
+      // theirs came since. Its words ride to the draft so they're never repeated.
+      let thread = c.payload.thread ?? null;
+      if (thread && c.payload.threadId) {
+        const last = await threadLastCheckin(c.userId, String(c.payload.threadId));
+        const { threadChase } = await import("../agent/companionCheckin.js");
+        const chase = threadChase(last === null ? { sentAt: new Date(0) } : last.row, last === null ? null : last.theirSince);
+        if (!chase.ok) return skip(`not chased: ${chase.why}`);
+        if (last?.row?.message) thread = { ...thread, lastSaid: last.row.message };
+      }
       // A moment is said only while the record still backs it: a "went" needs their stated going (services/milestones.ts).
       if (c.payload.story?.key && !(await import("../services/milestones.js").then((M) => M.milestoneConfirmed(c.userId, c.payload.story.key)).catch(() => false))) return skip("the moment isn't confirmed by them: only theirs to say");
-      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null, c.payload.heavy ?? null, owned);
+      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", thread, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null, c.payload.heavy ?? null, owned);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP: no specific open thread");
     },
     async onSent(c, _p, messages) {
