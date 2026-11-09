@@ -315,6 +315,7 @@ export const CALL_FROM_CORE = [
   corePiece(CO_CORE_PARTS.voice, /\n\n+/, "You know what time it is for them"),
   corePiece(CO_CORE_PARTS.voice, /\n\n+/, "When you advise"),
   corePiece(CO_CORE_PARTS.listening, /\n/, "Never announce a check-in"),
+  corePiece(CO_CORE_PARTS.listening, /\n/, "Venting and wanting help"),
 ].join("\n\n");
 
 // Pure: the agent's prompt from the voice layer (2026-10-08, Royce: "put what the Hume prompt had into ElevenLabs"). Hume's

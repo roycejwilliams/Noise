@@ -3,6 +3,7 @@
   "files": [
     "src/scripts/checkCoVoice.ts",
     "evals/reply/codeChecks.ts",
+    "evals/followThrough/replyNoRigidSplit.ts",
     "evals/reply/stateClaims.ts",
     "evals/reply/askedFor.ts",
     "evals/reply/threadWindow.ts",
