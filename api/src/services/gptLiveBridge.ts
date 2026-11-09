@@ -134,13 +134,13 @@ export function endGuard(o: { cueLast: { text: string; startMs: number } | null;
 }
 
 // Pure: what they said after afterMs on the transcript timeline, on timing and length only (Royce, 10-31: never code reading their words
-// for a goodbye). Their fragments chain into one utterance while each starts within continuationGapMs of the previous one's end. An
-// utterance begun before afterMs whose words after it are continuationMaxWords or fewer is only that utterance's end (speech recognition
-// split "Bye. Have a good" / "one" around Cue's "You too", 2026-11-09), and a listening sound is nothing new either. Such an end must
-// start no later than goodbyeOverlapMs after Cue's line started (lineMs; the real splits were ~100-200 ms): words that begin clearly
-// after Cue's goodbye started ("Oh wait", "Hold on") are always new, however short (review of #427).
+// for a goodbye). Their fragments chain into one utterance while each starts within continuationGapMs of the previous one's end. In an
+// utterance begun before afterMs, a single word after it starting no later than goodbyeTailMs after Cue's line started (lineMs) is only
+// that utterance's end (speech recognition split "Bye. Have a good" / "one" around Cue's "You too" ~200 ms in, 2026-11-09; "you" ~100 ms
+// in, 11-07). Two words or more, or a later start ("Oh wait", "Hold on", "One more thing."), are always new (review of #427). A
+// listening sound is nothing new either.
 // newAt: where the first new words after afterMs start (null: none). tail: some of their words after afterMs were only such an end.
-export function memberAfter(frags: Frag[], afterMs: number, lineMs: number = afterMs, gapMs: number = GPT_LIVE.continuationGapMs, maxWords: number = GPT_LIVE.continuationMaxWords, windowMs: number = GPT_LIVE.goodbyeOverlapMs): { newAt: number | null; tail: boolean } {
+export function memberAfter(frags: Frag[], afterMs: number, lineMs: number = afterMs, gapMs: number = GPT_LIVE.continuationGapMs, tailMs: number = GPT_LIVE.goodbyeTailMs): { newAt: number | null; tail: boolean } {
   const theirs = frags.filter((f) => f.who === "member" && f.text.trim()).sort((a, b) => a.startMs - b.startMs);
   let tail = false;
   for (let i = 0; i < theirs.length; ) {
@@ -152,7 +152,7 @@ export function memberAfter(frags: Frag[], afterMs: number, lineMs: number = aft
     if (!after.length) continue;
     const text = after.map((f) => f.text.trim()).join(" ");
     if (listeningSound(text)) continue;
-    if (after.length < u.length && after[0].startMs <= lineMs + windowMs && text.split(/\s+/).filter(Boolean).length <= maxWords) { tail = true; continue; }
+    if (after.length < u.length && after[0].startMs <= lineMs + tailMs && text.split(/\s+/).filter(Boolean).length === 1) { tail = true; continue; }
     return { newAt: after[0].startMs, tail };
   }
   return { newAt: null, tail };
