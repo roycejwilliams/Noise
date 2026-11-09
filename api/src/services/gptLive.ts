@@ -64,6 +64,9 @@ export const GPT_LIVE = {
   // or fewer (gptLiveBridge.ts memberAfter). Timing and length only: never what the words say.
   continuationGapMs: 1200,
   continuationMaxWords: 3,
+  // An end held because they spoke after the goodbye is decided again only by a turn of theirs within this of the hold; after it, a
+  // later end needs a fresh goodbye of its own (review of #427).
+  heldEndMs: 6000,
   wrapUpMs: 60_000, // how long before a session's cap GPT-Live is asked to wrap up
   guardCacheMs: 20_000, // the live guards are read at most this often per call, as on the ElevenLabs proxy
   preflightTimeoutMs: 3000, // the outbound check of OpenAI's key before dialing
