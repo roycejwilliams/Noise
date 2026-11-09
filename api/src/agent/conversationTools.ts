@@ -33,6 +33,8 @@ import { askEntries } from "../harness/profileWrite.js";
 import { localStamp, memberZone, memberZoneOrFallback } from "../services/memberTime.js";
 import { DateTime } from "luxon";
 import { googleTools } from "../services/googleTools.js";
+import { registrationTools, realRegistrationEnv } from "./registrationTools.js";
+import { registrationLive } from "../services/eventRegistration/approvals.js";
 import { loopTools, newLoopState, type LoopState } from "./loopTools.js";
 import { FIND_READS_PER_TURN, findsRedraftNote, ignoresFinds, isPost, realFindUseRead, turnFinds, unlinkedFinds } from "./findGuards.js";
 import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
@@ -2287,6 +2289,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
   // The calendar and Docs grants (services/googleTools.ts). Team-only tools are taken out again now that these are in.
   Object.assign(tools, googleTools(ctx, notDone));
+  // Registering them for another host's free Luma event (agent/registrationTools.ts): no such tools for anyone until live submission
+  // and the copy are approved (services/eventRegistration/approvals.ts), so today's tools and prompts are unchanged.
+  if (registrationLive()) Object.assign(tools, registrationTools(ctx, realRegistrationEnv, notDone));
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).

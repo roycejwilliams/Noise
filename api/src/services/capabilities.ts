@@ -1,5 +1,6 @@
 import { RECALL_USE, RECALL_CALL_USE } from "./conversationRecall.js";
 import { CRISIS_RESOURCES } from "./safetyText.js";
+import { registrationLive } from "./eventRegistration/approvals.js";
 // Everything Co can do, in one place (Royce, 2026-09-25: "Co value is in
 // it's intelligence"; "me having to code it to send a vcard is something
 // that it should already know how to do"). Co reads this about itself on
@@ -53,6 +54,8 @@ export type Ability = {
   // How the tool is used on a call, when that differs from texting (shareLink on a call takes the names of things on file, since
   // the call's prompt carries no links). Becomes the call tool's description.
   callUse?: string;
+  // What their yes is read against, when it's narrower than `can` (a registration's own question): null falls back to `can`.
+  confirmScope?: (input: any, userId: string) => Promise<string | null>;
 };
 
 // Co's calling line is a different number from the one it texts from
@@ -634,6 +637,63 @@ export const ABILITIES: Ability[] = [
   },
 ];
 
+// Registering them for another host's free Luma event (Royce, 2026-11-09; agent/registrationTools.ts). Kept out of ABILITIES, so no tool,
+// sheet line or member menu mentions it, until live submission and the copy are both approved (eventRegistration/approvals.ts); then
+// they join ABILITIES below. Going live also changes the LIMITS line "Cue can't book, buy, register them for events..." (its hash is
+// pinned in evals/capabilities/rules.ts), which changes every reply prompt: a golden re-record then.
+export const REGISTRATION_ABILITIES: Ability[] = [
+  {
+    id: "prepare_registration",
+    sheet: "Cue can register them for a free Luma event it found and sent them: it reads the whole form first, asks once for anything missing, and registers only on their yes to its explicit question. Never a paid event, never past a bot check, and never \"you're in\" before the page says so.",
+    can: "Cue can register them for a free event on another host's Luma page that it found and sent them, on their yes to a question naming the event, the details it would share and any terms; it reads the whole form first and asks for anything missing in one go.",
+    tool: "prepareEventRegistration",
+    limits: { perTurn: 1 },
+    use: "When they want to go to a Luma event Cue sent them (they say they're going, ask you to sign them up, or ask how to register) and it's free, offer to register them: call this first. It reads the event's whole public form without submitting anything and gives you the one ask to send, word for word: either what's still missing (a detail, or a draft for an open question like \"why do you want to attend?\") or the question that asks to register them. drafts: only for the open questions it lists, only from their own words, with those words as basis; never invent motivation, credentials or agreement. fit: one short sentence on why it fits, only from the event's own page or what the find said, or leave it out. Not on a passing \"interesting\" or because it looks like a good match: they have to want to go. Never for an event Cue didn't send them.",
+  },
+  {
+    id: "save_registration_answers",
+    sheet: null,
+    can: "Cue keeps the answers they give for one registration (their own words, or a draft they approved), for that event only.",
+    tool: "saveRegistrationAnswers",
+    limits: { perTurn: 1 },
+    use: "They answered your registration ask: a missing detail in their words (from: their_words), an edit to the draft (their_words), or approving the draft as you showed it (from: draft_as_shown, with their approval quoted in theirApproval). Keeps the answers for this one registration and gives you the next ask to send word for word, usually the question that asks to register them. It never registers them: a yes to a draft is not a yes to register.",
+  },
+  {
+    id: "register_for_event",
+    sheet: null,
+    can: "Cue registers them for the event it asked about, using the details and answers it listed, once they say yes to that question.",
+    tool: "registerForEvent",
+    limits: { perTurn: 1 },
+    confirm: "their_yes",
+    use: "They said yes to your question \"Want me to register you for this event using these details and answers?\" (or to registering after an unconfirmed try). It reads the page again and registers them only if nothing changed and they haven't taken it back, then gives you the line to send word for word: registered, submitted pending approval, waitlisted, already registered, a code to ask for, or that it didn't go through. Never on a yes to a draft or a detail, on \"interesting\", or before that question was asked. Never say they're in unless it says registered.",
+  },
+  {
+    id: "use_registration_code",
+    sheet: null,
+    can: "Cue enters the code Luma emailed them, once, for a signup that's waiting on it, and doesn't keep it.",
+    tool: "useRegistrationCode",
+    limits: { perTurn: 1 },
+    use: "They texted the code Luma emailed them for a signup that's waiting on one. The code is read from their message; never repeat it, quote it or put it in your reply.",
+  },
+  {
+    id: "stop_registration",
+    sheet: null,
+    can: "Cue stops a registration it asked about when they no longer want it, before anything is submitted.",
+    tool: "stopEventRegistration",
+    limits: { perTurn: 1 },
+    use: "They don't want the registration you asked about after all (before it's submitted): stop it, and say so in a few words.",
+  },
+];
+// The read of their yes, scoped to this registration's own question (agent/toolGuard.ts): a yes to registering for THIS event with
+// THESE details, never a yes to a draft or to something else.
+const registrationYesScope = async (input: any, userId: string): Promise<string | null> => {
+  const { registrationById } = await import("./eventRegistration/registrationStore.js");
+  const rec = await registrationById(userId, String(input?.registrationId ?? "")).catch(() => null);
+  return rec?.askText ? `Register them for the event in Cue's question, using exactly the details, answers and terms it listed (a yes to a draft or a detail alone is not this): ${rec.askText.slice(0, 900)}` : null;
+};
+REGISTRATION_ABILITIES.find((a) => a.id === "register_for_event")!.confirmScope = registrationYesScope;
+if (registrationLive()) ABILITIES.push(...REGISTRATION_ABILITIES);
+
 // What Cue no longer does for anyone (2026-11-04): drafting or sending their emails, plan sheets, reading their email (someone changing jobs still gets people and communities; only watching job listings or boards is out). Tested against the task being started only. A
 // task is never started for one of these, by text or on a call (agent/conversationTools.ts startTask), and the call briefing says so.
 export const NOT_ASSISTANT_ASK = /\b(?:draft|write|compose)\b[^.?!]{0,40}\b(?:e-?mails?|inquir(?:y|ies)|cold outreach)\b|\bplan sheet\b|\bone-?page(?:r)? (?:plan|sheet|itinerary)\b|\bread (?:my )?(?:e-?mail|inbox|gmail)\b|\b(?:watch|monitor|track|scan|alert|notify)\b[^.?!]{0,40}\bjob (?:listings?|postings?|boards?|openings?)\b|\bjob (?:listings?|postings?|boards?)\b[^.?!]{0,30}\b(?:watch|monitor|track|scan|alert)/i;
@@ -711,13 +771,13 @@ export function teamOnlyTools(): string[] {
 
 // A tool's description, from its entry.
 export function toolUse(tool: string, surface: Surface = "text"): string {
-  const a = ABILITIES.find((x) => x.tool === tool);
+  const a = ABILITIES.find((x) => x.tool === tool) ?? REGISTRATION_ABILITIES.find((x) => x.tool === tool);
   if (!a?.use) throw new Error(`capabilities: no entry for tool ${tool}`);
   return surface === "call" && a.callUse ? a.callUse : a.use;
 }
 
 export function abilityForTool(tool: string): Ability | undefined {
-  return ABILITIES.find((a) => a.tool === tool);
+  return ABILITIES.find((a) => a.tool === tool) ?? REGISTRATION_ABILITIES.find((a) => a.tool === tool);
 }
 
 // ---------- The list a member hears (item 9, 2026-10-12: the call briefing kept its own "complete" list that left out decks,
@@ -840,6 +900,8 @@ export const CHANGES_SOMETHING: ReadonlySet<string> = new Set([
   "answerProposal", "answerShareAsks", "shareAskInIntros", "answerBriefName", "requestEventIntro", "markArrived",
   "voiceRead", "shareLocationYes", "deleteImages",
   "sendInvite", "calendarConnection",
+  // Registering for an event changes a record; listed only once those tools exist (registrationLive), like every other registry tool.
+  ...(registrationLive() ? REGISTRATION_ABILITIES.map((a) => a.tool!) : []),
 ]);
 
 // What can never run on a call, even if it were listed above.

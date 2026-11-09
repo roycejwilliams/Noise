@@ -25,5 +25,6 @@
   "evals/golden/estimate.ts",
   "evals/golden/ledger.ts",
   "evals/golden/snapshot.ts",
-  "evals/registration/fixtures.ts"
+  "evals/registration/fixtures.ts",
+  "evals/registration/fakeStore.ts"
 ]
