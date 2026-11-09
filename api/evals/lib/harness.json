@@ -24,5 +24,6 @@
   "evals/golden/wording.ts",
   "evals/golden/estimate.ts",
   "evals/golden/ledger.ts",
-  "evals/golden/snapshot.ts"
+  "evals/golden/snapshot.ts",
+  "evals/registration/fixtures.ts"
 ]

@@ -333,6 +333,8 @@
     "evals/capabilities/directAsk.ts",
     "evals/member/matchPicture.ts",
     "evals/momentFit/today.ts",
-    "evals/registration/core.ts"
+    "evals/registration/core.ts",
+    "evals/registration/core.ts",
+    "evals/registration/driver.ts"
   ]
 }
