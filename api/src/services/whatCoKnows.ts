@@ -628,6 +628,8 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     `SELECT id, happened_at, meta->>'quote' AS quote FROM co_facts WHERE owner_user_id = $1 AND relation = 'already_knows' AND retired_at IS NULL ORDER BY happened_at DESC LIMIT 10`,
     [userId],
   ).catch(() => [] as any[]);
+  // Their event signups' saved answers (services/eventRegistration/registrationStore.ts): their own rows only.
+  const signupRows = await q(`SELECT id, event_name, form, answers FROM event_registrations WHERE user_id = $1 AND answers <> '{}'::jsonb ORDER BY updated_at DESC LIMIT 20`, [userId]).catch(() => [] as any[]);
   const eventRows = await q(
     `SELECT 'plan' AS kind, id::text AS id, event_name_raw AS name, event_date::text AS day_on, NULL::text AS arrived_via, true AS att FROM planned_event_mentions WHERE user_id = $1 AND (event_date IS NULL OR event_date >= CURRENT_DATE - 1)
      UNION ALL
@@ -645,8 +647,6 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
      LIMIT 80`,
     [userId],
   ).catch(() => [] as any[]);
-  // Their event signups' saved answers (services/eventRegistration/registrationStore.ts): their own rows only.
-  const signupRows = await q(`SELECT id, event_name, form, answers FROM event_registrations WHERE user_id = $1 AND answers <> '{}'::jsonb ORDER BY updated_at DESC LIMIT 20`, [userId]).catch(() => [] as any[]);
   const freeRows = await import("./wantWhen.js").then(async (WW) => {
     const { localDay } = await import("./memberTime.js");
     return (await WW.freeTimesOf(userId, localDay(new Date(), zone ?? null), db as any)).map((f) => ({ id: f.id, text: WW.describeFreeTime(f), quote: f.quote }));
