@@ -4,8 +4,23 @@ import { splitRecap } from "../services/claims.js";
 import { judgeCheckin, ruledOut } from "../brain/index.js";
 import { CHECKIN_TONE } from "../services/coVoice.js";
 
-// One of their open threads (harness/memberThreads.ts), as the cron hands it.
-export type CompanionThread = { text: string; quote: string; dueDate: string | null; feeling: string | null };
+// One of their open threads (harness/memberThreads.ts), as the cron hands it. lastSaid: what Cue's last check-in on this same thread
+// said, when one went (filled at draft time by the registry, threadLastCheckin), so a take or a question is never repeated.
+export type CompanionThread = { text: string; quote: string; dueDate: string | null; feeling: string | null; lastSaid?: string | null };
+
+// Once per problem, no chasing (Royce, 2026-11-09). A check-in on a thread already went, and they haven't texted or called since: the
+// next one on that thread isn't drafted (silence isn't rejection, but a second unanswered text on the same thing is chasing). Anything
+// of theirs since (new information) opens it again. Pure.
+export function threadChase(last: { sentAt: Date } | null, theirSince: boolean | null): { ok: true } | { ok: false; why: string } {
+  if (!last) return { ok: true };
+  if (theirSince === null) return { ok: false, why: "whether they've said anything since the last check-in on this thread couldn't be read" };
+  if (!theirSince) return { ok: false, why: "the last check-in on this thread got nothing back yet: not chased" };
+  return { ok: true };
+}
+
+// Model-facing (2026-11-09): how a thread check-in may carry Cue's own take instead of a question, in place of "ask how it's going" alone.
+export const THREAD_TAKE_TASK = `First work out, from their own words, what they were actually weighing or stuck on, if anything, and whether they wanted help with it. Then either ask how it's going or where it landed, in a few plain words that show you remember what they said; or, when their words show they were stuck on a real decision or problem and wanted a way through, give your own grounded take or one next step that's theirs to take, in place of the question. A take is enough on its own. Offer it as your read, theirs to correct, built only from what they said; never name a deeper problem they didn't express, and never push a solution on something they were only getting off their chest.`;
+export const THREAD_NO_REPEAT = `what_you_last_said_about_it is your last check-in on this same thing: never repeat it or ask it again. Send only something new it doesn't already cover, or SKIP.`;
 // At most one useful thing, already checked against its own page.
 export type CompanionItem = { kind: "web"; name: string; url: string; reason: string };
 
@@ -162,14 +177,15 @@ async function draftFromThread(
       // Feelings shape how it's said, never whether (standing rule).
       ...(thread.feeling ? { how_they_felt_saying_it: thread.feeling } : {}),
       ...(item ? { one_thing_found_for_it: `${item.name}: ${item.reason} ${item.url}` } : {}),
+      ...(thread.lastSaid ? { what_you_last_said_about_it: thread.lastSaid.slice(0, 400) } : {}),
       recap_for_background_only: recap.slice(0, 1500),
     },
-    task: `Write a short text about the_thing_they_are_in_the_middle_of, like a friend who remembered: ask how it's going or where it landed${thread.dueDate ? " (the_date_they_gave is a plan of theirs and nothing says it happened: if that day has passed, ask whether it happened, never how it went and never as if it did)" : ""}, in a few plain words that show you remember what they said. Let how_they_felt_saying_it shape the tone (gentler if it was weighing on them), without naming the feeling.${
+    task: `Write a short text about the_thing_they_are_in_the_middle_of, like a friend who remembered. ${THREAD_TAKE_TASK}${thread.dueDate ? " (the_date_they_gave is a plan of theirs and nothing says it happened: if that day has passed, ask whether it happened, never how it went and never as if it did.)" : ""} Let how_they_felt_saying_it shape the tone (gentler if it was weighing on them), without naming the feeling.${
       item
         ? ` Then mention one_thing_found_for_it in one short sentence with its link, as something you came across that might help with it. If it wouldn't actually help with this, leave it out and offer nothing. Nothing else offered.`
-        : ` Offer nothing: no events, no links, no suggestions.`
-    } Never promise anything Cue will do later. Don't mention any other person. Start with the thought itself, not a greeting like "Hey". ${CHECKIN_TONE}`,
-    maxSentences: item ? 3 : 2,
+        : ` Offer nothing to go to or look at: no events, no links, no people.`
+    }${thread.lastSaid ? ` ${THREAD_NO_REPEAT}` : ""} Never promise anything Cue will do later. Don't mention any other person. Start with the thought itself, not a greeting like "Hey". ${CHECKIN_TONE}`,
+    maxSentences: 3,
   });
   if (!text) return null;
   // A dated plan is intent, not evidence it happened (Royce, 2026-11-04): a line that takes for granted it did is never sent.
@@ -181,6 +197,6 @@ async function draftFromThread(
     text,
     rules: carriesItem
       ? { maxSentences: 3, maxChars: 360, allowUrl: true, mustIncludeAny: [item!.url] }
-      : { maxSentences: 2, maxChars: 240 },
+      : { maxSentences: 3, maxChars: 300 },
   };
 }
