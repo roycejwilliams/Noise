@@ -14,7 +14,7 @@ import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { enqueueCandidate } from "../harness/proactive.js";
-import { isScoreBasis, signalTarget, type EmotionSignal } from "../harness/emotion.js";
+import { isHardRead, isScoreBasis, signalTarget, type EmotionSignal } from "../harness/emotion.js";
 import { memberZone } from "./memberTime.js";
 import { SELF_HARM, plainPunctuation } from "./safetyText.js";
 
@@ -34,7 +34,7 @@ export const HEAVY = {
   priority: 5,
 };
 
-export type HeavySignal = Pick<EmotionSignal, "source" | "emotion" | "intensity" | "valence" | "about" | "quote" | "target" | "basis"> & { at: Date };
+export type HeavySignal = Pick<EmotionSignal, "source" | "emotion" | "intensity" | "valence" | "about" | "quote" | "target" | "basis" | "readKind" | "feltBy" | "framing"> & { at: Date };
 
 export type HeavyEpisode = {
   key: string;
@@ -67,7 +67,10 @@ export function pickEpisode(signals: HeavySignal[], now: Date, timezone: string 
     .filter((s) => s.at.getTime() >= since && s.at <= now && signalTarget(s) === "life")
     .sort((a, b) => a.at.getTime() - b.at.getTime());
   // Frustration with Co, and a voice score on its own (ElevenLabs' frustration score, Hume's voice read), are not their life.
-  const negative = life.filter((s) => s.valence === "negative" && !isScoreBasis(s.basis) && !ABOUT_CO_TOO.test(`${s.about ?? ""} ${s.quote ?? ""}`.slice(0, 400)));
+  // Only a hard read counts (harness/emotion.ts isHardRead, 2026-11-09): their own distress, felt now, or an old read without a kind
+  // when high. A concern they're working through (a decision, a risk, a business worry), someone else's feeling, a recounted or
+  // hypothetical one, or an unsure read never queues a care text: a calm deliberation isn't "something hard they shared".
+  const negative = life.filter((s) => isHardRead(s) && !ABOUT_CO_TOO.test(`${s.about ?? ""} ${s.quote ?? ""}`.slice(0, 400)));
   if (!negative.length) return null;
   // The latest episode: walk back while readings are close together.
   const gap = HEAVY.episodeGapHours * 3_600_000;
@@ -84,6 +87,8 @@ export function pickEpisode(signals: HeavySignal[], now: Date, timezone: string 
   // They have since had a good moment: it already passed.
   // A voice score alone never clears it (voice never dismisses what they said).
   if (life.some((s) => s.valence === "positive" && !isScoreBasis(s.basis) && s.at > endedAt)) return null;
+  // Or they told Cue since that they're okay: that settles an episode of medium reads, never one with a high one in it.
+  if (!highs.length && life.some((s) => s.readKind === "settled" && s.at >= endedAt && !episode.includes(s))) return null;
   const zone = timezone && DateTime.now().setZone(timezone).isValid ? timezone : "America/Los_Angeles";
   const local = DateTime.fromJSDate(endedAt).setZone(zone);
   const due = local.plus({ days: 1 }).set({ hour: HEAVY.dueHour, minute: 0, second: 0, millisecond: 0 });
@@ -127,7 +132,7 @@ export async function queueHeavyCheckins(now = new Date()): Promise<number> {
   let queued = 0;
   for (const u of rows) {
     const { rows: sig } = await pool.query(
-      `SELECT source, emotion, intensity, valence, about, quote, target, basis, created_at AS at
+      `SELECT source, emotion, intensity, valence, about, quote, target, basis, read_kind AS "readKind", felt_by AS "feltBy", framing, created_at AS at
        FROM emotion_signals WHERE user_id = $1 AND created_at > $2 ORDER BY created_at`,
       [u.user_id, new Date(now.getTime() - HEAVY.lookbackHours * 3_600_000)],
     );

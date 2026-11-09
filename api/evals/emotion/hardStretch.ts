@@ -227,13 +227,76 @@ for (const [quote, emotion, intensity] of distress) {
   (pool as any).query = realQuery;
 }
 
-// ================================================================ 9. no new block: the change adds no consumer
+// ================================================================ 9. no new block: the new state has only the consumers asked for
 {
   const root = new URL("../../", import.meta.url).pathname;
-  const users = execSync("grep -rlwE 'isHardRead|readKind|saidOkayAt|readNote' src --include='*.ts' --exclude=migrations.ts || true", { cwd: root, encoding: "utf8" }).trim().split("\n").filter(Boolean).sort();
-  check("9a. the new state is read only where the read is built and rendered (no new gate on finds or offers)", users.join() === ["src/harness/emotion.ts"].join(), users);
+  const users = execSync("grep -rlwE 'isHardRead|readKind|saidOkayAt|readNote' src --include='*.ts' || true", { cwd: root, encoding: "utf8" }).trim().split("\n").filter(Boolean).sort();
+  // emotion.ts builds and renders it; the two heavy-moment readers narrow to it (review of #430); migrations.ts names it in a comment.
+  const expected = ["src/db/migrations.ts", "src/harness/emotion.ts", "src/harness/replyGrounding.ts", "src/services/heavyMoment.ts"];
+  check("9a. the new state is read only where the read is built and rendered, and by the two heavy-moment readers (no new gate on finds or offers)", users.join() === expected.join(), users);
   // The guide is the same words in both reads.
   check("9b. both reads carry the same guide", turnReadAddendum(null, null).includes(EMOTION_READ_GUIDE) && readFileSync(new URL("../../src/harness/emotion.ts", import.meta.url), "utf8").includes("${EMOTION_READ_GUIDE}"));
+}
+
+// ================================================================ 10. migrations: only the three emotion_signals columns are new
+{
+  const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
+  // Review of #430: a find-and-replace once renamed these to read_kind; every proactive send insert would fail on a fresh database.
+  check("10a. ask_checkins still adds kind", /ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'find'/.test(mig));
+  check("10b. co_tasks still adds kind", /ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'work'/.test(mig));
+  check("10c. proactive_sends still adds kind", /ALTER TABLE proactive_sends ADD COLUMN IF NOT EXISTS kind TEXT`/.test(mig));
+  const readKindLines = mig.split("\n").filter((l) => /\bread_kind\b|\bfelt_by\b|\bframing\b/.test(l) && /ADD COLUMN/.test(l));
+  check("10d. read_kind, felt_by and framing are added to emotion_signals and nowhere else", readKindLines.length === 3 && readKindLines.every((l) => /ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS (read_kind|felt_by|framing) TEXT`/.test(l)), readKindLines);
+}
+
+// ================================================================ 11. distress wins over "I'm fine" (review of #430)
+{
+  const masked = turn({ emotion: { emotion: "hopeless", intensity: "medium", valence: "negative", about: "the point of anything", target: "life", felt_by: "member", framing: "own", kind: "distress" }, says_okay: true });
+  check("11a. 'I'm fine, I just don't see the point of anything' (stub: distress, says_okay): stays distress", masked.emotion?.readKind === "distress", masked.emotion);
+  const m = sig({ ...(masked.emotion as NonNullable<TextEmotion>), quote: "I'm fine, I just don't see the point of anything" }, 0.5);
+  check("11b. ... and keeps the hard stretch and the hold", state([m], 0.5).e.needsCare && state([m], 0.5).hold.state === "held");
+  const okay = sig({ ...(withReadFields(null, null, true) as NonNullable<TextEmotion>) }, 1);
+  const high = sig({ emotion: "devastated", intensity: "high", valence: "negative", readKind: "distress", feltBy: "member", framing: "own" }, 4);
+  const hs = state([high, okay], 1);
+  check("11c. a later 'I'm fine' never clears a high distress read the same day", hs.e.needsCare && hs.e.hardAt?.getTime() === ago(4).getTime(), hs.e);
+  check("11d. ... and the state never says 'take their word' beside it", !hs.e.saidOkayAt && !/take their word/.test(renderEmotionalContext(hs.e, NOW)));
+  const medium = sig({ emotion: "low", intensity: "medium", valence: "negative", readKind: "distress", feltBy: "member", framing: "own" }, 2);
+  const mixedDay = state([high, medium, okay], 1);
+  check("11e. their word clears a medium distress read but the day's high one still stands", mixedDay.e.needsCare && mixedDay.e.hardAt?.getTime() === ago(4).getTime(), mixedDay.e);
+  const legacyHigh = sig({ emotion: "devastated", intensity: "high", valence: "negative" }, 3);
+  check("11f. an old high read is not cleared by a later okay either", state([legacyHigh, okay], 1).e.needsCare);
+}
+{
+  // On a call: a high distress line, then "I'm okay" later on the same call.
+  const transcript = ["assistant: How are you?", "user: honestly everything is falling apart and I can't cope with any of it", "assistant: I'm here.", "user: anyway I'm fine, really, let's move on"].join("\n");
+  const fake = (mm: Record<string, TextEmotion>) => async (message: string) => {
+    for (const [k, v] of Object.entries(mm)) if (message.includes(k)) return v;
+    return null;
+  };
+  const moments = await callEmotionMoments(transcript, fake({ "falling apart": { emotion: "overwhelmed", intensity: "high", valence: "negative", about: "everything", target: "life", readKind: "distress", feltBy: "member", framing: "own" }, "I'm fine": withReadFields(null, null, true) }));
+  const at = ago(1);
+  check("11g. a high distress line on a call is not cleared by a later 'I'm fine' on the same call", state(moments.map((x) => ({ ...x, at }))).e.needsCare, moments);
+}
+
+// ================================================================ 12. the heavy-moment readers use the same rule (review of #430)
+{
+  const { pickEpisode } = await import("../../src/services/heavyMoment.js");
+  const { heavyMoment } = await import("../../src/harness/replyGrounding.js");
+  const hs = (o: Partial<Sig>, h: number) => ({ source: "text" as const, emotion: "uneasy", intensity: "medium" as const, valence: "negative" as const, about: "the decision", quote: "should I worry about it", target: "life" as const, basis: null, ...o, at: ago(h) });
+  const concernDay = royce.map(([emotion, about], i) => hs({ emotion, about, readKind: "concern", feltBy: "member", framing: "own" }, 2 + i));
+  check("12a. the next-day care check-in: the five concern reads queue nothing", pickEpisode(concernDay, NOW, "America/Los_Angeles") === null);
+  check("12b. ... nor do two old medium reads without a kind", pickEpisode([hs({}, 3), hs({}, 2)], NOW, "America/Los_Angeles") === null);
+  const distressDay = [hs({ emotion: "low", about: "the breakup", quote: "I can't get out of bed since the breakup", readKind: "distress", feltBy: "member", framing: "own" }, 3), hs({ emotion: "exhausted", about: "everything", quote: "everything's falling apart", readKind: "distress", feltBy: "member", framing: "own" }, 2)];
+  check("12c. two medium distress reads still make an episode", pickEpisode(distressDay, NOW, "America/Los_Angeles") !== null);
+  check("12d. an old high read still makes an episode", pickEpisode([hs({ intensity: "high", emotion: "grieving", about: "my dad", quote: "my dad passed" }, 2)], NOW, "America/Los_Angeles") !== null);
+  check("12e. someone else's feeling makes none", pickEpisode([hs({ intensity: "high", readKind: "distress", feltBy: "other", about: "my co-founder" }, 2)], NOW, "America/Los_Angeles") === null);
+  check("12f. their later word that they're okay settles a medium episode", pickEpisode([...distressDay, hs({ emotion: "okay", intensity: "low", valence: "mixed", about: null, quote: null, readKind: "settled" }, 1)], NOW, "America/Los_Angeles") === null);
+  check("12g. ... never one with a high distress read in it", pickEpisode([hs({ intensity: "high", readKind: "distress", feltBy: "member", framing: "own" }, 2), hs({ emotion: "okay", intensity: "low", valence: "mixed", about: null, quote: null, readKind: "settled" }, 1)], NOW, "America/Los_Angeles") !== null);
+  const ctx = (current: Sig) => ({ ...summarizeSignals([], NOW), current });
+  check("12h. heavyMoment: a high concern right now is not heavy", !heavyMoment(ctx(sig({ emotion: "worried", intensity: "high", valence: "negative", readKind: "concern" }, 0.5))));
+  check("12i. heavyMoment: high distress right now is heavy", heavyMoment(ctx(sig({ emotion: "panicked", intensity: "high", valence: "negative", readKind: "distress" }, 0.5))));
+  check("12j. heavyMoment: an old high read without a kind is heavy, as before", heavyMoment(ctx(sig({ emotion: "panicked", intensity: "high", valence: "negative" }, 0.5))));
+  check("12k. heavyMoment: someone else's high distress is not", !heavyMoment(ctx(sig({ emotion: "panicked", intensity: "high", valence: "negative", readKind: "distress", feltBy: "other" }, 0.5))));
 }
 
 console.log(`hard stretch: ${total - failed}/${total} passed`);
