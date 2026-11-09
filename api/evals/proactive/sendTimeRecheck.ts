@@ -208,7 +208,9 @@ for (const [name, s] of Object.entries(STATES)) {
 }
 
 // ---------------------------------------------------------------- 4. deferred sends: the row waits, rechecked at the minute it comes due
-const row = (over: Record<string, unknown> = {}) => ({ id: 1, user_id: ROWAN, phone_number: "+15035550177", type: "direct_ask", target_key: KEY, messages: ["Sam would like to meet you. Open to it?"], timezone: zone, after_kind: null, after_payload: null, due_at: new Date(NOW.getTime() - 60_000), status: "queued", attempts: 0, created_at: new Date(NOW.getTime() - 6 * 3_600_000), error: null, archived: false, ...over });
+// The deferred runner reads the real clock (runDueDeferredSends(new Date())), so the row is aged against it, not the pinned NOW:
+// pinned, it aged past the 72h window three days after NOW and the hold checks failed for a date reason (seen 2026-11-09).
+const row = (over: Record<string, unknown> = {}) => ({ id: 1, user_id: ROWAN, phone_number: "+15035550177", type: "direct_ask", target_key: KEY, messages: ["Sam would like to meet you. Open to it?"], timezone: zone, after_kind: null, after_payload: null, due_at: new Date(Date.now() - 60_000), status: "queued", attempts: 0, created_at: new Date(Date.now() - 6 * 3_600_000), error: null, archived: false, ...over });
 for (const [name, s] of Object.entries(STATES)) {
   R.setSendHoldReaderForTests(async () => s);
   const h = harness();
@@ -255,13 +257,13 @@ for (const [name, s] of Object.entries(STATES)) {
   const h = harness();
   const heard: any[] = [];
   const handlers = { ...D.afterHandlers, event_direct_ask: async (_p: any, o: string, r?: string) => void heard.push([o, r]) } as any;
-  h.setRow(row({ created_at: old(80) }));
+  h.setRow(row({ created_at: new Date(Date.now() - 80 * 3_600_000) }));
   try {
     const out = await D.runDueDeferredSends(new Date(), { send: P.sendExempt, handlers });
     check("window: a held Cue-started row past its window is skipped, not sent and not requeued", out.skipped === 1 && out.requeued === 0 && h.ledger.outbox.length === 0 && h.decisions.some((d) => d.decision === "proactive.deferredSend" && d.action === "skipped" && /past its window/.test(String(d.reason))), { out, d: h.decisions.map((d) => d.action) });
   } finally { h.restore(); }
   const g = harness();
-  g.setRow(row({ created_at: old(2) }));
+  g.setRow(row({ created_at: new Date(Date.now() - 2 * 3_600_000) }));
   try {
     const out = await D.runDueDeferredSends(new Date(), { send: P.sendExempt, handlers: D.afterHandlers });
     check("attempts: a held row is requeued and gives its attempt back", out.requeued === 1 && g.deferred.some((d) => /attempts = attempts - 1/.test(d.sql)), g.deferred.map((d) => d.sql));
