@@ -1,7 +1,7 @@
 {
   "hash": "7460e8f4f3a52c11",
   "case": "whats-ahead",
-  "recorded_at": "2026-11-09T18:06:23.747Z",
+  "recorded_at": "2026-11-09T20:37:25.468Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "Thursday I'll check in on the branding work and see where it landed. Nothing else on the calendar from my side this week.",
+      "text": "Thursday morning I'll check in on the branding work, that's the one thing on the calendar from me.\n\nOtherwise your week's wide open on my end, nothing else scheduled.",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 4722,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 4722,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 69,
+        "output_tokens": 58,
         "output_tokens_details": {
-          "thinking_tokens": 29
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,18 +1959,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoGiaNQApXs8LtW7L8s",
+        "id": "msg_011CgszngFLps9shRVGfcgmF",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EvoDCs0CCBMYAipAajjwcH7kHN95RZZ3KMB/vjJsjvoVNq0otvoguKkF8fmI1GoAeDwYm/KKjVGITRMA7zMIo2qTrLqxZfvuwUSMOjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBn5fI1wbCAUMIBxAAGhUBJCABc/0BGpgCOeIDTzcF+ooEJq0gBDIEEnHPJToEQZmG5kIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCRqqQ4SeNGVgUISsIf4bIa6mW+KoOW9xyR2zGV0QiIMiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzg4NhJpPuN/FQY4QoaDCAGNYQ63mNDRyTIiiIw2TwEzKLtfRTZRY878JYP/OQo781SSJnt7aFdgBxzHehCcm5jNybdaDOGTKf0vtSIKlpgpodmPjs3J3O4vkLFv/aasFBK9zyFr+D5Kou5y1zWTGSDDJFndEt7rdoLA/a8MRniA1OHJryCeM5uJtPylX56CxPzmYDNP/rWdsQ7XdrD74FSID2870xDH3QYAQ=="
-          },
-          {
             "type": "text",
-            "text": "Thursday I'll check in on the branding work and see where it landed. Nothing else on the calendar from my side this week."
+            "text": "Thursday morning I'll check in on the branding work, that's the one thing on the calendar from me.\n\nOtherwise your week's wide open on my end, nothing else scheduled."
           }
         ],
         "container": null,
@@ -1985,9 +1980,9 @@
             "ephemeral_5m_input_tokens": 4722,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 69,
+          "output_tokens": 58,
           "output_tokens_details": {
-            "thinking_tokens": 29
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

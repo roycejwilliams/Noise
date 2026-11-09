@@ -1,7 +1,7 @@
 {
   "hash": "6cef65566cd3b156",
   "case": "hey-co-alias",
-  "recorded_at": "2026-11-09T18:09:06.888Z",
+  "recorded_at": "2026-11-09T20:39:55.007Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 4320,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 76,
+        "output_tokens": 74,
         "output_tokens_details": {
-          "thinking_tokens": 17
+          "thinking_tokens": 15
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,18 +1959,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoUYso4ER2eGcrUGEtQ",
+        "id": "msg_011CgszyimCYcGUqUevsKxt2",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EtQDCs0CCBMYAipAXgxw+KOz06hf7dKMb4WVY/QovW2jAAYyK9ssqcURbiP2D35S0Jm07Wlq2IoQO5pXA7vRGp+HvN5seJazBTNT7DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBwpjI1wbCAUMIBxAAGhUBJCABNUABulICOeIDTzcFDcMEJq0gBDIEEnHPJToEnrZoLkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAgGq4N/KVQMMfb+YllS/c4lTcDN3ibG93EFqEA5DgPhCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwEQdDWyYKbdo0MgbQaDE5eysCxuNT/+XVddSIwCG0t1xoVhe0dWR11SzAub4VoinWcZ8doTJb8hyeVj7/U293A1rlC8z8XWFjPkKpjKjQ5vgC1GdaQFqpsYhNSgNI6GWGX+pIZTeCLa0rwh962B9lrheAGrGtR1rtNiXcNxjJPw1quGAE="
+            "signature": "EtUDCs0CCBMYAipAME3JkD2BtMVuwDvOJUeuTvs2LGq9H/g6CkvcBX3tWn+WcDvjUWNb2elUXca3AmLsPwFdCj2gxRE1mxkYnGrO2DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBmt/I1wbCAUMIBxAAGhUBJCABNUABulICOeIDTzcFDcMEJq0gBDIEEnHPJToEnrZoLkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAgGq4N/KVQMMfb+YllS/c4lTcDN3ibG93EFqEA5DgPhCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgysm5vD8Wv2g42ovDQaDLfJ/qPvTUm2Y3bTVSIwRAh0kin6IrnJYAODO54h3b1/wmxC3doPB8abFfbrgo3KbQLR+zFqLXXiwT5Fu/+wKjXYliNn/ESnQdhBx8TcTnB47MH0RiqkS64FWtX+ruFGhnKn0YAesJKoPgUJOfERvajGx9GPcRgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01UAsPBgzvguoahbB5ysPvaa",
+            "id": "toolu_01RPLpxsU3WXnsNanZSavGyh",
             "name": "sendReply",
             "input": {
               "message": "Hey. What's on your mind?"
@@ -1992,9 +1992,9 @@
             "ephemeral_5m_input_tokens": 4320,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 76,
+          "output_tokens": 74,
           "output_tokens_details": {
-            "thinking_tokens": 17
+            "thinking_tokens": 15
           },
           "service_tier": "standard",
           "inference_geo": "global",

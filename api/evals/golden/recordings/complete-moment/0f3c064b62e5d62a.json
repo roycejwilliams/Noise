@@ -1,7 +1,7 @@
 {
   "hash": "0f3c064b62e5d62a",
   "case": "complete-moment",
-  "recorded_at": "2026-11-09T18:12:06.729Z",
+  "recorded_at": "2026-11-09T20:42:40.507Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Full budget approved, no notes. That pricing slide earned its keep.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Full budget approved, no cuts. That's a great outcome, and the pricing slide held exactly like you said it would.\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 7933,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 7933,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 91,
+        "output_tokens": 84,
         "output_tokens_details": {
-          "thinking_tokens": 20
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,21 +1959,16 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsohzE9K6UL9T8JZm999",
+        "id": "msg_011Cgt1Bu78fFUhznJuudQTM",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "Et8DCs0CCBMYAipAwNvE9BgPPKQNY7BuZdzgEOFXP2WKmQBffFmqecgUReUXMTmUdRC/GUIKGxObRkUAPPZNmNa1r4+vgChieKDi9DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB9pnI1wbCAUMIBxAAGhUBJCABANUBhegCOeIDTzcFx+cEJq0gBDIEEnHPJToEPahX10IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiB+VbrebJc0zv7WVIdR7nW3Ip3Vj3V7m0ZTcj8CDGpkQSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyg/qPR+Bock2EpY+oaDKsi4WPl7tkpmioSoCIwRLYwHFH12rdiUEafEXQndBqRU5GPIRflICWrKAdlCHYoR4mGlOXkM3B40vq0CjUNKj88U8pzQ2iHtSvtcOHW1QDhRyVPqzViHy+yb6+Iivt5+L1kMfetMXE8dr7DzkTSx4JDB8nHQB/Ce5+EyREfna0YAQ=="
-          },
-          {
             "type": "tool_use",
-            "id": "toolu_019FZAcDrAZPHNZYVYmv9nJL",
+            "id": "toolu_01Vkwj9ttRn9WLky5TFFARAZ",
             "name": "sendReply",
             "input": {
-              "message": "Full budget approved, no notes. That pricing slide earned its keep."
+              "message": "Full budget approved, no cuts. That's a great outcome, and the pricing slide held exactly like you said it would."
             },
             "caller": {
               "type": "direct"
@@ -1992,9 +1987,9 @@
             "ephemeral_5m_input_tokens": 7933,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 91,
+          "output_tokens": 84,
           "output_tokens_details": {
-            "thinking_tokens": 20
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

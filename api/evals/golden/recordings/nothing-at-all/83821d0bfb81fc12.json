@@ -1,7 +1,7 @@
 {
   "hash": "83821d0bfb81fc12",
   "case": "nothing-at-all",
-  "recorded_at": "2026-11-09T18:06:04.469Z",
+  "recorded_at": "2026-11-09T20:36:59.619Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "Honestly, nothing right now, there's no active search running for you.\n\nHappy to start one if there's something or someone you want me looking for.",
+      "text": "[tool_use sendReply {\"message\":\"Honestly, nothing right now. Nothing's queued up for you, so if there's something you want me watching for, people, events, a room worth getting into, just say the word.\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 4120,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 4120,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 80,
+        "output_tokens": 139,
         "output_tokens_details": {
-          "thinking_tokens": 36
+          "thinking_tokens": 39
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,22 +1959,29 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoFH98yENQpVX6uDsdK",
+        "id": "msg_011CgszkjuoEPUCzKdt4DfLg",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EpMECs0CCBMYAipATyl9eRsysoGOs4rT6AMWL+ic0dR5CjjOpuqXoFf/UTtCWlSuZiMMzXT6Cp3ETLvYtEYqYn3emriKtGSWbie8ezIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBi5fI1wbCAUMIBxAAGhUBJCABc/0BBEwCOeIDTzcFdVMEJq0gBDIEEnHPJToE+oFhkEIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBierIzYODkQusQOAVSkxcJHYDCp/+Cl6K10LcGH1XG8yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyCoue3+b5/jZJs63caDC7nkKX+GRsUv30ZXCIwbdPXBKvbWAepjx9+faNhVRouR6xQXTHQ8yBC/v9FqTCbVKL2FVC9BkCgYvaDqvT3KnOvxj9Tc7/ABbR/D88P2ifc5PHH1Uet5g70hHrCgf7QqzQUtyTIIXsA01dUKkOPmCd+OKeqmwN8fIumtGF3yi5FkC0EIRd04OotAmpqfq+6LHuxEJSEeoDDRzzjaXcoRr1puaMb9B+3gRG9B+lHdOE+toW5GAE="
+            "signature": "EpgECs0CCBMYAipAP+vkmrD/S6AMZ54jfLqN8elHbIlhd0rt3pbTsVFXnOUhEXqpaL4/NHGSuyJT+8uQ39amBiM69+aoBp/iLrR+gTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB6t3I1wbCAUMIBxAAGhUBJCABc/0BBEwCOeIDTzcFdVMEJq0gBDIEEnHPJToE+oFhkEIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBierIzYODkQusQOAVSkxcJHYDCp/+Cl6K10LcGH1XG8yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwCZczix/vez4VKu4MaDIo9n9otWn+/EB0bZiIw+cKwdBVAVbgEoGPkvXtONrzQZfSbk6moYnobR4tEx0cH0brUW9gApdIfWzHx+fLrKniUG+RmIV3Y9av5/jVPHC6jXYsLbJLg/7YV47Ij4njN4wEnW41Fb8LVUQegDPFZ9i8wVIYMyixWSd9fCbcH0yzNJsRHTQQSsKZk5oDu6E8LkSvrgdftMmtB2qlX6Lpy0HxQ0i7/PxM+CszS2c448BhHcpzJeKAS4EQYAQ=="
           },
           {
-            "type": "text",
-            "text": "Honestly, nothing right now, there's no active search running for you.\n\nHappy to start one if there's something or someone you want me looking for."
+            "type": "tool_use",
+            "id": "toolu_01YZ5zMJJra8Evd8jMVkuTSy",
+            "name": "sendReply",
+            "input": {
+              "message": "Honestly, nothing right now. Nothing's queued up for you, so if there's something you want me watching for, people, events, a room worth getting into, just say the word."
+            },
+            "caller": {
+              "type": "direct"
+            }
           }
         ],
         "container": null,
-        "stop_reason": "end_turn",
+        "stop_reason": "tool_use",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
@@ -1985,9 +1992,9 @@
             "ephemeral_5m_input_tokens": 4120,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 80,
+          "output_tokens": 139,
           "output_tokens_details": {
-            "thinking_tokens": 36
+            "thinking_tokens": 39
           },
           "service_tier": "standard",
           "inference_geo": "global",

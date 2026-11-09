@@ -1,7 +1,7 @@
 {
   "hash": "c72a59a1e0843a7f",
   "case": "member-sweep",
-  "recorded_at": "2026-11-09T18:09:14.452Z",
+  "recorded_at": "2026-11-09T20:40:01.735Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "I'm Cue. I help you figure out who's worth meeting and what's worth your time, and set it up when it makes sense.",
+      "text": "I'm Cue. I help you figure out who's worth meeting and get you there.",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 4531,
@@ -1949,7 +1949,7 @@
           "ephemeral_5m_input_tokens": 4531,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 41,
+        "output_tokens": 27,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -1959,13 +1959,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoVFnuzwPjzcYdN2SiD",
+        "id": "msg_011CgszzEeYwZiNxhM3yy7Fj",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "I'm Cue. I help you figure out who's worth meeting and what's worth your time, and set it up when it makes sense."
+            "text": "I'm Cue. I help you figure out who's worth meeting and get you there."
           }
         ],
         "container": null,
@@ -1980,7 +1980,7 @@
             "ephemeral_5m_input_tokens": 4531,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 41,
+          "output_tokens": 27,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

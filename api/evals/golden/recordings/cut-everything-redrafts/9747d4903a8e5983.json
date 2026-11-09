@@ -1,7 +1,7 @@
 {
   "hash": "9747d4903a8e5983",
   "case": "cut-everything-redrafts",
-  "recorded_at": "2026-11-09T18:10:10.376Z",
+  "recorded_at": "2026-11-09T20:40:37.673Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use searchEvents {\"what\":\"anything interesting this week\",\"city\":\"San Francisco\",\"when\":\"this week\",\"whileLooking\":\"Taking a look at what's on in SF this week.\",\"why\":\"Jordan asked for anything in SF right now\"}]",
+      "text": "[tool_use searchEvents {\"what\":\"anything interesting this week\",\"city\":\"San Francisco\",\"when\":\"this week\",\"whileLooking\":\"Checking what's on in SF this week.\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 0,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 193,
+        "output_tokens": 152,
         "output_tokens_details": {
-          "thinking_tokens": 16
+          "thinking_tokens": 12
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,25 +1959,24 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoZK3jTRod88ZcoW41F",
+        "id": "msg_011Cgt12m5S2CzPprby22LAk",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EuMDCs0CCBMYAipAPWlLk7WaCaQxysKE0gHloJM5J0k3vRIgFOpU4RJ2NMcEjGcDZkwV8pkFc+qsZotG9bxUOMgMEkYnHJE8+NoKhDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBgZnI1wbCAUMIBxAAGhUBJCABc/0B/FwCOeIDTzcFzVsEJq0gBDIEEnHPJToECvB8w0IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCMkA59wiQN2qMOoYIYy/bewF0o3SSdiBXp/vCw8ejcqyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwktUcaUUoz+ygHZwkaDHq0nm/sLnct+O8DXSIw4TxqWe6I45K2KyOwxcKRzj8jagbCwLjj/uqONwFCur7KqzJ4jgQcnnBjI5q6fR76KkOtRymBd/JDXhKCYr55dZf55WHO03KievTmSlmh3eUQ28hAwO1WuDrr/xfpWxukFeMat4LcACn+GEWH9/Wu780v3KzzGAE="
+            "signature": "EswDCs0CCBMYAipAXE96c6ccOWlTEW9ntiAjUBowQUUOXjHmkyX+Ql0BSgThkvvKSBbq/jx0WiY9QGUMnWrrmjYPJSqXAFZuwE6yATIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBxN/I1wbCAUMIBxAAGhUBJCABc/0B/FwCOeIDTzcFzVsEJq0gBDIEEnHPJToECvB8w0IEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCMkA59wiQN2qMOoYIYy/bewF0o3SSdiBXp/vCw8ejcqyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgy1r9mNzCml9pnca8UaDJ0jR0kAzES2dfufuiIwSgaMTVFmwywb751Ldk6e0YpAnldKuT9PkfZUOxkqPvPaOHCi8b3ACgjE6p7DHfKkKizAS0fB7Jdaa9/lwUtlrgBZJ374yHJ7zyiyabSYSzSXbhN3LI84OmH4PNCnxxgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01L6LQaeTN3BgMMguQwbQkRw",
+            "id": "toolu_01Nzb5yDtT52bU3937eTTtnb",
             "name": "searchEvents",
             "input": {
               "what": "anything interesting this week",
               "city": "San Francisco",
               "when": "this week",
-              "whileLooking": "Taking a look at what's on in SF this week.",
-              "why": "Jordan asked for anything in SF right now"
+              "whileLooking": "Checking what's on in SF this week."
             },
             "caller": {
               "type": "direct"
@@ -1996,9 +1995,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 193,
+          "output_tokens": 152,
           "output_tokens_details": {
-            "thinking_tokens": 16
+            "thinking_tokens": 12
           },
           "service_tier": "standard",
           "inference_geo": "global",

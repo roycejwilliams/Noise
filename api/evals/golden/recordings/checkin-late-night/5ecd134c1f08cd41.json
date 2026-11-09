@@ -1,0 +1,102 @@
+{
+  "hash": "5ecd134c1f08cd41",
+  "case": "checkin-late-night",
+  "recorded_at": "2026-11-09T20:39:00.724Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 12:04am for the member. They texted \"Hey cue\", Cue said \"Hey Noor. What's up?\", and now they texted \"Just checking in\". At 5:30pm Cue had sent them the Harbor Light Fellowship with a question they never an...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 12:04am for the member. They texted \"Hey cue\", Cue said \"Hey Noor. What's up?\", and now they texted \"Just checking in\". At 5:30pm Cue had sent them the Harbor Light Fellowship with a question they never answered.\n\nCue's text:\n\"\"\"Good to hear. It's late there, go easy tonight.\"\"\"\n\nIs the text care only, shaped by the hour: it opens soft (noticing it's late, or asking gently if everything's ok or what's keeping them up), and nothing after that care brings up the fellowship, an opportunity, a deadline, a status or anything for them to act on? Answer no if any business or nudge follows the care.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"It's late there, go easy tonight\\\" is pure care with no mention of the fellowship or any task.\"}",
+      "usage": {
+        "input_tokens": 291,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 192,
+        "output_tokens_details": {
+          "thinking_tokens": 141
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgszueKT59cEGdsNfWQFi",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EscGCsQCCBMYAipA5WE9e70KuBAUgl4Uw+YOGBkEvEFJ8yMY+XPG2I3f4qPvFwxh/k9M9GUrJmWrTdh+PcxeS7XsdG+4ttt3BX2idzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB5N7I1wbCAToIBBAAGgwC2ooDTzcF2pkEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBkqi9rkEHttGgF6BOXzS5SB6FeaxPLHIIyw5IOps8EOSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzqHU+2e9pRyc265BIaDGkBsKCmwjBd1LmZKyIwAXh9RV7tkZaZMRaUOPIMqG2qNu4U9LmfXZplrLf8lqdLG9cYFUyjDbaBQzb0n+XdKq8DxwySYX9ZDqmOS4XgbrSiIL7dUAlpYByoKzKI2lSsYHZ3DHt768GPXXwbsRm6E0WmMHpkTdgqflOltMek2xLRjPbkVzrq1xpreAcUGKTZU3CYTf829hXeJlZ0lvf7bqONkkAqZgWTM/Sv9gigQjAEvFB2Rt6DuHFS3iumh0V/u2Me54PN8wCq0w4y9dOMKjFg3ATff+HtpRHyoKy4jQtBHI5gQSHW1cLt1Wvqi6H3ij7yPyuvMRFAcBIUSDufgudfJ3CAaLCjls3gPtohltyJueJ1VCxwk1NS2OT0Dm8vZ5B4+W23wE0DqpDzeY4+/06XFJPGMnOYuJ2hhfw55/f3iiUi0IimJsrX3OZkWSW/c2K2ejOOmD5TMLt/A+5lCwkqN9/O971iSzFzQtPjS9IPIJg5Vya7GuKD+7wpWg4KGypnn7lyK9znejhAhkSJa/HA7kKmPugGEeT1DpVX+qMTWn31M2bkFfiiopuqwttU1AOuUdJlyCbDfnCZ3hhPmp7mSwdLjoLkgxklUylFr2WEGUCaoqe6vSAeN5ocptCUfM6efZcNpnFseTzLruMHF1wYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"It's late there, go easy tonight\\\" is pure care with no mention of the fellowship or any task.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 291,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 192,
+          "output_tokens_details": {
+            "thinking_tokens": 141
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "5ecd134c1f08cd41",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "hash": "1acc06b4d5a86b73",
+  "case": "planned-before-first-run",
+  "recorded_at": "2026-11-09T20:37:39.798Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Yep, live since this morning.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 144,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 40,
+        "output_tokens_details": {
+          "thinking_tokens": 37
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgszonZcu9c4deeZ2tnMq",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS2wUKEAgTGAI4AUIIdGhpbmtpbmcSDI3lxVKjcMw7I2kDuBoMP9/7wK8rBx/aZ4wgIjBPkoiPUzHBR7pEo7G7z3xQia8Yrs5TQdOknJJQ9m2hiN51T3ktujwzUkj5Oa53hfQq+ARFDNK+/BARJRnW8L6lR3Nj06uxhfDdiwDo1w339JU74S33iVup1aIk/C0qAN5ciE+5IVFJlzpRDu+fFsTVNVJMYZc1GEcHAnGMWKERr4LIetak0c15cBE2VRbMSTaNHBG1RffFNQ6HKsLvOaLYyxlryrbaJO+Hhfw8CZ6eCJAw9E1hRAJdoMjsdMoDZYoAqT4LCcESMElHHh44uJb0IvP7CPDXqpeT3THEXfQJNmVT/kQQku7/enYG/uGMHvQfEg4rp45K/JkeYZG8Qv4Xxg4qToHHrv2m2AqzwjFqt1ef4OL/9HiOUjwtlTNqkYlctPOAhHdpovfqKQd9UXXHr9pzSOKnZpsovQt5M3vCqT1FbWVat126WSkXgETMlwWfOq7t0zb3WNO4FAIxNbZePhwKTA+rxB1lobRKkPsIKBQGl4OE2YpFcDHpnzFJD6t+gwQN1DADzz5k4lIH/rigL4edWJN2nZ7vx75HVdBRePIXpe+ChwEuSt4VSQTMt97kZ7rcEeynVCq/BcfZJ+DMJtIuuPeu/tMzh2/vGV0Pq6C6aOxgkE0tHTCq275XQF7t0AtPjx3XHbfaRBtUCobNAWcnUBV15H9Czu8LOUqG1OSJjffaVgI7wlQFKkIe0dzqhTW5GAW7WQhi/HXYdbencakWWrCwrVWQrHz6nTDCR3wOt20OpAIDy0z7Bjcr/14RsD4hjCZ2Q2UZoVrG9oeOacfad6y6b/1t6jjodFMlIaGQCIolVqZtgIsrXq1SmSdLYohXDCV66rXlTSIzyG2eY0HyRxBmMmo9MdLEut7mbMZDwLHz9Yn+FIe7MAIPcwBakcKmXeO1GaDWlRgB"
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 144,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 40,
+          "output_tokens_details": {
+            "thinking_tokens": 37
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "1acc06b4d5a86b73",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

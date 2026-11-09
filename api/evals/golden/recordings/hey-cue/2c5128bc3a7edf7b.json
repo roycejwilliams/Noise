@@ -1,7 +1,7 @@
 {
   "hash": "2c5128bc3a7edf7b",
   "case": "hey-cue",
-  "recorded_at": "2026-11-09T18:09:00.435Z",
+  "recorded_at": "2026-11-09T20:39:50.979Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"yes\", \"reason\": \"'Hey Jordan. What's on your mind?' is a warm reply as Cue, with no other name used or name questioned\"}",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Hey Jordan. What's on your mind?' responds warmly without using any other name or questioning it\"}",
       "usage": {
         "input_tokens": 193,
         "cache_creation_input_tokens": 0,
@@ -44,7 +44,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 56,
+        "output_tokens": 50,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -54,13 +54,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoUHs9kZJbWcffSwJzG",
+        "id": "msg_011CgszyTAMBpnpNHNFGw5wg",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"answer\": \"yes\", \"reason\": \"'Hey Jordan. What's on your mind?' is a warm reply as Cue, with no other name used or name questioned\"}"
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Hey Jordan. What's on your mind?' responds warmly without using any other name or questioning it\"}"
           }
         ],
         "container": null,
@@ -75,7 +75,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 56,
+          "output_tokens": 50,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

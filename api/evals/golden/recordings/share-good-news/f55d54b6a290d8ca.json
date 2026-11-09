@@ -1,7 +1,7 @@
 {
   "hash": "f55d54b6a290d8ca",
   "case": "share-good-news",
-  "recorded_at": "2026-11-09T18:10:27.386Z",
+  "recorded_at": "2026-11-09T20:40:52.692Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -1940,7 +1940,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Two years of no's and now it's done. That's enormous, Mara.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Two years and it landed anyway. That's not luck, that's you not quitting on it.\"}]",
       "usage": {
         "input_tokens": 2,
         "cache_creation_input_tokens": 7887,
@@ -1949,9 +1949,9 @@
           "ephemeral_5m_input_tokens": 7887,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 92,
+        "output_tokens": 102,
         "output_tokens_details": {
-          "thinking_tokens": 21
+          "thinking_tokens": 26
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -1959,21 +1959,21 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgsoafqQn6pcLWPVxiB3p",
+        "id": "msg_011Cgt13xGfmBA9GWeUWML98",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "Eu0DCs0CCBMYAipAsZWeE98CllHhklFdI6kK5l07/ihsqFcc6vUyNrZszAm/NP/KbxRXpJ9CKW85pmhh155EQCdh+2RRCqI1kfygUDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBkpnI1wbCAUMIBxAAGhUBJCABp9sB+y4COeIDTzcFx+cEJq0gBDIEEnHPJToEN2vXbkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiD5YJldw7q9RgEmrFi2qyg9+YLgBpCPDFf/HV0yo3ObQCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxBvnaK4Vx9yab3C3AaDKISjFFOBmDFY9NeNyIwTQ0O1y4YeMASIMnD5aRxIBqVNkevqXdoeBg23oGGswpz+nHBheiCEiTX1IYllqggKk0lwRuRn7h+0dMBBWtmax+t31MCKjFzi2dldJ6thlMFzkhyTp0UvRw0zxxKFPzsdohz7m95m8w8MxdfluMSulQuxsbVMmm2nX1i/v8OoRgB"
+            "signature": "EvwDCs0CCBMYAipADuBFm0ifU8oZAHZEpmpr2X8Vt8Zds283HcTWRztpcW01U7q67+x80yXrNcjtgeHuUQFsxsRdYmMLxUEVN3ngjTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB1N/I1wbCAUMIBxAAGhUBJCABp9sB+y4COeIDTzcFx+cEJq0gBDIEEnHPJToEN2vXbkIEM8GbUEoEddtTnFA2WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiD5YJldw7q9RgEmrFi2qyg9+YLgBpCPDFf/HV0yo3ObQCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzPhv9x2c8y62zheMUaDICU05i9QBx92ye54iIw6WetlsfQM8YGLVCRm1KQJL1FYOfcOvCVFg6Coji83PaFfkZN+nfswi6/wv4xMbTNKlw6yY6QO6vYjSzIT3ScNoeOFHJLXLT+2n/5YxU5gk1F6gXjlykKjC+6EF3coD1nIw6l0EfjrTqomRUU1LEq2yAKAemfxMeopGbQ7PoqVepCsG1uF+DTWx/eQLLhZhgB"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01EsHD5SfFkSPweNUYkB77zf",
+            "id": "toolu_01DkzQLbvF7MsShQEHzdMEKs",
             "name": "sendReply",
             "input": {
-              "message": "Two years of no's and now it's done. That's enormous, Mara."
+              "message": "Two years and it landed anyway. That's not luck, that's you not quitting on it."
             },
             "caller": {
               "type": "direct"
@@ -1992,9 +1992,9 @@
             "ephemeral_5m_input_tokens": 7887,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 92,
+          "output_tokens": 102,
           "output_tokens_details": {
-            "thinking_tokens": 21
+            "thinking_tokens": 26
           },
           "service_tier": "standard",
           "inference_geo": "global",
