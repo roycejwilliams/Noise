@@ -4,6 +4,7 @@ import { recordDecision } from "./core.js";
 import type { SendClass } from "./notifyGate.js";
 import { SEND_RECHECK } from "./sendTimeRecheck.js";
 import { notToTeammate } from "../services/teamLines.js";
+import { DateTime } from "luxon";
 
 const HOUR = 3_600_000;
 // ---------------------------------------------------------------- does it belong now (Royce, 2026-11-07)
@@ -117,10 +118,18 @@ export async function loadCallContext(userId: string): Promise<CallContextRead> 
 export const HARD_DAY_LINE = "They've had a hard stretch lately. That is a reason to be more thoughtful about this text, not a reason on its own to stay silent: judge whether this particular message helps them right now.";
 export const POST_CALL_LINE = "This is Cue's text after its latest call with them. The call ending is not a reason on its own to text: it should add something the call and the texts since didn't.";
 export const QUEUED_UNREAD = "(couldn't be read right now: don't assume nothing else is waiting)";
-export function momentPrompt(o: { firstName: string; message: string; recent: string; call?: string | null; queuedAt: Date; now: Date; hardDay?: boolean; queued?: string[] | null; kind?: string }): string {
+// Pure: today, in their zone (Pacific when unknown), so the read can tell an event or date in the text is already past (quality run
+// 2026-11-09: with no date it sent a brunch two days after it happened).
+export function todayLine(now: Date, zone?: string | null): string {
+  let d = DateTime.fromJSDate(now).setZone(zone || "America/Los_Angeles");
+  if (!d.isValid) d = DateTime.fromJSDate(now).setZone("America/Los_Angeles");
+  return `Today is ${d.toFormat("cccc, LLLL d, yyyy")}, ${d.toFormat("h:mma").toLowerCase()} their time.`;
+}
+export function momentPrompt(o: { firstName: string; message: string; recent: string; call?: string | null; queuedAt: Date; now: Date; hardDay?: boolean; queued?: string[] | null; kind?: string; zone?: string | null }): string {
   const days = Math.max(0, Math.round((o.now.getTime() - o.queuedAt.getTime()) / 86_400_000));
   const waiting = o.queued === null ? QUEUED_UNREAD : o.queued?.length ? o.queued.map((q) => `- ${q}`).join("\n") : "(nothing else)";
   return `Cue is about to text ${o.firstName || "a member"} on its own, unprompted. Decide whether this text belongs right now.
+${todayLine(o.now, o.zone)}
 
 The text:
 "${o.message.slice(0, 900)}"
@@ -136,7 +145,7 @@ ${o.recent.trim() || "(nothing yet)"}
 Cue's other messages waiting to go to them (not sent):
 ${waiting}
 
-Weigh: is what it's about still open; did something more important just happen; was it already answered or covered, by Cue or by them; does it repeat what Cue already said or something waiting above; what specific thing does it add now that they don't already have. Being queued is not a reason to send, and sending nothing is a fine outcome.
+Weigh: is what it's about still open; is anything it names (an event, a date, a deadline) already past, and if so drop it; did something more important just happen; was it already answered or covered, by Cue or by them; does it repeat what Cue already said or something waiting above; what specific thing does it add now that they don't already have. Being queued is not a reason to send, and sending nothing is a fine outcome.
 send: it fits now. wait: it could fit later, once this moment has passed. drop: it no longer fits.
 
 Return ONLY JSON: {"verdict": "send" | "wait" | "drop", "why": "one short line"}`;
@@ -162,14 +171,14 @@ export function setMomentModelForTests(f: ((prompt: string) => Promise<string>) 
 // kind: the candidate's type; hardDay (the capped hard-day hold, harness/proactive.ts heldForMood) reaches the prompt for every message
 // the read covers (Royce, 2026-11-09: a hard day informs the judgment; it neither mandates silence nor justifies a comforting text).
 export const momentHardDay = (o: { kind?: string; hardDay?: boolean }): boolean => o.hardDay === true;
-export async function momentFit(o: { userId: string; firstName: string; message: string; recent: string | null; call: ReturnType<typeof callContextFor> | null; queuedAt: Date; now: Date; kind?: string; hardDay?: boolean; queued?: string[] | null }): Promise<MomentVerdict> {
+export async function momentFit(o: { userId: string; firstName: string; message: string; recent: string | null; call: ReturnType<typeof callContextFor> | null; queuedAt: Date; now: Date; kind?: string; hardDay?: boolean; queued?: string[] | null; zone?: string | null }): Promise<MomentVerdict> {
   if (o.recent === null || o.call === null) return { verdict: "wait", why: "their latest texts and calls couldn't be read, so this waits", read: "no_context" };
   if (!o.call.ready) return { verdict: "wait", why: `${o.call.why}, so this waits for it`, read: "call_not_ready" };
   const gen = momentModel ?? (async (p: string) => {
     const [{ generateText }, { anthropic }, { MODELS }, { withMember }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js"), import("../services/llmUsage.js")]);
     return withMember(o.userId, () => generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 150, abortSignal: AbortSignal.timeout(MOMENT_FIT.timeoutMs), experimental_telemetry: { isEnabled: true, functionId: "sendRecheck.momentFit" }, prompt: p })).then((r) => r.text);
   });
-  const answer = parseMoment(await gen(momentPrompt({ firstName: o.firstName, message: o.message, queuedAt: o.queuedAt, now: o.now, recent: o.recent, call: o.call.line, hardDay: momentHardDay(o), queued: o.queued, kind: o.kind })).catch(() => ""));
+  const answer = parseMoment(await gen(momentPrompt({ firstName: o.firstName, message: o.message, queuedAt: o.queuedAt, now: o.now, recent: o.recent, call: o.call.line, hardDay: momentHardDay(o), queued: o.queued, kind: o.kind, zone: o.zone })).catch(() => ""));
   return answer ? { ...answer, read: "model" } : { verdict: "wait", why: "the read of whether it fits now didn't answer, so this waits", read: "failed" };
 }
 // Pure: what code does with the verdict. waits: how many times the read already chose wait for it.

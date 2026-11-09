@@ -3429,7 +3429,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
       // The read is told while the capped hard-day hold is on (2026-11-08 announcements, 2026-11-09 every message it covers): more
       // thought about this message now, never a blanket no. It also sees Cue's other messages waiting for them (loadQueuedFor).
       const queued = await STR.loadQueuedFor(pool, userId, c.id);
-      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date(), kind: c.type, hardDay: hardDayLine, queued });
+      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date(), kind: c.type, hardDay: hardDayLine, queued, zone: zoneNow });
       const waits = Number(pay.momentWaits ?? 0), unread = Number(pay.momentUnread ?? 0);
       const act = STR.momentAction(v, { waits, unread }, new Date());
       await recordDecision(STR.momentDecision({ userId, candidateId: c.id, kind: c.type, targetKey: c.targetKey, v, action: act, waits, unread })).catch(() => {});
