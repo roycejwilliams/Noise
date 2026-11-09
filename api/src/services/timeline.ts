@@ -6,6 +6,7 @@
 // blocks on their calendar (when Google is connected), plans they've
 // mentioned, and the date in Co's working notes. One fact the reply reads; how
 // to use it lives in CO_VOICE.
+import { notConfirmedPlan, notConfirmedWords } from "./eventRegistration/followThrough.js";
 import { isStated, UNCONFIRMED_RULE } from "./provenance.js";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
@@ -60,6 +61,14 @@ export function renderTimeline(now: DateTime, items: TimelineItem[], zoneKnown =
 
 // Pure: the member-local day bounds the timeline reads (deadlines from yesterday, plans from today, both two weeks out), computed
 // in code in their zone. SQL CURRENT_DATE is the database's (UTC) day, which is already tomorrow from 5pm Pacific.
+// Pure: a plan row as the timeline says it. A registration pending approval or on a waitlist is never "they said they're going".
+export function planTimelineWhat(p: { event_name_raw: unknown; provenance?: unknown; registration_status?: unknown }): string {
+  const name = String(p.event_name_raw ?? "").slice(0, 80);
+  const pending = notConfirmedPlan(p.registration_status);
+  if (pending) return `${name} (${notConfirmedWords(pending)})`;
+  return `${name} ${isStated(p.provenance as any) ? "(they said they're going)" : `(they may have mentioned it; ${UNCONFIRMED_RULE})`}`;
+}
+
 export function timelineDays(now: Date, zone: string | null): { today: string; from: string; until: string } {
   const local = DateTime.fromJSDate(now).setZone(wordsZone(zone)).startOf("day");
   return { today: local.toISODate()!, from: local.minus({ days: 1 }).toISODate()!, until: local.plus({ days: 14 }).toISODate()! };
@@ -78,7 +87,7 @@ export async function timelineFor(userId: string, _city: string | null, now: Dat
     // Only a fresh calendar read counts as what's ahead: an old snapshot can
     // miss what they added or cancelled since (2026-10-01 code review).
     q(`SELECT s.busy FROM google_snapshots s JOIN calendar_grants c ON c.user_id = s.user_id WHERE s.user_id = $1 AND s.fetched_at > NOW() - make_interval(secs => $2)`, [userId, SNAPSHOT_MAX_AGE_MS / 1000]),
-    q(`SELECT event_name_raw, event_date, provenance FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date < $3::date ORDER BY event_date LIMIT 3`, [userId, days.today, days.until]),
+    q(`SELECT event_name_raw, event_date, provenance, registration_status FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date < $3::date ORDER BY event_date LIMIT 3`, [userId, days.today, days.until]),
     loadBrief(userId).catch(() => null),
   ]);
   const items: TimelineItem[] = [
@@ -88,7 +97,7 @@ export async function timelineFor(userId: string, _city: string | null, now: Dat
       .filter((b) => new Date(b.start).getTime() - now.getTime() < 24 * 3600_000)
       .slice(0, 3)
       .map((b) => ({ at: b.start, allDay: false, what: "busy on their calendar" })),
-    ...plans.map((p: any) => ({ at: String(p.event_date instanceof Date ? p.event_date.toISOString() : p.event_date).slice(0, 10), allDay: true, what: `${String(p.event_name_raw).slice(0, 80)} ${isStated(p.provenance) ? "(they said they're going)" : `(they may have mentioned it; ${UNCONFIRMED_RULE})`}` })),
+    ...plans.map((p: any) => ({ at: String(p.event_date instanceof Date ? p.event_date.toISOString() : p.event_date).slice(0, 10), allDay: true, what: planTimelineWhat(p) })),
   ];
   const when = whenForWindow(brief?.when);
   const w = when ? resolveAskWindow(when, local).window : null;

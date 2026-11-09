@@ -13,6 +13,14 @@ import pool from "../../db/db.js";
 import type { RegistrationRecord } from "./registration.js";
 import type { Q } from "./registrationStore.js";
 
+// Pure: whether a plan row is one they're confirmed for. A registration pending the host's approval or on a waitlist is never
+// "going" (Royce, 2026-11-09): every reader of planned_event_mentions that says "they said they're going" asks this first.
+export const notConfirmedPlan = (registrationStatus: unknown): "pending_approval" | "waitlisted" | null =>
+  registrationStatus === "pending_approval" || registrationStatus === "waitlisted" ? registrationStatus : null;
+// What a reader says about such a plan instead (model-facing facts, never sent as is).
+export const notConfirmedWords = (s: "pending_approval" | "waitlisted") =>
+  s === "pending_approval" ? "they asked to go and the host hasn't approved them yet: not confirmed, never say they're going" : "they're on the waitlist: not confirmed, never say they're going";
+
 export type PlanRow = { name: string; date: string | null; status: "registered" | "pending_approval" | "waitlisted"; reason: string | null; reasonSource: "their_words" | "approved_draft" | null };
 
 // Pure: the plan a registration's outcome makes, or null for anything that isn't on (or waiting for) the guest list.
