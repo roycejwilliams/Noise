@@ -350,6 +350,9 @@ export type ProxyDeps = {
   // This turn's own notes (no tools this turn, where the last answer stopped): after their words, past the cache breakpoint, like the
   // turn note, so the call's cached prefix is untouched (review of #365).
   turnNotes?: string[];
+  // Set only by a caller whose voice hangs up on its own guard after the turn: Cue's end_call on this closing exchange already passed the closed read on an earlier turn,
+  // and is pending or was held only on timing (they spoke after the goodbye). The close stands for this turn; the bridge's guard still applies.
+  closedEarlier?: boolean;
   // The whole exchange (services/exchangeRecord.ts), Royce 2026-11-03: a sentence that asks again what they answered (on this call or in
   // the record), offers again what was already sent, or reopens something they closed is held before it's spoken, and the turn answers
   // again in its own words (the #365 hold). Undefined: the check is off (the ElevenLabs path, tests that don't pass it).
@@ -463,7 +466,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     inboundFirst,
     // Their goodbye now, or their reply to Co's own goodbye in any words (callClosing: one read, shared with callers that need it
     // before the turn runs).
-    closed: callClosing(b),
+    closed: callClosing(b) || !!deps.closedEarlier,
     tools: co ? { note: co.note, ...(co.turnFacts ?? { turnWords: "", tasks: [], canWriteTasks: false }) } : null,
     givenTurnNote: co?.turnNote,
   });

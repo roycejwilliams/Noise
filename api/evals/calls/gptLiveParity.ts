@@ -215,6 +215,126 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   note.tw.close();
 }
 
+// ---------------------------------------------------------------- 2b. calls end after goodbyes (2026-11-09: 8 of 8 GPT-Live calls ended by the caller)
+{
+  const refusedWith = (b: ReturnType<typeof bridge>) => b.records.filter((r) => r.decision === "call.end_refused").map((r) => r.action);
+  const frag = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, s: number, e: number) => b.ai.in({ type: who === "member" ? "session.input_transcript.delta" : "session.output_transcript.delta", delta: text, start_ms: s, end_ms: e });
+  const lastUser = (req: any) => { const u = (req.messages ?? []).filter((m: any) => m.role === "user"); const c = u[u.length - 1]?.content; return Array.isArray(c) ? c.map((p: any) => p?.text ?? "").join(" ") : String(c ?? ""); };
+  const sentFor = (b: ReturnType<typeof bridge>, id: string) => b.ai.sent.filter((m: any) => m.delegation_id === id && m.content);
+  check("the continuation gap and length are named constants (about 1.2 s, 1-3 words)", G.GPT_LIVE.continuationGapMs === 1200 && G.GPT_LIVE.continuationMaxWords === 3);
+
+  // This morning: "Bye. Have a good" / Cue "You too" / "one": speech recognition split their goodbye, and the trailing "one" landed after
+  // Cue's goodbye started. It is the end of their utterance (300 ms after it, one word), so it no longer holds the end.
+  const m = bridge({ answer: (req) => (/^one\b/.test(lastUser(req).trim()) ? "." : "|END"), endGraceMs: 30 });
+  await start(m, "live_morning");
+  frag(m, "member", "Bye. Have a good", 0, 1000);
+  m.ai.in({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "mo1", target: "client" } });
+  await sleep(40);
+  frag(m, "cue", "You too", 1100, 1500);
+  frag(m, "member", "one", 1300, 1500);
+  m.ai.in({ type: "session.delegation.created", offset_ms: 1500, delegation: { id: "mo2", target: "client" } });
+  await sleep(150);
+  check("this morning's sequence (\"Bye. Have a good\" / \"You too\" / \"one\"): Cue's end_call ends the call", m.ai.of("session.close").length === 1 && refusedWith(m).length === 0, refusedWith(m));
+  check("...and the stray \"one\" gets nothing spoken: no \".\", and no \"no answer\" note (the voice already spoke this utterance)", sentFor(m, "mo2").length === 0, sentFor(m, "mo2"));
+  m.ai.in({ type: "session.closed", reason: "close_requested", usage: { seconds: 30 } });
+  check("...recorded as ended by goodbye", m.records.find((r) => r.decision === "call.gpt_live_session")?.proposal.endedBy === "goodbye");
+
+  // 11-07: "Cool. I appreciate it. Thank" / Cue "Sure thing" / "you". The "you" is the end of their thanks (200 ms, one word): an end
+  // decided on that exchange isn't held by it, so it ends after the first goodbye with no second one. (Whether a thanks alone lets
+  // end_call through is the closing read's call, runCallLlm callClosing, unchanged here.)
+  const f1107: import("../../src/services/gptLive.js").Frag[] = [
+    { who: "member", text: "Cool. I appreciate it. Thank", startMs: 0, endMs: 1500 },
+    { who: "cue", text: "Sure thing. Talk again soon.", startMs: 1600, endMs: 3200 },
+    { who: "member", text: "you", startMs: 1700, endMs: 1900 },
+  ];
+  const a1107 = B.memberAfter(f1107, 1600);
+  check("the 11-07 sequence: the trailing \"you\" is the end of their thanks, so the guard lets the end through after the first goodbye", a1107.newAt === null && a1107.tail === true && B.endGuard({ cueLast: { text: "Sure thing. Talk again soon.", startMs: 1600 }, memberAfterMs: a1107.newAt, memberHeardAgoMs: 5000, graceMs: 2000 }) === null, a1107);
+  check("...but \"Cool\" well after that goodbye (a gap past 1.2 s) is new words: held, and decided again on their next turn", B.memberAfter([...f1107, { who: "member", text: "Cool", startMs: 4000, endMs: 4300 }], 1600).newAt === 4000);
+  // On the bridge: the end goes through with the "you" after Cue's goodbye, and nothing more is said.
+  const e = bridge({ answer: () => "|END", endGraceMs: 30 });
+  await start(e, "live_1107");
+  frag(e, "member", "Okay, bye. Thanks so", 0, 1500);
+  e.ai.in({ type: "session.delegation.created", offset_ms: 1500, delegation: { id: "e71", target: "client" } });
+  await sleep(40);
+  frag(e, "cue", "Sure thing. Talk again soon.", 1600, 3200);
+  frag(e, "member", "much", 1700, 1900);
+  await sleep(150);
+  check("...on the bridge: a goodbye whose last word lands after Cue's goodbye still ends the call, with no second goodbye sent", e.ai.of("session.close").length === 1 && refusedWith(e).length === 0 && e.ai.of("session.commentary.append").length === 0, refusedWith(e));
+  e.tw.close();
+
+  // A real new sentence after Cue's goodbye still refuses: quick but longer than three words, or short after a real gap.
+  for (const [label, text, s] of [["four words or more, even within the gap", "one more thing, actually wait", 1300], ["two words after a gap past 1.2 s", "Wait, actually", 2400]] as [string, string, number][]) {
+    const n = bridge({ answer: () => "|END", endGraceMs: 30 });
+    await start(n, "live_new");
+    frag(n, "member", "Bye. Have a good", 0, 1000);
+    n.ai.in({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "n1", target: "client" } });
+    await sleep(40);
+    frag(n, "cue", "You too", 1100, 1500);
+    frag(n, "member", text, s, s + 600);
+    await sleep(150);
+    check(`a real new sentence after Cue's goodbye (${label}): refused (member_spoke_after), the call stays open`, n.ai.of("session.close").length === 0 && refusedWith(n).join() === "member_spoke_after", refusedWith(n));
+    n.tw.close();
+  }
+  // A question from Cue still refuses, stray word or not.
+  const q = bridge({ answer: () => "|END", endGraceMs: 30 });
+  await start(q, "live_q2");
+  frag(q, "member", "Bye. Have a good", 0, 1000);
+  q.ai.in({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "q1", target: "client" } });
+  await sleep(40);
+  frag(q, "cue", "You too. Same time next week?", 1100, 2500);
+  frag(q, "member", "one", 1300, 1500);
+  await sleep(150);
+  check("a question from Cue still refuses (cue_asked), with the split-off \"one\" inside it", q.ai.of("session.close").length === 0 && refusedWith(q).join() === "cue_asked", refusedWith(q));
+  q.tw.close();
+
+  // A "." answer is never spoken: as no answer (the note) when the voice hasn't spoken this turn, and nothing when it has.
+  const dot = bridge({ answer: () => "." });
+  await start(dot, "live_dot");
+  frag(dot, "member", "What do you think I should do about the lease?", 0, 2000);
+  dot.ai.in({ type: "session.delegation.created", offset_ms: 2000, delegation: { id: "p1", target: "client" } });
+  await sleep(60);
+  const p1 = sentFor(dot, "p1");
+  check("a \".\" answer is never spoken: it counts as no answer (the existing note, nothing in the voice's mouth)", p1.length === 1 && p1[0].type === "session.thinking.append" && /No answer came back/.test(p1[0].content) && !p1.some((x: any) => /^\W+$/.test(x.content)), p1);
+  frag(dot, "cue", "Hm.", 2600, 2900);
+  frag(dot, "member", "Okay so", 4000, 4500);
+  dot.ai.in({ type: "session.delegation.created", offset_ms: 4500, delegation: { id: "p2", target: "client" } });
+  frag(dot, "cue", "Mm, go on.", 4700, 5200);
+  await sleep(60);
+  check("...and when the voice already spoke this turn, nothing is sent at all (noteSkipped)", sentFor(dot, "p2").length === 0, sentFor(dot, "p2"));
+  dot.tw.close();
+  check("thinkOnCall: punctuation-only text is no answer", (await G.thinkOnCall(callFor(), [{ who: "member", text: "one", startMs: 0, endMs: 300 }], () => (async function* () { for (const e of textEvents(", .")) yield e as any; })())).text === "");
+
+  // A refused end is decided again on their next turn, told why; ending again goes through the normal guard.
+  const r = bridge({ answer: () => "|END", endGraceMs: 30 });
+  await start(r, "live_redo");
+  frag(r, "member", "Okay bye.", 0, 800);
+  r.ai.in({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "r1", target: "client" } });
+  await sleep(40);
+  frag(r, "cue", "Bye, Jordan.", 1000, 1600);
+  frag(r, "member", "Cool, cheers.", 3000, 3500);
+  await sleep(120);
+  check("re-decide: their words after Cue's goodbye hold the end (member_spoke_after) and the call stays open", r.ai.of("session.close").length === 0 && refusedWith(r).join() === "member_spoke_after", refusedWith(r));
+  r.ai.in({ type: "session.delegation.created", offset_ms: 3500, delegation: { id: "r2", target: "client" } });
+  await sleep(150);
+  const r2 = r.reqs[r.reqs.length - 1];
+  check("...their next turn decides again and is told the end was held because they spoke", r.reqs.length === 2 && JSON.stringify(r2.messages).includes(G.END_HELD_NOTE));
+  check("...ending again there passes the normal guard: the call ends, with no second goodbye", r.ai.of("session.close").length === 1 && sentFor(r, "r2").length === 0 && refusedWith(r).join() === "member_spoke_after", { refused: refusedWith(r), sent: sentFor(r, "r2") });
+  r.tw.close();
+  // The same when the voice hands their turn over before the bridge's own check: the pending end is decided again with that turn.
+  const r3 = bridge({ answer: (req) => (/one more thing/.test(lastUser(req)) ? "Sure, what is it?" : "|END"), endGraceMs: 30 });
+  await start(r3, "live_redo2");
+  frag(r3, "member", "Okay bye.", 0, 800);
+  r3.ai.in({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "s1", target: "client" } });
+  await sleep(40);
+  frag(r3, "cue", "Bye, Jordan.", 1000, 1600);
+  frag(r3, "member", "Oh wait, one more thing.", 3000, 4000);
+  r3.ai.in({ type: "session.delegation.created", offset_ms: 4000, delegation: { id: "s2", target: "client" } });
+  await sleep(150);
+  check("...a new sentence handed over first: that turn decides again (told why), answers, and the call stays open", JSON.stringify(r3.reqs[1]?.messages ?? []).includes(G.END_HELD_NOTE) && r3.ai.of("session.close").length === 0 && sentFor(r3, "s2").some((x: any) => /what is it/.test(x.content)) && r3.records.some((x) => x.decision === "call.end_refused" && x.proposal.redecide === true));
+  r3.tw.close();
+  check("the end-call rule and the thinking's note say: a stray word after both goodbyes ends it, never a second goodbye", /isn't new conversation/.test(G.END_CALL_RULE) && /never a second goodbye/.test(G.END_CALL_RULE) && /An agreement or thanks alone isn't a goodbye unless it follows one/.test(G.END_CALL_RULE) && /Never add a second goodbye line/.test(callFor().backendSystem) && !/\bend_call\b/.test(G.END_HELD_NOTE));
+}
+
 // ---------------------------------------------------------------- 3. a wrap-up before the cap, in GPT-Live's own words
 {
   const capped = bridge({ maxSessionMs: 80, wrapUpMs: 30 });
