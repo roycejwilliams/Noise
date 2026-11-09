@@ -1714,7 +1714,7 @@ export async function runMigrations(): Promise<void> {
   // it, and when they last brought it up, so what matters now is searched first.
   await pool
     .query(
-      `ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'find',
+      `ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS read_kind TEXT NOT NULL DEFAULT 'find',
          ADD COLUMN IF NOT EXISTS kind_checked_at TIMESTAMPTZ,
          ADD COLUMN IF NOT EXISTS last_mentioned_at TIMESTAMPTZ`,
     )
@@ -2011,6 +2011,11 @@ export async function runMigrations(): Promise<void> {
     // 'frustration_score' is ElevenLabs' per-line score (2026-10-04,
     // harness/emotion.ts frustrationMoments). NULL for everything else.
     .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS basis TEXT`))
+    // What the read understood (2026-11-09, harness/emotion.ts EmotionKind): read_kind 'distress' | 'concern' | 'unsure' | 'settled',
+    // felt_by 'member' | 'other', framing 'own' | 'quoted' | 'hypothetical'. NULL on older rows: then only a high read is hard (isHardRead).
+    .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS read_kind TEXT`))
+    .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS felt_by TEXT`))
+    .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS framing TEXT`))
     .catch((err: Error) => console.error("emotion_signals table init failed:", err));
 
   // Voice flags (2026-10-03) — see src/services/voiceFlags.ts. One run per
@@ -2194,7 +2199,7 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_tasks_user ON co_tasks (user_id, status)`))
     // Deadlines and waking on their reply (2026-09-30).
     // Follow-ups handed to Co (2026-09-30): a follow-up task holds the check-in it may send.
-    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'work', ADD COLUMN IF NOT EXISTS followup JSONB, ADD COLUMN IF NOT EXISTS target_key TEXT`))
+    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS read_kind TEXT NOT NULL DEFAULT 'work', ADD COLUMN IF NOT EXISTS followup JSONB, ADD COLUMN IF NOT EXISTS target_key TEXT`))
     // Where a task came from (2026-10-04): 'promise' for one Co opened to keep a promise it made in a reply (services/promises.ts).
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ask'`))
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS deadline DATE, ADD COLUMN IF NOT EXISTS final_check_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS final_told BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS awaiting_reply BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS their_reply_at TIMESTAMPTZ`))
@@ -2919,7 +2924,7 @@ export async function runMigrations(): Promise<void> {
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
   // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.
   await pool
-    .query(`ALTER TABLE proactive_sends ADD COLUMN IF NOT EXISTS kind TEXT`)
+    .query(`ALTER TABLE proactive_sends ADD COLUMN IF NOT EXISTS read_kind TEXT`)
     .then(() =>
       pool.query(
         `CREATE TABLE IF NOT EXISTS member_kind_preferences (

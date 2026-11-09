@@ -402,7 +402,7 @@ const voiceSig = (h: number, valence: "negative" | "positive") => ({ valence, in
 check("a voice moment never extends a hard stretch", E.hardStretchSince([textHard(0), voiceSig(20, "negative"), textHard(40)], hAt).getTime() === hAt.getTime());
 check("a voice moment never breaks one either", E.hardStretchSince([textHard(0), voiceSig(5, "positive"), textHard(10)], hAt).getTime() === hrs(10).getTime());
 check("a frustration score never extends one", E.hardStretchSince([textHard(0), { ...voiceSig(20, "negative"), basis: "frustration_score" as const }, textHard(40)], hAt).getTime() === hAt.getTime());
-check("the stretch's own read leaves score reads out, both branches", /AND \(basis IS NULL OR basis NOT IN \('frustration_score', 'voice'\)\)\s*AND \(valence = 'positive' OR \(valence = 'negative' AND intensity <> 'low'\)\)/.test(emoSrc) && !/DISTINCT FROM 'frustration_score'/.test(emoSrc));
+check("the stretch's own read leaves score reads out, both branches", /AND \(basis IS NULL OR basis NOT IN \('frustration_score', 'voice'\)\)\s*AND \(valence = 'positive' OR read_kind = 'settled' OR \(valence = 'negative' AND intensity <> 'low'\)\)/.test(emoSrc) && !/DISTINCT FROM 'frustration_score'/.test(emoSrc));
 
 B.setBridgeDeps(null);
 console.log(`voice read rules: ${total - failed}/${total} passed`);

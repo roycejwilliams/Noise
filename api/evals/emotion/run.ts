@@ -36,7 +36,7 @@ const NOW = new Date("2026-09-15T18:00:00Z");
 const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3600_000);
 
 function signals(rows: any[]): EmotionSignal[] {
-  return rows.map((r) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about ?? null, quote: r.quote ?? null, at: hoursAgo(r.hoursAgo), target: r.target ?? null }));
+  return rows.map((r) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about ?? null, quote: r.quote ?? null, at: hoursAgo(r.hoursAgo), target: r.target ?? null, readKind: r.readKind ?? null, feltBy: r.feltBy ?? null, framing: r.framing ?? null }));
 }
 
 async function run(c: Case): Promise<any> {

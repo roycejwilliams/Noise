@@ -21,7 +21,7 @@ import { buildRouterPrompt, parseRouterOutput, ROUTER_MODEL, type RouteInput, ty
 import { DOTS_MODES, type Dot, type Mode, type Moment } from "./connectDots.js";
 import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import type { CoverageAssessment } from "./profileExtraction.js";
-import type { EmotionTarget, Intensity, TextEmotion, Valence } from "../harness/emotion.js";
+import { EMOTION_READ_GUIDE, withReadFields, type EmotionTarget, type Intensity, type TextEmotion, type Valence } from "../harness/emotion.js";
 import type { TurnContext } from "./turnContext.js";
 import { parseMessageKind, parseVerdict, type MessageKind, type ScopeVerdict } from "../harness/scope.js";
 import { exchangeAddendum, parseExchangeRead, type ExchangeBase, type ExchangeRead } from "./exchangeRecord.js";
@@ -119,7 +119,8 @@ ${priorContext ? `What was already known about them before this conversation: ${
 "pushback": if their message corrects or pushes back on something Cue just said, what, in a few words; otherwise null.
 "lesson": only when there's pushback, one short standing note about how Cue should be with them from now on, general enough to apply next time ("when he asks about logistics, answer the logistics; don't tie it to his own event"); otherwise null.
 "dots": at most two connections what's happening now clearly leads to, only when they're sharing or reacting: {"kind": "mention" (one thing serving two of their asks or bearing on a decision they're stuck on) | "shape" (how they're doing should change how Cue responds right now, not something to say), "link": "one short plain sentence", "why": "which ask or thread it ties to"}. Only real, specific links from what's written above; never invent facts. Otherwise [].
-"emotion": does the latest message carry a real feeling Cue should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. Ignore plain logistics, greetings and tone you aren't confident about; most messages have none. If none, null; else {"emotion": "one or two words", "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what it's about, only from what they said", "target": "co" when it's about Cue itself (what Cue found or didn't, its suggestions, replies, speed or mistakes, like "you keep finding nothing" or "that's not what I asked"), else "life"}.
+"emotion": does the latest message carry a real feeling Cue should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. Ignore plain logistics, greetings and tone you aren't confident about; most messages have none. If none, null; else {"emotion": "one or two words", "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what it's about, only from what they said", "target": "co" when it's about Cue itself (what Cue found or didn't, its suggestions, replies, speed or mistakes, like "you keep finding nothing" or "that's not what I asked"), else "life", "felt_by": "member" | "other", "framing": "own" | "quoted" | "hypothetical", "kind": "distress" | "concern" | "unsure" | null}.
+${EMOTION_READ_GUIDE}
 "seeking": "solving" only if you're genuinely confident they want a real answer or help deciding right now, not just to be heard (weighing options out loud, stuck on a decision, clearly past venting); ordinary sharing, updates and venting are "none", far more often than not.
 "feedback": each distinct piece of feedback about how Cue works or should work in general, the kind of thing the team would change (how it searches, what it sends, how it texts), or anything they ask Cue to pass to the team, as one clear sentence the team could act on. Not a correction or disagreement about something Cue said in this conversation (a fact, a person, an opinion, how Cue described itself): Cue just gets that right in its reply, and filing it would turn an ordinary correction into a complaint. [] if none.
 "ack": whether Cue should react to their message with an emoji before replying, the way a friend sometimes does. A reaction is communication: it says something about their specific message, so most messages get null, and a follow-up to something they just asked ("well a couple", "go ahead", "anything else?") gets null. Read the emotional register first: sad, frustrated, relieved and celebrating each call for something different, and on bad news or something sad, react only if it says you're with them, never "❤️" or "😂", which read as liking it. Then match the moment: an emoji about what they said beats a generic one (✈️ when they've landed, 🥟 for the dumplings they're eating). Cue's usual language, so they learn what it means: "🥂" good news or a win; "❤️" something personal and good that matters to them; "😂" when they're genuinely funny; "👀" something to look at or find; "✍️" something to write; "🤝" something agreed or handed to Cue; "🫡" a correction or an instruction taken; "🔥" real news that's genuinely big for them; "👍" a plain okay, never on bad news. Vary it: never the same one as Cue's last reaction, and never a generic one when a specific one fits: if nothing fits this exact message, null. Grown and understated, the way a private club is: never rockets, raised hands or confetti.
@@ -145,7 +146,7 @@ export function parseTurnRead(obj: any, sentNames: string[], record: ExchangeBas
     .map((d: any) => ({ link: String(d.link).trim().slice(0, 240), why: String(d.why ?? "").trim().slice(0, 160), kind: d.kind === "shape" ? ("shape" as const) : ("mention" as const) }));
   const pushback = str(obj?.pushback, 200);
   const e = obj?.emotion;
-  const emotion: TextEmotion =
+  const emotion: TextEmotion = withReadFields(
     e && typeof e === "object" && typeof e.emotion === "string" && e.emotion.trim()
       ? {
           emotion: e.emotion.toLowerCase().slice(0, 40),
@@ -154,7 +155,10 @@ export function parseTurnRead(obj: any, sentNames: string[], record: ExchangeBas
           about: typeof e.about === "string" ? e.about.slice(0, 80) : null,
           target: (e.target === "co" ? "co" : "life") as EmotionTarget,
         }
-      : null;
+      : null,
+    e,
+    obj?.says_okay,
+  );
   const topicList = (v: unknown): RapportTopic[] => (Array.isArray(v) ? v.filter((t): t is RapportTopic => RAPPORT_TOPICS.includes(t as RapportTopic)) : []);
   const aboutRaw = str(obj?.about_sent, 200);
   const aboutSent = aboutRaw ? sentNames.find((n) => n.toLowerCase() === aboutRaw.toLowerCase()) ?? null : null;
