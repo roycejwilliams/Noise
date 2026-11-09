@@ -15,6 +15,7 @@
     "evals/reactions/incoming.ts",
     "evals/proactive/closedSubjects.ts",
     "evals/proactive/sendTimeRecheck.ts",
+    "evals/followThrough/momentFollowThrough.ts",
     "evals/profile/lists.ts",
     "evals/matching/run.ts",
     "evals/matching/memberSafe.ts",

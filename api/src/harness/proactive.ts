@@ -3427,9 +3427,10 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     const judge = async (message: string, checks: GateCheck[]): Promise<boolean> => {
       const zoneNow = known?.identity.zone ?? person.timezone;
       const call = await STR.loadCallContext(userId).then((r) => STR.callContextFor(r, new Date(), (d) => localStamp(d.toISOString(), zoneNow))).catch(() => null);
-      // An announcement's read is told while the capped hard-day hold is on (2026-11-08): more thought about this message now, never a
-      // blanket no. The read uses it for announcements only (momentFit kind); a check-in's prompt is unchanged.
-      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date(), kind: c.type, hardDay: heldForMood(state) });
+      // The read is told while the capped hard-day hold is on (2026-11-08 announcements, 2026-11-09 every message it covers): more
+      // thought about this message now, never a blanket no. It also sees Cue's other messages waiting for them (loadQueuedFor).
+      const queued = await STR.loadQueuedFor(pool, userId, c.id);
+      const v = await STR.momentFit({ userId, firstName: person.firstName, message, recent: known ? recentStamped.split("\n").slice(-MOMENT_RECENT_LINES).join("\n") : null, call, queuedAt: c.createdAt, now: new Date(), kind: c.type, hardDay: heldForMood(state), queued });
       const waits = Number(pay.momentWaits ?? 0), unread = Number(pay.momentUnread ?? 0);
       const act = STR.momentAction(v, { waits, unread }, new Date());
       await recordDecision(STR.momentDecision({ userId, candidateId: c.id, kind: c.type, targetKey: c.targetKey, v, action: act, waits, unread })).catch(() => {});
@@ -3615,10 +3616,12 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   // wait re-queues it with the reason, drop closes an optional one, a failed read waits. The time of the judgment goes to the send lock,
   // which holds it if anything of theirs arrived since (it is judged again on the next pick, never sent stale).
   // The text that goes is the one judged: a fresh draft after a kept draft's send verdict is judged once more when it differs.
-  if (moment.applies && (!moment.preJudged || STR.sameDraft(moment.kept, draft.messages.join("\n")) === false)) {
+  // A post-call text carrying a correction Cue owes is not optional (STR.carriesCallCorrection): it isn't judged away.
+  const momentRead = moment.applies && !STR.carriesCallCorrection(c.type, "meta" in draft ? draft.meta : null);
+  if (momentRead && (!moment.preJudged || STR.sameDraft(moment.kept, draft.messages.join("\n")) === false)) {
     if (!(await moment.judge(draft.messages.join("\n"), draftChecks))) return;
   }
-  const judgedAt: Date | null = moment.applies ? contextAt : null;
+  const judgedAt: Date | null = momentRead ? contextAt : null;
 
   // Payload first (harness/payloadFirst.ts, 2026-10-04): a text asking whether
   // Co should do something it could just do goes to one of its tasks instead,
