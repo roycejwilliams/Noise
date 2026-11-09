@@ -221,7 +221,7 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
   const frag = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, s: number, e: number) => b.ai.in({ type: who === "member" ? "session.input_transcript.delta" : "session.output_transcript.delta", delta: text, start_ms: s, end_ms: e });
   const lastUser = (req: any) => { const u = (req.messages ?? []).filter((m: any) => m.role === "user"); const c = u[u.length - 1]?.content; return Array.isArray(c) ? c.map((p: any) => p?.text ?? "").join(" ") : String(c ?? ""); };
   const sentFor = (b: ReturnType<typeof bridge>, id: string) => b.ai.sent.filter((m: any) => m.delegation_id === id && m.content);
-  check("the continuation gap and length are named constants (about 1.2 s, 1-3 words)", G.GPT_LIVE.continuationGapMs === 1200 && G.GPT_LIVE.continuationMaxWords === 3);
+  check("the continuation gap and the goodbye tail window are named constants (about 1.2 s; one word within 250 ms of Cue's line)", G.GPT_LIVE.continuationGapMs === 1200 && G.GPT_LIVE.goodbyeTailMs === 250 && !("continuationMaxWords" in G.GPT_LIVE));
 
   // This morning: "Bye. Have a good" / Cue "You too" / "one": speech recognition split their goodbye, and the trailing "one" landed after
   // Cue's goodbye started. It is the end of their utterance (300 ms after it, one word), so it no longer holds the end.
@@ -303,8 +303,8 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
     check(`a real new sentence after Cue's goodbye (${label}): refused (member_spoke_after), the call stays open`, n.ai.of("session.close").length === 0 && refusedWith(n).join() === "member_spoke_after", refusedWith(n));
     n.tw.close();
   }
-  // Review of #427: a short real "wait" right after Cue's goodbye (within 1.2 s of their own goodbye, three words or fewer) is new words,
-  // never the end of their goodbye: only words starting within goodbyeOverlapMs of Cue's line starting can be that.
+  // Review of #427: a short real "wait" right after Cue's goodbye (within 1.2 s of their own goodbye) is new words, never the end of
+  // their goodbye: only one word starting within goodbyeTailMs of Cue's line starting can be that.
   for (const w of ["Oh wait", "Hold on", "One more thing"]) {
     const n = bridge({ answer: () => "|END", endGraceMs: 30 });
     await start(n, "live_wait");
@@ -317,7 +317,20 @@ const say = (b: ReturnType<typeof bridge>, who: "member" | "cue", text: string, 
     check(`"${w}" about 1 s after Cue's goodbye: refused (member_spoke_after), the call stays open`, n.ai.of("session.close").length === 0 && refusedWith(n).join() === "member_spoke_after", refusedWith(n));
     n.tw.close();
   }
-  check("memberAfter: the same short words are the end of their goodbye only when they start within goodbyeOverlapMs of Cue's line", B.memberAfter([{ who: "member", text: "Okay, bye.", startMs: 0, endMs: 800 }, { who: "member", text: "Oh wait", startMs: 1900, endMs: 2400 }], 900).newAt === 1900 && B.memberAfter([{ who: "member", text: "Bye. Have a good", startMs: 0, endMs: 1000 }, { who: "member", text: "one", startMs: 1300, endMs: 1500 }], 1100).newAt === null);
+  // Re-review of #427: inside the old 500 ms window, and two words even at 200 ms.
+  for (const [w, at] of [["Oh wait", 400], ["One more thing.", 500], ["Hold on", 200]] as [string, number][]) {
+    const n = bridge({ answer: () => "|END", endGraceMs: 30 });
+    await start(n, "live_wait2");
+    frag(n, "member", "Okay, bye.", 0, 800);
+    n.ai.in({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "w2", target: "client" } });
+    await sleep(40);
+    frag(n, "cue", "Bye, Jordan.", 900, 1600);
+    frag(n, "member", w, 900 + at, 900 + at + 400);
+    await sleep(150);
+    check(`"${w}" ${at} ms into Cue's goodbye: refused (member_spoke_after), the call stays open`, n.ai.of("session.close").length === 0 && refusedWith(n).join() === "member_spoke_after", refusedWith(n));
+    n.tw.close();
+  }
+  check("memberAfter: one word within goodbyeTailMs of Cue's line is the end of their goodbye; a later or longer start is new", B.memberAfter([{ who: "member", text: "Okay, bye.", startMs: 0, endMs: 800 }, { who: "member", text: "Oh wait", startMs: 1900, endMs: 2400 }], 900).newAt === 1900 && B.memberAfter([{ who: "member", text: "Bye. Have a good", startMs: 0, endMs: 1000 }, { who: "member", text: "one", startMs: 1300, endMs: 1500 }], 1100).newAt === null);
 
   // Review of #427: a held end lapses (heldEndMs). A turn long after carries no note, and an end there needs a fresh goodbye.
   check("the hold lapses after a named few seconds", G.GPT_LIVE.heldEndMs === 6000);

@@ -59,11 +59,12 @@ export const GPT_LIVE = {
   amdTimeoutSecs: 30,
   amdHoldMs: 32_000,
   goodbyeOverlapMs: 500, // GPT-Live's goodbye may start this much before the end of their turn and still be the goodbye
-  // Speech recognition splits one utterance ("Have a good" / "one", 2026-11-09): a fragment of theirs starting within this of their previous
-  // fragment's end is the same utterance, and its tail after Cue's line started counts as that utterance's end when it is this many words
-  // or fewer (gptLiveBridge.ts memberAfter). Timing and length only: never what the words say.
+  // Speech recognition splits one utterance ("Have a good" / "one", 2026-11-09): a fragment of theirs starting within continuationGapMs of
+  // their previous fragment's end is the same utterance, and its tail after Cue's line started counts as that utterance's end only when it
+  // is one word starting no later than goodbyeTailMs after Cue's line started (the real splits: one word, ~100-200 ms in; review of #427).
+  // gptLiveBridge.ts memberAfter. Timing and length only: never what the words say.
   continuationGapMs: 1200,
-  continuationMaxWords: 3,
+  goodbyeTailMs: 250,
   // An end held because they spoke after the goodbye is decided again only by a turn of theirs within this of the hold; after it, a
   // later end needs a fresh goodbye of its own (review of #427).
   heldEndMs: 6000,
