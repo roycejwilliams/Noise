@@ -665,15 +665,7 @@ export const REGISTRATION_ABILITIES: Ability[] = [
     tool: "registerForEvent",
     limits: { perTurn: 1 },
     confirm: "their_yes",
-    use: "They said yes to your question \"Want me to register you for this event using these details and answers?\" (or to registering after an unconfirmed try). It reads the page again and registers them only if nothing changed and they haven't taken it back, then gives you the line to send word for word: registered, submitted pending approval, waitlisted, already registered, a code to ask for, or that it didn't go through. Never on a yes to a draft or a detail, on \"interesting\", or before that question was asked. Never say they're in unless it says registered.",
-  },
-  {
-    id: "use_registration_code",
-    sheet: null,
-    can: "Cue enters the code Luma emailed them, once, for a signup that's waiting on it, and doesn't keep it.",
-    tool: "useRegistrationCode",
-    limits: { perTurn: 1 },
-    use: "They texted the code Luma emailed them for a signup that's waiting on one. The code is read from their message; never repeat it, quote it or put it in your reply.",
+    use: "They said yes to your question \"Want me to register you for this event using these details and answers?\" (or to registering after an unconfirmed try). It reads the page again and registers them only if nothing changed and they haven't taken it back, then gives you the line to send word for word: registered, submitted pending approval, waitlisted, already registered, a code to ask for (their reply with the code is taken care of before you see it), or that it didn't go through. Never on a yes to a draft or a detail, on \"interesting\", or before that question was asked. Never say they're in unless it says registered.",
   },
   {
     id: "stop_registration",

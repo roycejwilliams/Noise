@@ -141,7 +141,7 @@ export function voiceReadReceipt(name: string, input: any): { answer: string } |
 // Pure: what the log keeps of a registration tool's call (agent/registrationTools.ts): the registration id, which fields were answered
 // and how, and the event asked about. Never their message, an answer's value, an email or a code (Royce, 2026-11-09: never log the
 // email in plain decision rows; a code is never stored or logged). Null for any other tool.
-export const REGISTRATION_TOOLS: ReadonlySet<string> = new Set(["prepareEventRegistration", "saveRegistrationAnswers", "registerForEvent", "useRegistrationCode", "stopEventRegistration"]);
+export const REGISTRATION_TOOLS: ReadonlySet<string> = new Set(["prepareEventRegistration", "saveRegistrationAnswers", "registerForEvent", "stopEventRegistration"]);
 export function registrationReceipt(name: string, input: any): Record<string, unknown> | null {
   if (!REGISTRATION_TOOLS.has(name)) return null;
   const out: Record<string, unknown> = {};

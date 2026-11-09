@@ -473,6 +473,8 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
   const openForm = async () => {
     if (await formOpen()) return;
     const b = page.getByRole("button", { name: REGISTER_BUTTON }).first();
+    // The page renders its button by script after load (and again after a reload): wait for it a moment before deciding there's none.
+    await b.waitFor({ state: "visible", timeout: fixtureMode ? 2_000 : 5_000 }).catch(() => {});
     if (!(await b.count().catch(() => 0))) { button = null; return; }
     button = (await b.innerText().catch(() => "")).trim() || null;
     // The block the register button sits in (the event's RSVP/ticket card): where the page answers a submit when its dialog closes.

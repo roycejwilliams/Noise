@@ -14,12 +14,52 @@ const Cap = await import("../../src/services/capabilities.js");
 const A = await import("../../src/services/eventRegistration/approvals.js");
 const L = await import("../../src/services/eventRegistration/lumaFromFind.js");
 const C = await import("../../src/services/eventRegistration/copy.js");
-import { NAME_EMAIL, fixtureMap, type Fixture } from "./fixtures.js";
+const CC = await import("../../src/services/eventRegistration/codeChallenge.js");
+const W = await import("../../src/services/whatCoKnows.js");
+const RG = await import("../../src/services/eventRegistration/registration.js");
+
+import { NAME_EMAIL, fixtureServer, type Fixture } from "./fixtures.js";
 import { fakeRegistrations } from "./fakeStore.js";
 
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 900)}` : ""}`); } };
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+
+// ---- a code caught before the ordinary reply, only with an active challenge, only when it's a code
+check("code: a bare code is a code", CC.codeOnlyMessage("482913") === "482913" && CC.codeOnlyMessage("it's 482 913") === "482913" && CC.codeOnlyMessage("code: 482913 thanks") === "482913");
+check("not a code: a time, money, a zip, an address, a phone number, a sentence", ["meet at 7", "$20", "20 bucks", "my zip is 94110", "1234 Main St", "call me at 415-555-0101", "see you at 7:30", "I have 3 questions", "2026"].every((t) => CC.codeOnlyMessage(t) === null));
+{
+  let reads = 0;
+  const deps = (held: string[]) => ({ heldAny: () => held.length > 0, isHeld: (id: string) => held.includes(id), query: async () => { reads++; return { rows: [{ id: "reg-1", user_id: "u-1" }] }; } });
+  check("no active challenge anywhere: a numeric text flows, with no database read", (await CC.catchCode("+14155550101", "482913", deps([]))) === null && reads === 0);
+  check("a challenge for a session that isn't held (expired): flows", (await CC.catchCode("+14155550101", "482913", deps(["reg-other"]))) === null);
+  const caught = await CC.catchCode("+14155550101", "482913", deps(["reg-1"]));
+  check("an active challenge and a bare code: caught, with the placeholder in its place", caught?.code === "482913" && caught.registrationId === "reg-1" && caught.placeholder === CC.CODE_PLACEHOLDER && !caught.placeholder.includes("482913"));
+  check("an active challenge and an unrelated numeric message: flows", (await CC.catchCode("+14155550101", "meet at 7", deps(["reg-1"]))) === null && (await CC.catchCode("+14155550101", "$20", deps(["reg-1"]))) === null);
+  const route = src("routes/sendblue.ts");
+  const at = (re: RegExp) => route.search(re);
+  check("route: the code is caught before the delivery is saved, held, stamped, threaded or traced", at(/const regCode =/) > 0 && at(/if \(regCode\) req\.body\.content = regCode\.placeholder;/) < at(/INSERT INTO inbound_webhook_handles \(handle\) VALUES/) && at(/req\.body\.content = regCode\.placeholder/) < at(/SET payload = \$2::jsonb/) && at(/req\.body\.content = regCode\.placeholder/) < at(/claimTextLogin\(lockKey/) && at(/req\.body\.content = regCode\.placeholder/) < at(/traceName: "sendblue\.readTurn"/));
+  check("route: a caught code skips the ordinary reply; their line is kept as the placeholder", /User said: \$\{regCode\.placeholder\}/.test(route) && /continueWithCode\(/.test(route) && /if \(regCode && lockKey\) \{[\s\S]{0,1200}return;\n      \}/.test(route));
+  check("route: only while registration is live (no challenge can exist before)", /registrationLive\(\)\s*\n?\s*\? await catchCode/.test(route));
+  check("the code is never a tool input or a registry tool", !Cap.REGISTRATION_ABILITIES.some((a) => /Code/.test(a.tool ?? "")) && !/useRegistrationCode/.test(src("agent/registrationTools.ts")));
+}
+
+// ---- saved answers: visible in what Cue knows, factual details apart from one event's answers, removable, status kept
+{
+  const raw: any = { profile: null, claims: [], snapshot: null, threads: [], kit: [], tastes: [], asks: [], files: [],
+    signups: W.signupsOf([{ id: "00000000-0000-4000-8000-0000000000a1", event_name: "Founders Dinner", form: { fields: [{ id: "c", label: "What company do you work for?", kind: "company" }, { id: "w", label: "Why do you want to attend?", kind: "open_question" }] }, answers: { c: { value: "Northwind", source: "member" }, w: { value: "To meet climate investors.", source: "draft_approved" } } }], RG.FACTUAL_KINDS) };
+  const items = W.knownItems(raw);
+  const detail = items.find((i) => i.group === "signupDetails");
+  const answer = items.find((i) => i.group === "signupAnswers");
+  check("visible: a factual detail and an event answer, in separate groups", detail?.text === "What company do you work for?: Northwind (given for Founders Dinner)" && answer?.text === `for Founders Dinner, "Why do you want to attend?": To meet climate investors. (Cue's draft you approved)`, items);
+  check("visible: both groups have their own titles", W.GROUP_TITLES.signupDetails === "Details you gave for event signups" && W.GROUP_TITLES.signupAnswers === "Your answers on event signups");
+  const said: { sql: string; a: any[] }[] = [];
+  const db: any = { query: async (sql: string, a: any[]) => { said.push({ sql, a }); return { rows: [], rowCount: 1 }; } };
+  const out: any = await W.applyOne(db, "u", raw, answer!, "remove", null, "forget my answer for the founders dinner");
+  check("forget: removes that one answer from the registration's record, and nothing else", out?.now === null && said.length === 1 && /UPDATE event_registrations SET answers = answers - \$3::text/.test(said[0].sql) && said[0].a[2] === "w", { out, said });
+  check("forget: the registration's status is left as it is", !/status/.test(said[0].sql));
+  check("a signup answer can only be removed, not rewritten", !!(await W.applyOne(db, "u", raw, detail!, "correct", "Acme", "change it to Acme") as any).why);
+}
 
 // ---- today: nothing exists for members, nothing in any prompt changes
 check("approvals: live submission and copy both unapproved (code constants)", A.LUMA_LIVE_SUBMIT_APPROVED === false && A.REGISTRATION_COPY_APPROVED === false && !A.registrationLive());
@@ -84,14 +124,20 @@ if (browser) {
     { slug: "members-mixer", name: "Members Mixer", signIn: { code: "482913", reveals: [{ kind: "text", name: "registration_answers.0.value", label: "Who invited you?", required: true }] } },
     { slug: "plain-signin", name: "Plain Signin", signIn: { code: "771144" } },
     { slug: "guarded", name: "Guarded Event", captcha: true, button: null },
-    { slug: "slow-event", name: "Slow Event", result: "timeout" },
+    { slug: "slow-event", name: "Slow Event", result: "timeout", loginCode: "135790" },
+    { slug: "lost-event", name: "Lost Event", result: "timeout", lost: true, loginCode: "246810" },
+    { slug: "blind-event", name: "Blind Event", result: "timeout" },
+    { slug: "brought-night", name: "Brought Night" },
+    { slug: "crash-night", name: "Crash Night" },
   ];
-  const fixtures = fixtureMap(FIX);
+  // A stand-in for Luma's server across sessions: it keeps registrations (a lost response too) and shows them when signed in.
+  const srv = fixtureServer(FIX);
+  const fixtures = srv.fn;
   const submitted: string[] = [];
   const realDriver = D.lumaDriver({ browser: async () => browser!, slot: async () => () => {}, fixtures });
   // Counts every submit any session makes, by event: the duplicate checks read it.
   const driver = { ...realDriver, open: async (url: string) => { const s = await realDriver.open(url); const sub = s.submit; s.submit = async () => { submitted.push(url); return sub(); }; return s; } };
-  const finds = FIX.map((f) => ({ key: `event:${f.slug}`, name: f.name!, url: `https://lu.ma/${f.slug}`, details: { startAt: "2026-11-21T02:00:00.000Z", timezone: "America/Los_Angeles", hosts: [] } }));
+  const finds = FIX.filter((f) => f.slug !== "brought-night").map((f) => ({ key: `event:${f.slug}`, name: f.name!, url: `https://lu.ma/${f.slug}`, details: { startAt: "2026-11-21T02:00:00.000Z", timezone: "America/Los_Angeles", hosts: [] } }));
   const { q, rows } = fakeRegistrations(() => new Date(clock));
   let clock = Date.parse("2026-11-09T18:00:00Z");
   const tick = () => new Date((clock += 60_000));
@@ -221,7 +267,12 @@ if (browser) {
     check("withdrawn permission: a later yes to the old ask doesn't submit", after.ok === false && !submitted.some((u) => /slow-event/.test(u)), after);
   }
 
-  // Uncertain result: reconciled before any retry, never double-submitted.
+  // Uncertain result: reconciled against Luma's own state before any retry, never double-submitted.
+  const codeTurn = (code: string, id: string) => {
+    const at = tick();
+    latestFromThem = at;
+    return T.continueWithCode({ userId: U, resolvedContent: "[a sign-in code for an event signup, used once and not kept]", messageArrivedAt: at.getTime() }, env, id, code);
+  };
   {
     const r = await turn("ok sign me up for slow event").run("prepareEventRegistration", { event: "Slow Event" });
     const y = await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
@@ -231,7 +282,48 @@ if (browser) {
     const p = await turn("did it go through?").run("prepareEventRegistration", { event: "Slow Event" });
     check("uncertain: asking again offers a retry, never resubmits on its own", p.status === "uncertain" && submitted.filter((u) => /slow-event/.test(u)).length === 1, p);
     const y3 = await turn("yes", p.sendThisWordForWord).run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
-    check("uncertain: only a yes to the retry question submits once more", submitted.filter((u) => /slow-event/.test(u)).length === 2 && recOf("slow-event").attempts === 2, { y3, submitted });
+    check("uncertain: a yes to the retry is necessary, not sufficient: Luma's own state is read first (signed in), nothing submitted yet", y3.waiting === "code" && y3.sendThisWordForWord === "Before I try again, I'll check with Luma whether the first one went through. Luma sent a sign-in code to jordan@example.com. What's the code? I'll use it once and won't keep it." && submitted.filter((u) => /slow-event/.test(u)).length === 1, { y3, submitted });
+    const c = await codeTurn("135790", r.registrationId);
+    check("reconcile shows not registered: the one retry goes (attempt 2), and its own unknown result is uncertain again", submitted.filter((u) => /slow-event/.test(u)).length === 2 && recOf("slow-event").status === "uncertain" && /didn't confirm it/.test(c.text ?? ""), { c, submitted, status: recOf("slow-event").status });
+  }
+  {
+    // A lost response: the page never answered, but Luma kept it. The retry yes leads to a reconcile that finds it: no second submit.
+    const r = await turn("sign me up for lost event").run("prepareEventRegistration", { event: "Lost Event" });
+    await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
+    check("lost response: uncertain, though Luma's server holds it", recOf("lost-event").status === "uncertain" && srv.registrations("lost-event").length === 1);
+    const p = await turn("did it work?").run("prepareEventRegistration", { event: "Lost Event" });
+    await turn("yes", p.sendThisWordForWord).run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
+    const c = await codeTurn("246810", r.registrationId);
+    check("reconcile finds it registered: said so, nothing submitted again", c.text === "You're already registered for Lost Event with jordan@example.com, so I didn't sign you up again.\nhttps://luma.com/lost-event" && submitted.filter((u) => /lost-event/.test(u)).length === 1 && srv.registrations("lost-event").length === 1 && recOf("lost-event").status === "already_registered", { c, submitted });
+  }
+  {
+    // Reconcile can't determine it (no way to sign in on this page): no retry, and the member is told precisely.
+    const r = await turn("sign me up for blind event").run("prepareEventRegistration", { event: "Blind Event" });
+    await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
+    const p = await turn("so?").run("prepareEventRegistration", { event: "Blind Event" });
+    const y = await turn("yes", p.sendThisWordForWord).run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
+    check("reconcile can't tell: no retry, told precisely", y.ok === false && y.sendThisWordForWord === "I couldn't confirm whether the signup for Blind Event went through, so I won't submit it again. Luma's confirmation email to jordan@example.com, or the event page when you're signed in, will show it.\nhttps://luma.com/blind-event" && submitted.filter((u) => /blind-event/.test(u)).length === 1 && recOf("blind-event").status === "uncertain", y);
+  }
+  {
+    // The browser dies mid-submit: after the click it is uncertain (never retried); before it, nothing was sent.
+    const crashing = (clicked: boolean) => ({ ...env, driver: async () => ({ ...driver, open: async (u: string) => { const s = await driver.open(u); s.submit = async () => { throw Object.assign(new Error("Target closed"), { clicked }); }; return s; } }) });
+    const r = await turn("sign me up for crash night").run("prepareEventRegistration", { event: "Crash Night" });
+    const t1 = (m: string) => { const at = tick(); latestFromThem = at; const ctx = { userId: U, resolvedContent: m, recentExchange: `Cue: ${lastText}\nMember: ${m}`, messageArrivedAt: at.getTime() }; return guardTools(T.registrationTools(ctx, crashing(false), () => {}) as any, { userId: U, resolvedContent: m, dryRun: true, notDone: () => {}, recentExchange: ctx.recentExchange }) as any; };
+    const before = await t1("yes").registerForEvent.execute({ registrationId: r.registrationId, theirYes: "yes" }, {});
+    check("crash before the click: stopped as unreadable with the real link; nothing sent", recOf("crash-night").status === "blocked" && /couldn't read the signup form/.test(before.sendThisWordForWord), before);
+    const r2 = await turn("try crash night again").run("prepareEventRegistration", { event: "Crash Night" });
+    const t2 = (m: string) => { const at = tick(); latestFromThem = at; const ctx = { userId: U, resolvedContent: m, recentExchange: `Cue: ${lastText}\nMember: ${m}`, messageArrivedAt: at.getTime() }; return guardTools(T.registrationTools(ctx, crashing(true), () => {}) as any, { userId: U, resolvedContent: m, dryRun: true, notDone: () => {}, recentExchange: ctx.recentExchange }) as any; };
+    const after = await t2("yes").registerForEvent.execute({ registrationId: r2.registrationId, theirYes: "yes" }, {});
+    check("crash after the click: uncertain, never retried, never 'you're in'", recOf("crash-night").status === "uncertain" && /didn't confirm it/.test(after.sendThisWordForWord), after);
+  }
+  {
+    // A Luma link they brought themselves: the same checked flow, from its page; still their explicit yes.
+    const r = await turn("can you register me for this one? https://lu.ma/brought-night").run("prepareEventRegistration", { event: "https://lu.ma/brought-night" });
+    check("member-brought Luma link: the whole form read first, then the same submit question", r.ok && r.ask === "submit" && /^Brought Night is on/.test(r.sendThisWordForWord), r);
+    const no = await turn("sign me up for https://lu.ma/never-shared").run("prepareEventRegistration", { event: "https://lu.ma/someone-elses" });
+    check("a Luma link neither sent by Cue nor shared by them is refused", no.ok === false, no);
+    const y = await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
+    check("member-brought link: registered on their yes", y.status === "registered", y);
   }
 
   // Login by emailed code: asked in the moment, used once, never kept; what sign-in revealed goes back alone, then the submit again.
@@ -240,11 +332,12 @@ if (browser) {
     check("login required: not a stop; the submit question first", r.ask === "submit", r);
     const y = await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
     check("login: authorized email can't (none exists), so the member is asked for the code", y.waiting === "code" && y.sendThisWordForWord === "Luma sent a sign-in code to jordan@example.com. What's the code? I'll use it once and won't keep it." && recOf("members-mixer").status === "needs_member_code", y);
-    const none = await turn("one sec").run("useRegistrationCode", { registrationId: r.registrationId });
-    check("no code in their message: asked again, never guessed", none.ok === false && none.sendThisWordForWord === C.noCodeSeen);
-    const c = await turn("482913").run("useRegistrationCode", { registrationId: r.registrationId });
+    check("a message that isn't a code is never caught (it flows to the ordinary reply)", CC.codeOnlyMessage("one sec") === null);
+    const cr = await codeTurn("482913", r.registrationId);
+    const c = cr.result as any;
+    lastText = cr.text ?? lastText;
     check("login: their code signs in; the newly revealed question is the only thing asked", c.ok === false && c.sendThisWordForWord.startsWith("Signing in showed one more question.") && /Who invited you\?/.test(c.sendThisWordForWord) && !/your company/.test(c.sendThisWordForWord), c);
-    check("login: the code was taken out of the stored thread and is in no record", redacted.includes("482913") && !JSON.stringify(rows).includes("482913"));
+    check("login: the code is in no record", !JSON.stringify(rows).includes("482913"));
     const a = await turn("Sam Rivera invited me").run("saveRegistrationAnswers", { registrationId: r.registrationId, answers: [{ fieldId: "registration_answers.0.value", value: "Sam Rivera", from: "their_words" }] });
     check("revealed question answered: the submit question again (a new detail would be shared)", C.SUBMIT_QUESTION.test(a.sendThisWordForWord) && /Sam Rivera/.test(a.sendThisWordForWord), a);
   }
@@ -253,7 +346,7 @@ if (browser) {
     emailCode = "771144";
     const r = await turn("sign me up for plain signin").run("prepareEventRegistration", { event: "Plain Signin" });
     const y = await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
-    check("code source: authorized email first; with a code there, the member isn't asked and it completes", y.status === "registered", y);
+    check("code source: authorized email first; with a code there, the member isn't asked and it completes", y.status === "registered", { y, outcome: recOf("plain-signin").outcome });
     emailCode = null;
   }
 

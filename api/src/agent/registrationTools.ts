@@ -8,7 +8,8 @@
 //   registerForEvent          their yes to the submit question (toolGuard's theirYes + a read scoped to this registration's question),
 //                             then a fresh read of the page right before submitting: same scope, nothing newer from them, not withdrawn,
 //                             live submission approved. One claim, one submit, the page's real answer. A sign-in or code step pauses it.
-//   useRegistrationCode       the code from their message (never a tool input), entered once in the held session; never stored or logged.
+//   (their emailed code)      never a tool: caught before the ordinary reply (codeChallenge.ts, routes/sendblue.ts) and handed to
+//                             continueWithCode, entered once in the held session; never stored, logged, traced or shown to a model.
 //   stopEventRegistration     they took it back: withdrawn, the held session closed.
 // None of these exist for anyone until live submission and the copy are both approved (eventRegistration/approvals.ts).
 import { z } from "zod";
@@ -60,6 +61,16 @@ const normText = (s: string) => ` ${String(s ?? "").toLowerCase().replace(/[â€™â
 const inTheirMessage = (value: string, message: string) => normText(value).trim().length >= 1 && normText(message).includes(normText(value));
 
 export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => Promise<RegistrationEnv>), notDone: (what: string) => void) {
+  return registrationFlow(ctx, envIn, notDone).tools;
+}
+
+// Their emailed code, caught before the ordinary reply (routes/sendblue.ts): entered once in the held session, and the line to send.
+export async function continueWithCode(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => Promise<RegistrationEnv>), registrationId: string, code: string): Promise<{ text: string | null; result: Record<string, unknown> }> {
+  const result = await registrationFlow(ctx, envIn, () => {}).withCode(registrationId, code);
+  return { text: typeof result.sendThisWordForWord === "string" ? result.sendThisWordForWord : null, result };
+}
+
+function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => Promise<RegistrationEnv>), notDone: (what: string) => void) {
   // The environment is built on first use (a turn that never calls these tools never builds it).
   let env!: RegistrationEnv;
   let q: S.Q | undefined;
@@ -104,16 +115,24 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
 
   // A held or fresh session's page, read, planned and (when everything holds) submitted once. Pauses for their code when the page
   // asks for one; goes back to them when the page now asks for something their yes didn't cover.
-  async function runSubmit(rec: R.RegistrationRecord, session: RegistrationSession, o: { signedIn: boolean; yesAt: Date; retry?: boolean }): Promise<Record<string, unknown>> {
+  async function runSubmit(rec: R.RegistrationRecord, session: RegistrationSession, o: { signedIn: boolean; yesAt: Date }): Promise<Record<string, unknown>> {
     let keep = false;
     try {
       const facts = await factsFor(rec);
+      // Signed in: what Luma itself holds for their email comes first (a fresh read of the page). Already registered (or pending, or
+      // waitlisted) is never registered again, whatever the record says.
+      if (o.signedIn) {
+        const own = await session.ownState().catch(() => ({ state: "unknown" as const, why: "the page couldn't be read" }));
+        if (own.state === "registered" || own.state === "pending_approval" || own.state === "waitlisted") {
+          return settleFound(rec, ctxFor(rec, null, facts), own.state);
+        }
+      }
       const form = await session.read();
       const plan = R.planFill(form, facts, rec.answers, rec.drafts);
       const scopeNow = R.scopeOf(form, plan);
       const c = ctxFor(rec, plan, facts);
       const check = R.submitCheck({ record: rec, yesAt: o.yesAt, latestFromThemAt: await env.latestFromThemAt(userId), planNow: plan, scopeNow, liveAllowed: env.liveSubmit, signedIn: o.signedIn });
-      if (!check.go && !(o.retry && check.why === "uncertain")) {
+      if (!check.go) {
         if (check.why === "sign_in") {
           const claimed = await S.claimSubmit(userId, rec.id, rec.scopeHash ?? "", { resuming: rec.status !== "awaiting_yes" }, q);
           if (!claimed) return { ok: false, error: "Another reply already has this registration in hand, or it moved. Don't say it's done." };
@@ -141,7 +160,7 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
         if (check.why === "already_final") return { ok: true, ...said(C.outcomeLine(c, rec.status === "already_registered" ? "already_registered" : (rec.status as any))) };
         return { ok: false, error: `Not submitted: ${check.detail}.` };
       }
-      const claimed = o.retry ? await S.claimRetry(userId, rec.id, rec.scopeHash ?? "", q) : await S.claimSubmit(userId, rec.id, rec.scopeHash ?? "", { resuming: rec.status === "needs_member_code" || rec.status === "needs_member_step" }, q);
+      const claimed = await S.claimSubmit(userId, rec.id, rec.scopeHash ?? "", { resuming: rec.status === "needs_member_code" || rec.status === "needs_member_step" }, q);
       if (!claimed) return { ok: false, error: "Not submitted: another reply already has this registration, or it moved on. Never say it's done." };
       const values = Object.fromEntries(plan.fill.map((f) => [f.fieldId, f.value]));
       const filled = await session.fill(values, plan.attestations.map((a) => a.fieldId));
@@ -151,20 +170,32 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
         await S.recordOutcome(userId, rec.id, { state: "blocked", link: rec.eventUrl, linkKind: "event_page", detail: filled.detail, blocker: b, at: env.now().toISOString() }, "blocked", q);
         return { ok: false, ...said(C.blockerLine(c, b)) };
       }
-      const res = await session.submit();
+      let res: Awaited<ReturnType<RegistrationSession["submit"]>>;
+      try {
+        res = await session.submit();
+      } catch (err: any) {
+        // The browser died or the page broke mid-submit. Before the click nothing was sent: it stops, with the real link. After it the
+        // result is unknown: uncertain, reconciled before anything else, never retried on a guess.
+        if (err?.clicked === false) {
+          const b: R.Blocker = { kind: "unreadable", detail: "the browser stopped before submitting" };
+          await S.recordOutcome(userId, rec.id, { state: "blocked", link: rec.eventUrl, linkKind: "event_page", detail: b.detail, blocker: b, at: env.now().toISOString() }, "blocked", q);
+          return { ok: false, ...said(C.blockerLine(c, b)) };
+        }
+        res = { state: "unknown", detail: null, link: rec.eventUrl, linkKind: "event_page" };
+      }
       return await settle(claimed, session, c, res, () => { keep = true; });
     } finally {
       if (!keep) await session.close();
     }
   }
 
-  async function waitForCode(rec: R.RegistrationRecord, session: RegistrationSession, c: C.Ctx, waitingFor: "code" | "member_step", when: "sign_in" | "after_submit", kept: () => void): Promise<Record<string, unknown>> {
+  async function waitForCode(rec: R.RegistrationRecord, session: RegistrationSession, c: C.Ctx, waitingFor: "code" | "member_step", when: "sign_in" | "after_submit" | "reconcile", kept: () => void): Promise<Record<string, unknown>> {
     const to: R.Status = waitingFor === "code" ? "needs_member_code" : "needs_member_step";
     const moved = await S.moveRegistration(userId, rec.id, to, { outcome: { state: "uncertain", link: rec.eventUrl, linkKind: "event_page", detail: when, at: env.now().toISOString() } }, q);
     if (!env.hold(rec.id, session)) {
       const b: R.Blocker = { kind: "unreadable", detail: "too many signups waiting on a code right now" };
       await S.moveRegistration(userId, rec.id, when === "sign_in" ? "blocked" : "uncertain", {}, q);
-      return { ok: false, ...said(when === "sign_in" ? C.blockerLine(c, b) : C.outcomeLine(c, "uncertain")) };
+      return { ok: false, ...said(when === "sign_in" ? C.blockerLine(c, b) : when === "reconcile" ? C.cannotConfirm(c) : C.outcomeLine(c, "uncertain")) };
     }
     kept();
     if (waitingFor === "member_step") return { ok: true, waiting: "member_step", ...said(C.memberStepAsk()) };
@@ -174,7 +205,7 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
       const s = env.takeHeld(rec.id);
       if (s) return useCode({ ...moved, status: to }, s, found.code, c);
     }
-    return { ok: true, waiting: "code", ...said(C.codeAsk(c, when)) };
+    return { ok: true, waiting: "code", ...said(when === "reconcile" ? C.reconcileCodeAsk(c) : C.codeAsk(c, when)) };
   }
 
   async function useCode(rec: R.RegistrationRecord, session: RegistrationSession, code: string, c: C.Ctx): Promise<Record<string, unknown>> {
@@ -182,6 +213,20 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
     if (!r.ok) {
       env.hold(rec.id, session);
       return { ok: false, ...said(C.codeAgain) };
+    }
+    // Reconciling an unconfirmed submit: signed in, Luma's own page says what it holds for their email. Only "not registered" lets
+    // the one retry they said yes to go; anything it can't tell stays uncertain, and nothing is sent again.
+    if (rec.outcome?.detail === "reconcile") {
+      const own = await session.ownState().catch(() => ({ state: "unknown" as const, why: "the page couldn't be read" }));
+      if (own.state === "registered" || own.state === "pending_approval" || own.state === "waitlisted") {
+        await session.close();
+        return settleFound(rec, c, own.state);
+      }
+      if (own.state === "not_registered") return runSubmit(rec, session, { signedIn: true, yesAt: env.now() });
+      await session.close();
+      await S.moveRegistration(userId, rec.id, "uncertain", {}, q);
+      notDone("Whether the first signup went through couldn't be confirmed: it was NOT submitted again.");
+      return { ok: false, ...said(C.cannotConfirm(c)) };
     }
     const after = rec.outcome?.detail === "after_submit";
     if (after) {
@@ -193,8 +238,8 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
         if (!keep) await session.close();
       }
     }
-    // Signed in: the same yes carries on, unless the page now asks for more (then only the new things go back to them).
-    return runSubmit(rec, session, { signedIn: true, yesAt: ctx.messageArrivedAt ? new Date(ctx.messageArrivedAt) : env.now() });
+    // Signed in: the same yes carries on (the code is its continuation, not a new message to read), unless the page now asks for more.
+    return runSubmit(rec, session, { signedIn: true, yesAt: env.now() });
   }
 
   // The page's answer to the submit, recorded once and said as it is.
@@ -222,20 +267,37 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
     return { ok: true, status: res.state, ...said(text) };
   }
 
+  // What Luma already holds for them (read signed in): recorded as it is, nothing submitted.
+  async function settleFound(rec: R.RegistrationRecord, c: C.Ctx, state: "registered" | "pending_approval" | "waitlisted"): Promise<Record<string, unknown>> {
+    const to: R.Status = state === "registered" ? "already_registered" : state;
+    const outcome: R.Outcome = { state: to === "already_registered" ? "already_registered" : state, link: rec.eventUrl, linkKind: "event_page", detail: "Luma's own page, signed in", at: env.now().toISOString() };
+    const settled = await S.recordOutcome(userId, rec.id, outcome, to, q);
+    if (settled && R.FINAL.has(settled.status) && planHook) await planHook(settled).catch(() => {});
+    ctx.facts?.add("did_this_turn", `Registration for ${c.eventName}: Luma's own page already shows ${state.replace(/_/g, " ")}; nothing was submitted again.`);
+    return { ok: true, status: to, ...said(C.outcomeLine(c, to === "already_registered" ? "already_registered" : (state as any))) };
+  }
+  // Part 4 hooks the plan record here (services/eventRegistration/followThrough.ts); null until then.
+  const planHook: ((r: R.RegistrationRecord) => Promise<unknown>) | null = null;
+
   // The event they mean: a find Cue sent them, by its link or its name, resolved to its Luma page.
   async function findFor(event: string): Promise<{ find: SentFind; url: string } | { error: string }> {
     const finds = await env.sentFinds(userId);
     const wanted = R.canonicalEventUrl(event);
     const byLink = finds.find((f) => (f.url && wanted && R.canonicalEventUrl(f.url) === wanted) || lumaLinksIn(f).includes(wanted ?? "\u0000"));
     const byName = byLink ?? finds.find((f) => normText(f.name).trim() === normText(event).trim()) ?? finds.find((f) => event.trim().length >= 4 && normText(f.name).includes(normText(event)));
-    if (!byName) return { error: "That isn't an event Cue sent them. Registering only follows an event Cue found and sent (check listSentOffers); share the link instead." };
+    if (!byName) {
+      // A Luma event link they brought themselves (in this message or what they said before): the same checked flow, from its page.
+      const theirs = wanted && `${ctx.resolvedContent}\n${await env.theirWords(userId)}`.match(/https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\/[A-Za-z0-9_/-]+/gi)?.some((u) => R.canonicalEventUrl(u) === wanted);
+      if (theirs && wanted) return { find: { key: `link:${R.eventKeyOf(wanted)}`, name: "", url: wanted, details: null }, url: wanted };
+      return { error: "That isn't an event Cue sent them or a Luma link they shared. Registering follows one of those; share the link instead." };
+    }
     const { lumaPageForFind } = await import("../services/eventRegistration/lumaFromFind.js");
     const r = await lumaPageForFind(byName, env.resolve);
     if (!r.url) return { error: `Registering isn't available for this one (${r.why}). Share its link as usual.` };
     return { find: byName, url: r.url };
   }
 
-  return {
+  const tools = {
     prepareEventRegistration: tool({
       description: toolUse("prepareEventRegistration"),
       inputSchema: z.object({
@@ -248,7 +310,7 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
         const found = await findFor(event);
         if ("error" in found) return { ok: false, error: found.error };
         const eventKey = R.eventKeyOf(found.url)!;
-        let rec = await S.openRegistration(userId, { eventKey, eventUrl: found.url, itemKey: found.find.key, eventName: found.find.name }, q);
+        let rec = await S.openRegistration(userId, { eventKey, eventUrl: found.url, itemKey: found.find.key.startsWith("link:") ? null : found.find.key, eventName: found.find.name || null }, q);
         const facts = await factsFor(rec);
         const status = S.effectiveStatus(rec, env.now().getTime());
         // Already on the list (or waiting on the host or a spot): never again, said as it is.
@@ -259,7 +321,7 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
           await S.moveRegistration(userId, rec.id, "uncertain", { askKind: "submit", askText: t, askedAt: env.now() }, q);
           return { ok: true, status: "uncertain", ...said(t) };
         }
-        if (status === "needs_member_code") return { ok: true, status, ...said(C.codeAsk(ctxFor(rec, null, facts), rec.outcome?.detail === "after_submit" ? "after_submit" : "sign_in")) };
+        if (status === "needs_member_code") return { ok: true, status, ...said(rec.outcome?.detail === "reconcile" ? C.reconcileCodeAsk(ctxFor(rec, null, facts)) : C.codeAsk(ctxFor(rec, null, facts), rec.outcome?.detail === "after_submit" ? "after_submit" : "sign_in")) };
         if (status === "blocked" || status === "failed" || status === "withdrawn") rec = (await S.moveRegistration(userId, rec.id, "inspected", {}, q)) ?? rec;
         const session = await (await env.driver()).open(found.url);
         let form: R.FormRead;
@@ -357,36 +419,27 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
             await S.moveRegistration(userId, rec.id, "uncertain", { askKind: "submit", askText: t, askedAt: env.now() }, q);
             return { ok: false, error: "Not submitted again: the first try was never confirmed.", ...said(t) };
           }
+          // Their yes to a retry is necessary, not sufficient: Luma's own state for their email is read first (signed in with their
+          // emailed code), and only "not registered" lets the retry go.
           const session = await (await env.driver()).open(rec.eventUrl);
-          return runSubmit(rec, session, { signedIn: false, yesAt, retry: true });
+          let keep = false;
+          try {
+            const c = ctxFor(rec, null, facts);
+            const st = await session.startSignIn(c.email);
+            if (!st.ok || st.waitingFor !== "code") {
+              notDone("Whether the first signup went through couldn't be confirmed: it was NOT submitted again.");
+              return { ok: false, ...said(C.cannotConfirm(c)) };
+            }
+            return await waitForCode(rec, session, c, "code", "reconcile", () => { keep = true; });
+          } finally {
+            if (!keep) await session.close();
+          }
         }
         if (!rec.askText || !C.SUBMIT_QUESTION.test(rec.askText)) return { ok: false, error: "Not registered: they haven't been asked the submit question." };
         if (!asked(rec.askText)) return { ok: false, error: "Not registered: the question their yes would answer isn't in the conversation. Send the ask first." };
         if (status !== "awaiting_yes") return { ok: false, error: `Not registered: the registration is ${status.replace(/_/g, " ")}.` };
         const session = await (await env.driver()).open(rec.eventUrl);
         return runSubmit(rec, session, { signedIn: false, yesAt });
-      },
-    }),
-
-    useRegistrationCode: tool({
-      description: toolUse("useRegistrationCode"),
-      inputSchema: z.object({ registrationId: z.string() }),
-      execute: async ({ registrationId }) => {
-        await ready();
-        const rec = await S.registrationById(userId, registrationId, q);
-        if (!rec || rec.status !== "needs_member_code") return { ok: false, error: "No signup is waiting on a code." };
-        const facts = await factsFor(rec);
-        const c = ctxFor(rec, null, facts);
-        const code = R.codeIn(ctx.resolvedContent);
-        if (!code) return { ok: false, ...said(C.noCodeSeen) };
-        const session = env.takeHeld(rec.id);
-        await env.redactCode(userId, code).catch(() => {});
-        if (!session) {
-          const submitted = rec.outcome?.detail === "after_submit";
-          await S.moveRegistration(userId, rec.id, submitted ? "uncertain" : "inspected", {}, q);
-          return { ok: false, ...said(C.sessionExpired(c, submitted)) };
-        }
-        return useCode(rec, session, code, c);
       },
     }),
 
@@ -404,6 +457,25 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
       },
     }),
   };
+
+  // The code, once: never a tool input, never stored. The stored line it came in never had it (the route kept a placeholder).
+  async function withCode(registrationId: string, code: string): Promise<Record<string, unknown>> {
+    await ready();
+    const rec = await S.registrationById(userId, registrationId, q);
+    if (!rec || rec.status !== "needs_member_code") return { ok: false, error: "No signup is waiting on a code." };
+    const facts = await factsFor(rec);
+    const c = ctxFor(rec, null, facts);
+    const session = env.takeHeld(rec.id);
+    if (!session) {
+      const submitted = rec.outcome?.detail === "after_submit";
+      const reconciling = rec.outcome?.detail === "reconcile";
+      await S.moveRegistration(userId, rec.id, submitted || reconciling ? "uncertain" : "inspected", {}, q);
+      return { ok: false, ...said(reconciling ? C.cannotConfirm(c) : C.sessionExpired(c, submitted)) };
+    }
+    return useCode(rec, session, code, c);
+  }
+
+  return { tools, withCode };
 }
 
 async function R_codeFrom(rec: R.RegistrationRecord, env: RegistrationEnv) {
