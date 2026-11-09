@@ -82,7 +82,10 @@ export function pickEpisode(signals: HeavySignal[], now: Date, timezone: string 
   if (!highs.length && mediums.length < HEAVY.mediumsNeeded) return null;
   // Nothing specific to ask about: nothing to check on.
   if (!episode.some((s) => (s.about ?? "").trim() || (s.quote ?? "").trim())) return null;
-  if (episode.some((s) => SELF_HARM.test(plain(`${s.about ?? ""} ${s.quote ?? ""}`)))) return null;
+  // The self-harm bail reads every read in the window, whatever its kind, whose feeling it was, framing, target or intensity: what
+  // forms an episode (isHardRead above) never narrows what the safety scan sees (review of #430: a self-harm line read as unsure sat
+  // outside the episode and a care text was queued).
+  if (signals.some((s) => s.at.getTime() >= since && s.at <= now && SELF_HARM.test(plain(`${s.about ?? ""} ${s.quote ?? ""}`)))) return null;
   const endedAt = episode[episode.length - 1].at;
   // They have since had a good moment: it already passed.
   // A voice score alone never clears it (voice never dismisses what they said).
