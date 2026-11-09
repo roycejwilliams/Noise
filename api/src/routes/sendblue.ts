@@ -2701,7 +2701,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // shift the person never actually asked you to notice, not a rule.
         const seekingModeContext =
           seekingMode === "solving"
-            ? `They've moved from sharing into wanting a real answer or help deciding — meet that directly. Give them your actual read, grounded in what you know about them, instead of another reflective question or a line that waits for them to ask first.`
+            ? `They want a real answer or help deciding, maybe alongside what they're feeling. If there's a feeling, receive it in a line, then meet the ask directly: give them your actual read, grounded in what you know about them, instead of another reflective question or a line that waits for them to ask first.`
             : "";
 
         let coReply: string;
