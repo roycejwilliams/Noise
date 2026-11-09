@@ -120,7 +120,7 @@ const lines: OwnLine[] = [
   check("the item is a single thing, never a list", /export type CompanionItem = \{ kind: "web"; name: string; url: string; reason: string \};/.test(cc) && /item\?: CompanionItem \| null/.test(cc));
   check("with an item, the text must carry its link", /mustIncludeAny: \[item!\.url\]/.test(cc) && /const carriesItem = Boolean\(item\) && text\.includes\(item!\.url\);/.test(cc));
   check("an item that doesn't help is left out, not forced", /If it wouldn't actually help with this, leave it out and offer nothing\./.test(cc));
-  check("without an item, the check-in offers nothing", /Offer nothing: no events, no links, no suggestions\./.test(cc));
+  check("without an item, the check-in offers nothing to go to (2026-11-09: a take of its own is allowed, no events, links or people)", /Offer nothing to go to or look at: no events, no links, no people\./.test(cc));
   check("the check-in never promises later work", /Never promise anything Cue will do later\./.test(cc));
   const mt = src("harness/memberThreads.ts");
   check("a web item passes the grounding gate and the web budget first", /reserveWebSearch\(userId, "sweep"/.test(mt) && /if \(found && g\?\.pass\) item =/.test(mt));
