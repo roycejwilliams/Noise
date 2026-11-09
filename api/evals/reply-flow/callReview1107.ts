@@ -250,7 +250,9 @@ check("paraphrase only as far as their words support (check-in tone and the quot
   check("an answer that isn't the shape: wait", (await STR.momentFit({ userId: "u", firstName: "J", message: msg, recent, call: callDone, queuedAt: queued, now })).verdict === "wait");
   STR.setMomentModelForTests(null);
   // Requested reminders and promises are outside the gate entirely; an optional milestone in the same moment is judged.
-  check("a requested reminder, a promise's delivery and a post-call text never go through the gate (their own timing)", ["direct_ask", "task_update", "post_call", "commitment_nudge", "deadline_nudge", "call_reminder"].every((t) => !STR.momentFitApplies(candidateClass(t, false, {}), {}, { type: t })));
+  check("a requested reminder and a promise's delivery never go through the gate (their own timing)", ["direct_ask", "task_update", "commitment_nudge", "deadline_nudge", "call_reminder"].every((t) => !STR.momentFitApplies(candidateClass(t, false, {}), {}, { type: t })));
+  // 2026-11-09: the text after a call is Cue's own optional next thought and is judged; one carrying an owed correction is not (evals/followThrough/momentFollowThrough.ts).
+  check("the post-call text is judged like any optional message", STR.momentFitApplies(candidateClass("post_call", false, {}), {}, { type: "post_call" }));
   check("...and the reminder path (services/relay.ts, sendExempt as requested) never reaches it", !/momentFit/.test(src("src/services/relay.ts")) && /cls: "requested"/.test(src("src/services/relay.ts")) && src("src/harness/proactive.ts").split("export async function sendExempt")[1]?.split("\nexport ")[0]?.includes("momentFit") === false);
   check("the follow-up on their own dated commitment and a check-in on their ask route around it too", !STR.momentFitApplies("checkin", { kind: "commitment" }, { type: "window_followup" }) && !STR.momentFitApplies("checkin", {}, { type: "ask_checkin" }));
   check("an optional milestone in the same moment is judged", STR.momentFitApplies(candidateClass("companion", false, {}), { story: {} }, { type: "companion" }));
@@ -271,7 +273,7 @@ check("paraphrase only as far as their words support (check-in tone and the quot
     const failing = await STR.momentStillCurrent({ query: async () => { throw new Error("down"); } }, "u", contextAt);
     check("race: a text arriving between the context read and the send re-judges it; a failed read holds too", before && !after && !failing);
     const P2 = src("src/harness/proactive.ts");
-    check("race: judgedAt is the context read's database time, stamped before the knowledge read", /const contextAt: Date = await pool\.query\(`SELECT NOW\(\) AS now`\)/.test(P2) && P2.indexOf("const contextAt: Date") < P2.indexOf("const known = await MK.memberKnowledge(") && /const judgedAt: Date \| null = moment\.applies \? contextAt : null;/.test(P2));
+    check("race: judgedAt is the context read's database time, stamped before the knowledge read", /const contextAt: Date = await pool\.query\(`SELECT NOW\(\) AS now`\)/.test(P2) && P2.indexOf("const contextAt: Date") < P2.indexOf("const known = await MK.memberKnowledge(") && /const judgedAt: Date \| null = momentRead \? contextAt : null;/.test(P2));
   }
   // Retry cost: a waited check-in is judged on its kept draft before any new draft; unread reads are capped, then dropped with a reason.
   check("a waited check-in keeps its draft, and is judged on it first (no redraft unless the verdict is send)", /'momentDraft', \$5::text/.test(src("src/harness/proactive.ts")) && src("src/harness/proactive.ts").indexOf("if (moment.kept) {") < src("src/harness/proactive.ts").indexOf("draft = composed ? { messages: composed.messages"));

@@ -202,21 +202,21 @@ const base = { approved: true, now: () => now, told: async () => false, othersWa
   const base2 = { firstName: "Jordan", message: AN.ONE_CHANGE_RECALL, recent: "[Nov 19] Them: rough week", call: null, queuedAt: now, now };
   check("judgment: the hard day is told to the read as a reason for more thought, never a verdict", MF.momentPrompt({ ...base2, hardDay: true }).includes(MF.HARD_DAY_LINE) && /not a reason on its own to stay silent/.test(MF.HARD_DAY_LINE));
   check("judgment: without it the prompt is exactly as before", !MF.momentPrompt(base2).includes(MF.HARD_DAY_LINE) && MF.momentPrompt(base2) === MF.momentPrompt({ ...base2, hardDay: false }));
-  check("judgment: only an announcement's read gets the hard-day line", MF.momentHardDay({ kind: "announcement", hardDay: true }) && !MF.momentHardDay({ kind: "goal_checkin", hardDay: true }) && !MF.momentHardDay({ kind: "announcement", hardDay: false }));
+  check("judgment: every read the hard day is on gets the line (2026-11-09: announcements and check-ins alike)", MF.momentHardDay({ kind: "announcement", hardDay: true }) && MF.momentHardDay({ kind: "goal_checkin", hardDay: true }) && !MF.momentHardDay({ kind: "announcement", hardDay: false }));
   const prompts: string[] = [];
   MF.setMomentModelForTests(async (p) => (prompts.push(p), '{"verdict":"wait","why":"they are in the middle of something hard"}'));
   const ready = { ready: true as const, line: null };
   const va = await MF.momentFit({ userId: "u", ...base2, call: ready, kind: "announcement", hardDay: true });
   const vc = await MF.momentFit({ userId: "u", ...base2, call: ready, kind: "goal_checkin", hardDay: true });
   MF.setMomentModelForTests(null);
-  check("judgment: the read sees the line for an announcement, not for a check-in", prompts[0].includes(MF.HARD_DAY_LINE) && !prompts[1].includes(MF.HARD_DAY_LINE));
+  check("judgment: the read sees the line for an announcement and for a check-in on a hard day", prompts[0].includes(MF.HARD_DAY_LINE) && prompts[1].includes(MF.HARD_DAY_LINE));
   check("judgment: its verdict decides (a wait is a wait, capped like every moment wait)", va.verdict === "wait" && va.read === "model" && vc.verdict === "wait" && MF.momentAction(va, { waits: 0 }, now).act === "wait" && MF.momentAction(va, { waits: MF.MOMENT_FIT.maxWaits }, now).act === "drop");
   const pr = src("harness/proactive.ts");
-  check("judgment: the dispatch tells the read the capped hard-day hold and the kind", /kind: c\.type, hardDay: heldForMood\(state\) \}\);/.test(pr));
+  check("judgment: the dispatch tells the read the capped hard-day hold and the kind", /kind: c\.type, hardDay: heldForMood\(state\), queued \}\);/.test(pr));
   check("judgment: no hard_day class check for an announcement", /if \(!opts\.pulled && c\.type !== "announcement" && hardDayHolds\(/.test(pr));
   // Doesn't bypass the never-stacked rule: the read happens before the draft, the draft (with its stack read) always runs before a send,
   // and a defer returns before anything is sent.
-  const iKept = pr.indexOf("if (moment.kept) {"), iDraft = pr.indexOf("await drafting(c.type, () => registry[c.type].draft(c, person))"), iDefer = pr.indexOf('if ("defer" in draft) {'), iJudge = pr.indexOf("if (moment.applies && (!moment.preJudged");
+  const iKept = pr.indexOf("if (moment.kept) {"), iDraft = pr.indexOf("await drafting(c.type, () => registry[c.type].draft(c, person))"), iDefer = pr.indexOf('if ("defer" in draft) {'), iJudge = pr.indexOf("if (momentRead && (!moment.preJudged");
   check("judgment: never bypasses the stack read (kept-draft read, then the draft, then its defer, then the fresh read, then the send)", iKept > 0 && iKept < iDraft && iDraft < iDefer && iDefer < iJudge);
 }
 
