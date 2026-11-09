@@ -167,7 +167,7 @@ const quiet = <T>(fn: () => Promise<T>): Promise<T> => {
   const a = await PC.draftPostCallText("Jordan", TRANSCRIPT, "Planning a founders dinner.");
   const b = await PC.draftPostCallText("Jordan", TRANSCRIPT, "Planning a founders dinner.", [], { theySaid: [], coInferred: [] }, null, null, [], []);
   check("no corrections: the same request as without the argument, word for word", prompts.length === 2 && prompts[0] === prompts[1], prompts.map((p) => p.length));
-  check("no corrections: nothing of the correction in it, the rules today's", !/what_you_said_on_the_call_that_was_wrong|carries a correction/.test(prompts[0]) && JSON.stringify(a?.rules) === JSON.stringify({ maxSentences: 3, maxChars: 360 }) && a?.corrections.length === 0 && b?.corrections.length === 0, a);
+  check("no corrections: nothing of the correction in it, the rules today's", !/what_you_said_on_the_call_that_was_wrong|carries a correction/.test(prompts[0]) && a?.rules.maxSentences === 3 && a?.rules.maxChars === 360 && a?.rules.forbidden?.length === 1 && a.rules.forbidden[0] === PC.POST_CALL_NO_INTRO && a?.corrections.length === 0 && b?.corrections.length === 0, a);
 }
 
 // ================================================================ 4. the whole way: audit -> follow-up draft -> sent -> marked -> next text
